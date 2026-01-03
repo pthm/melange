@@ -63,6 +63,11 @@ func DefaultGenerateConfig() *GenerateConfig {
 //
 //	checker.Check(ctx, authz.AnyUser(), authz.RelCanRead, authz.Repository(456))
 func GenerateGo(w io.Writer, types []TypeDefinition, cfg *GenerateConfig) error {
+	// Validate schema before generating code
+	if err := DetectCycles(types); err != nil {
+		return err
+	}
+
 	if cfg == nil {
 		cfg = DefaultGenerateConfig()
 	}

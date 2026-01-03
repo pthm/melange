@@ -31,6 +31,11 @@ var (
 	// ErrMissingFunction is returned when a required PostgreSQL function doesn't exist.
 	// Run `melange migrate` to create the check_permission and list_accessible_* functions.
 	ErrMissingFunction = errors.New("melange: authorization function missing")
+
+	// ErrCyclicSchema is returned when the schema contains a cycle in the relation graph.
+	// Cycles in implied-by or parent relations would cause infinite recursion at runtime.
+	// Fix the schema by removing one of the relationships forming the cycle.
+	ErrCyclicSchema = errors.New("melange: cyclic schema")
 )
 
 // IsNoTuplesTableErr returns true if err is or wraps ErrNoTuplesTable.
@@ -56,6 +61,11 @@ func IsInvalidSchemaErr(err error) bool {
 // IsMissingFunctionErr returns true if err is or wraps ErrMissingFunction.
 func IsMissingFunctionErr(err error) bool {
 	return errors.Is(err, ErrMissingFunction)
+}
+
+// IsCyclicSchemaErr returns true if err is or wraps ErrCyclicSchema.
+func IsCyclicSchemaErr(err error) bool {
+	return errors.Is(err, ErrCyclicSchema)
 }
 
 // PostgreSQL error codes for error mapping.

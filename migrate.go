@@ -90,15 +90,21 @@ func (m *Migrator) ApplyDDL(ctx context.Context) error {
 // This is the core migration method used by the tooling package's Migrate function.
 //
 // The method:
-//  1. Applies DDL (creates tables and functions)
-//  2. Converts type definitions to authorization models
-//  3. Truncates and repopulates melange_model with the new rules
+//  1. Validates the schema (checks for cycles)
+//  2. Applies DDL (creates tables and functions)
+//  3. Converts type definitions to authorization models
+//  4. Truncates and repopulates melange_model with the new rules
 //
 // This is idempotent - safe to run multiple times with the same types.
 //
 // Uses a transaction if the db supports it (*sql.DB). This ensures
 // the schema is updated atomically or not at all.
 func (m *Migrator) MigrateWithTypes(ctx context.Context, types []TypeDefinition) error {
+	// Validate schema before applying to database
+	if err := DetectCycles(types); err != nil {
+		return err
+	}
+
 	// Apply DDL first
 	if err := m.ApplyDDL(ctx); err != nil {
 		return err
