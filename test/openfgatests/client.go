@@ -6,12 +6,11 @@
 //
 // # Usage
 //
-// The adapter requires a PostgreSQL database connection. Tests create isolated
-// stores and clean up after themselves.
+// The adapter uses testutil for database setup and integrates with the existing
+// test infrastructure.
 //
 //	func TestOpenFGACheck(t *testing.T) {
-//	    db := setupTestDB(t)
-//	    client := openfgatests.NewClient(db)
+//	    client := openfgatests.NewClient(t)
 //	    check.RunAllTests(t, client)
 //	}
 package openfgatests
@@ -22,12 +21,14 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"testing"
 
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
-	"github.com/openfga/language/pkg/go/transformer"
 	"google.golang.org/grpc"
 
 	"github.com/pthm/melange"
+	"github.com/pthm/melange/test/testutil"
+	"github.com/pthm/melange/tooling"
 )
 
 // Client implements the OpenFGA ClientInterface for running tests against melange.
@@ -35,6 +36,7 @@ import (
 // permission checks through melange's Checker.
 type Client struct {
 	db *sql.DB
+	tb testing.TB
 
 	mu     sync.RWMutex
 	stores map[string]*store
@@ -58,14 +60,53 @@ type model struct {
 	authzModel *openfgav1.AuthorizationModel
 }
 
-// NewClient creates a new test client backed by the given PostgreSQL database.
-// The database should already have melange infrastructure (melange_model table,
-// check_permission function) installed via `melange migrate`.
-func NewClient(db *sql.DB) *Client {
+// NewClient creates a new test client using testutil infrastructure.
+// The database is automatically set up with melange schema and cleaned up
+// when the test completes.
+func NewClient(tb testing.TB) *Client {
+	tb.Helper()
+
+	// Use testutil.EmptyDB since we need dynamic schemas for each test
+	db := testutil.EmptyDB(tb)
+
+	// Initialize melange infrastructure (without domain tables)
+	if err := initializeMelangeSchema(db); err != nil {
+		tb.Fatalf("failed to initialize melange schema: %v", err)
+	}
+
+	return &Client{
+		db:     db,
+		tb:     tb,
+		stores: make(map[string]*store),
+	}
+}
+
+// NewClientWithDB creates a test client with an existing database connection.
+// Use this when you need more control over the database setup.
+func NewClientWithDB(db *sql.DB) *Client {
 	return &Client{
 		db:     db,
 		stores: make(map[string]*store),
 	}
+}
+
+// initializeMelangeSchema applies the melange DDL without domain-specific tables.
+func initializeMelangeSchema(db *sql.DB) error {
+	ctx := context.Background()
+
+	// Use tooling.MigrateFromString with a minimal schema to set up infrastructure
+	// We use a minimal schema because OpenFGA tests provide their own models
+	minimalSchema := `
+model
+  schema 1.1
+
+type user
+`
+	if err := tooling.MigrateFromString(ctx, db, minimalSchema); err != nil {
+		return fmt.Errorf("apply melange migration: %w", err)
+	}
+
+	return nil
 }
 
 // CreateStore creates a new isolated store for testing.
@@ -380,6 +421,12 @@ func (c *Client) loadModel(ctx context.Context, s *store, modelID string) error 
 		return fmt.Errorf("clearing model: %w", err)
 	}
 
+	// Clear existing closure data
+	_, err = c.db.ExecContext(ctx, "DELETE FROM melange_relation_closure")
+	if err != nil {
+		return fmt.Errorf("clearing closure: %w", err)
+	}
+
 	// Convert to AuthzModels and insert
 	authzModels := melange.ToAuthzModels(m.types)
 	for _, am := range authzModels {
@@ -392,7 +439,50 @@ func (c *Client) loadModel(ctx context.Context, s *store, modelID string) error 
 		}
 	}
 
+	// Rebuild the relation closure table
+	if err := c.rebuildClosure(ctx); err != nil {
+		return fmt.Errorf("rebuilding closure: %w", err)
+	}
+
 	return nil
+}
+
+// rebuildClosure rebuilds the melange_relation_closure table from melange_model.
+func (c *Client) rebuildClosure(ctx context.Context) error {
+	// Use the same logic as tooling.Migrate - insert closure entries
+	_, err := c.db.ExecContext(ctx, `
+		INSERT INTO melange_relation_closure (object_type, relation, satisfying_relation, depth)
+		WITH RECURSIVE closure AS (
+			-- Base case: every relation satisfies itself
+			SELECT DISTINCT
+				object_type,
+				relation,
+				relation AS satisfying_relation,
+				0 AS depth
+			FROM melange_model
+			WHERE relation IS NOT NULL
+
+			UNION
+
+			-- Recursive case: if A is implied_by B, then B satisfies A
+			SELECT
+				m.object_type,
+				m.relation,
+				c.satisfying_relation,
+				c.depth + 1
+			FROM melange_model m
+			JOIN closure c
+				ON c.object_type = m.object_type
+				AND c.relation = m.implied_by
+			WHERE m.implied_by IS NOT NULL
+				AND m.parent_relation IS NULL
+				AND c.depth < 10
+		)
+		SELECT DISTINCT object_type, relation, satisfying_relation, MIN(depth)
+		FROM closure
+		GROUP BY object_type, relation, satisfying_relation
+	`)
+	return err
 }
 
 // refreshTuples updates the melange_tuples view with the current store tuples.
@@ -597,29 +687,7 @@ var _ interface {
 	StreamedListObjects(context.Context, *openfgav1.StreamedListObjectsRequest, ...grpc.CallOption) (openfgav1.OpenFGAService_StreamedListObjectsClient, error)
 } = (*Client)(nil)
 
-// Cleanup removes all test data from the database.
-// Call this after tests complete to leave the database in a clean state.
-func (c *Client) Cleanup(ctx context.Context) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	// Drop test tuples table
-	_, err := c.db.ExecContext(ctx, "DROP TABLE IF EXISTS melange_test_tuples CASCADE")
-	if err != nil {
-		return fmt.Errorf("dropping test tuples: %w", err)
-	}
-
-	// Clear model
-	_, err = c.db.ExecContext(ctx, "DELETE FROM melange_model")
-	if err != nil {
-		return fmt.Errorf("clearing model: %w", err)
-	}
-
-	// Clear stores
-	c.stores = make(map[string]*store)
-
-	return nil
+// DB returns the underlying database connection.
+func (c *Client) DB() *sql.DB {
+	return c.db
 }
-
-// Ensure transformer is imported for DSL parsing
-var _ = transformer.TransformDSLToProto
