@@ -17,6 +17,19 @@ test-unit:
 test-integration:
     cd test && go test -v -timeout 5m ./...
 
+# Run benchmarks (requires Docker)
+# Use SCALE to limit to a specific scale: just bench SCALE=1K
+bench SCALE="":
+    cd test && go test -bench=. -run=^$ -timeout 30m -benchmem {{ if SCALE != "" { "-bench='/" + SCALE + "'" } else { "" } }}
+
+# Run benchmarks with short output (no sub-benchmarks)
+bench-quick:
+    cd test && go test -bench='BenchmarkCheck/1K' -run=^$ -timeout 10m -benchmem
+
+# Run benchmarks and save to file
+bench-save FILE="benchmark_results.txt":
+    cd test && go test -bench=. -run=^$ -timeout 30m -benchmem | tee {{FILE}}
+
 # Run tests with race detection
 test-race:
     go test -race -short ./...

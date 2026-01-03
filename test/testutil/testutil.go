@@ -184,33 +184,34 @@ func ensureTemplate(adminDSN string) (string, error) {
 // DB returns a fully migrated database connection for testing.
 // Each call creates a new isolated database copied from the template.
 // The database is automatically cleaned up when the test completes.
-func DB(t *testing.T) *sql.DB {
-	t.Helper()
+// Works with both *testing.T and *testing.B.
+func DB(tb testing.TB) *sql.DB {
+	tb.Helper()
 
 	adminDSN, err := ensureSingleton()
-	require.NoError(t, err, "failed to start PostgreSQL container")
+	require.NoError(tb, err, "failed to start PostgreSQL container")
 
 	tmpl, err := ensureTemplate(adminDSN)
-	require.NoError(t, err, "failed to create template database")
+	require.NoError(tb, err, "failed to create template database")
 
 	// Generate unique database name
 	dbName := uniqueDBName("test")
 
 	// Create database from template
 	err = createDatabaseFromTemplate(adminDSN, dbName, tmpl)
-	require.NoError(t, err, "failed to create test database from template")
+	require.NoError(tb, err, "failed to create test database from template")
 
 	// Connect to the new database
 	dbDSN := replaceDBName(adminDSN, dbName)
 	db, err := sql.Open("pgx", dbDSN)
-	require.NoError(t, err, "failed to connect to test database")
+	require.NoError(tb, err, "failed to connect to test database")
 
 	// Verify connection
 	err = db.Ping()
-	require.NoError(t, err, "failed to ping test database")
+	require.NoError(tb, err, "failed to ping test database")
 
 	// Register cleanup
-	registerCleanup(t, db, adminDSN, dbName)
+	registerCleanup(tb, db, adminDSN, dbName)
 
 	return db
 }
@@ -218,38 +219,39 @@ func DB(t *testing.T) *sql.DB {
 // EmptyDB returns an empty database connection for testing.
 // Each call creates a new isolated empty database.
 // The database is automatically cleaned up when the test completes.
-func EmptyDB(t *testing.T) *sql.DB {
-	t.Helper()
+// Works with both *testing.T and *testing.B.
+func EmptyDB(tb testing.TB) *sql.DB {
+	tb.Helper()
 
 	adminDSN, err := ensureSingleton()
-	require.NoError(t, err, "failed to start PostgreSQL container")
+	require.NoError(tb, err, "failed to start PostgreSQL container")
 
 	// Generate unique database name
 	dbName := uniqueDBName("empty")
 
 	// Create empty database
 	err = createDatabase(adminDSN, dbName)
-	require.NoError(t, err, "failed to create empty database")
+	require.NoError(tb, err, "failed to create empty database")
 
 	// Connect to the new database
 	dbDSN := replaceDBName(adminDSN, dbName)
 	db, err := sql.Open("pgx", dbDSN)
-	require.NoError(t, err, "failed to connect to empty database")
+	require.NoError(tb, err, "failed to connect to empty database")
 
 	// Verify connection
 	err = db.Ping()
-	require.NoError(t, err, "failed to ping empty database")
+	require.NoError(tb, err, "failed to ping empty database")
 
 	// Register cleanup
-	registerCleanup(t, db, adminDSN, dbName)
+	registerCleanup(tb, db, adminDSN, dbName)
 
 	return db
 }
 
 // registerCleanup registers cleanup for the database connection and database itself.
 // Cleanup runs in a goroutine to not block the test.
-func registerCleanup(t *testing.T, db *sql.DB, adminDSN, dbName string) {
-	t.Cleanup(func() {
+func registerCleanup(tb testing.TB, db *sql.DB, adminDSN, dbName string) {
+	tb.Cleanup(func() {
 		// Close the connection first
 		_ = db.Close()
 
