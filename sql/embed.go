@@ -27,3 +27,12 @@ var ModelSQL string
 //
 //go:embed functions.sql
 var FunctionsSQL string
+
+// ClosureSQL contains the melange_relation_closure table definition and indexes.
+// This table stores the precomputed transitive closure of implied-by relations,
+// enabling efficient role hierarchy resolution without recursive function calls.
+//
+// Applied via CREATE TABLE IF NOT EXISTS for idempotence.
+//
+//go:embed closure.sql
+var ClosureSQL string

@@ -60,12 +60,13 @@ func (m *Migrator) HasSchema() bool {
 	return err == nil
 }
 
-// ApplyDDL applies the melange_model table and functions.
+// ApplyDDL applies the melange_model table, closure table, and functions.
 // This is idempotent (CREATE TABLE IF NOT EXISTS, CREATE OR REPLACE FUNCTION,
 // CREATE INDEX IF NOT EXISTS).
 //
 // The DDL creates:
 //   - melange_model table with performance indexes (stores parsed FGA schema)
+//   - melange_relation_closure table (precomputed transitive closure)
 //   - check_permission function (evaluates permissions)
 //   - list_accessible_objects function (reverse lookup)
 //   - has_tuple function (direct tuple checks)
@@ -76,6 +77,11 @@ func (m *Migrator) ApplyDDL(ctx context.Context) error {
 	// Apply model table and indexes
 	if _, err := m.db.ExecContext(ctx, melangesql.ModelSQL); err != nil {
 		return fmt.Errorf("applying model.sql: %w", err)
+	}
+
+	// Apply closure table and indexes
+	if _, err := m.db.ExecContext(ctx, melangesql.ClosureSQL); err != nil {
+		return fmt.Errorf("applying closure.sql: %w", err)
 	}
 
 	// Apply functions
@@ -93,7 +99,8 @@ func (m *Migrator) ApplyDDL(ctx context.Context) error {
 //  1. Validates the schema (checks for cycles)
 //  2. Applies DDL (creates tables and functions)
 //  3. Converts type definitions to authorization models
-//  4. Truncates and repopulates melange_model with the new rules
+//  4. Computes relation closure for efficient implied-by resolution
+//  5. Truncates and repopulates melange_model and melange_relation_closure
 //
 // This is idempotent - safe to run multiple times with the same types.
 //
@@ -111,6 +118,7 @@ func (m *Migrator) MigrateWithTypes(ctx context.Context, types []TypeDefinition)
 	}
 
 	models := ToAuthzModels(types)
+	closureRows := ComputeRelationClosure(types)
 
 	// Use a transaction if the db supports it
 	if txer, ok := m.db.(interface {
@@ -126,11 +134,18 @@ func (m *Migrator) MigrateWithTypes(ctx context.Context, types []TypeDefinition)
 			return err
 		}
 
+		if err := m.applyClosure(ctx, tx, closureRows); err != nil {
+			return err
+		}
+
 		return tx.Commit()
 	}
 
 	// Fall back to non-transactional (for *sql.Conn)
-	return m.applyModels(ctx, m.db, models)
+	if err := m.applyModels(ctx, m.db, models); err != nil {
+		return err
+	}
+	return m.applyClosure(ctx, m.db, closureRows)
 }
 
 // applyModels truncates and repopulates the melange_model table.
@@ -178,6 +193,46 @@ func (m *Migrator) applyModels(ctx context.Context, db Execer, models []AuthzMod
 	return nil
 }
 
+// applyClosure truncates and repopulates the melange_relation_closure table.
+// The closure table stores precomputed transitive implied-by relationships,
+// enabling efficient permission checks without recursive function calls.
+//
+// Uses bulk INSERT for efficiency when loading large schemas.
+func (m *Migrator) applyClosure(ctx context.Context, db Execer, closureRows []ClosureRow) error {
+	// TRUNCATE is transactional in PostgreSQL
+	_, err := db.ExecContext(ctx, "TRUNCATE melange_relation_closure RESTART IDENTITY")
+	if err != nil {
+		return fmt.Errorf("truncating melange_relation_closure: %w", err)
+	}
+
+	if len(closureRows) == 0 {
+		return nil
+	}
+
+	// Build bulk insert
+	var values []string
+	var args []any
+	argIdx := 1
+
+	for _, row := range closureRows {
+		values = append(values, fmt.Sprintf("($%d, $%d, $%d, $%d)",
+			argIdx, argIdx+1, argIdx+2, argIdx+3))
+		args = append(args, row.ObjectType, row.Relation, row.SatisfyingRelation, row.ViaPath)
+		argIdx += 4
+	}
+
+	query := fmt.Sprintf(
+		"INSERT INTO melange_relation_closure (object_type, relation, satisfying_relation, via_path) VALUES %s",
+		strings.Join(values, ", "),
+	)
+
+	_, err = db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("inserting closure: %w", err)
+	}
+
+	return nil
+}
 
 // Status represents the current migration state.
 // Use GetStatus to check if the authorization system is properly configured.
@@ -188,6 +243,10 @@ type Status struct {
 	// ModelCount is the number of rows in the melange_model table.
 	// Zero means the schema hasn't been loaded (run `melange migrate`).
 	ModelCount int64
+
+	// ClosureCount is the number of rows in the melange_relation_closure table.
+	// This table stores precomputed transitive implied-by relationships.
+	ClosureCount int64
 
 	// IndexCount is the number of melange-related indexes found.
 	// Expected to be at least 5 after a successful migration.
@@ -209,6 +268,12 @@ func (m *Migrator) GetStatus(ctx context.Context) (*Status, error) {
 	err := m.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM melange_model").Scan(&status.ModelCount)
 	if err != nil {
 		return nil, fmt.Errorf("counting melange_model rows: %w", err)
+	}
+
+	// Check closure count
+	err = m.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM melange_relation_closure").Scan(&status.ClosureCount)
+	if err != nil {
+		return nil, fmt.Errorf("counting melange_relation_closure rows: %w", err)
 	}
 
 	// Check index count

@@ -1,15 +1,18 @@
 -- Melange infrastructure functions
--- These are generic permission checking functions that work with melange_model and melange_tuples
+-- These are generic permission checking functions that work with melange_model,
+-- melange_relation_closure, and melange_tuples.
 -- IMPORTANT: These functions are domain-agnostic. Domain-specific logic belongs in the Go layer.
 --
 -- This file is idempotent and applied by `melange migrate`.
 
--- Generic permission check
+-- Generic permission check (optimized with closure table)
 -- Checks if a subject has a specific permission on an object by:
--- 1. Direct tuple match
--- 2. Implied relations (role hierarchy from authz_model)
--- 3. Parent relation inheritance (e.g., org -> repo -> change)
--- 4. Exclusion check (for "but not" relations)
+-- 1. Direct tuple match using closure table (handles direct + all implied relations in one query)
+-- 2. Parent relation inheritance (e.g., org -> repo -> change)
+-- 3. Exclusion check (for "but not" relations)
+--
+-- The closure table eliminates recursive implied-by traversal, reducing multiple
+-- model queries to a single JOIN operation.
 CREATE OR REPLACE FUNCTION check_permission(
     p_subject_type TEXT,
     p_subject_id TEXT,
@@ -23,46 +26,51 @@ DECLARE
     v_parent_id TEXT;
     v_parent_rel TEXT;
     v_excluded_rel TEXT;
-    v_implied RECORD;
 BEGIN
-    -- 1. Direct tuple check (including wildcard matching: subject_id = '*' represents type:*)
+    -- 1. Check direct tuple match using closure table
+    -- This handles: direct match + all implied-by relations in one query
+    -- The closure table contains all relations that satisfy p_relation (including itself)
     SELECT 1 INTO v_found
     FROM melange_tuples t
+    JOIN melange_relation_closure c
+        ON c.object_type = p_object_type
+        AND c.relation = p_relation
+        AND c.satisfying_relation = t.relation
     WHERE t.subject_type = p_subject_type
       AND (t.subject_id = p_subject_id OR t.subject_id = '*')
-      AND t.relation = p_relation
       AND t.object_type = p_object_type
       AND t.object_id = p_object_id
     LIMIT 1;
 
     IF v_found = 1 THEN
-        RETURN 1;
-    END IF;
+        -- Check for exclusions on the matching relation
+        -- Look up if any implied relation has an exclusion
+        DECLARE
+            v_excluded TEXT;
+        BEGIN
+            SELECT am.excluded_relation INTO v_excluded
+            FROM melange_model am
+            WHERE am.object_type = p_object_type
+              AND am.relation = p_relation
+              AND am.excluded_relation IS NOT NULL
+              AND am.parent_relation IS NULL
+            LIMIT 1;
 
-    -- 2. Check implied relations (role hierarchy)
-    -- Loop through all implied_by entries for this relation
-    FOR v_implied IN
-        SELECT am.implied_by, am.excluded_relation
-        FROM melange_model am
-        WHERE am.object_type = p_object_type
-          AND am.relation = p_relation
-          AND am.implied_by IS NOT NULL
-          AND am.parent_relation IS NULL
-    LOOP
-        -- Recursively check if the implied relation is satisfied
-        IF check_permission(p_subject_type, p_subject_id, v_implied.implied_by, p_object_type, p_object_id) = 1 THEN
-            -- Check for exclusion (e.g., "can_read but not author" or "can_read from org but not is_collaborator")
-            -- Use recursive check_permission to handle both direct tuples and computed relations
-            IF v_implied.excluded_relation IS NOT NULL THEN
-                IF check_permission(p_subject_type, p_subject_id, v_implied.excluded_relation, p_object_type, p_object_id) = 1 THEN
-                    CONTINUE; -- Excluded by "but not", try next implied relation
+            IF v_excluded IS NOT NULL THEN
+                -- Check if excluded relation is satisfied
+                IF check_permission(p_subject_type, p_subject_id, v_excluded, p_object_type, p_object_id) = 1 THEN
+                    -- Excluded, fall through to parent check
+                    v_found := 0;
                 END IF;
             END IF;
+        END;
+
+        IF v_found = 1 THEN
             RETURN 1;
         END IF;
-    END LOOP;
+    END IF;
 
-    -- 3. Check parent relations (inheritance from parent object)
+    -- 2. Check parent relations (inheritance from parent object)
     -- Uses schema-driven parent relations from melange_model.
     -- subject_type stores the LINKING RELATION (e.g., "org") not the parent type.
     -- This allows correct filtering when an object has multiple relations to the same type.
@@ -80,7 +88,7 @@ BEGIN
         WHERE t.object_type = p_object_type
           AND t.object_id = p_object_id
     LOOP
-        -- Check if the parent relation is satisfied
+        -- Check if the parent relation is satisfied (recursively uses closure for parent)
         IF check_permission(p_subject_type, p_subject_id, v_parent_rel, v_parent_type, v_parent_id) = 1 THEN
             -- Check for exclusion using recursive check_permission
             -- This handles both direct tuples and computed relations like is_collaborator
