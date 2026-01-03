@@ -1,0 +1,56 @@
+model
+  schema 1.1
+
+type user
+
+type organization
+  relations
+    define owner: [user]
+    define admin: [user] or owner
+    define member: [user] or admin
+    define billing_manager: [user]
+    define can_read: member
+    define can_admin: admin
+    define can_delete: owner
+
+type team
+  relations
+    define org: [organization]
+    define maintainer: [user]
+    define member: [user] or maintainer
+    define can_read: member
+    define can_admin: maintainer
+
+type repository
+  relations
+    define org: [organization]
+    define owner: [user]
+    define admin: [user] or owner
+    define maintainer: [user] or admin
+    define writer: [user] or maintainer
+    define reader: [user] or writer or can_read from org
+    define can_read: reader
+    define can_write: writer
+    define can_admin: admin
+    define can_delete: owner
+
+type issue
+  relations
+    define repo: [repository]
+    define author: [user]
+    define assignee: [user]
+    define can_read: can_read from repo
+    define can_edit: author or can_write from repo
+    define can_close: author or can_write from repo
+    define can_delete: can_admin from repo
+
+type pull_request
+  relations
+    define repo: [repository]
+    define author: [user]
+    define reviewer: [user]
+    define can_read: can_read from repo
+    define can_edit: author or can_write from repo
+    define can_merge: can_write from repo
+    define can_review: can_read from repo but not author
+    define can_delete: can_admin from repo

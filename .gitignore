@@ -4,6 +4,7 @@
 *.dll
 *.so
 *.dylib
+./bin/
 
 # Test binary, built with `go test -c`
 *.test
@@ -35,3 +36,6 @@ __debug_bin*
 
 # Agents
 .claude/
+
+# Generated files
+*_gen.go
