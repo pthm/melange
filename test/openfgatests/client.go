@@ -106,6 +106,30 @@ type user
 		return fmt.Errorf("apply melange migration: %w", err)
 	}
 
+	// Create an empty tuples table and view so that checks work even before Write is called
+	// This is needed because Check queries the melange_tuples view
+	_, err := db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS melange_test_tuples (
+			subject_type TEXT NOT NULL,
+			subject_id TEXT NOT NULL,
+			relation TEXT NOT NULL,
+			object_type TEXT NOT NULL,
+			object_id TEXT NOT NULL
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("creating test tuples table: %w", err)
+	}
+
+	_, err = db.ExecContext(ctx, `
+		CREATE OR REPLACE VIEW melange_tuples AS
+		SELECT subject_type, subject_id, relation, object_type, object_id
+		FROM melange_test_tuples
+	`)
+	if err != nil {
+		return fmt.Errorf("creating tuples view: %w", err)
+	}
+
 	return nil
 }
 
@@ -313,10 +337,11 @@ func (c *Client) ListUsers(ctx context.Context, req *openfgav1.ListUsersRequest,
 	}
 
 	// Handle contextual tuples
-	if contextualTuples := req.GetContextualTuples(); contextualTuples != nil && len(contextualTuples.GetTupleKeys()) > 0 {
+	// Note: ListUsersRequest.GetContextualTuples() returns []*TupleKey directly, not a wrapper
+	if contextualTuples := req.GetContextualTuples(); len(contextualTuples) > 0 {
 		c.mu.Lock()
 		originalTuples := s.tuples
-		s.tuples = append(append([]*openfgav1.TupleKey{}, s.tuples...), contextualTuples.GetTupleKeys()...)
+		s.tuples = append(append([]*openfgav1.TupleKey{}, s.tuples...), contextualTuples...)
 		if err := c.refreshTuples(ctx, s); err != nil {
 			s.tuples = originalTuples
 			c.mu.Unlock()
@@ -408,81 +433,17 @@ func (s *streamedListObjectsClient) Recv() (*openfgav1.StreamedListObjectsRespon
 	}, nil
 }
 
-// loadModel loads a model's type definitions into the melange_model table.
+// loadModel loads a model's type definitions into the database using the Migrator.
 func (c *Client) loadModel(ctx context.Context, s *store, modelID string) error {
 	m := s.models[modelID]
 	if m == nil {
 		return fmt.Errorf("model not found: %s", modelID)
 	}
 
-	// Clear existing model data
-	_, err := c.db.ExecContext(ctx, "DELETE FROM melange_model")
-	if err != nil {
-		return fmt.Errorf("clearing model: %w", err)
-	}
-
-	// Clear existing closure data
-	_, err = c.db.ExecContext(ctx, "DELETE FROM melange_relation_closure")
-	if err != nil {
-		return fmt.Errorf("clearing closure: %w", err)
-	}
-
-	// Convert to AuthzModels and insert
-	authzModels := melange.ToAuthzModels(m.types)
-	for _, am := range authzModels {
-		_, err := c.db.ExecContext(ctx, `
-			INSERT INTO melange_model (object_type, relation, subject_type, implied_by, parent_relation, excluded_relation)
-			VALUES ($1, $2, $3, $4, $5, $6)
-		`, am.ObjectType, am.Relation, am.SubjectType, am.ImpliedBy, am.ParentRelation, am.ExcludedRelation)
-		if err != nil {
-			return fmt.Errorf("inserting model row: %w", err)
-		}
-	}
-
-	// Rebuild the relation closure table
-	if err := c.rebuildClosure(ctx); err != nil {
-		return fmt.Errorf("rebuilding closure: %w", err)
-	}
-
-	return nil
-}
-
-// rebuildClosure rebuilds the melange_relation_closure table from melange_model.
-func (c *Client) rebuildClosure(ctx context.Context) error {
-	// Use the same logic as tooling.Migrate - insert closure entries
-	_, err := c.db.ExecContext(ctx, `
-		INSERT INTO melange_relation_closure (object_type, relation, satisfying_relation, depth)
-		WITH RECURSIVE closure AS (
-			-- Base case: every relation satisfies itself
-			SELECT DISTINCT
-				object_type,
-				relation,
-				relation AS satisfying_relation,
-				0 AS depth
-			FROM melange_model
-			WHERE relation IS NOT NULL
-
-			UNION
-
-			-- Recursive case: if A is implied_by B, then B satisfies A
-			SELECT
-				m.object_type,
-				m.relation,
-				c.satisfying_relation,
-				c.depth + 1
-			FROM melange_model m
-			JOIN closure c
-				ON c.object_type = m.object_type
-				AND c.relation = m.implied_by
-			WHERE m.implied_by IS NOT NULL
-				AND m.parent_relation IS NULL
-				AND c.depth < 10
-		)
-		SELECT DISTINCT object_type, relation, satisfying_relation, MIN(depth)
-		FROM closure
-		GROUP BY object_type, relation, satisfying_relation
-	`)
-	return err
+	// Use the Migrator to handle model and closure insertion
+	// The empty string for schemasDir is fine since we're using MigrateWithTypes directly
+	migrator := melange.NewMigrator(c.db, "")
+	return migrator.MigrateWithTypes(ctx, m.types)
 }
 
 // refreshTuples updates the melange_tuples view with the current store tuples.
@@ -664,7 +625,8 @@ func parseObject(obj string) (melange.Object, error) {
 }
 
 // removeTuple removes a tuple from the slice if it matches.
-func removeTuple(tuples []*openfgav1.TupleKey, toRemove *openfgav1.TupleKey) []*openfgav1.TupleKey {
+// The toRemove parameter uses TupleKeyWithoutCondition as that's what the delete API uses.
+func removeTuple(tuples []*openfgav1.TupleKey, toRemove *openfgav1.TupleKeyWithoutCondition) []*openfgav1.TupleKey {
 	result := make([]*openfgav1.TupleKey, 0, len(tuples))
 	for _, t := range tuples {
 		if t.GetUser() != toRemove.GetUser() ||

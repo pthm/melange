@@ -29,10 +29,15 @@ type repository
     define maintainer: [user] or admin
     define writer: [user] or maintainer
     define reader: [user] or writer or can_read from org
+    define author: [user] or owner
+    define banned: [user:*]
     define can_read: reader
     define can_write: writer
     define can_admin: admin
     define can_delete: owner
+    define can_review: can_read but not author
+    define can_read_safe: can_read but not banned
+    define can_deploy: can_admin from org
 
 type issue
   relations
@@ -49,8 +54,10 @@ type pull_request
     define repo: [repository]
     define author: [user]
     define reviewer: [user]
+    define banned: can_admin from repo
     define can_read: can_read from repo
     define can_edit: author or can_write from repo
     define can_merge: can_write from repo
     define can_review: can_read from repo but not author
+    define can_review_strict: can_read from repo but not banned
     define can_delete: can_admin from repo

@@ -122,4 +122,30 @@ SELECT
     'reviewer' AS relation,
     'pull_request' AS object_type,
     pull_request_id::text AS object_id
-FROM pull_request_reviewers;
+FROM pull_request_reviewers
+
+UNION ALL
+
+-- Repository authors (direct, from owner_id)
+SELECT
+    'user' AS subject_type,
+    owner_id::text AS subject_id,
+    'author' AS relation,
+    'repository' AS object_type,
+    id::text AS object_id
+FROM repositories
+WHERE owner_id IS NOT NULL
+
+UNION ALL
+
+-- Repository bans (wildcard or specific user)
+SELECT
+    'user' AS subject_type,
+    CASE
+        WHEN banned_all THEN '*'
+        ELSE user_id::text
+    END AS subject_id,
+    'banned' AS relation,
+    'repository' AS object_type,
+    repository_id::text AS object_id
+FROM repository_bans;

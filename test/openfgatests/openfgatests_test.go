@@ -2,10 +2,15 @@ package openfgatests_test
 
 import (
 	"context"
+	"os"
 	"testing"
 
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/language/pkg/go/transformer"
+	"github.com/openfga/openfga/tests/check"
+	"github.com/openfga/openfga/tests/listobjects"
+	"github.com/openfga/openfga/tests/listusers"
+
 	"github.com/stretchr/testify/require"
 
 	"github.com/pthm/melange/test/openfgatests"
@@ -392,17 +397,228 @@ type document
 	require.False(t, checkResp.GetAllowed(), "alice should not have permission after contextual tuple expires")
 }
 
-// TestOpenFGACheckSuite is a placeholder for running the official OpenFGA check test suite.
-// Uncomment and configure when ready to run the full test suite.
+// =============================================================================
+// Supported Feature Tests
+// These test patterns cover features that Melange fully supports.
+// See .claude/specs/openfga-dsl-support.md for the full feature matrix.
+// =============================================================================
+
+// TestOpenFGA_DirectAssignment tests direct relation assignment [user].
+// This is the most basic pattern: explicitly granting a relation via tuples.
+func TestOpenFGA_DirectAssignment(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	client := openfgatests.NewClient(t)
+
+	// Core direct assignment tests
+	openfgatests.RunTestByName(t, client, "this")
+	openfgatests.RunTestByName(t, client, "this_with_contextual_tuples")
+	openfgatests.RunTestByName(t, client, "this_and_union")
+}
+
+// TestOpenFGA_ComputedUserset tests computed relations (role hierarchy via implied_by).
+// Pattern: define admin: [user] or owner (owner implies admin)
+func TestOpenFGA_ComputedUserset(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	client := openfgatests.NewClient(t)
+
+	// Basic computed userset
+	openfgatests.RunTestByName(t, client, "computed_userset")
+	openfgatests.RunTestByName(t, client, "computed_userset_and_union")
+	openfgatests.RunTestByName(t, client, "computed_userset_and_exclusion")
+	openfgatests.RunTestByName(t, client, "computed_userset_and_computed_userset")
+}
+
+// TestOpenFGA_TupleToUserset tests parent inheritance (FROM pattern).
+// Pattern: define can_read: can_read from org
+func TestOpenFGA_TupleToUserset(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	client := openfgatests.NewClient(t)
+
+	// Basic tuple-to-userset (parent inheritance)
+	openfgatests.RunTestByName(t, client, "tuple_to_userset")
+	openfgatests.RunTestByName(t, client, "tuple_to_userset_and_union")
+	openfgatests.RunTestByName(t, client, "tuple_to_userset_and_exclusion")
+	openfgatests.RunTestByName(t, client, "tuple_to_userset_and_computed_userset")
+	openfgatests.RunTestByName(t, client, "tuple_to_userset_and_tuple_to_userset")
+
+	// Note: The following tests use userset references [type#relation] which
+	// we only partially support. See .claude/specs/openfga-dsl-support.md
+	// - ttu_mix_with_userset
+	// - ttu_multiple_parents
+	// - ttu_to_ttu
+	// - ttu_to_userset
+}
+
+// TestOpenFGA_Wildcards tests public access via wildcards [user:*].
+// Pattern: define public: [user:*]
+func TestOpenFGA_Wildcards(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	client := openfgatests.NewClient(t)
+
+	// Wildcard tests (passing)
+	openfgatests.RunTestByName(t, client, "wildcard_direct")
+	openfgatests.RunTestByName(t, client, "wildcard_computed_userset")
+	openfgatests.RunTestByName(t, client, "simple_ttu_child_wildcard")
+	openfgatests.RunTestByName(t, client, "combined_public_wildcard_userset")
+
+	// Note: The following tests use userset references [type#relation] which
+	// we only partially support. See .claude/specs/openfga-dsl-support.md
+	// - wildcard_and_userset_restriction
+	// - simple_userset_child_wildcard
+}
+
+// TestOpenFGA_Exclusion tests the BUT NOT pattern.
+// Pattern: define can_review: can_read but not author
+func TestOpenFGA_Exclusion(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	client := openfgatests.NewClient(t)
+
+	// Exclusion tests (passing)
+	openfgatests.RunTestByName(t, client, "exclusion_and_computed_userset")
+	openfgatests.RunTestByName(t, client, "exclusion_and_union_in_base")
+	openfgatests.RunTestByName(t, client, "exclusion_and_tuple_to_userset_in_base")
+	openfgatests.RunTestByName(t, client, "exclusion_for_some_relations")
+
+	// Note: The following tests have complex exclusion patterns that need investigation:
+	// - exclusion_and_exclusion_in_base (check_1 fails)
+	// - exclusion_and_exclusion_in_subtract
+	// - exclusion_and_union_in_subtract
+	// - exclusion_and_tuple_to_userset_in_subtract
+	// - exclusion_between_userset_and_type (uses userset references)
+}
+
+// TestOpenFGA_Union tests the OR pattern.
+// Pattern: define viewer: [user] or editor or admin
+func TestOpenFGA_Union(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	client := openfgatests.NewClient(t)
+
+	// Union tests
+	openfgatests.RunTestByName(t, client, "union_and_union")
+	openfgatests.RunTestByName(t, client, "union_and_exclusion")
+	openfgatests.RunTestByName(t, client, "union_and_tuple_to_userset")
+}
+
+// TestOpenFGA_ComplexPatterns tests combinations of supported features.
+func TestOpenFGA_ComplexPatterns(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	client := openfgatests.NewClient(t)
+
+	// Complex patterns combining multiple features (passing)
+	openfgatests.RunTestByName(t, client, "nested_usersets_are_recursively_expanded")
+	openfgatests.RunTestByName(t, client, "nested_ttu_involving_exclusion")
+
+	// Note: The following tests use unsupported patterns or have issues:
+	// - three_prong_relation (cyclic schema in parent relations)
+	// - evaluate_userset_in_computed_relation_of_ttu (userset reference)
+	// - relation_with_userset_involving_exclusion (userset reference)
+	// - relation_with_wildcard_involving_exclusion (wildcard+exclusion edge case)
+}
+
+// TestOpenFGA_CycleHandling tests that cycles are handled correctly.
+func TestOpenFGA_CycleHandling(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	client := openfgatests.NewClient(t)
+
+	// Cycle handling tests (passing)
+	openfgatests.RunTestByName(t, client, "immediate_cycle_return_false")
+	openfgatests.RunTestByName(t, client, "cycle_or_cycle_return_false")
+	openfgatests.RunTestByName(t, client, "false_butnot_cycle_return_false")
+
+	// Note: The following tests involve AND patterns (intersection) we don't support:
+	// - cycle_and_true_return_false (AND pattern)
+	// - true_butnot_cycle_return_false (cycle in subtracted relation)
+}
+
+// =============================================================================
+// Full Test Suites (use sparingly - these run many tests)
+// =============================================================================
+
+// TestOpenFGACheckSuite runs the full official OpenFGA check test suite.
+// Use -run TestOpenFGACheckSuite to run all tests.
 func TestOpenFGACheckSuite(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping OpenFGA test suite in short mode")
 	}
+	client := openfgatests.NewClient(t)
+	check.RunAllTests(t, client)
+}
 
-	t.Skip("OpenFGA test suite integration pending - run individual tests for now")
+// TestOpenFGAListObjectsSuite runs the full official OpenFGA list objects test suite.
+func TestOpenFGAListObjectsSuite(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping OpenFGA test suite in short mode")
+	}
+	client := openfgatests.NewClient(t)
+	listobjects.RunAllTests(t, client)
+}
 
-	// To run the official OpenFGA tests:
-	// import "github.com/openfga/openfga/tests/check"
-	// client := openfgatests.NewClient(t)
-	// check.RunAllTests(t, client)
+// TestOpenFGAListUsersSuite runs the full official OpenFGA list users test suite.
+func TestOpenFGAListUsersSuite(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping OpenFGA test suite in short mode")
+	}
+	client := openfgatests.NewClient(t)
+	listusers.RunAllTests(t, client)
+}
+
+// =============================================================================
+// Helper Tests
+// =============================================================================
+
+// TestOpenFGAByName runs a specific test by exact name.
+// Use: OPENFGA_TEST_NAME=wildcard_direct go test -run TestOpenFGAByName ./openfgatests/...
+// Or:  just test-openfga-name wildcard_direct
+func TestOpenFGAByName(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	name := os.Getenv("OPENFGA_TEST_NAME")
+	if name == "" {
+		name = "this" // default test
+	}
+	client := openfgatests.NewClient(t)
+	openfgatests.RunTestByName(t, client, name)
+}
+
+// TestOpenFGAByPattern runs tests matching a regex pattern.
+// Use: OPENFGA_TEST_PATTERN="^wildcard" go test -run TestOpenFGAByPattern ./openfgatests/...
+// Or:  just test-openfga-pattern "^wildcard"
+func TestOpenFGAByPattern(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	pattern := os.Getenv("OPENFGA_TEST_PATTERN")
+	if pattern == "" {
+		pattern = "^computed_userset$" // default pattern
+	}
+	client := openfgatests.NewClient(t)
+	openfgatests.RunTestsByPattern(t, client, pattern)
+}
+
+// TestOpenFGAListAvailableTests prints all available test names (useful for discovery).
+func TestOpenFGAListAvailableTests(t *testing.T) {
+	names, err := openfgatests.ListTestNames()
+	require.NoError(t, err)
+
+	t.Logf("Available OpenFGA tests (%d total):", len(names))
+	for _, name := range names {
+		t.Logf("  - %s", name)
+	}
 }

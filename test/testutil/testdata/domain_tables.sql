@@ -95,6 +95,16 @@ CREATE TABLE IF NOT EXISTS pull_request_reviewers (
     PRIMARY KEY (pull_request_id, user_id)
 );
 
+-- Repository bans (for exclusion tests)
+-- user_id is NULL when banned_all is true (wildcard ban)
+CREATE TABLE IF NOT EXISTS repository_bans (
+    id BIGSERIAL PRIMARY KEY,
+    repository_id BIGINT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+    banned_all BOOLEAN NOT NULL DEFAULT FALSE,
+    UNIQUE (repository_id, user_id)
+);
+
 -- Create indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_org_members_user ON organization_members(user_id);
 CREATE INDEX IF NOT EXISTS idx_team_members_user ON team_members(user_id);
@@ -102,3 +112,4 @@ CREATE INDEX IF NOT EXISTS idx_repo_collaborators_user ON repository_collaborato
 CREATE INDEX IF NOT EXISTS idx_repos_org ON repositories(organization_id);
 CREATE INDEX IF NOT EXISTS idx_issues_repo ON issues(repository_id);
 CREATE INDEX IF NOT EXISTS idx_prs_repo ON pull_requests(repository_id);
+CREATE INDEX IF NOT EXISTS idx_repo_bans_repo ON repository_bans(repository_id);

@@ -80,3 +80,48 @@ clean:
 
 # Run all checks (fmt, vet, test)
 check: fmt vet test
+
+# =============================================================================
+# OpenFGA Test Suite
+# =============================================================================
+
+# Run all OpenFGA feature tests (uses gotestfmt for pretty output)
+test-openfga:
+    cd test && go test -json -count=1 -timeout 5m \
+        -run "TestOpenFGA_" ./openfgatests/... 2>&1 | gotestfmt
+
+# Run OpenFGA tests for a specific feature (e.g., just test-openfga-feature Wildcards)
+test-openfga-feature FEATURE:
+    cd test && go test -json -count=1 -timeout 2m \
+        -run "TestOpenFGA_{{FEATURE}}" ./openfgatests/... 2>&1 | gotestfmt
+
+# Run a single OpenFGA test by name (e.g., just test-openfga-name wildcard_direct)
+test-openfga-name NAME:
+    cd test && OPENFGA_TEST_NAME="{{NAME}}" go test -v -count=1 -timeout 2m \
+        -run "TestOpenFGAByName" ./openfgatests/...
+
+# Run OpenFGA tests matching a regex pattern (e.g., just test-openfga-pattern "^wildcard")
+test-openfga-pattern PATTERN:
+    cd test && OPENFGA_TEST_PATTERN="{{PATTERN}}" go test -v -count=1 -timeout 5m \
+        -run "TestOpenFGAByPattern" ./openfgatests/...
+
+# List all available OpenFGA test names
+test-openfga-list:
+    cd test && go test -v -count=1 -run "TestOpenFGAListAvailableTests" ./openfgatests/...
+
+# Run OpenFGA tests in verbose mode (without gotestfmt)
+test-openfga-verbose:
+    cd test && go test -v -count=1 -timeout 5m \
+        -run "TestOpenFGA_" ./openfgatests/...
+
+# Run the full OpenFGA check suite (WARNING: includes unsupported features, many will fail)
+test-openfga-full-check:
+    @echo "⚠️  Running FULL OpenFGA check suite - this includes unsupported features!"
+    @echo "   Many tests will fail. Use 'just test-openfga' for supported features only."
+    @echo ""
+    cd test && go test -json -count=1 -timeout 10m \
+        -run "TestOpenFGACheckSuite" ./openfgatests/... 2>&1 | gotestfmt || true
+
+# Install gotestfmt if not already installed
+install-gotestfmt:
+    go install github.com/gotesttools/gotestfmt/v2/cmd/gotestfmt@latest

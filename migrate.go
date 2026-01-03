@@ -252,9 +252,9 @@ type Status struct {
 	// Expected to be at least 5 after a successful migration.
 	IndexCount int
 
-	// TuplesViewExists indicates if the melange_tuples view exists.
-	// This view must be created by the user to map their domain tables.
-	TuplesViewExists bool
+	// TuplesExists indicates if the melange_tuples relation exists (view, table, or materialized view).
+	// This must be created by the user to map their domain tables.
+	TuplesExists bool
 }
 
 // GetStatus returns the current migration status.
@@ -285,18 +285,21 @@ func (m *Migrator) GetStatus(ctx context.Context) (*Status, error) {
 		return nil, fmt.Errorf("counting melange indexes: %w", err)
 	}
 
-	// Check if melange_tuples view exists
-	var viewExists bool
+	// Check if melange_tuples relation exists (view, table, or materialized view)
+	var tuplesExists bool
 	err = m.db.QueryRowContext(ctx, `
 		SELECT EXISTS (
-			SELECT 1 FROM pg_views
-			WHERE viewname = 'melange_tuples'
+			SELECT 1 FROM pg_class c
+			JOIN pg_namespace n ON n.oid = c.relnamespace
+			WHERE c.relname = 'melange_tuples'
+			AND n.nspname = current_schema()
+			AND c.relkind IN ('r', 'v', 'm')
 		)
-	`).Scan(&viewExists)
+	`).Scan(&tuplesExists)
 	if err != nil {
-		return nil, fmt.Errorf("checking melange_tuples view: %w", err)
+		return nil, fmt.Errorf("checking melange_tuples: %w", err)
 	}
-	status.TuplesViewExists = viewExists
+	status.TuplesExists = tuplesExists
 
 	return status, nil
 }

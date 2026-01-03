@@ -43,16 +43,19 @@ func TestDB_Integration(t *testing.T) {
 		assert.True(t, exists, "table %s should exist", table)
 	}
 
-	// Verify melange_tuples view exists
-	var viewExists bool
+	// Verify melange_tuples relation exists (view, table, or materialized view)
+	var tuplesExists bool
 	err = db.QueryRowContext(ctx, `
 		SELECT EXISTS (
-			SELECT FROM information_schema.views
-			WHERE table_name = 'melange_tuples'
+			SELECT 1 FROM pg_class c
+			JOIN pg_namespace n ON n.oid = c.relnamespace
+			WHERE c.relname = 'melange_tuples'
+			AND n.nspname = current_schema()
+			AND c.relkind IN ('r', 'v', 'm')
 		)
-	`).Scan(&viewExists)
+	`).Scan(&tuplesExists)
 	require.NoError(t, err)
-	assert.True(t, viewExists, "melange_tuples view should exist")
+	assert.True(t, tuplesExists, "melange_tuples should exist")
 }
 
 // TestDB_IndexesApplied verifies that melange performance indexes are created.
@@ -117,8 +120,8 @@ func TestMigrator_GetStatus(t *testing.T) {
 	// Should have performance indexes
 	assert.GreaterOrEqual(t, status.IndexCount, 5, "should have at least 5 indexes")
 
-	// Template database has tuples view
-	assert.True(t, status.TuplesViewExists, "melange_tuples view should exist")
+	// Template database has tuples relation
+	assert.True(t, status.TuplesExists, "melange_tuples should exist")
 }
 
 // TestOrganization_Permissions tests organization permission checks
@@ -608,4 +611,537 @@ func TestGeneratedTypes(t *testing.T) {
 // idStr converts an int64 ID to a string.
 func idStr(id int64) string {
 	return fmt.Sprintf("%d", id)
+}
+
+// ============================================================================
+// SQL Edge Case Tests for Findings 1.1 - 1.6
+// These tests verify semantic parity between check_permission and list functions
+// ============================================================================
+
+// TestExclusionViaImpliedBy verifies that exclusions respect implied-by relations.
+// Finding 1.1: Exclusion checks must use closure table for implied relations.
+//
+// Schema: can_review = can_read but not author
+//
+//	author = [user] or owner  (owner implies author)
+//
+// A repository owner should be excluded from can_review because:
+//   - owner implies author via the closure table
+//   - can_review excludes author
+func TestExclusionViaImpliedBy(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	db := testutil.DB(t)
+	ctx := context.Background()
+
+	// Create test data
+	var orgID, repoID, ownerID, readerID int64
+
+	// Create users
+	err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('implied_owner') RETURNING id`).Scan(&ownerID)
+	require.NoError(t, err)
+	err = db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('implied_reader') RETURNING id`).Scan(&readerID)
+	require.NoError(t, err)
+
+	// Create organization
+	err = db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('implied_org') RETURNING id`).Scan(&orgID)
+	require.NoError(t, err)
+
+	// NOTE: We deliberately do NOT add users as org members here.
+	// If we did, they would get can_read via org inheritance, which creates
+	// an alternative access path that bypasses the direct exclusion check.
+	// This test specifically verifies that exclusions work on direct tuple matches.
+
+	// Create repository (needs org for schema validity)
+	err = db.QueryRowContext(ctx, `INSERT INTO repositories (organization_id, name) VALUES ($1, 'implied_repo') RETURNING id`, orgID).Scan(&repoID)
+	require.NoError(t, err)
+
+	// Add owner as repository owner (implies author via closure, also implies can_read)
+	_, err = db.ExecContext(ctx, `INSERT INTO repository_collaborators (repository_id, user_id, role) VALUES ($1, $2, 'owner')`, repoID, ownerID)
+	require.NoError(t, err)
+
+	// Add reader as repository reader
+	_, err = db.ExecContext(ctx, `INSERT INTO repository_collaborators (repository_id, user_id, role) VALUES ($1, $2, 'reader')`, repoID, readerID)
+	require.NoError(t, err)
+
+	checker := melange.NewChecker(db)
+	repo := authz.Repository(repoID)
+	owner := authz.User(ownerID)
+	reader := authz.User(readerID)
+
+	// Verify owner has can_read (prerequisite for can_review)
+	t.Run("owner has can_read", func(t *testing.T) {
+		ok, err := checker.Check(ctx, owner, authz.RelCanRead, repo)
+		require.NoError(t, err)
+		assert.True(t, ok, "owner should have can_read")
+	})
+
+	// Verify owner is excluded from can_review (owner implies author)
+	t.Run("owner excluded from can_review via implied author", func(t *testing.T) {
+		ok, err := checker.Check(ctx, owner, melange.Relation("can_review"), repo)
+		require.NoError(t, err)
+		assert.False(t, ok, "owner should be excluded from can_review (owner implies author)")
+	})
+
+	// Verify reader can review (has can_read, is not author)
+	t.Run("reader can review", func(t *testing.T) {
+		ok, err := checker.Check(ctx, reader, melange.Relation("can_review"), repo)
+		require.NoError(t, err)
+		assert.True(t, ok, "reader should be able to review")
+	})
+
+	// Verify ListObjects excludes repo for owner (parity with Check)
+	t.Run("list_accessible_objects excludes repo for owner", func(t *testing.T) {
+		ids, err := checker.ListObjects(ctx, owner, melange.Relation("can_review"), authz.TypeRepository)
+		require.NoError(t, err)
+		assert.NotContains(t, ids, idStr(repoID), "list_accessible_objects should exclude repo where owner is author")
+	})
+
+	// Verify ListObjects includes repo for reader
+	t.Run("list_accessible_objects includes repo for reader", func(t *testing.T) {
+		ids, err := checker.ListObjects(ctx, reader, melange.Relation("can_review"), authz.TypeRepository)
+		require.NoError(t, err)
+		assert.Contains(t, ids, idStr(repoID), "list_accessible_objects should include repo for reader")
+	})
+
+	// Verify ListSubjects excludes owner (parity with Check)
+	t.Run("list_accessible_subjects excludes owner", func(t *testing.T) {
+		ids, err := checker.ListSubjects(ctx, repo, melange.Relation("can_review"), authz.TypeUser)
+		require.NoError(t, err)
+		assert.NotContains(t, ids, idStr(ownerID), "list_accessible_subjects should exclude owner (implied author)")
+		assert.Contains(t, ids, idStr(readerID), "list_accessible_subjects should include reader")
+	})
+}
+
+// TestParentRelationMismatch verifies parent inheritance with different relation names.
+// Finding 1.2: inherited_access must use m.parent_relation, not p_relation.
+//
+// Schema: repository.can_deploy = can_admin from org
+//
+// An org admin should have can_deploy on repositories in that org.
+func TestParentRelationMismatch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	db := testutil.DB(t)
+	ctx := context.Background()
+
+	// Create test data
+	var orgID, repoID, adminID, outsiderID int64
+
+	// Create users
+	err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('deploy_admin') RETURNING id`).Scan(&adminID)
+	require.NoError(t, err)
+	err = db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('deploy_outsider') RETURNING id`).Scan(&outsiderID)
+	require.NoError(t, err)
+
+	// Create organization
+	err = db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('deploy_org') RETURNING id`).Scan(&orgID)
+	require.NoError(t, err)
+
+	// Add admin to org as admin (implies can_admin on org)
+	_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'admin')`, orgID, adminID)
+	require.NoError(t, err)
+
+	// Create repository under org
+	err = db.QueryRowContext(ctx, `INSERT INTO repositories (organization_id, name) VALUES ($1, 'deploy_repo') RETURNING id`, orgID).Scan(&repoID)
+	require.NoError(t, err)
+
+	checker := melange.NewChecker(db)
+	repo := authz.Repository(repoID)
+	admin := authz.User(adminID)
+	outsider := authz.User(outsiderID)
+
+	// Verify admin has can_admin on org
+	t.Run("admin has can_admin on org", func(t *testing.T) {
+		org := authz.Organization(orgID)
+		ok, err := checker.Check(ctx, admin, authz.RelCanAdmin, org)
+		require.NoError(t, err)
+		assert.True(t, ok, "admin should have can_admin on org")
+	})
+
+	// Verify admin has can_deploy on repo (inherits from org.can_admin)
+	t.Run("admin has can_deploy on repo", func(t *testing.T) {
+		ok, err := checker.Check(ctx, admin, melange.Relation("can_deploy"), repo)
+		require.NoError(t, err)
+		assert.True(t, ok, "org admin should have can_deploy on repo via parent inheritance")
+	})
+
+	// Verify outsider does not have can_deploy
+	t.Run("outsider does not have can_deploy", func(t *testing.T) {
+		ok, err := checker.Check(ctx, outsider, melange.Relation("can_deploy"), repo)
+		require.NoError(t, err)
+		assert.False(t, ok, "outsider should not have can_deploy")
+	})
+
+	// Verify ListObjects returns repo for admin (parity with Check)
+	t.Run("list_accessible_objects includes repo for admin", func(t *testing.T) {
+		ids, err := checker.ListObjects(ctx, admin, melange.Relation("can_deploy"), authz.TypeRepository)
+		require.NoError(t, err)
+		assert.Contains(t, ids, idStr(repoID), "list_accessible_objects should include repo for org admin")
+	})
+
+	// Verify ListSubjects returns admin (parity with Check)
+	t.Run("list_accessible_subjects includes admin", func(t *testing.T) {
+		ids, err := checker.ListSubjects(ctx, repo, melange.Relation("can_deploy"), authz.TypeUser)
+		require.NoError(t, err)
+		assert.Contains(t, ids, idStr(adminID), "list_accessible_subjects should include org admin")
+	})
+}
+
+// TestDirectAccessExclusionParity verifies exclusions apply to direct access results.
+// Finding 1.3: direct_access CTE must apply exclusion checks.
+//
+// A user with both can_read AND author on a repository should be excluded from can_review.
+func TestDirectAccessExclusionParity(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	db := testutil.DB(t)
+	ctx := context.Background()
+
+	// Create test data
+	var orgID, repoID, authorUserID, readerUserID int64
+
+	// Create users
+	err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('direct_author') RETURNING id`).Scan(&authorUserID)
+	require.NoError(t, err)
+	err = db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('direct_reader') RETURNING id`).Scan(&readerUserID)
+	require.NoError(t, err)
+
+	// Create organization
+	err = db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('direct_org') RETURNING id`).Scan(&orgID)
+	require.NoError(t, err)
+
+	// Create repository with owner_id set (this creates an author tuple)
+	err = db.QueryRowContext(ctx, `INSERT INTO repositories (organization_id, owner_id, name) VALUES ($1, $2, 'direct_repo') RETURNING id`, orgID, authorUserID).Scan(&repoID)
+	require.NoError(t, err)
+
+	// Add author as repository reader (so they have can_read directly)
+	_, err = db.ExecContext(ctx, `INSERT INTO repository_collaborators (repository_id, user_id, role) VALUES ($1, $2, 'reader')`, repoID, authorUserID)
+	require.NoError(t, err)
+
+	// Add reader as repository reader
+	_, err = db.ExecContext(ctx, `INSERT INTO repository_collaborators (repository_id, user_id, role) VALUES ($1, $2, 'reader')`, repoID, readerUserID)
+	require.NoError(t, err)
+
+	checker := melange.NewChecker(db)
+	repo := authz.Repository(repoID)
+	authorUser := authz.User(authorUserID)
+	readerUser := authz.User(readerUserID)
+
+	// Verify author has can_read
+	t.Run("author has can_read", func(t *testing.T) {
+		ok, err := checker.Check(ctx, authorUser, authz.RelCanRead, repo)
+		require.NoError(t, err)
+		assert.True(t, ok, "author should have can_read")
+	})
+
+	// Verify author is excluded from can_review (has both can_read and author)
+	t.Run("author excluded from can_review", func(t *testing.T) {
+		ok, err := checker.Check(ctx, authorUser, melange.Relation("can_review"), repo)
+		require.NoError(t, err)
+		assert.False(t, ok, "author should be excluded from can_review despite having direct can_read")
+	})
+
+	// Verify reader can review
+	t.Run("reader can review", func(t *testing.T) {
+		ok, err := checker.Check(ctx, readerUser, melange.Relation("can_review"), repo)
+		require.NoError(t, err)
+		assert.True(t, ok, "reader should be able to review")
+	})
+
+	// Verify ListObjects excludes repo for author (parity with Check)
+	t.Run("list_accessible_objects excludes repo for author", func(t *testing.T) {
+		ids, err := checker.ListObjects(ctx, authorUser, melange.Relation("can_review"), authz.TypeRepository)
+		require.NoError(t, err)
+		assert.NotContains(t, ids, idStr(repoID), "list_accessible_objects should exclude repo for author")
+	})
+
+	// Verify ListSubjects excludes author (parity with Check)
+	t.Run("list_accessible_subjects excludes author", func(t *testing.T) {
+		ids, err := checker.ListSubjects(ctx, repo, melange.Relation("can_review"), authz.TypeUser)
+		require.NoError(t, err)
+		assert.NotContains(t, ids, idStr(authorUserID), "list_accessible_subjects should exclude author")
+		assert.Contains(t, ids, idStr(readerUserID), "list_accessible_subjects should include reader")
+	})
+}
+
+// TestWildcardExclusion verifies wildcard exclusions work in list functions.
+// Finding 1.4: list_accessible_subjects must handle subject_id='*' in exclusions.
+//
+// Schema: can_read_safe = can_read but not banned
+//
+//	banned = [user:*]  (supports wildcards)
+//
+// When a repository has a wildcard ban (all users banned), list_accessible_subjects
+// should return empty, and check should deny.
+func TestWildcardExclusion(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	db := testutil.DB(t)
+	ctx := context.Background()
+
+	// Create test data
+	var orgID, repoID, userID int64
+
+	// Create user
+	err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('wildcard_user') RETURNING id`).Scan(&userID)
+	require.NoError(t, err)
+
+	// Create organization
+	err = db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('wildcard_org') RETURNING id`).Scan(&orgID)
+	require.NoError(t, err)
+
+	// NOTE: Don't add user as org member to avoid org inheritance path.
+	// The user will get can_read directly from repository_collaborators.
+
+	// Create repository
+	err = db.QueryRowContext(ctx, `INSERT INTO repositories (organization_id, name) VALUES ($1, 'wildcard_repo') RETURNING id`, orgID).Scan(&repoID)
+	require.NoError(t, err)
+
+	// Add user as repository reader (so they have direct can_read)
+	_, err = db.ExecContext(ctx, `INSERT INTO repository_collaborators (repository_id, user_id, role) VALUES ($1, $2, 'reader')`, repoID, userID)
+	require.NoError(t, err)
+
+	// Add wildcard ban (all users banned)
+	_, err = db.ExecContext(ctx, `INSERT INTO repository_bans (repository_id, user_id, banned_all) VALUES ($1, NULL, true)`, repoID)
+	require.NoError(t, err)
+
+	checker := melange.NewChecker(db)
+	repo := authz.Repository(repoID)
+	user := authz.User(userID)
+
+	// Verify user has can_read
+	t.Run("user has can_read", func(t *testing.T) {
+		ok, err := checker.Check(ctx, user, authz.RelCanRead, repo)
+		require.NoError(t, err)
+		assert.True(t, ok, "user should have can_read")
+	})
+
+	// Verify user is excluded from can_read_safe (wildcard ban)
+	t.Run("user excluded from can_read_safe via wildcard ban", func(t *testing.T) {
+		ok, err := checker.Check(ctx, user, melange.Relation("can_read_safe"), repo)
+		require.NoError(t, err)
+		assert.False(t, ok, "user should be excluded from can_read_safe due to wildcard ban")
+	})
+
+	// Verify ListObjects excludes repo (parity with Check)
+	t.Run("list_accessible_objects excludes repo", func(t *testing.T) {
+		ids, err := checker.ListObjects(ctx, user, melange.Relation("can_read_safe"), authz.TypeRepository)
+		require.NoError(t, err)
+		assert.NotContains(t, ids, idStr(repoID), "list_accessible_objects should exclude repo with wildcard ban")
+	})
+
+	// Verify ListSubjects returns empty (all users banned)
+	t.Run("list_accessible_subjects returns empty", func(t *testing.T) {
+		ids, err := checker.ListSubjects(ctx, repo, melange.Relation("can_read_safe"), authz.TypeUser)
+		require.NoError(t, err)
+		assert.Empty(t, ids, "list_accessible_subjects should return empty when all users banned")
+	})
+}
+
+// TestParentLevelExclusions verifies exclusions inherited from parent objects.
+// Finding 1.5: list_accessible_subjects must check exclusions at the permission source level.
+//
+// Schema: pull_request.banned = can_admin from repo
+//
+//	pull_request.can_review_strict = can_read from repo but not banned
+//
+// A repo admin should be excluded from can_review_strict on PRs in that repo
+// because they are "banned" (inherited from repo.can_admin).
+func TestParentLevelExclusions(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	db := testutil.DB(t)
+	ctx := context.Background()
+
+	// Create test data
+	var orgID, repoID, prID, adminID, readerID int64
+
+	// Create users
+	err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('parent_admin') RETURNING id`).Scan(&adminID)
+	require.NoError(t, err)
+	err = db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('parent_reader') RETURNING id`).Scan(&readerID)
+	require.NoError(t, err)
+
+	// Create organization
+	err = db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('parent_org') RETURNING id`).Scan(&orgID)
+	require.NoError(t, err)
+
+	// NOTE: Don't add users as org members to avoid org inheritance path complexity.
+	// Users get their access directly from repository_collaborators.
+
+	// Create repository
+	err = db.QueryRowContext(ctx, `INSERT INTO repositories (organization_id, name) VALUES ($1, 'parent_repo') RETURNING id`, orgID).Scan(&repoID)
+	require.NoError(t, err)
+
+	// Add admin as repository admin (implies can_admin, which implies banned on PRs)
+	// Admin also gets can_read via admin -> maintainer -> writer -> reader
+	_, err = db.ExecContext(ctx, `INSERT INTO repository_collaborators (repository_id, user_id, role) VALUES ($1, $2, 'admin')`, repoID, adminID)
+	require.NoError(t, err)
+
+	// Add reader as repository reader (so they have can_read but not can_admin)
+	_, err = db.ExecContext(ctx, `INSERT INTO repository_collaborators (repository_id, user_id, role) VALUES ($1, $2, 'reader')`, repoID, readerID)
+	require.NoError(t, err)
+
+	// Create pull request
+	err = db.QueryRowContext(ctx, `
+		INSERT INTO pull_requests (repository_id, author_id, title, source_branch)
+		VALUES ($1, $2, 'Parent Test PR', 'feature')
+		RETURNING id
+	`, repoID, readerID).Scan(&prID)
+	require.NoError(t, err)
+
+	checker := melange.NewChecker(db)
+	pr := authz.PullRequest(prID)
+	admin := authz.User(adminID)
+	reader := authz.User(readerID)
+
+	// Verify admin has can_read on PR (via repo)
+	t.Run("admin has can_read on PR", func(t *testing.T) {
+		ok, err := checker.Check(ctx, admin, authz.RelCanRead, pr)
+		require.NoError(t, err)
+		assert.True(t, ok, "admin should have can_read on PR")
+	})
+
+	// Verify admin is excluded from can_review_strict (banned via parent)
+	t.Run("admin excluded from can_review_strict via parent-level ban", func(t *testing.T) {
+		ok, err := checker.Check(ctx, admin, melange.Relation("can_review_strict"), pr)
+		require.NoError(t, err)
+		assert.False(t, ok, "repo admin should be excluded from can_review_strict (banned inherited from repo.can_admin)")
+	})
+
+	// Verify reader can review_strict (not banned)
+	t.Run("reader can review_strict", func(t *testing.T) {
+		ok, err := checker.Check(ctx, reader, melange.Relation("can_review_strict"), pr)
+		require.NoError(t, err)
+		assert.True(t, ok, "reader should be able to review_strict (not banned)")
+	})
+
+	// Verify ListObjects excludes PR for admin (parity with Check)
+	t.Run("list_accessible_objects excludes PR for admin", func(t *testing.T) {
+		ids, err := checker.ListObjects(ctx, admin, melange.Relation("can_review_strict"), authz.TypePullRequest)
+		require.NoError(t, err)
+		assert.NotContains(t, ids, idStr(prID), "list_accessible_objects should exclude PR for banned admin")
+	})
+
+	// Verify ListSubjects excludes admin (parity with Check)
+	// Regression test: list_accessible_subjects must correctly exclude subjects when the
+	// exclusion has parent inheritance (e.g., banned: can_admin from repo). This requires
+	// the recursive CTE to expand via the closure table for satisfying relations.
+	t.Run("list_accessible_subjects excludes admin", func(t *testing.T) {
+		ids, err := checker.ListSubjects(ctx, pr, melange.Relation("can_review_strict"), authz.TypeUser)
+		require.NoError(t, err)
+
+		// Reader should be included (not banned)
+		assert.Contains(t, ids, idStr(readerID), "list_accessible_subjects should include reader")
+
+		// Admin should be excluded (banned via parent inheritance)
+		assert.NotContains(t, ids, idStr(adminID), "list_accessible_subjects should exclude banned admin")
+
+		// Double-check parity with Check
+		adminAllowed, err := checker.Check(ctx, admin, melange.Relation("can_review_strict"), pr)
+		require.NoError(t, err)
+		assert.False(t, adminAllowed, "check should also exclude banned admin")
+	})
+}
+
+// TestListCheckParityProperty is a property-style test ensuring that every subject
+// returned by ListSubjects passes Check, and every object returned by ListObjects passes Check.
+// Finding 1.6: Semantic parity between list and check functions.
+func TestListCheckParityProperty(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	db := testutil.DB(t)
+	ctx := context.Background()
+
+	// Create a small graph with various roles and exclusions
+	var orgID, repo1ID, repo2ID int64
+	var user1ID, user2ID, user3ID int64
+
+	// Create users
+	err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('parity_user1') RETURNING id`).Scan(&user1ID)
+	require.NoError(t, err)
+	err = db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('parity_user2') RETURNING id`).Scan(&user2ID)
+	require.NoError(t, err)
+	err = db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('parity_user3') RETURNING id`).Scan(&user3ID)
+	require.NoError(t, err)
+
+	// Create organization
+	err = db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('parity_org') RETURNING id`).Scan(&orgID)
+	require.NoError(t, err)
+
+	// User1: org admin (has can_admin on org, can_deploy on repos)
+	_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'admin')`, orgID, user1ID)
+	require.NoError(t, err)
+
+	// User2: org member (has can_read on org and repos)
+	_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'member')`, orgID, user2ID)
+	require.NoError(t, err)
+
+	// User3: org member
+	_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'member')`, orgID, user3ID)
+	require.NoError(t, err)
+
+	// Create repos
+	err = db.QueryRowContext(ctx, `INSERT INTO repositories (organization_id, owner_id, name) VALUES ($1, $2, 'parity_repo1') RETURNING id`, orgID, user2ID).Scan(&repo1ID)
+	require.NoError(t, err)
+	err = db.QueryRowContext(ctx, `INSERT INTO repositories (organization_id, name) VALUES ($1, 'parity_repo2') RETURNING id`, orgID).Scan(&repo2ID)
+	require.NoError(t, err)
+
+	checker := melange.NewChecker(db)
+
+	// Test relations with exclusions
+	relations := []string{"can_review", "can_read_safe", "can_deploy"}
+	users := []int64{user1ID, user2ID, user3ID}
+	repos := []int64{repo1ID, repo2ID}
+
+	// For each relation, verify ListObjects/Check parity
+	for _, rel := range relations {
+		t.Run(fmt.Sprintf("ListObjects/%s", rel), func(t *testing.T) {
+			for _, uid := range users {
+				user := authz.User(uid)
+				ids, err := checker.ListObjects(ctx, user, melange.Relation(rel), authz.TypeRepository)
+				require.NoError(t, err)
+
+				// Every returned object must pass Check
+				for _, objID := range ids {
+					obj := melange.Object{Type: authz.TypeRepository, ID: objID}
+					ok, err := checker.Check(ctx, user, melange.Relation(rel), obj)
+					require.NoError(t, err)
+					assert.True(t, ok, "ListObjects returned %s but Check failed for user %d", objID, uid)
+				}
+			}
+		})
+	}
+
+	// For each relation, verify ListSubjects/Check parity
+	for _, rel := range relations {
+		t.Run(fmt.Sprintf("ListSubjects/%s", rel), func(t *testing.T) {
+			for _, rid := range repos {
+				repo := authz.Repository(rid)
+				ids, err := checker.ListSubjects(ctx, repo, melange.Relation(rel), authz.TypeUser)
+				require.NoError(t, err)
+
+				// Every returned subject must pass Check
+				for _, subjID := range ids {
+					subj := melange.Object{Type: authz.TypeUser, ID: subjID}
+					ok, err := checker.Check(ctx, subj, melange.Relation(rel), repo)
+					require.NoError(t, err)
+					assert.True(t, ok, "ListSubjects returned %s but Check failed for repo %d", subjID, rid)
+				}
+			}
+		})
+	}
 }

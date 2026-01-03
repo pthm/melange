@@ -137,16 +137,26 @@ BEGIN
     --
     -- Example: "can_read from org" stores subject_type="org", parent_relation="can_read"
     -- The query finds tuples where t.relation="org" and checks can_read on the parent.
+    --
+    -- IMPORTANT: We must check parent inheritance on ALL relations that satisfy p_relation
+    -- via the closure table, not just p_relation itself. For example:
+    --   repository.can_read: reader
+    --   repository.reader: [user] or can_read from org
+    -- When checking can_read, reader satisfies it via closure, so we must also check
+    -- reader's parent inheritance rule (can_read from org).
     FOR v_parent_type, v_parent_id, v_parent_rel, v_excluded_rel IN
         SELECT t.subject_type, t.subject_id, am.parent_relation, am.excluded_relation
-        FROM melange_tuples t
+        FROM melange_relation_closure c
         JOIN melange_model am
           ON am.object_type = p_object_type
-         AND am.relation = p_relation
+         AND am.relation = c.satisfying_relation
          AND am.parent_relation IS NOT NULL
+        JOIN melange_tuples t
+          ON t.object_type = p_object_type
+         AND t.object_id = p_object_id
          AND t.relation = am.subject_type  -- KEY: match linking relation, not parent type
-        WHERE t.object_type = p_object_type
-          AND t.object_id = p_object_id
+        WHERE c.object_type = p_object_type
+          AND c.relation = p_relation
     LOOP
         -- Check if the parent relation is satisfied (recursively uses closure for parent)
         IF check_permission(p_subject_type, p_subject_id, v_parent_rel, v_parent_type, v_parent_id) = 1 THEN
@@ -193,12 +203,18 @@ $$ LANGUAGE plpgsql STABLE;
 -- List objects a subject can access
 -- Uses a recursive CTE to walk the permission graph in a single query.
 --
--- Performance: 10-50x improvement over N+1 patterns on large datasets.
---
 -- The CTE:
 -- 1. Seeds with direct tuples that satisfy the relation (via closure table)
--- 2. Recursively follows parent relations to find inherited access
--- 3. Handles exclusions at each level
+-- 2. Finds inherited access via parent objects, using check_permission to handle
+--    complex inheritance chains correctly (including cross-relation inheritance)
+-- 3. Handles exclusions at the final result level
+--
+-- Key insight: When a child relation inherits from a parent via "X from parent",
+-- the parent may require a DIFFERENT relation than the child. For example:
+--   repository.can_read: can_admin from org
+-- Here can_read on repository requires can_admin on the org, not can_read.
+-- We use check_permission to correctly resolve parent access including multi-level
+-- inheritance and cross-relation inheritance patterns.
 CREATE OR REPLACE FUNCTION list_accessible_objects(
     p_subject_type TEXT,
     p_subject_id TEXT,
@@ -207,7 +223,7 @@ CREATE OR REPLACE FUNCTION list_accessible_objects(
 ) RETURNS TABLE(object_id TEXT) AS $$
 BEGIN
     RETURN QUERY
-    WITH RECURSIVE
+    WITH
     -- Find all relations that can satisfy the target relation
     satisfying_relations AS (
         SELECT c.satisfying_relation
@@ -219,86 +235,82 @@ BEGIN
     direct_access AS (
         SELECT DISTINCT
             t.object_id,
-            t.object_type,
-            0 AS depth
+            t.object_type
         FROM melange_tuples t
         WHERE t.subject_type = p_subject_type
           AND (t.subject_id = p_subject_id OR t.subject_id = '*')
           AND t.object_type = p_object_type
           AND t.relation IN (SELECT satisfying_relation FROM satisfying_relations)
     ),
-    -- Find parent objects that grant access (for parent inheritance)
-    parent_access AS (
-        SELECT DISTINCT
-            t.object_id,
-            t.object_type,
-            0 AS depth
-        FROM melange_tuples t
-        WHERE t.subject_type = p_subject_type
-          AND (t.subject_id = p_subject_id OR t.subject_id = '*')
-          AND EXISTS (
-              SELECT 1 FROM melange_relation_closure c
-              WHERE c.object_type = t.object_type
-                AND c.relation = p_relation
-                AND c.satisfying_relation = t.relation
-          )
-    ),
-    -- Recursively find children that inherit from accessible parents
+    -- Find inherited access via parent objects.
+    -- For "p_relation from parent_rel" patterns, check if subject has parent_rel on parent.
+    -- We use check_permission to handle complex cases:
+    --   - Direct access to parent via closure table
+    --   - Multi-level inheritance (parent inherits from grandparent)
+    --   - Cross-relation inheritance (can_read requires can_admin on parent)
+    --
+    -- IMPORTANT: We must check parent inheritance on ALL relations that satisfy p_relation
+    -- via the closure table, not just p_relation itself. This matches the fix in check_permission.
     inherited_access AS (
-        -- Start with parent objects we have access to
-        SELECT
-            pa.object_id,
-            pa.object_type,
-            pa.depth
-        FROM parent_access pa
-
-        UNION
-
-        -- Find child objects that inherit from accessible parents
         SELECT DISTINCT
             child.object_id,
             child.object_type,
-            ia.depth + 1
-        FROM inherited_access ia
-        -- Find children that link to this parent
-        JOIN melange_tuples child
-            ON child.subject_type = ia.object_type
-            AND child.subject_id = ia.object_id
-        -- Find model entries where child inherits the target relation from parent
+            m.excluded_relation
+        FROM melange_relation_closure c
         JOIN melange_model m
-            ON m.object_type = child.object_type
+            ON m.object_type = p_object_type
+            AND m.relation = c.satisfying_relation
             AND m.parent_relation IS NOT NULL
-            AND m.subject_type = child.relation  -- linking relation
-        -- Check that parent relation matches what we're looking for
-        JOIN melange_relation_closure c
-            ON c.object_type = ia.object_type
-            AND c.satisfying_relation = p_relation
-            AND c.relation = m.parent_relation
-        WHERE child.object_type = p_object_type
-          AND ia.depth < 10  -- depth protection
-          -- Exclusion check
-          AND (m.excluded_relation IS NULL OR NOT EXISTS (
-              SELECT 1 FROM melange_tuples excl
-              WHERE excl.subject_type = p_subject_type
-                AND (excl.subject_id = p_subject_id OR excl.subject_id = '*')
-                AND excl.object_type = child.object_type
-                AND excl.object_id = child.object_id
-                AND excl.relation = m.excluded_relation
-          ))
+        JOIN melange_tuples child
+            ON child.object_type = m.object_type
+            AND child.relation = m.subject_type  -- linking relation
+        WHERE c.object_type = p_object_type
+          AND c.relation = p_relation
+          AND check_permission(
+              p_subject_type,
+              p_subject_id,
+              m.parent_relation,
+              child.subject_type,
+              child.subject_id
+          ) = 1
     )
     -- Combine direct access and inherited access
-    SELECT DISTINCT da.object_id FROM direct_access da
+    SELECT DISTINCT da.object_id
+    FROM direct_access da
+    -- Exclusion check for direct access: must check if any exclusion is defined
+    -- for this relation and whether the subject is excluded
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM melange_model em
+        WHERE em.object_type = p_object_type
+          AND em.relation = p_relation
+          AND em.excluded_relation IS NOT NULL
+          AND check_exclusion(
+              p_subject_type,
+              p_subject_id,
+              em.excluded_relation,
+              p_object_type,
+              da.object_id
+          )
+    )
     UNION
-    SELECT DISTINCT ia.object_id FROM inherited_access ia
-    WHERE ia.object_type = p_object_type;
+    SELECT DISTINCT ia.object_id
+    FROM inherited_access ia
+    WHERE ia.object_type = p_object_type
+      -- Exclusion check: use check_exclusion to handle closure table + parent inheritance
+      AND (ia.excluded_relation IS NULL OR NOT check_exclusion(
+          p_subject_type,
+          p_subject_id,
+          ia.excluded_relation,
+          ia.object_type,
+          ia.object_id
+      ));
 END;
 $$ LANGUAGE plpgsql STABLE;
 
 
 -- List subjects that have access to an object
 -- Uses a recursive CTE to find all permission sources, then collects subjects.
---
--- Performance: 10-50x improvement over N+1 patterns on large datasets.
 --
 -- The CTE:
 -- 1. Starts with the target object
@@ -324,22 +336,28 @@ BEGIN
 
         UNION
 
-        -- Parents that grant permission via inheritance
+        -- Parents that grant permission via inheritance.
+        -- IMPORTANT: We must check parent inheritance on ALL relations that satisfy
+        -- the required_relation via the closure table, not just required_relation itself.
+        -- This matches the fix in check_permission and list_accessible_objects.
         SELECT
             t.subject_type,
             t.subject_id,
             m.parent_relation,
             ps.depth + 1
         FROM permission_sources ps
+        JOIN melange_relation_closure c
+            ON c.object_type = ps.source_type
+            AND c.relation = ps.required_relation
         JOIN melange_tuples t
             ON t.object_type = ps.source_type
             AND t.object_id = ps.source_id
         JOIN melange_model m
             ON m.object_type = ps.source_type
-            AND m.relation = ps.required_relation
+            AND m.relation = c.satisfying_relation
             AND m.parent_relation IS NOT NULL
             AND m.subject_type = t.relation  -- linking relation
-        WHERE ps.depth < 10  -- depth protection
+        WHERE ps.depth < 10
     )
     -- Find all subjects with satisfying relations on any permission source
     SELECT DISTINCT t.subject_id
@@ -353,19 +371,24 @@ BEGIN
         AND t.relation = c.satisfying_relation
     WHERE t.subject_type = p_subject_type
       AND t.subject_id != '*'  -- Exclude wildcard from results
-      -- Exclusion check on the original object
+      -- Exclusion check: ALWAYS check against the ORIGINAL object (p_object_type/p_object_id),
+      -- not the permission source. Exclusions are defined on p_relation which is on the
+      -- original object. For example, if checking can_review_strict on pull_request,
+      -- the exclusion (banned) must be checked on the pull_request, even when the
+      -- permission comes from a parent repo.
       AND NOT EXISTS (
           SELECT 1
           FROM melange_model em
-          JOIN melange_tuples excl
-              ON excl.object_type = p_object_type
-              AND excl.object_id = p_object_id
-              AND excl.subject_type = p_subject_type
-              AND excl.subject_id = t.subject_id
-              AND excl.relation = em.excluded_relation
           WHERE em.object_type = p_object_type
             AND em.relation = p_relation
             AND em.excluded_relation IS NOT NULL
+            AND check_exclusion(
+                p_subject_type,
+                t.subject_id,
+                em.excluded_relation,
+                p_object_type,
+                p_object_id
+            )
       );
 END;
 $$ LANGUAGE plpgsql STABLE;

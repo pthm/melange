@@ -10,9 +10,9 @@ import "errors"
 // Use the Is*Err helper functions to check for specific errors and provide
 // helpful setup messages to users.
 var (
-	// ErrNoTuplesTable is returned when the melange_tuples view doesn't exist.
-	// This typically means the application hasn't created the view over its
-	// domain tables. See the melange documentation for view creation examples.
+	// ErrNoTuplesTable is returned when the melange_tuples relation doesn't exist.
+	// This typically means the application hasn't created the view (or table/materialized view)
+	// over its domain tables. See the melange documentation for view creation examples.
 	ErrNoTuplesTable = errors.New("melange: melange_tuples view/table not found")
 
 	// ErrMissingModel is returned when the melange_model table doesn't exist.
