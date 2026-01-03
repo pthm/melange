@@ -1,0 +1,199 @@
+package melange
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	melangesql "github.com/pthm/melange/sql"
+)
+
+// Migrator handles loading authorization schemas into PostgreSQL.
+// The migrator is idempotent - safe to run on every application startup.
+//
+// The migration process:
+//  1. Creates melange_model table (if not exists)
+//  2. Creates/replaces check_permission and list_accessible_* functions
+//  3. Loads pre-parsed authorization rules into the database
+//
+// # Usage with Tooling Module
+//
+// For most use cases, use the tooling module's convenience functions which
+// handle parsing and migration in one step:
+//
+//	import "github.com/pthm/melange/tooling"
+//	err := tooling.Migrate(ctx, db, "schemas")
+//
+// Use the core Migrator directly when you have pre-parsed TypeDefinitions
+// or need fine-grained control (DDL-only, status checks, etc.):
+//
+//	types, _ := tooling.ParseSchema("schemas/schema.fga")
+//	migrator := melange.NewMigrator(db, "schemas")
+//	err := migrator.MigrateWithTypes(ctx, types)
+//
+// This separation keeps the core melange package free of OpenFGA dependencies.
+type Migrator struct {
+	db         Execer
+	schemasDir string
+}
+
+// NewMigrator creates a new schema migrator.
+// The schemasDir should contain a schema.fga file in OpenFGA DSL format.
+// The Execer is typically *sql.DB but can be *sql.Tx for testing.
+func NewMigrator(db Execer, schemasDir string) *Migrator {
+	return &Migrator{db: db, schemasDir: schemasDir}
+}
+
+// SchemaPath returns the path to the schema.fga file.
+// Conventionally named schema.fga by OpenFGA tooling.
+func (m *Migrator) SchemaPath() string {
+	return filepath.Join(m.schemasDir, "schema.fga")
+}
+
+// HasSchema returns true if the schema file exists.
+// Use this to conditionally run migration or skip if not configured.
+func (m *Migrator) HasSchema() bool {
+	_, err := os.Stat(m.SchemaPath())
+	return err == nil
+}
+
+// ApplyDDL applies the melange_model table and functions.
+// This is idempotent (CREATE TABLE IF NOT EXISTS, CREATE OR REPLACE FUNCTION).
+//
+// The DDL creates:
+//   - melange_model table (stores parsed FGA schema)
+//   - check_permission function (evaluates permissions)
+//   - list_accessible_objects function (reverse lookup)
+//   - has_tuple function (direct tuple checks)
+//
+// This can be called independently of schema migration to update function
+// implementations without reloading the authorization model.
+func (m *Migrator) ApplyDDL(ctx context.Context) error {
+	// Apply model table
+	if _, err := m.db.ExecContext(ctx, melangesql.ModelSQL); err != nil {
+		return fmt.Errorf("applying model.sql: %w", err)
+	}
+
+	// Apply functions
+	if _, err := m.db.ExecContext(ctx, melangesql.FunctionsSQL); err != nil {
+		return fmt.Errorf("applying functions.sql: %w", err)
+	}
+
+	return nil
+}
+
+// MigrateWithTypes performs database migration using pre-parsed type definitions.
+// This is the core migration method used by the tooling package's Migrate function.
+//
+// The method:
+//  1. Applies DDL (creates tables and functions)
+//  2. Converts type definitions to authorization models
+//  3. Truncates and repopulates melange_model with the new rules
+//
+// This is idempotent - safe to run multiple times with the same types.
+//
+// Uses a transaction if the db supports it (*sql.DB). This ensures
+// the schema is updated atomically or not at all.
+func (m *Migrator) MigrateWithTypes(ctx context.Context, types []TypeDefinition) error {
+	// Apply DDL first
+	if err := m.ApplyDDL(ctx); err != nil {
+		return err
+	}
+
+	models := ToAuthzModels(types)
+
+	// Use a transaction if the db supports it
+	if txer, ok := m.db.(interface {
+		BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+	}); ok {
+		tx, err := txer.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("starting transaction: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+
+		if err := m.applyModels(ctx, tx, models); err != nil {
+			return err
+		}
+
+		return tx.Commit()
+	}
+
+	// Fall back to non-transactional (for *sql.Conn)
+	return m.applyModels(ctx, m.db, models)
+}
+
+// applyModels truncates and repopulates the melange_model table.
+// This is the core of the migration: converting parsed FGA rules into
+// database rows that check_permission can query.
+//
+// TRUNCATE is transactional in PostgreSQL, ensuring atomicity when called
+// within a transaction. If any insert fails, the whole migration rolls back.
+//
+// Uses bulk INSERT for efficiency when loading large schemas.
+func (m *Migrator) applyModels(ctx context.Context, db Execer, models []AuthzModel) error {
+	// TRUNCATE is transactional in PostgreSQL
+	_, err := db.ExecContext(ctx, "TRUNCATE melange_model RESTART IDENTITY")
+	if err != nil {
+		return fmt.Errorf("truncating melange_model: %w", err)
+	}
+
+	if len(models) == 0 {
+		return nil
+	}
+
+	// Build bulk insert
+	var values []string
+	var args []any
+	argIdx := 1
+
+	for _, model := range models {
+		values = append(values, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d)",
+			argIdx, argIdx+1, argIdx+2, argIdx+3, argIdx+4, argIdx+5))
+		args = append(args, model.ObjectType, model.Relation,
+			model.SubjectType, model.ImpliedBy, model.ParentRelation, model.ExcludedRelation)
+		argIdx += 6
+	}
+
+	query := fmt.Sprintf(
+		"INSERT INTO melange_model (object_type, relation, subject_type, implied_by, parent_relation, excluded_relation) VALUES %s",
+		strings.Join(values, ", "),
+	)
+
+	_, err = db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("inserting schema: %w", err)
+	}
+
+	return nil
+}
+
+
+// Status represents the current migration state.
+// Use GetStatus to check if the authorization system is properly configured.
+type Status struct {
+	// SchemaExists indicates if the schema.fga file exists on disk.
+	SchemaExists bool
+
+	// ModelCount is the number of rows in the melange_model table.
+	// Zero means the schema hasn't been loaded (run `melange migrate`).
+	ModelCount int64
+}
+
+// GetStatus returns the current migration status.
+// Useful for health checks or migration diagnostics.
+func (m *Migrator) GetStatus(ctx context.Context) (*Status, error) {
+	var count int64
+	err := m.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM melange_model").Scan(&count)
+	if err != nil {
+		return nil, fmt.Errorf("counting melange_model rows: %w", err)
+	}
+
+	return &Status{
+		SchemaExists: m.HasSchema(),
+		ModelCount:   count,
+	}, nil
+}
