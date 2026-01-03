@@ -28,7 +28,17 @@ CREATE INDEX IF NOT EXISTS idx_melange_model_object_relation ON melange_model (o
 CREATE INDEX IF NOT EXISTS idx_melange_model_implied ON melange_model (object_type, relation)
     WHERE implied_by IS NOT NULL AND parent_relation IS NULL;
 
+-- Composite index for the full implied-by lookup pattern including the implied_by column
+-- Covers: SELECT implied_by, excluded_relation FROM melange_model WHERE object_type = ? AND relation = ? AND implied_by IS NOT NULL
+CREATE INDEX IF NOT EXISTS idx_melange_model_implied_lookup ON melange_model (object_type, relation, implied_by)
+    WHERE implied_by IS NOT NULL;
+
 -- Parent relations lookup: find parent inheritance rules
 -- Query: WHERE object_type = ? AND relation = ? AND parent_relation IS NOT NULL AND subject_type = ?
 CREATE INDEX IF NOT EXISTS idx_melange_model_parent ON melange_model (object_type, relation, subject_type)
+    WHERE parent_relation IS NOT NULL;
+
+-- Composite index for the full parent lookup pattern including parent_relation
+-- Covers: SELECT parent_relation, subject_type, excluded_relation FROM melange_model WHERE object_type = ? AND relation = ? AND parent_relation IS NOT NULL
+CREATE INDEX IF NOT EXISTS idx_melange_model_parent_lookup ON melange_model (object_type, relation, parent_relation, subject_type)
     WHERE parent_relation IS NOT NULL;

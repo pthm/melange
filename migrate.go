@@ -61,10 +61,11 @@ func (m *Migrator) HasSchema() bool {
 }
 
 // ApplyDDL applies the melange_model table and functions.
-// This is idempotent (CREATE TABLE IF NOT EXISTS, CREATE OR REPLACE FUNCTION).
+// This is idempotent (CREATE TABLE IF NOT EXISTS, CREATE OR REPLACE FUNCTION,
+// CREATE INDEX IF NOT EXISTS).
 //
 // The DDL creates:
-//   - melange_model table (stores parsed FGA schema)
+//   - melange_model table with performance indexes (stores parsed FGA schema)
 //   - check_permission function (evaluates permissions)
 //   - list_accessible_objects function (reverse lookup)
 //   - has_tuple function (direct tuple checks)
@@ -72,7 +73,7 @@ func (m *Migrator) HasSchema() bool {
 // This can be called independently of schema migration to update function
 // implementations without reloading the authorization model.
 func (m *Migrator) ApplyDDL(ctx context.Context) error {
-	// Apply model table
+	// Apply model table and indexes
 	if _, err := m.db.ExecContext(ctx, melangesql.ModelSQL); err != nil {
 		return fmt.Errorf("applying model.sql: %w", err)
 	}
@@ -181,19 +182,50 @@ type Status struct {
 	// ModelCount is the number of rows in the melange_model table.
 	// Zero means the schema hasn't been loaded (run `melange migrate`).
 	ModelCount int64
+
+	// IndexCount is the number of melange-related indexes found.
+	// Expected to be at least 5 after a successful migration.
+	IndexCount int
+
+	// TuplesViewExists indicates if the melange_tuples view exists.
+	// This view must be created by the user to map their domain tables.
+	TuplesViewExists bool
 }
 
 // GetStatus returns the current migration status.
 // Useful for health checks or migration diagnostics.
 func (m *Migrator) GetStatus(ctx context.Context) (*Status, error) {
-	var count int64
-	err := m.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM melange_model").Scan(&count)
+	status := &Status{
+		SchemaExists: m.HasSchema(),
+	}
+
+	// Check model count
+	err := m.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM melange_model").Scan(&status.ModelCount)
 	if err != nil {
 		return nil, fmt.Errorf("counting melange_model rows: %w", err)
 	}
 
-	return &Status{
-		SchemaExists: m.HasSchema(),
-		ModelCount:   count,
-	}, nil
+	// Check index count
+	err = m.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM pg_indexes
+		WHERE indexname LIKE 'idx_melange_%'
+	`).Scan(&status.IndexCount)
+	if err != nil {
+		return nil, fmt.Errorf("counting melange indexes: %w", err)
+	}
+
+	// Check if melange_tuples view exists
+	var viewExists bool
+	err = m.db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_views
+			WHERE viewname = 'melange_tuples'
+		)
+	`).Scan(&viewExists)
+	if err != nil {
+		return nil, fmt.Errorf("checking melange_tuples view: %w", err)
+	}
+	status.TuplesViewExists = viewExists
+
+	return status, nil
 }
