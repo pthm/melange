@@ -173,15 +173,16 @@ func (m *Migrator) applyModels(ctx context.Context, db Execer, models []AuthzMod
 	argIdx := 1
 
 	for _, model := range models {
-		values = append(values, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d)",
-			argIdx, argIdx+1, argIdx+2, argIdx+3, argIdx+4, argIdx+5))
+		values = append(values, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+			argIdx, argIdx+1, argIdx+2, argIdx+3, argIdx+4, argIdx+5, argIdx+6, argIdx+7, argIdx+8, argIdx+9))
 		args = append(args, model.ObjectType, model.Relation,
-			model.SubjectType, model.ImpliedBy, model.ParentRelation, model.ExcludedRelation)
-		argIdx += 6
+			model.SubjectType, model.ImpliedBy, model.ParentRelation, model.ExcludedRelation,
+			model.SubjectRelation, model.RuleGroupID, model.RuleGroupMode, model.CheckRelation)
+		argIdx += 10
 	}
 
 	query := fmt.Sprintf(
-		"INSERT INTO melange_model (object_type, relation, subject_type, implied_by, parent_relation, excluded_relation) VALUES %s",
+		"INSERT INTO melange_model (object_type, relation, subject_type, implied_by, parent_relation, excluded_relation, subject_relation, rule_group_id, rule_group_mode, check_relation) VALUES %s",
 		strings.Join(values, ", "),
 	)
 

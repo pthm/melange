@@ -64,23 +64,33 @@ func convertModel(model *openfgav1.AuthorizationModel) []melange.TypeDefinition 
 		}
 
 		// Get directly related user types from metadata
+		// This extracts both simple type references [user] and userset references [group#member]
 		directTypes := make(map[string][]string)
+		directTypeRefs := make(map[string][]melange.SubjectTypeRef)
 		if meta := td.GetMetadata(); meta != nil {
 			for relName, relMeta := range meta.GetRelations() {
 				for _, t := range relMeta.GetDirectlyRelatedUserTypes() {
 					typeName := t.GetType()
-					switch t.GetRelationOrWildcard().(type) {
+					ref := melange.SubjectTypeRef{Type: typeName}
+
+					switch v := t.GetRelationOrWildcard().(type) {
 					case *openfgav1.RelationReference_Wildcard:
 						typeName += ":*"
+						ref.Wildcard = true
+					case *openfgav1.RelationReference_Relation:
+						// This is a userset reference like [group#member]
+						ref.Relation = v.Relation
 					}
+
 					directTypes[relName] = append(directTypes[relName], typeName)
+					directTypeRefs[relName] = append(directTypeRefs[relName], ref)
 				}
 			}
 		}
 
 		// Convert relations
 		for relName, rel := range td.GetRelations() {
-			relDef := convertRelation(relName, rel, directTypes[relName])
+			relDef := convertRelation(relName, rel, directTypes[relName], directTypeRefs[relName])
 			typeDef.Relations = append(typeDef.Relations, relDef)
 		}
 
@@ -96,10 +106,12 @@ func convertModel(model *openfgav1.AuthorizationModel) []melange.TypeDefinition 
 //   - Computed relations: implied by other relations (role hierarchy)
 //   - Tuple-to-userset: inherited from related objects (parent permissions)
 //   - Union/intersection/difference: combining multiple rules
-func convertRelation(name string, rel *openfgav1.Userset, subjectTypes []string) melange.RelationDefinition {
+//   - Userset references: access via group membership [type#relation]
+func convertRelation(name string, rel *openfgav1.Userset, subjectTypes []string, subjectTypeRefs []melange.SubjectTypeRef) melange.RelationDefinition {
 	relDef := melange.RelationDefinition{
-		Name:         name,
-		SubjectTypes: subjectTypes,
+		Name:            name,
+		SubjectTypes:    subjectTypes,
+		SubjectTypeRefs: subjectTypeRefs,
 	}
 
 	// Extract implied relations and parent relations from the userset

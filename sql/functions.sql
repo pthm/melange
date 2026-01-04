@@ -6,6 +6,326 @@
 -- This file is idempotent and applied by `melange migrate`.
 
 
+-- =============================================================================
+-- USERSET REFERENCE HELPER FUNCTIONS
+-- These functions support [type#relation] patterns where a subject gains access
+-- via group/team membership rather than direct tuple assignment.
+-- =============================================================================
+
+-- Check if a subject has a specific relation on a specific object.
+-- Handles:
+--   1. Direct tuples (subject has relation directly)
+--   2. Userset references (subject is member of a group that has the relation)
+--   3. Implied relations via closure table
+--   4. Parent inheritance (relation inherited from parent object)
+--
+-- This is the on-demand (lazy) version for check_permission - only evaluates
+-- the specific membership needed, not all possible grants.
+--
+-- Parameters:
+--   p_subject_type, p_subject_id: The subject to check
+--   p_object_type, p_object_id: The object to check access on
+--   p_relation: The relation to check
+--   p_visited: Array of visited nodes for cycle detection (internal use)
+--
+-- Returns TRUE if the subject has the relation on the object.
+CREATE OR REPLACE FUNCTION subject_has_grant(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_object_type TEXT,
+    p_object_id TEXT,
+    p_relation TEXT,
+    p_visited TEXT[] DEFAULT ARRAY[]::TEXT[]
+) RETURNS BOOLEAN AS $$
+DECLARE
+    v_found BOOLEAN := FALSE;
+    v_userset RECORD;
+    v_parent RECORD;
+    v_visit_key TEXT;
+BEGIN
+    -- Build unique key for cycle detection
+    v_visit_key := p_object_type || ':' || p_object_id || ':' || p_relation;
+
+    -- Cycle detection
+    IF v_visit_key = ANY(p_visited) THEN
+        RETURN FALSE;
+    END IF;
+
+    -- Depth protection (array length serves as depth counter)
+    -- Note: array_length returns NULL for empty arrays, so use COALESCE
+    IF COALESCE(array_length(p_visited, 1), 0) >= 10 THEN
+        RETURN FALSE;
+    END IF;
+
+    -- 1. Check direct tuple match via closure table
+    -- This handles: direct match + all implied-by relations in one query
+    -- Also handles userset tuple match where subject_id contains #relation
+    SELECT TRUE INTO v_found
+    FROM melange_tuples t
+    JOIN melange_relation_closure c
+        ON c.object_type = p_object_type
+        AND c.relation = p_relation
+        AND c.satisfying_relation = t.relation
+    JOIN melange_model m
+        ON m.object_type = p_object_type
+        AND m.relation = c.satisfying_relation
+        AND m.subject_type = t.subject_type
+        AND m.parent_relation IS NULL   -- Not a parent rule
+        -- Allow either:
+        -- 1. Direct assignment (no subject_relation in model)
+        -- 2. Userset reference where the subject_id matches the pattern
+        AND (
+            m.subject_relation IS NULL
+            OR (
+                m.subject_relation IS NOT NULL
+                AND position('#' in p_subject_id) > 0
+                AND substring(p_subject_id from position('#' in p_subject_id) + 1) = m.subject_relation
+            )
+        )
+    WHERE t.object_type = p_object_type
+      AND t.object_id = p_object_id
+      AND t.subject_type = p_subject_type
+      AND (t.subject_id = p_subject_id OR t.subject_id = '*')
+    LIMIT 1;
+
+    IF v_found THEN
+        RETURN TRUE;
+    END IF;
+
+    -- 2. Check userset references from tuples
+    -- Tuples with userset subjects store subject_id as "id#relation" (e.g., "x#member")
+    -- For example: tuple (group, x#member, viewer, document, 1) means
+    -- "members of group:x have viewer on document:1"
+    FOR v_userset IN
+        SELECT
+            t.subject_type AS group_type,
+            -- Parse the group ID: everything before # or the whole string if no #
+            CASE
+                WHEN position('#' in t.subject_id) > 0
+                THEN substring(t.subject_id from 1 for position('#' in t.subject_id) - 1)
+                ELSE t.subject_id
+            END AS group_id,
+            -- Parse the required relation: everything after # or from model if no #
+            CASE
+                WHEN position('#' in t.subject_id) > 0
+                THEN substring(t.subject_id from position('#' in t.subject_id) + 1)
+                ELSE m.subject_relation
+            END AS required_relation
+        FROM melange_relation_closure c
+        JOIN melange_model m
+            ON m.object_type = p_object_type
+            AND m.relation = c.satisfying_relation
+            AND m.subject_relation IS NOT NULL  -- userset reference rule
+            AND m.parent_relation IS NULL       -- not a parent inheritance rule
+        JOIN melange_tuples t
+            ON t.object_type = p_object_type
+            AND t.object_id = p_object_id
+            AND t.relation = c.satisfying_relation
+            AND t.subject_type = m.subject_type
+            -- Tuple subject_id must match the model's expected pattern
+            -- Either it has # (userset in tuple) or model defines the relation
+            AND (position('#' in t.subject_id) > 0 OR m.subject_relation IS NOT NULL)
+        WHERE c.object_type = p_object_type
+          AND c.relation = p_relation
+    LOOP
+        -- Recursively check if subject has the required relation on the group
+        IF subject_has_grant(
+            p_subject_type, p_subject_id,
+            v_userset.group_type, v_userset.group_id,
+            v_userset.required_relation,
+            p_visited || v_visit_key  -- append current to visited for cycle detection
+        ) THEN
+            RETURN TRUE;
+        END IF;
+    END LOOP;
+
+    -- 3. Check parent inheritance
+    -- For rules like "can_read from org", check if subject has the
+    -- parent_relation on the parent object.
+    FOR v_parent IN
+        SELECT
+            t.subject_type AS parent_type,
+            t.subject_id AS parent_id,
+            m.parent_relation AS required_relation
+        FROM melange_relation_closure c
+        JOIN melange_model m
+            ON m.object_type = p_object_type
+            AND m.relation = c.satisfying_relation
+            AND m.parent_relation IS NOT NULL
+        JOIN melange_tuples t
+            ON t.object_type = p_object_type
+            AND t.object_id = p_object_id
+            AND t.relation = m.subject_type  -- linking relation
+        WHERE c.object_type = p_object_type
+          AND c.relation = p_relation
+    LOOP
+        -- Recursively check parent (which may itself have usersets)
+        IF subject_has_grant(
+            p_subject_type, p_subject_id,
+            v_parent.parent_type, v_parent.parent_id,
+            v_parent.required_relation,
+            p_visited || v_visit_key
+        ) THEN
+            RETURN TRUE;
+        END IF;
+    END LOOP;
+
+    RETURN FALSE;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+
+-- Compute all (object_type, object_id, relation) tuples that a subject can access.
+-- Uses iterative fixpoint computation to handle:
+--   1. Direct tuples
+--   2. Userset references (nested group membership)
+--   3. Parent inheritance
+--   4. Implied relations via closure table
+--
+-- This is the full enumeration version for list_accessible_objects.
+-- For check_permission, prefer subject_has_grant() for on-demand evaluation.
+--
+-- Parameters:
+--   p_subject_type, p_subject_id: The subject to enumerate access for
+--
+-- Returns a table of (object_type, object_id, relation) tuples the subject can access.
+CREATE OR REPLACE FUNCTION subject_grants(
+    p_subject_type TEXT,
+    p_subject_id TEXT
+) RETURNS TABLE (object_type TEXT, object_id TEXT, relation TEXT) AS $$
+DECLARE
+    v_iteration INTEGER := 0;
+    v_new_count INTEGER;
+    v_max_iterations CONSTANT INTEGER := 10;  -- depth limit
+BEGIN
+    -- Create temp table for iterative fixpoint computation
+    -- Using ON COMMIT DROP for automatic cleanup
+    CREATE TEMP TABLE IF NOT EXISTS _sg_grants (
+        object_type TEXT NOT NULL,
+        object_id TEXT NOT NULL,
+        relation TEXT NOT NULL,
+        iteration INTEGER NOT NULL,  -- track when discovered for debugging
+        PRIMARY KEY (object_type, object_id, relation)
+    ) ON COMMIT DROP;
+
+    -- Clear any existing data (in case function is called multiple times in same transaction)
+    TRUNCATE _sg_grants;
+
+    -- Seed: direct tuples the subject has (only for rules without userset reference)
+    -- Expand via closure to get all relations these tuples satisfy
+    INSERT INTO _sg_grants (object_type, object_id, relation, iteration)
+    SELECT DISTINCT
+        t.object_type,
+        t.object_id,
+        c.relation,
+        0
+    FROM melange_tuples t
+    JOIN melange_model m
+        ON m.object_type = t.object_type
+        AND m.relation = t.relation
+        AND m.subject_type = t.subject_type
+        AND m.subject_relation IS NULL  -- Direct assignment only
+        AND m.parent_relation IS NULL   -- Not a parent rule
+    JOIN melange_relation_closure c
+        ON c.object_type = t.object_type
+        AND c.satisfying_relation = t.relation
+    WHERE t.subject_type = p_subject_type
+      AND (t.subject_id = p_subject_id OR t.subject_id = '*')
+    ON CONFLICT DO NOTHING;
+
+    -- Iterative expansion until fixpoint or depth limit
+    LOOP
+        v_iteration := v_iteration + 1;
+
+        IF v_iteration > v_max_iterations THEN
+            RAISE NOTICE 'subject_grants: depth limit (%) reached for subject %:%',
+                         v_max_iterations, p_subject_type, p_subject_id;
+            EXIT;
+        END IF;
+
+        -- Expand via userset references AND parent inheritance in one pass
+        WITH userset_expansion AS (
+            -- If subject has relation R on group G, and there's a tuple
+            -- (G, group_id) -> relation -> object with userset rule [G#R],
+            -- then subject has that relation on the object.
+            SELECT DISTINCT
+                t.object_type,
+                t.object_id,
+                c.relation
+            FROM _sg_grants g
+            JOIN melange_model m
+                ON m.subject_type = g.object_type      -- group type matches
+                AND m.subject_relation = g.relation    -- required relation matches
+                AND m.subject_relation IS NOT NULL     -- is a userset rule
+                AND m.parent_relation IS NULL          -- not parent inheritance
+            JOIN melange_tuples t
+                ON t.subject_type = m.subject_type
+                AND t.subject_id = g.object_id         -- the specific group
+                AND t.object_type = m.object_type
+                AND t.relation = m.relation
+            JOIN melange_relation_closure c
+                ON c.object_type = t.object_type
+                AND c.satisfying_relation = m.relation
+            WHERE NOT EXISTS (
+                SELECT 1 FROM _sg_grants existing
+                WHERE existing.object_type = t.object_type
+                  AND existing.object_id = t.object_id
+                  AND existing.relation = c.relation
+            )
+        ),
+        parent_expansion AS (
+            -- If subject has parent_relation on parent P, and there's an object O
+            -- linked to P via linking_relation with rule "X from P",
+            -- then subject has relation X on O.
+            SELECT DISTINCT
+                child.object_type,
+                child.object_id,
+                c.relation
+            FROM _sg_grants g
+            JOIN melange_model m
+                ON m.parent_relation = g.relation      -- parent relation matches
+                AND m.parent_relation IS NOT NULL      -- is parent inheritance
+            JOIN melange_tuples child
+                ON child.subject_type = g.object_type  -- parent type
+                AND child.subject_id = g.object_id     -- specific parent
+                AND child.object_type = m.object_type
+                AND child.relation = m.subject_type    -- linking relation
+            JOIN melange_relation_closure c
+                ON c.object_type = child.object_type
+                AND c.satisfying_relation = m.relation
+            WHERE NOT EXISTS (
+                SELECT 1 FROM _sg_grants existing
+                WHERE existing.object_type = child.object_type
+                  AND existing.object_id = child.object_id
+                  AND existing.relation = c.relation
+            )
+        ),
+        all_new AS (
+            SELECT * FROM userset_expansion
+            UNION
+            SELECT * FROM parent_expansion
+        )
+        INSERT INTO _sg_grants (object_type, object_id, relation, iteration)
+        SELECT object_type, object_id, relation, v_iteration
+        FROM all_new
+        ON CONFLICT DO NOTHING;
+
+        GET DIAGNOSTICS v_new_count = ROW_COUNT;
+
+        -- Fixpoint reached - no new grants discovered
+        IF v_new_count = 0 THEN
+            EXIT;
+        END IF;
+    END LOOP;
+
+    -- Return all discovered grants
+    RETURN QUERY
+    SELECT g.object_type, g.object_id, g.relation
+    FROM _sg_grants g;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+
 -- Check if a subject has an excluded relation on an object.
 -- Uses a recursive CTE to handle all cases uniformly:
 --   1. Direct tuples (e.g., author)
@@ -67,7 +387,10 @@ END;
 $$ LANGUAGE plpgsql STABLE;
 
 
--- Generic permission check (optimized with closure table)
+-- Simple permission check (no userset reference support)
+-- This is the original check_permission for backward compatibility and as a fast path
+-- when no userset references are defined for a relation.
+--
 -- Checks if a subject has a specific permission on an object by:
 -- 1. Direct tuple match using closure table (handles direct + all implied relations in one query)
 -- 2. Parent relation inheritance (e.g., org -> repo -> change)
@@ -75,7 +398,7 @@ $$ LANGUAGE plpgsql STABLE;
 --
 -- The closure table eliminates recursive implied-by traversal, reducing multiple
 -- model queries to a single JOIN operation.
-CREATE OR REPLACE FUNCTION check_permission(
+CREATE OR REPLACE FUNCTION check_permission_simple(
     p_subject_type TEXT,
     p_subject_id TEXT,
     p_relation TEXT,
@@ -159,7 +482,7 @@ BEGIN
           AND c.relation = p_relation
     LOOP
         -- Check if the parent relation is satisfied (recursively uses closure for parent)
-        IF check_permission(p_subject_type, p_subject_id, v_parent_rel, v_parent_type, v_parent_id) = 1 THEN
+        IF check_permission_simple(p_subject_type, p_subject_id, v_parent_rel, v_parent_type, v_parent_id) = 1 THEN
             -- Check for exclusion using CTE-based helper (handles all cases uniformly)
             IF v_excluded_rel IS NOT NULL THEN
                 IF check_exclusion(p_subject_type, p_subject_id, v_excluded_rel, p_object_type, p_object_id) THEN
@@ -171,6 +494,80 @@ BEGIN
     END LOOP;
 
     RETURN 0;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+
+-- Generic permission check with userset reference support
+-- This is the main entry point for permission checking. It detects whether
+-- userset references are defined for the relation and uses either:
+-- 1. Fast path (check_permission_simple) for relations without usersets
+-- 2. Full userset-aware check using subject_has_grant for relations with usersets
+--
+-- Parameters:
+--   p_subject_type, p_subject_id: The subject requesting access
+--   p_relation: The relation to check
+--   p_object_type, p_object_id: The object to check access on
+--
+-- Returns 1 if access is granted, 0 if denied.
+CREATE OR REPLACE FUNCTION check_permission(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_relation TEXT,
+    p_object_type TEXT,
+    p_object_id TEXT
+) RETURNS INTEGER AS $$
+DECLARE
+    v_has_userset BOOLEAN;
+    v_excluded_rel TEXT;
+BEGIN
+    -- Fast path: check if any userset references exist for this relation
+    -- If not, we can use the simpler (faster) check_permission_simple
+    SELECT EXISTS (
+        SELECT 1
+        FROM melange_relation_closure c
+        JOIN melange_model m
+            ON m.object_type = c.object_type
+            AND m.relation = c.satisfying_relation
+        WHERE c.object_type = p_object_type
+          AND c.relation = p_relation
+          AND m.subject_relation IS NOT NULL
+    ) INTO v_has_userset;
+
+    IF NOT v_has_userset THEN
+        -- No userset references, use fast path
+        RETURN check_permission_simple(
+            p_subject_type, p_subject_id,
+            p_relation, p_object_type, p_object_id
+        );
+    END IF;
+
+    -- Full userset-aware check using subject_has_grant
+    -- First check if access is granted
+    IF subject_has_grant(
+        p_subject_type, p_subject_id,
+        p_object_type, p_object_id,
+        p_relation, ARRAY[]::TEXT[]
+    ) THEN
+        -- Check for exclusions
+        SELECT em.excluded_relation INTO v_excluded_rel
+        FROM melange_model em
+        WHERE em.object_type = p_object_type
+          AND em.relation = p_relation
+          AND em.excluded_relation IS NOT NULL
+        LIMIT 1;
+
+        IF v_excluded_rel IS NOT NULL THEN
+            -- Check if subject is excluded
+            IF check_exclusion(p_subject_type, p_subject_id, v_excluded_rel, p_object_type, p_object_id) THEN
+                RETURN 0;  -- Excluded
+            END IF;
+        END IF;
+
+        RETURN 1;  -- Access granted
+    END IF;
+
+    RETURN 0;  -- No access
 END;
 $$ LANGUAGE plpgsql STABLE;
 
@@ -200,7 +597,7 @@ END;
 $$ LANGUAGE plpgsql STABLE;
 
 
--- List objects a subject can access
+-- List objects a subject can access (simple path - no userset references)
 -- Uses a recursive CTE to walk the permission graph in a single query.
 --
 -- This is a CTE-only implementation that avoids per-row check_permission calls
@@ -213,7 +610,7 @@ $$ LANGUAGE plpgsql STABLE;
 --
 -- Key insight: Build a complete set of (object_type, object_id, relation) tuples
 -- the subject satisfies, then filter by closure to the target relation.
-CREATE OR REPLACE FUNCTION list_accessible_objects(
+CREATE OR REPLACE FUNCTION list_accessible_objects_simple(
     p_subject_type TEXT,
     p_subject_id TEXT,
     p_relation TEXT,
@@ -291,6 +688,67 @@ BEGIN
               co.obj_id
           )
     );
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+
+-- List objects a subject can access (with userset reference support)
+-- This is the main entry point. It detects whether userset references exist
+-- for the target relation and dispatches to either:
+-- 1. Fast path (list_accessible_objects_simple) for relations without usersets
+-- 2. Full userset-aware enumeration using subject_grants for relations with usersets
+CREATE OR REPLACE FUNCTION list_accessible_objects(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_relation TEXT,
+    p_object_type TEXT
+) RETURNS TABLE(object_id TEXT) AS $$
+DECLARE
+    v_has_userset BOOLEAN;
+BEGIN
+    -- Fast path: check if any userset references exist for this relation
+    SELECT EXISTS (
+        SELECT 1
+        FROM melange_relation_closure c
+        JOIN melange_model m
+            ON m.object_type = c.object_type
+            AND m.relation = c.satisfying_relation
+        WHERE c.object_type = p_object_type
+          AND c.relation = p_relation
+          AND m.subject_relation IS NOT NULL
+    ) INTO v_has_userset;
+
+    IF NOT v_has_userset THEN
+        -- No userset references, use fast path
+        RETURN QUERY SELECT lo.object_id
+        FROM list_accessible_objects_simple(
+            p_subject_type, p_subject_id, p_relation, p_object_type
+        ) lo;
+        RETURN;
+    END IF;
+
+    -- Full userset-aware enumeration using subject_grants
+    -- Filter the results to the target object type and relation, applying exclusions
+    RETURN QUERY
+    SELECT DISTINCT sg.object_id
+    FROM subject_grants(p_subject_type, p_subject_id) sg
+    WHERE sg.object_type = p_object_type
+      AND sg.relation = p_relation
+      -- Apply exclusions
+      AND NOT EXISTS (
+        SELECT 1
+        FROM melange_model em
+        WHERE em.object_type = p_object_type
+          AND em.relation = p_relation
+          AND em.excluded_relation IS NOT NULL
+          AND check_exclusion(
+              p_subject_type,
+              p_subject_id,
+              em.excluded_relation,
+              p_object_type,
+              sg.object_id
+          )
+      );
 END;
 $$ LANGUAGE plpgsql STABLE;
 

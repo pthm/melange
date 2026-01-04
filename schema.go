@@ -8,6 +8,15 @@ type TypeDefinition struct {
 	Relations []RelationDefinition
 }
 
+// SubjectTypeRef represents a subject type reference in a relation definition.
+// For userset references like [group#member], Type is "group" and Relation is "member".
+// For direct references like [user], Type is "user" and Relation is empty.
+type SubjectTypeRef struct {
+	Type     string // Subject type: "user", "group", etc.
+	Relation string // For userset refs: the relation (e.g., "member" in [group#member])
+	Wildcard bool   // True if this is a wildcard reference (user:*)
+}
+
 // RelationDefinition represents a parsed relation.
 // Relations describe who can have what relationship with an object.
 //
@@ -16,13 +25,19 @@ type TypeDefinition struct {
 //   - Implied: granted by having another relation (ImpliedBy)
 //   - Inherited: derived from a parent object (ParentRelation, ParentType)
 //   - Exclusive: granted except for excluded subjects (ExcludedRelation)
+//   - Userset: granted via group membership (SubjectTypeRefs with Relation set)
 type RelationDefinition struct {
 	Name             string   // Relation name: "owner", "can_read", etc.
-	SubjectTypes     []string // Direct subject types: ["user"], ["organization"]
+	SubjectTypes     []string // Direct subject types: ["user"], ["organization"] (legacy)
 	ImpliedBy        []string // Relations that imply this one: ["owner", "admin"]
 	ParentRelation   string   // For inheritance: "can_read from org" → "can_read"
 	ParentType       string   // The relation linking to parent: "org", "repo"
 	ExcludedRelation string   // For exclusions: "can_read but not author" → "author"
+	// SubjectTypeRefs provides detailed subject type info including userset relations.
+	// For [user, group#member], this would contain:
+	//   - {Type: "user", Relation: ""}
+	//   - {Type: "group", Relation: "member"}
+	SubjectTypeRefs []SubjectTypeRef
 }
 
 // AuthzModel represents an entry in the melange_model table.
@@ -36,6 +51,8 @@ type RelationDefinition struct {
 //   - Implied: ImpliedBy is set (having one relation grants another)
 //   - Parent: ParentRelation and SubjectType set (inherit from parent object)
 //   - Exclusive: ExcludedRelation set (permission denied if exclusion holds)
+//   - Userset: SubjectType and SubjectRelation set (e.g., [group#member])
+//   - Intersection: RuleGroupID and RuleGroupMode set (AND semantics)
 type AuthzModel struct {
 	ID               int64
 	ObjectType       string  // Object type this rule applies to
@@ -44,6 +61,11 @@ type AuthzModel struct {
 	ImpliedBy        *string // Implying relation (for role hierarchy)
 	ParentRelation   *string // Parent relation to check (for inheritance)
 	ExcludedRelation *string // Relation to exclude (for "but not" rules)
+	// New fields for userset references and intersection support
+	SubjectRelation *string // For userset refs [type#relation]: the relation part
+	RuleGroupID     *int64  // Groups rules that form an intersection
+	RuleGroupMode   *string // 'intersection' for AND, 'union' or NULL for OR
+	CheckRelation   *string // For intersection: which relation to check
 }
 
 // SubjectTypes returns all types that can be subjects in authorization checks.
@@ -61,15 +83,26 @@ func SubjectTypes(types []TypeDefinition) []string {
 
 	for _, t := range types {
 		for _, r := range t.Relations {
-			for _, st := range r.SubjectTypes {
-				// Strip wildcard suffix if present (e.g., "user:*" → "user")
-				typeName := st
-				if len(typeName) > 2 && typeName[len(typeName)-2:] == ":*" {
-					typeName = typeName[:len(typeName)-2]
+			// Use SubjectTypeRefs if available
+			if len(r.SubjectTypeRefs) > 0 {
+				for _, ref := range r.SubjectTypeRefs {
+					if !seen[ref.Type] {
+						seen[ref.Type] = true
+						result = append(result, ref.Type)
+					}
 				}
-				if !seen[typeName] {
-					seen[typeName] = true
-					result = append(result, typeName)
+			} else {
+				// Fall back to SubjectTypes
+				for _, st := range r.SubjectTypes {
+					// Strip wildcard suffix if present (e.g., "user:*" → "user")
+					typeName := st
+					if len(typeName) > 2 && typeName[len(typeName)-2:] == ":*" {
+						typeName = typeName[:len(typeName)-2]
+					}
+					if !seen[typeName] {
+						seen[typeName] = true
+						result = append(result, typeName)
+					}
 				}
 			}
 		}
@@ -101,7 +134,16 @@ func RelationSubjects(types []TypeDefinition, objectType string, relation string
 				continue
 			}
 
-			// Return direct subject types, stripping wildcard suffix
+			// Use SubjectTypeRefs if available
+			if len(r.SubjectTypeRefs) > 0 {
+				var result []string
+				for _, ref := range r.SubjectTypeRefs {
+					result = append(result, ref.Type)
+				}
+				return result
+			}
+
+			// Fall back to SubjectTypes, stripping wildcard suffix
 			var result []string
 			for _, st := range r.SubjectTypes {
 				typeName := st
@@ -149,17 +191,37 @@ func ToAuthzModels(types []TypeDefinition) []AuthzModel {
 
 		for _, r := range t.Relations {
 			// Add entries for direct subject types
-			for _, subjectType := range r.SubjectTypes {
-				// Strip wildcard suffix for storage
-				st := subjectType
-				if len(st) > 2 && st[len(st)-2:] == ":*" {
-					st = st[:len(st)-2]
+			// Use SubjectTypeRefs if available (includes userset relation info),
+			// otherwise fall back to SubjectTypes for backward compatibility
+			if len(r.SubjectTypeRefs) > 0 {
+				for _, ref := range r.SubjectTypeRefs {
+					st := ref.Type
+					model := AuthzModel{
+						ObjectType:  t.Name,
+						Relation:    r.Name,
+						SubjectType: &st,
+					}
+					// Set subject_relation for userset references
+					if ref.Relation != "" {
+						sr := ref.Relation
+						model.SubjectRelation = &sr
+					}
+					models = append(models, model)
 				}
-				models = append(models, AuthzModel{
-					ObjectType:  t.Name,
-					Relation:    r.Name,
-					SubjectType: &st,
-				})
+			} else {
+				// Legacy path: use SubjectTypes (no userset info)
+				for _, subjectType := range r.SubjectTypes {
+					// Strip wildcard suffix for storage
+					st := subjectType
+					if len(st) > 2 && st[len(st)-2:] == ":*" {
+						st = st[:len(st)-2]
+					}
+					models = append(models, AuthzModel{
+						ObjectType:  t.Name,
+						Relation:    r.Name,
+						SubjectType: &st,
+					})
+				}
 			}
 
 			// Add entries for ALL implied relations (including transitive)

@@ -524,23 +524,33 @@ func convertAuthzModel(model *openfgav1.AuthorizationModel) []melange.TypeDefini
 		}
 
 		// Get directly related user types from metadata
+		// This extracts both simple type references [user] and userset references [group#member]
 		directTypes := make(map[string][]string)
+		directTypeRefs := make(map[string][]melange.SubjectTypeRef)
 		if meta := td.GetMetadata(); meta != nil {
 			for relName, relMeta := range meta.GetRelations() {
 				for _, t := range relMeta.GetDirectlyRelatedUserTypes() {
 					typeName := t.GetType()
-					switch t.GetRelationOrWildcard().(type) {
+					ref := melange.SubjectTypeRef{Type: typeName}
+
+					switch v := t.GetRelationOrWildcard().(type) {
 					case *openfgav1.RelationReference_Wildcard:
 						typeName += ":*"
+						ref.Wildcard = true
+					case *openfgav1.RelationReference_Relation:
+						// This is a userset reference like [group#member]
+						ref.Relation = v.Relation
 					}
+
 					directTypes[relName] = append(directTypes[relName], typeName)
+					directTypeRefs[relName] = append(directTypeRefs[relName], ref)
 				}
 			}
 		}
 
 		// Convert relations
 		for relName, rel := range td.GetRelations() {
-			relDef := convertRelation(relName, rel, directTypes[relName])
+			relDef := convertRelation(relName, rel, directTypes[relName], directTypeRefs[relName])
 			typeDef.Relations = append(typeDef.Relations, relDef)
 		}
 
@@ -551,10 +561,11 @@ func convertAuthzModel(model *openfgav1.AuthorizationModel) []melange.TypeDefini
 }
 
 // convertRelation converts a protobuf Userset to a melange RelationDefinition.
-func convertRelation(name string, rel *openfgav1.Userset, subjectTypes []string) melange.RelationDefinition {
+func convertRelation(name string, rel *openfgav1.Userset, subjectTypes []string, subjectTypeRefs []melange.SubjectTypeRef) melange.RelationDefinition {
 	relDef := melange.RelationDefinition{
-		Name:         name,
-		SubjectTypes: subjectTypes,
+		Name:            name,
+		SubjectTypes:    subjectTypes,
+		SubjectTypeRefs: subjectTypeRefs,
 	}
 
 	extractUserset(rel, &relDef)
@@ -601,14 +612,19 @@ func extractUserset(us *openfgav1.Userset, rel *melange.RelationDefinition) {
 // parseSubject parses an OpenFGA user string (e.g., "user:123" or "team:456#member").
 func parseSubject(user string) (melange.Object, error) {
 	// Handle userset format: "type:id#relation"
-	for i := len(user) - 1; i >= 0; i-- {
-		if user[i] == '#' {
-			// This is a userset - for now, treat it as the base object
-			// Full userset support would need additional handling
-			return parseObject(user[:i])
+	// For userset references like "group:x#member", we need to preserve the full ID
+	// The relation part (#member) indicates that this is a userset reference
+	for i := 0; i < len(user); i++ {
+		if user[i] == ':' {
+			// Found the type:id separator
+			// The ID may include a #relation suffix for userset references
+			return melange.Object{
+				Type: melange.ObjectType(user[:i]),
+				ID:   user[i+1:], // Includes #relation if present
+			}, nil
 		}
 	}
-	return parseObject(user)
+	return melange.Object{}, fmt.Errorf("invalid subject format: %s", user)
 }
 
 // parseObject parses an OpenFGA object string (e.g., "document:123").

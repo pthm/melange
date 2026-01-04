@@ -16,7 +16,13 @@ CREATE TABLE IF NOT EXISTS melange_model (
     subject_type VARCHAR,
     implied_by VARCHAR,
     parent_relation VARCHAR,
-    excluded_relation VARCHAR
+    excluded_relation VARCHAR,
+    -- New columns for userset references and intersection support
+    subject_relation VARCHAR,      -- For userset references [type#relation]: stores the relation part
+    rule_group_id BIGINT,          -- Groups rules that form an intersection
+    rule_group_mode VARCHAR,       -- 'intersection' for AND semantics, 'union' or NULL for OR
+    check_relation VARCHAR,        -- For intersection rules: which relation to check
+    CONSTRAINT chk_rule_group_mode CHECK (rule_group_mode IS NULL OR rule_group_mode IN ('union', 'intersection'))
 );
 
 -- Primary lookup: find rules for a specific object type and relation
@@ -42,3 +48,13 @@ CREATE INDEX IF NOT EXISTS idx_melange_model_parent ON melange_model (object_typ
 -- Covers: SELECT parent_relation, subject_type, excluded_relation FROM melange_model WHERE object_type = ? AND relation = ? AND parent_relation IS NOT NULL
 CREATE INDEX IF NOT EXISTS idx_melange_model_parent_lookup ON melange_model (object_type, relation, parent_relation, subject_type)
     WHERE parent_relation IS NOT NULL;
+
+-- Userset reference lookup: find rules with userset references
+-- Used for resolving [type#relation] patterns in check_permission
+CREATE INDEX IF NOT EXISTS idx_melange_model_userset ON melange_model (object_type, relation, subject_type, subject_relation)
+    WHERE subject_relation IS NOT NULL;
+
+-- Intersection group lookup: find intersection rules
+-- Used to detect if a relation has intersection rules (for fast path optimization)
+CREATE INDEX IF NOT EXISTS idx_melange_model_intersection ON melange_model (object_type, relation)
+    WHERE rule_group_mode = 'intersection';

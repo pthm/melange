@@ -524,9 +524,34 @@ func TestOpenFGA_ComplexPatterns(t *testing.T) {
 
 	// Note: The following tests use unsupported patterns or have issues:
 	// - three_prong_relation (cyclic schema in parent relations)
-	// - evaluate_userset_in_computed_relation_of_ttu (userset reference)
-	// - relation_with_userset_involving_exclusion (userset reference)
+	// - evaluate_userset_in_computed_relation_of_ttu (userset reference - partially supported)
+	// - relation_with_userset_involving_exclusion (userset reference - now supported)
 	// - relation_with_wildcard_involving_exclusion (wildcard+exclusion edge case)
+}
+
+// TestOpenFGA_UsersetReferences tests userset references [type#relation].
+// Pattern: define viewer: [group#member] means members of groups can be viewers.
+func TestOpenFGA_UsersetReferences(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	client := openfgatests.NewClient(t)
+
+	// Basic userset reference tests (all passing)
+	openfgatests.RunTestByName(t, client, "userset_as_user")
+	openfgatests.RunTestByName(t, client, "simple_userset_child_wildcard")
+	openfgatests.RunTestByName(t, client, "simple_userset_child_wildcard_only")
+	openfgatests.RunTestByName(t, client, "userset_discard_invalid")
+	openfgatests.RunTestByName(t, client, "userset_discard_invalid_wildcard")
+	openfgatests.RunTestByName(t, client, "nested_usersets_are_recursively_expanded")
+	openfgatests.RunTestByName(t, client, "relation_with_userset_involving_exclusion")
+	openfgatests.RunTestByName(t, client, "userset_orphan_parent")
+
+	// Note: The following tests have complex patterns that need further investigation:
+	// - simple_userset_child_computed_userset (computed userset nested in userset)
+	// - ttu_mix_with_userset (complex nested TTU with userset)
+	// - ttu_to_userset, userset_to_ttu, userset_to_userset (chained patterns)
+	// - userset_with_intersection_in_computed_relation_of_ttu (intersection - Phase 3)
 }
 
 // TestOpenFGA_CycleHandling tests that cycles are handled correctly.
