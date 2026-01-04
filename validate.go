@@ -86,9 +86,34 @@ func detectImpliedByCycles(types []TypeDefinition) error {
 // detectParentCycles checks for cycles in parent relations across types.
 // For example: repository.can_read inherits from org.can_read, and
 // org.can_read inherits from repository.can_read would be a cycle.
+//
+// IMPORTANT: Same-type recursive patterns like "viewer from parent" where
+// parent: [folder] are NOT cycles - they represent hierarchical inheritance
+// (e.g., folders inheriting permissions from parent folders). These are valid
+// patterns supported by OpenFGA/Zanzibar and handled at runtime via visited
+// tracking in the SQL functions.
+//
+// We only flag true cross-type cycles where different object types form a loop.
 func detectParentCycles(types []TypeDefinition) error {
 	graph := buildParentGraph(types)
 	if cycle := detectCycleInGraph(graph); cycle != nil {
+		// Check if this is a same-type self-reference (hierarchical recursion)
+		// These are NOT cycles - they're valid recursive patterns like "viewer from parent"
+		if len(cycle) == 2 && cycle[0] == cycle[1] {
+			// Self-edge: folder.viewer → folder.viewer - this is valid hierarchical recursion
+			return nil
+		}
+		// Check if all nodes in the cycle are the same type - also valid recursion
+		allSameType := true
+		for i := 1; i < len(cycle); i++ {
+			if cycle[i].objectType != cycle[0].objectType {
+				allSameType = false
+				break
+			}
+		}
+		if allSameType {
+			return nil
+		}
 		return fmt.Errorf("%w: parent relation cycle: %s",
 			ErrCyclicSchema, formatCycle(cycle))
 	}

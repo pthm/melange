@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS melange_model (
     rule_group_id BIGINT,          -- Groups rules that form an intersection
     rule_group_mode VARCHAR,       -- 'intersection' for AND semantics, 'union' or NULL for OR
     check_relation VARCHAR,        -- For intersection rules: which relation to check
+    check_excluded_relation VARCHAR, -- For intersection rules: exclusion on the check_relation (e.g., "editor but not owner")
     CONSTRAINT chk_rule_group_mode CHECK (rule_group_mode IS NULL OR rule_group_mode IN ('union', 'intersection'))
 );
 

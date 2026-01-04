@@ -8,12 +8,12 @@ This document covers testing strategies for applications using Melange, as well 
 
 Melange provides multiple testing approaches depending on your needs:
 
-| Strategy | Database Required | Speed | Use Case |
-|----------|-------------------|-------|----------|
-| **Decision overrides** | No | Fast | Unit tests, mocking permission checks |
-| **Context-based overrides** | No | Fast | Handler/middleware tests |
-| **Integration tests** | Yes (PostgreSQL) | Slower | End-to-end permission validation |
-| **OpenFGA test suite** | Yes (PostgreSQL) | Slower | Validating DSL compatibility |
+| Strategy                    | Database Required | Speed  | Use Case                              |
+| --------------------------- | ----------------- | ------ | ------------------------------------- |
+| **Decision overrides**      | No                | Fast   | Unit tests, mocking permission checks |
+| **Context-based overrides** | No                | Fast   | Handler/middleware tests              |
+| **Integration tests**       | Yes (PostgreSQL)  | Slower | End-to-end permission validation      |
+| **OpenFGA test suite**      | Yes (PostgreSQL)  | Slower | Validating DSL compatibility          |
 
 ---
 
@@ -288,16 +288,16 @@ just test-openfga-full-check
 
 ### Feature Test Categories
 
-| Category | Command | Tests |
-|----------|---------|-------|
+| Category          | Command                                      | Tests                                                   |
+| ----------------- | -------------------------------------------- | ------------------------------------------------------- |
 | Direct Assignment | `just test-openfga-feature DirectAssignment` | `this`, `this_with_contextual_tuples`, `this_and_union` |
-| Computed Userset | `just test-openfga-feature ComputedUserset` | Role hierarchy via `or` |
-| Tuple-to-Userset | `just test-openfga-feature TupleToUserset` | Parent inheritance via `from` |
-| Wildcards | `just test-openfga-feature Wildcards` | Public access via `[user:*]` |
-| Exclusion | `just test-openfga-feature Exclusion` | `but not` patterns |
-| Union | `just test-openfga-feature Union` | Multiple `or` branches |
-| Complex Patterns | `just test-openfga-feature ComplexPatterns` | Nested combinations |
-| Cycle Handling | `just test-openfga-feature CycleHandling` | Cycle detection |
+| Computed Userset  | `just test-openfga-feature ComputedUserset`  | Role hierarchy via `or`                                 |
+| Tuple-to-Userset  | `just test-openfga-feature TupleToUserset`   | Parent inheritance via `from`                           |
+| Wildcards         | `just test-openfga-feature Wildcards`        | Public access via `[user:*]`                            |
+| Exclusion         | `just test-openfga-feature Exclusion`        | `but not` patterns                                      |
+| Union             | `just test-openfga-feature Union`            | Multiple `or` branches                                  |
+| Complex Patterns  | `just test-openfga-feature ComplexPatterns`  | Nested combinations                                     |
+| Cycle Handling    | `just test-openfga-feature CycleHandling`    | Cycle detection                                         |
 
 ### Understanding Test Output
 
@@ -340,7 +340,7 @@ just dump-openfga-all
 
 Example output:
 
-```
+````
 Test: userset_defines_itself_1
 ------------------------------
 
@@ -354,22 +354,23 @@ type user
 type document
   relations
     define viewer: [user]
-```
+````
 
 Tuples: (none)
 
 Check Assertions:
-  [1] ALLOW: document:1#viewer | viewer | document:1
-  [2] DENY: document:2#viewer | viewer | document:1
+[1] ALLOW: document:1#viewer | viewer | document:1
+[2] DENY: document:2#viewer | viewer | document:1
 
 ListObjects Assertions:
-  [1] user=document:1#viewer relation=viewer type=document
-      => [document:1]
+[1] user=document:1#viewer relation=viewer type=document
+=> [document:1]
 
 ListUsers Assertions:
-  [1] object=document:1 relation=viewer filters=[document#viewer]
-      => [document:1#viewer]
-```
+[1] object=document:1 relation=viewer filters=[document#viewer]
+=> [document:1#viewer]
+
+````
 
 This is useful for:
 - Understanding what a failing test expects
@@ -411,7 +412,7 @@ just bench-openfga-save baseline.txt
 # ... make changes ...
 just bench-openfga-save after.txt
 diff baseline.txt after.txt
-```
+````
 
 Example benchmark output:
 
@@ -421,23 +422,11 @@ BenchmarkOpenFGA_DirectAssignment/this_and_union-12     	     1	  11305875 ns/op
 ```
 
 The output shows:
+
 - **ns/op**: Nanoseconds per operation (lower is better)
 - **checks/op**: Number of Check assertions per operation
 - **listobjs/op**: Number of ListObjects assertions per operation
 - **listusers/op**: Number of ListUsers assertions per operation
-
-### Excluded Tests
-
-Some OpenFGA tests are excluded because they use unsupported features:
-
-| Feature | Reason | Example Tests |
-|---------|--------|---------------|
-| Userset references `[type#relation]` | Partial support only | `ttu_mix_with_userset` |
-| Intersection/AND | Not implemented | `cycle_and_true_return_false` |
-| Conditions (ABAC) | Not supported | `wildcard_with_condition` |
-| Complex cycles | Edge cases | `true_butnot_cycle_return_false` |
-
-See `docs/openfga-support.md` for the full feature compatibility matrix.
 
 ---
 
@@ -446,12 +435,6 @@ See `docs/openfga-support.md` for the full feature compatibility matrix.
 ### Justfile Commands
 
 ```bash
-# All tests
-just test                    # Unit + integration tests
-just test-unit               # Unit tests only (no Docker)
-just test-integration        # Integration tests (requires Docker)
-just test-race               # Tests with race detection
-
 # OpenFGA test suite
 just test-openfga            # Supported features with gotestfmt
 just test-openfga-feature X  # Single feature category

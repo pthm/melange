@@ -493,6 +493,44 @@ END;
 $$ LANGUAGE plpgsql STABLE;
 
 
+-- Check if a subject is excluded by ANY of the exclusion rules for a relation.
+-- For nested exclusions like "(writer but not editor) but not owner",
+-- this checks all exclusion rows and returns TRUE if ANY matches.
+--
+-- Parameters:
+--   p_subject_type, p_subject_id: The subject to check
+--   p_relation: The relation being checked (to find its exclusions)
+--   p_object_type, p_object_id: The object to check exclusions on
+--
+-- Returns TRUE if the subject should be excluded, FALSE otherwise.
+CREATE OR REPLACE FUNCTION check_all_exclusions(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_relation TEXT,
+    p_object_type TEXT,
+    p_object_id TEXT
+) RETURNS BOOLEAN AS $$
+DECLARE
+    v_excluded TEXT;
+BEGIN
+    -- Iterate through ALL exclusions for this relation
+    FOR v_excluded IN
+        SELECT em.excluded_relation
+        FROM melange_model em
+        WHERE em.object_type = p_object_type
+          AND em.relation = p_relation
+          AND em.excluded_relation IS NOT NULL
+    LOOP
+        IF check_exclusion(p_subject_type, p_subject_id, v_excluded, p_object_type, p_object_id) THEN
+            RETURN TRUE;  -- Subject is excluded
+        END IF;
+    END LOOP;
+
+    RETURN FALSE;  -- Not excluded
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+
 -- Simple permission check (no userset reference support)
 -- This is the original check_permission for backward compatibility and as a fast path
 -- when no userset references are defined for a relation.
@@ -516,7 +554,6 @@ DECLARE
     v_parent_type TEXT;
     v_parent_id TEXT;
     v_parent_rel TEXT;
-    v_excluded_rel TEXT;
 BEGIN
     -- 1. Check direct tuple match using closure table
     -- This handles: direct match + all implied-by relations in one query
@@ -562,25 +599,13 @@ BEGIN
     END IF;
 
     IF v_found = 1 THEN
-        -- Check for exclusions on the matching relation
-        DECLARE
-            v_excluded TEXT;
-        BEGIN
-            SELECT am.excluded_relation INTO v_excluded
-            FROM melange_model am
-            WHERE am.object_type = p_object_type
-              AND am.relation = p_relation
-              AND am.excluded_relation IS NOT NULL
-              AND am.parent_relation IS NULL
-            LIMIT 1;
-
-            IF v_excluded IS NOT NULL THEN
-                -- Use CTE-based exclusion check (handles all cases uniformly)
-                IF check_exclusion(p_subject_type, p_subject_id, v_excluded, p_object_type, p_object_id) THEN
-                    v_found := 0;
-                END IF;
-            END IF;
-        END;
+        -- Check for ALL exclusions on the matching relation.
+        -- For nested exclusions like "(writer but not editor) but not owner",
+        -- there will be multiple exclusion rows (one for "editor", one for "owner").
+        -- The subject must NOT have ANY of the excluded relations.
+        IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+            v_found := 0;
+        END IF;
 
         IF v_found = 1 THEN
             RETURN 1;
@@ -601,8 +626,8 @@ BEGIN
     --   repository.reader: [user] or can_read from org
     -- When checking can_read, reader satisfies it via closure, so we must also check
     -- reader's parent inheritance rule (can_read from org).
-    FOR v_parent_type, v_parent_id, v_parent_rel, v_excluded_rel IN
-        SELECT t.subject_type, t.subject_id, am.parent_relation, am.excluded_relation
+    FOR v_parent_type, v_parent_id, v_parent_rel IN
+        SELECT t.subject_type, t.subject_id, am.parent_relation
         FROM melange_relation_closure c
         JOIN melange_model am
           ON am.object_type = p_object_type
@@ -617,13 +642,10 @@ BEGIN
     LOOP
         -- Check if the parent relation is satisfied (recursively uses closure for parent)
         IF check_permission_simple(p_subject_type, p_subject_id, v_parent_rel, v_parent_type, v_parent_id) = 1 THEN
-            -- Check for exclusion using CTE-based helper (handles all cases uniformly)
-            IF v_excluded_rel IS NOT NULL THEN
-                IF check_exclusion(p_subject_type, p_subject_id, v_excluded_rel, p_object_type, p_object_id) THEN
-                    CONTINUE; -- Excluded by "but not", try next parent
-                END IF;
+            -- Check for ALL exclusions (using helper function)
+            IF NOT check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+                RETURN 1;
             END IF;
-            RETURN 1;
         END IF;
     END LOOP;
 
@@ -635,6 +657,9 @@ $$ LANGUAGE plpgsql STABLE;
 -- Check intersection groups for a relation.
 -- For "viewer: writer and editor", this checks if the subject has BOTH
 -- writer AND editor on the object.
+--
+-- For "viewer: writer and (editor but not owner)", this checks if the subject
+-- has writer AND (has editor BUT NOT owner) on the object.
 --
 -- Returns TRUE if ANY intersection group is fully satisfied (all relations in group match).
 -- Returns FALSE if no intersection groups are satisfied.
@@ -651,7 +676,7 @@ CREATE OR REPLACE FUNCTION check_intersection_groups(
 DECLARE
     v_group RECORD;
     v_group_satisfied BOOLEAN;
-    v_check_rel TEXT;
+    v_check RECORD;
 BEGIN
     -- Find all distinct intersection groups for this relation
     FOR v_group IN
@@ -668,15 +693,16 @@ BEGIN
         v_group_satisfied := TRUE;
 
         -- Check if ALL relations in this group are satisfied
-        FOR v_check_rel IN
-            SELECT m.check_relation
+        -- Now also fetches check_excluded_relation for per-check exclusions
+        FOR v_check IN
+            SELECT m.check_relation, m.check_excluded_relation
             FROM melange_model m
             WHERE m.object_type = p_object_type
               AND m.rule_group_id = v_group.rule_group_id
               AND m.rule_group_mode = 'intersection'
               AND m.check_relation IS NOT NULL
         LOOP
-            IF v_check_rel = p_relation THEN
+            IF v_check.check_relation = p_relation THEN
                 -- Self-reference (This pattern): "[user] and writer" on viewer
                 -- Check for direct tuple since there's no subject_type entry
                 IF NOT EXISTS (
@@ -685,20 +711,42 @@ BEGIN
                       AND (t.subject_id = p_subject_id OR t.subject_id = '*')
                       AND t.object_type = p_object_type
                       AND t.object_id = p_object_id
-                      AND t.relation = v_check_rel
+                      AND t.relation = v_check.check_relation
                 ) THEN
                     v_group_satisfied := FALSE;
                     EXIT;
+                END IF;
+
+                -- Check for exclusion on this self-reference check
+                IF v_group_satisfied AND v_check.check_excluded_relation IS NOT NULL THEN
+                    IF check_exclusion(p_subject_type, p_subject_id,
+                                       v_check.check_excluded_relation,
+                                       p_object_type, p_object_id) THEN
+                        v_group_satisfied := FALSE;
+                        EXIT;
+                    END IF;
                 END IF;
             ELSE
                 -- Use subject_has_grant to check other relations (supports userset patterns)
                 IF NOT subject_has_grant(
                     p_subject_type, p_subject_id,
                     p_object_type, p_object_id,
-                    v_check_rel, ARRAY[]::TEXT[]
+                    v_check.check_relation, ARRAY[]::TEXT[]
                 ) THEN
                     v_group_satisfied := FALSE;
                     EXIT;  -- No need to check more relations in this group
+                END IF;
+
+                -- Check for exclusion on this check_relation
+                -- For "writer and (editor but not owner)", when check_relation=editor,
+                -- check_excluded_relation=owner. If subject has owner, they're excluded.
+                IF v_group_satisfied AND v_check.check_excluded_relation IS NOT NULL THEN
+                    IF check_exclusion(p_subject_type, p_subject_id,
+                                       v_check.check_excluded_relation,
+                                       p_object_type, p_object_id) THEN
+                        v_group_satisfied := FALSE;
+                        EXIT;
+                    END IF;
                 END IF;
             END IF;
         END LOOP;
@@ -738,7 +786,6 @@ DECLARE
     v_has_intersection BOOLEAN;
     v_has_other_rules BOOLEAN;
     v_has_userset BOOLEAN;
-    v_excluded_rel TEXT;
 BEGIN
     -- Check if any intersection rules exist for this relation
     SELECT EXISTS (
@@ -758,18 +805,9 @@ BEGIN
             p_subject_type, p_subject_id,
             p_relation, p_object_type, p_object_id
         ) THEN
-            -- Check for exclusions
-            SELECT em.excluded_relation INTO v_excluded_rel
-            FROM melange_model em
-            WHERE em.object_type = p_object_type
-              AND em.relation = p_relation
-              AND em.excluded_relation IS NOT NULL
-            LIMIT 1;
-
-            IF v_excluded_rel IS NOT NULL THEN
-                IF check_exclusion(p_subject_type, p_subject_id, v_excluded_rel, p_object_type, p_object_id) THEN
-                    RETURN 0;  -- Excluded
-                END IF;
+            -- Check for ALL exclusions (supports nested exclusions)
+            IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+                RETURN 0;  -- Excluded
             END IF;
 
             RETURN 1;  -- Access granted via intersection
@@ -823,19 +861,9 @@ BEGIN
         p_object_type, p_object_id,
         p_relation, ARRAY[]::TEXT[]
     ) THEN
-        -- Check for exclusions
-        SELECT em.excluded_relation INTO v_excluded_rel
-        FROM melange_model em
-        WHERE em.object_type = p_object_type
-          AND em.relation = p_relation
-          AND em.excluded_relation IS NOT NULL
-        LIMIT 1;
-
-        IF v_excluded_rel IS NOT NULL THEN
-            -- Check if subject is excluded
-            IF check_exclusion(p_subject_type, p_subject_id, v_excluded_rel, p_object_type, p_object_id) THEN
-                RETURN 0;  -- Excluded
-            END IF;
+        -- Check for ALL exclusions (supports nested exclusions)
+        IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+            RETURN 0;  -- Excluded
         END IF;
 
         RETURN 1;  -- Access granted

@@ -171,12 +171,17 @@ func extractUserset(us *openfgav1.Userset, rel *melange.RelationDefinition) {
 
 	case *openfgav1.Userset_Difference:
 		// Difference: base minus subtract (e.g., "can_read but not author")
-		// Extract from base
+		// For nested exclusions like "(writer but not editor) but not owner",
+		// we need to collect ALL exclusions, not just the outermost one.
+		// The base may itself be a Difference, so we recurse first.
 		extractUserset(v.Difference.GetBase(), rel)
-		// Extract exclusion from subtract
+		// Add this exclusion to the list (append, don't overwrite)
 		if subtract := v.Difference.GetSubtract(); subtract != nil {
 			if computed := subtract.GetComputedUserset(); computed != nil {
-				rel.ExcludedRelation = computed.GetRelation()
+				excl := computed.GetRelation()
+				rel.ExcludedRelations = append(rel.ExcludedRelations, excl)
+				// Also set deprecated field for backward compatibility
+				rel.ExcludedRelation = excl
 			}
 		}
 	}
@@ -236,12 +241,71 @@ func expandIntersection(intersection *openfgav1.Usersets, relationName string) [
 			if len(nestedGroups) > 0 {
 				for i := range groups {
 					groups[i].Relations = append(groups[i].Relations, nestedGroups[0].Relations...)
+					// Merge exclusions from nested groups
+					if nestedGroups[0].Exclusions != nil {
+						if groups[i].Exclusions == nil {
+							groups[i].Exclusions = make(map[string][]string)
+						}
+						for k, v := range nestedGroups[0].Exclusions {
+							groups[i].Exclusions[k] = append(groups[i].Exclusions[k], v...)
+						}
+					}
+				}
+			}
+
+		case *openfgav1.Userset_Difference:
+			// Difference within intersection: "a and (b but not c)"
+			// Extract the base relation and the exclusion
+			baseRel := extractBaseRelationFromDifference(cv.Difference)
+			if baseRel == "" {
+				continue
+			}
+
+			// Extract the excluded relation
+			var excludedRel string
+			if subtract := cv.Difference.GetSubtract(); subtract != nil {
+				if computed := subtract.GetComputedUserset(); computed != nil {
+					excludedRel = computed.GetRelation()
+				}
+			}
+
+			// Add the base relation and its exclusion to all groups
+			for i := range groups {
+				groups[i].Relations = append(groups[i].Relations, baseRel)
+				if excludedRel != "" {
+					if groups[i].Exclusions == nil {
+						groups[i].Exclusions = make(map[string][]string)
+					}
+					groups[i].Exclusions[baseRel] = append(groups[i].Exclusions[baseRel], excludedRel)
 				}
 			}
 		}
 	}
 
 	return groups
+}
+
+// extractBaseRelationFromDifference extracts the base relation from a Difference node.
+// For "b but not c", returns "b".
+// Handles nested differences like "(a but not b) but not c" by recursing.
+func extractBaseRelationFromDifference(diff *openfgav1.Difference) string {
+	base := diff.GetBase()
+	if base == nil {
+		return ""
+	}
+
+	switch bv := base.Userset.(type) {
+	case *openfgav1.Userset_ComputedUserset:
+		return bv.ComputedUserset.GetRelation()
+	case *openfgav1.Userset_Difference:
+		// Nested difference: "(a but not b) but not c" - extract from inner
+		return extractBaseRelationFromDifference(bv.Difference)
+	case *openfgav1.Userset_This:
+		// This case shouldn't happen in well-formed schemas, but handle it
+		return ""
+	default:
+		return ""
+	}
 }
 
 // extractUnionRelations extracts relation names from a union node.
@@ -274,6 +338,13 @@ func distributeUnion(groups []melange.IntersectionGroup, unionRels []string) []m
 			}
 			copy(newGroup.Relations, g.Relations)
 			newGroup.Relations = append(newGroup.Relations, rel)
+			// Copy exclusions
+			if g.Exclusions != nil {
+				newGroup.Exclusions = make(map[string][]string)
+				for k, v := range g.Exclusions {
+					newGroup.Exclusions[k] = append([]string{}, v...)
+				}
+			}
 			expanded = append(expanded, newGroup)
 		}
 	}
