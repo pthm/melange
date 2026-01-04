@@ -1,6 +1,9 @@
-# The melange_tuples View
+---
+title: Tuples View
+weight: 2
+---
 
-The `melange_tuples` view is the bridge between your application's domain tables and Melange's permission checking system. This document explains how to create and optimize this view.
+The `melange_tuples` view is the bridge between your application's domain tables and Melange's permission checking system. This document explains how to create, optimize, and scale this view.
 
 ## Overview
 
@@ -59,6 +62,24 @@ SELECT
     repository_id::text AS object_id
 FROM repository_collaborators;
 ```
+
+## Wildcard Subjects
+
+To support public access (e.g., public repositories), use `'*'` as the subject_id:
+
+```sql
+-- Public repositories: any user can read
+SELECT
+    'user' AS subject_type,
+    '*' AS subject_id,              -- wildcard: matches any user
+    'reader' AS relation,
+    'repository' AS object_type,
+    id::text AS object_id
+FROM repositories
+WHERE is_public = true
+```
+
+The `check_permission` function automatically checks for both the specific subject_id and `'*'`.
 
 ## Performance Optimization
 
@@ -125,7 +146,7 @@ CREATE INDEX idx_repos_parent
     ON repositories (id, organization_id);
 ```
 
-### Complete Example
+### Complete Index Example
 
 For the view example above, create these indexes:
 
@@ -149,60 +170,160 @@ CREATE INDEX idx_repo_collabs_user_role_repo
     ON repository_collaborators (user_id, role, repository_id);
 ```
 
-## Wildcard Subjects
+## Scaling Strategies
 
-To support public access (e.g., public repositories), use `'*'` as the subject_id:
+For high-traffic applications or large datasets, consider these strategies to improve performance.
 
-```sql
--- Public repositories: any user can read
-SELECT
-    'user' AS subject_type,
-    '*' AS subject_id,              -- wildcard: matches any user
-    'reader' AS relation,
-    'repository' AS object_type,
-    id::text AS object_id
-FROM repositories
-WHERE is_public = true
-```
+### Strategy 1: Materialized View
 
-The `check_permission` function automatically checks for both the specific subject_id and `'*'`.
-
-## Materialized Views
-
-For very high-traffic applications, consider using a materialized view:
+Convert the view to a materialized view for faster queries:
 
 ```sql
 CREATE MATERIALIZED VIEW melange_tuples AS
--- ... same query as above ...
+-- ... same query as your regular view ...
 WITH DATA;
 
 -- Create indexes directly on the materialized view
-CREATE INDEX idx_mt_object ON melange_tuples (object_type, object_id, relation);
-CREATE INDEX idx_mt_subject ON melange_tuples (subject_type, subject_id, relation);
+CREATE INDEX idx_mt_object
+    ON melange_tuples (object_type, object_id, relation, subject_type, subject_id);
+CREATE INDEX idx_mt_subject
+    ON melange_tuples (subject_type, subject_id, relation, object_type, object_id);
+```
 
--- Refresh periodically or on-demand
+#### Refresh Strategies
+
+**Periodic refresh** - Simple but permissions may be stale:
+
+```sql
+-- Refresh every minute via cron or pg_cron
 REFRESH MATERIALIZED VIEW CONCURRENTLY melange_tuples;
 ```
 
-**Trade-offs**:
-- Faster permission checks (indexes on the view itself)
-- Permissions may be stale until refresh
-- Loses transaction isolation (can't see uncommitted changes)
-- Requires periodic refresh strategy
+**On-demand refresh** - Refresh after batch operations:
+
+```sql
+-- In your application after bulk updates
+db.ExecContext(ctx, "REFRESH MATERIALIZED VIEW CONCURRENTLY melange_tuples")
+```
+
+**Trigger-based refresh** - Refresh on data changes (use sparingly):
+
+```sql
+CREATE OR REPLACE FUNCTION refresh_tuples_trigger()
+RETURNS TRIGGER AS $$
+BEGIN
+    REFRESH MATERIALIZED VIEW CONCURRENTLY melange_tuples;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER refresh_tuples_on_members
+    AFTER INSERT OR UPDATE OR DELETE ON organization_members
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION refresh_tuples_trigger();
+```
+
+#### Trade-offs
+
+| Aspect | Regular View | Materialized View |
+|--------|--------------|-------------------|
+| Query speed | Slower (joins at query time) | Faster (pre-computed) |
+| Data freshness | Always current | Stale until refresh |
+| Transaction visibility | Sees uncommitted changes | Only sees committed data |
+| Index support | Must index source tables | Direct indexes on view |
+| Maintenance | None | Refresh required |
+
+### Strategy 2: Dedicated Tuples Table
+
+For very high-traffic scenarios, maintain a separate `melange_tuples` table instead of a view:
+
+```sql
+CREATE TABLE melange_tuples (
+    subject_type text NOT NULL,
+    subject_id text NOT NULL,
+    relation text NOT NULL,
+    object_type text NOT NULL,
+    object_id text NOT NULL,
+    PRIMARY KEY (object_type, object_id, relation, subject_type, subject_id)
+);
+
+CREATE INDEX idx_tuples_subject
+    ON melange_tuples (subject_type, subject_id, relation, object_type);
+```
+
+Sync the table using triggers on your domain tables:
+
+```sql
+CREATE OR REPLACE FUNCTION sync_org_member_tuple()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        INSERT INTO melange_tuples
+        VALUES ('user', NEW.user_id::text, NEW.role, 'organization', NEW.organization_id::text);
+    ELSIF TG_OP = 'UPDATE' THEN
+        UPDATE melange_tuples
+        SET relation = NEW.role
+        WHERE subject_type = 'user'
+          AND subject_id = OLD.user_id::text
+          AND object_type = 'organization'
+          AND object_id = OLD.organization_id::text;
+    ELSIF TG_OP = 'DELETE' THEN
+        DELETE FROM melange_tuples
+        WHERE subject_type = 'user'
+          AND subject_id = OLD.user_id::text
+          AND object_type = 'organization'
+          AND object_id = OLD.organization_id::text;
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER sync_org_members
+    AFTER INSERT OR UPDATE OR DELETE ON organization_members
+    FOR EACH ROW EXECUTE FUNCTION sync_org_member_tuple();
+```
+
+### Strategy 3: Application-Level Caching
+
+Combine any of the above with Melange's built-in cache:
+
+```go
+cache := melange.NewCache(
+    melange.WithTTL(time.Minute),
+    melange.WithMaxSize(10000),
+)
+checker := melange.NewChecker(db, melange.WithCache(cache))
+```
+
+This provides:
+- Sub-microsecond repeated checks (~79ns vs ~1ms)
+- Reduced database load
+- Configurable TTL for freshness requirements
+
+### Scaling Recommendations
+
+| Scale | Recommended Approach |
+|-------|---------------------|
+| < 10K tuples | Regular view + source table indexes |
+| 10K-100K tuples | Regular view + source indexes + application cache |
+| 100K-1M tuples | Materialized view with periodic refresh |
+| > 1M tuples | Dedicated table with trigger sync + application cache |
 
 ## Verifying Your View
 
 After creating the view, verify it works:
 
 ```sql
--- Check the view exists
+-- Check the view exists and has data
 SELECT * FROM melange_tuples LIMIT 10;
 
 -- Verify a specific permission
 SELECT check_permission('user', '123', 'can_read', 'repository', '456');
 
--- Check migration status (includes view existence)
--- In Go: migrator.GetStatus(ctx)
+-- Analyze query performance
+EXPLAIN ANALYZE
+SELECT * FROM melange_tuples
+WHERE object_type = 'repository' AND object_id = '456';
 ```
 
 ## Common Issues
@@ -226,4 +347,5 @@ REFRESH MATERIALIZED VIEW CONCURRENTLY melange_tuples;
 
 1. Run `EXPLAIN ANALYZE` on the underlying queries
 2. Add indexes to source tables (see patterns above)
-3. Consider a materialized view for read-heavy workloads
+3. Consider a materialized view or dedicated table for read-heavy workloads
+4. Enable application-level caching

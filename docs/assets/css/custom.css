@@ -1,0 +1,12 @@
+/* Custom theme colors - burnt orange */
+:root {
+  --primary-hue: 25deg;
+  --primary-saturation: 85%;
+  --primary-lightness: 45%;
+}
+
+.dark {
+  --primary-hue: 25deg;
+  --primary-saturation: 85%;
+  --primary-lightness: 50%;
+}

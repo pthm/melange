@@ -78,6 +78,10 @@ clean:
     rm -rf bin/
     go clean ./...
 
+# Run Hugo docs dev server
+docs-dev:
+    cd docs && git submodule update --init --recursive && hugo server
+
 # Run all checks (fmt, vet, test)
 check: fmt vet test
 

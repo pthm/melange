@@ -1,0 +1,68 @@
+# Hugo configuration file for Melange documentation
+title: Melange
+baseURL: https://melange.pthm.dev/
+
+# Use hextra theme from submodule
+theme: hextra
+
+enableRobotsTXT: true
+enableGitInfo: true
+
+markup:
+  goldmark:
+    renderer:
+      unsafe: true
+  highlight:
+    noClasses: false
+
+defaultContentLanguage: en
+languages:
+  en:
+    languageName: English
+    weight: 1
+
+menu:
+  main:
+    - name: Docs
+      pageRef: /docs
+      weight: 1
+    - name: Search
+      weight: 2
+      params:
+        type: search
+    - name: GitHub
+      weight: 3
+      url: "https://github.com/pthm/melange"
+      params:
+        icon: github
+
+params:
+  description: Zero-copy authorization for PostgreSQL - OpenFGA-compatible permission checking that queries your existing domain tables directly.
+
+  navbar:
+    displayTitle: true
+    displayLogo: true
+    logo:
+      path: images/logo.png
+      dark: images/logo.png
+      width: 50
+      height: 50
+    width: wide
+
+  page:
+    width: normal
+
+  footer:
+    displayCopyright: false
+    displayPoweredBy: false
+
+  editURL:
+    enable: true
+    base: "https://github.com/pthm/melange/edit/main/docs/content"
+
+  blog:
+    list:
+      displayTags: true
+
+  comments:
+    enable: false
