@@ -160,9 +160,13 @@ func extractUserset(us *openfgav1.Userset, rel *melange.RelationDefinition) {
 
 	case *openfgav1.Userset_Intersection:
 		// Intersection: permission granted if ALL children grant it
-		// We don't fully support this yet, but extract what we can
-		for _, child := range v.Intersection.GetChild() {
-			extractUserset(child, rel)
+		// May produce multiple groups due to distributive expansion
+		// E.g., "a and (b or c)" expands to [[a,b], [a,c]]
+		groups := expandIntersection(v.Intersection, rel.Name)
+		for _, group := range groups {
+			if len(group.Relations) > 0 {
+				rel.IntersectionGroups = append(rel.IntersectionGroups, group)
+			}
 		}
 
 	case *openfgav1.Userset_Difference:
@@ -176,4 +180,102 @@ func extractUserset(us *openfgav1.Userset, rel *melange.RelationDefinition) {
 			}
 		}
 	}
+}
+
+// expandIntersection expands an intersection node into one or more groups.
+// Returns multiple IntersectionGroups when union-in-intersection requires
+// distributive expansion: A ∧ (B ∨ C) = (A ∧ B) ∨ (A ∧ C)
+//
+// The relationName parameter is needed to handle Userset_This within intersections.
+// For "[user] and writer" on relation "viewer", This means "has direct viewer tuple".
+//
+// For simple intersections like "a and b", returns one group: [[a, b]]
+// For "a and (b or c)", returns two groups: [[a, b], [a, c]]
+func expandIntersection(intersection *openfgav1.Usersets, relationName string) []melange.IntersectionGroup {
+	// Start with one empty group
+	groups := []melange.IntersectionGroup{{}}
+
+	for _, child := range intersection.GetChild() {
+		switch cv := child.Userset.(type) {
+		case *openfgav1.Userset_ComputedUserset:
+			// Computed userset: add this relation to all existing groups
+			rel := cv.ComputedUserset.GetRelation()
+			for i := range groups {
+				groups[i].Relations = append(groups[i].Relations, rel)
+			}
+
+		case *openfgav1.Userset_This:
+			// Direct assignment within intersection: "[user] and writer"
+			// This means "has a direct tuple for THIS relation"
+			// Add the relation name itself to require direct tuple match
+			for i := range groups {
+				groups[i].Relations = append(groups[i].Relations, relationName)
+			}
+
+		case *openfgav1.Userset_TupleToUserset:
+			// TTU within intersection, e.g., "writer and (can_write from org)"
+			// Add the computed relation to all groups
+			rel := cv.TupleToUserset.GetComputedUserset().GetRelation()
+			for i := range groups {
+				groups[i].Relations = append(groups[i].Relations, rel)
+			}
+
+		case *openfgav1.Userset_Union:
+			// Union within intersection: apply distributive law
+			// For "a and (b or c)", if groups = [[a]], expand to [[a,b], [a,c]]
+			unionRels := extractUnionRelations(cv.Union)
+			if len(unionRels) > 0 {
+				groups = distributeUnion(groups, unionRels)
+			}
+
+		case *openfgav1.Userset_Intersection:
+			// Nested intersection: flatten into existing groups
+			nestedGroups := expandIntersection(cv.Intersection, relationName)
+			// If nested has multiple groups (due to its own unions), we'd need
+			// to cross-product. For now, just flatten the first group.
+			if len(nestedGroups) > 0 {
+				for i := range groups {
+					groups[i].Relations = append(groups[i].Relations, nestedGroups[0].Relations...)
+				}
+			}
+		}
+	}
+
+	return groups
+}
+
+// extractUnionRelations extracts relation names from a union node.
+// For simple unions like "a or b", returns ["a", "b"].
+// For nested structures, flattens computed usersets only.
+func extractUnionRelations(union *openfgav1.Usersets) []string {
+	var rels []string
+	for _, child := range union.GetChild() {
+		switch cv := child.Userset.(type) {
+		case *openfgav1.Userset_ComputedUserset:
+			rels = append(rels, cv.ComputedUserset.GetRelation())
+		case *openfgav1.Userset_Union:
+			// Nested union: flatten
+			rels = append(rels, extractUnionRelations(cv.Union)...)
+		}
+	}
+	return rels
+}
+
+// distributeUnion applies the distributive law: each existing group gets
+// expanded for each union member.
+// E.g., groups=[[a]], unionRels=[b,c] → [[a,b], [a,c]]
+func distributeUnion(groups []melange.IntersectionGroup, unionRels []string) []melange.IntersectionGroup {
+	var expanded []melange.IntersectionGroup
+	for _, g := range groups {
+		for _, rel := range unionRels {
+			// Clone the group and add this union member
+			newGroup := melange.IntersectionGroup{
+				Relations: make([]string, len(g.Relations), len(g.Relations)+1),
+			}
+			copy(newGroup.Relations, g.Relations)
+			newGroup.Relations = append(newGroup.Relations, rel)
+			expanded = append(expanded, newGroup)
+		}
+	}
+	return expanded
 }

@@ -17,6 +17,12 @@ type SubjectTypeRef struct {
 	Wildcard bool   // True if this is a wildcard reference (user:*)
 }
 
+// IntersectionGroup represents a group of relations that must ALL be satisfied.
+// For "viewer: writer and editor", the group would be ["writer", "editor"].
+type IntersectionGroup struct {
+	Relations []string // Relations that must all be satisfied (AND)
+}
+
 // RelationDefinition represents a parsed relation.
 // Relations describe who can have what relationship with an object.
 //
@@ -26,6 +32,7 @@ type SubjectTypeRef struct {
 //   - Inherited: derived from a parent object (ParentRelation, ParentType)
 //   - Exclusive: granted except for excluded subjects (ExcludedRelation)
 //   - Userset: granted via group membership (SubjectTypeRefs with Relation set)
+//   - Intersection: granted if ALL relations in a group are satisfied
 type RelationDefinition struct {
 	Name             string   // Relation name: "owner", "can_read", etc.
 	SubjectTypes     []string // Direct subject types: ["user"], ["organization"] (legacy)
@@ -38,6 +45,11 @@ type RelationDefinition struct {
 	//   - {Type: "user", Relation: ""}
 	//   - {Type: "group", Relation: "member"}
 	SubjectTypeRefs []SubjectTypeRef
+	// IntersectionGroups contains groups of relations that must ALL be satisfied.
+	// Each group is an AND (intersection), multiple groups are OR'd together.
+	// For "viewer: writer and editor", IntersectionGroups = [["writer", "editor"]]
+	// For "viewer: (a and b) or (c and d)", IntersectionGroups = [["a","b"], ["c","d"]]
+	IntersectionGroups []IntersectionGroup
 }
 
 // AuthzModel represents an entry in the melange_model table.
@@ -171,11 +183,13 @@ func RelationSubjects(types []TypeDefinition, objectType string, relation string
 //   - Implied relations: "repository.can_read implied by can_write"
 //   - Parent inheritance: "change.can_read from repository.can_read"
 //   - Exclusions: "change.can_read but not is_author"
+//   - Intersection groups: "viewer: writer and editor" (all must be satisfied)
 //
 // The check_permission function queries these rows to evaluate permissions
 // recursively, following the graph of implications and parent relationships.
 func ToAuthzModels(types []TypeDefinition) []AuthzModel {
 	var models []AuthzModel
+	var ruleGroupIDCounter int64 = 1 // Counter for intersection group IDs
 
 	for _, t := range types {
 		// Build implied_by graph for this type
@@ -190,37 +204,58 @@ func ToAuthzModels(types []TypeDefinition) []AuthzModel {
 		transitiveImpliers := computeTransitiveClosure(impliedByGraph)
 
 		for _, r := range t.Relations {
+			// Check if this relation has an intersection that includes itself (This pattern).
+			// For "[user] and writer" on relation "viewer", we don't want a separate
+			// subject_type entry because the intersection check already handles the direct
+			// tuple requirement. Without this skip, the fallthrough after intersection
+			// failure would find the direct tuple and incorrectly grant access.
+			hasThisInIntersection := false
+			for _, group := range r.IntersectionGroups {
+				for _, rel := range group.Relations {
+					if rel == r.Name {
+						hasThisInIntersection = true
+						break
+					}
+				}
+				if hasThisInIntersection {
+					break
+				}
+			}
+
 			// Add entries for direct subject types
 			// Use SubjectTypeRefs if available (includes userset relation info),
 			// otherwise fall back to SubjectTypes for backward compatibility
-			if len(r.SubjectTypeRefs) > 0 {
-				for _, ref := range r.SubjectTypeRefs {
-					st := ref.Type
-					model := AuthzModel{
-						ObjectType:  t.Name,
-						Relation:    r.Name,
-						SubjectType: &st,
+			// Skip if intersection includes This (self-reference)
+			if !hasThisInIntersection {
+				if len(r.SubjectTypeRefs) > 0 {
+					for _, ref := range r.SubjectTypeRefs {
+						st := ref.Type
+						model := AuthzModel{
+							ObjectType:  t.Name,
+							Relation:    r.Name,
+							SubjectType: &st,
+						}
+						// Set subject_relation for userset references
+						if ref.Relation != "" {
+							sr := ref.Relation
+							model.SubjectRelation = &sr
+						}
+						models = append(models, model)
 					}
-					// Set subject_relation for userset references
-					if ref.Relation != "" {
-						sr := ref.Relation
-						model.SubjectRelation = &sr
+				} else {
+					// Legacy path: use SubjectTypes (no userset info)
+					for _, subjectType := range r.SubjectTypes {
+						// Strip wildcard suffix for storage
+						st := subjectType
+						if len(st) > 2 && st[len(st)-2:] == ":*" {
+							st = st[:len(st)-2]
+						}
+						models = append(models, AuthzModel{
+							ObjectType:  t.Name,
+							Relation:    r.Name,
+							SubjectType: &st,
+						})
 					}
-					models = append(models, model)
-				}
-			} else {
-				// Legacy path: use SubjectTypes (no userset info)
-				for _, subjectType := range r.SubjectTypes {
-					// Strip wildcard suffix for storage
-					st := subjectType
-					if len(st) > 2 && st[len(st)-2:] == ":*" {
-						st = st[:len(st)-2]
-					}
-					models = append(models, AuthzModel{
-						ObjectType:  t.Name,
-						Relation:    r.Name,
-						SubjectType: &st,
-					})
 				}
 			}
 
@@ -262,6 +297,36 @@ func ToAuthzModels(types []TypeDefinition) []AuthzModel {
 					model.ExcludedRelation = &er
 				}
 				models = append(models, model)
+			}
+
+			// Add entries for intersection groups
+			// For "viewer: writer and editor", we create:
+			//   - {relation: viewer, check_relation: writer, rule_group_id: 1, rule_group_mode: intersection}
+			//   - {relation: viewer, check_relation: editor, rule_group_id: 1, rule_group_mode: intersection}
+			for _, group := range r.IntersectionGroups {
+				if len(group.Relations) == 0 {
+					continue
+				}
+				groupID := ruleGroupIDCounter
+				ruleGroupIDCounter++
+				mode := "intersection"
+
+				for _, checkRel := range group.Relations {
+					cr := checkRel
+					model := AuthzModel{
+						ObjectType:    t.Name,
+						Relation:      r.Name,
+						CheckRelation: &cr,
+						RuleGroupID:   &groupID,
+						RuleGroupMode: &mode,
+					}
+					// Include exclusion if this relation has one
+					if r.ExcludedRelation != "" {
+						er := r.ExcludedRelation
+						model.ExcludedRelation = &er
+					}
+					models = append(models, model)
+				}
 			}
 		}
 	}

@@ -189,6 +189,7 @@ $$ LANGUAGE plpgsql STABLE;
 --   p_subject_type, p_subject_id: The subject to enumerate access for
 --
 -- Returns a table of (object_type, object_id, relation) tuples the subject can access.
+-- Note: VOLATILE because it uses temp tables for iterative computation.
 CREATE OR REPLACE FUNCTION subject_grants(
     p_subject_type TEXT,
     p_subject_id TEXT
@@ -246,8 +247,18 @@ BEGIN
         -- Expand via userset references AND parent inheritance in one pass
         WITH userset_expansion AS (
             -- If subject has relation R on group G, and there's a tuple
-            -- (G, group_id) -> relation -> object with userset rule [G#R],
+            -- (G, group_id#R) -> relation -> object with userset rule [G#R],
             -- then subject has that relation on the object.
+            --
+            -- Tuples with userset subjects are stored as:
+            --   subject_type=group, subject_id=x#member, relation=viewer, object_type=document, object_id=1
+            -- This means "members of group:x have viewer on document:1"
+            --
+            -- We need to match:
+            --   - g.object_type = group (the group type matches)
+            --   - g.object_id = x (the specific group)
+            --   - g.relation = member (the required relation on the group)
+            --   - t.subject_id = x#member (matches g.object_id || '#' || g.relation)
             SELECT DISTINCT
                 t.object_type,
                 t.object_id,
@@ -260,7 +271,8 @@ BEGIN
                 AND m.parent_relation IS NULL          -- not parent inheritance
             JOIN melange_tuples t
                 ON t.subject_type = m.subject_type
-                AND t.subject_id = g.object_id         -- the specific group
+                -- Match userset tuple format: subject_id is "id#relation"
+                AND t.subject_id = g.object_id || '#' || m.subject_relation
                 AND t.object_type = m.object_type
                 AND t.relation = m.relation
             JOIN melange_relation_closure c
@@ -301,13 +313,13 @@ BEGIN
             )
         ),
         all_new AS (
-            SELECT * FROM userset_expansion
+            SELECT ue.object_type, ue.object_id, ue.relation FROM userset_expansion ue
             UNION
-            SELECT * FROM parent_expansion
+            SELECT pe.object_type, pe.object_id, pe.relation FROM parent_expansion pe
         )
         INSERT INTO _sg_grants (object_type, object_id, relation, iteration)
-        SELECT object_type, object_id, relation, v_iteration
-        FROM all_new
+        SELECT an.object_type, an.object_id, an.relation, v_iteration
+        FROM all_new an
         ON CONFLICT DO NOTHING;
 
         GET DIAGNOSTICS v_new_count = ROW_COUNT;
@@ -323,7 +335,7 @@ BEGIN
     SELECT g.object_type, g.object_id, g.relation
     FROM _sg_grants g;
 END;
-$$ LANGUAGE plpgsql STABLE;
+$$ LANGUAGE plpgsql VOLATILE;
 
 
 -- Check if a subject has an excluded relation on an object.
@@ -498,11 +510,94 @@ END;
 $$ LANGUAGE plpgsql STABLE;
 
 
--- Generic permission check with userset reference support
--- This is the main entry point for permission checking. It detects whether
--- userset references are defined for the relation and uses either:
--- 1. Fast path (check_permission_simple) for relations without usersets
--- 2. Full userset-aware check using subject_has_grant for relations with usersets
+-- Check intersection groups for a relation.
+-- For "viewer: writer and editor", this checks if the subject has BOTH
+-- writer AND editor on the object.
+--
+-- Returns TRUE if ANY intersection group is fully satisfied (all relations in group match).
+-- Returns FALSE if no intersection groups are satisfied.
+--
+-- Each intersection group has a unique rule_group_id. All rules in a group must
+-- be satisfied (AND semantics), but groups themselves are OR'd together.
+CREATE OR REPLACE FUNCTION check_intersection_groups(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_relation TEXT,
+    p_object_type TEXT,
+    p_object_id TEXT
+) RETURNS BOOLEAN AS $$
+DECLARE
+    v_group RECORD;
+    v_group_satisfied BOOLEAN;
+    v_check_rel TEXT;
+BEGIN
+    -- Find all distinct intersection groups for this relation
+    FOR v_group IN
+        SELECT DISTINCT m.rule_group_id
+        FROM melange_relation_closure c
+        JOIN melange_model m
+            ON m.object_type = c.object_type
+            AND m.relation = c.satisfying_relation
+        WHERE c.object_type = p_object_type
+          AND c.relation = p_relation
+          AND m.rule_group_mode = 'intersection'
+          AND m.rule_group_id IS NOT NULL
+    LOOP
+        v_group_satisfied := TRUE;
+
+        -- Check if ALL relations in this group are satisfied
+        FOR v_check_rel IN
+            SELECT m.check_relation
+            FROM melange_model m
+            WHERE m.object_type = p_object_type
+              AND m.rule_group_id = v_group.rule_group_id
+              AND m.rule_group_mode = 'intersection'
+              AND m.check_relation IS NOT NULL
+        LOOP
+            IF v_check_rel = p_relation THEN
+                -- Self-reference (This pattern): "[user] and writer" on viewer
+                -- Check for direct tuple since there's no subject_type entry
+                IF NOT EXISTS (
+                    SELECT 1 FROM melange_tuples t
+                    WHERE t.subject_type = p_subject_type
+                      AND (t.subject_id = p_subject_id OR t.subject_id = '*')
+                      AND t.object_type = p_object_type
+                      AND t.object_id = p_object_id
+                      AND t.relation = v_check_rel
+                ) THEN
+                    v_group_satisfied := FALSE;
+                    EXIT;
+                END IF;
+            ELSE
+                -- Use subject_has_grant to check other relations (supports userset patterns)
+                IF NOT subject_has_grant(
+                    p_subject_type, p_subject_id,
+                    p_object_type, p_object_id,
+                    v_check_rel, ARRAY[]::TEXT[]
+                ) THEN
+                    v_group_satisfied := FALSE;
+                    EXIT;  -- No need to check more relations in this group
+                END IF;
+            END IF;
+        END LOOP;
+
+        -- If this group is fully satisfied, return true
+        IF v_group_satisfied THEN
+            RETURN TRUE;
+        END IF;
+    END LOOP;
+
+    RETURN FALSE;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+
+-- Generic permission check with userset reference and intersection support
+-- This is the main entry point for permission checking. It detects the type of
+-- relation rules and uses the appropriate evaluation strategy:
+-- 1. Intersection groups: uses check_intersection_groups (AND semantics)
+-- 2. Userset references: uses subject_has_grant (lazy userset evaluation)
+-- 3. Simple relations: uses check_permission_simple (fast path)
 --
 -- Parameters:
 --   p_subject_type, p_subject_id: The subject requesting access
@@ -518,9 +613,66 @@ CREATE OR REPLACE FUNCTION check_permission(
     p_object_id TEXT
 ) RETURNS INTEGER AS $$
 DECLARE
+    v_has_intersection BOOLEAN;
+    v_has_other_rules BOOLEAN;
     v_has_userset BOOLEAN;
     v_excluded_rel TEXT;
 BEGIN
+    -- Check if any intersection rules exist for this relation
+    SELECT EXISTS (
+        SELECT 1
+        FROM melange_relation_closure c
+        JOIN melange_model m
+            ON m.object_type = c.object_type
+            AND m.relation = c.satisfying_relation
+        WHERE c.object_type = p_object_type
+          AND c.relation = p_relation
+          AND m.rule_group_mode = 'intersection'
+    ) INTO v_has_intersection;
+
+    IF v_has_intersection THEN
+        -- Check intersection groups
+        IF check_intersection_groups(
+            p_subject_type, p_subject_id,
+            p_relation, p_object_type, p_object_id
+        ) THEN
+            -- Check for exclusions
+            SELECT em.excluded_relation INTO v_excluded_rel
+            FROM melange_model em
+            WHERE em.object_type = p_object_type
+              AND em.relation = p_relation
+              AND em.excluded_relation IS NOT NULL
+            LIMIT 1;
+
+            IF v_excluded_rel IS NOT NULL THEN
+                IF check_exclusion(p_subject_type, p_subject_id, v_excluded_rel, p_object_type, p_object_id) THEN
+                    RETURN 0;  -- Excluded
+                END IF;
+            END IF;
+
+            RETURN 1;  -- Access granted via intersection
+        END IF;
+
+        -- Intersection not satisfied. Check if there are OTHER (non-intersection) rules
+        -- to fall through to (e.g., "writer or (editor and owner)" has both).
+        -- If there are no other rules, return 0 immediately.
+        SELECT EXISTS (
+            SELECT 1
+            FROM melange_relation_closure c
+            JOIN melange_model m
+                ON m.object_type = c.object_type
+                AND m.relation = c.satisfying_relation
+            WHERE c.object_type = p_object_type
+              AND c.relation = p_relation
+              AND (m.rule_group_mode IS NULL OR m.rule_group_mode != 'intersection')
+              AND (m.subject_type IS NOT NULL OR m.implied_by IS NOT NULL OR m.parent_relation IS NOT NULL)
+        ) INTO v_has_other_rules;
+
+        IF NOT v_has_other_rules THEN
+            RETURN 0;  -- Intersection-only relation, no fallback
+        END IF;
+    END IF;
+
     -- Fast path: check if any userset references exist for this relation
     -- If not, we can use the simpler (faster) check_permission_simple
     SELECT EXISTS (

@@ -26,12 +26,12 @@ type TestCase struct {
 
 // CheckAssertion represents an expected result for a Check call.
 type CheckAssertion struct {
-	Name             string                  `json:"name"`
-	Tuple            *openfgav1.TupleKey     `json:"tuple"`
-	ContextualTuples []*openfgav1.TupleKey   `json:"contextualTuples"`
-	Context          *structpb.Struct        `json:"context"`
-	Expectation      bool                    `json:"expectation"`
-	ErrorCode        int                     `json:"errorCode"`
+	Name             string                `json:"name"`
+	Tuple            *openfgav1.TupleKey   `json:"tuple"`
+	ContextualTuples []*openfgav1.TupleKey `json:"contextualTuples"`
+	Context          *structpb.Struct      `json:"context"`
+	Expectation      bool                  `json:"expectation"`
+	ErrorCode        int                   `json:"errorCode"`
 }
 
 // Stage represents a stage within a test case.
@@ -79,7 +79,7 @@ type testFile struct {
 func LoadTests() ([]TestCase, error) {
 	files := []string{
 		"tests/consolidated_1_1_tests.yaml",
-		"tests/abac_tests.yaml",
+		// "tests/abac_tests.yaml", // We do not support ABAC tests yet so this remains commented out
 	}
 
 	var allTests []TestCase
@@ -135,6 +135,29 @@ func RunTestsByPattern(t *testing.T, client *Client, pattern string) {
 		t.Logf("no tests matched pattern %q", pattern)
 	} else {
 		t.Logf("ran %d tests matching pattern %q", matched, pattern)
+	}
+}
+
+// RunTestsByNegativePattern runs tests whose names do NOT match the given regex pattern.
+func RunTestsByNegativePattern(t *testing.T, client *Client, pattern string) {
+	re, err := regexp.Compile(pattern)
+	require.NoError(t, err, "invalid pattern")
+
+	tests, err := LoadTests()
+	require.NoError(t, err, "loading tests")
+
+	var matched int
+	for _, tc := range tests {
+		if !re.MatchString(tc.Name) {
+			matched++
+			RunTest(t, client, tc)
+		}
+	}
+
+	if matched == 0 {
+		t.Logf("no tests matched negative pattern %q", pattern)
+	} else {
+		t.Logf("ran %d tests not matching pattern %q", matched, pattern)
 	}
 }
 
@@ -235,6 +258,78 @@ func RunTest(t *testing.T, _ *Client, tc TestCase) {
 						} else {
 							require.Error(t, err)
 						}
+					})
+				}
+
+				// Run list objects assertions
+				for i, assertion := range stage.ListObjectsAssertions {
+					assertionName := fmt.Sprintf("listobjects_%d", i)
+
+					t.Run(assertionName, func(t *testing.T) {
+						resp, err := client.ListObjects(ctx, &openfgav1.ListObjectsRequest{
+							StoreId:              storeID,
+							AuthorizationModelId: modelID,
+							Type:                 assertion.Request.Type,
+							Relation:             assertion.Request.Relation,
+							User:                 assertion.Request.User,
+						})
+						require.NoError(t, err)
+
+						// Sort both for comparison
+						got := resp.GetObjects()
+						want := assertion.Expectation
+
+						require.ElementsMatch(t, want, got,
+							"listobjects user=%s relation=%s type=%s",
+							assertion.Request.User, assertion.Request.Relation, assertion.Request.Type)
+					})
+				}
+
+				// Run list users assertions
+				for i, assertion := range stage.ListUsersAssertions {
+					assertionName := fmt.Sprintf("listusers_%d", i)
+
+					t.Run(assertionName, func(t *testing.T) {
+						// Parse object
+						var objType, objID string
+						for j := 0; j < len(assertion.Request.Object); j++ {
+							if assertion.Request.Object[j] == ':' {
+								objType = assertion.Request.Object[:j]
+								objID = assertion.Request.Object[j+1:]
+								break
+							}
+						}
+
+						// Convert filters to UserTypeFilter
+						var filters []*openfgav1.UserTypeFilter
+						for _, f := range assertion.Request.Filters {
+							filters = append(filters, &openfgav1.UserTypeFilter{Type: f})
+						}
+
+						resp, err := client.ListUsers(ctx, &openfgav1.ListUsersRequest{
+							StoreId:              storeID,
+							AuthorizationModelId: modelID,
+							Object: &openfgav1.Object{
+								Type: objType,
+								Id:   objID,
+							},
+							Relation:    assertion.Request.Relation,
+							UserFilters: filters,
+						})
+						require.NoError(t, err)
+
+						// Extract user strings from response
+						var got []string
+						for _, u := range resp.GetUsers() {
+							if obj := u.GetObject(); obj != nil {
+								got = append(got, obj.GetType()+":"+obj.GetId())
+							}
+						}
+
+						want := assertion.Expectation
+						require.ElementsMatch(t, want, got,
+							"listusers object=%s relation=%s filters=%v",
+							assertion.Request.Object, assertion.Request.Relation, assertion.Request.Filters)
 					})
 				}
 			})

@@ -105,6 +105,12 @@ test-openfga-pattern PATTERN:
     cd test && OPENFGA_TEST_PATTERN="{{PATTERN}}" go test -v -count=1 -timeout 5m \
         -run "TestOpenFGAByPattern" ./openfgatests/...
 
+# Run OpenFGA tests not matching a regex pattern (e.g., just test-openfga-negative-pattern "^wildcard")
+test-openfga-negative-pattern PATTERN:
+    cd test && OPENFGA_TEST_PATTERN="{{PATTERN}}" go test -v -count=1 -timeout 5m \
+        -run "TestOpenFGAByNegativePattern" ./openfgatests/...
+
+
 # List all available OpenFGA test names
 test-openfga-list:
     cd test && go test -v -count=1 -run "TestOpenFGAListAvailableTests" ./openfgatests/...

@@ -595,8 +595,14 @@ func extractUserset(us *openfgav1.Userset, rel *melange.RelationDefinition) {
 		}
 
 	case *openfgav1.Userset_Intersection:
-		for _, child := range v.Intersection.GetChild() {
-			extractUserset(child, rel)
+		// Intersection: permission granted if ALL children grant it
+		// May produce multiple groups due to distributive expansion
+		// E.g., "a and (b or c)" expands to [[a,b], [a,c]]
+		groups := expandIntersection(v.Intersection, rel.Name)
+		for _, group := range groups {
+			if len(group.Relations) > 0 {
+				rel.IntersectionGroups = append(rel.IntersectionGroups, group)
+			}
 		}
 
 	case *openfgav1.Userset_Difference:
@@ -607,6 +613,87 @@ func extractUserset(us *openfgav1.Userset, rel *melange.RelationDefinition) {
 			}
 		}
 	}
+}
+
+// expandIntersection expands an intersection node into one or more groups.
+// Returns multiple IntersectionGroups when union-in-intersection requires
+// distributive expansion: A ∧ (B ∨ C) = (A ∧ B) ∨ (A ∧ C)
+func expandIntersection(intersection *openfgav1.Usersets, relationName string) []melange.IntersectionGroup {
+	// Start with one empty group
+	groups := []melange.IntersectionGroup{{}}
+
+	for _, child := range intersection.GetChild() {
+		switch cv := child.Userset.(type) {
+		case *openfgav1.Userset_ComputedUserset:
+			// Computed userset: add this relation to all existing groups
+			rel := cv.ComputedUserset.GetRelation()
+			for i := range groups {
+				groups[i].Relations = append(groups[i].Relations, rel)
+			}
+
+		case *openfgav1.Userset_This:
+			// Direct assignment within intersection: "[user] and writer"
+			// This means "has a direct tuple for THIS relation"
+			for i := range groups {
+				groups[i].Relations = append(groups[i].Relations, relationName)
+			}
+
+		case *openfgav1.Userset_TupleToUserset:
+			// TTU within intersection
+			rel := cv.TupleToUserset.GetComputedUserset().GetRelation()
+			for i := range groups {
+				groups[i].Relations = append(groups[i].Relations, rel)
+			}
+
+		case *openfgav1.Userset_Union:
+			// Union within intersection: apply distributive law
+			unionRels := extractUnionRelations(cv.Union)
+			if len(unionRels) > 0 {
+				groups = distributeUnion(groups, unionRels)
+			}
+
+		case *openfgav1.Userset_Intersection:
+			// Nested intersection: flatten into existing groups
+			nestedGroups := expandIntersection(cv.Intersection, relationName)
+			if len(nestedGroups) > 0 {
+				for i := range groups {
+					groups[i].Relations = append(groups[i].Relations, nestedGroups[0].Relations...)
+				}
+			}
+		}
+	}
+
+	return groups
+}
+
+// extractUnionRelations extracts relation names from a union node.
+func extractUnionRelations(union *openfgav1.Usersets) []string {
+	var rels []string
+	for _, child := range union.GetChild() {
+		switch cv := child.Userset.(type) {
+		case *openfgav1.Userset_ComputedUserset:
+			rels = append(rels, cv.ComputedUserset.GetRelation())
+		case *openfgav1.Userset_Union:
+			rels = append(rels, extractUnionRelations(cv.Union)...)
+		}
+	}
+	return rels
+}
+
+// distributeUnion applies the distributive law.
+func distributeUnion(groups []melange.IntersectionGroup, unionRels []string) []melange.IntersectionGroup {
+	var expanded []melange.IntersectionGroup
+	for _, g := range groups {
+		for _, rel := range unionRels {
+			newGroup := melange.IntersectionGroup{
+				Relations: make([]string, len(g.Relations), len(g.Relations)+1),
+			}
+			copy(newGroup.Relations, g.Relations)
+			newGroup.Relations = append(newGroup.Relations, rel)
+			expanded = append(expanded, newGroup)
+		}
+	}
+	return expanded
 }
 
 // parseSubject parses an OpenFGA user string (e.g., "user:123" or "team:456#member").
