@@ -196,3 +196,61 @@ Commands:
   validate  Validate schema syntax
   status    Show current schema status
 ```
+
+## Performance
+
+Melange is designed for low-latency permission checks with predictable scaling characteristics. All benchmarks run against PostgreSQL with varying tuple counts.
+
+### Permission Check Latency
+
+| Operation            | 1K Tuples | 10K Tuples | 100K Tuples | 1M Tuples | Scaling  |
+| -------------------- | --------- | ---------- | ----------- | --------- | -------- |
+| Direct Membership    | 426μs     | 397μs      | 384μs       | 428μs     | O(1)     |
+| Inherited Permission | 995μs     | 1.1ms      | 1.4ms       | 3.4ms     | O(log n) |
+| Exclusion Pattern    | 1.8ms     | 3.4ms      | 18ms        | 173ms     | O(n)     |
+| Denied Permission    | 612μs     | 683μs      | 739μs       | 1.2ms     | O(log n) |
+
+**Direct membership checks are constant-time** regardless of tuple count. The ~400μs baseline is dominated by network round-trip latency.
+
+**Inherited permissions** (role hierarchies via `from parent`) scale logarithmically thanks to precomputed transitive closure.
+
+**Exclusion patterns** (`but not`) scale linearly and should be avoided in hot paths for large deployments.
+
+### List Operation Latency
+
+| Operation    | 1K    | 10K   | 100K  | 1M    |
+| ------------ | ----- | ----- | ----- | ----- |
+| ListObjects  | 2.3ms | 23ms  | 192ms | 1.5s  |
+| ListSubjects | 708μs | 6.3ms | 42ms  | 864ms |
+
+List operations scale linearly with tuple count. For large datasets, use application-layer pagination or pre-filter candidates.
+
+### Caching Impact
+
+| Scenario          | Latency | Speedup |
+| ----------------- | ------- | ------- |
+| Without cache     | 980μs   | —       |
+| With cache (warm) | 79ns    | 12,400× |
+
+Enable caching for dramatic performance improvements on repeated checks:
+
+```go
+cache := melange.NewCache(melange.WithTTL(time.Minute))
+checker := melange.NewChecker(db, melange.WithCache(cache))
+```
+
+Recommendations by Scale
+
+| Scale           | Expected Latency | Recommendations                       |
+| --------------- | ---------------- | ------------------------------------- |
+| < 10K tuples    | < 1ms            | No optimization needed                |
+| 10K–100K tuples | 1–5ms            | Enable caching for repeated checks    |
+| 100K–1M tuples  | 5–20ms           | Avoid exclusion patterns in hot paths |
+| > 1M tuples     | 20ms+            | Use caching; paginate list operations |
+
+Memory Overhead
+
+- Check operations: ~1.3KB, 29 allocations per call
+- List operations: ~1–2KB base + result size
+
+Memory allocation in the Go runtime is constant regardless of tuple count—the SQL-based approach keeps Go-side overhead minimal.
