@@ -2,6 +2,7 @@ package melange
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"log"
 	"strings"
@@ -126,7 +127,6 @@ func WithContextDecision() Option {
 	}
 }
 
-
 // NewChecker creates a checker that works with *sql.DB, *sql.Tx, or *sql.Conn.
 // Options allow callers to enable caching or decision overrides.
 //
@@ -201,6 +201,45 @@ func (c *Checker) Check(ctx context.Context, subject SubjectLike, relation Relat
 	return allowed, err
 }
 
+// CheckWithContextualTuples returns true if subject has the relation on object,
+// using the provided contextual tuples for this call only.
+// Contextual tuples are validated against the loaded model before evaluation.
+func (c *Checker) CheckWithContextualTuples(
+	ctx context.Context,
+	subject SubjectLike,
+	relation RelationLike,
+	object ObjectLike,
+	tuples []ContextualTuple,
+) (bool, error) {
+	if len(tuples) == 0 {
+		return c.Check(ctx, subject, relation, object)
+	}
+
+	// Check for context decision override (opt-in via WithContextDecision)
+	if c.useContextDecision {
+		if d := GetDecisionContext(ctx); d != DecisionUnset {
+			return d == DecisionAllow, nil
+		}
+	}
+
+	// Check for Checker-level decision override (allows bypassing DB for admin tools/tests)
+	if c.decision != DecisionUnset {
+		return c.decision == DecisionAllow, nil
+	}
+
+	if err := c.validateContextualTuples(ctx, tuples); err != nil {
+		return false, err
+	}
+
+	execer, cleanup, err := c.prepareContextualTuples(ctx, tuples)
+	if err != nil {
+		return false, err
+	}
+	defer cleanup()
+
+	return c.checkPermissionWithQuerier(ctx, execer, subject.FGASubject(), relation.FGARelation(), object.FGAObject())
+}
+
 // checkPermission calls the PostgreSQL check_permission function.
 // This is the low-level implementation that maps to the stored procedure.
 //
@@ -213,9 +252,13 @@ func (c *Checker) Check(ctx context.Context, subject SubjectLike, relation Relat
 // PostgreSQL errors are mapped to sentinel errors (ErrNoTuplesTable,
 // ErrMissingModel) for easier error handling in application code.
 func (c *Checker) checkPermission(ctx context.Context, subject Object, relation Relation, object Object) (bool, error) {
+	return c.checkPermissionWithQuerier(ctx, c.q, subject, relation, object)
+}
+
+func (c *Checker) checkPermissionWithQuerier(ctx context.Context, q Querier, subject Object, relation Relation, object Object) (bool, error) {
 	var result int
 
-	err := c.q.QueryRowContext(ctx,
+	err := q.QueryRowContext(ctx,
 		"SELECT check_permission($1, $2, $3, $4, $5)",
 		subject.Type, subject.ID, relation, object.Type, object.ID,
 	).Scan(&result)
@@ -337,6 +380,62 @@ func (c *Checker) ListObjects(ctx context.Context, subject SubjectLike, relation
 	return ids, rows.Err()
 }
 
+// ListObjectsWithContextualTuples returns object IDs for a subject using contextual tuples.
+// Contextual tuples are validated against the loaded model before evaluation.
+func (c *Checker) ListObjectsWithContextualTuples(
+	ctx context.Context,
+	subject SubjectLike,
+	relation RelationLike,
+	objectType ObjectType,
+	tuples []ContextualTuple,
+) ([]string, error) {
+	if len(tuples) == 0 {
+		return c.ListObjects(ctx, subject, relation, objectType)
+	}
+
+	// Check context decision if enabled
+	if c.useContextDecision {
+		if d := GetDecisionContext(ctx); d == DecisionDeny {
+			return nil, nil
+		}
+	}
+
+	// DecisionDeny means no access to anything
+	if c.decision == DecisionDeny {
+		return nil, nil
+	}
+
+	if err := c.validateContextualTuples(ctx, tuples); err != nil {
+		return nil, err
+	}
+
+	execer, cleanup, err := c.prepareContextualTuples(ctx, tuples)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+
+	rows, err := execer.QueryContext(ctx,
+		"SELECT object_id FROM list_accessible_objects($1, $2, $3, $4)",
+		subject.FGASubject().Type, subject.FGASubject().ID, relation.FGARelation(), objectType,
+	)
+	if err != nil {
+		return nil, c.mapError("list_accessible_objects", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+
+	return ids, rows.Err()
+}
+
 // ListSubjects returns all subject IDs of the given type that have relation on object.
 // This is the inverse of ListObjects - it answers "who has access to this object?"
 //
@@ -388,6 +487,225 @@ func (c *Checker) ListSubjects(ctx context.Context, object ObjectLike, relation 
 	}
 
 	return ids, rows.Err()
+}
+
+// ListSubjectsWithContextualTuples returns subject IDs for an object using contextual tuples.
+// Contextual tuples are validated against the loaded model before evaluation.
+func (c *Checker) ListSubjectsWithContextualTuples(
+	ctx context.Context,
+	object ObjectLike,
+	relation RelationLike,
+	subjectType ObjectType,
+	tuples []ContextualTuple,
+) ([]string, error) {
+	if len(tuples) == 0 {
+		return c.ListSubjects(ctx, object, relation, subjectType)
+	}
+
+	// Check context decision if enabled
+	if c.useContextDecision {
+		if d := GetDecisionContext(ctx); d == DecisionDeny {
+			return nil, nil
+		}
+	}
+
+	// DecisionDeny means no subjects have access
+	if c.decision == DecisionDeny {
+		return nil, nil
+	}
+
+	if err := c.validateContextualTuples(ctx, tuples); err != nil {
+		return nil, err
+	}
+
+	execer, cleanup, err := c.prepareContextualTuples(ctx, tuples)
+	if err != nil {
+		return nil, err
+	}
+	defer cleanup()
+
+	rows, err := execer.QueryContext(ctx,
+		"SELECT subject_id FROM list_accessible_subjects($1, $2, $3, $4)",
+		object.FGAObject().Type, object.FGAObject().ID, relation.FGARelation(), subjectType,
+	)
+	if err != nil {
+		return nil, c.mapError("list_accessible_subjects", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+
+	return ids, rows.Err()
+}
+
+func (c *Checker) validateContextualTuples(ctx context.Context, tuples []ContextualTuple) error {
+	for i, tuple := range tuples {
+		if err := c.validateContextualTuple(ctx, tuple); err != nil {
+			return fmt.Errorf("%w: tuple %d: %v", ErrInvalidContextualTuple, i, err)
+		}
+	}
+	return nil
+}
+
+func (c *Checker) validateContextualTuple(ctx context.Context, tuple ContextualTuple) error {
+	var exists int
+	err := c.q.QueryRowContext(ctx,
+		"SELECT 1 FROM melange_model WHERE object_type = $1 AND relation = $2 LIMIT 1",
+		tuple.Object.Type, tuple.Relation,
+	).Scan(&exists)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("relation %s not defined on %s", tuple.Relation, tuple.Object.Type)
+		}
+		return c.mapError("contextual_tuple_relation", err)
+	}
+
+	subjectID := tuple.Subject.ID
+	usersetRelation := ""
+	isUserset := false
+	if idx := strings.Index(subjectID, "#"); idx != -1 {
+		isUserset = true
+		usersetRelation = subjectID[idx+1:]
+	}
+
+	err = c.q.QueryRowContext(ctx,
+		`SELECT 1
+		FROM melange_model
+		WHERE object_type = $1
+		  AND relation = $2
+		  AND subject_type = $3
+		  AND parent_relation IS NULL
+		  AND (
+		        ($4 AND subject_relation = $5)
+		     OR (NOT $4 AND subject_relation IS NULL)
+		  )
+		LIMIT 1`,
+		tuple.Object.Type, tuple.Relation, tuple.Subject.Type, isUserset, usersetRelation,
+	).Scan(&exists)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("subject type %s not allowed for %s on %s", tuple.Subject.Type, tuple.Relation, tuple.Object.Type)
+		}
+		return c.mapError("contextual_tuple_subject", err)
+	}
+
+	return nil
+}
+
+func (c *Checker) prepareContextualTuples(ctx context.Context, tuples []ContextualTuple) (Execer, func(), error) {
+	switch q := c.q.(type) {
+	case *sql.DB:
+		conn, err := q.Conn(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		cleanup := func() {
+			_ = c.cleanupContextualTuples(ctx, conn)
+			_ = conn.Close()
+		}
+		if err := c.setupContextualTuples(ctx, conn, tuples); err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		return conn, cleanup, nil
+	case *sql.Tx:
+		cleanup := func() { _ = c.cleanupContextualTuples(ctx, q) }
+		if err := c.setupContextualTuples(ctx, q, tuples); err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		return q, cleanup, nil
+	case *sql.Conn:
+		cleanup := func() { _ = c.cleanupContextualTuples(ctx, q) }
+		if err := c.setupContextualTuples(ctx, q, tuples); err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		return q, cleanup, nil
+	default:
+		return nil, nil, ErrContextualTuplesUnsupported
+	}
+}
+
+func (c *Checker) setupContextualTuples(ctx context.Context, q Execer, tuples []ContextualTuple) error {
+	baseSchema, err := c.lookupTuplesSchema(ctx, q)
+	if err != nil {
+		return err
+	}
+
+	_, err = q.ExecContext(ctx, `
+		CREATE TEMP TABLE melange_contextual_tuples (
+			subject_type TEXT NOT NULL,
+			subject_id TEXT NOT NULL,
+			relation TEXT NOT NULL,
+			object_type TEXT NOT NULL,
+			object_id TEXT NOT NULL
+		) ON COMMIT DROP
+	`)
+	if err != nil {
+		return err
+	}
+
+	for _, tuple := range tuples {
+		_, err = q.ExecContext(ctx, `
+			INSERT INTO melange_contextual_tuples (subject_type, subject_id, relation, object_type, object_id)
+			VALUES ($1, $2, $3, $4, $5)
+		`, tuple.Subject.Type, tuple.Subject.ID, tuple.Relation, tuple.Object.Type, tuple.Object.ID)
+		if err != nil {
+			return err
+		}
+	}
+
+	_, err = q.ExecContext(ctx, fmt.Sprintf(`
+		CREATE TEMP VIEW melange_tuples AS
+		SELECT subject_type, subject_id, relation, object_type, object_id
+		FROM %s.melange_tuples
+		UNION ALL
+		SELECT subject_type, subject_id, relation, object_type, object_id
+		FROM melange_contextual_tuples
+	`, quoteIdent(baseSchema)))
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *Checker) cleanupContextualTuples(ctx context.Context, q Execer) error {
+	_, _ = q.ExecContext(ctx, "DROP VIEW IF EXISTS pg_temp.melange_tuples")
+	_, _ = q.ExecContext(ctx, "DROP TABLE IF EXISTS pg_temp.melange_contextual_tuples")
+	return nil
+}
+
+func (c *Checker) lookupTuplesSchema(ctx context.Context, q Querier) (string, error) {
+	var schema string
+	err := q.QueryRowContext(ctx, `
+		SELECT n.nspname
+		FROM pg_catalog.pg_class c
+		JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+		WHERE c.relname = 'melange_tuples'
+		  AND c.relkind IN ('r', 'v', 'm')
+		ORDER BY n.nspname
+		LIMIT 1
+	`).Scan(&schema)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", ErrNoTuplesTable
+		}
+		return "", err
+	}
+	return schema, nil
+}
+
+func quoteIdent(ident string) string {
+	return `"` + strings.ReplaceAll(ident, `"`, `""`) + `"`
 }
 
 // Must panics if the permission check fails or errors.

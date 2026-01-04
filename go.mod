@@ -8,3 +8,5 @@ go 1.25.3
 //
 // For schema parsing and code generation, use github.com/pthm/melange/tooling
 // which depends on the OpenFGA parser.
+
+require github.com/openfga/openfga v1.11.2 // indirect

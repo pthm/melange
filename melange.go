@@ -151,6 +151,14 @@ func (r Relation) String() string {
 	return string(r)
 }
 
+// ContextualTuple represents a tuple provided at request time.
+// These tuples are not persisted and only affect a single check/list call.
+type ContextualTuple struct {
+	Subject  Object
+	Relation Relation
+	Object   Object
+}
+
 // FGARelation returns the relation itself, implementing RelationLike.
 func (r Relation) FGARelation() Relation {
 	return r

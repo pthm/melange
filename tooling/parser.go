@@ -46,6 +46,16 @@ func ParseSchemaString(content string) ([]melange.TypeDefinition, error) {
 	return convertModel(model), nil
 }
 
+// ConvertProtoModel converts an OpenFGA protobuf AuthorizationModel to melange
+// TypeDefinitions. This is useful when you have a protobuf model directly
+// (e.g., from the OpenFGA API) rather than DSL text.
+//
+// This function is used by the OpenFGA test suite adapter to convert test
+// models without re-implementing the parsing logic.
+func ConvertProtoModel(model *openfgav1.AuthorizationModel) []melange.TypeDefinition {
+	return convertModel(model)
+}
+
 // convertModel converts the protobuf model to our TypeDefinition format.
 // Extracts the essential authorization rules from OpenFGA's protobuf representation:
 //   - Type definitions (user, repository, etc.)
@@ -175,13 +185,14 @@ func extractUserset(us *openfgav1.Userset, rel *melange.RelationDefinition) {
 		// we need to collect ALL exclusions, not just the outermost one.
 		// The base may itself be a Difference, so we recurse first.
 		extractUserset(v.Difference.GetBase(), rel)
-		// Add this exclusion to the list (append, don't overwrite)
+		// Add exclusions from the subtract part
+		// The subtract can be a simple relation (ComputedUserset) or a union (editor or owner)
 		if subtract := v.Difference.GetSubtract(); subtract != nil {
-			if computed := subtract.GetComputedUserset(); computed != nil {
-				excl := computed.GetRelation()
-				rel.ExcludedRelations = append(rel.ExcludedRelations, excl)
-				// Also set deprecated field for backward compatibility
-				rel.ExcludedRelation = excl
+			excludedRels := extractSubtractRelations(subtract)
+			rel.ExcludedRelations = append(rel.ExcludedRelations, excludedRels...)
+			// Also set deprecated field for backward compatibility
+			if len(excludedRels) > 0 {
+				rel.ExcludedRelation = excludedRels[len(excludedRels)-1]
 			}
 		}
 	}
@@ -349,4 +360,42 @@ func distributeUnion(groups []melange.IntersectionGroup, unionRels []string) []m
 		}
 	}
 	return expanded
+}
+
+// extractSubtractRelations extracts all relation names from a subtract userset.
+// Handles both simple relations (ComputedUserset) and unions (editor or owner).
+// For "but not (editor or owner)", returns ["editor", "owner"].
+// For "but not author", returns ["author"].
+func extractSubtractRelations(us *openfgav1.Userset) []string {
+	if us == nil {
+		return nil
+	}
+
+	switch v := us.Userset.(type) {
+	case *openfgav1.Userset_ComputedUserset:
+		// Simple relation: "but not author"
+		return []string{v.ComputedUserset.GetRelation()}
+
+	case *openfgav1.Userset_Union:
+		// Union in subtract: "but not (editor or owner)"
+		// All relations in the union should exclude
+		var rels []string
+		for _, child := range v.Union.GetChild() {
+			rels = append(rels, extractSubtractRelations(child)...)
+		}
+		return rels
+
+	case *openfgav1.Userset_This:
+		// Direct assignment in subtract - use the relation being defined
+		// This is rare but could occur
+		return nil
+
+	case *openfgav1.Userset_TupleToUserset:
+		// TTU in subtract: "but not (viewer from parent)"
+		// Return the computed relation for now
+		return []string{v.TupleToUserset.GetComputedUserset().GetRelation()}
+
+	default:
+		return nil
+	}
 }

@@ -640,8 +640,11 @@ BEGIN
         WHERE c.object_type = p_object_type
           AND c.relation = p_relation
     LOOP
-        -- Check if the parent relation is satisfied (recursively uses closure for parent)
-        IF check_permission_simple(p_subject_type, p_subject_id, v_parent_rel, v_parent_type, v_parent_id) = 1 THEN
+        -- Check if the parent relation is satisfied
+        -- IMPORTANT: Must use check_permission (not check_permission_simple) here because
+        -- the parent object may have userset references that require full evaluation.
+        -- E.g., document.viewer: viewer from parent -> folder.viewer: [group#member]
+        IF check_permission(p_subject_type, p_subject_id, v_parent_rel, v_parent_type, v_parent_id) = 1 THEN
             -- Check for ALL exclusions (using helper function)
             IF NOT check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
                 RETURN 1;
@@ -899,296 +902,49 @@ END;
 $$ LANGUAGE plpgsql STABLE;
 
 
--- List objects a subject can access (simple path - no userset references)
--- Uses a recursive CTE to walk the permission graph in a single query.
+-- List objects a subject can access
+-- Simplified implementation: finds candidate objects and filters using check_permission.
+-- This ensures consistency with permission checks at the cost of performance.
 --
--- This is a CTE-only implementation that avoids per-row check_permission calls
--- by building the complete access set recursively:
---
--- 1. base_access: All relations the subject satisfies via direct tuples (via closure)
--- 2. inherited_access: Recursively inherit child relations from parent objects
--- 3. intersection_candidates: Objects that may satisfy intersection rules
--- 4. candidate_objects: Filter to objects matching p_object_type and p_relation (via closure)
--- 5. Apply exclusions at the final result level
---
--- Key insight: Build a complete set of (object_type, object_id, relation) tuples
--- the subject satisfies, then filter by closure to the target relation.
-CREATE OR REPLACE FUNCTION list_accessible_objects_simple(
-    p_subject_type TEXT,
-    p_subject_id TEXT,
-    p_relation TEXT,
-    p_object_type TEXT
-) RETURNS TABLE(object_id TEXT) AS $$
-DECLARE
-    v_has_intersection BOOLEAN;
-BEGIN
-    -- Check once if intersection rules exist (optimization)
-    SELECT EXISTS (
-        SELECT 1 FROM melange_model m
-        WHERE m.object_type = p_object_type
-          AND m.relation = p_relation
-          AND m.rule_group_mode = 'intersection'
-    ) INTO v_has_intersection;
-
-    RETURN QUERY
-    WITH RECURSIVE
-    -- Base: all relations the subject satisfies via direct tuples (closure)
-    -- For each tuple where subject matches, expand to all relations it satisfies
-    -- Validates against model rules for subject type matching
-    base_access AS (
-        SELECT
-            t.object_type AS obj_type,
-            t.object_id AS obj_id,
-            c.relation AS rel
-        FROM melange_tuples t
-        JOIN melange_model m
-            ON m.object_type = t.object_type
-            AND m.relation = t.relation
-            AND m.subject_type = t.subject_type
-            AND m.parent_relation IS NULL
-            -- Accept either:
-            -- 1. Direct assignment (no subject_relation in model)
-            -- 2. Userset reference where subject_id matches the pattern
-            AND (
-                m.subject_relation IS NULL
-                OR (
-                    m.subject_relation IS NOT NULL
-                    AND position('#' in p_subject_id) > 0
-                    AND substring(p_subject_id from position('#' in p_subject_id) + 1) = m.subject_relation
-                )
-            )
-        JOIN melange_relation_closure c
-            ON c.object_type = t.object_type
-            AND c.satisfying_relation = t.relation
-        WHERE t.subject_type = p_subject_type
-          AND (t.subject_id = p_subject_id OR t.subject_id = '*')
-    ),
-    -- Additional access for computed usersets: when p_subject_id is a userset (e.g., fga#member)
-    -- and there are tuples with a different userset relation that is implied by the requested one
-    -- (e.g., tuple has fga#member_c4 and we query fga#member, where member implies member_c4)
-    computed_userset_access AS (
-        SELECT
-            t.object_type AS obj_type,
-            t.object_id AS obj_id,
-            obj_c.relation AS rel
-        FROM melange_tuples t
-        JOIN melange_model m
-            ON m.object_type = t.object_type
-            AND m.relation = t.relation
-            AND m.subject_type = t.subject_type
-            AND m.subject_relation IS NOT NULL  -- userset reference rule
-            AND m.parent_relation IS NULL
-        -- Check if the requested userset relation implies the tuple's userset relation
-        -- via the subject type's closure table
-        -- e.g., closure(group, member_c4, member) means "member satisfies member_c4"
-        JOIN melange_relation_closure subj_c
-            ON subj_c.object_type = t.subject_type  -- closure on subject type (e.g., group)
-            AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1)  -- tuple's relation (e.g., member_c4)
-            AND subj_c.satisfying_relation = substring(p_subject_id from position('#' in p_subject_id) + 1)  -- requested relation (e.g., member)
-        JOIN melange_relation_closure obj_c
-            ON obj_c.object_type = t.object_type
-            AND obj_c.satisfying_relation = t.relation
-        WHERE t.subject_type = p_subject_type
-          AND t.subject_id != '*'
-          AND position('#' in p_subject_id) > 0
-          AND position('#' in t.subject_id) > 0
-          -- Match the ID part (before #) of the subject
-          AND substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) =
-              substring(p_subject_id from 1 for position('#' in p_subject_id) - 1)
-    ),
-    -- Recursive: inherit child relations from parent relations
-    -- For "X from parent" patterns, if subject has parent_relation on parent object,
-    -- then subject has relation X on all child objects linked to that parent.
-    inherited_access AS (
-        SELECT obj_type, obj_id, rel, 0 AS depth FROM base_access
-        UNION
-        SELECT obj_type, obj_id, rel, 0 AS depth FROM computed_userset_access
-
-        UNION
-
-        SELECT
-            child.object_type AS obj_type,
-            child.object_id AS obj_id,
-            c.relation AS rel,
-            ia.depth + 1
-        FROM inherited_access ia
-        -- Find parent inheritance rules where:
-        -- - The rule is for objects linked to our accessible object type
-        -- - The rule requires our accessible relation on the parent
-        JOIN melange_model m
-            ON m.parent_relation IS NOT NULL
-            AND m.parent_relation = ia.rel
-        -- Find child objects linked to the accessible parent
-        JOIN melange_tuples child
-            ON child.subject_type = ia.obj_type
-            AND child.subject_id = ia.obj_id
-            AND child.relation = m.subject_type  -- linking relation
-            AND child.object_type = m.object_type
-        -- Expand to all relations this satisfies via closure
-        JOIN melange_relation_closure c
-            ON c.object_type = child.object_type
-            AND c.satisfying_relation = m.relation
-        WHERE ia.depth < 10
-    ),
-    -- Intersection candidates: For intersection relations (A and B), find objects
-    -- where subject has ANY of the check_relations. These are potential matches
-    -- that will be filtered by check_intersection_groups to verify ALL are satisfied.
-    -- This is needed because closure-based expansion doesn't work for AND semantics.
-    intersection_candidates AS (
-        SELECT DISTINCT t.object_id AS obj_id
-        FROM melange_model m
-        JOIN melange_tuples t
-            ON t.object_type = m.object_type
-            AND t.relation = m.check_relation
-        WHERE m.object_type = p_object_type
-          AND m.relation = p_relation
-          AND m.rule_group_mode = 'intersection'
-          AND m.check_relation IS NOT NULL
-          AND t.subject_type = p_subject_type
-          AND (t.subject_id = p_subject_id OR t.subject_id = '*')
-    ),
-    -- Candidate objects that satisfy p_relation (via closure) OR are intersection candidates
-    candidate_objects AS (
-        SELECT DISTINCT ia.obj_id
-        FROM inherited_access ia
-        WHERE ia.obj_type = p_object_type
-          AND ia.rel = p_relation
-
-        UNION
-
-        -- Include intersection candidates (only when intersection rules exist)
-        SELECT ic.obj_id
-        FROM intersection_candidates ic
-        WHERE v_has_intersection
-    )
-    SELECT co.obj_id AS object_id
-    FROM candidate_objects co
-    WHERE NOT EXISTS (
-        SELECT 1
-        FROM melange_model em
-        WHERE em.object_type = p_object_type
-          AND em.relation = p_relation
-          AND em.excluded_relation IS NOT NULL
-          AND check_exclusion(
-              p_subject_type,
-              p_subject_id,
-              em.excluded_relation,
-              p_object_type,
-              co.obj_id
-          )
-    )
-    -- Intersection check: filter out candidates that don't satisfy all AND conditions
-    AND (
-        NOT v_has_intersection
-        OR check_intersection_groups(
-            p_subject_type,
-            p_subject_id,
-            p_relation,
-            p_object_type,
-            co.obj_id
-        )
-    );
-END;
-$$ LANGUAGE plpgsql STABLE;
-
-
--- List objects a subject can access (with userset reference support)
--- This is the main entry point. It detects whether userset references exist
--- for the target relation and dispatches to either:
--- 1. Fast path (list_accessible_objects_simple) for relations without usersets
--- 2. Full userset-aware enumeration using subject_grants for relations with usersets
+-- Strategy:
+-- 1. Find ALL objects of the target type (comprehensive candidate set)
+-- 2. Filter candidates using check_permission to ensure correctness
 CREATE OR REPLACE FUNCTION list_accessible_objects(
     p_subject_type TEXT,
     p_subject_id TEXT,
     p_relation TEXT,
     p_object_type TEXT
 ) RETURNS TABLE(object_id TEXT) AS $$
-DECLARE
-    v_has_userset BOOLEAN;
 BEGIN
-    -- Fast path: check if any userset references exist for this relation
-    SELECT EXISTS (
-        SELECT 1
-        FROM melange_relation_closure c
-        JOIN melange_model m
-            ON m.object_type = c.object_type
-            AND m.relation = c.satisfying_relation
-        WHERE c.object_type = p_object_type
-          AND c.relation = p_relation
-          AND m.subject_relation IS NOT NULL
-    ) INTO v_has_userset;
-
-    IF NOT v_has_userset THEN
-        -- No userset references, use fast path
-        RETURN QUERY SELECT lo.object_id
-        FROM list_accessible_objects_simple(
-            p_subject_type, p_subject_id, p_relation, p_object_type
-        ) lo;
-        RETURN;
-    END IF;
-
-    -- Full userset-aware enumeration using subject_grants
-    -- Filter the results to the target object type and relation, applying exclusions
     RETURN QUERY
-    SELECT DISTINCT sg.object_id
-    FROM subject_grants(p_subject_type, p_subject_id) sg
-    WHERE sg.object_type = p_object_type
-      AND sg.relation = p_relation
-      -- Apply exclusions
-      AND NOT EXISTS (
-        SELECT 1
-        FROM melange_model em
-        WHERE em.object_type = p_object_type
-          AND em.relation = p_relation
-          AND em.excluded_relation IS NOT NULL
-          AND check_exclusion(
-              p_subject_type,
-              p_subject_id,
-              em.excluded_relation,
-              p_object_type,
-              sg.object_id
-          )
-      )
-      -- Intersection check: filter out objects that don't satisfy all AND conditions
-      AND (
-          NOT EXISTS (
-              SELECT 1 FROM melange_model m
-              WHERE m.object_type = p_object_type
-                AND m.relation = p_relation
-                AND m.rule_group_mode = 'intersection'
-          )
-          OR check_intersection_groups(
-              p_subject_type,
-              p_subject_id,
-              p_relation,
-              p_object_type,
-              sg.object_id
-          )
-      );
+    -- Find ALL distinct objects of the target type from tuples
+    -- This is comprehensive - any object that exists in the tuples table
+    SELECT DISTINCT t.object_id
+    FROM melange_tuples t
+    WHERE t.object_type = p_object_type
+      -- Filter using check_permission for correctness
+      AND check_permission(
+          p_subject_type,
+          p_subject_id,
+          p_relation,
+          p_object_type,
+          t.object_id
+      ) = 1;
 END;
 $$ LANGUAGE plpgsql STABLE;
 
 
 -- List subjects that have access to an object
--- Uses a recursive CTE to find all permission sources, then collects subjects.
---
--- The CTE:
--- 1. Starts with the target object
--- 2. Recursively finds parent objects that grant permission
--- 3. Expands userset references to find actual subjects (only when userset tuples exist)
--- 4. Collects all subjects with satisfying relations on any permission source
+-- Simplified implementation: finds candidate subjects and filters using check_permission.
+-- This ensures consistency with permission checks at the cost of performance.
 --
 -- Supports userset filters: p_subject_type can be "group#member" to filter for
--- subjects that are userset references (tuples with subject_id containing #relation).
+-- userset references (tuples with subject_id containing #relation).
 --
--- Userset expansion: When a tuple like (group, fga#member, viewer, document, public)
--- exists (meaning "members of group:fga have viewer"), this function expands it to
--- find all subjects of the requested type that have "member" on "group:fga".
---
--- Performance optimization: Uses two execution paths:
--- 1. Fast path: When no userset references exist in the schema, skips userset expansion entirely
--- 2. Full path: When userset references exist, includes userset expansion CTEs
--- The schema check is cheap (indexed lookup on melange_model) vs data scanning.
+-- Strategy:
+-- 1. Find ALL subjects of the target type (comprehensive candidate set)
+-- 2. For userset filters, also include userset reference candidates
+-- 3. Filter candidates using check_permission to ensure correctness
 CREATE OR REPLACE FUNCTION list_accessible_subjects(
     p_object_type TEXT,
     p_object_id TEXT,
@@ -1198,7 +954,6 @@ CREATE OR REPLACE FUNCTION list_accessible_subjects(
 DECLARE
     v_filter_type TEXT;     -- Parsed type part (e.g., 'group' from 'group#member')
     v_filter_relation TEXT; -- Parsed relation part (e.g., 'member' from 'group#member')
-    v_has_userset_schema BOOLEAN;
 BEGIN
     -- Parse userset filter: "group#member" -> type=group, relation=member
     IF position('#' in p_subject_type) > 0 THEN
@@ -1209,285 +964,59 @@ BEGIN
         v_filter_relation := NULL;
     END IF;
 
-    -- Fast path check: determine if userset expansion is needed.
-    -- Userset expansion is only needed when:
-    -- 1. Not filtering for userset subjects (v_filter_relation IS NULL)
-    -- 2. Schema has userset references defined (subject_relation IS NOT NULL)
-    --
-    -- This check uses an indexed lookup on melange_model, which is much cheaper
-    -- than scanning melange_tuples for userset patterns.
+    -- For userset filters (e.g., "group#member"), we need a different approach
     IF v_filter_relation IS NOT NULL THEN
-        -- Filtering for userset subjects, so userset_expanded_subjects won't contribute
-        v_has_userset_schema := FALSE;
-    ELSE
-        -- Check if any userset references exist in the schema
-        SELECT EXISTS (
-            SELECT 1 FROM melange_model m
-            WHERE m.subject_relation IS NOT NULL
-            LIMIT 1
-        ) INTO v_has_userset_schema;
-    END IF;
-
-    IF v_has_userset_schema THEN
-        -- Full path: includes userset expansion
+        -- Return userset references tied to this object and relation closure.
+        -- For filter group#member, include tuples like group:foo#member or
+        -- group:foo#member_c4 when member implies member_c4.
         RETURN QUERY
-        WITH RECURSIVE
-        permission_sources AS (
-            SELECT
-                p_object_type AS source_type,
-                p_object_id AS source_id,
-                p_relation AS required_relation,
-                0 AS depth
-
-            UNION
-
-            SELECT
-                t.subject_type,
-                t.subject_id,
-                m.parent_relation,
-                ps.depth + 1
-            FROM permission_sources ps
-            JOIN melange_relation_closure c
-                ON c.object_type = ps.source_type
-                AND c.relation = ps.required_relation
-            JOIN melange_tuples t
-                ON t.object_type = ps.source_type
-                AND t.object_id = ps.source_id
-            JOIN melange_model m
-                ON m.object_type = ps.source_type
-                AND m.relation = c.satisfying_relation
-                AND m.parent_relation IS NOT NULL
-                AND m.subject_type = t.relation
-            WHERE ps.depth < 10
-        ),
-        -- Combined userset expansion: find and expand userset grants in one CTE
-        userset_expanded_subjects AS (
-            SELECT DISTINCT mem.subject_id
-            FROM permission_sources ps
-            JOIN melange_relation_closure c
-                ON c.object_type = ps.source_type
-                AND c.relation = ps.required_relation
-            JOIN melange_tuples t
-                ON t.object_type = ps.source_type
-                AND t.object_id = ps.source_id
-                AND t.relation = c.satisfying_relation
-                AND position('#' in t.subject_id) > 0
-            JOIN melange_relation_closure uc
-                ON uc.object_type = t.subject_type
-                AND uc.relation = substring(t.subject_id from position('#' in t.subject_id) + 1)
-            JOIN melange_tuples mem
-                ON mem.object_type = t.subject_type
-                AND mem.object_id = substring(t.subject_id from 1 for position('#' in t.subject_id) - 1)
-                AND mem.relation = uc.satisfying_relation
-            WHERE mem.subject_type = v_filter_type
-              AND position('#' in mem.subject_id) = 0
-        ),
-        intersection_candidates AS (
-            SELECT DISTINCT t.subject_id
-            FROM melange_model m
-            JOIN melange_tuples t
-                ON t.object_type = m.object_type
-                AND t.object_id = p_object_id
-                AND t.relation = m.check_relation
-            WHERE m.object_type = p_object_type
-              AND m.relation = p_relation
-              AND m.rule_group_mode = 'intersection'
-              AND m.check_relation IS NOT NULL
-              AND t.subject_type = v_filter_type
-        ),
-        all_candidates AS (
-            SELECT DISTINCT t.subject_id
-            FROM permission_sources ps
-            JOIN melange_relation_closure c
-                ON c.object_type = ps.source_type
-                AND c.relation = ps.required_relation
-            JOIN melange_tuples t
-                ON t.object_type = ps.source_type
-                AND t.object_id = ps.source_id
-                AND t.relation = c.satisfying_relation
-            WHERE t.subject_type = v_filter_type
-
-            UNION
-
-            SELECT ues.subject_id FROM userset_expanded_subjects ues
-
-            UNION
-
-            SELECT ic.subject_id FROM intersection_candidates ic
-        )
-        SELECT ac.subject_id
-        FROM all_candidates ac
-        WHERE
-          NOT EXISTS (
-              SELECT 1
-              FROM melange_model em
-              WHERE em.object_type = p_object_type
-                AND em.relation = p_relation
-                AND em.excluded_relation IS NOT NULL
-                AND check_exclusion(
-                    v_filter_type,
-                    ac.subject_id,
-                    em.excluded_relation,
-                    p_object_type,
-                    p_object_id
-                )
-          )
+        SELECT DISTINCT
+            substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) || '#' || v_filter_relation AS subject_id
+        FROM melange_tuples t
+        JOIN melange_relation_closure c
+            ON c.object_type = p_object_type
+            AND c.relation = p_relation
+            AND c.satisfying_relation = t.relation
+        WHERE t.object_type = p_object_type
+          AND t.object_id = p_object_id
+          AND t.subject_type = v_filter_type
+          AND position('#' in t.subject_id) > 0
           AND (
-              NOT EXISTS (
-                  SELECT 1 FROM melange_model m
-                  WHERE m.object_type = p_object_type
-                    AND m.relation = p_relation
-                    AND m.rule_group_mode = 'intersection'
+              substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation
+              OR EXISTS (
+                  SELECT 1 FROM melange_relation_closure subj_c
+                  WHERE subj_c.object_type = v_filter_type
+                    AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1)
+                    AND subj_c.satisfying_relation = v_filter_relation
               )
-              OR check_intersection_groups(
-                  v_filter_type,
-                  ac.subject_id,
-                  p_relation,
-                  p_object_type,
-                  p_object_id
-              )
-          );
+          )
+          AND check_permission(
+              v_filter_type,
+              substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) || '#' || v_filter_relation,
+              p_relation,
+              p_object_type,
+              p_object_id
+          ) = 1;
     ELSE
-        -- Fast path: no userset expansion needed
+        -- Regular subject filter: only subjects tied to this object and relation closure.
         RETURN QUERY
-        WITH RECURSIVE
-        permission_sources AS (
-            SELECT
-                p_object_type AS source_type,
-                p_object_id AS source_id,
-                p_relation AS required_relation,
-                0 AS depth
-
-            UNION
-
-            SELECT
-                t.subject_type,
-                t.subject_id,
-                m.parent_relation,
-                ps.depth + 1
-            FROM permission_sources ps
-            JOIN melange_relation_closure c
-                ON c.object_type = ps.source_type
-                AND c.relation = ps.required_relation
-            JOIN melange_tuples t
-                ON t.object_type = ps.source_type
-                AND t.object_id = ps.source_id
-            JOIN melange_model m
-                ON m.object_type = ps.source_type
-                AND m.relation = c.satisfying_relation
-                AND m.parent_relation IS NOT NULL
-                AND m.subject_type = t.relation
-            WHERE ps.depth < 10
-        ),
-        intersection_candidates AS (
-            SELECT DISTINCT
-                CASE
-                    WHEN v_filter_relation IS NOT NULL AND position('#' in t.subject_id) > 0
-                    THEN substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) || '#' || v_filter_relation
-                    ELSE t.subject_id
-                END AS subject_id
-            FROM melange_model m
-            JOIN melange_tuples t
-                ON t.object_type = m.object_type
-                AND t.object_id = p_object_id
-                AND t.relation = m.check_relation
-            WHERE m.object_type = p_object_type
-              AND m.relation = p_relation
-              AND m.rule_group_mode = 'intersection'
-              AND m.check_relation IS NOT NULL
-              AND t.subject_type = v_filter_type
-              AND (
-                  v_filter_relation IS NULL
-                  OR (
-                      position('#' in t.subject_id) > 0
-                      AND (
-                          substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation
-                          OR EXISTS (
-                              SELECT 1 FROM melange_relation_closure subj_c
-                              WHERE subj_c.object_type = t.subject_type
-                                AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1)
-                                AND subj_c.satisfying_relation = v_filter_relation
-                          )
-                      )
-                  )
-              )
-        ),
-        all_candidates AS (
-            -- When filtering for userset subjects (v_filter_relation IS NOT NULL),
-            -- return the subject_id rewritten to use the filter relation instead of the tuple's relation.
-            -- e.g., filter for group#member, tuple has fga#member_c4 -> return fga#member
-            SELECT DISTINCT
-                CASE
-                    WHEN v_filter_relation IS NOT NULL AND position('#' in t.subject_id) > 0
-                    THEN substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) || '#' || v_filter_relation
-                    ELSE t.subject_id
-                END AS subject_id
-            FROM permission_sources ps
-            JOIN melange_relation_closure c
-                ON c.object_type = ps.source_type
-                AND c.relation = ps.required_relation
-            JOIN melange_tuples t
-                ON t.object_type = ps.source_type
-                AND t.object_id = ps.source_id
-                AND t.relation = c.satisfying_relation
-            WHERE t.subject_type = v_filter_type
-              AND (
-                  -- No userset filter: accept any subject (direct or userset)
-                  v_filter_relation IS NULL
-                  -- Userset filter: must be a userset subject
-                  OR (
-                      position('#' in t.subject_id) > 0
-                      AND (
-                          -- Exact match on the userset relation
-                          substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation
-                          -- Computed userset: requested relation (e.g., member) satisfies tuple's relation (e.g., member_c4)
-                          -- via the subject type's closure table
-                          OR EXISTS (
-                              SELECT 1 FROM melange_relation_closure subj_c
-                              WHERE subj_c.object_type = t.subject_type
-                                AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1)  -- tuple's relation (e.g., member_c4)
-                                AND subj_c.satisfying_relation = v_filter_relation  -- requested relation (e.g., member)
-                          )
-                      )
-                  )
-              )
-
-            UNION
-
-            SELECT ic.subject_id FROM intersection_candidates ic
-        )
-        SELECT ac.subject_id
-        FROM all_candidates ac
-        WHERE
-          NOT EXISTS (
-              SELECT 1
-              FROM melange_model em
-              WHERE em.object_type = p_object_type
-                AND em.relation = p_relation
-                AND em.excluded_relation IS NOT NULL
-                AND check_exclusion(
-                    v_filter_type,
-                    ac.subject_id,
-                    em.excluded_relation,
-                    p_object_type,
-                    p_object_id
-                )
-          )
-          AND (
-              NOT EXISTS (
-                  SELECT 1 FROM melange_model m
-                  WHERE m.object_type = p_object_type
-                    AND m.relation = p_relation
-                    AND m.rule_group_mode = 'intersection'
-              )
-              OR check_intersection_groups(
-                  v_filter_type,
-                  ac.subject_id,
-                  p_relation,
-                  p_object_type,
-                  p_object_id
-              )
-          );
+        SELECT DISTINCT t.subject_id
+        FROM melange_tuples t
+        JOIN melange_relation_closure c
+            ON c.object_type = p_object_type
+            AND c.relation = p_relation
+            AND c.satisfying_relation = t.relation
+        WHERE t.object_type = p_object_type
+          AND t.object_id = p_object_id
+          AND t.subject_type = v_filter_type
+          AND (position('#' in t.subject_id) = 0 OR t.subject_id = '*')
+          AND check_permission(
+              v_filter_type,
+              t.subject_id,
+              p_relation,
+              p_object_type,
+              p_object_id
+          ) = 1;
     END IF;
 END;
 $$ LANGUAGE plpgsql STABLE;

@@ -225,31 +225,11 @@ func (c *Client) Write(ctx context.Context, req *openfgav1.WriteRequest, opts ..
 // Check evaluates whether a user has a specific relation on an object.
 func (c *Client) Check(ctx context.Context, req *openfgav1.CheckRequest, opts ...grpc.CallOption) (*openfgav1.CheckResponse, error) {
 	c.mu.RLock()
-	s, ok := c.stores[req.GetStoreId()]
+	_, ok := c.stores[req.GetStoreId()]
 	c.mu.RUnlock()
 
 	if !ok {
 		return nil, fmt.Errorf("store not found: %s", req.GetStoreId())
-	}
-
-	// Handle contextual tuples by temporarily adding them
-	if contextualTuples := req.GetContextualTuples(); contextualTuples != nil && len(contextualTuples.GetTupleKeys()) > 0 {
-		c.mu.Lock()
-		originalTuples := s.tuples
-		s.tuples = append(append([]*openfgav1.TupleKey{}, s.tuples...), contextualTuples.GetTupleKeys()...)
-		if err := c.refreshTuples(ctx, s); err != nil {
-			s.tuples = originalTuples
-			c.mu.Unlock()
-			return nil, fmt.Errorf("refreshing contextual tuples: %w", err)
-		}
-		c.mu.Unlock()
-
-		defer func() {
-			c.mu.Lock()
-			s.tuples = originalTuples
-			_ = c.refreshTuples(ctx, s)
-			c.mu.Unlock()
-		}()
 	}
 
 	// Parse the tuple key
@@ -266,7 +246,16 @@ func (c *Client) Check(ctx context.Context, req *openfgav1.CheckRequest, opts ..
 
 	// Perform the check using melange
 	checker := melange.NewChecker(c.db)
-	allowed, err := checker.Check(ctx, subject, melange.Relation(relation), object)
+	contextualTuples, err := contextualTuplesFromKeys(req.GetContextualTuples().GetTupleKeys())
+	if err != nil {
+		return nil, fmt.Errorf("parsing contextual tuples: %w", err)
+	}
+	var allowed bool
+	if len(contextualTuples) > 0 {
+		allowed, err = checker.CheckWithContextualTuples(ctx, subject, melange.Relation(relation), object, contextualTuples)
+	} else {
+		allowed, err = checker.Check(ctx, subject, melange.Relation(relation), object)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("check failed: %w", err)
 	}
@@ -279,31 +268,11 @@ func (c *Client) Check(ctx context.Context, req *openfgav1.CheckRequest, opts ..
 // ListObjects returns all objects of a given type that the user has a relation on.
 func (c *Client) ListObjects(ctx context.Context, req *openfgav1.ListObjectsRequest, opts ...grpc.CallOption) (*openfgav1.ListObjectsResponse, error) {
 	c.mu.RLock()
-	s, ok := c.stores[req.GetStoreId()]
+	_, ok := c.stores[req.GetStoreId()]
 	c.mu.RUnlock()
 
 	if !ok {
 		return nil, fmt.Errorf("store not found: %s", req.GetStoreId())
-	}
-
-	// Handle contextual tuples
-	if contextualTuples := req.GetContextualTuples(); contextualTuples != nil && len(contextualTuples.GetTupleKeys()) > 0 {
-		c.mu.Lock()
-		originalTuples := s.tuples
-		s.tuples = append(append([]*openfgav1.TupleKey{}, s.tuples...), contextualTuples.GetTupleKeys()...)
-		if err := c.refreshTuples(ctx, s); err != nil {
-			s.tuples = originalTuples
-			c.mu.Unlock()
-			return nil, fmt.Errorf("refreshing contextual tuples: %w", err)
-		}
-		c.mu.Unlock()
-
-		defer func() {
-			c.mu.Lock()
-			s.tuples = originalTuples
-			_ = c.refreshTuples(ctx, s)
-			c.mu.Unlock()
-		}()
 	}
 
 	subject, err := parseSubject(req.GetUser())
@@ -312,7 +281,16 @@ func (c *Client) ListObjects(ctx context.Context, req *openfgav1.ListObjectsRequ
 	}
 
 	checker := melange.NewChecker(c.db)
-	ids, err := checker.ListObjects(ctx, subject, melange.Relation(req.GetRelation()), melange.ObjectType(req.GetType()))
+	contextualTuples, err := contextualTuplesFromKeys(req.GetContextualTuples().GetTupleKeys())
+	if err != nil {
+		return nil, fmt.Errorf("parsing contextual tuples: %w", err)
+	}
+	var ids []string
+	if len(contextualTuples) > 0 {
+		ids, err = checker.ListObjectsWithContextualTuples(ctx, subject, melange.Relation(req.GetRelation()), melange.ObjectType(req.GetType()), contextualTuples)
+	} else {
+		ids, err = checker.ListObjects(ctx, subject, melange.Relation(req.GetRelation()), melange.ObjectType(req.GetType()))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("list objects failed: %w", err)
 	}
@@ -330,32 +308,11 @@ func (c *Client) ListObjects(ctx context.Context, req *openfgav1.ListObjectsRequ
 // ListUsers returns all users that have a relation on the given object.
 func (c *Client) ListUsers(ctx context.Context, req *openfgav1.ListUsersRequest, opts ...grpc.CallOption) (*openfgav1.ListUsersResponse, error) {
 	c.mu.RLock()
-	s, ok := c.stores[req.GetStoreId()]
+	_, ok := c.stores[req.GetStoreId()]
 	c.mu.RUnlock()
 
 	if !ok {
 		return nil, fmt.Errorf("store not found: %s", req.GetStoreId())
-	}
-
-	// Handle contextual tuples
-	// Note: ListUsersRequest.GetContextualTuples() returns []*TupleKey directly, not a wrapper
-	if contextualTuples := req.GetContextualTuples(); len(contextualTuples) > 0 {
-		c.mu.Lock()
-		originalTuples := s.tuples
-		s.tuples = append(append([]*openfgav1.TupleKey{}, s.tuples...), contextualTuples...)
-		if err := c.refreshTuples(ctx, s); err != nil {
-			s.tuples = originalTuples
-			c.mu.Unlock()
-			return nil, fmt.Errorf("refreshing contextual tuples: %w", err)
-		}
-		c.mu.Unlock()
-
-		defer func() {
-			c.mu.Lock()
-			s.tuples = originalTuples
-			_ = c.refreshTuples(ctx, s)
-			c.mu.Unlock()
-		}()
 	}
 
 	object, err := parseObject(req.GetObject().GetType() + ":" + req.GetObject().GetId())
@@ -377,7 +334,16 @@ func (c *Client) ListUsers(ctx context.Context, req *openfgav1.ListUsersRequest,
 		}
 
 		checker := melange.NewChecker(c.db)
-		ids, err := checker.ListSubjects(ctx, object, melange.Relation(req.GetRelation()), subjectType)
+		contextualTuples, err := contextualTuplesFromKeys(req.GetContextualTuples())
+		if err != nil {
+			return nil, fmt.Errorf("parsing contextual tuples: %w", err)
+		}
+		var ids []string
+		if len(contextualTuples) > 0 {
+			ids, err = checker.ListSubjectsWithContextualTuples(ctx, object, melange.Relation(req.GetRelation()), subjectType, contextualTuples)
+		} else {
+			ids, err = checker.ListSubjects(ctx, object, melange.Relation(req.GetRelation()), subjectType)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("list subjects failed: %w", err)
 		}
@@ -511,272 +477,15 @@ func (c *Client) refreshTuples(ctx context.Context, s *store) error {
 }
 
 // convertProtoModel converts a WriteAuthorizationModelRequest to melange TypeDefinitions.
+// Uses tooling.ConvertProtoModel to ensure test parsing matches production parsing.
 func convertProtoModel(req *openfgav1.WriteAuthorizationModelRequest) []melange.TypeDefinition {
-	// Build a fake AuthorizationModel to use the existing converter
 	model := &openfgav1.AuthorizationModel{
 		SchemaVersion:   req.GetSchemaVersion(),
 		TypeDefinitions: req.GetTypeDefinitions(),
 		Conditions:      req.GetConditions(),
 	}
 
-	return convertAuthzModel(model)
-}
-
-// convertAuthzModel converts an OpenFGA AuthorizationModel to melange TypeDefinitions.
-// This mirrors the logic in tooling/parser.go but works with protobuf directly.
-func convertAuthzModel(model *openfgav1.AuthorizationModel) []melange.TypeDefinition {
-	var types []melange.TypeDefinition
-
-	for _, td := range model.GetTypeDefinitions() {
-		typeDef := melange.TypeDefinition{
-			Name: td.GetType(),
-		}
-
-		// Get directly related user types from metadata
-		// This extracts both simple type references [user] and userset references [group#member]
-		directTypes := make(map[string][]string)
-		directTypeRefs := make(map[string][]melange.SubjectTypeRef)
-		if meta := td.GetMetadata(); meta != nil {
-			for relName, relMeta := range meta.GetRelations() {
-				for _, t := range relMeta.GetDirectlyRelatedUserTypes() {
-					typeName := t.GetType()
-					ref := melange.SubjectTypeRef{Type: typeName}
-
-					switch v := t.GetRelationOrWildcard().(type) {
-					case *openfgav1.RelationReference_Wildcard:
-						typeName += ":*"
-						ref.Wildcard = true
-					case *openfgav1.RelationReference_Relation:
-						// This is a userset reference like [group#member]
-						ref.Relation = v.Relation
-					}
-
-					directTypes[relName] = append(directTypes[relName], typeName)
-					directTypeRefs[relName] = append(directTypeRefs[relName], ref)
-				}
-			}
-		}
-
-		// Convert relations
-		for relName, rel := range td.GetRelations() {
-			relDef := convertRelation(relName, rel, directTypes[relName], directTypeRefs[relName])
-			typeDef.Relations = append(typeDef.Relations, relDef)
-		}
-
-		types = append(types, typeDef)
-	}
-
-	return types
-}
-
-// convertRelation converts a protobuf Userset to a melange RelationDefinition.
-func convertRelation(name string, rel *openfgav1.Userset, subjectTypes []string, subjectTypeRefs []melange.SubjectTypeRef) melange.RelationDefinition {
-	relDef := melange.RelationDefinition{
-		Name:            name,
-		SubjectTypes:    subjectTypes,
-		SubjectTypeRefs: subjectTypeRefs,
-	}
-
-	extractUserset(rel, &relDef)
-	return relDef
-}
-
-// extractUserset recursively extracts relation information from a Userset.
-func extractUserset(us *openfgav1.Userset, rel *melange.RelationDefinition) {
-	if us == nil {
-		return
-	}
-
-	switch v := us.Userset.(type) {
-	case *openfgav1.Userset_This:
-		// Direct assignment - subject types handled via metadata
-
-	case *openfgav1.Userset_ComputedUserset:
-		rel.ImpliedBy = append(rel.ImpliedBy, v.ComputedUserset.GetRelation())
-
-	case *openfgav1.Userset_TupleToUserset:
-		rel.ParentRelation = v.TupleToUserset.GetComputedUserset().GetRelation()
-		rel.ParentType = v.TupleToUserset.GetTupleset().GetRelation()
-
-	case *openfgav1.Userset_Union:
-		for _, child := range v.Union.GetChild() {
-			extractUserset(child, rel)
-		}
-
-	case *openfgav1.Userset_Intersection:
-		// Intersection: permission granted if ALL children grant it
-		// May produce multiple groups due to distributive expansion
-		// E.g., "a and (b or c)" expands to [[a,b], [a,c]]
-		groups := expandIntersection(v.Intersection, rel.Name)
-		for _, group := range groups {
-			if len(group.Relations) > 0 {
-				rel.IntersectionGroups = append(rel.IntersectionGroups, group)
-			}
-		}
-
-	case *openfgav1.Userset_Difference:
-		// Difference: base minus subtract (e.g., "can_read but not author")
-		// For nested exclusions like "(writer but not editor) but not owner",
-		// we need to collect ALL exclusions, not just the outermost one.
-		// The base may itself be a Difference, so we recurse first.
-		extractUserset(v.Difference.GetBase(), rel)
-		// Add this exclusion to the list (append, don't overwrite)
-		if subtract := v.Difference.GetSubtract(); subtract != nil {
-			if computed := subtract.GetComputedUserset(); computed != nil {
-				excl := computed.GetRelation()
-				rel.ExcludedRelations = append(rel.ExcludedRelations, excl)
-				// Also set deprecated field for backward compatibility
-				rel.ExcludedRelation = excl
-			}
-		}
-	}
-}
-
-// expandIntersection expands an intersection node into one or more groups.
-// Returns multiple IntersectionGroups when union-in-intersection requires
-// distributive expansion: A ∧ (B ∨ C) = (A ∧ B) ∨ (A ∧ C)
-func expandIntersection(intersection *openfgav1.Usersets, relationName string) []melange.IntersectionGroup {
-	// Start with one empty group
-	groups := []melange.IntersectionGroup{{}}
-
-	for _, child := range intersection.GetChild() {
-		switch cv := child.Userset.(type) {
-		case *openfgav1.Userset_ComputedUserset:
-			// Computed userset: add this relation to all existing groups
-			rel := cv.ComputedUserset.GetRelation()
-			for i := range groups {
-				groups[i].Relations = append(groups[i].Relations, rel)
-			}
-
-		case *openfgav1.Userset_This:
-			// Direct assignment within intersection: "[user] and writer"
-			// This means "has a direct tuple for THIS relation"
-			for i := range groups {
-				groups[i].Relations = append(groups[i].Relations, relationName)
-			}
-
-		case *openfgav1.Userset_TupleToUserset:
-			// TTU within intersection
-			rel := cv.TupleToUserset.GetComputedUserset().GetRelation()
-			for i := range groups {
-				groups[i].Relations = append(groups[i].Relations, rel)
-			}
-
-		case *openfgav1.Userset_Union:
-			// Union within intersection: apply distributive law
-			unionRels := extractUnionRelations(cv.Union)
-			if len(unionRels) > 0 {
-				groups = distributeUnion(groups, unionRels)
-			}
-
-		case *openfgav1.Userset_Intersection:
-			// Nested intersection: flatten into existing groups
-			nestedGroups := expandIntersection(cv.Intersection, relationName)
-			if len(nestedGroups) > 0 {
-				for i := range groups {
-					groups[i].Relations = append(groups[i].Relations, nestedGroups[0].Relations...)
-					// Merge exclusions from nested groups
-					if nestedGroups[0].Exclusions != nil {
-						if groups[i].Exclusions == nil {
-							groups[i].Exclusions = make(map[string][]string)
-						}
-						for k, v := range nestedGroups[0].Exclusions {
-							groups[i].Exclusions[k] = append(groups[i].Exclusions[k], v...)
-						}
-					}
-				}
-			}
-
-		case *openfgav1.Userset_Difference:
-			// Difference within intersection: "a and (b but not c)"
-			// Extract the base relation and the exclusion
-			baseRel := extractBaseRelationFromDifference(cv.Difference)
-			if baseRel == "" {
-				continue
-			}
-
-			// Extract the excluded relation
-			var excludedRel string
-			if subtract := cv.Difference.GetSubtract(); subtract != nil {
-				if computed := subtract.GetComputedUserset(); computed != nil {
-					excludedRel = computed.GetRelation()
-				}
-			}
-
-			// Add the base relation and its exclusion to all groups
-			for i := range groups {
-				groups[i].Relations = append(groups[i].Relations, baseRel)
-				if excludedRel != "" {
-					if groups[i].Exclusions == nil {
-						groups[i].Exclusions = make(map[string][]string)
-					}
-					groups[i].Exclusions[baseRel] = append(groups[i].Exclusions[baseRel], excludedRel)
-				}
-			}
-		}
-	}
-
-	return groups
-}
-
-// extractBaseRelationFromDifference extracts the base relation from a Difference node.
-// For "b but not c", returns "b".
-// Handles nested differences like "(a but not b) but not c" by recursing.
-func extractBaseRelationFromDifference(diff *openfgav1.Difference) string {
-	base := diff.GetBase()
-	if base == nil {
-		return ""
-	}
-
-	switch bv := base.Userset.(type) {
-	case *openfgav1.Userset_ComputedUserset:
-		return bv.ComputedUserset.GetRelation()
-	case *openfgav1.Userset_Difference:
-		// Nested difference: "(a but not b) but not c" - extract from inner
-		return extractBaseRelationFromDifference(bv.Difference)
-	case *openfgav1.Userset_This:
-		// This case shouldn't happen in well-formed schemas, but handle it
-		return ""
-	default:
-		return ""
-	}
-}
-
-// extractUnionRelations extracts relation names from a union node.
-func extractUnionRelations(union *openfgav1.Usersets) []string {
-	var rels []string
-	for _, child := range union.GetChild() {
-		switch cv := child.Userset.(type) {
-		case *openfgav1.Userset_ComputedUserset:
-			rels = append(rels, cv.ComputedUserset.GetRelation())
-		case *openfgav1.Userset_Union:
-			rels = append(rels, extractUnionRelations(cv.Union)...)
-		}
-	}
-	return rels
-}
-
-// distributeUnion applies the distributive law.
-func distributeUnion(groups []melange.IntersectionGroup, unionRels []string) []melange.IntersectionGroup {
-	var expanded []melange.IntersectionGroup
-	for _, g := range groups {
-		for _, rel := range unionRels {
-			newGroup := melange.IntersectionGroup{
-				Relations: make([]string, len(g.Relations), len(g.Relations)+1),
-			}
-			copy(newGroup.Relations, g.Relations)
-			newGroup.Relations = append(newGroup.Relations, rel)
-			// Copy exclusions
-			if g.Exclusions != nil {
-				newGroup.Exclusions = make(map[string][]string)
-				for k, v := range g.Exclusions {
-					newGroup.Exclusions[k] = append([]string{}, v...)
-				}
-			}
-			expanded = append(expanded, newGroup)
-		}
-	}
-	return expanded
+	return tooling.ConvertProtoModel(model)
 }
 
 // parseSubject parses an OpenFGA user string (e.g., "user:123" or "team:456#member").
@@ -795,6 +504,29 @@ func parseSubject(user string) (melange.Object, error) {
 		}
 	}
 	return melange.Object{}, fmt.Errorf("invalid subject format: %s", user)
+}
+
+func contextualTuplesFromKeys(keys []*openfgav1.TupleKey) ([]melange.ContextualTuple, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	tuples := make([]melange.ContextualTuple, 0, len(keys))
+	for _, key := range keys {
+		subject, err := parseSubject(key.GetUser())
+		if err != nil {
+			return nil, err
+		}
+		object, err := parseObject(key.GetObject())
+		if err != nil {
+			return nil, err
+		}
+		tuples = append(tuples, melange.ContextualTuple{
+			Subject:  subject,
+			Relation: melange.Relation(key.GetRelation()),
+			Object:   object,
+		})
+	}
+	return tuples, nil
 }
 
 // parseObject parses an OpenFGA object string (e.g., "document:123").

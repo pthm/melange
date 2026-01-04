@@ -32,6 +32,13 @@ var (
 	// Run `melange migrate` to create the check_permission and list_accessible_* functions.
 	ErrMissingFunction = errors.New("melange: authorization function missing")
 
+	// ErrContextualTuplesUnsupported is returned when contextual tuples are used
+	// with a Checker that cannot execute statements on a single connection.
+	ErrContextualTuplesUnsupported = errors.New("melange: contextual tuples require *sql.DB, *sql.Tx, or *sql.Conn")
+
+	// ErrInvalidContextualTuple is returned when contextual tuples fail validation.
+	ErrInvalidContextualTuple = errors.New("melange: contextual tuple invalid")
+
 	// ErrCyclicSchema is returned when the schema contains a cycle in the relation graph.
 	// Cycles in implied-by or parent relations would cause infinite recursion at runtime.
 	// Fix the schema by removing one of the relationships forming the cycle.
