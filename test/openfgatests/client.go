@@ -19,6 +19,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -365,7 +366,15 @@ func (c *Client) ListUsers(ctx context.Context, req *openfgav1.ListUsersRequest,
 	// Get all user filters and list subjects for each
 	var users []*openfgav1.User
 	for _, filter := range req.GetUserFilters() {
-		subjectType := melange.ObjectType(filter.GetType())
+		filterType := filter.GetType()
+		subjectType := melange.ObjectType(filterType)
+
+		// Parse userset filter: "group#member" has type "group" and relation "member"
+		// The output type should be just "group", not "group#member"
+		outputType := filterType
+		if idx := strings.Index(filterType, "#"); idx != -1 {
+			outputType = filterType[:idx] // Extract just the type part
+		}
 
 		checker := melange.NewChecker(c.db)
 		ids, err := checker.ListSubjects(ctx, object, melange.Relation(req.GetRelation()), subjectType)
@@ -377,7 +386,7 @@ func (c *Client) ListUsers(ctx context.Context, req *openfgav1.ListUsersRequest,
 			users = append(users, &openfgav1.User{
 				User: &openfgav1.User_Object{
 					Object: &openfgav1.Object{
-						Type: filter.GetType(),
+						Type: outputType,
 						Id:   id,
 					},
 				},
