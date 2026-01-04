@@ -105,12 +105,6 @@ test-openfga-pattern PATTERN:
     cd test && OPENFGA_TEST_PATTERN="{{PATTERN}}" go test -v -count=1 -timeout 5m \
         -run "TestOpenFGAByPattern" ./openfgatests/...
 
-# Run OpenFGA tests not matching a regex pattern (e.g., just test-openfga-negative-pattern "^wildcard")
-test-openfga-negative-pattern PATTERN:
-    cd test && OPENFGA_TEST_PATTERN="{{PATTERN}}" go test -v -count=1 -timeout 5m \
-        -run "TestOpenFGAByNegativePattern" ./openfgatests/...
-
-
 # List all available OpenFGA test names
 test-openfga-list:
     cd test && go test -v -count=1 -run "TestOpenFGAListAvailableTests" ./openfgatests/...
@@ -131,3 +125,59 @@ test-openfga-full-check:
 # Install gotestfmt if not already installed
 install-gotestfmt:
     go install github.com/gotesttools/gotestfmt/v2/cmd/gotestfmt@latest
+
+# =============================================================================
+# OpenFGA Benchmarks
+# =============================================================================
+
+# Run all OpenFGA benchmarks
+bench-openfga:
+    cd test && go test -bench="BenchmarkOpenFGA_All" -run='^$$' -timeout 30m -benchmem ./openfgatests/...
+
+# Run OpenFGA benchmarks for a specific category (e.g., just bench-openfga-category DirectAssignment)
+bench-openfga-category CATEGORY:
+    cd test && go test -bench="BenchmarkOpenFGA_{{CATEGORY}}" -run='^$$' -timeout 10m -benchmem ./openfgatests/...
+
+# Run OpenFGA benchmarks by pattern (e.g., just bench-openfga-pattern "^wildcard")
+bench-openfga-pattern PATTERN:
+    cd test && OPENFGA_BENCH_PATTERN="{{PATTERN}}" go test -bench="BenchmarkOpenFGAByPattern" -run='^$$' -timeout 10m -benchmem ./openfgatests/...
+
+# Run OpenFGA benchmark for a specific test by name (e.g., just bench-openfga-name wildcard_direct)
+bench-openfga-name NAME:
+    cd test && OPENFGA_BENCH_NAME="{{NAME}}" go test -bench="BenchmarkOpenFGAByName" -run='^$$' -timeout 5m -benchmem ./openfgatests/...
+
+# Run OpenFGA checks-only benchmarks (isolates Check performance from List operations)
+bench-openfga-checks:
+    cd test && go test -bench="BenchmarkOpenFGA_ChecksOnly_All" -run='^$$' -timeout 30m -benchmem ./openfgatests/...
+
+# Run OpenFGA benchmarks organized by category
+bench-openfga-by-category:
+    cd test && go test -bench="BenchmarkOpenFGA_ByCategory" -run='^$$' -timeout 30m -benchmem ./openfgatests/...
+
+# Run OpenFGA benchmarks and save results to file
+bench-openfga-save FILE="openfga_benchmark_results.txt":
+    cd test && go test -bench="BenchmarkOpenFGA_All" -run='^$$' -timeout 30m -benchmem ./openfgatests/... | tee {{FILE}}
+
+# =============================================================================
+# OpenFGA Test Inspection
+# =============================================================================
+
+# Build the dumptest utility
+build-dumptest:
+    cd test && go build -o ../bin/dumptest ./cmd/dumptest
+
+# List all available OpenFGA tests (fast, no database required)
+dump-openfga-list: build-dumptest
+    ./bin/dumptest
+
+# Dump a specific OpenFGA test by name (e.g., just dump-openfga wildcard_direct)
+dump-openfga NAME: build-dumptest
+    ./bin/dumptest "{{NAME}}"
+
+# Dump OpenFGA tests matching a regex pattern (e.g., just dump-openfga-pattern "^userset")
+dump-openfga-pattern PATTERN: build-dumptest
+    ./bin/dumptest -pattern "{{PATTERN}}"
+
+# Dump all OpenFGA tests (warning: very long output)
+dump-openfga-all: build-dumptest
+    ./bin/dumptest -all

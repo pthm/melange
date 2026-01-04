@@ -319,6 +319,113 @@ Failed tests show red X marks with details:
       Messages: check user:alice:viewer on document:1
 ```
 
+### Inspecting Test Cases
+
+Use the `dumptest` utility to understand what a test does before running it:
+
+```bash
+# List all available test names (148 tests)
+just dump-openfga-list
+
+# Dump a specific test to see its model, tuples, and assertions
+just dump-openfga userset_defines_itself_1
+
+# Dump tests matching a pattern
+just dump-openfga-pattern "^wildcard"
+just dump-openfga-pattern "computed_userset|ttu_"
+
+# Dump all tests (warning: very long output)
+just dump-openfga-all
+```
+
+Example output:
+
+```
+Test: userset_defines_itself_1
+------------------------------
+
+=== Stage 1 ===
+
+Model:
+```fga
+model
+  schema 1.1
+type user
+type document
+  relations
+    define viewer: [user]
+```
+
+Tuples: (none)
+
+Check Assertions:
+  [1] ALLOW: document:1#viewer | viewer | document:1
+  [2] DENY: document:2#viewer | viewer | document:1
+
+ListObjects Assertions:
+  [1] user=document:1#viewer relation=viewer type=document
+      => [document:1]
+
+ListUsers Assertions:
+  [1] object=document:1 relation=viewer filters=[document#viewer]
+      => [document:1#viewer]
+```
+
+This is useful for:
+- Understanding what a failing test expects
+- Learning OpenFGA patterns by example
+- Debugging why a specific assertion fails
+
+### Benchmarking
+
+Run benchmarks to measure performance and detect regressions:
+
+```bash
+# Quick sanity check (1 iteration, direct assignment only)
+just bench-openfga-quick
+
+# Run all OpenFGA benchmarks
+just bench-openfga
+
+# Benchmark a specific category
+just bench-openfga-category DirectAssignment
+just bench-openfga-category ComputedUserset
+just bench-openfga-category TupleToUserset
+just bench-openfga-category Wildcards
+
+# Benchmark tests matching a pattern
+just bench-openfga-pattern "^wildcard"
+just bench-openfga-pattern "computed_userset|ttu_"
+
+# Benchmark a specific test by name
+just bench-openfga-name wildcard_direct
+
+# Run checks-only benchmarks (isolates Check from ListObjects/ListUsers)
+just bench-openfga-checks
+
+# Run benchmarks organized by authorization pattern
+just bench-openfga-by-category
+
+# Save results to file for comparison
+just bench-openfga-save baseline.txt
+# ... make changes ...
+just bench-openfga-save after.txt
+diff baseline.txt after.txt
+```
+
+Example benchmark output:
+
+```
+BenchmarkOpenFGA_DirectAssignment/this-12         	     1	  14359250 ns/op	 2.000 checks/op
+BenchmarkOpenFGA_DirectAssignment/this_and_union-12     	     1	  11305875 ns/op	 4.000 checks/op
+```
+
+The output shows:
+- **ns/op**: Nanoseconds per operation (lower is better)
+- **checks/op**: Number of Check assertions per operation
+- **listobjs/op**: Number of ListObjects assertions per operation
+- **listusers/op**: Number of ListUsers assertions per operation
+
 ### Excluded Tests
 
 Some OpenFGA tests are excluded because they use unsupported features:
@@ -345,7 +452,7 @@ just test-unit               # Unit tests only (no Docker)
 just test-integration        # Integration tests (requires Docker)
 just test-race               # Tests with race detection
 
-# OpenFGA suite
+# OpenFGA test suite
 just test-openfga            # Supported features with gotestfmt
 just test-openfga-feature X  # Single feature category
 just test-openfga-name X     # Single test by name
@@ -354,8 +461,25 @@ just test-openfga-list       # List all test names
 just test-openfga-verbose    # Without gotestfmt
 just test-openfga-full-check # Full suite (many failures expected)
 
+# OpenFGA test inspection
+just dump-openfga-list       # List all test names (fast, no DB)
+just dump-openfga X          # Dump a specific test by name
+just dump-openfga-pattern X  # Dump tests matching regex
+just dump-openfga-all        # Dump all tests
+
+# OpenFGA benchmarks
+just bench-openfga           # Run all benchmarks
+just bench-openfga-quick     # Quick sanity check (1 iteration)
+just bench-openfga-category X # Benchmark a category
+just bench-openfga-pattern X  # Benchmark tests matching regex
+just bench-openfga-name X     # Benchmark a specific test
+just bench-openfga-checks     # Checks-only benchmarks
+just bench-openfga-by-category # Benchmarks by authorization pattern
+just bench-openfga-save X     # Save results to file
+
 # Tools
 just install-gotestfmt       # Install gotestfmt formatter
+just build-dumptest          # Build the dumptest utility
 ```
 
 ### Direct Go Commands
@@ -372,6 +496,17 @@ cd test && OPENFGA_TEST_PATTERN="^tuple" go test -v -run TestOpenFGAByPattern ./
 
 # Run with JSON output for gotestfmt
 cd test && go test -json -run "TestOpenFGA_" ./openfgatests/... | gotestfmt
+
+# Run benchmarks directly
+cd test && go test -bench="BenchmarkOpenFGA_DirectAssignment" -run='^$' -benchmem ./openfgatests/...
+
+# Run benchmarks with pattern
+cd test && OPENFGA_BENCH_PATTERN="^wildcard" go test -bench="BenchmarkOpenFGAByPattern" -run='^$' ./openfgatests/...
+
+# Build and use dumptest directly
+cd test && go build -o ../bin/dumptest ./cmd/dumptest
+./bin/dumptest wildcard_direct
+./bin/dumptest -pattern "^userset"
 ```
 
 ---

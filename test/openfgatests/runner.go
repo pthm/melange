@@ -176,6 +176,372 @@ func RunTestByName(t *testing.T, client *Client, name string) {
 	t.Fatalf("test %q not found", name)
 }
 
+// =============================================================================
+// Benchmark Support
+// =============================================================================
+
+// BenchmarkResult holds the results of a benchmark run.
+type BenchmarkResult struct {
+	TestName      string
+	CheckCount    int
+	ListObjCount  int
+	ListUserCount int
+}
+
+// BenchTestsByPattern runs benchmarks for tests whose names match the given regex pattern.
+func BenchTestsByPattern(b *testing.B, pattern string) {
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		b.Fatalf("invalid pattern: %v", err)
+	}
+
+	tests, err := LoadTests()
+	if err != nil {
+		b.Fatalf("loading tests: %v", err)
+	}
+
+	var matched []TestCase
+	for _, tc := range tests {
+		if re.MatchString(tc.Name) {
+			matched = append(matched, tc)
+		}
+	}
+
+	if len(matched) == 0 {
+		b.Skipf("no tests matched pattern %q", pattern)
+		return
+	}
+
+	for _, tc := range matched {
+		b.Run(tc.Name, func(b *testing.B) {
+			BenchTest(b, tc)
+		})
+	}
+}
+
+// BenchTestByName runs a benchmark for a specific test by exact name.
+func BenchTestByName(b *testing.B, name string) {
+	tests, err := LoadTests()
+	if err != nil {
+		b.Fatalf("loading tests: %v", err)
+	}
+
+	for _, tc := range tests {
+		if tc.Name == name {
+			BenchTest(b, tc)
+			return
+		}
+	}
+
+	b.Fatalf("test %q not found", name)
+}
+
+// BenchTest runs a benchmark for a single test case.
+// Setup (model + tuples) is done once, then assertions are run b.N times.
+func BenchTest(b *testing.B, tc TestCase) {
+	// Setup: create client, store, and load all stages
+	client := NewClient(b)
+	ctx := context.Background()
+
+	resp, err := client.CreateStore(ctx, &openfgav1.CreateStoreRequest{Name: tc.Name})
+	if err != nil {
+		b.Fatalf("create store: %v", err)
+	}
+	storeID := resp.GetId()
+
+	// Collect all assertions across all stages
+	type preparedStage struct {
+		modelID           string
+		checkAssertions   []*CheckAssertion
+		listObjAssertions []*ListObjectsAssertion
+		listUserAssertion []*ListUsersAssertion
+	}
+	var stages []preparedStage
+
+	for _, stage := range tc.Stages {
+		// Write model
+		model := testutils.MustTransformDSLToProtoWithID(stage.Model)
+		writeModelResp, err := client.WriteAuthorizationModel(ctx, &openfgav1.WriteAuthorizationModelRequest{
+			StoreId:         storeID,
+			SchemaVersion:   typesystem.SchemaVersion1_1,
+			TypeDefinitions: model.GetTypeDefinitions(),
+			Conditions:      model.GetConditions(),
+		})
+		if err != nil {
+			b.Fatalf("write model: %v", err)
+		}
+		modelID := writeModelResp.GetAuthorizationModelId()
+
+		// Write tuples in chunks
+		tuples := stage.Tuples
+		for i := 0; i < len(tuples); i += writeMaxChunkSize {
+			end := int(math.Min(float64(i+writeMaxChunkSize), float64(len(tuples))))
+			chunk := tuples[i:end]
+			_, err = client.Write(ctx, &openfgav1.WriteRequest{
+				StoreId:              storeID,
+				AuthorizationModelId: modelID,
+				Writes: &openfgav1.WriteRequestWrites{
+					TupleKeys: chunk,
+				},
+			})
+			if err != nil {
+				b.Fatalf("write tuples: %v", err)
+			}
+		}
+
+		stages = append(stages, preparedStage{
+			modelID:           modelID,
+			checkAssertions:   stage.CheckAssertions,
+			listObjAssertions: stage.ListObjectsAssertions,
+			listUserAssertion: stage.ListUsersAssertions,
+		})
+	}
+
+	// Count total assertions for reporting
+	var totalChecks, totalListObjs, totalListUsers int
+	for _, s := range stages {
+		totalChecks += len(s.checkAssertions)
+		totalListObjs += len(s.listObjAssertions)
+		totalListUsers += len(s.listUserAssertion)
+	}
+
+	b.ReportMetric(float64(totalChecks), "checks/op")
+	b.ReportMetric(float64(totalListObjs), "listobjs/op")
+	b.ReportMetric(float64(totalListUsers), "listusers/op")
+
+	// Reset timer after setup
+	b.ResetTimer()
+
+	// Run benchmark
+	for i := 0; i < b.N; i++ {
+		for _, stage := range stages {
+			// Run check assertions
+			for _, assertion := range stage.checkAssertions {
+				if assertion.ErrorCode != 0 {
+					continue // Skip error cases in benchmarks
+				}
+
+				var tupleKey *openfgav1.CheckRequestTupleKey
+				if assertion.Tuple != nil {
+					tupleKey = &openfgav1.CheckRequestTupleKey{
+						User:     assertion.Tuple.GetUser(),
+						Relation: assertion.Tuple.GetRelation(),
+						Object:   assertion.Tuple.GetObject(),
+					}
+				}
+
+				_, err := client.Check(ctx, &openfgav1.CheckRequest{
+					StoreId:              storeID,
+					AuthorizationModelId: stage.modelID,
+					TupleKey:             tupleKey,
+					ContextualTuples: &openfgav1.ContextualTupleKeys{
+						TupleKeys: assertion.ContextualTuples,
+					},
+					Context: assertion.Context,
+				})
+				if err != nil {
+					b.Fatalf("check failed: %v", err)
+				}
+			}
+
+			// Run list objects assertions
+			for _, assertion := range stage.listObjAssertions {
+				_, err := client.ListObjects(ctx, &openfgav1.ListObjectsRequest{
+					StoreId:              storeID,
+					AuthorizationModelId: stage.modelID,
+					Type:                 assertion.Request.Type,
+					Relation:             assertion.Request.Relation,
+					User:                 assertion.Request.User,
+				})
+				if err != nil {
+					b.Fatalf("list objects failed: %v", err)
+				}
+			}
+
+			// Run list users assertions
+			for _, assertion := range stage.listUserAssertion {
+				var objType, objID string
+				for j := 0; j < len(assertion.Request.Object); j++ {
+					if assertion.Request.Object[j] == ':' {
+						objType = assertion.Request.Object[:j]
+						objID = assertion.Request.Object[j+1:]
+						break
+					}
+				}
+
+				var filters []*openfgav1.UserTypeFilter
+				for _, f := range assertion.Request.Filters {
+					filters = append(filters, &openfgav1.UserTypeFilter{Type: f})
+				}
+
+				_, err := client.ListUsers(ctx, &openfgav1.ListUsersRequest{
+					StoreId:              storeID,
+					AuthorizationModelId: stage.modelID,
+					Object: &openfgav1.Object{
+						Type: objType,
+						Id:   objID,
+					},
+					Relation:    assertion.Request.Relation,
+					UserFilters: filters,
+				})
+				if err != nil {
+					b.Fatalf("list users failed: %v", err)
+				}
+			}
+		}
+	}
+}
+
+// BenchAllTests runs benchmarks for all OpenFGA tests.
+// This is useful for getting a comprehensive performance profile.
+func BenchAllTests(b *testing.B) {
+	tests, err := LoadTests()
+	if err != nil {
+		b.Fatalf("loading tests: %v", err)
+	}
+
+	for _, tc := range tests {
+		b.Run(tc.Name, func(b *testing.B) {
+			BenchTest(b, tc)
+		})
+	}
+}
+
+// BenchChecksOnly runs benchmarks focusing only on Check operations.
+// This is useful for isolating Check performance from List operations.
+func BenchChecksOnly(b *testing.B, pattern string) {
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		b.Fatalf("invalid pattern: %v", err)
+	}
+
+	tests, err := LoadTests()
+	if err != nil {
+		b.Fatalf("loading tests: %v", err)
+	}
+
+	// Filter tests that have check assertions
+	var matched []TestCase
+	for _, tc := range tests {
+		if !re.MatchString(tc.Name) {
+			continue
+		}
+		hasChecks := false
+		for _, stage := range tc.Stages {
+			if len(stage.CheckAssertions) > 0 {
+				hasChecks = true
+				break
+			}
+		}
+		if hasChecks {
+			matched = append(matched, tc)
+		}
+	}
+
+	if len(matched) == 0 {
+		b.Skipf("no tests with checks matched pattern %q", pattern)
+		return
+	}
+
+	for _, tc := range matched {
+		b.Run(tc.Name, func(b *testing.B) {
+			benchChecksOnlyForTest(b, tc)
+		})
+	}
+}
+
+// benchChecksOnlyForTest runs only Check assertions for a single test.
+func benchChecksOnlyForTest(b *testing.B, tc TestCase) {
+	client := NewClient(b)
+	ctx := context.Background()
+
+	resp, err := client.CreateStore(ctx, &openfgav1.CreateStoreRequest{Name: tc.Name})
+	if err != nil {
+		b.Fatalf("create store: %v", err)
+	}
+	storeID := resp.GetId()
+
+	type checkSetup struct {
+		modelID    string
+		assertions []*CheckAssertion
+	}
+	var allChecks []checkSetup
+
+	for _, stage := range tc.Stages {
+		model := testutils.MustTransformDSLToProtoWithID(stage.Model)
+		writeModelResp, err := client.WriteAuthorizationModel(ctx, &openfgav1.WriteAuthorizationModelRequest{
+			StoreId:         storeID,
+			SchemaVersion:   typesystem.SchemaVersion1_1,
+			TypeDefinitions: model.GetTypeDefinitions(),
+			Conditions:      model.GetConditions(),
+		})
+		if err != nil {
+			b.Fatalf("write model: %v", err)
+		}
+		modelID := writeModelResp.GetAuthorizationModelId()
+
+		tuples := stage.Tuples
+		for i := 0; i < len(tuples); i += writeMaxChunkSize {
+			end := int(math.Min(float64(i+writeMaxChunkSize), float64(len(tuples))))
+			_, err = client.Write(ctx, &openfgav1.WriteRequest{
+				StoreId:              storeID,
+				AuthorizationModelId: modelID,
+				Writes:               &openfgav1.WriteRequestWrites{TupleKeys: tuples[i:end]},
+			})
+			if err != nil {
+				b.Fatalf("write tuples: %v", err)
+			}
+		}
+
+		// Only collect non-error check assertions
+		var checks []*CheckAssertion
+		for _, a := range stage.CheckAssertions {
+			if a.ErrorCode == 0 {
+				checks = append(checks, a)
+			}
+		}
+		if len(checks) > 0 {
+			allChecks = append(allChecks, checkSetup{modelID: modelID, assertions: checks})
+		}
+	}
+
+	var totalChecks int
+	for _, cs := range allChecks {
+		totalChecks += len(cs.assertions)
+	}
+	b.ReportMetric(float64(totalChecks), "checks/op")
+
+	b.ResetTimer()
+
+	for i := 0; i < b.N; i++ {
+		for _, cs := range allChecks {
+			for _, assertion := range cs.assertions {
+				var tupleKey *openfgav1.CheckRequestTupleKey
+				if assertion.Tuple != nil {
+					tupleKey = &openfgav1.CheckRequestTupleKey{
+						User:     assertion.Tuple.GetUser(),
+						Relation: assertion.Tuple.GetRelation(),
+						Object:   assertion.Tuple.GetObject(),
+					}
+				}
+
+				_, err := client.Check(ctx, &openfgav1.CheckRequest{
+					StoreId:              storeID,
+					AuthorizationModelId: cs.modelID,
+					TupleKey:             tupleKey,
+					ContextualTuples: &openfgav1.ContextualTupleKeys{
+						TupleKeys: assertion.ContextualTuples,
+					},
+					Context: assertion.Context,
+				})
+				if err != nil {
+					b.Fatalf("check failed: %v", err)
+				}
+			}
+		}
+	}
+}
+
 // RunTest runs a single test case with its own isolated database.
 // Each test gets a fresh database to enable parallel execution.
 func RunTest(t *testing.T, _ *Client, tc TestCase) {
