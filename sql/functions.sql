@@ -768,7 +768,17 @@ CREATE OR REPLACE FUNCTION list_accessible_objects_simple(
     p_relation TEXT,
     p_object_type TEXT
 ) RETURNS TABLE(object_id TEXT) AS $$
+DECLARE
+    v_has_intersection BOOLEAN;
 BEGIN
+    -- Check once if intersection rules exist (optimization)
+    SELECT EXISTS (
+        SELECT 1 FROM melange_model m
+        WHERE m.object_type = p_object_type
+          AND m.relation = p_relation
+          AND m.rule_group_mode = 'intersection'
+    ) INTO v_has_intersection;
+
     RETURN QUERY
     WITH RECURSIVE
     -- Base: all relations the subject satisfies via direct tuples (closure)
@@ -839,6 +849,17 @@ BEGIN
               p_object_type,
               co.obj_id
           )
+    )
+    -- Intersection check: filter out candidates that don't satisfy all AND conditions
+    AND (
+        NOT v_has_intersection
+        OR check_intersection_groups(
+            p_subject_type,
+            p_subject_id,
+            p_relation,
+            p_object_type,
+            co.obj_id
+        )
     );
 END;
 $$ LANGUAGE plpgsql STABLE;
@@ -897,6 +918,22 @@ BEGIN
               p_subject_type,
               p_subject_id,
               em.excluded_relation,
+              p_object_type,
+              sg.object_id
+          )
+      )
+      -- Intersection check: filter out objects that don't satisfy all AND conditions
+      AND (
+          NOT EXISTS (
+              SELECT 1 FROM melange_model m
+              WHERE m.object_type = p_object_type
+                AND m.relation = p_relation
+                AND m.rule_group_mode = 'intersection'
+          )
+          OR check_intersection_groups(
+              p_subject_type,
+              p_subject_id,
+              p_relation,
               p_object_type,
               sg.object_id
           )
@@ -985,6 +1022,22 @@ BEGIN
                 p_object_type,
                 p_object_id
             )
+      )
+      -- Intersection check: filter out subjects that don't satisfy all AND conditions
+      AND (
+          NOT EXISTS (
+              SELECT 1 FROM melange_model m
+              WHERE m.object_type = p_object_type
+                AND m.relation = p_relation
+                AND m.rule_group_mode = 'intersection'
+          )
+          OR check_intersection_groups(
+              p_subject_type,
+              t.subject_id,
+              p_relation,
+              p_object_type,
+              p_object_id
+          )
       );
 END;
 $$ LANGUAGE plpgsql STABLE;

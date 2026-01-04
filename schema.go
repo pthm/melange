@@ -235,6 +235,11 @@ func ToAuthzModels(types []TypeDefinition) []AuthzModel {
 							Relation:    r.Name,
 							SubjectType: &st,
 						}
+						// Include exclusion if this relation has one (for "but not" expressions)
+						if r.ExcludedRelation != "" {
+							er := r.ExcludedRelation
+							model.ExcludedRelation = &er
+						}
 						// Set subject_relation for userset references
 						if ref.Relation != "" {
 							sr := ref.Relation
@@ -250,11 +255,17 @@ func ToAuthzModels(types []TypeDefinition) []AuthzModel {
 						if len(st) > 2 && st[len(st)-2:] == ":*" {
 							st = st[:len(st)-2]
 						}
-						models = append(models, AuthzModel{
+						model := AuthzModel{
 							ObjectType:  t.Name,
 							Relation:    r.Name,
 							SubjectType: &st,
-						})
+						}
+						// Include exclusion if this relation has one (for "but not" expressions)
+						if r.ExcludedRelation != "" {
+							er := r.ExcludedRelation
+							model.ExcludedRelation = &er
+						}
+						models = append(models, model)
 					}
 				}
 			}
