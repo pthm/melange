@@ -46,10 +46,10 @@ type Stage struct {
 
 // ListObjectsAssertion represents an expected result for ListObjects.
 type ListObjectsAssertion struct {
-	Request         ListObjectsRequest      `json:"request"`
-	ContextualTuples []*openfgav1.TupleKey  `json:"contextualTuples"`
-	Expectation     []string                `json:"expectation"`
-	ErrorCode       int                     `json:"errorCode"`
+	Request          ListObjectsRequest    `json:"request"`
+	ContextualTuples []*openfgav1.TupleKey `json:"contextualTuples"`
+	Expectation      []string              `json:"expectation"`
+	ErrorCode        int                   `json:"errorCode"`
 }
 
 // ListObjectsRequest represents a ListObjects request.
@@ -61,10 +61,10 @@ type ListObjectsRequest struct {
 
 // ListUsersAssertion represents an expected result for ListUsers.
 type ListUsersAssertion struct {
-	Request         ListUsersRequest         `json:"request"`
-	ContextualTuples []*openfgav1.TupleKey   `json:"contextualTuples"`
-	Expectation     []string                 `json:"expectation"`
-	ErrorCode       int                      `json:"errorCode"`
+	Request          ListUsersRequest      `json:"request"`
+	ContextualTuples []*openfgav1.TupleKey `json:"contextualTuples"`
+	Expectation      []string              `json:"expectation"`
+	ErrorCode        int                   `json:"errorCode"`
 }
 
 // ListUsersRequest represents a ListUsers request.
@@ -117,6 +117,15 @@ func ListTestNames() ([]string, error) {
 		names[i] = tc.Name
 	}
 	return names, nil
+}
+
+// RunAll runs all available tests.
+func RunAll(t *testing.T, client *Client) {
+	tests, err := LoadTests()
+	require.NoError(t, err, "loading tests")
+	for _, tc := range tests {
+		RunTest(t, client, tc)
+	}
 }
 
 // RunTestsByPattern runs tests whose names match the given regex pattern.
@@ -689,8 +698,8 @@ func RunTest(t *testing.T, _ *Client, tc TestCase) {
 								Type: objType,
 								Id:   objID,
 							},
-							Relation:    assertion.Request.Relation,
-							UserFilters: filters,
+							Relation:         assertion.Request.Relation,
+							UserFilters:      filters,
 							ContextualTuples: assertion.ContextualTuples,
 						})
 						if assertion.ErrorCode == 0 {
@@ -705,7 +714,7 @@ func RunTest(t *testing.T, _ *Client, tc TestCase) {
 							}
 
 							want := assertion.Expectation
-							client.debugUserset(t, objType, objID, assertion.Request.Relation, assertion.Request.Filters)
+							client.debugUserset(t, storeID, objType, objID, assertion.Request.Relation, assertion.Request.Filters)
 							require.ElementsMatch(t, want, got,
 								"listusers object=%s relation=%s filters=%v",
 								assertion.Request.Object, assertion.Request.Relation, assertion.Request.Filters)

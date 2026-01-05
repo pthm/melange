@@ -37,20 +37,25 @@ import (
 // It manages stores, authorization models, and tuples in PostgreSQL, routing
 // permission checks through melange's Checker.
 type Client struct {
-	db *sql.DB
-	tb testing.TB
+	sharedDB *sql.DB
+	tb       testing.TB
 
 	mu     sync.RWMutex
 	stores map[string]*store
 
 	storeCounter atomic.Int64
 	modelCounter atomic.Int64
+
+	sharedDBOnce    sync.Once
+	sharedDBInitErr error
+	dbCreateMu      sync.Mutex
 }
 
 // store represents an isolated OpenFGA store with its own model and tuples.
 type store struct {
 	id     string
 	name   string
+	db     *sql.DB
 	models map[string]*model
 	tuples []*openfgav1.TupleKey
 }
@@ -68,16 +73,7 @@ type model struct {
 func NewClient(tb testing.TB) *Client {
 	tb.Helper()
 
-	// Use testutil.EmptyDB since we need dynamic schemas for each test
-	db := testutil.EmptyDB(tb)
-
-	// Initialize melange infrastructure (without domain tables)
-	if err := initializeMelangeSchema(db); err != nil {
-		tb.Fatalf("failed to initialize melange schema: %v", err)
-	}
-
 	return &Client{
-		db:     db,
 		tb:     tb,
 		stores: make(map[string]*store),
 	}
@@ -87,13 +83,14 @@ func NewClient(tb testing.TB) *Client {
 // Use this when you need more control over the database setup.
 func NewClientWithDB(db *sql.DB) *Client {
 	return &Client{
-		db:     db,
-		stores: make(map[string]*store),
+		sharedDB: db,
+		stores:   make(map[string]*store),
 	}
 }
 
 func (c *Client) debugUserset(
 	tb testing.TB,
+	storeID string,
 	objectType string,
 	objectID string,
 	relation string,
@@ -106,9 +103,15 @@ func (c *Client) debugUserset(
 	tb.Helper()
 	ctx := context.Background()
 
+	store, ok := c.storeByID(storeID)
+	if !ok {
+		tb.Logf("debug userset: store not found: %s", storeID)
+		return
+	}
+
 	tb.Logf("debug userset: object=%s:%s relation=%s filters=%v", objectType, objectID, relation, filters)
 
-	rows, err := c.db.QueryContext(ctx, `
+	rows, err := store.db.QueryContext(ctx, `
 		SELECT object_type, relation, tuple_relation, subject_type, subject_relation, subject_relation_satisfying
 		FROM melange_userset_rules
 		WHERE object_type = $1 AND relation = $2
@@ -129,7 +132,7 @@ func (c *Client) debugUserset(
 	}
 	_ = rows.Close()
 
-	rows, err = c.db.QueryContext(ctx, `
+	rows, err = store.db.QueryContext(ctx, `
 		SELECT relation, satisfying_relation
 		FROM melange_relation_closure
 		WHERE object_type = $1 AND relation = $2
@@ -149,7 +152,7 @@ func (c *Client) debugUserset(
 	}
 	_ = rows.Close()
 
-	rows, err = c.db.QueryContext(ctx, `
+	rows, err = store.db.QueryContext(ctx, `
 		SELECT subject_type, subject_id, relation
 		FROM melange_tuples
 		WHERE object_type = $1 AND object_id = $2
@@ -176,7 +179,7 @@ func (c *Client) debugUserset(
 		}
 		filterType := filter[:hash]
 		filterRel := filter[hash+1:]
-		rows, err = c.db.QueryContext(ctx, `
+		rows, err = store.db.QueryContext(ctx, `
 			SELECT relation, satisfying_relation
 			FROM melange_relation_closure
 			WHERE object_type = $1 AND (relation = $2 OR satisfying_relation = $2)
@@ -246,10 +249,16 @@ type user
 func (c *Client) CreateStore(ctx context.Context, req *openfgav1.CreateStoreRequest, opts ...grpc.CallOption) (*openfgav1.CreateStoreResponse, error) {
 	id := fmt.Sprintf("store_%d", c.storeCounter.Add(1))
 
+	db, err := c.storeDB()
+	if err != nil {
+		return nil, err
+	}
+
 	c.mu.Lock()
 	c.stores[id] = &store{
 		id:     id,
 		name:   req.GetName(),
+		db:     db,
 		models: make(map[string]*model),
 		tuples: nil,
 	}
@@ -288,7 +297,7 @@ func (c *Client) WriteAuthorizationModel(ctx context.Context, req *openfgav1.Wri
 	}
 
 	// Load this model into the database
-	if err := c.loadModel(ctx, s, modelID); err != nil {
+	if err := c.loadModel(ctx, s.db, s.models[modelID]); err != nil {
 		return nil, fmt.Errorf("loading model: %w", err)
 	}
 
@@ -320,7 +329,7 @@ func (c *Client) Write(ctx context.Context, req *openfgav1.WriteRequest, opts ..
 	}
 
 	// Refresh the tuples view in the database
-	if err := c.refreshTuples(ctx, s); err != nil {
+	if err := c.refreshTuples(ctx, s.db, s); err != nil {
 		return nil, fmt.Errorf("refreshing tuples: %w", err)
 	}
 
@@ -329,10 +338,7 @@ func (c *Client) Write(ctx context.Context, req *openfgav1.WriteRequest, opts ..
 
 // Check evaluates whether a user has a specific relation on an object.
 func (c *Client) Check(ctx context.Context, req *openfgav1.CheckRequest, opts ...grpc.CallOption) (*openfgav1.CheckResponse, error) {
-	c.mu.RLock()
-	_, ok := c.stores[req.GetStoreId()]
-	c.mu.RUnlock()
-
+	store, ok := c.storeByID(req.GetStoreId())
 	if !ok {
 		return nil, fmt.Errorf("store not found: %s", req.GetStoreId())
 	}
@@ -350,7 +356,7 @@ func (c *Client) Check(ctx context.Context, req *openfgav1.CheckRequest, opts ..
 	relation := tk.GetRelation()
 
 	// Perform the check using melange
-	checker := melange.NewChecker(c.db, melange.WithUsersetValidation(), melange.WithRequestValidation())
+	checker := melange.NewChecker(store.db, melange.WithUsersetValidation(), melange.WithRequestValidation())
 	contextualTuples, err := contextualTuplesFromKeys(req.GetContextualTuples().GetTupleKeys())
 	if err != nil {
 		return nil, fmt.Errorf("parsing contextual tuples: %w", err)
@@ -372,10 +378,7 @@ func (c *Client) Check(ctx context.Context, req *openfgav1.CheckRequest, opts ..
 
 // ListObjects returns all objects of a given type that the user has a relation on.
 func (c *Client) ListObjects(ctx context.Context, req *openfgav1.ListObjectsRequest, opts ...grpc.CallOption) (*openfgav1.ListObjectsResponse, error) {
-	c.mu.RLock()
-	_, ok := c.stores[req.GetStoreId()]
-	c.mu.RUnlock()
-
+	store, ok := c.storeByID(req.GetStoreId())
 	if !ok {
 		return nil, fmt.Errorf("store not found: %s", req.GetStoreId())
 	}
@@ -385,7 +388,7 @@ func (c *Client) ListObjects(ctx context.Context, req *openfgav1.ListObjectsRequ
 		return nil, fmt.Errorf("parsing subject: %w", err)
 	}
 
-	checker := melange.NewChecker(c.db, melange.WithUsersetValidation(), melange.WithRequestValidation())
+	checker := melange.NewChecker(store.db, melange.WithUsersetValidation(), melange.WithRequestValidation())
 	contextualTuples, err := contextualTuplesFromKeys(req.GetContextualTuples().GetTupleKeys())
 	if err != nil {
 		return nil, fmt.Errorf("parsing contextual tuples: %w", err)
@@ -412,10 +415,7 @@ func (c *Client) ListObjects(ctx context.Context, req *openfgav1.ListObjectsRequ
 
 // ListUsers returns all users that have a relation on the given object.
 func (c *Client) ListUsers(ctx context.Context, req *openfgav1.ListUsersRequest, opts ...grpc.CallOption) (*openfgav1.ListUsersResponse, error) {
-	c.mu.RLock()
-	_, ok := c.stores[req.GetStoreId()]
-	c.mu.RUnlock()
-
+	store, ok := c.storeByID(req.GetStoreId())
 	if !ok {
 		return nil, fmt.Errorf("store not found: %s", req.GetStoreId())
 	}
@@ -438,7 +438,7 @@ func (c *Client) ListUsers(ctx context.Context, req *openfgav1.ListUsersRequest,
 			outputType = filterType[:idx] // Extract just the type part
 		}
 
-		checker := melange.NewChecker(c.db, melange.WithUsersetValidation(), melange.WithRequestValidation())
+		checker := melange.NewChecker(store.db, melange.WithUsersetValidation(), melange.WithRequestValidation())
 		contextualTuples, err := contextualTuplesFromKeys(req.GetContextualTuples())
 		if err != nil {
 			return nil, fmt.Errorf("parsing contextual tuples: %w", err)
@@ -514,28 +514,27 @@ func (s *streamedListObjectsClient) Recv() (*openfgav1.StreamedListObjectsRespon
 }
 
 // loadModel loads a model's type definitions into the database using the Migrator.
-func (c *Client) loadModel(ctx context.Context, s *store, modelID string) error {
-	m := s.models[modelID]
+func (c *Client) loadModel(ctx context.Context, db *sql.DB, m *model) error {
 	if m == nil {
-		return fmt.Errorf("model not found: %s", modelID)
+		return fmt.Errorf("model not found")
 	}
 
 	// Use the Migrator to handle model and closure insertion
 	// The empty string for schemasDir is fine since we're using MigrateWithTypes directly
-	migrator := melange.NewMigrator(c.db, "")
+	migrator := melange.NewMigrator(db, "")
 	return migrator.MigrateWithTypes(ctx, m.types)
 }
 
 // refreshTuples updates the melange_tuples view with the current store tuples.
-func (c *Client) refreshTuples(ctx context.Context, s *store) error {
+func (c *Client) refreshTuples(ctx context.Context, db *sql.DB, s *store) error {
 	// Drop existing test tuples table if it exists
-	_, err := c.db.ExecContext(ctx, "DROP TABLE IF EXISTS melange_test_tuples CASCADE")
+	_, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS melange_test_tuples CASCADE")
 	if err != nil {
 		return fmt.Errorf("dropping test tuples: %w", err)
 	}
 
 	// Create test tuples table
-	_, err = c.db.ExecContext(ctx, `
+	_, err = db.ExecContext(ctx, `
 		CREATE TABLE melange_test_tuples (
 			subject_type TEXT NOT NULL,
 			subject_id TEXT NOT NULL,
@@ -559,7 +558,7 @@ func (c *Client) refreshTuples(ctx context.Context, s *store) error {
 			return fmt.Errorf("parsing tuple object: %w", err)
 		}
 
-		_, err = c.db.ExecContext(ctx, `
+		_, err = db.ExecContext(ctx, `
 			INSERT INTO melange_test_tuples (subject_type, subject_id, relation, object_type, object_id)
 			VALUES ($1, $2, $3, $4, $5)
 		`, subject.Type, subject.ID, tk.GetRelation(), object.Type, object.ID)
@@ -569,7 +568,7 @@ func (c *Client) refreshTuples(ctx context.Context, s *store) error {
 	}
 
 	// Create or replace the melange_tuples view
-	_, err = c.db.ExecContext(ctx, `
+	_, err = db.ExecContext(ctx, `
 		CREATE OR REPLACE VIEW melange_tuples AS
 		SELECT subject_type, subject_id, relation, object_type, object_id
 		FROM melange_test_tuples
@@ -674,5 +673,36 @@ var _ interface {
 
 // DB returns the underlying database connection.
 func (c *Client) DB() *sql.DB {
-	return c.db
+	return c.sharedDB
+}
+
+func (c *Client) storeDB() (*sql.DB, error) {
+	if c.sharedDB != nil {
+		c.sharedDBOnce.Do(func() {
+			c.sharedDBInitErr = initializeMelangeSchema(c.sharedDB)
+		})
+		if c.sharedDBInitErr != nil {
+			return nil, fmt.Errorf("init shared db: %w", c.sharedDBInitErr)
+		}
+		return c.sharedDB, nil
+	}
+
+	if c.tb == nil {
+		return nil, fmt.Errorf("missing test handle for store db creation")
+	}
+	c.dbCreateMu.Lock()
+	defer c.dbCreateMu.Unlock()
+
+	db := testutil.EmptyDB(c.tb)
+	if err := initializeMelangeSchema(db); err != nil {
+		return nil, fmt.Errorf("init store db: %w", err)
+	}
+	return db, nil
+}
+
+func (c *Client) storeByID(id string) (*store, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	s, ok := c.stores[id]
+	return s, ok
 }

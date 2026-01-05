@@ -97,6 +97,14 @@ func BenchmarkOpenFGA_Cycles(b *testing.B) {
 	openfgatests.BenchTestsByPattern(b, "cycle|recursive")
 }
 
+// BenchmarkOpenFGA_ContextualTuples benchmarks contextual tuples (temporary tuples in requests).
+func BenchmarkOpenFGA_ContextualTuples(b *testing.B) {
+	if testing.Short() {
+		b.Skip("skipping benchmark in short mode")
+	}
+	openfgatests.BenchTestsByPattern(b, "contextual")
+}
+
 // =============================================================================
 // Checks-Only Benchmarks
 // These isolate Check performance from List operations.
@@ -179,6 +187,7 @@ func BenchmarkOpenFGA_ByCategory(b *testing.B) {
 		{"Exclusion", "exclusion|butnot|but_not"},
 		{"Union", "union"},
 		{"Intersection", "intersection"},
+		{"ContextualTuples", "contextual"},
 	}
 
 	for _, cat := range categories {
