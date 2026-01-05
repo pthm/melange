@@ -23,19 +23,16 @@ OPENFGA_BENCH_TIMEOUT_TINY := "5m"
 default:
     @just --list
 
-# Sync internal module versions (usage: just release-prepare VERSION=1.2.3)
+# Sync internal module versions (usage: just release-prepare VERSION=1.2.3 [ALLOW_DIRTY=1])
 [group('Release')]
 [doc('Sync internal module versions and tidy go.mod files')]
-release-prepare VERSION:
+release-prepare VERSION ALLOW_DIRTY="":
     @set -euo pipefail; \
     if [ -z "{{VERSION}}" ]; then \
         echo "VERSION is required (e.g. just release-prepare VERSION=1.2.3)"; \
         exit 1; \
     fi; \
-    if [ -n "$$(git status --porcelain)" ]; then \
-        echo "Working tree is dirty; commit or stash before syncing versions."; \
-        exit 1; \
-    fi; \
+    just _assert-clean ALLOW_DIRTY={{ALLOW_DIRTY}}; \
     cd cmd/melange; \
     go mod edit -require=github.com/pthm/melange@v{{VERSION}}; \
     go mod edit -require=github.com/pthm/melange/tooling@v{{VERSION}}; \
@@ -44,19 +41,16 @@ release-prepare VERSION:
     go mod edit -require=github.com/pthm/melange@v{{VERSION}}; \
     go mod tidy
 
-# Tag and push module releases (usage: just release VERSION=1.2.3)
+# Tag and push module releases (usage: just release VERSION=1.2.3 [ALLOW_DIRTY=1])
 [group('Release')]
 [doc('Create and push module tags for melange, cmd/melange, tooling')]
-release VERSION:
+release VERSION ALLOW_DIRTY="":
     @set -euo pipefail; \
     if [ -z "{{VERSION}}" ]; then \
         echo "VERSION is required (e.g. just release VERSION=1.2.3)"; \
         exit 1; \
     fi; \
-    if [ -n "$$(git status --porcelain)" ]; then \
-        echo "Working tree is dirty; commit or stash before tagging."; \
-        exit 1; \
-    fi; \
+    just _assert-clean ALLOW_DIRTY={{ALLOW_DIRTY}}; \
     root_tag="v{{VERSION}}"; \
     cmd_tag="cmd/melange/v{{VERSION}}"; \
     tooling_tag="tooling/v{{VERSION}}"; \
@@ -68,6 +62,39 @@ release VERSION:
         git tag -a "$$tag" -m "$$tag"; \
     done; \
     git push origin "$$root_tag" "$$cmd_tag" "$$tooling_tag"
+
+[group('Release')]
+[private]
+[doc('Fail if the working copy has uncommitted changes (git or jj)')]
+_assert-clean ALLOW_DIRTY="":
+    @set -euo pipefail; \
+    if [ "{{ALLOW_DIRTY}}" = "1" ]; then \
+        exit 0; \
+    fi; \
+    if command -v jj >/dev/null 2>&1 && [ -d .jj ]; then \
+        if [ -n "$(jj diff --name-only --no-pager)" ]; then \
+            echo "Working copy is dirty (jj); commit or stash before continuing."; \
+            exit 1; \
+        fi; \
+        exit 0; \
+    fi; \
+    if command -v git >/dev/null 2>&1; then \
+        if ! git diff --quiet; then \
+            echo "Working tree has unstaged changes; commit or stash before continuing."; \
+            exit 1; \
+        fi; \
+        if ! git diff --cached --quiet; then \
+            echo "Index has staged changes; commit or stash before continuing."; \
+            exit 1; \
+        fi; \
+        if git ls-files --others --exclude-standard --error-unmatch . >/dev/null 2>&1; then \
+            echo "Working tree has untracked files; commit or stash before continuing."; \
+            exit 1; \
+        fi; \
+        exit 0; \
+    fi; \
+    echo "No supported VCS (jj or git) found; set ALLOW_DIRTY=1 to bypass."; \
+    exit 1
 
 
 # Run all tests (unit + integration)
