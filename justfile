@@ -32,36 +32,66 @@ release-prepare VERSION ALLOW_DIRTY="":
         echo "VERSION is required (e.g. just release-prepare VERSION=1.2.3)"; \
         exit 1; \
     fi; \
+    version="{{VERSION}}"; \
+    if [ "${version#v}" = "$version" ]; then \
+        version="v$version"; \
+    fi; \
+    printf "%s\n" "$version" > VERSION; \
     just _assert-clean ALLOW_DIRTY={{ALLOW_DIRTY}}; \
     cd cmd/melange; \
-    go mod edit -require=github.com/pthm/melange@v{{VERSION}}; \
-    go mod edit -require=github.com/pthm/melange/tooling@v{{VERSION}}; \
+    go mod edit -require=github.com/pthm/melange@$version; \
+    go mod edit -require=github.com/pthm/melange/tooling@$version; \
     go mod tidy; \
     cd ../../tooling; \
-    go mod edit -require=github.com/pthm/melange@v{{VERSION}}; \
+    go mod edit -require=github.com/pthm/melange@$version; \
     go mod tidy
 
-# Tag and push module releases (usage: just release VERSION=1.2.3 [ALLOW_DIRTY=1])
+# Tag and push module releases (usage: just release [VERSION=1.2.3] [ALLOW_DIRTY=1])
 [group('Release')]
 [doc('Create and push module tags for melange, cmd/melange, tooling')]
-release VERSION ALLOW_DIRTY="":
+release VERSION="" ALLOW_DIRTY="":
     @set -euo pipefail; \
-    if [ -z "{{VERSION}}" ]; then \
-        echo "VERSION is required (e.g. just release VERSION=1.2.3)"; \
+    if [ ! -f VERSION ]; then \
+        echo "VERSION file not found; run release-prepare first."; \
         exit 1; \
     fi; \
+    version_from_file="$(tr -d '[:space:]' < VERSION)"; \
+    if [ -z "$version_from_file" ]; then \
+        echo "VERSION file is empty; run release-prepare first."; \
+        exit 1; \
+    fi; \
+    if [ "${version_from_file#v}" = "$version_from_file" ]; then \
+        version_from_file="v$version_from_file"; \
+    fi; \
+    cmd_core_version="$(awk '$1 == "github.com/pthm/melange" { print $2; exit }' cmd/melange/go.mod)"; \
+    cmd_tooling_version="$(awk '$1 == "github.com/pthm/melange/tooling" { print $2; exit }' cmd/melange/go.mod)"; \
+    tooling_core_version="$(awk '$1 == "github.com/pthm/melange" { print $2; exit }' tooling/go.mod)"; \
+    if [ -z "$cmd_core_version" ] || [ -z "$cmd_tooling_version" ] || [ -z "$tooling_core_version" ]; then \
+        echo "Could not read module versions from go.mod files; run release-prepare first."; \
+        exit 1; \
+    fi; \
+    if [ "$cmd_core_version" != "$cmd_tooling_version" ] || [ "$cmd_core_version" != "$tooling_core_version" ]; then \
+        echo "Module versions are out of sync. Run release-prepare to align versions before tagging."; \
+        echo "cmd/melange core: $cmd_core_version, cmd/melange tooling: $cmd_tooling_version, tooling core: $tooling_core_version"; \
+        exit 1; \
+    fi; \
+    if [ "$cmd_core_version" != "$version_from_file" ]; then \
+        echo "VERSION file $version_from_file does not match go.mod $cmd_core_version; run release-prepare first."; \
+        exit 1; \
+    fi; \
+    version="$version_from_file"; \
     just _assert-clean ALLOW_DIRTY={{ALLOW_DIRTY}}; \
-    root_tag="v{{VERSION}}"; \
-    cmd_tag="cmd/melange/v{{VERSION}}"; \
-    tooling_tag="tooling/v{{VERSION}}"; \
-    for tag in "$$root_tag" "$$cmd_tag" "$$tooling_tag"; do \
-        if git rev-parse -q --verify "refs/tags/$$tag" >/dev/null; then \
-            echo "Tag already exists: $$tag"; \
+    root_tag="$version"; \
+    cmd_tag="cmd/melange/$version"; \
+    tooling_tag="tooling/$version"; \
+    for tag in "$root_tag" "$cmd_tag" "$tooling_tag"; do \
+        if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then \
+            echo "Tag already exists: $tag"; \
             exit 1; \
         fi; \
-        git tag -a "$$tag" -m "$$tag"; \
+        git tag -a "$tag" -m "$tag"; \
     done; \
-    git push origin "$$root_tag" "$$cmd_tag" "$$tooling_tag"
+    git push origin "$root_tag" "$cmd_tag" "$tooling_tag"
 
 [group('Release')]
 [private]
