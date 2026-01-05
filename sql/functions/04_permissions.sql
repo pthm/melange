@@ -427,23 +427,23 @@ END;
 $$ LANGUAGE plpgsql STABLE;
 
 
--- Generic permission checking implementation.
+-- Generic permission checking implementation with visited tracking.
+-- This internal version accepts p_visited for cycle detection when called
+-- from specialized functions via check_permission_internal.
+--
 -- Routes to optimal strategy based on relation rules:
 --   - Intersection groups first (AND semantics require all conditions)
 --   - Userset references via subject_has_grant (recursive group membership)
 --   - Simple relations via check_permission_simple (fast path)
 --
 -- Returns 1 if access granted, 0 if denied.
---
--- Note: The main check_permission() entry point is generated at migration time
--- and dispatches to specialized per-relation functions. This generic version
--- is used as a fallback when no specialized function exists.
-CREATE OR REPLACE FUNCTION check_permission_generic(
+CREATE OR REPLACE FUNCTION check_permission_generic_internal(
     p_subject_type TEXT,
     p_subject_id TEXT,
     p_relation TEXT,
     p_object_type TEXT,
-    p_object_id TEXT
+    p_object_id TEXT,
+    p_visited TEXT[] DEFAULT ARRAY[]::TEXT[]
 ) RETURNS INTEGER AS $$
 DECLARE
     v_has_intersection BOOLEAN;
@@ -496,7 +496,8 @@ BEGIN
 
         IF check_intersection_groups(
             p_subject_type, p_subject_id,
-            p_relation, p_object_type, p_object_id
+            p_relation, p_object_type, p_object_id,
+            p_visited
         ) THEN
             IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
                 RETURN 0;  -- Excluded
@@ -555,7 +556,7 @@ BEGIN
     IF subject_has_grant(
         p_subject_type, p_subject_id,
         p_object_type, p_object_id,
-        p_relation, ARRAY[]::TEXT[]
+        p_relation, p_visited
     ) THEN
         IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
             RETURN 0;
@@ -568,14 +569,39 @@ END;
 $$ LANGUAGE plpgsql STABLE;
 
 
--- Generic permission check ignoring wildcards - used by ListUsers to enumerate specific subjects.
--- See check_permission_generic for details on the dispatch pattern.
-CREATE OR REPLACE FUNCTION check_permission_no_wildcard_generic(
+-- Generic permission checking implementation.
+-- Routes to optimal strategy based on relation rules:
+--   - Intersection groups first (AND semantics require all conditions)
+--   - Userset references via subject_has_grant (recursive group membership)
+--   - Simple relations via check_permission_simple (fast path)
+--
+-- Returns 1 if access granted, 0 if denied.
+--
+-- Note: The main check_permission() entry point is generated at migration time
+-- and dispatches to specialized per-relation functions. This generic version
+-- is used as a fallback when no specialized function exists.
+CREATE OR REPLACE FUNCTION check_permission_generic(
     p_subject_type TEXT,
     p_subject_id TEXT,
     p_relation TEXT,
     p_object_type TEXT,
     p_object_id TEXT
+) RETURNS INTEGER AS $$
+    SELECT check_permission_generic_internal(
+        p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, ARRAY[]::TEXT[]
+    );
+$$ LANGUAGE sql STABLE;
+
+
+-- Generic permission check ignoring wildcards with visited tracking.
+-- This internal version accepts p_visited for cycle detection.
+CREATE OR REPLACE FUNCTION check_permission_no_wildcard_generic_internal(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_relation TEXT,
+    p_object_type TEXT,
+    p_object_id TEXT,
+    p_visited TEXT[] DEFAULT ARRAY[]::TEXT[]
 ) RETURNS INTEGER AS $$
 DECLARE
     v_has_intersection BOOLEAN;
@@ -608,7 +634,8 @@ BEGIN
 
         IF check_intersection_groups_no_wildcard(
             p_subject_type, p_subject_id,
-            p_relation, p_object_type, p_object_id
+            p_relation, p_object_type, p_object_id,
+            p_visited
         ) THEN
             IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
                 RETURN 0;
@@ -650,7 +677,7 @@ BEGIN
     IF subject_has_grant_no_wildcard(
         p_subject_type, p_subject_id,
         p_object_type, p_object_id,
-        p_relation, ARRAY[]::TEXT[]
+        p_relation, p_visited
     ) THEN
         IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
             RETURN 0;
@@ -662,6 +689,21 @@ BEGIN
     RETURN 0;
 END;
 $$ LANGUAGE plpgsql STABLE;
+
+
+-- Generic permission check ignoring wildcards - used by ListUsers to enumerate specific subjects.
+-- See check_permission_generic for details on the dispatch pattern.
+CREATE OR REPLACE FUNCTION check_permission_no_wildcard_generic(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_relation TEXT,
+    p_object_type TEXT,
+    p_object_id TEXT
+) RETURNS INTEGER AS $$
+    SELECT check_permission_no_wildcard_generic_internal(
+        p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, ARRAY[]::TEXT[]
+    );
+$$ LANGUAGE sql STABLE;
 
 
 -- Default dispatcher for check_permission.

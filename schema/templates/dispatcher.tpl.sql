@@ -15,12 +15,13 @@ p_object_id TEXT,
 p_visited TEXT[] DEFAULT ARRAY[]::TEXT[]
 ) RETURNS INTEGER AS $$
     SELECT CASE
-        -- Userset subjects require generic implementation for reflexive checks
-        WHEN position('#' in p_subject_type) > 0 OR position('#' in p_subject_id) > 0 THEN {{.GenericFunctionName}}(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id)
+        -- Userset subjects (e.g., "group:eng#member") require generic implementation for reflexive checks
+        -- Note: only subject_id contains '#' for usersets, not subject_type
+        WHEN position('#' in p_subject_id) > 0 THEN {{.GenericFunctionName}}_internal(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, p_visited)
 {{- range .Cases}}
         WHEN p_object_type = '{{.ObjectType}}' AND p_relation = '{{.Relation}}' THEN {{.CheckFunctionName}}(p_subject_type, p_subject_id, p_object_id, p_visited)
 {{- end}}
-        ELSE {{.GenericFunctionName}}(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id)
+        ELSE {{.GenericFunctionName}}_internal(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, p_visited)
     END;
 $$ LANGUAGE sql STABLE;
 

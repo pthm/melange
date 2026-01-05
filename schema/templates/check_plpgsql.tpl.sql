@@ -85,7 +85,7 @@ BEGIN
               AND t.object_id = p_object_id
               AND t.relation = '{{$.Relation}}'
               AND t.subject_type = p_subject_type
-              AND (t.subject_id = p_subject_id OR t.subject_id = '*')
+              AND {{if $.HasWildcard}}(t.subject_id = p_subject_id OR t.subject_id = '*'){{else}}t.subject_id = p_subject_id AND t.subject_id != '*'{{end}}
         ){{else if $part.IsTTU}}EXISTS(
             SELECT 1 FROM melange_tuples link
             WHERE link.object_type = '{{$.ObjectType}}'

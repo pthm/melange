@@ -286,12 +286,30 @@ func analyzeRelation(
 // detectFeatures identifies which features a relation uses.
 // Multiple features can be present - they will be composed in generated SQL.
 func detectFeatures(r RelationDefinition, analysis RelationAnalysis) RelationFeatures {
+	// Check for TTU in top-level parent relations
+	hasRecursive := len(analysis.ParentRelations) > 0
+
+	// Also check for TTU inside intersection groups - these also need cycle detection
+	if !hasRecursive {
+		for _, ig := range analysis.IntersectionGroups {
+			for _, part := range ig.Parts {
+				if part.ParentRelation != nil {
+					hasRecursive = true
+					break
+				}
+			}
+			if hasRecursive {
+				break
+			}
+		}
+	}
+
 	return RelationFeatures{
 		HasDirect:       len(analysis.DirectSubjectTypes) > 0,
 		HasImplied:      len(r.ImpliedBy) > 0,
 		HasWildcard:     hasWildcardRefs(r),
 		HasUserset:      len(analysis.UsersetPatterns) > 0,
-		HasRecursive:    len(analysis.ParentRelations) > 0,
+		HasRecursive:    hasRecursive,
 		HasExclusion:    len(analysis.ExcludedRelations) > 0 || len(r.ExcludedParentRelations) > 0 || len(r.ExcludedIntersectionGroups) > 0,
 		HasIntersection: len(r.IntersectionGroups) > 0,
 	}
