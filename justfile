@@ -183,7 +183,7 @@ clean:
 # Run Hugo docs dev server
 [group('Docs')]
 docs-dev:
-    cd docs && git submodule update --init --recursive && hugo server
+    cd docs && hugo mod tidy && hugo server
 
 # Run all checks (fmt, lint, test)
 [group('Test')]
