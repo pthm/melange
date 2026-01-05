@@ -16,6 +16,7 @@ import (
 	"github.com/openfga/language/pkg/go/transformer"
 
 	"github.com/pthm/melange"
+	"github.com/pthm/melange/schema"
 )
 
 // ParseSchema reads an OpenFGA .fga file and returns type definitions.
@@ -25,7 +26,7 @@ import (
 // The parser extracts type definitions, relations, and metadata that are
 // then converted to melange's internal representation for code generation
 // and database migration.
-func ParseSchema(path string) ([]melange.TypeDefinition, error) {
+func ParseSchema(path string) ([]schema.TypeDefinition, error) {
 	content, err := os.ReadFile(path) //nolint:gosec // path is from trusted source
 	if err != nil {
 		return nil, fmt.Errorf("reading schema file: %w", err)
@@ -37,7 +38,7 @@ func ParseSchema(path string) ([]melange.TypeDefinition, error) {
 // ParseSchemaString parses OpenFGA DSL content and returns type definitions.
 // This is the core parser used by both file-based and string-based parsing.
 // Wraps the OpenFGA transformer to convert protobuf models to our format.
-func ParseSchemaString(content string) ([]melange.TypeDefinition, error) {
+func ParseSchemaString(content string) ([]schema.TypeDefinition, error) {
 	model, err := transformer.TransformDSLToProto(content)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", melange.ErrInvalidSchema, err)
@@ -46,13 +47,13 @@ func ParseSchemaString(content string) ([]melange.TypeDefinition, error) {
 	return convertModel(model), nil
 }
 
-// ConvertProtoModel converts an OpenFGA protobuf AuthorizationModel to melange
+// ConvertProtoModel converts an OpenFGA protobuf AuthorizationModel to schema
 // TypeDefinitions. This is useful when you have a protobuf model directly
 // (e.g., from the OpenFGA API) rather than DSL text.
 //
 // This function is used by the OpenFGA test suite adapter to convert test
 // models without re-implementing the parsing logic.
-func ConvertProtoModel(model *openfgav1.AuthorizationModel) []melange.TypeDefinition {
+func ConvertProtoModel(model *openfgav1.AuthorizationModel) []schema.TypeDefinition {
 	return convertModel(model)
 }
 
@@ -65,24 +66,24 @@ func ConvertProtoModel(model *openfgav1.AuthorizationModel) []melange.TypeDefini
 //
 // The conversion preserves all information needed to generate Go code and
 // populate the melange_model table.
-func convertModel(model *openfgav1.AuthorizationModel) []melange.TypeDefinition {
+func convertModel(model *openfgav1.AuthorizationModel) []schema.TypeDefinition {
 	typeDefs := model.GetTypeDefinitions()
-	types := make([]melange.TypeDefinition, 0, len(typeDefs))
+	types := make([]schema.TypeDefinition, 0, len(typeDefs))
 
 	for _, td := range typeDefs {
-		typeDef := melange.TypeDefinition{
+		typeDef := schema.TypeDefinition{
 			Name: td.GetType(),
 		}
 
 		// Get directly related user types from metadata
 		// This extracts both simple type references [user] and userset references [group#member]
 		directTypes := make(map[string][]string)
-		directTypeRefs := make(map[string][]melange.SubjectTypeRef)
+		directTypeRefs := make(map[string][]schema.SubjectTypeRef)
 		if meta := td.GetMetadata(); meta != nil {
 			for relName, relMeta := range meta.GetRelations() {
 				for _, t := range relMeta.GetDirectlyRelatedUserTypes() {
 					typeName := t.GetType()
-					ref := melange.SubjectTypeRef{Type: typeName}
+					ref := schema.SubjectTypeRef{Type: typeName}
 
 					switch v := t.GetRelationOrWildcard().(type) {
 					case *openfgav1.RelationReference_Wildcard:
@@ -118,8 +119,8 @@ func convertModel(model *openfgav1.AuthorizationModel) []melange.TypeDefinition 
 //   - Tuple-to-userset: inherited from related objects (parent permissions)
 //   - Union/intersection/difference: combining multiple rules
 //   - Userset references: access via group membership [type#relation]
-func convertRelation(name string, rel *openfgav1.Userset, subjectTypes []string, subjectTypeRefs []melange.SubjectTypeRef) melange.RelationDefinition {
-	relDef := melange.RelationDefinition{
+func convertRelation(name string, rel *openfgav1.Userset, subjectTypes []string, subjectTypeRefs []schema.SubjectTypeRef) schema.RelationDefinition {
+	relDef := schema.RelationDefinition{
 		Name:            name,
 		SubjectTypes:    subjectTypes,
 		SubjectTypeRefs: subjectTypeRefs,
@@ -144,7 +145,7 @@ func convertRelation(name string, rel *openfgav1.Userset, subjectTypes []string,
 //
 // The extraction flattens these rules into our RelationDefinition format,
 // which the database functions can evaluate efficiently.
-func extractUserset(us *openfgav1.Userset, rel *melange.RelationDefinition) {
+func extractUserset(us *openfgav1.Userset, rel *schema.RelationDefinition) {
 	if us == nil {
 		return
 	}
@@ -162,7 +163,7 @@ func extractUserset(us *openfgav1.Userset, rel *melange.RelationDefinition) {
 		// e.g., "can_read from org" means check can_read on the org
 		parentRel := v.TupleToUserset.GetComputedUserset().GetRelation()
 		parentType := v.TupleToUserset.GetTupleset().GetRelation()
-		rel.ParentRelations = append(rel.ParentRelations, melange.ParentRelationCheck{
+		rel.ParentRelations = append(rel.ParentRelations, schema.ParentRelationCheck{
 			Relation:   parentRel,
 			ParentType: parentType,
 		})
@@ -219,9 +220,9 @@ func extractUserset(us *openfgav1.Userset, rel *melange.RelationDefinition) {
 //
 // For simple intersections like "a and b", returns one group: [[a, b]]
 // For "a and (b or c)", returns two groups: [[a, b], [a, c]]
-func expandIntersection(intersection *openfgav1.Usersets, relationName string) []melange.IntersectionGroup {
+func expandIntersection(intersection *openfgav1.Usersets, relationName string) []schema.IntersectionGroup {
 	// Start with one empty group
-	groups := []melange.IntersectionGroup{{}}
+	groups := []schema.IntersectionGroup{{}}
 
 	for _, child := range intersection.GetChild() {
 		switch cv := child.Userset.(type) {
@@ -246,7 +247,7 @@ func expandIntersection(intersection *openfgav1.Usersets, relationName string) [
 			rel := cv.TupleToUserset.GetComputedUserset().GetRelation()
 			parent := cv.TupleToUserset.GetTupleset().GetRelation()
 			for i := range groups {
-				groups[i].ParentRelations = append(groups[i].ParentRelations, melange.ParentRelationCheck{
+				groups[i].ParentRelations = append(groups[i].ParentRelations, schema.ParentRelationCheck{
 					Relation:   rel,
 					ParentType: parent,
 				})
@@ -355,12 +356,12 @@ func extractUnionRelations(union *openfgav1.Usersets) []string {
 // distributeUnion applies the distributive law: each existing group gets
 // expanded for each union member.
 // E.g., groups=[[a]], unionRels=[b,c] → [[a,b], [a,c]]
-func distributeUnion(groups []melange.IntersectionGroup, unionRels []string) []melange.IntersectionGroup {
-	var expanded []melange.IntersectionGroup
+func distributeUnion(groups []schema.IntersectionGroup, unionRels []string) []schema.IntersectionGroup {
+	var expanded []schema.IntersectionGroup
 	for _, g := range groups {
 		for _, rel := range unionRels {
 			// Clone the group and add this union member
-			newGroup := melange.IntersectionGroup{
+			newGroup := schema.IntersectionGroup{
 				Relations: make([]string, len(g.Relations), len(g.Relations)+1),
 			}
 			copy(newGroup.Relations, g.Relations)
@@ -383,7 +384,7 @@ func distributeUnion(groups []melange.IntersectionGroup, unionRels []string) []m
 // Handles both simple relations (ComputedUserset) and unions (editor or owner).
 // For "but not (editor or owner)", returns ["editor", "owner"].
 // For "but not author", returns ["author"].
-func extractSubtractRelations(us *openfgav1.Userset) ([]string, []melange.ParentRelationCheck) {
+func extractSubtractRelations(us *openfgav1.Userset) ([]string, []schema.ParentRelationCheck) {
 	if us == nil {
 		return nil, nil
 	}
@@ -397,7 +398,7 @@ func extractSubtractRelations(us *openfgav1.Userset) ([]string, []melange.Parent
 		// Union in subtract: "but not (editor or owner)"
 		// All relations in the union should exclude
 		var rels []string
-		var parents []melange.ParentRelationCheck
+		var parents []schema.ParentRelationCheck
 		for _, child := range v.Union.GetChild() {
 			childRels, childParents := extractSubtractRelations(child)
 			rels = append(rels, childRels...)
@@ -413,7 +414,7 @@ func extractSubtractRelations(us *openfgav1.Userset) ([]string, []melange.Parent
 	case *openfgav1.Userset_TupleToUserset:
 		// TTU in subtract: "but not (viewer from parent)"
 		// Preserve the tuple-to-userset linkage for exclusion evaluation.
-		return nil, []melange.ParentRelationCheck{{
+		return nil, []schema.ParentRelationCheck{{
 			Relation:   v.TupleToUserset.GetComputedUserset().GetRelation(),
 			ParentType: v.TupleToUserset.GetTupleset().GetRelation(),
 		}}
@@ -426,7 +427,7 @@ func extractSubtractRelations(us *openfgav1.Userset) ([]string, []melange.Parent
 // extractSubtractIntersectionGroups extracts intersection groups from a subtract userset.
 // For "but not (editor and owner)", returns one group: [[editor, owner]].
 // For unions, returns the union of all child intersection groups.
-func extractSubtractIntersectionGroups(us *openfgav1.Userset, relationName string) []melange.IntersectionGroup {
+func extractSubtractIntersectionGroups(us *openfgav1.Userset, relationName string) []schema.IntersectionGroup {
 	if us == nil {
 		return nil
 	}
@@ -435,7 +436,7 @@ func extractSubtractIntersectionGroups(us *openfgav1.Userset, relationName strin
 	case *openfgav1.Userset_Intersection:
 		return expandIntersection(v.Intersection, relationName)
 	case *openfgav1.Userset_Union:
-		var groups []melange.IntersectionGroup
+		var groups []schema.IntersectionGroup
 		for _, child := range v.Union.GetChild() {
 			groups = append(groups, extractSubtractIntersectionGroups(child, relationName)...)
 		}
@@ -472,7 +473,7 @@ func extractSubtractIntersectionGroups(us *openfgav1.Userset, relationName strin
 // extractBaseIntersectionGroups extracts intersection groups from a base userset.
 // For "editor", returns [[editor]]. For "a and b", returns [[a, b]].
 // For unions, returns the concatenation of each child group's results.
-func extractBaseIntersectionGroups(us *openfgav1.Userset, relationName string) []melange.IntersectionGroup {
+func extractBaseIntersectionGroups(us *openfgav1.Userset, relationName string) []schema.IntersectionGroup {
 	if us == nil {
 		return nil
 	}
@@ -480,11 +481,11 @@ func extractBaseIntersectionGroups(us *openfgav1.Userset, relationName string) [
 	switch v := us.Userset.(type) {
 	case *openfgav1.Userset_ComputedUserset:
 		rel := v.ComputedUserset.GetRelation()
-		return []melange.IntersectionGroup{{Relations: []string{rel}}}
+		return []schema.IntersectionGroup{{Relations: []string{rel}}}
 	case *openfgav1.Userset_Intersection:
 		return expandIntersection(v.Intersection, relationName)
 	case *openfgav1.Userset_Union:
-		var groups []melange.IntersectionGroup
+		var groups []schema.IntersectionGroup
 		for _, child := range v.Union.GetChild() {
 			groups = append(groups, extractBaseIntersectionGroups(child, relationName)...)
 		}

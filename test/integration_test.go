@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pthm/melange"
+	"github.com/pthm/melange/schema"
 	"github.com/pthm/melange/test/authz"
 	"github.com/pthm/melange/test/testutil"
 )
@@ -110,7 +111,7 @@ func TestMigrator_GetStatus(t *testing.T) {
 	db := testutil.DB(t)
 	ctx := context.Background()
 
-	migrator := melange.NewMigrator(db, "testdata")
+	migrator := schema.NewMigrator(db, "testdata")
 	status, err := migrator.GetStatus(ctx)
 	require.NoError(t, err)
 

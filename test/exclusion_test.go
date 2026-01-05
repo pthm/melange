@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/pthm/melange"
+	"github.com/pthm/melange/schema"
 	"github.com/pthm/melange/test/testutil"
 	"github.com/pthm/melange/tooling"
 	"github.com/stretchr/testify/require"
@@ -28,7 +28,7 @@ type document
 	types, err := tooling.ParseSchemaString(schema)
 	require.NoError(t, err)
 
-	var viewerRel *melange.RelationDefinition
+	var viewerRel *schema.RelationDefinition
 	for i := range types {
 		if types[i].Name != "document" {
 			continue

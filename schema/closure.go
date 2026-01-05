@@ -1,4 +1,4 @@
-package melange
+package schema
 
 // ClosureRow represents a row in the melange_relation_closure table.
 // The closure table is a critical optimization that precomputes transitive

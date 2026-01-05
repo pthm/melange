@@ -36,11 +36,8 @@ melange.go         # Object, Relation, Querier interfaces
 checker.go         # Checker implementation
 cache.go           # Permission result caching
 decision.go        # Decision overrides for testing
-schema.go          # TypeDefinition, RelationDefinition
 errors.go          # Sentinel errors and helpers
-migrate.go         # Database migration
-generate.go        # Code generation
-validate.go        # Schema validation
+schema/            # Schema types, validation, codegen, migration
 ```
 
 ### Key Files
@@ -57,10 +54,11 @@ validate.go        # Schema validation
 - `ListObjects()` / `ListSubjects()` - List operations
 - `Must()` - Panic on failure
 
-**`schema.go`** - Schema types:
+**`schema/`** - Schema handling:
 - `TypeDefinition` - Object type with relations
 - `RelationDefinition` - Individual relation rules
 - `AuthzModel` - Database row representation
+- Migrator, validation, and codegen helpers
 
 **`cache.go`** - Caching:
 - `Cache` interface
@@ -87,7 +85,7 @@ tooling/
 **`parser.go`** - Schema parsing:
 - `ParseSchema(path)` - Parse `.fga` file
 - `ParseSchemaString(dsl)` - Parse DSL string
-- Converts OpenFGA AST to `TypeDefinition` slice
+- Converts OpenFGA AST to `schema.TypeDefinition` slice
 
 **`migrate.go`** - Migration helpers:
 - `Migrate(ctx, db, dir)` - One-step migration

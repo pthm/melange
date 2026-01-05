@@ -4,12 +4,12 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/pthm/melange"
+	"github.com/pthm/melange/schema"
 )
 
 // Migrate is a convenience function that parses a schema file and applies it
-// to the database. This combines ParseSchema + melange.ToAuthzModels +
-// melange.MigrateWithTypes into a single operation.
+// to the database. This combines ParseSchema + schema.ToAuthzModels +
+// schema.MigrateWithTypes into a single operation.
 //
 // The migration process:
 //  1. Reads schemasDir/schema.fga
@@ -21,14 +21,14 @@ import (
 // For more control over the migration process, use the individual functions:
 //
 //	types, err := tooling.ParseSchema(path)
-//	models := melange.ToAuthzModels(types)
-//	migrator := melange.NewMigrator(db, schemasDir)
+//	models := schema.ToAuthzModels(types)
+//	migrator := schema.NewMigrator(db, schemasDir)
 //	err = migrator.MigrateWithTypes(ctx, types)
 //
 // The migration is idempotent and transactional (when using *sql.DB).
 // Safe to run on application startup.
-func Migrate(ctx context.Context, db melange.Execer, schemasDir string) error {
-	migrator := melange.NewMigrator(db, schemasDir)
+func Migrate(ctx context.Context, db schema.Execer, schemasDir string) error {
+	migrator := schema.NewMigrator(db, schemasDir)
 
 	if !migrator.HasSchema() {
 		return fmt.Errorf("no schema found at %s", migrator.SchemaPath())
@@ -56,12 +56,12 @@ func Migrate(ctx context.Context, db melange.Execer, schemasDir string) error {
 //	err := tooling.MigrateFromString(ctx, db, embeddedSchema)
 //
 // The migration is idempotent and transactional (when using *sql.DB).
-func MigrateFromString(ctx context.Context, db melange.Execer, content string) error {
+func MigrateFromString(ctx context.Context, db schema.Execer, content string) error {
 	types, err := ParseSchemaString(content)
 	if err != nil {
 		return fmt.Errorf("parsing schema: %w", err)
 	}
 
-	migrator := melange.NewMigrator(db, "")
+	migrator := schema.NewMigrator(db, "")
 	return migrator.MigrateWithTypes(ctx, types)
 }

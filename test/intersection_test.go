@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/pthm/melange"
+	"github.com/pthm/melange/schema"
 	"github.com/pthm/melange/test/testutil"
 	"github.com/pthm/melange/tooling"
 	"github.com/stretchr/testify/require"
@@ -29,7 +29,7 @@ type document
 	require.Len(t, types, 2) // user, document
 
 	// Find document type
-	var docType *melange.TypeDefinition
+	var docType *schema.TypeDefinition
 	for i := range types {
 		if types[i].Name == "document" {
 			docType = &types[i]
@@ -39,7 +39,7 @@ type document
 	require.NotNil(t, docType)
 
 	// Find viewer relation
-	var viewerRel *melange.RelationDefinition
+	var viewerRel *schema.RelationDefinition
 	for i := range docType.Relations {
 		if docType.Relations[i].Name == "viewer" {
 			viewerRel = &docType.Relations[i]
@@ -58,11 +58,11 @@ type document
 	require.Empty(t, viewerRel.ImpliedBy, "ImpliedBy should be empty for intersection")
 
 	// Check model generation
-	models := melange.ToAuthzModels(types)
+	models := schema.ToAuthzModels(types)
 	t.Logf("Generated %d models", len(models))
 
 	// Count intersection rules for viewer
-	var intersectionRules []melange.AuthzModel
+	var intersectionRules []schema.AuthzModel
 	for _, m := range models {
 		if m.ObjectType == "document" && m.Relation == "viewer" {
 			t.Logf("viewer model: %+v", m)
@@ -221,7 +221,7 @@ type document
 	types, err := tooling.ParseSchemaString(schema)
 	require.NoError(t, err)
 
-	var viewerRel *melange.RelationDefinition
+	var viewerRel *schema.RelationDefinition
 	for i := range types {
 		if types[i].Name != "document" {
 			continue

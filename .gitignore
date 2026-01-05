@@ -41,3 +41,6 @@ __debug_bin*
 
 # Generated files
 *_gen.go
+
+# Documentation
+specs/

@@ -1,24 +1,24 @@
-package melange_test
+package schema_test
 
 import (
 	"bytes"
 	"strings"
 	"testing"
 
-	"github.com/pthm/melange"
+	"github.com/pthm/melange/schema"
 )
 
 func TestGenerateGo_Defaults(t *testing.T) {
-	types := []melange.TypeDefinition{
+	types := []schema.TypeDefinition{
 		{
 			Name: "user",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "self", SubjectTypes: []string{"user"}},
 			},
 		},
 		{
 			Name: "repository",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "owner", SubjectTypes: []string{"user"}},
 				{Name: "can_read", ImpliedBy: []string{"owner"}},
 			},
@@ -27,7 +27,7 @@ func TestGenerateGo_Defaults(t *testing.T) {
 
 	t.Run("default config uses string ID", func(t *testing.T) {
 		var buf bytes.Buffer
-		err := melange.GenerateGo(&buf, types, nil)
+		err := schema.GenerateGo(&buf, types, nil)
 		if err != nil {
 			t.Fatalf("GenerateGo error: %v", err)
 		}
@@ -46,13 +46,13 @@ func TestGenerateGo_Defaults(t *testing.T) {
 	})
 
 	t.Run("empty IDType defaults to string", func(t *testing.T) {
-		cfg := &melange.GenerateConfig{
+		cfg := &schema.GenerateConfig{
 			Package: "authz",
 			IDType:  "", // Empty should default to string
 		}
 
 		var buf bytes.Buffer
-		err := melange.GenerateGo(&buf, types, cfg)
+		err := schema.GenerateGo(&buf, types, cfg)
 		if err != nil {
 			t.Fatalf("GenerateGo error: %v", err)
 		}
@@ -64,13 +64,13 @@ func TestGenerateGo_Defaults(t *testing.T) {
 	})
 
 	t.Run("int64 IDType uses fmt.Sprint", func(t *testing.T) {
-		cfg := &melange.GenerateConfig{
+		cfg := &schema.GenerateConfig{
 			Package: "authz",
 			IDType:  "int64",
 		}
 
 		var buf bytes.Buffer
-		err := melange.GenerateGo(&buf, types, cfg)
+		err := schema.GenerateGo(&buf, types, cfg)
 		if err != nil {
 			t.Fatalf("GenerateGo error: %v", err)
 		}
@@ -94,13 +94,13 @@ func TestGenerateGo_Defaults(t *testing.T) {
 	})
 
 	t.Run("generates all relations by default", func(t *testing.T) {
-		cfg := &melange.GenerateConfig{
+		cfg := &schema.GenerateConfig{
 			Package:              "authz",
 			RelationPrefixFilter: "", // No filter
 		}
 
 		var buf bytes.Buffer
-		err := melange.GenerateGo(&buf, types, cfg)
+		err := schema.GenerateGo(&buf, types, cfg)
 		if err != nil {
 			t.Fatalf("GenerateGo error: %v", err)
 		}
@@ -120,13 +120,13 @@ func TestGenerateGo_Defaults(t *testing.T) {
 	})
 
 	t.Run("prefix filter limits relations", func(t *testing.T) {
-		cfg := &melange.GenerateConfig{
+		cfg := &schema.GenerateConfig{
 			Package:              "authz",
 			RelationPrefixFilter: "can_",
 		}
 
 		var buf bytes.Buffer
-		err := melange.GenerateGo(&buf, types, cfg)
+		err := schema.GenerateGo(&buf, types, cfg)
 		if err != nil {
 			t.Fatalf("GenerateGo error: %v", err)
 		}
@@ -147,7 +147,7 @@ func TestGenerateGo_Defaults(t *testing.T) {
 
 	t.Run("generates wildcard constructors", func(t *testing.T) {
 		var buf bytes.Buffer
-		err := melange.GenerateGo(&buf, types, nil)
+		err := schema.GenerateGo(&buf, types, nil)
 		if err != nil {
 			t.Fatalf("GenerateGo error: %v", err)
 		}

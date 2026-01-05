@@ -27,7 +27,7 @@ import (
 
 	_ "github.com/lib/pq"
 
-	"github.com/pthm/melange"
+	"github.com/pthm/melange/schema"
 	"github.com/pthm/melange/tooling"
 )
 
@@ -75,7 +75,7 @@ func main() {
 
 	switch flag.Arg(0) {
 	case "status":
-		migrator := melange.NewMigrator(db, *schemasDir)
+		migrator := schema.NewMigrator(db, *schemasDir)
 		status(ctx, migrator)
 	case "migrate":
 		migrate(ctx, db, *schemasDir)
@@ -117,7 +117,7 @@ func printUsage() {
 
 // status queries the database for current migration state.
 // Checks both filesystem (schema.fga) and database (melange_model).
-func status(ctx context.Context, m *melange.Migrator) {
+func status(ctx context.Context, m *schema.Migrator) {
 	s, err := m.GetStatus(ctx)
 	if err != nil {
 		log.Fatalf("getting status: %v", err)

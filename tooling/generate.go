@@ -3,22 +3,22 @@ package tooling
 import (
 	"io"
 
-	"github.com/pthm/melange"
+	"github.com/pthm/melange/schema"
 )
 
-// GenerateConfig is an alias for melange.GenerateConfig.
+// GenerateConfig is an alias for schema.GenerateConfig.
 // This allows users of the tooling package to configure code generation
-// without importing the core melange package separately.
-type GenerateConfig = melange.GenerateConfig
+// without importing the schema package separately.
+type GenerateConfig = schema.GenerateConfig
 
 // DefaultGenerateConfig returns sensible defaults for code generation.
 // Package: "authz", no relation filter (all relations), string IDs.
 func DefaultGenerateConfig() *GenerateConfig {
-	return melange.DefaultGenerateConfig()
+	return schema.DefaultGenerateConfig()
 }
 
 // GenerateGo writes Go code for the types and relations from a parsed schema.
-// This is a convenience re-export of melange.GenerateGo.
+// This is a convenience re-export of schema.GenerateGo.
 //
 // The generated code includes:
 //   - ObjectType constants (TypeUser, TypeRepository, etc.)
@@ -34,6 +34,6 @@ func DefaultGenerateConfig() *GenerateConfig {
 //	    Package: "authz",
 //	    IDType:  "int64",
 //	})
-func GenerateGo(w io.Writer, types []melange.TypeDefinition, cfg *GenerateConfig) error {
-	return melange.GenerateGo(w, types, cfg)
+func GenerateGo(w io.Writer, types []schema.TypeDefinition, cfg *GenerateConfig) error {
+	return schema.GenerateGo(w, types, cfg)
 }

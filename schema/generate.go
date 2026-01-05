@@ -1,4 +1,4 @@
-package melange
+package schema
 
 import (
 	"fmt"

@@ -1,4 +1,4 @@
-package melange
+package schema
 
 // TypeDefinition represents a parsed type from an .fga file.
 // Each type definition describes an object type (user, repository, etc.)
@@ -111,8 +111,8 @@ type AuthzModel struct {
 //
 // Example:
 //
-//	types, _ := melange.ParseSchema("schema.fga")
-//	subjects := melange.SubjectTypes(types)
+//	types, _ := tooling.ParseSchema("schema.fga")
+//	subjects := schema.SubjectTypes(types)
 //	// Returns: ["user", "organization", "team"]
 func SubjectTypes(types []TypeDefinition) []string {
 	seen := make(map[string]bool)
@@ -154,11 +154,11 @@ func SubjectTypes(types []TypeDefinition) []string {
 //
 // Example:
 //
-//	types, _ := melange.ParseSchema("schema.fga")
-//	subjects := melange.RelationSubjects(types, "repository", "owner")
+//	types, _ := tooling.ParseSchema("schema.fga")
+//	subjects := schema.RelationSubjects(types, "repository", "owner")
 //	// Returns: ["user"] - only users can be repository owners
 //
-//	readers := melange.RelationSubjects(types, "repository", "can_read")
+//	readers := schema.RelationSubjects(types, "repository", "can_read")
 //	// Returns: ["user", "organization"] - users and orgs can read repositories
 func RelationSubjects(types []TypeDefinition, objectType string, relation string) []string {
 	for _, t := range types {

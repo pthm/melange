@@ -1,22 +1,22 @@
-package melange_test
+package schema_test
 
 import (
 	"testing"
 
-	"github.com/pthm/melange"
+	"github.com/pthm/melange/schema"
 )
 
 func TestComputeRelationClosure_Simple(t *testing.T) {
-	types := []melange.TypeDefinition{
+	types := []schema.TypeDefinition{
 		{
 			Name: "repo",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "owner", SubjectTypes: []string{"user"}},
 			},
 		},
 	}
 
-	rows := melange.ComputeRelationClosure(types)
+	rows := schema.ComputeRelationClosure(types)
 
 	// owner should satisfy only itself
 	if !hasClosureRow(rows, "repo", "owner", "owner") {
@@ -30,17 +30,17 @@ func TestComputeRelationClosure_Simple(t *testing.T) {
 
 func TestComputeRelationClosure_TwoLevel(t *testing.T) {
 	// owner -> admin
-	types := []melange.TypeDefinition{
+	types := []schema.TypeDefinition{
 		{
 			Name: "repo",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "owner", SubjectTypes: []string{"user"}},
 				{Name: "admin", ImpliedBy: []string{"owner"}},
 			},
 		},
 	}
 
-	rows := melange.ComputeRelationClosure(types)
+	rows := schema.ComputeRelationClosure(types)
 
 	// owner satisfies owner
 	if !hasClosureRow(rows, "repo", "owner", "owner") {
@@ -67,10 +67,10 @@ func TestComputeRelationClosure_TwoLevel(t *testing.T) {
 
 func TestComputeRelationClosure_ThreeLevel(t *testing.T) {
 	// owner -> admin -> member
-	types := []melange.TypeDefinition{
+	types := []schema.TypeDefinition{
 		{
 			Name: "repo",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "owner", SubjectTypes: []string{"user"}},
 				{Name: "admin", ImpliedBy: []string{"owner"}},
 				{Name: "member", ImpliedBy: []string{"admin"}},
@@ -78,7 +78,7 @@ func TestComputeRelationClosure_ThreeLevel(t *testing.T) {
 		},
 	}
 
-	rows := melange.ComputeRelationClosure(types)
+	rows := schema.ComputeRelationClosure(types)
 
 	// owner satisfies only itself
 	if !hasClosureRow(rows, "repo", "owner", "owner") {
@@ -114,10 +114,10 @@ func TestComputeRelationClosure_Diamond(t *testing.T) {
 	//    reader   writer
 	//        \     /
 	//        viewer
-	types := []melange.TypeDefinition{
+	types := []schema.TypeDefinition{
 		{
 			Name: "doc",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "admin", SubjectTypes: []string{"user"}},
 				{Name: "reader", ImpliedBy: []string{"admin"}},
 				{Name: "writer", ImpliedBy: []string{"admin"}},
@@ -126,7 +126,7 @@ func TestComputeRelationClosure_Diamond(t *testing.T) {
 		},
 	}
 
-	rows := melange.ComputeRelationClosure(types)
+	rows := schema.ComputeRelationClosure(types)
 
 	// viewer should be satisfied by viewer, reader, writer, and admin
 	if !hasClosureRow(rows, "doc", "viewer", "viewer") {
@@ -144,25 +144,25 @@ func TestComputeRelationClosure_Diamond(t *testing.T) {
 }
 
 func TestComputeRelationClosure_MultipleTypes(t *testing.T) {
-	types := []melange.TypeDefinition{
+	types := []schema.TypeDefinition{
 		{Name: "user"},
 		{
 			Name: "org",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "owner", SubjectTypes: []string{"user"}},
 				{Name: "member", ImpliedBy: []string{"owner"}},
 			},
 		},
 		{
 			Name: "repo",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "admin", SubjectTypes: []string{"user"}},
 				{Name: "viewer", ImpliedBy: []string{"admin"}},
 			},
 		},
 	}
 
-	rows := melange.ComputeRelationClosure(types)
+	rows := schema.ComputeRelationClosure(types)
 
 	// Check org closure
 	if !hasClosureRow(rows, "org", "member", "owner") {
@@ -182,10 +182,10 @@ func TestComputeRelationClosure_MultipleTypes(t *testing.T) {
 
 func TestComputeRelationClosure_NoImpliedBy(t *testing.T) {
 	// Relations with only direct subject types, no implied_by
-	types := []melange.TypeDefinition{
+	types := []schema.TypeDefinition{
 		{
 			Name: "repo",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "owner", SubjectTypes: []string{"user"}},
 				{Name: "admin", SubjectTypes: []string{"user"}},
 				{Name: "viewer", SubjectTypes: []string{"user"}},
@@ -193,7 +193,7 @@ func TestComputeRelationClosure_NoImpliedBy(t *testing.T) {
 		},
 	}
 
-	rows := melange.ComputeRelationClosure(types)
+	rows := schema.ComputeRelationClosure(types)
 
 	// Each relation should only satisfy itself
 	if !hasClosureRow(rows, "repo", "owner", "owner") {
@@ -217,9 +217,9 @@ func TestComputeRelationClosure_NoImpliedBy(t *testing.T) {
 }
 
 func TestComputeRelationClosure_Empty(t *testing.T) {
-	var types []melange.TypeDefinition
+	var types []schema.TypeDefinition
 
-	rows := melange.ComputeRelationClosure(types)
+	rows := schema.ComputeRelationClosure(types)
 
 	if len(rows) != 0 {
 		t.Errorf("expected 0 closure rows for empty types, got %d", len(rows))
@@ -227,11 +227,11 @@ func TestComputeRelationClosure_Empty(t *testing.T) {
 }
 
 func TestComputeRelationClosure_TypeWithNoRelations(t *testing.T) {
-	types := []melange.TypeDefinition{
+	types := []schema.TypeDefinition{
 		{Name: "user"},
 	}
 
-	rows := melange.ComputeRelationClosure(types)
+	rows := schema.ComputeRelationClosure(types)
 
 	if len(rows) != 0 {
 		t.Errorf("expected 0 closure rows for type with no relations, got %d", len(rows))
@@ -240,10 +240,10 @@ func TestComputeRelationClosure_TypeWithNoRelations(t *testing.T) {
 
 func TestComputeRelationClosure_ViaPath(t *testing.T) {
 	// owner -> admin -> member -> viewer
-	types := []melange.TypeDefinition{
+	types := []schema.TypeDefinition{
 		{
 			Name: "org",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "owner", SubjectTypes: []string{"user"}},
 				{Name: "admin", ImpliedBy: []string{"owner"}},
 				{Name: "member", ImpliedBy: []string{"admin"}},
@@ -252,7 +252,7 @@ func TestComputeRelationClosure_ViaPath(t *testing.T) {
 		},
 	}
 
-	rows := melange.ComputeRelationClosure(types)
+	rows := schema.ComputeRelationClosure(types)
 
 	// Check via_path for viewer <- owner (should be [viewer, member, admin, owner])
 	for _, row := range rows {
@@ -274,7 +274,7 @@ func TestComputeRelationClosure_ViaPath(t *testing.T) {
 }
 
 func TestClosureRow_Fields(t *testing.T) {
-	row := melange.ClosureRow{
+	row := schema.ClosureRow{
 		ObjectType:         "repository",
 		Relation:           "can_read",
 		SatisfyingRelation: "owner",
@@ -296,7 +296,7 @@ func TestClosureRow_Fields(t *testing.T) {
 }
 
 // hasClosureRow checks if a closure row exists with the given parameters
-func hasClosureRow(rows []melange.ClosureRow, objectType, relation, satisfying string) bool {
+func hasClosureRow(rows []schema.ClosureRow, objectType, relation, satisfying string) bool {
 	for _, row := range rows {
 		if row.ObjectType == objectType && row.Relation == relation && row.SatisfyingRelation == satisfying {
 			return true

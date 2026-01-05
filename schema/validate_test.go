@@ -1,4 +1,4 @@
-package melange_test
+package schema_test
 
 import (
 	"bytes"
@@ -7,25 +7,25 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pthm/melange"
+	"github.com/pthm/melange/schema"
 )
 
 func TestDetectCycles_ImpliedBy(t *testing.T) {
-	types := []melange.TypeDefinition{
+	types := []schema.TypeDefinition{
 		{
 			Name: "resource",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "admin", ImpliedBy: []string{"owner"}},
 				{Name: "owner", ImpliedBy: []string{"admin"}}, // cycle!
 			},
 		},
 	}
 
-	err := melange.DetectCycles(types)
+	err := schema.DetectCycles(types)
 	if err == nil {
 		t.Fatal("expected error for implied-by cycle")
 	}
-	if !melange.IsCyclicSchemaErr(err) {
+	if !schema.IsCyclicSchemaErr(err) {
 		t.Errorf("expected IsCyclicSchemaErr to return true, got false")
 	}
 	if !strings.Contains(err.Error(), "implied-by cycle") {
@@ -38,10 +38,10 @@ func TestDetectCycles_ImpliedBy(t *testing.T) {
 
 func TestDetectCycles_ImpliedByThreeWay(t *testing.T) {
 	// A → B → C → A
-	types := []melange.TypeDefinition{
+	types := []schema.TypeDefinition{
 		{
 			Name: "resource",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "a", ImpliedBy: []string{"c"}},
 				{Name: "b", ImpliedBy: []string{"a"}},
 				{Name: "c", ImpliedBy: []string{"b"}}, // completes cycle
@@ -49,62 +49,62 @@ func TestDetectCycles_ImpliedByThreeWay(t *testing.T) {
 		},
 	}
 
-	err := melange.DetectCycles(types)
+	err := schema.DetectCycles(types)
 	if err == nil {
 		t.Fatal("expected error for three-way implied-by cycle")
 	}
-	if !melange.IsCyclicSchemaErr(err) {
+	if !schema.IsCyclicSchemaErr(err) {
 		t.Errorf("expected IsCyclicSchemaErr to return true")
 	}
 }
 
 func TestDetectCycles_Parent(t *testing.T) {
-	types := []melange.TypeDefinition{
+	types := []schema.TypeDefinition{
 		{
 			Name: "organization",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "repo", SubjectTypes: []string{"repository"}},
 				{Name: "can_read", ParentRelation: "can_read", ParentType: "repo"},
 			},
 		},
 		{
 			Name: "repository",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "org", SubjectTypes: []string{"organization"}},
 				{Name: "can_read", ParentRelation: "can_read", ParentType: "org"},
 			},
 		},
 	}
 
-	err := melange.DetectCycles(types)
+	err := schema.DetectCycles(types)
 	if err != nil {
 		t.Fatalf("expected no error for same-relation parent recursion, got: %v", err)
 	}
 }
 
 func TestDetectCycles_ParentDifferentRelations(t *testing.T) {
-	types := []melange.TypeDefinition{
+	types := []schema.TypeDefinition{
 		{
 			Name: "organization",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "repo", SubjectTypes: []string{"repository"}},
 				{Name: "can_read", ParentRelation: "can_write", ParentType: "repo"},
 			},
 		},
 		{
 			Name: "repository",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "org", SubjectTypes: []string{"organization"}},
 				{Name: "can_write", ParentRelation: "can_read", ParentType: "org"},
 			},
 		},
 	}
 
-	err := melange.DetectCycles(types)
+	err := schema.DetectCycles(types)
 	if err == nil {
 		t.Fatal("expected error for parent relation cycle with differing relations")
 	}
-	if !melange.IsCyclicSchemaErr(err) {
+	if !schema.IsCyclicSchemaErr(err) {
 		t.Errorf("expected IsCyclicSchemaErr to return true")
 	}
 	if !strings.Contains(err.Error(), "parent") {
@@ -116,10 +116,10 @@ func TestDetectCycles_ParentDifferentRelations(t *testing.T) {
 }
 
 func TestDetectCycles_ValidDAG(t *testing.T) {
-	types := []melange.TypeDefinition{
+	types := []schema.TypeDefinition{
 		{
 			Name: "resource",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "owner", SubjectTypes: []string{"user"}},
 				{Name: "admin", ImpliedBy: []string{"owner"}},
 				{Name: "member", ImpliedBy: []string{"admin"}},
@@ -128,7 +128,7 @@ func TestDetectCycles_ValidDAG(t *testing.T) {
 		},
 	}
 
-	err := melange.DetectCycles(types)
+	err := schema.DetectCycles(types)
 	if err != nil {
 		t.Errorf("expected no error for valid DAG, got: %v", err)
 	}
@@ -136,25 +136,25 @@ func TestDetectCycles_ValidDAG(t *testing.T) {
 
 func TestDetectCycles_DisconnectedGraphs(t *testing.T) {
 	// Multiple types with no cycles
-	types := []melange.TypeDefinition{
+	types := []schema.TypeDefinition{
 		{Name: "user"},
 		{
 			Name: "org",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "owner", SubjectTypes: []string{"user"}},
 				{Name: "member", ImpliedBy: []string{"owner"}},
 			},
 		},
 		{
 			Name: "repo",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "owner", SubjectTypes: []string{"user"}},
 				{Name: "viewer", ImpliedBy: []string{"owner"}},
 			},
 		},
 	}
 
-	err := melange.DetectCycles(types)
+	err := schema.DetectCycles(types)
 	if err != nil {
 		t.Errorf("expected no error for disconnected graphs, got: %v", err)
 	}
@@ -162,53 +162,53 @@ func TestDetectCycles_DisconnectedGraphs(t *testing.T) {
 
 func TestDetectCycles_ValidParentChain(t *testing.T) {
 	// Valid: org → repo → issue (no cycle)
-	types := []melange.TypeDefinition{
+	types := []schema.TypeDefinition{
 		{Name: "user"},
 		{
 			Name: "organization",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "member", SubjectTypes: []string{"user"}},
 				{Name: "can_read", ImpliedBy: []string{"member"}},
 			},
 		},
 		{
 			Name: "repository",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "org", SubjectTypes: []string{"organization"}},
 				{Name: "can_read", ParentRelation: "can_read", ParentType: "org"},
 			},
 		},
 		{
 			Name: "issue",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "repo", SubjectTypes: []string{"repository"}},
 				{Name: "can_read", ParentRelation: "can_read", ParentType: "repo"},
 			},
 		},
 	}
 
-	err := melange.DetectCycles(types)
+	err := schema.DetectCycles(types)
 	if err != nil {
 		t.Errorf("expected no error for valid parent chain, got: %v", err)
 	}
 }
 
 func TestDetectCycles_EmptySchema(t *testing.T) {
-	var types []melange.TypeDefinition
+	var types []schema.TypeDefinition
 
-	err := melange.DetectCycles(types)
+	err := schema.DetectCycles(types)
 	if err != nil {
 		t.Errorf("expected no error for empty schema, got: %v", err)
 	}
 }
 
 func TestDetectCycles_TypeWithNoRelations(t *testing.T) {
-	types := []melange.TypeDefinition{
+	types := []schema.TypeDefinition{
 		{Name: "user"},
 		{Name: "team"},
 	}
 
-	err := melange.DetectCycles(types)
+	err := schema.DetectCycles(types)
 	if err != nil {
 		t.Errorf("expected no error for types with no relations, got: %v", err)
 	}
@@ -216,30 +216,30 @@ func TestDetectCycles_TypeWithNoRelations(t *testing.T) {
 
 func TestDetectCycles_SelfLoop(t *testing.T) {
 	// admin implies admin (self-loop)
-	types := []melange.TypeDefinition{
+	types := []schema.TypeDefinition{
 		{
 			Name: "resource",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "admin", SubjectTypes: []string{"user"}, ImpliedBy: []string{"admin"}},
 			},
 		},
 	}
 
-	err := melange.DetectCycles(types)
+	err := schema.DetectCycles(types)
 	if err == nil {
 		t.Fatal("expected error for self-loop")
 	}
-	if !melange.IsCyclicSchemaErr(err) {
+	if !schema.IsCyclicSchemaErr(err) {
 		t.Errorf("expected IsCyclicSchemaErr to return true")
 	}
 }
 
 func TestDetectCycles_MultipleImpliers(t *testing.T) {
 	// viewer implied by multiple relations, no cycle
-	types := []melange.TypeDefinition{
+	types := []schema.TypeDefinition{
 		{
 			Name: "resource",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "owner", SubjectTypes: []string{"user"}},
 				{Name: "admin", SubjectTypes: []string{"user"}},
 				{Name: "viewer", ImpliedBy: []string{"owner", "admin"}}, // diamond, not a cycle
@@ -247,17 +247,17 @@ func TestDetectCycles_MultipleImpliers(t *testing.T) {
 		},
 	}
 
-	err := melange.DetectCycles(types)
+	err := schema.DetectCycles(types)
 	if err != nil {
 		t.Errorf("expected no error for diamond pattern, got: %v", err)
 	}
 }
 
 func TestGenerateGo_RejectsCyclicSchema(t *testing.T) {
-	types := []melange.TypeDefinition{
+	types := []schema.TypeDefinition{
 		{
 			Name: "resource",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "a", ImpliedBy: []string{"b"}},
 				{Name: "b", ImpliedBy: []string{"a"}},
 			},
@@ -265,31 +265,31 @@ func TestGenerateGo_RejectsCyclicSchema(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := melange.GenerateGo(&buf, types, nil)
+	err := schema.GenerateGo(&buf, types, nil)
 	if err == nil {
 		t.Fatal("expected error for cyclic schema")
 	}
-	if !melange.IsCyclicSchemaErr(err) {
+	if !schema.IsCyclicSchemaErr(err) {
 		t.Errorf("expected IsCyclicSchemaErr to return true, got: %v", err)
 	}
 }
 
 func TestIsCyclicSchemaErr(t *testing.T) {
 	t.Run("wrapped error", func(t *testing.T) {
-		err := fmt.Errorf("wrapped: %w", melange.ErrCyclicSchema)
-		if !melange.IsCyclicSchemaErr(err) {
+		err := fmt.Errorf("wrapped: %w", schema.ErrCyclicSchema)
+		if !schema.IsCyclicSchemaErr(err) {
 			t.Error("IsCyclicSchemaErr should return true for wrapped ErrCyclicSchema")
 		}
 	})
 
 	t.Run("other error", func(t *testing.T) {
-		if melange.IsCyclicSchemaErr(errors.New("other error")) {
+		if schema.IsCyclicSchemaErr(errors.New("other error")) {
 			t.Error("IsCyclicSchemaErr should return false for other errors")
 		}
 	})
 
 	t.Run("nil error", func(t *testing.T) {
-		if melange.IsCyclicSchemaErr(nil) {
+		if schema.IsCyclicSchemaErr(nil) {
 			t.Error("IsCyclicSchemaErr should return false for nil")
 		}
 	})
@@ -297,11 +297,11 @@ func TestIsCyclicSchemaErr(t *testing.T) {
 
 func TestDetectCycles_ComplexValidSchema(t *testing.T) {
 	// A realistic schema with multiple types and inheritance
-	types := []melange.TypeDefinition{
+	types := []schema.TypeDefinition{
 		{Name: "user"},
 		{
 			Name: "organization",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "owner", SubjectTypes: []string{"user"}},
 				{Name: "admin", SubjectTypes: []string{"user"}, ImpliedBy: []string{"owner"}},
 				{Name: "member", SubjectTypes: []string{"user"}, ImpliedBy: []string{"admin"}},
@@ -312,7 +312,7 @@ func TestDetectCycles_ComplexValidSchema(t *testing.T) {
 		},
 		{
 			Name: "repository",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "org", SubjectTypes: []string{"organization"}},
 				{Name: "owner", SubjectTypes: []string{"user"}},
 				{Name: "collaborator", SubjectTypes: []string{"user"}},
@@ -322,7 +322,7 @@ func TestDetectCycles_ComplexValidSchema(t *testing.T) {
 		},
 		{
 			Name: "issue",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "repo", SubjectTypes: []string{"repository"}},
 				{Name: "author", SubjectTypes: []string{"user"}},
 				{Name: "can_read", ParentRelation: "can_read", ParentType: "repo"},
@@ -331,7 +331,7 @@ func TestDetectCycles_ComplexValidSchema(t *testing.T) {
 		},
 	}
 
-	err := melange.DetectCycles(types)
+	err := schema.DetectCycles(types)
 	if err != nil {
 		t.Errorf("expected no error for complex valid schema, got: %v", err)
 	}

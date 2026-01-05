@@ -1,29 +1,29 @@
-package melange_test
+package schema_test
 
 import (
 	"testing"
 
-	"github.com/pthm/melange"
+	"github.com/pthm/melange/schema"
 )
 
 func TestSubjectTypes(t *testing.T) {
-	types := []melange.TypeDefinition{
+	types := []schema.TypeDefinition{
 		{
 			Name: "user",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "self", SubjectTypes: []string{"user"}},
 			},
 		},
 		{
 			Name: "organization",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "owner", SubjectTypes: []string{"user"}},
 				{Name: "member", SubjectTypes: []string{"user", "team"}},
 			},
 		},
 		{
 			Name: "repository",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "org", SubjectTypes: []string{"organization"}},
 				{Name: "public", SubjectTypes: []string{"user:*"}}, // wildcard
 				{Name: "can_read", ImpliedBy: []string{"owner"}},   // no direct subjects
@@ -31,7 +31,7 @@ func TestSubjectTypes(t *testing.T) {
 		},
 	}
 
-	subjects := melange.SubjectTypes(types)
+	subjects := schema.SubjectTypes(types)
 
 	// Should contain: user, team, organization (user:* becomes user)
 	expected := map[string]bool{
@@ -52,10 +52,10 @@ func TestSubjectTypes(t *testing.T) {
 }
 
 func TestRelationSubjects(t *testing.T) {
-	types := []melange.TypeDefinition{
+	types := []schema.TypeDefinition{
 		{
 			Name: "repository",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "owner", SubjectTypes: []string{"user"}},
 				{Name: "collaborator", SubjectTypes: []string{"user", "team"}},
 				{Name: "public", SubjectTypes: []string{"user:*"}},
@@ -65,42 +65,42 @@ func TestRelationSubjects(t *testing.T) {
 	}
 
 	t.Run("single subject type", func(t *testing.T) {
-		subjects := melange.RelationSubjects(types, "repository", "owner")
+		subjects := schema.RelationSubjects(types, "repository", "owner")
 		if len(subjects) != 1 || subjects[0] != "user" {
 			t.Errorf("RelationSubjects = %v, want [user]", subjects)
 		}
 	})
 
 	t.Run("multiple subject types", func(t *testing.T) {
-		subjects := melange.RelationSubjects(types, "repository", "collaborator")
+		subjects := schema.RelationSubjects(types, "repository", "collaborator")
 		if len(subjects) != 2 {
 			t.Errorf("RelationSubjects = %v, want [user, team]", subjects)
 		}
 	})
 
 	t.Run("wildcard stripped", func(t *testing.T) {
-		subjects := melange.RelationSubjects(types, "repository", "public")
+		subjects := schema.RelationSubjects(types, "repository", "public")
 		if len(subjects) != 1 || subjects[0] != "user" {
 			t.Errorf("RelationSubjects = %v, want [user]", subjects)
 		}
 	})
 
 	t.Run("no direct subjects", func(t *testing.T) {
-		subjects := melange.RelationSubjects(types, "repository", "can_read")
+		subjects := schema.RelationSubjects(types, "repository", "can_read")
 		if subjects != nil {
 			t.Errorf("RelationSubjects = %v, want nil", subjects)
 		}
 	})
 
 	t.Run("unknown type", func(t *testing.T) {
-		subjects := melange.RelationSubjects(types, "unknown", "owner")
+		subjects := schema.RelationSubjects(types, "unknown", "owner")
 		if subjects != nil {
 			t.Errorf("RelationSubjects = %v, want nil", subjects)
 		}
 	})
 
 	t.Run("unknown relation", func(t *testing.T) {
-		subjects := melange.RelationSubjects(types, "repository", "unknown")
+		subjects := schema.RelationSubjects(types, "repository", "unknown")
 		if subjects != nil {
 			t.Errorf("RelationSubjects = %v, want nil", subjects)
 		}
@@ -108,10 +108,10 @@ func TestRelationSubjects(t *testing.T) {
 }
 
 func TestToAuthzModels(t *testing.T) {
-	types := []melange.TypeDefinition{
+	types := []schema.TypeDefinition{
 		{
 			Name: "repository",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "owner", SubjectTypes: []string{"user"}},
 				{Name: "admin", SubjectTypes: []string{"user"}, ImpliedBy: []string{"owner"}},
 				{
@@ -123,7 +123,7 @@ func TestToAuthzModels(t *testing.T) {
 		},
 	}
 
-	models := melange.ToAuthzModels(types)
+	models := schema.ToAuthzModels(types)
 
 	t.Run("direct subject type", func(t *testing.T) {
 		// Should have entry for repository.owner with subject_type=user
@@ -172,10 +172,10 @@ func TestToAuthzModels(t *testing.T) {
 
 func TestToAuthzModels_TransitiveClosure(t *testing.T) {
 	// Test: owner -> admin -> member
-	types := []melange.TypeDefinition{
+	types := []schema.TypeDefinition{
 		{
 			Name: "org",
-			Relations: []melange.RelationDefinition{
+			Relations: []schema.RelationDefinition{
 				{Name: "owner", SubjectTypes: []string{"user"}},
 				{Name: "admin", ImpliedBy: []string{"owner"}},
 				{Name: "member", ImpliedBy: []string{"admin"}},
@@ -183,7 +183,7 @@ func TestToAuthzModels_TransitiveClosure(t *testing.T) {
 		},
 	}
 
-	models := melange.ToAuthzModels(types)
+	models := schema.ToAuthzModels(types)
 
 	// member should have implied_by for both admin and owner (transitive)
 	adminImplied := false

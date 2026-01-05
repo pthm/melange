@@ -1,4 +1,4 @@
-package melange
+package schema
 
 import (
 	"context"
@@ -31,7 +31,7 @@ import (
 // or need fine-grained control (DDL-only, status checks, etc.):
 //
 //	types, _ := tooling.ParseSchema("schemas/schema.fga")
-//	migrator := melange.NewMigrator(db, "schemas")
+//	migrator := schema.NewMigrator(db, "schemas")
 //	err := migrator.MigrateWithTypes(ctx, types)
 //
 // This separation keeps the core melange package free of OpenFGA dependencies.

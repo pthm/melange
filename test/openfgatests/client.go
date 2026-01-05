@@ -29,6 +29,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/pthm/melange"
+	"github.com/pthm/melange/schema"
 	"github.com/pthm/melange/test/testutil"
 	"github.com/pthm/melange/tooling"
 )
@@ -63,7 +64,7 @@ type store struct {
 // model represents an authorization model within a store.
 type model struct {
 	id         string
-	types      []melange.TypeDefinition
+	types      []schema.TypeDefinition
 	authzModel *openfgav1.AuthorizationModel
 }
 
@@ -281,7 +282,7 @@ func (c *Client) WriteAuthorizationModel(ctx context.Context, req *openfgav1.Wri
 		return nil, fmt.Errorf("store not found: %s", req.GetStoreId())
 	}
 
-	// Convert the protobuf model to melange TypeDefinitions
+	// Convert the protobuf model to schema TypeDefinitions
 	types := convertProtoModel(req)
 
 	modelID := fmt.Sprintf("model_%d", c.modelCounter.Add(1))
@@ -521,7 +522,7 @@ func (c *Client) loadModel(ctx context.Context, db *sql.DB, m *model) error {
 
 	// Use the Migrator to handle model and closure insertion
 	// The empty string for schemasDir is fine since we're using MigrateWithTypes directly
-	migrator := melange.NewMigrator(db, "")
+	migrator := schema.NewMigrator(db, "")
 	return migrator.MigrateWithTypes(ctx, m.types)
 }
 
@@ -580,9 +581,9 @@ func (c *Client) refreshTuples(ctx context.Context, db *sql.DB, s *store) error 
 	return nil
 }
 
-// convertProtoModel converts a WriteAuthorizationModelRequest to melange TypeDefinitions.
+// convertProtoModel converts a WriteAuthorizationModelRequest to schema TypeDefinitions.
 // Uses tooling.ConvertProtoModel to ensure test parsing matches production parsing.
-func convertProtoModel(req *openfgav1.WriteAuthorizationModelRequest) []melange.TypeDefinition {
+func convertProtoModel(req *openfgav1.WriteAuthorizationModelRequest) []schema.TypeDefinition {
 	model := &openfgav1.AuthorizationModel{
 		SchemaVersion:   req.GetSchemaVersion(),
 		TypeDefinitions: req.GetTypeDefinitions(),

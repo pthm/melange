@@ -1,4 +1,4 @@
-package melange
+package schema
 
 // UsersetRule represents a precomputed userset rule with relation closure applied.
 // Userset rules handle permissions granted via group membership, expressed in OpenFGA
