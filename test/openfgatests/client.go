@@ -350,7 +350,7 @@ func (c *Client) Check(ctx context.Context, req *openfgav1.CheckRequest, opts ..
 	relation := tk.GetRelation()
 
 	// Perform the check using melange
-	checker := melange.NewChecker(c.db, melange.WithUsersetValidation())
+	checker := melange.NewChecker(c.db, melange.WithUsersetValidation(), melange.WithRequestValidation())
 	contextualTuples, err := contextualTuplesFromKeys(req.GetContextualTuples().GetTupleKeys())
 	if err != nil {
 		return nil, fmt.Errorf("parsing contextual tuples: %w", err)
@@ -385,7 +385,7 @@ func (c *Client) ListObjects(ctx context.Context, req *openfgav1.ListObjectsRequ
 		return nil, fmt.Errorf("parsing subject: %w", err)
 	}
 
-	checker := melange.NewChecker(c.db, melange.WithUsersetValidation())
+	checker := melange.NewChecker(c.db, melange.WithUsersetValidation(), melange.WithRequestValidation())
 	contextualTuples, err := contextualTuplesFromKeys(req.GetContextualTuples().GetTupleKeys())
 	if err != nil {
 		return nil, fmt.Errorf("parsing contextual tuples: %w", err)
@@ -438,7 +438,7 @@ func (c *Client) ListUsers(ctx context.Context, req *openfgav1.ListUsersRequest,
 			outputType = filterType[:idx] // Extract just the type part
 		}
 
-		checker := melange.NewChecker(c.db, melange.WithUsersetValidation())
+		checker := melange.NewChecker(c.db, melange.WithUsersetValidation(), melange.WithRequestValidation())
 		contextualTuples, err := contextualTuplesFromKeys(req.GetContextualTuples())
 		if err != nil {
 			return nil, fmt.Errorf("parsing contextual tuples: %w", err)

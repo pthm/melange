@@ -81,4 +81,57 @@ func IsCyclicSchemaErr(err error) bool {
 const (
 	pgUndefinedTable    = "42P01" // undefined_table
 	pgUndefinedFunction = "42883" // undefined_function
+
+	// Custom Melange error codes (must not conflict with PostgreSQL codes)
+	// These are prefixed with 'M' to distinguish them from PG error codes.
+	pgResolutionTooComplex = "M2002" // resolution depth exceeded
 )
+
+// OpenFGA error codes for compatibility with the OpenFGA API.
+// These are used in ValidationError to provide OpenFGA-compatible error responses.
+const (
+	// ErrorCodeValidation indicates an invalid request (bad relation, type, etc.).
+	ErrorCodeValidation = 2000
+
+	// ErrorCodeAuthorizationModelNotFound indicates the model doesn't exist.
+	ErrorCodeAuthorizationModelNotFound = 2001
+
+	// ErrorCodeResolutionTooComplex indicates depth/complexity exceeded.
+	ErrorCodeResolutionTooComplex = 2002
+)
+
+// ValidationError represents an OpenFGA-compatible validation error.
+// It contains an error code and message matching OpenFGA's error semantics.
+type ValidationError struct {
+	// Code is the OpenFGA error code (e.g., 2000 for validation errors).
+	Code int
+
+	// Message describes the validation failure.
+	Message string
+}
+
+// Error implements the error interface.
+func (e *ValidationError) Error() string {
+	return e.Message
+}
+
+// ErrorCode returns the OpenFGA error code.
+func (e *ValidationError) ErrorCode() int {
+	return e.Code
+}
+
+// IsValidationError returns true if err is or wraps a ValidationError.
+func IsValidationError(err error) bool {
+	var ve *ValidationError
+	return errors.As(err, &ve)
+}
+
+// GetValidationErrorCode extracts the error code from a ValidationError.
+// Returns 0 if err is not a ValidationError.
+func GetValidationErrorCode(err error) int {
+	var ve *ValidationError
+	if errors.As(err, &ve) {
+		return ve.Code
+	}
+	return 0
+}

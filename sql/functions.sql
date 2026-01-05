@@ -42,6 +42,9 @@ DECLARE
     v_userset RECORD;
     v_parent RECORD;
     v_visit_key TEXT;
+    v_has_intersection BOOLEAN;
+    v_has_other_rules BOOLEAN;
+    v_self_in_intersection BOOLEAN := FALSE;
 BEGIN
     -- Build unique key for cycle detection
     v_visit_key := p_object_type || ':' || p_object_id || ':' || p_relation;
@@ -53,8 +56,9 @@ BEGIN
 
     -- Depth protection (array length serves as depth counter)
     -- Note: array_length returns NULL for empty arrays, so use COALESCE
-    IF COALESCE(array_length(p_visited, 1), 0) >= 10 THEN
-        RETURN FALSE;
+    -- Raises an exception with SQLSTATE 'M2002' to signal resolution too complex
+    IF COALESCE(array_length(p_visited, 1), 0) >= 25 THEN
+        RAISE EXCEPTION 'resolution too complex: depth limit exceeded' USING ERRCODE = 'M2002';
     END IF;
 
     -- Special-case userset subjects like "document:1#writer".
@@ -72,6 +76,73 @@ BEGIN
             IF v_found THEN
                 RETURN TRUE;
             END IF;
+        END IF;
+    END IF;
+
+    -- If this relation has intersection rules, enforce them first.
+    -- Only fall through to other rules if non-intersection rules exist.
+    SELECT EXISTS (
+        SELECT 1
+        FROM melange_relation_closure c
+        JOIN melange_model m
+            ON m.object_type = c.object_type
+            AND m.relation = c.satisfying_relation
+        WHERE c.object_type = p_object_type
+          AND c.relation = p_relation
+          AND m.rule_group_mode = 'intersection'
+    ) INTO v_has_intersection;
+
+    IF v_has_intersection THEN
+        SELECT EXISTS (
+            SELECT 1
+            FROM melange_relation_closure c
+            JOIN melange_model m
+                ON m.object_type = c.object_type
+                AND m.relation = c.satisfying_relation
+            WHERE c.object_type = p_object_type
+              AND c.relation = p_relation
+              AND m.rule_group_mode = 'intersection'
+              AND m.check_relation = p_relation
+        ) INTO v_self_in_intersection;
+
+        IF check_intersection_groups(
+            p_subject_type, p_subject_id,
+            p_relation, p_object_type, p_object_id,
+            p_visited || v_visit_key
+        ) THEN
+            IF check_all_exclusions_with_visited(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, p_visited || v_visit_key) THEN
+                RETURN FALSE;
+            END IF;
+            RETURN TRUE;
+        END IF;
+
+        SELECT EXISTS (
+            SELECT 1
+            FROM melange_model m
+            WHERE m.object_type = p_object_type
+              AND m.relation = p_relation
+              AND (m.rule_group_mode IS NULL OR m.rule_group_mode != 'intersection')
+              AND (m.subject_type IS NOT NULL OR m.implied_by IS NOT NULL OR m.parent_relation IS NOT NULL)
+              AND NOT (
+                  v_self_in_intersection
+                  AND m.subject_type IS NOT NULL
+                  AND m.implied_by IS NULL
+                  AND m.parent_relation IS NULL
+              )
+              AND NOT (
+                  m.implied_by IS NOT NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM melange_model mi
+                      WHERE mi.object_type = p_object_type
+                        AND mi.relation = m.implied_by
+                        AND mi.rule_group_mode = 'intersection'
+                  )
+              )
+        ) INTO v_has_other_rules;
+
+        IF NOT v_has_other_rules THEN
+            RETURN FALSE;
         END IF;
     END IF;
 
@@ -108,7 +179,7 @@ BEGIN
     LIMIT 1;
 
     IF v_found THEN
-        IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+        IF check_all_exclusions_with_visited(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, p_visited || v_visit_key) THEN
             RETURN FALSE;
         END IF;
         RETURN TRUE;
@@ -152,7 +223,7 @@ BEGIN
         LIMIT 1;
 
         IF v_found THEN
-            IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+            IF check_all_exclusions_with_visited(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, p_visited || v_visit_key) THEN
                 RETURN FALSE;
             END IF;
             RETURN TRUE;
@@ -198,7 +269,7 @@ BEGIN
             v_userset.required_relation,
             p_visited || v_visit_key  -- append current to visited for cycle detection
         ) THEN
-            IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+            IF check_all_exclusions_with_visited(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, p_visited || v_visit_key) THEN
                 RETURN FALSE;
             END IF;
             RETURN TRUE;
@@ -222,6 +293,20 @@ BEGIN
             ON t.object_type = p_object_type
             AND t.object_id = p_object_id
             AND t.relation = m.subject_type  -- linking relation
+        JOIN melange_model mr
+            ON mr.object_type = p_object_type
+            AND mr.relation = m.subject_type
+            AND mr.subject_type = t.subject_type
+            AND mr.parent_relation IS NULL
+            AND mr.implied_by IS NULL
+            AND (
+                mr.subject_relation IS NULL
+                OR (
+                    position('#' in t.subject_id) > 0
+                    AND substring(t.subject_id from position('#' in t.subject_id) + 1) = mr.subject_relation
+                )
+            )
+            AND (t.subject_id != '*' OR mr.subject_wildcard = TRUE)
         WHERE c.object_type = p_object_type
           AND c.relation = p_relation
     LOOP
@@ -232,23 +317,12 @@ BEGIN
             v_parent.required_relation,
             p_visited || v_visit_key
         ) THEN
-            IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+            IF check_all_exclusions_with_visited(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, p_visited || v_visit_key) THEN
                 RETURN FALSE;
             END IF;
             RETURN TRUE;
         END IF;
     END LOOP;
-
-    -- 4. Check intersection groups (supports computed relations in userset evaluation).
-    IF check_intersection_groups(
-        p_subject_type, p_subject_id,
-        p_relation, p_object_type, p_object_id
-    ) THEN
-        IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
-            RETURN FALSE;
-        END IF;
-        RETURN TRUE;
-    END IF;
 
     RETURN FALSE;
 END;
@@ -269,6 +343,9 @@ DECLARE
     v_userset RECORD;
     v_parent RECORD;
     v_visit_key TEXT;
+    v_has_intersection BOOLEAN;
+    v_has_other_rules BOOLEAN;
+    v_self_in_intersection BOOLEAN := FALSE;
 BEGIN
     v_visit_key := p_object_type || ':' || p_object_id || ':' || p_relation;
 
@@ -276,8 +353,9 @@ BEGIN
         RETURN FALSE;
     END IF;
 
-    IF COALESCE(array_length(p_visited, 1), 0) >= 10 THEN
-        RETURN FALSE;
+    -- Depth protection: raise exception to signal resolution too complex
+    IF COALESCE(array_length(p_visited, 1), 0) >= 25 THEN
+        RAISE EXCEPTION 'resolution too complex: depth limit exceeded' USING ERRCODE = 'M2002';
     END IF;
 
     IF position('#' in p_subject_id) > 0 AND p_subject_type = p_object_type THEN
@@ -292,6 +370,71 @@ BEGIN
             IF v_found THEN
                 RETURN TRUE;
             END IF;
+        END IF;
+    END IF;
+
+    SELECT EXISTS (
+        SELECT 1
+        FROM melange_relation_closure c
+        JOIN melange_model m
+            ON m.object_type = c.object_type
+            AND m.relation = c.satisfying_relation
+        WHERE c.object_type = p_object_type
+          AND c.relation = p_relation
+          AND m.rule_group_mode = 'intersection'
+    ) INTO v_has_intersection;
+
+    IF v_has_intersection THEN
+        SELECT EXISTS (
+            SELECT 1
+            FROM melange_relation_closure c
+            JOIN melange_model m
+                ON m.object_type = c.object_type
+                AND m.relation = c.satisfying_relation
+            WHERE c.object_type = p_object_type
+              AND c.relation = p_relation
+              AND m.rule_group_mode = 'intersection'
+              AND m.check_relation = p_relation
+        ) INTO v_self_in_intersection;
+
+        IF check_intersection_groups_no_wildcard(
+            p_subject_type, p_subject_id,
+            p_relation, p_object_type, p_object_id,
+            p_visited || v_visit_key
+        ) THEN
+            IF check_all_exclusions_with_visited(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, p_visited || v_visit_key) THEN
+                RETURN FALSE;
+            END IF;
+            RETURN TRUE;
+        END IF;
+
+        SELECT EXISTS (
+            SELECT 1
+            FROM melange_model m
+            WHERE m.object_type = p_object_type
+              AND m.relation = p_relation
+              AND (m.rule_group_mode IS NULL OR m.rule_group_mode != 'intersection')
+              AND (m.subject_type IS NOT NULL OR m.implied_by IS NOT NULL OR m.parent_relation IS NOT NULL)
+              AND NOT (
+                  v_self_in_intersection
+                  AND m.subject_type IS NOT NULL
+                  AND m.implied_by IS NULL
+                  AND m.parent_relation IS NULL
+              )
+              AND NOT (
+                  m.implied_by IS NOT NULL
+                  AND EXISTS (
+                      SELECT 1
+                      FROM melange_model mi
+                      WHERE mi.object_type = p_object_type
+                        AND mi.relation = m.implied_by
+                        AND mi.rule_group_mode = 'intersection'
+                  )
+              )
+        ) INTO v_has_other_rules;
+
+        IF NOT v_has_other_rules THEN
+            RETURN FALSE;
         END IF;
     END IF;
 
@@ -321,7 +464,7 @@ BEGIN
     LIMIT 1;
 
     IF v_found THEN
-        IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+        IF check_all_exclusions_with_visited(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, p_visited || v_visit_key) THEN
             RETURN FALSE;
         END IF;
         RETURN TRUE;
@@ -354,7 +497,7 @@ BEGIN
         LIMIT 1;
 
     IF v_found THEN
-        IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+        IF check_all_exclusions_with_visited(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, p_visited || v_visit_key) THEN
             RETURN FALSE;
         END IF;
         RETURN TRUE;
@@ -394,7 +537,10 @@ BEGIN
             v_userset.required_relation,
             p_visited || v_visit_key
         ) THEN
-            IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+            IF check_all_exclusions_with_visited(
+                p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id,
+                p_visited || v_visit_key
+            ) THEN
                 RETURN FALSE;
             END IF;
             RETURN TRUE;
@@ -415,6 +561,20 @@ BEGIN
             ON t.object_type = p_object_type
             AND t.object_id = p_object_id
             AND t.relation = m.subject_type
+        JOIN melange_model mr
+            ON mr.object_type = p_object_type
+            AND mr.relation = m.subject_type
+            AND mr.subject_type = t.subject_type
+            AND mr.parent_relation IS NULL
+            AND mr.implied_by IS NULL
+            AND (
+                mr.subject_relation IS NULL
+                OR (
+                    position('#' in t.subject_id) > 0
+                    AND substring(t.subject_id from position('#' in t.subject_id) + 1) = mr.subject_relation
+                )
+            )
+            AND (t.subject_id != '*' OR mr.subject_wildcard = TRUE)
         WHERE c.object_type = p_object_type
           AND c.relation = p_relation
     LOOP
@@ -424,22 +584,15 @@ BEGIN
             v_parent.required_relation,
             p_visited || v_visit_key
         ) THEN
-            IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+            IF check_all_exclusions_with_visited(
+                p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id,
+                p_visited || v_visit_key
+            ) THEN
                 RETURN FALSE;
             END IF;
             RETURN TRUE;
         END IF;
     END LOOP;
-
-    IF check_intersection_groups_no_wildcard(
-        p_subject_type, p_subject_id,
-        p_relation, p_object_type, p_object_id
-    ) THEN
-        IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
-            RETURN FALSE;
-        END IF;
-        RETURN TRUE;
-    END IF;
 
     RETURN FALSE;
 END;
@@ -468,7 +621,7 @@ CREATE OR REPLACE FUNCTION subject_grants(
 DECLARE
     v_iteration INTEGER := 0;
     v_new_count INTEGER;
-    v_max_iterations CONSTANT INTEGER := 10;  -- depth limit
+    v_max_iterations CONSTANT INTEGER := 25;  -- depth limit (matches OpenFGA default)
 BEGIN
     -- Create temp table for iterative fixpoint computation
     -- Using ON COMMIT DROP for automatic cleanup
@@ -684,6 +837,28 @@ END;
 $$ LANGUAGE plpgsql STABLE;
 
 
+-- Variant of check_exclusion that threads visited state to prevent cycles.
+CREATE OR REPLACE FUNCTION check_exclusion_with_visited(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_excluded_relation TEXT,
+    p_object_type TEXT,
+    p_object_id TEXT,
+    p_visited TEXT[]
+) RETURNS BOOLEAN AS $$
+BEGIN
+    RETURN subject_has_grant(
+        p_subject_type,
+        p_subject_id,
+        p_object_type,
+        p_object_id,
+        p_excluded_relation,
+        p_visited
+    );
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+
 -- Check if a subject is excluded by ANY of the exclusion rules for a relation.
 -- For nested exclusions like "(writer but not editor) but not owner",
 -- this checks all exclusion rows and returns TRUE if ANY matches.
@@ -763,6 +938,75 @@ END;
 $$ LANGUAGE plpgsql STABLE;
 
 
+-- Variant of check_all_exclusions that threads visited state to prevent cycles.
+CREATE OR REPLACE FUNCTION check_all_exclusions_with_visited(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_relation TEXT,
+    p_object_type TEXT,
+    p_object_id TEXT,
+    p_visited TEXT[]
+) RETURNS BOOLEAN AS $$
+DECLARE
+    v_excluded TEXT;
+    v_parent_excl RECORD;
+    v_parent RECORD;
+BEGIN
+    FOR v_excluded IN
+        SELECT em.excluded_relation
+        FROM melange_relation_closure c
+        JOIN melange_model em
+            ON em.object_type = c.object_type
+            AND em.relation = c.satisfying_relation
+        WHERE c.object_type = p_object_type
+          AND c.relation = p_relation
+          AND em.excluded_relation IS NOT NULL
+    LOOP
+        IF check_exclusion_with_visited(p_subject_type, p_subject_id, v_excluded, p_object_type, p_object_id, p_visited) THEN
+            RETURN TRUE;
+        END IF;
+    END LOOP;
+
+    FOR v_parent_excl IN
+        SELECT em.excluded_parent_relation, em.excluded_parent_type
+        FROM melange_relation_closure c
+        JOIN melange_model em
+            ON em.object_type = c.object_type
+            AND em.relation = c.satisfying_relation
+        WHERE c.object_type = p_object_type
+          AND c.relation = p_relation
+          AND em.excluded_parent_relation IS NOT NULL
+    LOOP
+        FOR v_parent IN
+            SELECT t.subject_type AS parent_type, t.subject_id AS parent_id
+            FROM melange_tuples t
+            WHERE t.object_type = p_object_type
+              AND t.object_id = p_object_id
+              AND t.relation = v_parent_excl.excluded_parent_type
+        LOOP
+            IF subject_has_grant(
+                p_subject_type, p_subject_id,
+                v_parent.parent_type, v_parent.parent_id,
+                v_parent_excl.excluded_parent_relation, p_visited
+            ) THEN
+                RETURN TRUE;
+            END IF;
+        END LOOP;
+    END LOOP;
+
+    IF check_exclusion_intersection_groups_with_visited(
+        p_subject_type, p_subject_id,
+        p_relation, p_object_type, p_object_id,
+        p_visited
+    ) THEN
+        RETURN TRUE;
+    END IF;
+
+    RETURN FALSE;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+
 -- Check exclusion groups that require ALL relations in a group.
 -- For "viewer: writer but not (editor and owner)", this returns TRUE
 -- when the subject has BOTH editor and owner on the object.
@@ -772,6 +1016,152 @@ CREATE OR REPLACE FUNCTION check_exclusion_intersection_groups(
     p_relation TEXT,
     p_object_type TEXT,
     p_object_id TEXT
+) RETURNS BOOLEAN AS $$
+DECLARE
+    v_group RECORD;
+    v_group_satisfied BOOLEAN;
+    v_check RECORD;
+    v_has_direct BOOLEAN;
+    v_parent RECORD;
+BEGIN
+    SELECT EXISTS (
+        SELECT 1
+        FROM melange_model m
+        WHERE m.object_type = p_object_type
+          AND m.relation = p_relation
+          AND m.subject_type IS NOT NULL
+          AND m.subject_relation IS NULL
+          AND m.parent_relation IS NULL
+    ) INTO v_has_direct;
+
+    FOR v_group IN
+        SELECT DISTINCT m.rule_group_id
+        FROM melange_relation_closure c
+        JOIN melange_model m
+            ON m.object_type = c.object_type
+            AND m.relation = c.satisfying_relation
+        WHERE c.object_type = p_object_type
+          AND c.relation = p_relation
+          AND m.rule_group_mode = 'exclude_intersection'
+          AND m.rule_group_id IS NOT NULL
+    LOOP
+        v_group_satisfied := TRUE;
+
+        FOR v_check IN
+            SELECT m.check_relation, m.check_excluded_relation, m.check_parent_relation, m.check_parent_type
+            FROM melange_model m
+            WHERE m.object_type = p_object_type
+              AND m.rule_group_id = v_group.rule_group_id
+              AND m.rule_group_mode = 'exclude_intersection'
+              AND (m.check_relation IS NOT NULL OR m.check_parent_relation IS NOT NULL)
+        LOOP
+            IF v_check.check_parent_relation IS NOT NULL THEN
+                v_group_satisfied := FALSE;
+                FOR v_parent IN
+                    SELECT t.subject_type AS parent_type, t.subject_id AS parent_id
+                    FROM melange_tuples t
+                    WHERE t.object_type = p_object_type
+                      AND t.object_id = p_object_id
+                      AND t.relation = v_check.check_parent_type
+                LOOP
+                    IF subject_has_grant(
+                        p_subject_type, p_subject_id,
+                        v_parent.parent_type, v_parent.parent_id,
+                        v_check.check_parent_relation, p_visited
+                    ) THEN
+                        v_group_satisfied := TRUE;
+                        EXIT;
+                    END IF;
+                END LOOP;
+
+                IF NOT v_group_satisfied THEN
+                    EXIT;
+                END IF;
+
+                CONTINUE;
+            END IF;
+
+            IF v_check.check_relation = p_relation THEN
+                IF position('#' in p_subject_id) > 0
+                    AND p_subject_type = p_object_type
+                    AND substring(p_subject_id from 1 for position('#' in p_subject_id) - 1) = p_object_id
+                    AND EXISTS (
+                        SELECT 1
+                        FROM melange_relation_closure c
+                        WHERE c.object_type = p_object_type
+                          AND c.relation = p_relation
+                          AND c.satisfying_relation = substring(p_subject_id from position('#' in p_subject_id) + 1)
+                    ) THEN
+                    v_group_satisfied := TRUE;
+                ELSEIF v_has_direct THEN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM melange_tuples t
+                        WHERE t.subject_type = p_subject_type
+                          AND (t.subject_id = p_subject_id OR t.subject_id = '*')
+                          AND t.object_type = p_object_type
+                          AND t.object_id = p_object_id
+                          AND t.relation = v_check.check_relation
+                    ) THEN
+                        v_group_satisfied := FALSE;
+                        EXIT;
+                    END IF;
+                ELSE
+                    IF NOT subject_has_grant(
+                        p_subject_type, p_subject_id,
+                        p_object_type, p_object_id,
+                        v_check.check_relation, p_visited
+                    ) THEN
+                        v_group_satisfied := FALSE;
+                        EXIT;
+                    END IF;
+                END IF;
+
+                IF v_group_satisfied AND v_check.check_excluded_relation IS NOT NULL THEN
+                    IF check_exclusion(p_subject_type, p_subject_id,
+                                       v_check.check_excluded_relation,
+                                       p_object_type, p_object_id) THEN
+                        v_group_satisfied := FALSE;
+                        EXIT;
+                    END IF;
+                END IF;
+            ELSE
+                IF check_permission(
+                    p_subject_type, p_subject_id,
+                    v_check.check_relation, p_object_type, p_object_id
+                ) = 0 THEN
+                    v_group_satisfied := FALSE;
+                    EXIT;
+                END IF;
+
+                IF v_group_satisfied AND v_check.check_excluded_relation IS NOT NULL THEN
+                    IF check_exclusion(p_subject_type, p_subject_id,
+                                       v_check.check_excluded_relation,
+                                       p_object_type, p_object_id) THEN
+                        v_group_satisfied := FALSE;
+                        EXIT;
+                    END IF;
+                END IF;
+            END IF;
+        END LOOP;
+
+        IF v_group_satisfied THEN
+            RETURN TRUE;
+        END IF;
+    END LOOP;
+
+    RETURN FALSE;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+
+-- Variant of check_exclusion_intersection_groups that threads visited state.
+CREATE OR REPLACE FUNCTION check_exclusion_intersection_groups_with_visited(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_relation TEXT,
+    p_object_type TEXT,
+    p_object_id TEXT,
+    p_visited TEXT[]
 ) RETURNS BOOLEAN AS $$
 DECLARE
     v_group RECORD;
@@ -864,7 +1254,7 @@ BEGIN
                     IF NOT subject_has_grant(
                         p_subject_type, p_subject_id,
                         p_object_type, p_object_id,
-                        v_check.check_relation, ARRAY[]::TEXT[]
+                        v_check.check_relation, p_visited
                     ) THEN
                         v_group_satisfied := FALSE;
                         EXIT;
@@ -872,9 +1262,9 @@ BEGIN
                 END IF;
 
                 IF v_group_satisfied AND v_check.check_excluded_relation IS NOT NULL THEN
-                    IF check_exclusion(p_subject_type, p_subject_id,
-                                       v_check.check_excluded_relation,
-                                       p_object_type, p_object_id) THEN
+                    IF check_exclusion_with_visited(p_subject_type, p_subject_id,
+                                                   v_check.check_excluded_relation,
+                                                   p_object_type, p_object_id, p_visited) THEN
                         v_group_satisfied := FALSE;
                         EXIT;
                     END IF;
@@ -889,9 +1279,9 @@ BEGIN
                 END IF;
 
                 IF v_group_satisfied AND v_check.check_excluded_relation IS NOT NULL THEN
-                    IF check_exclusion(p_subject_type, p_subject_id,
-                                       v_check.check_excluded_relation,
-                                       p_object_type, p_object_id) THEN
+                    IF check_exclusion_with_visited(p_subject_type, p_subject_id,
+                                                   v_check.check_excluded_relation,
+                                                   p_object_type, p_object_id, p_visited) THEN
                         v_group_satisfied := FALSE;
                         EXIT;
                     END IF;
@@ -1038,6 +1428,20 @@ BEGIN
           ON t.object_type = p_object_type
          AND t.object_id = p_object_id
          AND t.relation = am.subject_type  -- KEY: match linking relation, not parent type
+        JOIN melange_model mr
+          ON mr.object_type = p_object_type
+         AND mr.relation = am.subject_type
+         AND mr.subject_type = t.subject_type
+         AND mr.parent_relation IS NULL
+         AND mr.implied_by IS NULL
+         AND (
+             mr.subject_relation IS NULL
+             OR (
+                 position('#' in t.subject_id) > 0
+                 AND substring(t.subject_id from position('#' in t.subject_id) + 1) = mr.subject_relation
+             )
+         )
+         AND (t.subject_id != '*' OR mr.subject_wildcard = TRUE)
         WHERE c.object_type = p_object_type
           AND c.relation = p_relation
     LOOP
@@ -1077,7 +1481,8 @@ CREATE OR REPLACE FUNCTION check_intersection_groups(
     p_subject_id TEXT,
     p_relation TEXT,
     p_object_type TEXT,
-    p_object_id TEXT
+    p_object_id TEXT,
+    p_visited TEXT[] DEFAULT ARRAY[]::TEXT[]
 ) RETURNS BOOLEAN AS $$
 DECLARE
     v_group RECORD;
@@ -1187,19 +1592,20 @@ BEGIN
 
                 -- Check for exclusion on this self-reference check
                 IF v_group_satisfied AND v_check.check_excluded_relation IS NOT NULL THEN
-                    IF check_exclusion(p_subject_type, p_subject_id,
-                                       v_check.check_excluded_relation,
-                                       p_object_type, p_object_id) THEN
+                    IF check_exclusion_with_visited(p_subject_type, p_subject_id,
+                                                   v_check.check_excluded_relation,
+                                                   p_object_type, p_object_id, p_visited) THEN
                         v_group_satisfied := FALSE;
                         EXIT;
                     END IF;
                 END IF;
             ELSE
                 -- Use subject_has_grant to check other relations (supports userset patterns)
-                IF check_permission(
+                IF NOT subject_has_grant(
                     p_subject_type, p_subject_id,
-                    v_check.check_relation, p_object_type, p_object_id
-                ) = 0 THEN
+                    p_object_type, p_object_id,
+                    v_check.check_relation, p_visited
+                ) THEN
                     v_group_satisfied := FALSE;
                     EXIT;  -- No need to check more relations in this group
                 END IF;
@@ -1208,9 +1614,9 @@ BEGIN
                 -- For "writer and (editor but not owner)", when check_relation=editor,
                 -- check_excluded_relation=owner. If subject has owner, they're excluded.
                 IF v_group_satisfied AND v_check.check_excluded_relation IS NOT NULL THEN
-                    IF check_exclusion(p_subject_type, p_subject_id,
-                                       v_check.check_excluded_relation,
-                                       p_object_type, p_object_id) THEN
+                    IF check_exclusion_with_visited(p_subject_type, p_subject_id,
+                                                   v_check.check_excluded_relation,
+                                                   p_object_type, p_object_id, p_visited) THEN
                         v_group_satisfied := FALSE;
                         EXIT;
                     END IF;
@@ -1235,7 +1641,8 @@ CREATE OR REPLACE FUNCTION check_intersection_groups_no_wildcard(
     p_subject_id TEXT,
     p_relation TEXT,
     p_object_type TEXT,
-    p_object_id TEXT
+    p_object_id TEXT,
+    p_visited TEXT[] DEFAULT ARRAY[]::TEXT[]
 ) RETURNS BOOLEAN AS $$
 DECLARE
     v_group RECORD;
@@ -1284,10 +1691,11 @@ BEGIN
                       AND t.object_id = p_object_id
                       AND t.relation = v_check.check_parent_type
                 LOOP
-                    IF check_permission_no_wildcard(
+                    IF subject_has_grant_no_wildcard(
                         p_subject_type, p_subject_id,
-                        v_check.check_parent_relation, v_parent.parent_type, v_parent.parent_id
-                    ) = 1 THEN
+                        v_parent.parent_type, v_parent.parent_id,
+                        v_check.check_parent_relation, p_visited
+                    ) THEN
                         v_group_satisfied := TRUE;
                         EXIT;
                     END IF;
@@ -1328,7 +1736,7 @@ BEGIN
                     IF NOT subject_has_grant_no_wildcard(
                         p_subject_type, p_subject_id,
                         p_object_type, p_object_id,
-                        v_check.check_relation, ARRAY[]::TEXT[]
+                        v_check.check_relation, p_visited
                     ) THEN
                         v_group_satisfied := FALSE;
                         EXIT;
@@ -1336,26 +1744,27 @@ BEGIN
                 END IF;
 
                 IF v_group_satisfied AND v_check.check_excluded_relation IS NOT NULL THEN
-                    IF check_exclusion(p_subject_type, p_subject_id,
-                                       v_check.check_excluded_relation,
-                                       p_object_type, p_object_id) THEN
+                    IF check_exclusion_with_visited(p_subject_type, p_subject_id,
+                                                   v_check.check_excluded_relation,
+                                                   p_object_type, p_object_id, p_visited) THEN
                         v_group_satisfied := FALSE;
                         EXIT;
                     END IF;
                 END IF;
             ELSE
-                IF check_permission_no_wildcard(
+                IF NOT subject_has_grant_no_wildcard(
                     p_subject_type, p_subject_id,
-                    v_check.check_relation, p_object_type, p_object_id
-                ) = 0 THEN
+                    p_object_type, p_object_id,
+                    v_check.check_relation, p_visited
+                ) THEN
                     v_group_satisfied := FALSE;
                     EXIT;
                 END IF;
 
                 IF v_group_satisfied AND v_check.check_excluded_relation IS NOT NULL THEN
-                    IF check_exclusion(p_subject_type, p_subject_id,
-                                       v_check.check_excluded_relation,
-                                       p_object_type, p_object_id) THEN
+                    IF check_exclusion_with_visited(p_subject_type, p_subject_id,
+                                                   v_check.check_excluded_relation,
+                                                   p_object_type, p_object_id, p_visited) THEN
                         v_group_satisfied := FALSE;
                         EXIT;
                     END IF;
@@ -1470,7 +1879,6 @@ BEGIN
               AND NOT (
                   v_self_in_intersection
                   AND m.subject_type IS NOT NULL
-                  AND m.subject_relation IS NULL
                   AND m.implied_by IS NULL
                   AND m.parent_relation IS NULL
               )
@@ -1586,7 +1994,6 @@ BEGIN
               AND NOT (
                   v_self_in_intersection
                   AND m.subject_type IS NOT NULL
-                  AND m.subject_relation IS NULL
                   AND m.implied_by IS NULL
                   AND m.parent_relation IS NULL
               )
@@ -1760,7 +2167,7 @@ BEGIN
                     substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) AS id,
                     substring(t.subject_id from position('#' in t.subject_id) + 1) AS rel
             ) AS split
-            WHERE n.depth < 10
+            WHERE n.depth < 25
               AND position('#' in t.subject_id) > 0
               AND split.rel = ur.subject_relation_satisfying
         ),
@@ -1928,7 +2335,7 @@ BEGIN
                     substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) AS id,
                     substring(t.subject_id from position('#' in t.subject_id) + 1) AS rel
             ) AS split
-            WHERE n.depth < 10
+            WHERE n.depth < 25
               AND position('#' in t.subject_id) > 0
               AND split.rel = ur.subject_relation_satisfying
         ),

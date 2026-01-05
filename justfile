@@ -118,7 +118,7 @@ check: fmt lint test
 # Run all OpenFGA feature tests (uses gotestfmt for pretty output)
 test-openfga:
     cd test && go test -json -count=1 -timeout 5m \
-        -run "TestOpenFGA_" ./openfgatests/... 2>&1 | gotestfmt
+        -run "TestOpenFGA_" ./openfgatests/... 2>&1 | gotestfmt -hide "successful-tests"
 
 # Run OpenFGA tests for a specific feature (e.g., just test-openfga-feature Wildcards)
 test-openfga-feature FEATURE:
@@ -150,7 +150,7 @@ test-openfga-full-check:
     @echo "   Many tests will fail. Use 'just test-openfga' for supported features only."
     @echo ""
     cd test && go test -json -count=1 -timeout 10m \
-        -run "TestOpenFGACheckSuite" ./openfgatests/... 2>&1 | gotestfmt || true
+        -run "TestOpenFGACheckSuite" ./openfgatests/... 2>&1 | gotestfmt -hide "successful-tests" || true
 
 # Install gotestfmt if not already installed
 install-gotestfmt:

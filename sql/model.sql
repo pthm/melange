@@ -1,3 +1,13 @@
+-- Melange type definitions table
+-- Stores all defined types from the FGA schema for validation
+-- This includes types without relations (e.g., "type user")
+--
+-- This file is idempotent and applied by `melange migrate`.
+
+CREATE TABLE IF NOT EXISTS melange_types (
+    object_type VARCHAR NOT NULL PRIMARY KEY
+);
+
 -- Melange authorization model table
 -- Stores parsed FGA schema definitions for permission checking
 --

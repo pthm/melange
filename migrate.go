@@ -131,6 +131,10 @@ func (m *Migrator) MigrateWithTypes(ctx context.Context, types []TypeDefinition)
 		}
 		defer func() { _ = tx.Rollback() }()
 
+		if err := m.applyTypes(ctx, tx, types); err != nil {
+			return err
+		}
+
 		if err := m.applyModels(ctx, tx, models); err != nil {
 			return err
 		}
@@ -147,6 +151,9 @@ func (m *Migrator) MigrateWithTypes(ctx context.Context, types []TypeDefinition)
 	}
 
 	// Fall back to non-transactional (for *sql.Conn)
+	if err := m.applyTypes(ctx, m.db, types); err != nil {
+		return err
+	}
 	if err := m.applyModels(ctx, m.db, models); err != nil {
 		return err
 	}
@@ -154,6 +161,43 @@ func (m *Migrator) MigrateWithTypes(ctx context.Context, types []TypeDefinition)
 		return err
 	}
 	return m.applyUsersetRules(ctx, m.db, usersetRules)
+}
+
+// applyTypes truncates and repopulates the melange_types table.
+// This table stores all defined types for validation purposes.
+func (m *Migrator) applyTypes(ctx context.Context, db Execer, types []TypeDefinition) error {
+	// TRUNCATE is transactional in PostgreSQL
+	_, err := db.ExecContext(ctx, "TRUNCATE melange_types")
+	if err != nil {
+		return fmt.Errorf("truncating melange_types: %w", err)
+	}
+
+	if len(types) == 0 {
+		return nil
+	}
+
+	// Build bulk insert
+	values := make([]string, 0, len(types))
+	args := make([]any, 0, len(types))
+	argIdx := 1
+
+	for _, t := range types {
+		values = append(values, fmt.Sprintf("($%d)", argIdx))
+		args = append(args, t.Name)
+		argIdx++
+	}
+
+	query := fmt.Sprintf(
+		"INSERT INTO melange_types (object_type) VALUES %s",
+		strings.Join(values, ", "),
+	)
+
+	_, err = db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("inserting types: %w", err)
+	}
+
+	return nil
 }
 
 // applyModels truncates and repopulates the melange_model table.

@@ -84,6 +84,7 @@ type Checker struct {
 	decision           Decision
 	useContextDecision bool
 	validateUserset    bool
+	validateRequest    bool
 }
 
 // Option configures a Checker.
@@ -134,6 +135,21 @@ func WithContextDecision() Option {
 func WithUsersetValidation() Option {
 	return func(ch *Checker) {
 		ch.validateUserset = true
+	}
+}
+
+// WithRequestValidation enables validation of check requests before SQL execution.
+// When enabled, Check will verify that:
+// - The object type exists in the authorization model
+// - The relation exists on the object type
+// - The subject type exists in the model
+//
+// Invalid requests return a *ValidationError with the appropriate OpenFGA error code.
+// This provides OpenFGA-compatible error semantics where invalid requests should
+// return errors rather than silently denying access.
+func WithRequestValidation() Option {
+	return func(ch *Checker) {
+		ch.validateRequest = true
 	}
 }
 
@@ -199,6 +215,12 @@ func (c *Checker) Check(ctx context.Context, subject SubjectLike, relation Relat
 		}
 	}
 
+	if c.validateRequest {
+		if err := c.validateCheckRequest(ctx, c.q, subject.FGASubject(), relation.FGARelation(), object.FGAObject()); err != nil {
+			return false, err
+		}
+	}
+
 	// Check cache if available
 	if c.cache != nil {
 		if allowed, cachedErr, found := c.cache.Get(subject.FGASubject(), relation.FGARelation(), object.FGAObject()); found {
@@ -245,6 +267,12 @@ func (c *Checker) CheckWithContextualTuples(
 
 	if c.validateUserset {
 		if err := c.validateUsersetSubject(ctx, c.q, subject.FGASubject()); err != nil {
+			return false, err
+		}
+	}
+
+	if c.validateRequest {
+		if err := c.validateCheckRequest(ctx, c.q, subject.FGASubject(), relation.FGARelation(), object.FGAObject()); err != nil {
 			return false, err
 		}
 	}
@@ -309,6 +337,11 @@ func (c *Checker) mapError(operation string, err error) error {
 			strings.Contains(err.Error(), "list_accessible") {
 			return fmt.Errorf("%w: %v", ErrMissingFunction, err)
 		}
+	case pgResolutionTooComplex:
+		return &ValidationError{
+			Code:    ErrorCodeResolutionTooComplex,
+			Message: "resolution too complex: depth limit exceeded",
+		}
 	}
 
 	return fmt.Errorf("%s: %w", operation, err)
@@ -347,6 +380,145 @@ func (c *Checker) validateUsersetSubject(ctx context.Context, q Querier, subject
 			return fmt.Errorf("userset subject relation %s not defined on %s", rel, subject.Type)
 		}
 		return c.mapError("userset_subject_relation", err)
+	}
+
+	return nil
+}
+
+// validateCheckRequest validates that the check request references valid types and relations.
+// It returns a *ValidationError if the request is invalid.
+//
+// Note: Subject type validation is intentionally relaxed because types defined without
+// relations (e.g., "type employee") don't appear in melange_model. The object type and
+// relation validation is sufficient to catch most invalid requests.
+func (c *Checker) validateCheckRequest(ctx context.Context, q Querier, subject Object, relation Relation, object Object) error {
+	// 1. Verify object type exists in the model
+	var exists int
+	err := q.QueryRowContext(ctx,
+		"SELECT 1 FROM melange_model WHERE object_type = $1 LIMIT 1",
+		object.Type,
+	).Scan(&exists)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return &ValidationError{
+				Code:    ErrorCodeValidation,
+				Message: fmt.Sprintf("type '%s' not found", object.Type),
+			}
+		}
+		return c.mapError("validate_object_type", err)
+	}
+
+	// 2. Verify relation exists on object type
+	err = q.QueryRowContext(ctx,
+		"SELECT 1 FROM melange_model WHERE object_type = $1 AND relation = $2 LIMIT 1",
+		object.Type, relation,
+	).Scan(&exists)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return &ValidationError{
+				Code:    ErrorCodeValidation,
+				Message: fmt.Sprintf("relation '%s' is not a relation on type '%s'", relation, object.Type),
+			}
+		}
+		return c.mapError("validate_relation", err)
+	}
+
+	// 3. Verify subject type is defined in the model
+	// Uses melange_types table which tracks all defined types (including those without relations)
+	err = q.QueryRowContext(ctx,
+		"SELECT 1 FROM melange_types WHERE object_type = $1 LIMIT 1",
+		subject.Type,
+	).Scan(&exists)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return &ValidationError{
+				Code:    ErrorCodeValidation,
+				Message: fmt.Sprintf("type '%s' not found", subject.Type),
+			}
+		}
+		return c.mapError("validate_subject_type", err)
+	}
+
+	return nil
+}
+
+// validateListUsersRequest validates list users requests for object/relation and subject filters.
+func (c *Checker) validateListUsersRequest(ctx context.Context, q Querier, relation Relation, object Object, subjectType ObjectType) error {
+	var exists int
+	err := q.QueryRowContext(ctx,
+		"SELECT 1 FROM melange_model WHERE object_type = $1 LIMIT 1",
+		object.Type,
+	).Scan(&exists)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return &ValidationError{
+				Code:    ErrorCodeValidation,
+				Message: fmt.Sprintf("type '%s' not found", object.Type),
+			}
+		}
+		return c.mapError("validate_object_type", err)
+	}
+
+	err = q.QueryRowContext(ctx,
+		"SELECT 1 FROM melange_model WHERE object_type = $1 AND relation = $2 LIMIT 1",
+		object.Type, relation,
+	).Scan(&exists)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return &ValidationError{
+				Code:    ErrorCodeValidation,
+				Message: fmt.Sprintf("relation '%s' is not a relation on type '%s'", relation, object.Type),
+			}
+		}
+		return c.mapError("validate_relation", err)
+	}
+
+	filter := string(subjectType)
+	if idx := strings.Index(filter, "#"); idx != -1 {
+		baseType := filter[:idx]
+		rel := filter[idx+1:]
+
+		err = q.QueryRowContext(ctx,
+			"SELECT 1 FROM melange_types WHERE object_type = $1 LIMIT 1",
+			baseType,
+		).Scan(&exists)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return &ValidationError{
+					Code:    ErrorCodeValidation,
+					Message: fmt.Sprintf("type '%s' not found", baseType),
+				}
+			}
+			return c.mapError("validate_subject_type", err)
+		}
+
+		err = q.QueryRowContext(ctx,
+			"SELECT 1 FROM melange_model WHERE object_type = $1 AND relation = $2 LIMIT 1",
+			baseType, rel,
+		).Scan(&exists)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return &ValidationError{
+					Code:    ErrorCodeValidation,
+					Message: fmt.Sprintf("relation '%s' is not a relation on type '%s'", rel, baseType),
+				}
+			}
+			return c.mapError("validate_userset_relation", err)
+		}
+	} else {
+		err = q.QueryRowContext(ctx,
+			"SELECT 1 FROM melange_types WHERE object_type = $1 LIMIT 1",
+			subjectType,
+		).Scan(&exists)
+		if err != nil {
+			if err == sql.ErrNoRows {
+				return &ValidationError{
+					Code:    ErrorCodeValidation,
+					Message: fmt.Sprintf("type '%s' not found", subjectType),
+				}
+			}
+			return c.mapError("validate_subject_type", err)
+		}
 	}
 
 	return nil
@@ -405,6 +577,18 @@ func sqlState(err error) string {
 // Uses a recursive CTE to walk the permission graph in a single query,
 // providing 10-50x improvement over N+1 patterns on large datasets.
 func (c *Checker) ListObjects(ctx context.Context, subject SubjectLike, relation RelationLike, objectType ObjectType) ([]string, error) {
+	if c.validateUserset {
+		if err := c.validateUsersetSubject(ctx, c.q, subject.FGASubject()); err != nil {
+			return nil, err
+		}
+	}
+
+	if c.validateRequest {
+		if err := c.validateCheckRequest(ctx, c.q, subject.FGASubject(), relation.FGARelation(), Object{Type: objectType}); err != nil {
+			return nil, err
+		}
+	}
+
 	// Check context decision if enabled
 	if c.useContextDecision {
 		if d := GetDecisionContext(ctx); d == DecisionDeny {
@@ -451,6 +635,18 @@ func (c *Checker) ListObjectsWithContextualTuples(
 ) ([]string, error) {
 	if len(tuples) == 0 {
 		return c.ListObjects(ctx, subject, relation, objectType)
+	}
+
+	if c.validateUserset {
+		if err := c.validateUsersetSubject(ctx, c.q, subject.FGASubject()); err != nil {
+			return nil, err
+		}
+	}
+
+	if c.validateRequest {
+		if err := c.validateCheckRequest(ctx, c.q, subject.FGASubject(), relation.FGARelation(), Object{Type: objectType}); err != nil {
+			return nil, err
+		}
 	}
 
 	// Check context decision if enabled
@@ -514,6 +710,12 @@ func (c *Checker) ListObjectsWithContextualTuples(
 // Uses a recursive CTE to walk the permission graph in a single query,
 // providing 10-50x improvement over N+1 patterns on large datasets.
 func (c *Checker) ListSubjects(ctx context.Context, object ObjectLike, relation RelationLike, subjectType ObjectType) ([]string, error) {
+	if c.validateRequest {
+		if err := c.validateListUsersRequest(ctx, c.q, relation.FGARelation(), object.FGAObject(), subjectType); err != nil {
+			return nil, err
+		}
+	}
+
 	// Check context decision if enabled
 	if c.useContextDecision {
 		if d := GetDecisionContext(ctx); d == DecisionDeny {
@@ -560,6 +762,12 @@ func (c *Checker) ListSubjectsWithContextualTuples(
 ) ([]string, error) {
 	if len(tuples) == 0 {
 		return c.ListSubjects(ctx, object, relation, subjectType)
+	}
+
+	if c.validateRequest {
+		if err := c.validateListUsersRequest(ctx, c.q, relation.FGARelation(), object.FGAObject(), subjectType); err != nil {
+			return nil, err
+		}
 	}
 
 	// Check context decision if enabled
@@ -634,6 +842,7 @@ func (c *Checker) validateContextualTuple(ctx context.Context, tuple ContextualT
 		isUserset = true
 		usersetRelation = subjectID[idx+1:]
 	}
+	isWildcard := subjectID == "*"
 
 	err = c.q.QueryRowContext(ctx,
 		`SELECT 1
@@ -646,8 +855,9 @@ func (c *Checker) validateContextualTuple(ctx context.Context, tuple ContextualT
 		        ($4 AND subject_relation = $5)
 		     OR (NOT $4 AND subject_relation IS NULL)
 		  )
+		  AND (NOT $6 OR subject_wildcard = TRUE)
 		LIMIT 1`,
-		tuple.Object.Type, tuple.Relation, tuple.Subject.Type, isUserset, usersetRelation,
+		tuple.Object.Type, tuple.Relation, tuple.Subject.Type, isUserset, usersetRelation, isWildcard,
 	).Scan(&exists)
 	if err != nil {
 		if err == sql.ErrNoRows {

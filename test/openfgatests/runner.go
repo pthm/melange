@@ -46,8 +46,10 @@ type Stage struct {
 
 // ListObjectsAssertion represents an expected result for ListObjects.
 type ListObjectsAssertion struct {
-	Request     ListObjectsRequest `json:"request"`
-	Expectation []string           `json:"expectation"`
+	Request         ListObjectsRequest      `json:"request"`
+	ContextualTuples []*openfgav1.TupleKey  `json:"contextualTuples"`
+	Expectation     []string                `json:"expectation"`
+	ErrorCode       int                     `json:"errorCode"`
 }
 
 // ListObjectsRequest represents a ListObjects request.
@@ -59,8 +61,10 @@ type ListObjectsRequest struct {
 
 // ListUsersAssertion represents an expected result for ListUsers.
 type ListUsersAssertion struct {
-	Request     ListUsersRequest `json:"request"`
-	Expectation []string         `json:"expectation"`
+	Request         ListUsersRequest         `json:"request"`
+	ContextualTuples []*openfgav1.TupleKey   `json:"contextualTuples"`
+	Expectation     []string                 `json:"expectation"`
+	ErrorCode       int                      `json:"errorCode"`
 }
 
 // ListUsersRequest represents a ListUsers request.
@@ -638,16 +642,22 @@ func RunTest(t *testing.T, _ *Client, tc TestCase) {
 							Type:                 assertion.Request.Type,
 							Relation:             assertion.Request.Relation,
 							User:                 assertion.Request.User,
+							ContextualTuples: &openfgav1.ContextualTupleKeys{
+								TupleKeys: assertion.ContextualTuples,
+							},
 						})
-						require.NoError(t, err)
+						if assertion.ErrorCode == 0 {
+							require.NoError(t, err)
+							// Sort both for comparison
+							got := resp.GetObjects()
+							want := assertion.Expectation
 
-						// Sort both for comparison
-						got := resp.GetObjects()
-						want := assertion.Expectation
-
-						require.ElementsMatch(t, want, got,
-							"listobjects user=%s relation=%s type=%s",
-							assertion.Request.User, assertion.Request.Relation, assertion.Request.Type)
+							require.ElementsMatch(t, want, got,
+								"listobjects user=%s relation=%s type=%s",
+								assertion.Request.User, assertion.Request.Relation, assertion.Request.Type)
+						} else {
+							require.Error(t, err)
+						}
 					})
 				}
 
@@ -681,22 +691,27 @@ func RunTest(t *testing.T, _ *Client, tc TestCase) {
 							},
 							Relation:    assertion.Request.Relation,
 							UserFilters: filters,
+							ContextualTuples: assertion.ContextualTuples,
 						})
-						require.NoError(t, err)
+						if assertion.ErrorCode == 0 {
+							require.NoError(t, err)
 
-						// Extract user strings from response
-						var got []string
-						for _, u := range resp.GetUsers() {
-							if obj := u.GetObject(); obj != nil {
-								got = append(got, obj.GetType()+":"+obj.GetId())
+							// Extract user strings from response
+							var got []string
+							for _, u := range resp.GetUsers() {
+								if obj := u.GetObject(); obj != nil {
+									got = append(got, obj.GetType()+":"+obj.GetId())
+								}
 							}
-						}
 
-						want := assertion.Expectation
-						client.debugUserset(t, objType, objID, assertion.Request.Relation, assertion.Request.Filters)
-						require.ElementsMatch(t, want, got,
-							"listusers object=%s relation=%s filters=%v",
-							assertion.Request.Object, assertion.Request.Relation, assertion.Request.Filters)
+							want := assertion.Expectation
+							client.debugUserset(t, objType, objID, assertion.Request.Relation, assertion.Request.Filters)
+							require.ElementsMatch(t, want, got,
+								"listusers object=%s relation=%s filters=%v",
+								assertion.Request.Object, assertion.Request.Relation, assertion.Request.Filters)
+						} else {
+							require.Error(t, err)
+						}
 					})
 				}
 			})
