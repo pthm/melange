@@ -917,7 +917,7 @@ func (c *Checker) setupContextualTuples(ctx context.Context, q Execer, tuples []
 			relation TEXT NOT NULL,
 			object_type TEXT NOT NULL,
 			object_id TEXT NOT NULL
-		) ON COMMIT DROP
+		)
 	`)
 	if err != nil {
 		return err
