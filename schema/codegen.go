@@ -111,6 +111,15 @@ type CheckFunctionData struct {
 
 	// For recursive (TTU) patterns
 	ParentRelations []ParentRelationData
+
+	// For implied relations that need function calls
+	ImpliedFunctionCalls []ImpliedFunctionCall
+}
+
+// ImpliedFunctionCall represents a function call to a complex implied relation.
+// Used when an implied relation has exclusions and can't use simple tuple lookup.
+type ImpliedFunctionCall struct {
+	FunctionName string // e.g., "check_document_editor"
 }
 
 // ParentRelationData contains data for rendering recursive access checks.
@@ -187,7 +196,21 @@ func buildCheckFunctionData(a RelationAnalysis) (CheckFunctionData, error) {
 		})
 	}
 
+	// Build function calls for complex implied relations
+	data.ImpliedFunctionCalls = buildImpliedFunctionCalls(a)
+
 	return data, nil
+}
+
+// buildImpliedFunctionCalls creates function call data for complex closure relations.
+func buildImpliedFunctionCalls(a RelationAnalysis) []ImpliedFunctionCall {
+	var calls []ImpliedFunctionCall
+	for _, rel := range a.ComplexClosureRelations {
+		calls = append(calls, ImpliedFunctionCall{
+			FunctionName: functionName(a.ObjectType, rel),
+		})
+	}
+	return calls
 }
 
 // DirectCheckData contains data for rendering direct check template.
@@ -200,10 +223,17 @@ type DirectCheckData struct {
 
 // buildDirectCheck renders the direct check SQL fragment.
 func buildDirectCheck(a RelationAnalysis) (string, error) {
-	// Build relation list from satisfying relations
-	relations := a.SatisfyingRelations
-	if len(relations) == 0 {
-		relations = []string{a.Relation}
+	// Build relation list from self + simple closure relations
+	// Complex closure relations are handled via function calls, not tuple lookup
+	relations := []string{a.Relation}
+	relations = append(relations, a.SimpleClosureRelations...)
+
+	// Fallback to satisfying relations only if no partition was computed at all
+	// (for backwards compatibility when closure relations not yet partitioned).
+	// If ComplexClosureRelations is non-empty, the partition was computed and
+	// we should use only the simple relations (even if that's just self).
+	if len(a.SimpleClosureRelations) == 0 && len(a.ComplexClosureRelations) == 0 && len(a.SatisfyingRelations) > 0 {
+		relations = a.SatisfyingRelations
 	}
 
 	relationList := make([]string, len(relations))

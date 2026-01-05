@@ -139,7 +139,7 @@ test-unit:
 # Run integration tests (requires Docker)
 [group('Test')]
 test-integration:
-    cd {{TEST}} && {{GO_TEST}} -v -timeout 5m ./...
+    cd {{TEST}} && {{GO_TEST}} -timeout 5m ./...
 
 # Run benchmarks (requires Docker)
 # Use SCALE to limit to a specific scale: just bench SCALE=1K

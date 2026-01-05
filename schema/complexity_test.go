@@ -87,7 +87,7 @@ func TestRelationFeaturesCanGenerate(t *testing.T) {
 		{
 			name: "with exclusion",
 			f:    RelationFeatures{HasDirect: true, HasExclusion: true},
-			want: false, // Exclusion not yet supported
+			want: true, // Exclusion IS supported (but requires excluded relations to be simply resolvable)
 		},
 		{
 			name: "with intersection",

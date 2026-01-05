@@ -40,6 +40,16 @@ BEGIN
     END IF;
 {{- end}}
 
+{{- range .ImpliedFunctionCalls}}
+
+    -- Implied access path via {{.FunctionName}}
+    IF NOT v_has_access THEN
+        IF {{.FunctionName}}(p_subject_type, p_subject_id, p_object_id, p_visited) = 1 THEN
+            v_has_access := TRUE;
+        END IF;
+    END IF;
+{{- end}}
+
 {{- range .ParentRelations}}
 
     -- Recursive access path via {{.LinkingRelation}}

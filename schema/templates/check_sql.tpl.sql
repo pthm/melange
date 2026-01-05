@@ -13,7 +13,7 @@ p_visited TEXT [] DEFAULT ARRAY []::TEXT []
 ) RETURNS INTEGER AS $$
 BEGIN
 {{- if .HasExclusion}}
-    IF {{.AccessChecks}} THEN
+    IF {{.AccessChecks}}{{range .ImpliedFunctionCalls}} OR {{.FunctionName}}(p_subject_type, p_subject_id, p_object_id, p_visited) = 1{{end}} THEN
         IF {{.ExclusionCheck}} THEN
             RETURN 0;
         ELSE
@@ -23,7 +23,7 @@ BEGIN
         RETURN 0;
     END IF;
 {{- else}}
-    IF {{.AccessChecks}} THEN
+    IF {{.AccessChecks}}{{range .ImpliedFunctionCalls}} OR {{.FunctionName}}(p_subject_type, p_subject_id, p_object_id, p_visited) = 1{{end}} THEN
         RETURN 1;
     ELSE
         RETURN 0;

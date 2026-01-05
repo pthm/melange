@@ -1,5 +1,7 @@
 package schema
 
+import "strings"
+
 // RelationFeatures tracks which features a relation uses.
 // Multiple features can be present and will be composed in generated SQL.
 // For example, a relation with HasDirect, HasUserset, and HasRecursive
@@ -180,6 +182,16 @@ type RelationAnalysis struct {
 	// This is used to enforce type restrictions in generated SQL.
 	// Computed by ComputeCanGenerate.
 	AllowedSubjectTypes []string
+
+	// SimpleClosureRelations contains relations in the closure that can use tuple lookup.
+	// These are relations without exclusions, usersets, recursion, or intersections.
+	// Computed by ComputeCanGenerate.
+	SimpleClosureRelations []string
+
+	// ComplexClosureRelations contains relations in the closure that need function calls.
+	// These are relations with exclusions that are themselves generatable.
+	// Computed by ComputeCanGenerate.
+	ComplexClosureRelations []string
 }
 
 // AnalyzeRelations classifies all relations and gathers data needed for SQL generation.
@@ -425,23 +437,9 @@ func collectIntersectionGroups(r RelationDefinition) []IntersectionGroupInfo {
 	return groups
 }
 
-// ComputeCanGenerate walks the dependency graph and sets CanGenerate on each analysis.
-// A relation can be generated if:
-// 1. Its own features allow generation (CanGenerate() on features returns true)
-// 2. ALL relations in its satisfying closure are simply resolvable
-// 3. If the relation has exclusions, ALL excluded relations must be:
-//   - Simply resolvable (no usersets, TTU, etc.)
-//   - Have no implied relations (closure must be just the relation itself)
-//
-// This ensures that closure-based SQL like `relation IN ('viewer', 'editor', 'owner')`
-// will work correctly - every relation in the list must be resolvable via direct tuple lookup.
-// For exclusions, it ensures a simple tuple lookup is sufficient.
-//
-// This function also:
-// - Propagates HasWildcard: if ANY relation in the closure supports wildcards
-// - Collects AllowedSubjectTypes: union of all subject types from satisfying relations
-func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
-	// Build lookup map: (objectType, relation) -> *RelationAnalysis
+// buildAnalysisLookup creates a nested map for efficient analysis lookups.
+// Returns map[objectType][relation] -> *RelationAnalysis
+func buildAnalysisLookup(analyses []RelationAnalysis) map[string]map[string]*RelationAnalysis {
 	lookup := make(map[string]map[string]*RelationAnalysis)
 	for i := range analyses {
 		a := &analyses[i]
@@ -450,10 +448,118 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		}
 		lookup[a.ObjectType][a.Relation] = a
 	}
+	return lookup
+}
+
+// sortByDependency performs topological sort on analyses based on closure dependencies.
+// Returns sorted analyses where each relation is processed after its dependencies.
+// This ensures that when we check if a closure relation CanGenerate, it has already been evaluated.
+func sortByDependency(analyses []RelationAnalysis) []RelationAnalysis {
+	// Build dependency graph: relation -> relations it depends on (from SatisfyingRelations)
+	deps := make(map[string][]string) // key: "type.relation"
+	for _, a := range analyses {
+		key := a.ObjectType + "." + a.Relation
+		for _, rel := range a.SatisfyingRelations {
+			if rel != a.Relation { // Skip self
+				deps[key] = append(deps[key], a.ObjectType+"."+rel)
+			}
+		}
+	}
+
+	// Build reverse mapping: for each relation, which relations depend on it
+	dependents := make(map[string][]string)
+	for key, depList := range deps {
+		for _, dep := range depList {
+			dependents[dep] = append(dependents[dep], key)
+		}
+	}
+
+	// Start with relations that have no dependencies
+	var queue []string
+	for _, a := range analyses {
+		key := a.ObjectType + "." + a.Relation
+		if len(deps[key]) == 0 {
+			queue = append(queue, key)
+		}
+	}
+
+	// Process in order using Kahn's algorithm
+	var sorted []RelationAnalysis
+	processed := make(map[string]bool)
+	lookup := buildAnalysisLookup(analyses)
+
+	for len(queue) > 0 {
+		key := queue[0]
+		queue = queue[1:]
+
+		if processed[key] {
+			continue
+		}
+		processed[key] = true
+
+		parts := strings.SplitN(key, ".", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		a := lookup[parts[0]][parts[1]]
+		if a == nil {
+			continue
+		}
+		sorted = append(sorted, *a)
+
+		// Add dependents whose dependencies are now satisfied
+		for _, depKey := range dependents[key] {
+			allDepsProcessed := true
+			for _, dep := range deps[depKey] {
+				if !processed[dep] {
+					allDepsProcessed = false
+					break
+				}
+			}
+			if allDepsProcessed && !processed[depKey] {
+				queue = append(queue, depKey)
+			}
+		}
+	}
+
+	// Handle cycles or unprocessed (add remaining)
+	for _, a := range analyses {
+		key := a.ObjectType + "." + a.Relation
+		if !processed[key] {
+			sorted = append(sorted, a)
+		}
+	}
+
+	return sorted
+}
+
+// ComputeCanGenerate walks the dependency graph and sets CanGenerate on each analysis.
+// A relation can be generated if:
+// 1. Its own features allow generation (CanGenerate() on features returns true)
+// 2. ALL relations in its satisfying closure are either:
+//   - Simply resolvable (can use tuple lookup), OR
+//   - Complex but generatable (have exclusions but can generate their own function)
+// 3. If the relation has exclusions, ALL excluded relations must be:
+//   - Simply resolvable (no usersets, TTU, etc.)
+//   - Have no implied relations (closure must be just the relation itself)
+//
+// For relations in the closure that need function calls (have exclusions but are generatable),
+// the generated SQL will call their specialized check function rather than using tuple lookup.
+//
+// This function also:
+// - Propagates HasWildcard: if ANY relation in the closure supports wildcards
+// - Collects AllowedSubjectTypes: union of all subject types from satisfying relations
+// - Partitions closure relations into SimpleClosureRelations and ComplexClosureRelations
+func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
+	// Sort by dependency order first - ensures relations are processed after their dependencies
+	sorted := sortByDependency(analyses)
+
+	// Build lookup map on sorted analyses: (objectType, relation) -> *RelationAnalysis
+	lookup := buildAnalysisLookup(sorted)
 
 	// For each analysis, check if it can be generated and propagate properties
-	for i := range analyses {
-		a := &analyses[i]
+	for i := range sorted {
+		a := &sorted[i]
 
 		// Collect allowed subject types from all satisfying relations
 		// This ensures type restrictions are enforced correctly
@@ -481,12 +587,12 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 			continue
 		}
 
-		// Second check: are ALL satisfying relations compatible with closure lookup?
+		// Second check: partition satisfying relations into simple vs complex
 		// Skip the relation itself - its features are already checked by CanGenerate().
-		// For other relations in the closure, they must be closure-compatible (no
-		// usersets, recursion, exclusions, or intersections that would require
-		// additional permission logic beyond tuple lookup).
+		// - Simple: can use tuple lookup (closure-compatible)
+		// - Complex: has exclusion but is itself generatable (delegate to function)
 		canGenerate := true
+		var simpleRels, complexRels []string
 		for _, rel := range a.SatisfyingRelations {
 			// Skip self - the relation's own features are handled by its generated code
 			if rel == a.Relation {
@@ -498,7 +604,14 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 				canGenerate = false
 				break
 			}
-			if !relAnalysis.Features.IsClosureCompatible() {
+			if relAnalysis.Features.IsClosureCompatible() {
+				// Simple: can use tuple lookup
+				simpleRels = append(simpleRels, rel)
+			} else if relAnalysis.CanGenerate && relAnalysis.Features.HasExclusion {
+				// Complex but generatable: delegate to its check function
+				complexRels = append(complexRels, rel)
+			} else {
+				// Truly incompatible: fall back to generic
 				canGenerate = false
 				break
 			}
@@ -542,8 +655,12 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 			}
 		}
 
+		if canGenerate {
+			a.SimpleClosureRelations = simpleRels
+			a.ComplexClosureRelations = complexRels
+		}
 		a.CanGenerate = canGenerate
 	}
 
-	return analyses
+	return sorted
 }
