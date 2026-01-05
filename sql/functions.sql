@@ -151,24 +151,16 @@ BEGIN
             CASE
                 WHEN position('#' in t.subject_id) > 0
                 THEN substring(t.subject_id from position('#' in t.subject_id) + 1)
-                ELSE m.subject_relation
+                ELSE ur.subject_relation
             END AS required_relation
-        FROM melange_relation_closure c
-        JOIN melange_model m
-            ON m.object_type = p_object_type
-            AND m.relation = c.satisfying_relation
-            AND m.subject_relation IS NOT NULL  -- userset reference rule
-            AND m.parent_relation IS NULL       -- not a parent inheritance rule
+        FROM melange_userset_rules ur
         JOIN melange_tuples t
             ON t.object_type = p_object_type
             AND t.object_id = p_object_id
-            AND t.relation = c.satisfying_relation
-            AND t.subject_type = m.subject_type
-            -- Tuple subject_id must match the model's expected pattern
-            -- Either it has # (userset in tuple) or model defines the relation
-            AND (position('#' in t.subject_id) > 0 OR m.subject_relation IS NOT NULL)
-        WHERE c.object_type = p_object_type
-          AND c.relation = p_relation
+            AND t.relation = ur.tuple_relation
+            AND t.subject_type = ur.subject_type
+        WHERE ur.object_type = p_object_type
+          AND ur.relation = p_relation
     LOOP
         -- Recursively check if subject has the required relation on the group
         IF subject_has_grant(
@@ -356,27 +348,22 @@ BEGIN
             SELECT DISTINCT
                 t.object_type,
                 t.object_id,
-                c.relation
+                ur.relation
             FROM _sg_grants g
-            JOIN melange_model m
-                ON m.subject_type = g.object_type      -- group type matches
-                AND m.subject_relation = g.relation    -- required relation matches
-                AND m.subject_relation IS NOT NULL     -- is a userset rule
-                AND m.parent_relation IS NULL          -- not parent inheritance
+            JOIN melange_userset_rules ur
+                ON ur.subject_type = g.object_type   -- group type matches
+                AND ur.subject_relation = g.relation -- required relation matches
             JOIN melange_tuples t
-                ON t.subject_type = m.subject_type
+                ON t.subject_type = ur.subject_type
                 -- Match userset tuple format: subject_id is "id#relation"
-                AND t.subject_id = g.object_id || '#' || m.subject_relation
-                AND t.object_type = m.object_type
-                AND t.relation = m.relation
-            JOIN melange_relation_closure c
-                ON c.object_type = t.object_type
-                AND c.satisfying_relation = m.relation
+                AND t.subject_id = g.object_id || '#' || ur.subject_relation
+                AND t.object_type = ur.object_type
+                AND t.relation = ur.tuple_relation
             WHERE NOT EXISTS (
                 SELECT 1 FROM _sg_grants existing
                 WHERE existing.object_type = t.object_type
                   AND existing.object_id = t.object_id
-                  AND existing.relation = c.relation
+                  AND existing.relation = ur.relation
             )
         ),
         parent_expansion AS (
@@ -447,47 +434,13 @@ CREATE OR REPLACE FUNCTION check_exclusion(
     p_object_id TEXT
 ) RETURNS BOOLEAN AS $$
 BEGIN
-    RETURN EXISTS (
-        WITH RECURSIVE exclusion_sources AS (
-            -- Base case: the target object itself
-            SELECT
-                p_object_type AS source_type,
-                p_object_id AS source_id,
-                p_excluded_relation AS check_rel,
-                0 AS depth
-
-            UNION ALL
-
-            -- Recursive case: walk up to parent objects if exclusion has parent inheritance
-            SELECT
-                t.subject_type,
-                t.subject_id,
-                m.parent_relation,
-                es.depth + 1
-            FROM exclusion_sources es
-            JOIN melange_tuples t
-                ON t.object_type = es.source_type
-                AND t.object_id = es.source_id
-            JOIN melange_model m
-                ON m.object_type = es.source_type
-                AND m.relation = es.check_rel
-                AND m.parent_relation IS NOT NULL
-                AND m.subject_type = t.relation
-            WHERE es.depth < 10
-        )
-        -- Check if subject has any satisfying relation at any exclusion source
-        SELECT 1
-        FROM exclusion_sources es
-        JOIN melange_relation_closure c
-            ON c.object_type = es.source_type
-            AND c.relation = es.check_rel
-        JOIN melange_tuples t
-            ON t.object_type = es.source_type
-            AND t.object_id = es.source_id
-            AND t.relation = c.satisfying_relation
-        WHERE t.subject_type = p_subject_type
-          AND (t.subject_id = p_subject_id OR t.subject_id = '*')
-        LIMIT 1
+    RETURN subject_has_grant(
+        p_subject_type,
+        p_subject_id,
+        p_object_type,
+        p_object_id,
+        p_excluded_relation,
+        ARRAY[]::TEXT[]
     );
 END;
 $$ LANGUAGE plpgsql STABLE;
@@ -840,13 +793,9 @@ BEGIN
     -- If not, we can use the simpler (faster) check_permission_simple
     SELECT EXISTS (
         SELECT 1
-        FROM melange_relation_closure c
-        JOIN melange_model m
-            ON m.object_type = c.object_type
-            AND m.relation = c.satisfying_relation
-        WHERE c.object_type = p_object_type
-          AND c.relation = p_relation
-          AND m.subject_relation IS NOT NULL
+        FROM melange_userset_rules ur
+        WHERE ur.object_type = p_object_type
+          AND ur.relation = p_relation
     ) INTO v_has_userset;
 
     IF NOT v_has_userset THEN
@@ -970,16 +919,51 @@ BEGIN
         -- For filter group#member, include tuples like group:foo#member or
         -- group:foo#member_c4 when member implies member_c4.
         RETURN QUERY
+        WITH RECURSIVE seed_relations AS (
+            SELECT p_relation AS relation
+            UNION
+            SELECT DISTINCT m.check_relation
+            FROM melange_relation_closure c
+            JOIN melange_model m
+                ON m.object_type = c.object_type
+                AND m.relation = c.satisfying_relation
+            WHERE c.object_type = p_object_type
+              AND c.relation = p_relation
+              AND m.rule_group_mode = 'intersection'
+              AND m.check_relation IS NOT NULL
+        ),
+        userset_nodes AS (
+            SELECT p_object_type AS object_type, p_object_id AS object_id, s.relation AS relation, 0 AS depth
+            FROM seed_relations s
+            UNION
+            SELECT t.subject_type AS object_type, split.id AS object_id, split.rel AS relation, n.depth + 1 AS depth
+            FROM userset_nodes n
+            JOIN melange_relation_closure c
+                ON c.object_type = n.object_type
+                AND c.relation = n.relation
+            JOIN melange_tuples t
+                ON t.object_type = n.object_type
+                AND t.object_id = n.object_id
+                AND t.relation = c.satisfying_relation
+            CROSS JOIN LATERAL (
+                SELECT
+                    substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) AS id,
+                    substring(t.subject_id from position('#' in t.subject_id) + 1) AS rel
+            ) AS split
+            WHERE n.depth < 10
+              AND position('#' in t.subject_id) > 0
+        )
         SELECT DISTINCT
             substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) || '#' || v_filter_relation AS subject_id
-        FROM melange_tuples t
+        FROM userset_nodes n
         JOIN melange_relation_closure c
-            ON c.object_type = p_object_type
-            AND c.relation = p_relation
-            AND c.satisfying_relation = t.relation
-        WHERE t.object_type = p_object_type
-          AND t.object_id = p_object_id
-          AND t.subject_type = v_filter_type
+            ON c.object_type = n.object_type
+            AND c.relation = n.relation
+        JOIN melange_tuples t
+            ON t.object_type = n.object_type
+            AND t.object_id = n.object_id
+            AND t.relation = c.satisfying_relation
+        WHERE t.subject_type = v_filter_type
           AND position('#' in t.subject_id) > 0
           AND (
               substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation
@@ -998,17 +982,53 @@ BEGIN
               p_object_id
           ) = 1;
     ELSE
-        -- Regular subject filter: only subjects tied to this object and relation closure.
+        -- Regular subject filter: only subjects tied to this object and relation closure,
+        -- including userset expansion via related group objects.
         RETURN QUERY
+        WITH RECURSIVE seed_relations AS (
+            SELECT p_relation AS relation
+            UNION
+            SELECT DISTINCT m.check_relation
+            FROM melange_relation_closure c
+            JOIN melange_model m
+                ON m.object_type = c.object_type
+                AND m.relation = c.satisfying_relation
+            WHERE c.object_type = p_object_type
+              AND c.relation = p_relation
+              AND m.rule_group_mode = 'intersection'
+              AND m.check_relation IS NOT NULL
+        ),
+        userset_nodes AS (
+            SELECT p_object_type AS object_type, p_object_id AS object_id, s.relation AS relation, 0 AS depth
+            FROM seed_relations s
+            UNION
+            SELECT t.subject_type AS object_type, split.id AS object_id, split.rel AS relation, n.depth + 1 AS depth
+            FROM userset_nodes n
+            JOIN melange_relation_closure c
+                ON c.object_type = n.object_type
+                AND c.relation = n.relation
+            JOIN melange_tuples t
+                ON t.object_type = n.object_type
+                AND t.object_id = n.object_id
+                AND t.relation = c.satisfying_relation
+            CROSS JOIN LATERAL (
+                SELECT
+                    substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) AS id,
+                    substring(t.subject_id from position('#' in t.subject_id) + 1) AS rel
+            ) AS split
+            WHERE n.depth < 10
+              AND position('#' in t.subject_id) > 0
+        )
         SELECT DISTINCT t.subject_id
-        FROM melange_tuples t
+        FROM userset_nodes n
         JOIN melange_relation_closure c
-            ON c.object_type = p_object_type
-            AND c.relation = p_relation
-            AND c.satisfying_relation = t.relation
-        WHERE t.object_type = p_object_type
-          AND t.object_id = p_object_id
-          AND t.subject_type = v_filter_type
+            ON c.object_type = n.object_type
+            AND c.relation = n.relation
+        JOIN melange_tuples t
+            ON t.object_type = n.object_type
+            AND t.object_id = n.object_id
+            AND t.relation = c.satisfying_relation
+        WHERE t.subject_type = v_filter_type
           AND (position('#' in t.subject_id) = 0 OR t.subject_id = '*')
           AND check_permission(
               v_filter_type,

@@ -59,3 +59,29 @@ CREATE INDEX IF NOT EXISTS idx_melange_model_userset ON melange_model (object_ty
 -- Used to detect if a relation has intersection rules (for fast path optimization)
 CREATE INDEX IF NOT EXISTS idx_melange_model_intersection ON melange_model (object_type, relation)
     WHERE rule_group_mode = 'intersection';
+
+-- Userset rule expansion table
+-- Stores precomputed userset rules with relation closure applied.
+-- Each row indicates that a tuple with tuple_relation can satisfy relation
+-- for object_type when the tuple subject is subject_type#subject_relation.
+CREATE TABLE IF NOT EXISTS melange_userset_rules (
+    id BIGSERIAL PRIMARY KEY,
+    object_type VARCHAR NOT NULL,
+    relation VARCHAR NOT NULL,
+    tuple_relation VARCHAR NOT NULL,
+    subject_type VARCHAR NOT NULL,
+    subject_relation VARCHAR NOT NULL,
+    UNIQUE (object_type, relation, tuple_relation, subject_type, subject_relation)
+);
+
+-- Primary lookup: find userset rules for a specific object type and relation
+CREATE INDEX IF NOT EXISTS idx_melange_userset_rules_lookup
+    ON melange_userset_rules (object_type, relation);
+
+-- Tuple lookup: match tuples by relation and subject type
+CREATE INDEX IF NOT EXISTS idx_melange_userset_rules_tuple
+    ON melange_userset_rules (object_type, tuple_relation, subject_type);
+
+-- Subject lookup: match group relation requirements
+CREATE INDEX IF NOT EXISTS idx_melange_userset_rules_subject
+    ON melange_userset_rules (subject_type, subject_relation);

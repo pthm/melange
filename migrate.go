@@ -119,6 +119,7 @@ func (m *Migrator) MigrateWithTypes(ctx context.Context, types []TypeDefinition)
 
 	models := ToAuthzModels(types)
 	closureRows := ComputeRelationClosure(types)
+	usersetRules := ToUsersetRules(types, closureRows)
 
 	// Use a transaction if the db supports it
 	if txer, ok := m.db.(interface {
@@ -138,6 +139,10 @@ func (m *Migrator) MigrateWithTypes(ctx context.Context, types []TypeDefinition)
 			return err
 		}
 
+		if err := m.applyUsersetRules(ctx, tx, usersetRules); err != nil {
+			return err
+		}
+
 		return tx.Commit()
 	}
 
@@ -145,7 +150,10 @@ func (m *Migrator) MigrateWithTypes(ctx context.Context, types []TypeDefinition)
 	if err := m.applyModels(ctx, m.db, models); err != nil {
 		return err
 	}
-	return m.applyClosure(ctx, m.db, closureRows)
+	if err := m.applyClosure(ctx, m.db, closureRows); err != nil {
+		return err
+	}
+	return m.applyUsersetRules(ctx, m.db, usersetRules)
 }
 
 // applyModels truncates and repopulates the melange_model table.
@@ -231,6 +239,42 @@ func (m *Migrator) applyClosure(ctx context.Context, db Execer, closureRows []Cl
 	_, err = db.ExecContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("inserting closure: %w", err)
+	}
+
+	return nil
+}
+
+// applyUsersetRules truncates and repopulates the melange_userset_rules table.
+// These rows are derived from userset references plus relation closure.
+func (m *Migrator) applyUsersetRules(ctx context.Context, db Execer, rules []UsersetRule) error {
+	_, err := db.ExecContext(ctx, "TRUNCATE melange_userset_rules RESTART IDENTITY")
+	if err != nil {
+		return fmt.Errorf("truncating melange_userset_rules: %w", err)
+	}
+
+	if len(rules) == 0 {
+		return nil
+	}
+
+	var values []string
+	var args []any
+	argIdx := 1
+
+	for _, rule := range rules {
+		values = append(values, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d)",
+			argIdx, argIdx+1, argIdx+2, argIdx+3, argIdx+4))
+		args = append(args, rule.ObjectType, rule.Relation, rule.TupleRelation, rule.SubjectType, rule.SubjectRelation)
+		argIdx += 5
+	}
+
+	query := fmt.Sprintf(
+		"INSERT INTO melange_userset_rules (object_type, relation, tuple_relation, subject_type, subject_relation) VALUES %s",
+		strings.Join(values, ", "),
+	)
+
+	_, err = db.ExecContext(ctx, query, args...)
+	if err != nil {
+		return fmt.Errorf("inserting userset rules: %w", err)
 	}
 
 	return nil

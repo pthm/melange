@@ -1,256 +1,93 @@
 # Melange
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/pthm/melange.svg)](https://pkg.go.dev/github.com/pthm/melange)
+[![Go Report Card](https://goreportcard.com/badge/github.com/pthm/melange)](https://goreportcard.com/report/github.com/pthm/melange)
+
 <img align="right" width="300" src="assets/mascot.png">
 
-Melange is a pure PostgreSQL + Go authorization library inspired by OpenFGA/Zanzibar
-and the rover-app pgfga implementation: https://github.com/rover-app/pgfga
+**Fine-grained authorization for PostgreSQL applications.**
 
-## Overview
+Melange brings [Zanzibar](https://research.google/pubs/pub48190/)-style relationship-based access control directly into your PostgreSQL database. Define authorization schemas using the [OpenFGA DSL](https://openfga.dev/docs/configuration-language), and Melange runs permission checks as efficient SQL queries against your existing data.
 
-Melange provides fine-grained authorization with:
+## Why Melange?
 
-- PostgreSQL functions for permission checks
-- Zero tuple sync (permissions derived from a view over your tables)
-- Optional code generation for type-safe constants
-- Zero runtime dependencies (core library is pure stdlib)
+Traditional authorization systems require syncing your application data to a separate service. Melange takes a different approach: **permissions are derived from views over your existing tables**. This means:
 
-## Module Structure
+- **Always in sync** — No replication lag or eventual consistency
+- **Transaction-aware** — Permission checks see uncommitted changes
+- **Zero runtime deps** — Core library is pure Go stdlib
+- **Single query** — No recursive lookups at runtime
 
-Melange is split into two modules for clean dependency isolation:
+Inspired by [OpenFGA](https://openfga.dev) and built on ideas from [pgFGA](https://github.com/rover-app/pgfga).
 
-| Module                            | Purpose                                | Dependencies   |
-| --------------------------------- | -------------------------------------- | -------------- |
-| `github.com/pthm/melange`         | Core runtime (checker, types, errors)  | stdlib only    |
-| `github.com/pthm/melange/tooling` | Schema parsing, CLI, migration helpers | OpenFGA parser |
+---
 
-**Most applications only import the core module at runtime.** The tooling module
-is used during development (CLI, code generation) or if you need programmatic
-schema parsing.
+> **📚 Full Documentation**
+>
+> Visit **[melange.pthm.dev](https://melange.pthm.dev)** for comprehensive guides, API reference, and examples.
 
-## Requirements
+---
 
-- PostgreSQL database
-- A `.fga` schema file (parsed by CLI or tooling module)
-- A `melange_tuples` view that maps your domain tables into tuples
+## Installation
 
-## Quick Start
-
-1. Create a schema file (`schema.fga`):
-
-```fga
-model
-  schema 1.1
-
-type user
-
-type repository
-  relations
-    define owner: [user]
-    define can_read: owner
-```
-
-2. Create a `melange_tuples` view:
-
-```sql
-CREATE OR REPLACE VIEW melange_tuples AS
-SELECT
-    'user' AS subject_type,
-    user_id::text AS subject_id,
-    'owner' AS relation,
-    'repository' AS object_type,
-    repository_id::text AS object_id
-FROM repository_owners;
-```
-
-3. Apply Melange infrastructure + schema:
+### CLI
 
 ```bash
-melange migrate --db postgres://localhost/mydb --schemas-dir schemas
+go install github.com/pthm/melange/cmd/melange@latest
 ```
 
-4. Generate type-safe Go constants:
+### Library
 
 ```bash
-melange generate --schemas-dir schemas --generate-dir internal/authz --generate-pkg authz
+# Core module (runtime, no external dependencies)
+go get github.com/pthm/melange
+
+# Tooling module (schema parsing, code generation)
+go get github.com/pthm/melange/tooling
 ```
 
-5. Check permissions in Go:
+## Quick Example
 
 ```go
 checker := melange.NewChecker(db)
-ok, err := checker.Check(ctx, authz.User("123"), authz.RelCanRead, authz.Repository("456"))
-if err != nil {
-    return err
-}
+
+// Check if user can read the repository
+ok, err := checker.Check(ctx, user, "can_read", repo)
 if !ok {
     return ErrForbidden
 }
 ```
 
-## Core Concepts
+---
 
-- **Objects**: Both subjects and resources are modeled as objects.
-  - `Object{Type: "user", ID: "123"}`
-- **Relations**: Simple strings (generated constants are optional).
-- **Wildcard**: Use `*` as a subject ID for public access (type:\*).
+## Contributing
 
-## Checker API
+Contributions are welcome! Here's how to get started:
 
-Melange works with `*sql.DB`, `*sql.Tx`, or `*sql.Conn`.
+1. **Fork the repository** and clone locally
+2. **Create a branch** for your changes
+3. **Run tests** with `go test ./...`
+4. **Submit a pull request** with a clear description
 
-```go
-checker := melange.NewChecker(db)
-ok, err := checker.Check(ctx, subject, relation, object)
-ids, err := checker.ListObjects(ctx, subject, relation, objectType)
-```
+Please ensure your code:
 
-## Caching
+- Passes all existing tests
+- Includes tests for new functionality
+- Follows the existing code style
 
-```go
-cache := melange.NewCache(melange.WithTTL(time.Minute))
-checker := melange.NewChecker(db, melange.WithCache(cache))
-```
+For bug reports and feature requests, please [open an issue](https://github.com/pthm/melange/issues).
 
-## Decision Overrides
+---
 
-For tests or admin tools:
+## Resources
 
-```go
-checker := melange.NewChecker(db, melange.WithDecision(melange.DecisionAllow))
-```
+- **[Documentation](https://melange.pthm.dev)** — Guides, API reference, and examples
+- **[OpenFGA](https://openfga.dev)** — The authorization model Melange implements
+- **[Zanzibar Paper](https://research.google/pubs/pub48190/)** — Google's original authorization system
+- **[pgFGA](https://github.com/rover-app/pgfga)** — PostgreSQL FGA implementation that inspired this project
 
-## Error Handling
+---
 
-Sentinel errors:
+## License
 
-- `melange.ErrNoTuplesTable` - melange_tuples view doesn't exist
-- `melange.ErrMissingModel` - melange_model table doesn't exist
-- `melange.ErrEmptyModel` - Model table exists but is empty
-- `melange.ErrInvalidSchema` - Schema parsing failed
-- `melange.ErrMissingFunction` - SQL functions not installed
-
-Helpers:
-
-- `melange.IsNoTuplesTableErr(err)`
-- `melange.IsMissingModelErr(err)`
-- `melange.IsEmptyModelErr(err)`
-- `melange.IsInvalidSchemaErr(err)`
-- `melange.IsMissingFunctionErr(err)`
-
-## Schema Helpers
-
-Query schema definitions to build dynamic UIs or introspect the model:
-
-```go
-types := []melange.TypeDefinition{...} // from tooling.ParseSchema
-
-// Get all unique subject types across the schema
-subjects := melange.SubjectTypes(types)
-// e.g., ["user", "team", "organization"]
-
-// Get subject types for a specific relation
-allowed := melange.RelationSubjects(types, "repository", "owner")
-// e.g., ["user"]  (only users can be owners)
-```
-
-## Programmatic Migration
-
-For programmatic schema loading (without the CLI):
-
-```go
-import "github.com/pthm/melange/tooling"
-
-// Parse and migrate in one step
-err := tooling.Migrate(ctx, db, "schemas")
-
-// Or with more control:
-types, err := tooling.ParseSchema("schemas/schema.fga")
-migrator := melange.NewMigrator(db, "schemas")
-err = migrator.MigrateWithTypes(ctx, types)
-```
-
-The `Migrator` also supports individual steps:
-
-```go
-migrator := melange.NewMigrator(db, "schemas")
-
-// Apply DDL only (tables + functions)
-err := migrator.ApplyDDL(ctx)
-
-// Load schema into model table
-err := migrator.MigrateWithTypes(ctx, types)
-
-// Check current status
-status, err := migrator.GetStatus(ctx)
-// status.SchemaExists, status.ModelCount
-```
-
-## CLI
-
-```
-melange [command] [flags]
-
-Commands:
-  migrate   Apply schema to database
-  generate  Generate Go types from schema
-  validate  Validate schema syntax
-  status    Show current schema status
-```
-
-## Performance
-
-Melange is designed for low-latency permission checks with predictable scaling characteristics. All benchmarks run against PostgreSQL with varying tuple counts.
-
-### Permission Check Latency
-
-| Operation            | 1K Tuples | 10K Tuples | 100K Tuples | 1M Tuples | Scaling  |
-| -------------------- | --------- | ---------- | ----------- | --------- | -------- |
-| Direct Membership    | 426μs     | 397μs      | 384μs       | 428μs     | O(1)     |
-| Inherited Permission | 995μs     | 1.1ms      | 1.4ms       | 3.4ms     | O(log n) |
-| Exclusion Pattern    | 1.8ms     | 3.4ms      | 18ms        | 173ms     | O(n)     |
-| Denied Permission    | 612μs     | 683μs      | 739μs       | 1.2ms     | O(log n) |
-
-**Direct membership checks are constant-time** regardless of tuple count. The ~400μs baseline is dominated by network round-trip latency.
-
-**Inherited permissions** (role hierarchies via `from parent`) scale logarithmically thanks to precomputed transitive closure.
-
-**Exclusion patterns** (`but not`) scale linearly and should be avoided in hot paths for large deployments.
-
-### List Operation Latency
-
-| Operation    | 1K    | 10K   | 100K  | 1M    |
-| ------------ | ----- | ----- | ----- | ----- |
-| ListObjects  | 2.3ms | 23ms  | 192ms | 1.5s  |
-| ListSubjects | 708μs | 6.3ms | 42ms  | 864ms |
-
-List operations scale linearly with tuple count. For large datasets, use application-layer pagination or pre-filter candidates.
-
-### Caching Impact
-
-| Scenario          | Latency | Speedup |
-| ----------------- | ------- | ------- |
-| Without cache     | 980μs   | —       |
-| With cache (warm) | 79ns    | 12,400× |
-
-Enable caching for dramatic performance improvements on repeated checks:
-
-```go
-cache := melange.NewCache(melange.WithTTL(time.Minute))
-checker := melange.NewChecker(db, melange.WithCache(cache))
-```
-
-Recommendations by Scale
-
-| Scale           | Expected Latency | Recommendations                       |
-| --------------- | ---------------- | ------------------------------------- |
-| < 10K tuples    | < 1ms            | No optimization needed                |
-| 10K–100K tuples | 1–5ms            | Enable caching for repeated checks    |
-| 100K–1M tuples  | 5–20ms           | Avoid exclusion patterns in hot paths |
-| > 1M tuples     | 20ms+            | Use caching; paginate list operations |
-
-Memory Overhead
-
-- Check operations: ~1.3KB, 29 allocations per call
-- List operations: ~1–2KB base + result size
-
-Memory allocation in the Go runtime is constant regardless of tuple count—the SQL-based approach keeps Go-side overhead minimal.
+MIT License — see [LICENSE](LICENSE) for details.
