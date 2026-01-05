@@ -21,15 +21,16 @@ type RelationFeatures struct {
 // that all dependency relations are generatable via RelationAnalysis.CanGenerate.
 func (f RelationFeatures) CanGenerate() bool {
 	// We can generate SQL if:
-	// 1. The relation only has Direct, Implied, Wildcard, and/or Exclusion features
-	// 2. No complex features that require JOINs, recursion, etc.
+	// 1. The relation has Direct, Implied, Wildcard, Userset, and/or Exclusion features
+	// 2. No complex features that require recursion or intersection
 	// Note: Exclusion is allowed here, but ComputeCanGenerate will verify that
 	// all excluded relations are simply resolvable before enabling codegen.
-	if f.HasUserset || f.HasRecursive || f.HasIntersection {
+	// Note: Userset is supported via JOIN-based expansion in userset_check.tpl.sql
+	if f.HasRecursive || f.HasIntersection {
 		return false
 	}
-	// Must have at least one access path (direct or implied)
-	return f.HasDirect || f.HasImplied
+	// Must have at least one access path (direct, implied, or userset)
+	return f.HasDirect || f.HasImplied || f.HasUserset
 }
 
 // IsSimplyResolvable returns true if this relation can be fully resolved
@@ -111,6 +112,17 @@ func (f RelationFeatures) String() string {
 type UsersetPattern struct {
 	SubjectType     string // e.g., "group"
 	SubjectRelation string // e.g., "member"
+
+	// SatisfyingRelations contains all relations in the closure of SubjectRelation.
+	// For example, if SubjectRelation="member_c4" and member_c4 is implied by member,
+	// this would contain ["member_c4", "member_c3", "member_c2", "member_c1", "member"].
+	// This is populated by ComputeCanGenerate from the closure data.
+	SatisfyingRelations []string
+
+	// HasWildcard is true if any relation in the closure supports wildcards.
+	// When true, the userset check should match membership tuples with subject_id = '*'.
+	// This is populated by ComputeCanGenerate from the subject relation's features.
+	HasWildcard bool
 }
 
 // ParentRelationInfo represents a "X from Y" pattern (tuple-to-userset).
@@ -581,6 +593,36 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 			}
 		}
 
+		// Populate SatisfyingRelations and HasWildcard for userset patterns from the closure.
+		// For [group#member_c4], we need to look up the closure for group.member_c4
+		// to get all relations that satisfy member_c4 (e.g., member, member_c1, etc.)
+		for i := range a.UsersetPatterns {
+			pattern := &a.UsersetPatterns[i]
+			subjectAnalysis, ok := lookup[pattern.SubjectType][pattern.SubjectRelation]
+			if !ok {
+				// Subject relation not found - use just the relation itself
+				pattern.SatisfyingRelations = []string{pattern.SubjectRelation}
+				continue
+			}
+			// Use the satisfying relations from the subject relation's closure
+			if len(subjectAnalysis.SatisfyingRelations) > 0 {
+				pattern.SatisfyingRelations = subjectAnalysis.SatisfyingRelations
+			} else {
+				// No closure computed - use just the relation itself
+				pattern.SatisfyingRelations = []string{pattern.SubjectRelation}
+			}
+			// Propagate wildcard flag from subject relation
+			// If any relation in the closure supports wildcards, the userset check
+			// needs to match membership tuples with subject_id = '*'
+			for _, rel := range pattern.SatisfyingRelations {
+				relAnalysis, ok := lookup[pattern.SubjectType][rel]
+				if ok && relAnalysis.Features.HasWildcard {
+					pattern.HasWildcard = true
+					break
+				}
+			}
+		}
+
 		// First check: does this relation's features allow generation?
 		if !a.Features.CanGenerate() {
 			a.CanGenerate = false
@@ -650,6 +692,33 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 				// If blocked had implied relations, we'd need: relation IN ('blocked', 'editor', ...)
 				if len(excludedAnalysis.SatisfyingRelations) > 1 {
 					canGenerate = false
+					break
+				}
+			}
+		}
+
+		// Sixth check: if relation has userset patterns, verify ALL relations in each
+		// pattern's closure are suitable for simple codegen (can use tuple lookup).
+		// This ensures the userset JOIN can find membership tuples directly.
+		// For example, [group#member_c4] requires ALL satisfying relations (member_c4,
+		// member_c3, ... member) to be simply resolvable tuple lookups.
+		if canGenerate && a.Features.HasUserset {
+			for _, pattern := range a.UsersetPatterns {
+				for _, rel := range pattern.SatisfyingRelations {
+					relAnalysis, ok := lookup[pattern.SubjectType][rel]
+					if !ok {
+						// Unknown relation - fall back to generic
+						canGenerate = false
+						break
+					}
+					// Each satisfying relation must be resolvable via tuple lookup
+					// (no TTU, userset, intersection, or exclusion)
+					if !relAnalysis.Features.IsClosureCompatible() {
+						canGenerate = false
+						break
+					}
+				}
+				if !canGenerate {
 					break
 				}
 			}

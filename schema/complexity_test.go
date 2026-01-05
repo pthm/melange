@@ -77,7 +77,7 @@ func TestRelationFeaturesCanGenerate(t *testing.T) {
 		{
 			name: "with userset",
 			f:    RelationFeatures{HasDirect: true, HasUserset: true},
-			want: false, // Userset requires JOINs
+			want: true, // Userset IS supported via JOIN-based expansion
 		},
 		{
 			name: "with recursive",
@@ -987,7 +987,7 @@ func TestComputeCanGenerate_MixedModel(t *testing.T) {
 					Name:            "owner",
 					SubjectTypeRefs: []SubjectTypeRef{{Type: "user"}},
 				},
-				// Direct + userset - should NOT be generatable
+				// Direct + userset - IS generatable (userset is now supported)
 				{
 					Name: "editor",
 					SubjectTypeRefs: []SubjectTypeRef{
@@ -1027,9 +1027,9 @@ func TestComputeCanGenerate_MixedModel(t *testing.T) {
 		t.Error("document.owner should be generatable")
 	}
 
-	// editor has userset - not generatable
-	if lookup["editor"].CanGenerate {
-		t.Error("document.editor should NOT be generatable (has userset)")
+	// editor has userset - IS generatable (userset is now supported)
+	if !lookup["editor"].CanGenerate {
+		t.Error("document.editor should be generatable (userset is supported)")
 	}
 
 	// can_delete implied from owner (which is simple) - generatable

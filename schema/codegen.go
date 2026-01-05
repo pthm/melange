@@ -284,6 +284,14 @@ type UsersetCheckData struct {
 	Relation        string
 	SubjectType     string
 	SubjectRelation string
+
+	// SatisfyingRelationsList is a SQL-formatted list of relations that satisfy SubjectRelation.
+	// For example: "'member_c4', 'member_c3', 'member_c2', 'member_c1', 'member'"
+	SatisfyingRelationsList string
+
+	// HasWildcard is true if the subject relation supports wildcards.
+	// When true, the membership check should also match subject_id = '*'.
+	HasWildcard bool
 }
 
 // buildUsersetCheck renders the userset check SQL fragment.
@@ -294,11 +302,26 @@ func buildUsersetCheck(a RelationAnalysis) (string, error) {
 
 	var checks []string
 	for _, pattern := range a.UsersetPatterns {
+		// Build SQL-formatted list of satisfying relations for the subject relation.
+		// For [group#member_c4], if member_c4 is satisfied by member, we generate:
+		// membership.relation IN ('member_c4', 'member_c3', 'member_c2', 'member_c1', 'member')
+		satisfyingRels := pattern.SatisfyingRelations
+		if len(satisfyingRels) == 0 {
+			// Fallback: use just the subject relation itself
+			satisfyingRels = []string{pattern.SubjectRelation}
+		}
+		quotedRels := make([]string, len(satisfyingRels))
+		for i, rel := range satisfyingRels {
+			quotedRels[i] = fmt.Sprintf("'%s'", rel)
+		}
+
 		data := UsersetCheckData{
-			ObjectType:      a.ObjectType,
-			Relation:        a.Relation,
-			SubjectType:     pattern.SubjectType,
-			SubjectRelation: pattern.SubjectRelation,
+			ObjectType:              a.ObjectType,
+			Relation:                a.Relation,
+			SubjectType:             pattern.SubjectType,
+			SubjectRelation:         pattern.SubjectRelation,
+			SatisfyingRelationsList: strings.Join(quotedRels, ", "),
+			HasWildcard:             pattern.HasWildcard,
 		}
 
 		var buf bytes.Buffer
