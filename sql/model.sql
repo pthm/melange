@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS melange_model (
     implied_by VARCHAR,
     parent_relation VARCHAR,
     excluded_relation VARCHAR,
+    subject_wildcard BOOLEAN,
     excluded_parent_relation VARCHAR,
     excluded_parent_type VARCHAR,
     -- New columns for userset references and intersection support

@@ -177,22 +177,22 @@ func (m *Migrator) applyModels(ctx context.Context, db Execer, models []AuthzMod
 
 	// Build bulk insert
 	values := make([]string, 0, len(models))
-	args := make([]any, 0, len(models)*15)
+	args := make([]any, 0, len(models)*16)
 	argIdx := 1
 
 	for _, model := range models {
-		values = append(values, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
-			argIdx, argIdx+1, argIdx+2, argIdx+3, argIdx+4, argIdx+5, argIdx+6, argIdx+7, argIdx+8, argIdx+9, argIdx+10, argIdx+11, argIdx+12, argIdx+13, argIdx+14))
+		values = append(values, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+			argIdx, argIdx+1, argIdx+2, argIdx+3, argIdx+4, argIdx+5, argIdx+6, argIdx+7, argIdx+8, argIdx+9, argIdx+10, argIdx+11, argIdx+12, argIdx+13, argIdx+14, argIdx+15))
 		args = append(args, model.ObjectType, model.Relation,
 			model.SubjectType, model.ImpliedBy, model.ParentRelation, model.ExcludedRelation,
-			model.ExcludedParentRelation, model.ExcludedParentType, model.SubjectRelation, model.RuleGroupID,
-			model.RuleGroupMode, model.CheckRelation, model.CheckExcludedRelation, model.CheckParentRelation,
-			model.CheckParentType)
-		argIdx += 15
+			model.SubjectWildcard, model.ExcludedParentRelation, model.ExcludedParentType, model.SubjectRelation,
+			model.RuleGroupID, model.RuleGroupMode, model.CheckRelation, model.CheckExcludedRelation,
+			model.CheckParentRelation, model.CheckParentType)
+		argIdx += 16
 	}
 
 	query := fmt.Sprintf(
-		"INSERT INTO melange_model (object_type, relation, subject_type, implied_by, parent_relation, excluded_relation, excluded_parent_relation, excluded_parent_type, subject_relation, rule_group_id, rule_group_mode, check_relation, check_excluded_relation, check_parent_relation, check_parent_type) VALUES %s",
+		"INSERT INTO melange_model (object_type, relation, subject_type, implied_by, parent_relation, excluded_relation, subject_wildcard, excluded_parent_relation, excluded_parent_type, subject_relation, rule_group_id, rule_group_mode, check_relation, check_excluded_relation, check_parent_relation, check_parent_type) VALUES %s",
 		strings.Join(values, ", "),
 	)
 

@@ -87,6 +87,7 @@ type AuthzModel struct {
 	ImpliedBy        *string // Implying relation (for role hierarchy)
 	ParentRelation   *string // Parent relation to check (for inheritance)
 	ExcludedRelation *string // Relation to exclude (for "but not" rules)
+	SubjectWildcard  *bool   // Whether wildcard subjects are allowed for SubjectType
 	// Excluded parent relation for tuple-to-userset exclusions.
 	ExcludedParentRelation *string // Parent relation to exclude (for "but not rel from parent")
 	ExcludedParentType     *string // Linking relation for the excluded parent relation
@@ -224,23 +225,6 @@ func ToAuthzModels(types []TypeDefinition) []AuthzModel {
 		transitiveImpliers := computeTransitiveClosure(impliedByGraph)
 
 		for _, r := range t.Relations {
-			// Check if this relation has an intersection that includes itself (This pattern).
-			// For "[user] and writer" on relation "viewer", we don't want a separate
-			// subject_type entry because the intersection check already handles the direct
-			// tuple requirement. Without this skip, the fallthrough after intersection
-			// failure would find the direct tuple and incorrectly grant access.
-			hasThisInIntersection := false
-			for _, group := range r.IntersectionGroups {
-				for _, rel := range group.Relations {
-					if rel == r.Name {
-						hasThisInIntersection = true
-						break
-					}
-				}
-				if hasThisInIntersection {
-					break
-				}
-			}
 
 			// Collect all exclusions for this relation.
 			// For nested exclusions like "(A but not B) but not C", this will be ["B", "C"].
@@ -253,39 +237,41 @@ func ToAuthzModels(types []TypeDefinition) []AuthzModel {
 
 			// Add entries for direct subject types
 			// Use SubjectTypeRefs if available (includes userset relation info),
-			// otherwise fall back to SubjectTypes for backward compatibility
-			// Skip if intersection includes This (self-reference)
-			if !hasThisInIntersection {
-				if len(r.SubjectTypeRefs) > 0 {
-					for _, ref := range r.SubjectTypeRefs {
-						st := ref.Type
-						model := AuthzModel{
-							ObjectType:  t.Name,
-							Relation:    r.Name,
-							SubjectType: &st,
-						}
-						// Set subject_relation for userset references
-						if ref.Relation != "" {
-							sr := ref.Relation
-							model.SubjectRelation = &sr
-						}
-						models = append(models, model)
+			// otherwise fall back to SubjectTypes for backward compatibility.
+			if len(r.SubjectTypeRefs) > 0 {
+				for _, ref := range r.SubjectTypeRefs {
+					st := ref.Type
+					wildcard := ref.Wildcard
+					model := AuthzModel{
+						ObjectType:      t.Name,
+						Relation:        r.Name,
+						SubjectType:     &st,
+						SubjectWildcard: &wildcard,
 					}
-				} else {
-					// Legacy path: use SubjectTypes (no userset info)
-					for _, subjectType := range r.SubjectTypes {
-						// Strip wildcard suffix for storage
-						st := subjectType
-						if len(st) > 2 && st[len(st)-2:] == ":*" {
-							st = st[:len(st)-2]
-						}
-						model := AuthzModel{
-							ObjectType:  t.Name,
-							Relation:    r.Name,
-							SubjectType: &st,
-						}
-						models = append(models, model)
+					// Set subject_relation for userset references
+					if ref.Relation != "" {
+						sr := ref.Relation
+						model.SubjectRelation = &sr
 					}
+					models = append(models, model)
+				}
+			} else {
+				// Legacy path: use SubjectTypes (no userset info)
+				for _, subjectType := range r.SubjectTypes {
+					// Strip wildcard suffix for storage
+					st := subjectType
+					wildcard := false
+					if len(st) > 2 && st[len(st)-2:] == ":*" {
+						wildcard = true
+						st = st[:len(st)-2]
+					}
+					model := AuthzModel{
+						ObjectType:      t.Name,
+						Relation:        r.Name,
+						SubjectType:     &st,
+						SubjectWildcard: &wildcard,
+					}
+					models = append(models, model)
 				}
 			}
 
