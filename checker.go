@@ -886,9 +886,9 @@ func (c *Checker) validateContextualTuple(ctx context.Context, tuple ContextualT
 // prepareContextualTuples sets up a temporary table and view for contextual tuples.
 // The lifecycle depends on the Querier type:
 //
-//  - *sql.DB: Opens a new connection, returns it with cleanup closing the connection
-//  - *sql.Tx: Uses the transaction, cleanup drops temp objects (table persists until tx ends)
-//  - *sql.Conn: Uses the connection, cleanup drops temp objects
+// - *sql.DB: Opens a new connection, returns it with cleanup closing the connection
+// - *sql.Tx: Uses the transaction, cleanup drops temp objects (table persists until tx ends)
+// - *sql.Conn: Uses the connection, cleanup drops temp objects
 //
 // The temporary table (melange_contextual_tuples) is session-scoped, not transaction-scoped.
 // This allows it to persist across transaction boundaries within the same connection,

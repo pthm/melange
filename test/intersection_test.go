@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/pthm/melange"
 	"github.com/pthm/melange/schema"
 	"github.com/pthm/melange/test/testutil"
 	"github.com/pthm/melange/tooling"
@@ -11,7 +12,7 @@ import (
 )
 
 func TestIntersectionParsing(t *testing.T) {
-	schema := `
+	dsl := `
 model
   schema 1.1
 
@@ -24,7 +25,7 @@ type document
     define viewer: writer and editor
 `
 
-	types, err := tooling.ParseSchemaString(schema)
+	types, err := tooling.ParseSchemaString(dsl)
 	require.NoError(t, err)
 	require.Len(t, types, 2) // user, document
 
@@ -84,7 +85,7 @@ type document
 }
 
 func TestIntersectionSQL(t *testing.T) {
-	schema := `
+	dsl := `
 model
   schema 1.1
 
@@ -101,7 +102,7 @@ type document
 	ctx := context.Background()
 
 	// Migrate schema
-	err := tooling.MigrateFromString(ctx, db, schema)
+	err := tooling.MigrateFromString(ctx, db, dsl)
 	require.NoError(t, err)
 
 	// Create tuples view
@@ -204,7 +205,7 @@ type document
 }
 
 func TestIntersectionExclusionInSubtractParsing(t *testing.T) {
-	schema := `
+	dsl := `
 model
   schema 1.1
 
@@ -218,7 +219,7 @@ type document
     define viewer: writer but not (editor and owner)
 `
 
-	types, err := tooling.ParseSchemaString(schema)
+	types, err := tooling.ParseSchemaString(dsl)
 	require.NoError(t, err)
 
 	var viewerRel *schema.RelationDefinition
@@ -335,7 +336,7 @@ type document
 
 	rows, err := db.QueryContext(ctx, `SELECT subject_id FROM list_accessible_subjects('document', '1', 'can_view', 'user') ORDER BY subject_id`)
 	require.NoError(t, err)
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var subjects []string
 	for rows.Next() {

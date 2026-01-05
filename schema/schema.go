@@ -1,3 +1,79 @@
+// Package schema provides OpenFGA schema types and transformation logic for melange.
+//
+// This package contains the core data structures and algorithms for converting
+// OpenFGA authorization models into database-friendly representations. It sits
+// between the tooling package (which parses .fga files) and the runtime checker
+// (which executes permission checks).
+//
+// # Package Responsibilities
+//
+// The schema package handles three critical transformations:
+//
+//  1. Schema representation (TypeDefinition, RelationDefinition) - parsed FGA models
+//  2. Database model generation (ToAuthzModels) - flattening rules for SQL queries
+//  3. Precomputation (ComputeRelationClosure, ToUsersetRules) - optimizing runtime checks
+//
+// # Key Types
+//
+// TypeDefinition represents a parsed object type from an FGA schema. Each type
+// has relations that define permissions and roles. For example:
+//
+//	type repository
+//	  relations
+//	    define owner: [user]
+//	    define can_read: owner or [user]
+//
+// AuthzModel represents a row in the melange_model table. The ToAuthzModels function
+// converts TypeDefinitions into database rows, performing transitive closure of
+// implied-by relationships to support efficient permission checks.
+//
+// ClosureRow represents precomputed transitive relationships in melange_relation_closure.
+// This table eliminates recursive SQL during permission checks by answering "what
+// relations satisfy this relation?" with a simple JOIN.
+//
+// # Migration Workflow
+//
+// The Migrator orchestrates loading schemas into PostgreSQL:
+//
+//  1. ApplyDDL - creates tables and functions (idempotent)
+//  2. Parse schema via tooling package (returns []TypeDefinition)
+//  3. MigrateWithTypes - validates, transforms, and loads data
+//
+// Typical usage:
+//
+//	import "github.com/pthm/melange/tooling"
+//	types, _ := tooling.ParseSchema("schemas/schema.fga")
+//	migrator := schema.NewMigrator(db, "schemas")
+//	err := migrator.MigrateWithTypes(ctx, types)
+//
+// # Code Generation
+//
+// GenerateGo produces type-safe Go constants from schema types. This enables
+// compile-time checking of permission checks:
+//
+//	types, _ := tooling.ParseSchema("schema.fga")
+//	schema.GenerateGo(file, types, schema.DefaultGenerateConfig())
+//
+// Generated code includes ObjectType constants, Relation constants, and
+// constructor functions for creating melange.Object values.
+//
+// # Validation
+//
+// DetectCycles validates schemas before migration. It checks for:
+//  - Implied-by cycles within a type (admin -> owner -> admin)
+//  - Cross-type parent relation cycles
+//  - Allows hierarchical recursion (folder -> parent folder)
+//
+// Invalid schemas are rejected with ErrCyclicSchema before reaching the database.
+//
+// # Relationship to Other Packages
+//
+// The schema package is dependency-free (stdlib only) and imported by both:
+//  - tooling package (adds OpenFGA parser, provides convenience functions)
+//  - root melange package (uses Execer interface but no other types)
+//
+// This layering keeps the core runtime (melange package) lightweight while
+// supporting rich schema manipulation in tooling contexts.
 package schema
 
 // TypeDefinition represents a parsed type from an .fga file.

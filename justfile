@@ -1,46 +1,118 @@
 # Melange - PostgreSQL Authorization Library
 # Run `just` to see available commands
 
+ROOT := "."
+TOOLING := "tooling"
+TEST := "test"
+
+GO_TEST := "go test"
+GO_TEST_JSON := "go test -json -count=1"
+GO_TEST_BENCH_MEM := "go test -bench=. -run=^$ -benchmem"
+
+OPENFGA_PKGS := "./openfgatests/..."
+OPENFGA_TEST_TIMEOUT := "5m"
+OPENFGA_TEST_TIMEOUT_SHORT := "2m"
+OPENFGA_TEST_TIMEOUT_LONG := "10m"
+OPENFGA_BENCH_TIMEOUT := "30m"
+OPENFGA_BENCH_TIMEOUT_SHORT := "10m"
+OPENFGA_BENCH_TIMEOUT_TINY := "5m"
+
 # Default recipe: show help
+[group('General')]
+[doc('Show available commands')]
 default:
     @just --list
 
+# Sync internal module versions (usage: just release-prepare VERSION=1.2.3)
+[group('Release')]
+[doc('Sync internal module versions and tidy go.mod files')]
+release-prepare VERSION:
+    @set -euo pipefail; \
+    if [ -z "{{VERSION}}" ]; then \
+        echo "VERSION is required (e.g. just release-prepare VERSION=1.2.3)"; \
+        exit 1; \
+    fi; \
+    if [ -n "$$(git status --porcelain)" ]; then \
+        echo "Working tree is dirty; commit or stash before syncing versions."; \
+        exit 1; \
+    fi; \
+    cd cmd/melange; \
+    go mod edit -require=github.com/pthm/melange@v{{VERSION}}; \
+    go mod edit -require=github.com/pthm/melange/tooling@v{{VERSION}}; \
+    go mod tidy; \
+    cd ../../tooling; \
+    go mod edit -require=github.com/pthm/melange@v{{VERSION}}; \
+    go mod tidy
+
+# Tag and push module releases (usage: just release VERSION=1.2.3)
+[group('Release')]
+[doc('Create and push module tags for melange, cmd/melange, tooling')]
+release VERSION:
+    @set -euo pipefail; \
+    if [ -z "{{VERSION}}" ]; then \
+        echo "VERSION is required (e.g. just release VERSION=1.2.3)"; \
+        exit 1; \
+    fi; \
+    if [ -n "$$(git status --porcelain)" ]; then \
+        echo "Working tree is dirty; commit or stash before tagging."; \
+        exit 1; \
+    fi; \
+    root_tag="v{{VERSION}}"; \
+    cmd_tag="cmd/melange/v{{VERSION}}"; \
+    tooling_tag="tooling/v{{VERSION}}"; \
+    for tag in "$$root_tag" "$$cmd_tag" "$$tooling_tag"; do \
+        if git rev-parse -q --verify "refs/tags/$$tag" >/dev/null; then \
+            echo "Tag already exists: $$tag"; \
+            exit 1; \
+        fi; \
+        git tag -a "$$tag" -m "$$tag"; \
+    done; \
+    git push origin "$$root_tag" "$$cmd_tag" "$$tooling_tag"
+
+
 # Run all tests (unit + integration)
+[group('Test')]
 test: test-unit test-integration
 
 # Run unit tests only (no database required)
+[group('Test')]
 test-unit:
-    go test -short ./...
-    cd tooling && go test -short ./...
+    for dir in {{ROOT}} {{TOOLING}}; do (cd "$dir" && {{GO_TEST}} -short ./...); done
 
 # Run integration tests (requires Docker)
+[group('Test')]
 test-integration:
-    cd test && go test -v -timeout 5m ./...
+    cd {{TEST}} && {{GO_TEST}} -v -timeout 5m ./...
 
 # Run benchmarks (requires Docker)
 # Use SCALE to limit to a specific scale: just bench SCALE=1K
+[group('Test')]
 bench SCALE="":
-    cd test && go test -bench=. -run=^$ -timeout 30m -benchmem {{ if SCALE != "" { "-bench='/" + SCALE + "'" } else { "" } }}
+    cd {{TEST}} && {{GO_TEST_BENCH_MEM}} -timeout 30m {{ if SCALE != "" { "-bench='/" + SCALE + "'" } else { "" } }}
 
 # Run benchmarks with short output (no sub-benchmarks)
+[group('Test')]
 bench-quick:
-    cd test && go test -bench='BenchmarkCheck/1K' -run=^$ -timeout 10m -benchmem
+    cd {{TEST}} && {{GO_TEST}} -bench='BenchmarkCheck/1K' -run=^$ -timeout 10m -benchmem
 
 # Run benchmarks and save to file
+[group('Test')]
 bench-save FILE="benchmark_results.txt":
-    cd test && go test -bench=. -run=^$ -timeout 30m -benchmem | tee {{FILE}}
+    cd {{TEST}} && {{GO_TEST_BENCH_MEM}} -timeout 30m | tee {{FILE}}
 
 # Run tests with race detection
+[group('Test')]
 test-race:
-    go test -race -short ./...
-    cd tooling && go test -race -short ./...
-    cd test && go test -race -timeout 5m ./...
+    for dir in {{ROOT}} {{TOOLING}}; do (cd "$dir" && {{GO_TEST}} -race -short ./...); done
+    cd {{TEST}} && {{GO_TEST}} -race -timeout 5m ./...
 
 # Build the CLI
+[group('Build')]
 build:
     go build -o bin/melange ./cmd/melange
 
 # Install the CLI locally
+[group('Build')]
 install:
     go install ./cmd/melange
 
@@ -49,66 +121,72 @@ install:
 # =============================================================================
 
 # Format all code (Go + SQL)
+[group('Lint')]
 fmt: fmt-go fmt-sql
 
 # Format Go code with gofumpt
+[group('Lint')]
 fmt-go:
-    gofumpt -w .
-    cd tooling && gofumpt -w .
-    cd test && gofumpt -w .
+    for dir in {{ROOT}} {{TOOLING}} {{TEST}}; do (cd "$dir" && gofumpt -w .); done
 
 # Format SQL files with sqruff
+[group('Lint')]
 fmt-sql:
     mise exec -- sqruff fix sql/
 
 # Lint all code (Go + SQL)
+[group('Lint')]
 lint: lint-go lint-sql
 
 # Lint Go code with golangci-lint
+[group('Lint')]
 lint-go:
-    golangci-lint run ./...
-    cd tooling && golangci-lint run ./...
-    cd test && golangci-lint run ./...
+    for dir in {{ROOT}} {{TOOLING}} {{TEST}}; do (cd "$dir" && golangci-lint run ./...); done
 
 # Lint SQL files with sqruff
+[group('Lint')]
 lint-sql:
     mise exec -- sqruff lint sql/
 
 # Install linting and formatting tools
+[group('Lint')]
 install-tools:
     go install tool
     mise install
 
 # Run go vet on all packages (included in lint-go via golangci-lint)
+[group('Lint')]
 vet:
-    go vet ./...
-    cd tooling && go vet ./...
-    cd test && go vet ./...
+    for dir in {{ROOT}} {{TOOLING}} {{TEST}}; do (cd "$dir" && go vet ./...); done
 
 # Tidy all go.mod files
+[group('Lint')]
 tidy:
-    go mod tidy
-    cd tooling && go mod tidy
-    cd test && go mod tidy
+    for dir in {{ROOT}} {{TOOLING}} {{TEST}}; do (cd "$dir" && go mod tidy); done
 
 # Generate test authz package from schema
+[group('Generate')]
 generate:
-    cd test && go test -run TestDB_Integration -timeout 2m -v
+    cd {{TEST}} && {{GO_TEST}} -run TestDB_Integration -timeout 2m -v
 
 # Validate the test schema
+[group('Generate')]
 validate:
-    ./bin/melange validate --schemas-dir test/testutil/testdata
+    ./bin/melange validate --schemas-dir {{TEST}}/testutil/testdata
 
 # Clean build artifacts
+[group('Build')]
 clean:
     rm -rf bin/
     go clean ./...
 
 # Run Hugo docs dev server
+[group('Docs')]
 docs-dev:
     cd docs && git submodule update --init --recursive && hugo server
 
 # Run all checks (fmt, lint, test)
+[group('Test')]
 check: fmt lint test
 
 # =============================================================================
@@ -116,43 +194,51 @@ check: fmt lint test
 # =============================================================================
 
 # Run all OpenFGA feature tests (uses gotestfmt for pretty output)
+[group('OpenFGA Test')]
 test-openfga:
-    cd test && go test -json -count=1 -timeout 5m \
-        -run "TestOpenFGA_" ./openfgatests/... 2>&1 | gotestfmt -hide "successful-tests"
+    cd {{TEST}} && {{GO_TEST_JSON}} -timeout {{OPENFGA_TEST_TIMEOUT}} \
+        -run "TestOpenFGA_" {{OPENFGA_PKGS}} 2>&1 | gotestfmt -hide "successful-tests"
 
 # Run OpenFGA tests for a specific feature (e.g., just test-openfga-feature Wildcards)
+[group('OpenFGA Test')]
 test-openfga-feature FEATURE:
-    cd test && go test -json -count=1 -timeout 2m \
-        -run "TestOpenFGA_{{FEATURE}}" ./openfgatests/... 2>&1 | gotestfmt
+    cd {{TEST}} && {{GO_TEST_JSON}} -timeout {{OPENFGA_TEST_TIMEOUT_SHORT}} \
+        -run "TestOpenFGA_{{FEATURE}}" {{OPENFGA_PKGS}} 2>&1 | gotestfmt
 
 # Run a single OpenFGA test by name (e.g., just test-openfga-name wildcard_direct)
+[group('OpenFGA Test')]
 test-openfga-name NAME:
-    cd test && OPENFGA_TEST_NAME="{{NAME}}" go test -v -count=1 -timeout 2m \
-        -run "TestOpenFGAByName" ./openfgatests/...
+    cd {{TEST}} && OPENFGA_TEST_NAME="{{NAME}}" {{GO_TEST}} -v -count=1 -timeout {{OPENFGA_TEST_TIMEOUT_SHORT}} \
+        -run "TestOpenFGAByName" {{OPENFGA_PKGS}}
 
 # Run OpenFGA tests matching a regex pattern (e.g., just test-openfga-pattern "^wildcard")
+[group('OpenFGA Test')]
 test-openfga-pattern PATTERN:
-    cd test && OPENFGA_TEST_PATTERN="{{PATTERN}}" go test -v -count=1 -timeout 5m \
-        -run "TestOpenFGAByPattern" ./openfgatests/...
+    cd {{TEST}} && OPENFGA_TEST_PATTERN="{{PATTERN}}" {{GO_TEST}} -v -count=1 -timeout {{OPENFGA_TEST_TIMEOUT}} \
+        -run "TestOpenFGAByPattern" {{OPENFGA_PKGS}}
 
 # List all available OpenFGA test names
+[group('OpenFGA Test')]
 test-openfga-list:
-    cd test && go test -v -count=1 -run "TestOpenFGAListAvailableTests" ./openfgatests/...
+    cd {{TEST}} && {{GO_TEST}} -v -count=1 -run "TestOpenFGAListAvailableTests" {{OPENFGA_PKGS}}
 
 # Run OpenFGA tests in verbose mode (without gotestfmt)
+[group('OpenFGA Test')]
 test-openfga-verbose:
-    cd test && go test -v -count=1 -timeout 5m \
-        -run "TestOpenFGA_" ./openfgatests/...
+    cd {{TEST}} && {{GO_TEST}} -v -count=1 -timeout {{OPENFGA_TEST_TIMEOUT}} \
+        -run "TestOpenFGA_" {{OPENFGA_PKGS}}
 
 # Run the full OpenFGA check suite (WARNING: includes unsupported features, many will fail)
+[group('OpenFGA Test')]
 test-openfga-full-check:
     @echo "⚠️  Running FULL OpenFGA check suite - this includes unsupported features!"
     @echo "   Many tests will fail. Use 'just test-openfga' for supported features only."
     @echo ""
-    cd test && go test -json -count=1 -timeout 10m \
-        -run "TestOpenFGACheckSuite" ./openfgatests/... 2>&1 | gotestfmt -hide "successful-tests" || true
+    cd {{TEST}} && {{GO_TEST_JSON}} -timeout {{OPENFGA_TEST_TIMEOUT_LONG}} \
+        -run "TestOpenFGACheckSuite" {{OPENFGA_PKGS}} 2>&1 | gotestfmt -hide "successful-tests" || true
 
 # Install gotestfmt if not already installed
+[group('OpenFGA Test')]
 install-gotestfmt:
     go install github.com/gotesttools/gotestfmt/v2/cmd/gotestfmt@latest
 
@@ -161,53 +247,65 @@ install-gotestfmt:
 # =============================================================================
 
 # Run all OpenFGA benchmarks
+[group('OpenFGA Bench')]
 bench-openfga:
-    cd test && go test -bench="BenchmarkOpenFGA_All" -run='^$$' -timeout 30m -benchmem ./openfgatests/...
+    cd {{TEST}} && {{GO_TEST}} -bench="BenchmarkOpenFGA_All" -run='^$' -timeout {{OPENFGA_BENCH_TIMEOUT}} -benchmem {{OPENFGA_PKGS}}
 
 # Run OpenFGA benchmarks for a specific category (e.g., just bench-openfga-category DirectAssignment)
+[group('OpenFGA Bench')]
 bench-openfga-category CATEGORY:
-    cd test && go test -bench="BenchmarkOpenFGA_{{CATEGORY}}" -run='^$$' -timeout 10m -benchmem ./openfgatests/...
+    cd {{TEST}} && {{GO_TEST}} -bench="BenchmarkOpenFGA_{{CATEGORY}}" -run='^$' -timeout {{OPENFGA_BENCH_TIMEOUT_SHORT}} -benchmem {{OPENFGA_PKGS}}
 
 # Run OpenFGA benchmarks by pattern (e.g., just bench-openfga-pattern "^wildcard")
+[group('OpenFGA Bench')]
 bench-openfga-pattern PATTERN:
-    cd test && OPENFGA_BENCH_PATTERN="{{PATTERN}}" go test -bench="BenchmarkOpenFGAByPattern" -run='^$$' -timeout 10m -benchmem ./openfgatests/...
+    cd {{TEST}} && OPENFGA_BENCH_PATTERN="{{PATTERN}}" {{GO_TEST}} -bench="BenchmarkOpenFGAByPattern" -run='^$' -timeout {{OPENFGA_BENCH_TIMEOUT_SHORT}} -benchmem {{OPENFGA_PKGS}}
 
 # Run OpenFGA benchmark for a specific test by name (e.g., just bench-openfga-name wildcard_direct)
+[group('OpenFGA Bench')]
 bench-openfga-name NAME:
-    cd test && OPENFGA_BENCH_NAME="{{NAME}}" go test -bench="BenchmarkOpenFGAByName" -run='^$$' -timeout 5m -benchmem ./openfgatests/...
+    cd {{TEST}} && OPENFGA_BENCH_NAME="{{NAME}}" {{GO_TEST}} -bench="BenchmarkOpenFGAByName" -run='^$' -timeout {{OPENFGA_BENCH_TIMEOUT_TINY}} -benchmem {{OPENFGA_PKGS}}
 
 # Run OpenFGA checks-only benchmarks (isolates Check performance from List operations)
+[group('OpenFGA Bench')]
 bench-openfga-checks:
-    cd test && go test -bench="BenchmarkOpenFGA_ChecksOnly_All" -run='^$$' -timeout 30m -benchmem ./openfgatests/...
+    cd {{TEST}} && {{GO_TEST}} -bench="BenchmarkOpenFGA_ChecksOnly_All" -run='^$' -timeout {{OPENFGA_BENCH_TIMEOUT}} -benchmem {{OPENFGA_PKGS}}
 
 # Run OpenFGA benchmarks organized by category
+[group('OpenFGA Bench')]
 bench-openfga-by-category:
-    cd test && go test -bench="BenchmarkOpenFGA_ByCategory" -run='^$$' -timeout 30m -benchmem ./openfgatests/...
+    cd {{TEST}} && {{GO_TEST}} -bench="BenchmarkOpenFGA_ByCategory" -run='^$' -timeout {{OPENFGA_BENCH_TIMEOUT}} -benchmem {{OPENFGA_PKGS}}
 
 # Run OpenFGA benchmarks and save results to file
+[group('OpenFGA Bench')]
 bench-openfga-save FILE="openfga_benchmark_results.txt":
-    cd test && go test -bench="BenchmarkOpenFGA_All" -run='^$$' -timeout 30m -benchmem ./openfgatests/... | tee {{FILE}}
+    cd {{TEST}} && {{GO_TEST}} -bench="BenchmarkOpenFGA_All" -run='^$' -timeout {{OPENFGA_BENCH_TIMEOUT}} -benchmem {{OPENFGA_PKGS}} | tee {{FILE}}
 
 # =============================================================================
 # OpenFGA Test Inspection
 # =============================================================================
 
 # Build the dumptest utility
+[group('OpenFGA Inspect')]
 build-dumptest:
-    cd test && go build -o ../bin/dumptest ./cmd/dumptest
+    cd {{TEST}} && go build -o ../bin/dumptest ./cmd/dumptest
 
 # List all available OpenFGA tests (fast, no database required)
+[group('OpenFGA Inspect')]
 dump-openfga-list: build-dumptest
     ./bin/dumptest
 
 # Dump a specific OpenFGA test by name (e.g., just dump-openfga wildcard_direct)
+[group('OpenFGA Inspect')]
 dump-openfga NAME: build-dumptest
     ./bin/dumptest "{{NAME}}"
 
 # Dump OpenFGA tests matching a regex pattern (e.g., just dump-openfga-pattern "^userset")
+[group('OpenFGA Inspect')]
 dump-openfga-pattern PATTERN: build-dumptest
     ./bin/dumptest -pattern "{{PATTERN}}"
 
 # Dump all OpenFGA tests (warning: very long output)
+[group('OpenFGA Inspect')]
 dump-openfga-all: build-dumptest
     ./bin/dumptest -all

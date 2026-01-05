@@ -11,7 +11,7 @@ import (
 )
 
 func TestSubtractDifferenceExclusionParsing(t *testing.T) {
-	schema := `
+	dsl := `
 model
   schema 1.1
 
@@ -25,7 +25,7 @@ type document
     define viewer: writer but not (editor but not owner)
 `
 
-	types, err := tooling.ParseSchemaString(schema)
+	types, err := tooling.ParseSchemaString(dsl)
 	require.NoError(t, err)
 
 	var viewerRel *schema.RelationDefinition
@@ -48,7 +48,7 @@ type document
 }
 
 func TestSubtractDifferenceExclusionSQL(t *testing.T) {
-	schema := `
+	dsl := `
 model
   schema 1.1
 
@@ -65,7 +65,7 @@ type document
 	db := testutil.EmptyDB(t)
 	ctx := context.Background()
 
-	err := tooling.MigrateFromString(ctx, db, schema)
+	err := tooling.MigrateFromString(ctx, db, dsl)
 	require.NoError(t, err)
 
 	_, err = db.ExecContext(ctx, `
