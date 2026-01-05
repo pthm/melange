@@ -19,21 +19,43 @@ type RelationFeatures struct {
 // that all dependency relations are generatable via RelationAnalysis.CanGenerate.
 func (f RelationFeatures) CanGenerate() bool {
 	// We can generate SQL if:
-	// 1. The relation only has Direct, Implied, and/or Wildcard features
+	// 1. The relation only has Direct, Implied, Wildcard, and/or Exclusion features
 	// 2. No complex features that require JOINs, recursion, etc.
-	if f.HasUserset || f.HasRecursive || f.HasExclusion || f.HasIntersection {
+	// Note: Exclusion is allowed here, but ComputeCanGenerate will verify that
+	// all excluded relations are simply resolvable before enabling codegen.
+	if f.HasUserset || f.HasRecursive || f.HasIntersection {
 		return false
 	}
 	// Must have at least one access path (direct or implied)
 	return f.HasDirect || f.HasImplied
 }
 
-// IsSimplyResolvable returns true if this relation can be resolved
-// with a simple tuple lookup (no userset JOINs, recursion, etc.).
-// This is used to check if all relations in a closure are compatible
-// with simple closure-based SQL generation.
+// IsSimplyResolvable returns true if this relation can be fully resolved
+// with a simple tuple lookup (no userset JOINs, recursion, exclusions, etc.).
+// This is used to check if excluded relations can be handled with a simple
+// EXISTS check, since exclusions on excluded relations would require full
+// permission resolution.
 func (f RelationFeatures) IsSimplyResolvable() bool {
 	// Can use simple tuple lookup only if no complex features
+	return !f.HasUserset && !f.HasRecursive && !f.HasExclusion && !f.HasIntersection
+}
+
+// IsClosureCompatible returns true if this relation can participate in a
+// closure-based tuple lookup (relation IN ('a', 'b', 'c')) WITHOUT additional
+// permission logic.
+//
+// This returns false for relations with exclusions because when a relation A
+// implies relation B (e.g., can_view: viewer), and B has an exclusion
+// (e.g., viewer: [user] but not blocked), checking A requires applying B's
+// exclusion. A simple closure lookup won't do this.
+//
+// Note: A relation can still generate code for ITSELF even if it has an
+// exclusion - its generated function handles the exclusion. But it can't
+// be part of another relation's closure lookup.
+func (f RelationFeatures) IsClosureCompatible() bool {
+	// Usersets require JOINs, recursive requires function calls
+	// Exclusions require the exclusion check to be applied
+	// Intersections require AND logic
 	return !f.HasUserset && !f.HasRecursive && !f.HasExclusion && !f.HasIntersection
 }
 
@@ -135,7 +157,12 @@ type RelationAnalysis struct {
 	SatisfyingRelations []string // Relations that satisfy this one (e.g., ["viewer", "editor", "owner"])
 
 	// For Exclusion patterns
-	ExcludedRelations []string // Relations to exclude (for "but not" patterns)
+	ExcludedRelations []string // Relations to exclude (for simple "but not X" patterns)
+
+	// HasComplexExclusion is true if the relation has exclusions that can't be
+	// handled by simple tuple lookup (TTU exclusions or intersection exclusions).
+	// When true, the relation must fall back to generic for exclusion handling.
+	HasComplexExclusion bool
 
 	// For Userset patterns
 	UsersetPatterns []UsersetPattern // [group#member] patterns
@@ -213,6 +240,10 @@ func analyzeRelation(
 
 	// Collect excluded relations
 	analysis.ExcludedRelations = collectExcludedRelations(r)
+
+	// Check for complex exclusions (TTU or intersection exclusions)
+	// These require generic handling, simple codegen can't handle them
+	analysis.HasComplexExclusion = len(r.ExcludedParentRelations) > 0 || len(r.ExcludedIntersectionGroups) > 0
 
 	// Collect intersection groups
 	analysis.IntersectionGroups = collectIntersectionGroups(r)
@@ -398,9 +429,13 @@ func collectIntersectionGroups(r RelationDefinition) []IntersectionGroupInfo {
 // A relation can be generated if:
 // 1. Its own features allow generation (CanGenerate() on features returns true)
 // 2. ALL relations in its satisfying closure are simply resolvable
+// 3. If the relation has exclusions, ALL excluded relations must be:
+//   - Simply resolvable (no usersets, TTU, etc.)
+//   - Have no implied relations (closure must be just the relation itself)
 //
 // This ensures that closure-based SQL like `relation IN ('viewer', 'editor', 'owner')`
 // will work correctly - every relation in the list must be resolvable via direct tuple lookup.
+// For exclusions, it ensures a simple tuple lookup is sufficient.
 //
 // This function also:
 // - Propagates HasWildcard: if ANY relation in the closure supports wildcards
@@ -446,16 +481,24 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 			continue
 		}
 
-		// Second check: are ALL satisfying relations simply resolvable?
+		// Second check: are ALL satisfying relations compatible with closure lookup?
+		// Skip the relation itself - its features are already checked by CanGenerate().
+		// For other relations in the closure, they must be closure-compatible (no
+		// usersets, recursion, exclusions, or intersections that would require
+		// additional permission logic beyond tuple lookup).
 		canGenerate := true
 		for _, rel := range a.SatisfyingRelations {
+			// Skip self - the relation's own features are handled by its generated code
+			if rel == a.Relation {
+				continue
+			}
 			relAnalysis, ok := lookup[a.ObjectType][rel]
 			if !ok {
 				// Unknown relation - shouldn't happen with valid closure, but be safe
 				canGenerate = false
 				break
 			}
-			if !relAnalysis.Features.IsSimplyResolvable() {
+			if !relAnalysis.Features.IsClosureCompatible() {
 				canGenerate = false
 				break
 			}
@@ -465,6 +508,38 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		// (relations with no direct types in closure fall back to generic)
 		if len(a.AllowedSubjectTypes) == 0 {
 			canGenerate = false
+		}
+
+		// Fourth check: if relation has complex exclusions (TTU or intersection),
+		// we can't generate - these require the generic implementation.
+		if canGenerate && a.HasComplexExclusion {
+			canGenerate = false
+		}
+
+		// Fifth check: if relation has simple exclusions, verify all excluded relations
+		// are suitable for simple codegen (simply resolvable and no implied relations).
+		// This ensures the exclusion check can be a direct tuple lookup.
+		if canGenerate && a.Features.HasExclusion {
+			for _, excludedRel := range a.ExcludedRelations {
+				excludedAnalysis, ok := lookup[a.ObjectType][excludedRel]
+				if !ok {
+					// Unknown excluded relation - fall back to generic
+					canGenerate = false
+					break
+				}
+				// Excluded relation must be simply resolvable
+				if !excludedAnalysis.Features.IsSimplyResolvable() {
+					canGenerate = false
+					break
+				}
+				// Excluded relation must not have implied relations (closure must be just itself)
+				// because our exclusion template does a direct lookup: relation = 'blocked'
+				// If blocked had implied relations, we'd need: relation IN ('blocked', 'editor', ...)
+				if len(excludedAnalysis.SatisfyingRelations) > 1 {
+					canGenerate = false
+					break
+				}
+			}
 		}
 
 		a.CanGenerate = canGenerate
