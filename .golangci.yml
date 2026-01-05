@@ -1,0 +1,55 @@
+# golangci-lint configuration
+# Run: golangci-lint run ./...
+
+version: "2"
+
+run:
+  timeout: 5m
+  modules-download-mode: readonly
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gocritic
+    - misspell
+    - prealloc
+    - unconvert
+    - unparam
+
+formatters:
+  enable:
+    - gofumpt
+
+linters-settings:
+  gocritic:
+    enabled-tags:
+      - diagnostic
+      - style
+      - performance
+    disabled-checks:
+      - hugeParam
+      - rangeValCopy
+  misspell:
+    locale: US
+  prealloc:
+    simple: true
+    for-loops: true
+
+formatters-settings:
+  gofumpt:
+    extra-rules: true
+
+issues:
+  exclude-rules:
+    # Allow unchecked errors in tests
+    - path: _test\.go
+      linters:
+        - errcheck
+    # Allow unused parameters in test helpers
+    - path: test/
+      linters:
+        - unparam

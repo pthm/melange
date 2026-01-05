@@ -1,0 +1,47 @@
+# mise.toml - Development tool configuration
+# Install tools with: mise install
+# See: https://mise.jdx.dev/
+[settings]
+auto_install = true
+experimental = true
+
+[tools]
+# SQL linter/formatter (from GitHub releases via ubi)
+"ubi:quarylabs/sqruff" = "latest"
+
+# Go tools are managed via go.mod tool directive
+# Run: go install tool to install them
+
+# Check for system dependencies and install project deps on directory enter
+# Uses hash caching to skip installs when lockfiles haven't changed
+[hooks]
+enter = """
+echo '🚀 Setting up melange development environment...'
+if ! command -v docker &>/dev/null; then
+  echo '⚠️  WARNING: docker is not installed. Some tests require Docker.'
+fi
+
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/mise-melange"
+mkdir -p "$CACHE_DIR"
+
+# Go tools - skip if go.sum unchanged
+GO_HASH=$(shasum -a 256 go.sum 2>/dev/null | cut -d' ' -f1)
+GO_CACHE="$CACHE_DIR/go-sum-hash"
+if [ -f "$GO_CACHE" ] && [ "$(cat "$GO_CACHE")" = "$GO_HASH" ]; then
+  echo '✅ Go tools up to date'
+else
+  echo '⬇️ Installing Go tools (go install tool)...'
+  go install tool 2>/dev/null
+  echo "$GO_HASH" > "$GO_CACHE"
+fi
+
+echo '✅ Ready!'
+"""
+
+[tasks.clean-cache]
+description = "Clear mise dependency cache to force reinstall on next enter"
+run = """
+CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/mise-melange"
+rm -rf "$CACHE_DIR"
+echo '🧹 Cleared mise cache - dependencies will reinstall on next directory enter'
+"""

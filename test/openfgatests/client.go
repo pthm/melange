@@ -19,6 +19,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -88,6 +89,112 @@ func NewClientWithDB(db *sql.DB) *Client {
 	return &Client{
 		db:     db,
 		stores: make(map[string]*store),
+	}
+}
+
+func (c *Client) debugUserset(
+	tb testing.TB,
+	objectType string,
+	objectID string,
+	relation string,
+	filters []string,
+) {
+	if os.Getenv("MELANGE_DEBUG_USERSET") == "" {
+		return
+	}
+
+	tb.Helper()
+	ctx := context.Background()
+
+	tb.Logf("debug userset: object=%s:%s relation=%s filters=%v", objectType, objectID, relation, filters)
+
+	rows, err := c.db.QueryContext(ctx, `
+		SELECT object_type, relation, tuple_relation, subject_type, subject_relation, subject_relation_satisfying
+		FROM melange_userset_rules
+		WHERE object_type = $1 AND relation = $2
+		ORDER BY tuple_relation, subject_type, subject_relation, subject_relation_satisfying
+	`, objectType, relation)
+	if err != nil {
+		tb.Logf("debug userset rules error: %v", err)
+		return
+	}
+	for rows.Next() {
+		var ot, rel, tupleRel, subjType, subjRel, subjRelSat string
+		if scanErr := rows.Scan(&ot, &rel, &tupleRel, &subjType, &subjRel, &subjRelSat); scanErr != nil {
+			tb.Logf("debug userset rules scan error: %v", scanErr)
+			break
+		}
+		tb.Logf("userset_rule: object_type=%s relation=%s tuple_relation=%s subject_type=%s subject_relation=%s subject_relation_satisfying=%s",
+			ot, rel, tupleRel, subjType, subjRel, subjRelSat)
+	}
+	_ = rows.Close()
+
+	rows, err = c.db.QueryContext(ctx, `
+		SELECT relation, satisfying_relation
+		FROM melange_relation_closure
+		WHERE object_type = $1 AND relation = $2
+		ORDER BY satisfying_relation
+	`, objectType, relation)
+	if err != nil {
+		tb.Logf("debug closure error: %v", err)
+		return
+	}
+	for rows.Next() {
+		var rel, satisfying string
+		if scanErr := rows.Scan(&rel, &satisfying); scanErr != nil {
+			tb.Logf("debug closure scan error: %v", scanErr)
+			break
+		}
+		tb.Logf("closure: relation=%s satisfying_relation=%s", rel, satisfying)
+	}
+	_ = rows.Close()
+
+	rows, err = c.db.QueryContext(ctx, `
+		SELECT subject_type, subject_id, relation
+		FROM melange_tuples
+		WHERE object_type = $1 AND object_id = $2
+		ORDER BY relation, subject_type, subject_id
+	`, objectType, objectID)
+	if err != nil {
+		tb.Logf("debug tuples error: %v", err)
+		return
+	}
+	for rows.Next() {
+		var subjType, subjID, rel string
+		if scanErr := rows.Scan(&subjType, &subjID, &rel); scanErr != nil {
+			tb.Logf("debug tuples scan error: %v", scanErr)
+			break
+		}
+		tb.Logf("tuple: subject_type=%s subject_id=%s relation=%s", subjType, subjID, rel)
+	}
+	_ = rows.Close()
+
+	for _, filter := range filters {
+		hash := strings.Index(filter, "#")
+		if hash == -1 {
+			continue
+		}
+		filterType := filter[:hash]
+		filterRel := filter[hash+1:]
+		rows, err = c.db.QueryContext(ctx, `
+			SELECT relation, satisfying_relation
+			FROM melange_relation_closure
+			WHERE object_type = $1 AND (relation = $2 OR satisfying_relation = $2)
+			ORDER BY relation, satisfying_relation
+		`, filterType, filterRel)
+		if err != nil {
+			tb.Logf("debug subject closure error: %v", err)
+			continue
+		}
+		for rows.Next() {
+			var rel, satisfying string
+			if scanErr := rows.Scan(&rel, &satisfying); scanErr != nil {
+				tb.Logf("debug subject closure scan error: %v", scanErr)
+				break
+			}
+			tb.Logf("subject_closure: type=%s relation=%s satisfying_relation=%s", filterType, rel, satisfying)
+		}
+		_ = rows.Close()
 	}
 }
 
@@ -209,9 +316,7 @@ func (c *Client) Write(ctx context.Context, req *openfgav1.WriteRequest, opts ..
 
 	// Then process writes
 	if writes := req.GetWrites(); writes != nil {
-		for _, tk := range writes.GetTupleKeys() {
-			s.tuples = append(s.tuples, tk)
-		}
+		s.tuples = append(s.tuples, writes.GetTupleKeys()...)
 	}
 
 	// Refresh the tuples view in the database
@@ -245,7 +350,7 @@ func (c *Client) Check(ctx context.Context, req *openfgav1.CheckRequest, opts ..
 	relation := tk.GetRelation()
 
 	// Perform the check using melange
-	checker := melange.NewChecker(c.db)
+	checker := melange.NewChecker(c.db, melange.WithUsersetValidation())
 	contextualTuples, err := contextualTuplesFromKeys(req.GetContextualTuples().GetTupleKeys())
 	if err != nil {
 		return nil, fmt.Errorf("parsing contextual tuples: %w", err)
@@ -280,7 +385,7 @@ func (c *Client) ListObjects(ctx context.Context, req *openfgav1.ListObjectsRequ
 		return nil, fmt.Errorf("parsing subject: %w", err)
 	}
 
-	checker := melange.NewChecker(c.db)
+	checker := melange.NewChecker(c.db, melange.WithUsersetValidation())
 	contextualTuples, err := contextualTuplesFromKeys(req.GetContextualTuples().GetTupleKeys())
 	if err != nil {
 		return nil, fmt.Errorf("parsing contextual tuples: %w", err)
@@ -333,7 +438,7 @@ func (c *Client) ListUsers(ctx context.Context, req *openfgav1.ListUsersRequest,
 			outputType = filterType[:idx] // Extract just the type part
 		}
 
-		checker := melange.NewChecker(c.db)
+		checker := melange.NewChecker(c.db, melange.WithUsersetValidation())
 		contextualTuples, err := contextualTuplesFromKeys(req.GetContextualTuples())
 		if err != nil {
 			return nil, fmt.Errorf("parsing contextual tuples: %w", err)

@@ -78,7 +78,7 @@ func GenerateGo(w io.Writer, types []TypeDefinition, cfg *GenerateConfig) error 
 	}
 
 	// Collect unique object types
-	var objectTypes []string
+	objectTypes := make([]string, 0, len(types))
 	for _, t := range types {
 		objectTypes = append(objectTypes, t.Name)
 	}
@@ -95,7 +95,7 @@ func GenerateGo(w io.Writer, types []TypeDefinition, cfg *GenerateConfig) error 
 		}
 	}
 
-	var relations []string
+	relations := make([]string, 0, len(relSet))
 	for r := range relSet {
 		relations = append(relations, r)
 	}

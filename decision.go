@@ -7,7 +7,10 @@ import "context"
 // the bypass explicit and visible in code.
 type Decision int
 
-const decisionKey = "melange_decision"
+// decisionContextKey is a custom type for context keys to avoid collisions.
+type decisionContextKey struct{}
+
+var decisionKey = decisionContextKey{}
 
 const (
 	// DecisionUnset means no override - perform normal permission check.

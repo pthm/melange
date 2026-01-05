@@ -193,7 +193,7 @@ func generate(schemasDir, generateDir, generatePkg, idType, relationPrefix strin
 	}
 
 	// Create output directory if needed
-	if err := os.MkdirAll(generateDir, 0755); err != nil {
+	if err := os.MkdirAll(generateDir, 0o755); err != nil {
 		fmt.Printf("Creating output directory: %v\n", err)
 		os.Exit(1)
 	}

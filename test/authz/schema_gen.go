@@ -10,41 +10,41 @@ import (
 
 // ObjectType constants from schema.
 const (
-	TypeIssue melange.ObjectType = "issue"
+	TypeIssue        melange.ObjectType = "issue"
 	TypeOrganization melange.ObjectType = "organization"
-	TypePullRequest melange.ObjectType = "pull_request"
-	TypeRepository melange.ObjectType = "repository"
-	TypeTeam melange.ObjectType = "team"
-	TypeUser melange.ObjectType = "user"
+	TypePullRequest  melange.ObjectType = "pull_request"
+	TypeRepository   melange.ObjectType = "repository"
+	TypeTeam         melange.ObjectType = "team"
+	TypeUser         melange.ObjectType = "user"
 )
 
 // Relations from schema.
 // ALL relations are generated, not just "can_*" permissions.
 const (
-	RelAdmin melange.Relation = "admin"
-	RelAssignee melange.Relation = "assignee"
-	RelAuthor melange.Relation = "author"
-	RelBanned melange.Relation = "banned"
-	RelBillingManager melange.Relation = "billing_manager"
-	RelCanAdmin melange.Relation = "can_admin"
-	RelCanClose melange.Relation = "can_close"
-	RelCanDelete melange.Relation = "can_delete"
-	RelCanDeploy melange.Relation = "can_deploy"
-	RelCanEdit melange.Relation = "can_edit"
-	RelCanMerge melange.Relation = "can_merge"
-	RelCanRead melange.Relation = "can_read"
-	RelCanReadSafe melange.Relation = "can_read_safe"
-	RelCanReview melange.Relation = "can_review"
+	RelAdmin           melange.Relation = "admin"
+	RelAssignee        melange.Relation = "assignee"
+	RelAuthor          melange.Relation = "author"
+	RelBanned          melange.Relation = "banned"
+	RelBillingManager  melange.Relation = "billing_manager"
+	RelCanAdmin        melange.Relation = "can_admin"
+	RelCanClose        melange.Relation = "can_close"
+	RelCanDelete       melange.Relation = "can_delete"
+	RelCanDeploy       melange.Relation = "can_deploy"
+	RelCanEdit         melange.Relation = "can_edit"
+	RelCanMerge        melange.Relation = "can_merge"
+	RelCanRead         melange.Relation = "can_read"
+	RelCanReadSafe     melange.Relation = "can_read_safe"
+	RelCanReview       melange.Relation = "can_review"
 	RelCanReviewStrict melange.Relation = "can_review_strict"
-	RelCanWrite melange.Relation = "can_write"
-	RelMaintainer melange.Relation = "maintainer"
-	RelMember melange.Relation = "member"
-	RelOrg melange.Relation = "org"
-	RelOwner melange.Relation = "owner"
-	RelReader melange.Relation = "reader"
-	RelRepo melange.Relation = "repo"
-	RelReviewer melange.Relation = "reviewer"
-	RelWriter melange.Relation = "writer"
+	RelCanWrite        melange.Relation = "can_write"
+	RelMaintainer      melange.Relation = "maintainer"
+	RelMember          melange.Relation = "member"
+	RelOrg             melange.Relation = "org"
+	RelOwner           melange.Relation = "owner"
+	RelReader          melange.Relation = "reader"
+	RelRepo            melange.Relation = "repo"
+	RelReviewer        melange.Relation = "reviewer"
+	RelWriter          melange.Relation = "writer"
 )
 
 // Object constructors.
@@ -53,13 +53,19 @@ const (
 func Issue(id int64) melange.Object { return melange.Object{Type: TypeIssue, ID: fmt.Sprint(id)} }
 
 // Organization creates a organization object for relation checks.
-func Organization(id int64) melange.Object { return melange.Object{Type: TypeOrganization, ID: fmt.Sprint(id)} }
+func Organization(id int64) melange.Object {
+	return melange.Object{Type: TypeOrganization, ID: fmt.Sprint(id)}
+}
 
 // PullRequest creates a pull_request object for relation checks.
-func PullRequest(id int64) melange.Object { return melange.Object{Type: TypePullRequest, ID: fmt.Sprint(id)} }
+func PullRequest(id int64) melange.Object {
+	return melange.Object{Type: TypePullRequest, ID: fmt.Sprint(id)}
+}
 
 // Repository creates a repository object for relation checks.
-func Repository(id int64) melange.Object { return melange.Object{Type: TypeRepository, ID: fmt.Sprint(id)} }
+func Repository(id int64) melange.Object {
+	return melange.Object{Type: TypeRepository, ID: fmt.Sprint(id)}
+}
 
 // Team creates a team object for relation checks.
 func Team(id int64) melange.Object { return melange.Object{Type: TypeTeam, ID: fmt.Sprint(id)} }
@@ -86,4 +92,3 @@ func AnyTeam() melange.Object { return melange.Object{Type: TypeTeam, ID: "*"} }
 
 // AnyUser returns a wildcard user that matches type:* tuples.
 func AnyUser() melange.Object { return melange.Object{Type: TypeUser, ID: "*"} }
-

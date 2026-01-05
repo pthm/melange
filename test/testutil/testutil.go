@@ -124,12 +124,12 @@ func runCodegen() error {
 
 	// Write to the authz package (test/authz from test/testutil)
 	authzDir := filepath.Join(packageDir(), "..", "authz")
-	if err := os.MkdirAll(authzDir, 0755); err != nil {
+	if err := os.MkdirAll(authzDir, 0o755); err != nil {
 		return fmt.Errorf("create authz dir: %w", err)
 	}
 
 	outPath := filepath.Join(authzDir, "schema_gen.go")
-	if err := os.WriteFile(outPath, buf.Bytes(), 0644); err != nil {
+	if err := os.WriteFile(outPath, buf.Bytes(), 0o644); err != nil {
 		return fmt.Errorf("write generated code: %w", err)
 	}
 

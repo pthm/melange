@@ -38,11 +38,11 @@ type TestCase struct {
 
 // Stage represents a stage within a test case.
 type Stage struct {
-	Model                 string                  `json:"model"`
-	Tuples                []Tuple                 `json:"tuples"`
-	CheckAssertions       []CheckAssertion        `json:"checkAssertions"`
-	ListObjectsAssertions []ListObjectsAssertion  `json:"listObjectsAssertions"`
-	ListUsersAssertions   []ListUsersAssertion    `json:"listUsersAssertions"`
+	Model                 string                 `json:"model"`
+	Tuples                []Tuple                `json:"tuples"`
+	CheckAssertions       []CheckAssertion       `json:"checkAssertions"`
+	ListObjectsAssertions []ListObjectsAssertion `json:"listObjectsAssertions"`
+	ListUsersAssertions   []ListUsersAssertion   `json:"listUsersAssertions"`
 }
 
 // Tuple represents a relationship tuple.

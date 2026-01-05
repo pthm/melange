@@ -75,7 +75,7 @@ type document
 	require.Len(t, intersectionRules, 2, "should have 2 intersection rules for viewer")
 
 	// Check the rules have correct check_relations
-	var checkRelations []string
+	checkRelations := make([]string, 0, len(intersectionRules))
 	for _, r := range intersectionRules {
 		require.NotNil(t, r.CheckRelation)
 		checkRelations = append(checkRelations, *r.CheckRelation)
@@ -140,7 +140,7 @@ type document
 		t.Logf("  %s.%s: subject_type=%v, rule_group_id=%v, rule_group_mode=%v, check_relation=%v",
 			objType, rel, subjType, rgID, rgMode, checkRel)
 	}
-	rows.Close()
+	_ = rows.Close()
 
 	// Debug: Check closure table
 	rows, err = db.QueryContext(ctx, `
@@ -157,7 +157,7 @@ type document
 		require.NoError(t, err)
 		t.Logf("  %s -> %s", rel, satRel)
 	}
-	rows.Close()
+	_ = rows.Close()
 
 	// Debug: Check intersection detection
 	var hasIntersection bool
@@ -275,7 +275,7 @@ type document
 		}
 		t.Logf("  subject_type=%s, rule_group_mode=%s, check_relation=%s", subjTypeStr, rgModeStr, checkRelStr)
 	}
-	rows.Close()
+	_ = rows.Close()
 
 	// Debug: Check what SQL functions return for badger
 	var intersectionResult bool

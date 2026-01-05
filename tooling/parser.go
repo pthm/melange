@@ -66,9 +66,10 @@ func ConvertProtoModel(model *openfgav1.AuthorizationModel) []melange.TypeDefini
 // The conversion preserves all information needed to generate Go code and
 // populate the melange_model table.
 func convertModel(model *openfgav1.AuthorizationModel) []melange.TypeDefinition {
-	var types []melange.TypeDefinition
+	typeDefs := model.GetTypeDefinitions()
+	types := make([]melange.TypeDefinition, 0, len(typeDefs))
 
-	for _, td := range model.GetTypeDefinitions() {
+	for _, td := range typeDefs {
 		typeDef := melange.TypeDefinition{
 			Name: td.GetType(),
 		}
@@ -188,8 +189,9 @@ func extractUserset(us *openfgav1.Userset, rel *melange.RelationDefinition) {
 		// Add exclusions from the subtract part
 		// The subtract can be a simple relation (ComputedUserset) or a union (editor or owner)
 		if subtract := v.Difference.GetSubtract(); subtract != nil {
-			excludedRels := extractSubtractRelations(subtract)
+			excludedRels, excludedParents := extractSubtractRelations(subtract)
 			rel.ExcludedRelations = append(rel.ExcludedRelations, excludedRels...)
+			rel.ExcludedParentRelations = append(rel.ExcludedParentRelations, excludedParents...)
 			// Also set deprecated field for backward compatibility
 			if len(excludedRels) > 0 {
 				rel.ExcludedRelation = excludedRels[len(excludedRels)-1]
@@ -230,10 +232,14 @@ func expandIntersection(intersection *openfgav1.Usersets, relationName string) [
 
 		case *openfgav1.Userset_TupleToUserset:
 			// TTU within intersection, e.g., "writer and (can_write from org)"
-			// Add the computed relation to all groups
+			// Add a parent-relation check to all groups
 			rel := cv.TupleToUserset.GetComputedUserset().GetRelation()
+			parent := cv.TupleToUserset.GetTupleset().GetRelation()
 			for i := range groups {
-				groups[i].Relations = append(groups[i].Relations, rel)
+				groups[i].ParentRelations = append(groups[i].ParentRelations, melange.ParentRelationCheck{
+					Relation:   rel,
+					ParentType: parent,
+				})
 			}
 
 		case *openfgav1.Userset_Union:
@@ -362,40 +368,47 @@ func distributeUnion(groups []melange.IntersectionGroup, unionRels []string) []m
 	return expanded
 }
 
-// extractSubtractRelations extracts all relation names from a subtract userset.
+// extractSubtractRelations extracts all relation names from a subtract userset,
+// along with tuple-to-userset exclusions.
 // Handles both simple relations (ComputedUserset) and unions (editor or owner).
 // For "but not (editor or owner)", returns ["editor", "owner"].
 // For "but not author", returns ["author"].
-func extractSubtractRelations(us *openfgav1.Userset) []string {
+func extractSubtractRelations(us *openfgav1.Userset) ([]string, []melange.ParentRelationCheck) {
 	if us == nil {
-		return nil
+		return nil, nil
 	}
 
 	switch v := us.Userset.(type) {
 	case *openfgav1.Userset_ComputedUserset:
 		// Simple relation: "but not author"
-		return []string{v.ComputedUserset.GetRelation()}
+		return []string{v.ComputedUserset.GetRelation()}, nil
 
 	case *openfgav1.Userset_Union:
 		// Union in subtract: "but not (editor or owner)"
 		// All relations in the union should exclude
 		var rels []string
+		var parents []melange.ParentRelationCheck
 		for _, child := range v.Union.GetChild() {
-			rels = append(rels, extractSubtractRelations(child)...)
+			childRels, childParents := extractSubtractRelations(child)
+			rels = append(rels, childRels...)
+			parents = append(parents, childParents...)
 		}
-		return rels
+		return rels, parents
 
 	case *openfgav1.Userset_This:
 		// Direct assignment in subtract - use the relation being defined
 		// This is rare but could occur
-		return nil
+		return nil, nil
 
 	case *openfgav1.Userset_TupleToUserset:
 		// TTU in subtract: "but not (viewer from parent)"
-		// Return the computed relation for now
-		return []string{v.TupleToUserset.GetComputedUserset().GetRelation()}
+		// Preserve the tuple-to-userset linkage for exclusion evaluation.
+		return nil, []melange.ParentRelationCheck{{
+			Relation:   v.TupleToUserset.GetComputedUserset().GetRelation(),
+			ParentType: v.TupleToUserset.GetTupleset().GetRelation(),
+		}}
 
 	default:
-		return nil
+		return nil, nil
 	}
 }

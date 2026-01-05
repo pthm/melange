@@ -66,7 +66,7 @@ func (f *Fixtures) insertUsersBatch(start, end int) ([]int64, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var id int64
@@ -133,7 +133,7 @@ func (f *Fixtures) insertOrgsBatch(start, end int) ([]int64, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var id int64
@@ -231,7 +231,7 @@ func (f *Fixtures) insertReposBatch(orgID int64, start, end int) ([]int64, error
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var id int64
@@ -331,7 +331,7 @@ func (f *Fixtures) insertPRsBatch(repoID int64, authorIDs []int64, start, end in
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var id int64
@@ -392,7 +392,7 @@ func (f *Fixtures) insertIssuesBatch(repoID int64, authorIDs []int64, start, end
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var id int64
@@ -451,7 +451,7 @@ func (f *Fixtures) insertTeamsBatch(orgID int64, start, end int) ([]int64, error
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var id int64

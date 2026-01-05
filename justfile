@@ -44,25 +44,51 @@ build:
 install:
     go install ./cmd/melange
 
-# Format all Go code
-fmt:
-    go fmt ./...
-    cd tooling && go fmt ./...
-    cd cmd/melange && go fmt ./...
-    cd test && go fmt ./...
+# =============================================================================
+# Linting and Formatting
+# =============================================================================
 
-# Run go vet on all packages
+# Format all code (Go + SQL)
+fmt: fmt-go fmt-sql
+
+# Format Go code with gofumpt
+fmt-go:
+    gofumpt -w .
+    cd tooling && gofumpt -w .
+    cd test && gofumpt -w .
+
+# Format SQL files with sqruff
+fmt-sql:
+    mise exec -- sqruff fix sql/
+
+# Lint all code (Go + SQL)
+lint: lint-go lint-sql
+
+# Lint Go code with golangci-lint
+lint-go:
+    golangci-lint run ./...
+    cd tooling && golangci-lint run ./...
+    cd test && golangci-lint run ./...
+
+# Lint SQL files with sqruff
+lint-sql:
+    mise exec -- sqruff lint sql/
+
+# Install linting and formatting tools
+install-tools:
+    go install tool
+    mise install
+
+# Run go vet on all packages (included in lint-go via golangci-lint)
 vet:
     go vet ./...
     cd tooling && go vet ./...
-    cd cmd/melange && go vet ./...
     cd test && go vet ./...
 
 # Tidy all go.mod files
 tidy:
     go mod tidy
     cd tooling && go mod tidy
-    cd cmd/melange && go mod tidy
     cd test && go mod tidy
 
 # Generate test authz package from schema
@@ -82,8 +108,8 @@ clean:
 docs-dev:
     cd docs && git submodule update --init --recursive && hugo server
 
-# Run all checks (fmt, vet, test)
-check: fmt vet test
+# Run all checks (fmt, lint, test)
+check: fmt lint test
 
 # =============================================================================
 # OpenFGA Test Suite

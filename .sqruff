@@ -1,0 +1,17 @@
+[sqruff]
+dialect = postgres
+# LT01: spacing around brackets (PostgreSQL arrays use [] without spaces)
+# LT02: indentation (project uses custom indent style)
+# LT05: line length
+# LT12: trailing whitespace
+exclude_rules = LT01, LT02, LT05, LT12
+max_line_length = 120
+
+[sqruff:rules:capitalisation.keywords]
+capitalisation_policy = upper
+
+[sqruff:rules:capitalisation.types]
+capitalisation_policy = upper
+
+[sqruff:rules:capitalisation.functions]
+capitalisation_policy = upper

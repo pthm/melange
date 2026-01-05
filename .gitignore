@@ -19,6 +19,8 @@ go.work.sum
 
 # Dependency directories
 vendor/
+.gomodcache/
+.gocache/
 
 # IDE and editor files
 .idea/

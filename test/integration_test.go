@@ -74,7 +74,7 @@ func TestDB_IndexesApplied(t *testing.T) {
 		ORDER BY indexname
 	`)
 	require.NoError(t, err)
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var indexes []string
 	for rows.Next() {
@@ -86,8 +86,8 @@ func TestDB_IndexesApplied(t *testing.T) {
 
 	// Verify we have the expected indexes (from model.sql and indexes.sql)
 	expectedIndexes := []string{
-		"idx_melange_model_implied",        // from model.sql
-		"idx_melange_model_implied_lookup", // from indexes.sql
+		"idx_melange_model_implied",         // from model.sql
+		"idx_melange_model_implied_lookup",  // from indexes.sql
 		"idx_melange_model_object_relation", // from model.sql
 		"idx_melange_model_parent",          // from model.sql
 		"idx_melange_model_parent_lookup",   // from indexes.sql
@@ -492,7 +492,7 @@ func TestTransaction_SeeUncommittedChanges(t *testing.T) {
 	// Start a transaction
 	tx, err := db.BeginTx(ctx, nil)
 	require.NoError(t, err)
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Create checker with transaction
 	checker := melange.NewChecker(tx)

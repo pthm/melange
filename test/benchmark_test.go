@@ -13,12 +13,12 @@ import (
 
 // BenchmarkScale defines the data magnitude for a benchmark run.
 type BenchmarkScale struct {
-	Name         string
-	Users        int
-	Orgs         int
-	ReposPerOrg  int
+	Name          string
+	Users         int
+	Orgs          int
+	ReposPerOrg   int
 	MembersPerOrg int
-	PRsPerRepo   int
+	PRsPerRepo    int
 }
 
 // Production-scale benchmark configurations.

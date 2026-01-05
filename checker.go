@@ -83,6 +83,7 @@ type Checker struct {
 	cache              Cache
 	decision           Decision
 	useContextDecision bool
+	validateUserset    bool
 }
 
 // Option configures a Checker.
@@ -124,6 +125,15 @@ func WithDecision(d Decision) Option {
 func WithContextDecision() Option {
 	return func(ch *Checker) {
 		ch.useContextDecision = true
+	}
+}
+
+// WithUsersetValidation enables validation for userset subjects like "group:1#member".
+// When enabled, Check will return an error if the userset type or relation is not
+// defined in the authorization model.
+func WithUsersetValidation() Option {
+	return func(ch *Checker) {
+		ch.validateUserset = true
 	}
 }
 
@@ -183,6 +193,12 @@ func (c *Checker) Check(ctx context.Context, subject SubjectLike, relation Relat
 		return c.decision == DecisionAllow, nil
 	}
 
+	if c.validateUserset {
+		if err := c.validateUsersetSubject(ctx, c.q, subject.FGASubject()); err != nil {
+			return false, err
+		}
+	}
+
 	// Check cache if available
 	if c.cache != nil {
 		if allowed, cachedErr, found := c.cache.Get(subject.FGASubject(), relation.FGARelation(), object.FGAObject()); found {
@@ -225,6 +241,12 @@ func (c *Checker) CheckWithContextualTuples(
 	// Check for Checker-level decision override (allows bypassing DB for admin tools/tests)
 	if c.decision != DecisionUnset {
 		return c.decision == DecisionAllow, nil
+	}
+
+	if c.validateUserset {
+		if err := c.validateUsersetSubject(ctx, c.q, subject.FGASubject()); err != nil {
+			return false, err
+		}
 	}
 
 	if err := c.validateContextualTuples(ctx, tuples); err != nil {
@@ -290,6 +312,44 @@ func (c *Checker) mapError(operation string, err error) error {
 	}
 
 	return fmt.Errorf("%s: %w", operation, err)
+}
+
+func (c *Checker) validateUsersetSubject(ctx context.Context, q Querier, subject Object) error {
+	id := subject.ID
+	idx := strings.Index(id, "#")
+	if idx == -1 {
+		return nil
+	}
+
+	rel := id[idx+1:]
+	if rel == "" {
+		return fmt.Errorf("userset subject relation missing for %s", subject.String())
+	}
+
+	var exists int
+	err := q.QueryRowContext(ctx,
+		"SELECT 1 FROM melange_model WHERE object_type = $1 LIMIT 1",
+		subject.Type,
+	).Scan(&exists)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("userset subject type %s not defined in model", subject.Type)
+		}
+		return c.mapError("userset_subject_type", err)
+	}
+
+	err = q.QueryRowContext(ctx,
+		"SELECT 1 FROM melange_model WHERE object_type = $1 AND relation = $2 LIMIT 1",
+		subject.Type, rel,
+	).Scan(&exists)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("userset subject relation %s not defined on %s", rel, subject.Type)
+		}
+		return c.mapError("userset_subject_relation", err)
+	}
+
+	return nil
 }
 
 // sqlState extracts the SQLSTATE code from a PostgreSQL error.
@@ -607,7 +667,7 @@ func (c *Checker) prepareContextualTuples(ctx context.Context, tuples []Contextu
 			return nil, nil, err
 		}
 		cleanup := func() {
-			_ = c.cleanupContextualTuples(ctx, conn)
+			c.cleanupContextualTuples(ctx, conn)
 			_ = conn.Close()
 		}
 		if err := c.setupContextualTuples(ctx, conn, tuples); err != nil {
@@ -616,14 +676,14 @@ func (c *Checker) prepareContextualTuples(ctx context.Context, tuples []Contextu
 		}
 		return conn, cleanup, nil
 	case *sql.Tx:
-		cleanup := func() { _ = c.cleanupContextualTuples(ctx, q) }
+		cleanup := func() { c.cleanupContextualTuples(ctx, q) }
 		if err := c.setupContextualTuples(ctx, q, tuples); err != nil {
 			cleanup()
 			return nil, nil, err
 		}
 		return q, cleanup, nil
 	case *sql.Conn:
-		cleanup := func() { _ = c.cleanupContextualTuples(ctx, q) }
+		cleanup := func() { c.cleanupContextualTuples(ctx, q) }
 		if err := c.setupContextualTuples(ctx, q, tuples); err != nil {
 			cleanup()
 			return nil, nil, err
@@ -678,10 +738,9 @@ func (c *Checker) setupContextualTuples(ctx context.Context, q Execer, tuples []
 	return nil
 }
 
-func (c *Checker) cleanupContextualTuples(ctx context.Context, q Execer) error {
+func (c *Checker) cleanupContextualTuples(ctx context.Context, q Execer) {
 	_, _ = q.ExecContext(ctx, "DROP VIEW IF EXISTS pg_temp.melange_tuples")
 	_, _ = q.ExecContext(ctx, "DROP TABLE IF EXISTS pg_temp.melange_contextual_tuples")
-	return nil
 }
 
 func (c *Checker) lookupTuplesSchema(ctx context.Context, q Querier) (string, error) {

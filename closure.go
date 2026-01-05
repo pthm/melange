@@ -28,9 +28,7 @@ func ComputeRelationClosure(types []TypeDefinition) []ClosureRow {
 		// impliedBy[A] = [B, C] means B and C both imply A
 		impliedBy := make(map[string][]string)
 		for _, r := range t.Relations {
-			for _, ib := range r.ImpliedBy {
-				impliedBy[r.Name] = append(impliedBy[r.Name], ib)
-			}
+			impliedBy[r.Name] = append(impliedBy[r.Name], r.ImpliedBy...)
 		}
 
 		// For each relation, compute transitive closure via BFS

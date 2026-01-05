@@ -176,22 +176,23 @@ func (m *Migrator) applyModels(ctx context.Context, db Execer, models []AuthzMod
 	}
 
 	// Build bulk insert
-	var values []string
-	var args []any
+	values := make([]string, 0, len(models))
+	args := make([]any, 0, len(models)*15)
 	argIdx := 1
 
 	for _, model := range models {
-		values = append(values, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
-			argIdx, argIdx+1, argIdx+2, argIdx+3, argIdx+4, argIdx+5, argIdx+6, argIdx+7, argIdx+8, argIdx+9, argIdx+10))
+		values = append(values, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d, $%d)",
+			argIdx, argIdx+1, argIdx+2, argIdx+3, argIdx+4, argIdx+5, argIdx+6, argIdx+7, argIdx+8, argIdx+9, argIdx+10, argIdx+11, argIdx+12, argIdx+13, argIdx+14))
 		args = append(args, model.ObjectType, model.Relation,
 			model.SubjectType, model.ImpliedBy, model.ParentRelation, model.ExcludedRelation,
-			model.SubjectRelation, model.RuleGroupID, model.RuleGroupMode, model.CheckRelation,
-			model.CheckExcludedRelation)
-		argIdx += 11
+			model.ExcludedParentRelation, model.ExcludedParentType, model.SubjectRelation, model.RuleGroupID,
+			model.RuleGroupMode, model.CheckRelation, model.CheckExcludedRelation, model.CheckParentRelation,
+			model.CheckParentType)
+		argIdx += 15
 	}
 
 	query := fmt.Sprintf(
-		"INSERT INTO melange_model (object_type, relation, subject_type, implied_by, parent_relation, excluded_relation, subject_relation, rule_group_id, rule_group_mode, check_relation, check_excluded_relation) VALUES %s",
+		"INSERT INTO melange_model (object_type, relation, subject_type, implied_by, parent_relation, excluded_relation, excluded_parent_relation, excluded_parent_type, subject_relation, rule_group_id, rule_group_mode, check_relation, check_excluded_relation, check_parent_relation, check_parent_type) VALUES %s",
 		strings.Join(values, ", "),
 	)
 
@@ -220,8 +221,8 @@ func (m *Migrator) applyClosure(ctx context.Context, db Execer, closureRows []Cl
 	}
 
 	// Build bulk insert
-	var values []string
-	var args []any
+	values := make([]string, 0, len(closureRows))
+	args := make([]any, 0, len(closureRows)*4)
 	argIdx := 1
 
 	for _, row := range closureRows {
@@ -256,19 +257,19 @@ func (m *Migrator) applyUsersetRules(ctx context.Context, db Execer, rules []Use
 		return nil
 	}
 
-	var values []string
-	var args []any
+	values := make([]string, 0, len(rules))
+	args := make([]any, 0, len(rules)*6)
 	argIdx := 1
 
 	for _, rule := range rules {
-		values = append(values, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d)",
-			argIdx, argIdx+1, argIdx+2, argIdx+3, argIdx+4))
-		args = append(args, rule.ObjectType, rule.Relation, rule.TupleRelation, rule.SubjectType, rule.SubjectRelation)
-		argIdx += 5
+		values = append(values, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d)",
+			argIdx, argIdx+1, argIdx+2, argIdx+3, argIdx+4, argIdx+5))
+		args = append(args, rule.ObjectType, rule.Relation, rule.TupleRelation, rule.SubjectType, rule.SubjectRelation, rule.SubjectRelationSatisfying)
+		argIdx += 6
 	}
 
 	query := fmt.Sprintf(
-		"INSERT INTO melange_userset_rules (object_type, relation, tuple_relation, subject_type, subject_relation) VALUES %s",
+		"INSERT INTO melange_userset_rules (object_type, relation, tuple_relation, subject_type, subject_relation, subject_relation_satisfying) VALUES %s",
 		strings.Join(values, ", "),
 	)
 

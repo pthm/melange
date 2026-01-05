@@ -22,8 +22,16 @@ type SubjectTypeRef struct {
 // For "viewer: writer and (editor but not owner)", the group would be
 // ["writer", "editor"] with Exclusions["editor"] = ["owner"].
 type IntersectionGroup struct {
-	Relations  []string            // Relations that must all be satisfied (AND)
-	Exclusions map[string][]string // Per-relation exclusions: relation -> list of excluded relations
+	Relations       []string              // Relations that must all be satisfied (AND)
+	ParentRelations []ParentRelationCheck // Parent inheritance checks (tuple-to-userset)
+	Exclusions      map[string][]string   // Per-relation exclusions: relation -> list of excluded relations
+}
+
+// ParentRelationCheck represents a tuple-to-userset check in an intersection group.
+// For "viewer: writer and (viewer from parent)", this captures the parent relation.
+type ParentRelationCheck struct {
+	Relation   string // Relation to check on the parent object (e.g., "viewer")
+	ParentType string // Linking relation on the current object (e.g., "parent")
 }
 
 // RelationDefinition represents a parsed relation.
@@ -37,13 +45,15 @@ type IntersectionGroup struct {
 //   - Userset: granted via group membership (SubjectTypeRefs with Relation set)
 //   - Intersection: granted if ALL relations in a group are satisfied
 type RelationDefinition struct {
-	Name             string   // Relation name: "owner", "can_read", etc.
-	SubjectTypes     []string // Direct subject types: ["user"], ["organization"] (legacy)
-	ImpliedBy        []string // Relations that imply this one: ["owner", "admin"]
-	ParentRelation   string   // For inheritance: "can_read from org" → "can_read"
-	ParentType       string   // The relation linking to parent: "org", "repo"
+	Name              string   // Relation name: "owner", "can_read", etc.
+	SubjectTypes      []string // Direct subject types: ["user"], ["organization"] (legacy)
+	ImpliedBy         []string // Relations that imply this one: ["owner", "admin"]
+	ParentRelation    string   // For inheritance: "can_read from org" → "can_read"
+	ParentType        string   // The relation linking to parent: "org", "repo"
 	ExcludedRelation  string   // For exclusions: "can_read but not author" -> "author" (deprecated, use ExcludedRelations)
 	ExcludedRelations []string // For nested exclusions: "(a but not b) but not c" -> ["b", "c"]
+	// ExcludedParentRelations captures tuple-to-userset exclusions like "but not viewer from parent".
+	ExcludedParentRelations []ParentRelationCheck
 	// SubjectTypeRefs provides detailed subject type info including userset relations.
 	// For [user, group#member], this would contain:
 	//   - {Type: "user", Relation: ""}
@@ -77,12 +87,17 @@ type AuthzModel struct {
 	ImpliedBy        *string // Implying relation (for role hierarchy)
 	ParentRelation   *string // Parent relation to check (for inheritance)
 	ExcludedRelation *string // Relation to exclude (for "but not" rules)
+	// Excluded parent relation for tuple-to-userset exclusions.
+	ExcludedParentRelation *string // Parent relation to exclude (for "but not rel from parent")
+	ExcludedParentType     *string // Linking relation for the excluded parent relation
 	// New fields for userset references and intersection support
 	SubjectRelation       *string // For userset refs [type#relation]: the relation part
 	RuleGroupID           *int64  // Groups rules that form an intersection
 	RuleGroupMode         *string // 'intersection' for AND, 'union' or NULL for OR
 	CheckRelation         *string // For intersection: which relation to check
 	CheckExcludedRelation *string // For intersection: exclusion on check_relation (e.g., "editor but not owner")
+	CheckParentRelation   *string // For intersection: parent relation to check (tuple-to-userset)
+	CheckParentType       *string // For intersection: linking relation on current object
 }
 
 // SubjectTypes returns all types that can be subjects in authorization checks.
@@ -287,6 +302,17 @@ func ToAuthzModels(types []TypeDefinition) []AuthzModel {
 				}
 				models = append(models, model)
 			}
+			for _, excl := range r.ExcludedParentRelations {
+				er := excl.Relation
+				et := excl.ParentType
+				model := AuthzModel{
+					ObjectType:             t.Name,
+					Relation:               r.Name,
+					ExcludedParentRelation: &er,
+					ExcludedParentType:     &et,
+				}
+				models = append(models, model)
+			}
 
 			// Add entries for ALL implied relations (including transitive)
 			// Note: Exclusions are stored in separate rows, not embedded here.
@@ -329,7 +355,9 @@ func ToAuthzModels(types []TypeDefinition) []AuthzModel {
 			//   - {relation: viewer, check_relation: editor, check_excluded_relation: owner, rule_group_id: 1, rule_group_mode: intersection}
 			for _, group := range r.IntersectionGroups {
 				if len(group.Relations) == 0 {
-					continue
+					if len(group.ParentRelations) == 0 {
+						continue
+					}
 				}
 				groupID := ruleGroupIDCounter
 				ruleGroupIDCounter++
@@ -350,6 +378,20 @@ func ToAuthzModels(types []TypeDefinition) []AuthzModel {
 						// Take first exclusion (could extend for multiple in future)
 						cer := excls[0]
 						model.CheckExcludedRelation = &cer
+					}
+					models = append(models, model)
+				}
+
+				for _, checkParent := range group.ParentRelations {
+					cr := checkParent.Relation
+					cp := checkParent.ParentType
+					model := AuthzModel{
+						ObjectType:          t.Name,
+						Relation:            r.Name,
+						CheckParentRelation: &cr,
+						CheckParentType:     &cp,
+						RuleGroupID:         &groupID,
+						RuleGroupMode:       &mode,
 					}
 					models = append(models, model)
 				}

@@ -256,7 +256,7 @@ func BenchTest(b *testing.B, tc TestCase) {
 		listObjAssertions []*ListObjectsAssertion
 		listUserAssertion []*ListUsersAssertion
 	}
-	var stages []preparedStage
+	stages := make([]preparedStage, 0, len(tc.Stages))
 
 	for _, stage := range tc.Stages {
 		// Write model
@@ -693,6 +693,7 @@ func RunTest(t *testing.T, _ *Client, tc TestCase) {
 						}
 
 						want := assertion.Expectation
+						client.debugUserset(t, objType, objID, assertion.Request.Relation, assertion.Request.Filters)
 						require.ElementsMatch(t, want, got,
 							"listusers object=%s relation=%s filters=%v",
 							assertion.Request.Object, assertion.Request.Relation, assertion.Request.Filters)
