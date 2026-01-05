@@ -106,35 +106,6 @@ func BenchmarkOpenFGA_ContextualTuples(b *testing.B) {
 }
 
 // =============================================================================
-// Checks-Only Benchmarks
-// These isolate Check performance from List operations.
-// =============================================================================
-
-// BenchmarkOpenFGA_ChecksOnly_All benchmarks only Check operations across all tests.
-func BenchmarkOpenFGA_ChecksOnly_All(b *testing.B) {
-	if testing.Short() {
-		b.Skip("skipping benchmark in short mode")
-	}
-	openfgatests.BenchChecksOnly(b, ".*")
-}
-
-// BenchmarkOpenFGA_ChecksOnly_ComputedUserset benchmarks Check for computed usersets.
-func BenchmarkOpenFGA_ChecksOnly_ComputedUserset(b *testing.B) {
-	if testing.Short() {
-		b.Skip("skipping benchmark in short mode")
-	}
-	openfgatests.BenchChecksOnly(b, "computed_userset|computeduserset")
-}
-
-// BenchmarkOpenFGA_ChecksOnly_TTU benchmarks Check for tuple-to-userset.
-func BenchmarkOpenFGA_ChecksOnly_TTU(b *testing.B) {
-	if testing.Short() {
-		b.Skip("skipping benchmark in short mode")
-	}
-	openfgatests.BenchChecksOnly(b, "tuple_to_userset|ttu_")
-}
-
-// =============================================================================
 // Custom Pattern Benchmarks
 // =============================================================================
 

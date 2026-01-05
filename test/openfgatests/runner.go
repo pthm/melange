@@ -249,8 +249,9 @@ func BenchTestByName(b *testing.B, name string) {
 	b.Fatalf("test %q not found", name)
 }
 
-// BenchTest runs a benchmark for a single test case.
-// Setup (model + tuples) is done once, then assertions are run b.N times.
+// BenchTest runs a benchmark for a single test case with separate sub-benchmarks
+// for Check and List operations. Setup (model + tuples) is done once, then each
+// operation type gets its own measured benchmark.
 func BenchTest(b *testing.B, tc TestCase) {
 	// Setup: create client, store, and load all stages
 	client := NewClient(b)
@@ -262,17 +263,26 @@ func BenchTest(b *testing.B, tc TestCase) {
 	}
 	storeID := resp.GetId()
 
-	// Collect all assertions across all stages
-	type preparedStage struct {
-		modelID           string
-		checkAssertions   []*CheckAssertion
-		listObjAssertions []*ListObjectsAssertion
-		listUserAssertion []*ListUsersAssertion
+	// Prepared operations ready for benchmarking
+	type checkOp struct {
+		modelID   string
+		assertion *CheckAssertion
 	}
-	stages := make([]preparedStage, 0, len(tc.Stages))
+	type listObjOp struct {
+		modelID   string
+		assertion *ListObjectsAssertion
+	}
+	type listUserOp struct {
+		modelID   string
+		assertion *ListUsersAssertion
+	}
 
+	var checkOps []checkOp
+	var listObjOps []listObjOp
+	var listUserOps []listUserOp
+
+	// Setup all stages
 	for _, stage := range tc.Stages {
-		// Write model
 		model := testutils.MustTransformDSLToProtoWithID(stage.Model)
 		writeModelResp, err := client.WriteAuthorizationModel(ctx, &openfgav1.WriteAuthorizationModelRequest{
 			StoreId:         storeID,
@@ -289,127 +299,137 @@ func BenchTest(b *testing.B, tc TestCase) {
 		tuples := stage.Tuples
 		for i := 0; i < len(tuples); i += writeMaxChunkSize {
 			end := int(math.Min(float64(i+writeMaxChunkSize), float64(len(tuples))))
-			chunk := tuples[i:end]
 			_, err = client.Write(ctx, &openfgav1.WriteRequest{
 				StoreId:              storeID,
 				AuthorizationModelId: modelID,
-				Writes: &openfgav1.WriteRequestWrites{
-					TupleKeys: chunk,
-				},
+				Writes:               &openfgav1.WriteRequestWrites{TupleKeys: tuples[i:end]},
 			})
 			if err != nil {
 				b.Fatalf("write tuples: %v", err)
 			}
 		}
 
-		stages = append(stages, preparedStage{
-			modelID:           modelID,
-			checkAssertions:   stage.CheckAssertions,
-			listObjAssertions: stage.ListObjectsAssertions,
-			listUserAssertion: stage.ListUsersAssertions,
+		// Collect operations (skip error cases)
+		for _, a := range stage.CheckAssertions {
+			if a.ErrorCode == 0 {
+				checkOps = append(checkOps, checkOp{modelID: modelID, assertion: a})
+			}
+		}
+		for _, a := range stage.ListObjectsAssertions {
+			if a.ErrorCode == 0 {
+				listObjOps = append(listObjOps, listObjOp{modelID: modelID, assertion: a})
+			}
+		}
+		for _, a := range stage.ListUsersAssertions {
+			if a.ErrorCode == 0 {
+				listUserOps = append(listUserOps, listUserOp{modelID: modelID, assertion: a})
+			}
+		}
+	}
+
+	// Benchmark Check operations
+	if len(checkOps) > 0 {
+		b.Run("Check", func(b *testing.B) {
+			for i, op := range checkOps {
+				name := fmt.Sprintf("%d", i)
+				if op.assertion.Name != "" {
+					name = op.assertion.Name
+				}
+				b.Run(name, func(b *testing.B) {
+					var tupleKey *openfgav1.CheckRequestTupleKey
+					if op.assertion.Tuple != nil {
+						tupleKey = &openfgav1.CheckRequestTupleKey{
+							User:     op.assertion.Tuple.GetUser(),
+							Relation: op.assertion.Tuple.GetRelation(),
+							Object:   op.assertion.Tuple.GetObject(),
+						}
+					}
+
+					b.ResetTimer()
+					for j := 0; j < b.N; j++ {
+						_, err := client.Check(ctx, &openfgav1.CheckRequest{
+							StoreId:              storeID,
+							AuthorizationModelId: op.modelID,
+							TupleKey:             tupleKey,
+							ContextualTuples: &openfgav1.ContextualTupleKeys{
+								TupleKeys: op.assertion.ContextualTuples,
+							},
+							Context: op.assertion.Context,
+						})
+						if err != nil {
+							b.Fatalf("check failed: %v", err)
+						}
+					}
+				})
+			}
 		})
 	}
 
-	// Count total assertions for reporting
-	var totalChecks, totalListObjs, totalListUsers int
-	for _, s := range stages {
-		totalChecks += len(s.checkAssertions)
-		totalListObjs += len(s.listObjAssertions)
-		totalListUsers += len(s.listUserAssertion)
+	// Benchmark ListObjects operations
+	if len(listObjOps) > 0 {
+		b.Run("ListObjects", func(b *testing.B) {
+			for i, op := range listObjOps {
+				b.Run(fmt.Sprintf("%d", i), func(b *testing.B) {
+					b.ResetTimer()
+					for j := 0; j < b.N; j++ {
+						_, err := client.ListObjects(ctx, &openfgav1.ListObjectsRequest{
+							StoreId:              storeID,
+							AuthorizationModelId: op.modelID,
+							Type:                 op.assertion.Request.Type,
+							Relation:             op.assertion.Request.Relation,
+							User:                 op.assertion.Request.User,
+							ContextualTuples: &openfgav1.ContextualTupleKeys{
+								TupleKeys: op.assertion.ContextualTuples,
+							},
+						})
+						if err != nil {
+							b.Fatalf("list objects failed: %v", err)
+						}
+					}
+				})
+			}
+		})
 	}
 
-	b.ReportMetric(float64(totalChecks), "checks/op")
-	b.ReportMetric(float64(totalListObjs), "listobjs/op")
-	b.ReportMetric(float64(totalListUsers), "listusers/op")
-
-	// Reset timer after setup
-	b.ResetTimer()
-
-	// Run benchmark
-	for i := 0; i < b.N; i++ {
-		for _, stage := range stages {
-			// Run check assertions
-			for _, assertion := range stage.checkAssertions {
-				if assertion.ErrorCode != 0 {
-					continue // Skip error cases in benchmarks
-				}
-
-				var tupleKey *openfgav1.CheckRequestTupleKey
-				if assertion.Tuple != nil {
-					tupleKey = &openfgav1.CheckRequestTupleKey{
-						User:     assertion.Tuple.GetUser(),
-						Relation: assertion.Tuple.GetRelation(),
-						Object:   assertion.Tuple.GetObject(),
+	// Benchmark ListUsers operations
+	if len(listUserOps) > 0 {
+		b.Run("ListUsers", func(b *testing.B) {
+			for i, op := range listUserOps {
+				b.Run(fmt.Sprintf("%d", i), func(b *testing.B) {
+					var objType, objID string
+					for j := 0; j < len(op.assertion.Request.Object); j++ {
+						if op.assertion.Request.Object[j] == ':' {
+							objType = op.assertion.Request.Object[:j]
+							objID = op.assertion.Request.Object[j+1:]
+							break
+						}
 					}
-				}
 
-				_, err := client.Check(ctx, &openfgav1.CheckRequest{
-					StoreId:              storeID,
-					AuthorizationModelId: stage.modelID,
-					TupleKey:             tupleKey,
-					ContextualTuples: &openfgav1.ContextualTupleKeys{
-						TupleKeys: assertion.ContextualTuples,
-					},
-					Context: assertion.Context,
-				})
-				if err != nil {
-					b.Fatalf("check failed: %v", err)
-				}
-			}
-
-			// Run list objects assertions
-			for _, assertion := range stage.listObjAssertions {
-				if assertion.ErrorCode != 0 {
-					continue // Skip error cases in benchmarks
-				}
-
-				_, err := client.ListObjects(ctx, &openfgav1.ListObjectsRequest{
-					StoreId:              storeID,
-					AuthorizationModelId: stage.modelID,
-					Type:                 assertion.Request.Type,
-					Relation:             assertion.Request.Relation,
-					User:                 assertion.Request.User,
-				})
-				if err != nil {
-					b.Fatalf("list objects failed: %v", err)
-				}
-			}
-
-			// Run list users assertions
-			for _, assertion := range stage.listUserAssertion {
-				if assertion.ErrorCode != 0 {
-					continue // Skip error cases in benchmarks
-				}
-
-				var objType, objID string
-				for j := 0; j < len(assertion.Request.Object); j++ {
-					if assertion.Request.Object[j] == ':' {
-						objType = assertion.Request.Object[:j]
-						objID = assertion.Request.Object[j+1:]
-						break
+					var filters []*openfgav1.UserTypeFilter
+					for _, f := range op.assertion.Request.Filters {
+						filters = append(filters, &openfgav1.UserTypeFilter{Type: f})
 					}
-				}
 
-				var filters []*openfgav1.UserTypeFilter
-				for _, f := range assertion.Request.Filters {
-					filters = append(filters, &openfgav1.UserTypeFilter{Type: f})
-				}
-
-				_, err := client.ListUsers(ctx, &openfgav1.ListUsersRequest{
-					StoreId:              storeID,
-					AuthorizationModelId: stage.modelID,
-					Object: &openfgav1.Object{
-						Type: objType,
-						Id:   objID,
-					},
-					Relation:    assertion.Request.Relation,
-					UserFilters: filters,
+					b.ResetTimer()
+					for j := 0; j < b.N; j++ {
+						_, err := client.ListUsers(ctx, &openfgav1.ListUsersRequest{
+							StoreId:              storeID,
+							AuthorizationModelId: op.modelID,
+							Object: &openfgav1.Object{
+								Type: objType,
+								Id:   objID,
+							},
+							Relation:         op.assertion.Request.Relation,
+							UserFilters:      filters,
+							ContextualTuples: op.assertion.ContextualTuples,
+						})
+						if err != nil {
+							b.Fatalf("list users failed: %v", err)
+						}
+					}
 				})
-				if err != nil {
-					b.Fatalf("list users failed: %v", err)
-				}
 			}
-		}
+		})
 	}
 }
 
@@ -428,140 +448,6 @@ func BenchAllTests(b *testing.B) {
 	}
 }
 
-// BenchChecksOnly runs benchmarks focusing only on Check operations.
-// This is useful for isolating Check performance from List operations.
-func BenchChecksOnly(b *testing.B, pattern string) {
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		b.Fatalf("invalid pattern: %v", err)
-	}
-
-	tests, err := LoadTests()
-	if err != nil {
-		b.Fatalf("loading tests: %v", err)
-	}
-
-	// Filter tests that have check assertions
-	var matched []TestCase
-	for _, tc := range tests {
-		if !re.MatchString(tc.Name) {
-			continue
-		}
-		hasChecks := false
-		for _, stage := range tc.Stages {
-			if len(stage.CheckAssertions) > 0 {
-				hasChecks = true
-				break
-			}
-		}
-		if hasChecks {
-			matched = append(matched, tc)
-		}
-	}
-
-	if len(matched) == 0 {
-		b.Skipf("no tests with checks matched pattern %q", pattern)
-		return
-	}
-
-	for _, tc := range matched {
-		b.Run(tc.Name, func(b *testing.B) {
-			benchChecksOnlyForTest(b, tc)
-		})
-	}
-}
-
-// benchChecksOnlyForTest runs only Check assertions for a single test.
-func benchChecksOnlyForTest(b *testing.B, tc TestCase) {
-	client := NewClient(b)
-	ctx := context.Background()
-
-	resp, err := client.CreateStore(ctx, &openfgav1.CreateStoreRequest{Name: tc.Name})
-	if err != nil {
-		b.Fatalf("create store: %v", err)
-	}
-	storeID := resp.GetId()
-
-	type checkSetup struct {
-		modelID    string
-		assertions []*CheckAssertion
-	}
-	var allChecks []checkSetup
-
-	for _, stage := range tc.Stages {
-		model := testutils.MustTransformDSLToProtoWithID(stage.Model)
-		writeModelResp, err := client.WriteAuthorizationModel(ctx, &openfgav1.WriteAuthorizationModelRequest{
-			StoreId:         storeID,
-			SchemaVersion:   typesystem.SchemaVersion1_1,
-			TypeDefinitions: model.GetTypeDefinitions(),
-			Conditions:      model.GetConditions(),
-		})
-		if err != nil {
-			b.Fatalf("write model: %v", err)
-		}
-		modelID := writeModelResp.GetAuthorizationModelId()
-
-		tuples := stage.Tuples
-		for i := 0; i < len(tuples); i += writeMaxChunkSize {
-			end := int(math.Min(float64(i+writeMaxChunkSize), float64(len(tuples))))
-			_, err = client.Write(ctx, &openfgav1.WriteRequest{
-				StoreId:              storeID,
-				AuthorizationModelId: modelID,
-				Writes:               &openfgav1.WriteRequestWrites{TupleKeys: tuples[i:end]},
-			})
-			if err != nil {
-				b.Fatalf("write tuples: %v", err)
-			}
-		}
-
-		// Only collect non-error check assertions
-		var checks []*CheckAssertion
-		for _, a := range stage.CheckAssertions {
-			if a.ErrorCode == 0 {
-				checks = append(checks, a)
-			}
-		}
-		if len(checks) > 0 {
-			allChecks = append(allChecks, checkSetup{modelID: modelID, assertions: checks})
-		}
-	}
-
-	var totalChecks int
-	for _, cs := range allChecks {
-		totalChecks += len(cs.assertions)
-	}
-	b.ReportMetric(float64(totalChecks), "checks/op")
-
-	b.ResetTimer()
-
-	for i := 0; i < b.N; i++ {
-		for _, cs := range allChecks {
-			for _, assertion := range cs.assertions {
-				var tupleKey *openfgav1.CheckRequestTupleKey
-				if assertion.Tuple != nil {
-					tupleKey = &openfgav1.CheckRequestTupleKey{
-						User:     assertion.Tuple.GetUser(),
-						Relation: assertion.Tuple.GetRelation(),
-						Object:   assertion.Tuple.GetObject(),
-					}
-				}
-
-				_, err := client.Check(ctx, &openfgav1.CheckRequest{
-					StoreId:              storeID,
-					AuthorizationModelId: cs.modelID,
-					TupleKey:             tupleKey,
-					ContextualTuples: &openfgav1.ContextualTupleKeys{
-						TupleKeys: assertion.ContextualTuples,
-					},
-					Context: assertion.Context,
-				})
-				if err != nil {
-					b.Fatalf("check failed: %v", err)
-				}
-			}
-		}
-	}
-}
 
 // RunTest runs a single test case with its own isolated database.
 // Each test gets a fresh database to enable parallel execution.

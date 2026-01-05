@@ -52,15 +52,17 @@ BEGIN
 
 {{- range .ParentRelations}}
 
-    -- Recursive access path via {{.LinkingRelation}}
+    -- Recursive access path via {{.LinkingRelation}} -> {{.ParentRelation}}
     IF NOT v_has_access THEN
         IF EXISTS(
             SELECT 1 FROM melange_tuples link
             WHERE link.object_type = '{{$.ObjectType}}'
               AND link.object_id = p_object_id
               AND link.relation = '{{.LinkingRelation}}'
-              AND {{.ParentFunctionName}}(
+              AND check_permission_internal(
                   p_subject_type, p_subject_id,
+                  '{{.ParentRelation}}',
+                  link.subject_type,
                   link.subject_id,
                   p_visited || v_key
               ) = 1

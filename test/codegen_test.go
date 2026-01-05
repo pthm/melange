@@ -81,26 +81,43 @@ func TestCodegen_DispatcherRouting(t *testing.T) {
 	db := testutil.DB(t)
 	ctx := context.Background()
 
-	// Get the dispatcher function definition
-	var dispatcherDef string
+	// Get the internal dispatcher function definition (where routing happens)
+	var internalDispatcherDef string
 	err := db.QueryRowContext(ctx, `
+		SELECT pg_get_functiondef(p.oid)
+		FROM pg_proc p
+		JOIN pg_namespace n ON p.pronamespace = n.oid
+		WHERE p.proname = 'check_permission_internal'
+		  AND n.nspname = current_schema()
+		LIMIT 1
+	`).Scan(&internalDispatcherDef)
+	require.NoError(t, err)
+
+	t.Logf("Internal dispatcher definition:\n%s", internalDispatcherDef)
+
+	// Verify the internal dispatcher contains specialized routing
+	// It should contain CASE statements for routing to specialized functions
+	assert.Contains(t, internalDispatcherDef, "check_organization_owner",
+		"internal dispatcher should route to check_organization_owner")
+	assert.Contains(t, internalDispatcherDef, "check_permission_generic",
+		"internal dispatcher should fall back to generic for unhandled cases")
+
+	// Also verify the public check_permission delegates to internal
+	var publicDispatcherDef string
+	err = db.QueryRowContext(ctx, `
 		SELECT pg_get_functiondef(p.oid)
 		FROM pg_proc p
 		JOIN pg_namespace n ON p.pronamespace = n.oid
 		WHERE p.proname = 'check_permission'
 		  AND n.nspname = current_schema()
 		LIMIT 1
-	`).Scan(&dispatcherDef)
+	`).Scan(&publicDispatcherDef)
 	require.NoError(t, err)
 
-	t.Logf("Dispatcher definition:\n%s", dispatcherDef)
+	t.Logf("Public dispatcher definition:\n%s", publicDispatcherDef)
 
-	// Verify the dispatcher contains specialized routing
-	// It should contain CASE statements for routing to specialized functions
-	assert.Contains(t, dispatcherDef, "check_organization_owner",
-		"dispatcher should route to check_organization_owner")
-	assert.Contains(t, dispatcherDef, "check_permission_generic",
-		"dispatcher should fall back to generic for unhandled cases")
+	assert.Contains(t, publicDispatcherDef, "check_permission_internal",
+		"public dispatcher should delegate to internal dispatcher")
 }
 
 // TestCodegen_SpecializedFunctionCorrectness verifies that specialized functions

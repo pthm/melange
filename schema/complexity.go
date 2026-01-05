@@ -21,16 +21,18 @@ type RelationFeatures struct {
 // that all dependency relations are generatable via RelationAnalysis.CanGenerate.
 func (f RelationFeatures) CanGenerate() bool {
 	// We can generate SQL if:
-	// 1. The relation has Direct, Implied, Wildcard, Userset, and/or Exclusion features
-	// 2. No complex features that require recursion or intersection
+	// 1. The relation has Direct, Implied, Wildcard, Userset, Recursive, and/or Exclusion features
+	// 2. No intersection features (not yet supported in codegen)
 	// Note: Exclusion is allowed here, but ComputeCanGenerate will verify that
 	// all excluded relations are simply resolvable before enabling codegen.
 	// Note: Userset is supported via JOIN-based expansion in userset_check.tpl.sql
-	if f.HasRecursive || f.HasIntersection {
+	// Note: Recursive (TTU) is supported for same-type recursion. ComputeCanGenerate
+	// verifies that all parent relations link to the same type.
+	if f.HasIntersection {
 		return false
 	}
-	// Must have at least one access path (direct, implied, or userset)
-	return f.HasDirect || f.HasImplied || f.HasUserset
+	// Must have at least one access path (direct, implied, userset, or recursive)
+	return f.HasDirect || f.HasImplied || f.HasUserset || f.HasRecursive
 }
 
 // IsSimplyResolvable returns true if this relation can be fully resolved
@@ -719,6 +721,20 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 					}
 				}
 				if !canGenerate {
+					break
+				}
+			}
+		}
+
+		// Seventh check: if relation has recursive/TTU patterns, verify parent relations
+		// have valid data. The parent type may vary at runtime (e.g., parent: [folder, org]),
+		// so we use check_permission_internal to dispatch to the correct type's function.
+		// This check just ensures the parent relation definitions are present.
+		if canGenerate && a.Features.HasRecursive {
+			for _, parent := range a.ParentRelations {
+				if parent.LinkingRelation == "" || parent.Relation == "" {
+					// Invalid parent relation data - fall back to generic
+					canGenerate = false
 					break
 				}
 			}

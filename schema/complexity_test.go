@@ -82,7 +82,7 @@ func TestRelationFeaturesCanGenerate(t *testing.T) {
 		{
 			name: "with recursive",
 			f:    RelationFeatures{HasDirect: true, HasRecursive: true},
-			want: false, // Recursive requires cycle detection
+			want: true, // Recursive IS supported via check_permission_internal dispatch
 		},
 		{
 			name: "with exclusion",
@@ -97,7 +97,7 @@ func TestRelationFeaturesCanGenerate(t *testing.T) {
 		{
 			name: "complex combination",
 			f:    RelationFeatures{HasUserset: true, HasRecursive: true, HasExclusion: true},
-			want: false, // Multiple complex features
+			want: true, // All supported: userset (JOIN), recursive (dispatch), exclusion (lookup)
 		},
 	}
 	for _, tt := range tests {
@@ -378,9 +378,10 @@ func TestDetectFeatures_ComplexCombination(t *testing.T) {
 		t.Error("expected HasExclusion = true")
 	}
 
-	// Complex combinations with userset/recursive/exclusion cannot be generated
-	if got.CanGenerate() {
-		t.Error("expected CanGenerate() = false for complex combination")
+	// Complex combinations with userset/recursive/exclusion CAN be generated
+	// (at the Features level - ComputeCanGenerate does additional checks)
+	if !got.CanGenerate() {
+		t.Error("expected CanGenerate() = true for userset+recursive+exclusion combination")
 	}
 
 	// Should not be simply resolvable due to userset/recursive/exclusion
@@ -805,12 +806,12 @@ func TestAnalyzeRelations_ComplexComposite(t *testing.T) {
 		t.Error("expected HasExclusion = true")
 	}
 
-	// Complex features cannot be generated
-	if f.CanGenerate() {
-		t.Error("expected Features.CanGenerate() = false due to userset/recursive/exclusion")
+	// Complex features CAN now be generated (userset, recursive, exclusion all supported)
+	if !f.CanGenerate() {
+		t.Error("expected Features.CanGenerate() = true - userset/recursive/exclusion are all supported")
 	}
-	if viewerAnalysis.CanGenerate {
-		t.Error("expected CanGenerate = false due to complex features")
+	if !viewerAnalysis.CanGenerate {
+		t.Error("expected CanGenerate = true - group.member is closure-compatible and blocked is simply resolvable")
 	}
 
 	// Check collected data
