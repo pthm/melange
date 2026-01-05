@@ -54,6 +54,9 @@ type RelationDefinition struct {
 	ExcludedRelations []string // For nested exclusions: "(a but not b) but not c" -> ["b", "c"]
 	// ExcludedParentRelations captures tuple-to-userset exclusions like "but not viewer from parent".
 	ExcludedParentRelations []ParentRelationCheck
+	// ExcludedIntersectionGroups captures exclusions that require ALL relations in a group.
+	// For "viewer: writer but not (editor and owner)", this is [[editor, owner]].
+	ExcludedIntersectionGroups []IntersectionGroup
 	// SubjectTypeRefs provides detailed subject type info including userset relations.
 	// For [user, group#member], this would contain:
 	//   - {Type: "user", Relation: ""}
@@ -298,6 +301,51 @@ func ToAuthzModels(types []TypeDefinition) []AuthzModel {
 					ExcludedParentType:     &et,
 				}
 				models = append(models, model)
+			}
+
+			// Add entries for exclusion intersection groups.
+			// For "viewer: writer but not (editor and owner)", we create:
+			//   - {relation: viewer, check_relation: editor, rule_group_id: 1, rule_group_mode: exclude_intersection}
+			//   - {relation: viewer, check_relation: owner, rule_group_id: 1, rule_group_mode: exclude_intersection}
+			for _, group := range r.ExcludedIntersectionGroups {
+				if len(group.Relations) == 0 {
+					if len(group.ParentRelations) == 0 {
+						continue
+					}
+				}
+				groupID := ruleGroupIDCounter
+				ruleGroupIDCounter++
+				mode := "exclude_intersection"
+
+				for _, checkRel := range group.Relations {
+					cr := checkRel
+					model := AuthzModel{
+						ObjectType:    t.Name,
+						Relation:      r.Name,
+						CheckRelation: &cr,
+						RuleGroupID:   &groupID,
+						RuleGroupMode: &mode,
+					}
+					if excls, ok := group.Exclusions[checkRel]; ok && len(excls) > 0 {
+						cer := excls[0]
+						model.CheckExcludedRelation = &cer
+					}
+					models = append(models, model)
+				}
+
+				for _, checkParent := range group.ParentRelations {
+					cr := checkParent.Relation
+					cp := checkParent.ParentType
+					model := AuthzModel{
+						ObjectType:          t.Name,
+						Relation:            r.Name,
+						CheckParentRelation: &cr,
+						CheckParentType:     &cp,
+						RuleGroupID:         &groupID,
+						RuleGroupMode:       &mode,
+					}
+					models = append(models, model)
+				}
 			}
 
 			// Add entries for ALL implied relations (including transitive)

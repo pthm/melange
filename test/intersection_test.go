@@ -203,6 +203,150 @@ type document
 	t.Logf("badger on document:2: writer=%v, editor=%v", hasWriter, hasEditor)
 }
 
+func TestIntersectionExclusionInSubtractParsing(t *testing.T) {
+	schema := `
+model
+  schema 1.1
+
+type user
+
+type document
+  relations
+    define writer: [user]
+    define editor: [user]
+    define owner: [user]
+    define viewer: writer but not (editor and owner)
+`
+
+	types, err := tooling.ParseSchemaString(schema)
+	require.NoError(t, err)
+
+	var viewerRel *melange.RelationDefinition
+	for i := range types {
+		if types[i].Name != "document" {
+			continue
+		}
+		for j := range types[i].Relations {
+			if types[i].Relations[j].Name == "viewer" {
+				viewerRel = &types[i].Relations[j]
+				break
+			}
+		}
+	}
+	require.NotNil(t, viewerRel)
+	require.Len(t, viewerRel.ExcludedIntersectionGroups, 1, "should have one excluded intersection group")
+	require.ElementsMatch(t, viewerRel.ExcludedIntersectionGroups[0].Relations, []string{"editor", "owner"})
+}
+
+func TestIntersectionExclusionInSubtractSQL(t *testing.T) {
+	schema := `
+model
+  schema 1.1
+
+type user
+
+type document
+  relations
+    define writer: [user]
+    define editor: [user]
+    define owner: [user]
+    define viewer: writer but not (editor and owner)
+`
+
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+
+	err := tooling.MigrateFromString(ctx, db, schema)
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(ctx, `
+		CREATE VIEW melange_tuples AS
+		SELECT 'user'::text AS subject_type,
+		       subject_id,
+		       relation,
+		       'document'::text AS object_type,
+		       object_id
+		FROM (VALUES
+			('aardvark', 'writer', '1'),
+			('aardvark', 'editor', '1'),
+			('aardvark', 'owner', '1'),
+			('badger', 'writer', '2'),
+			('badger', 'editor', '2'),
+			('cheetah', 'writer', '3'),
+			('cheetah', 'owner', '3'),
+			('duck', 'writer', '4')
+		) AS t(subject_id, relation, object_id)
+	`)
+	require.NoError(t, err)
+
+	var allowed bool
+	err = db.QueryRowContext(ctx, `SELECT check_permission('user', 'aardvark', 'viewer', 'document', '1')`).Scan(&allowed)
+	require.NoError(t, err)
+	require.False(t, allowed, "aardvark should be excluded by editor and owner")
+
+	err = db.QueryRowContext(ctx, `SELECT check_permission('user', 'badger', 'viewer', 'document', '2')`).Scan(&allowed)
+	require.NoError(t, err)
+	require.True(t, allowed, "badger should be allowed")
+}
+
+func TestIntersectionWildcardInComputedRelation(t *testing.T) {
+	schema := `
+model
+  schema 1.1
+
+type user
+
+type document
+  relations
+    define allowed: [user]
+    define viewer: [user:*] and allowed
+    define can_view: viewer
+`
+
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+
+	err := tooling.MigrateFromString(ctx, db, schema)
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(ctx, `
+		CREATE VIEW melange_tuples AS
+		SELECT 'user'::text AS subject_type,
+		       subject_id,
+		       relation,
+		       'document'::text AS object_type,
+		       object_id
+		FROM (VALUES
+			('jon', 'allowed', '1'),
+			('*', 'viewer', '1'),
+			('*', 'viewer', '2')
+		) AS t(subject_id, relation, object_id)
+	`)
+	require.NoError(t, err)
+
+	var allowed bool
+	err = db.QueryRowContext(ctx, `SELECT check_permission('user', 'jon', 'can_view', 'document', '1')`).Scan(&allowed)
+	require.NoError(t, err)
+	require.True(t, allowed, "jon should be allowed for can_view on document:1")
+
+	err = db.QueryRowContext(ctx, `SELECT check_permission('user', 'bob', 'can_view', 'document', '2')`).Scan(&allowed)
+	require.NoError(t, err)
+	require.False(t, allowed, "bob should be denied for can_view on document:2")
+
+	rows, err := db.QueryContext(ctx, `SELECT subject_id FROM list_accessible_subjects('document', '1', 'can_view', 'user') ORDER BY subject_id`)
+	require.NoError(t, err)
+	defer rows.Close()
+
+	var subjects []string
+	for rows.Next() {
+		var id string
+		require.NoError(t, rows.Scan(&id))
+		subjects = append(subjects, id)
+	}
+	require.NoError(t, rows.Err())
+	require.Equal(t, []string{"jon"}, subjects)
+}
+
 // TestThisAndIntersection tests the "[user] and writer" pattern.
 // This tests that having a direct tuple for the relation is not sufficient;
 // the subject must also satisfy the other parts of the intersection.

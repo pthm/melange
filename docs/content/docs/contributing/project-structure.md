@@ -148,7 +148,7 @@ test/
 ├── schema_test.go      # Schema helper tests
 ├── openfgatests/       # OpenFGA compatibility suite
 │   ├── loader.go       # Test case loader
-│   ├── client.go       # Test client (parser mirror)
+│   ├── client.go       # Test client (uses tooling parser)
 │   ├── runner.go       # Test execution
 │   └── *_test.go       # Test files
 ├── cmd/dumptest/       # Test case inspector
@@ -162,8 +162,8 @@ The `openfgatests` package runs OpenFGA's official test suite against Melange:
 
 **`loader.go`** - Loads test cases from embedded YAML files
 
-**`client.go`** - Test client that mirrors `tooling/parser.go`:
-- Parses schemas the same way as tooling
+**`client.go`** - Test client:
+- Uses `tooling.ConvertProtoModel()` for schema parsing
 - Creates database schema
 - Executes assertions
 
@@ -193,15 +193,6 @@ docs/
 2. **Parser changes** go in `tooling/parser.go`
 3. **SQL changes** go in `sql/functions.sql`
 4. **Tests** go in `test/` or the appropriate `*_test.go` file
-
-### Parser Changes (Important!)
-
-The parser exists in two places that must stay in sync:
-
-1. `tooling/parser.go` - Production parser
-2. `test/openfgatests/client.go` - Test client parser
-
-When modifying parsing logic, update both files.
 
 ### SQL Function Changes
 

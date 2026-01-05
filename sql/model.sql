@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS melange_model (
     check_excluded_relation VARCHAR, -- For intersection rules: exclusion on the check_relation (e.g., "editor but not owner")
     check_parent_relation VARCHAR, -- For intersection rules: parent relation to check (tuple-to-userset)
     check_parent_type VARCHAR,     -- For intersection rules: linking relation on current object
-    CONSTRAINT chk_rule_group_mode CHECK (rule_group_mode IS NULL OR rule_group_mode IN ('union', 'intersection'))
+    CONSTRAINT chk_rule_group_mode CHECK (rule_group_mode IS NULL OR rule_group_mode IN ('union', 'intersection', 'exclude_intersection'))
 );
 
 -- Primary lookup: find rules for a specific object type and relation
@@ -64,6 +64,9 @@ CREATE INDEX IF NOT EXISTS idx_melange_model_userset ON melange_model (object_ty
 -- Used to detect if a relation has intersection rules (for fast path optimization)
 CREATE INDEX IF NOT EXISTS idx_melange_model_intersection ON melange_model (object_type, relation)
     WHERE rule_group_mode = 'intersection';
+
+CREATE INDEX IF NOT EXISTS idx_melange_model_exclude_intersection ON melange_model (object_type, relation)
+    WHERE rule_group_mode = 'exclude_intersection';
 
 -- Userset rule expansion table
 -- Stores precomputed userset rules with relation closure applied.

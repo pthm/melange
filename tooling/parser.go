@@ -192,6 +192,8 @@ func extractUserset(us *openfgav1.Userset, rel *melange.RelationDefinition) {
 			excludedRels, excludedParents := extractSubtractRelations(subtract)
 			rel.ExcludedRelations = append(rel.ExcludedRelations, excludedRels...)
 			rel.ExcludedParentRelations = append(rel.ExcludedParentRelations, excludedParents...)
+			excludedIntersectionGroups := extractSubtractIntersectionGroups(subtract, rel.Name)
+			rel.ExcludedIntersectionGroups = append(rel.ExcludedIntersectionGroups, excludedIntersectionGroups...)
 			// Also set deprecated field for backward compatibility
 			if len(excludedRels) > 0 {
 				rel.ExcludedRelation = excludedRels[len(excludedRels)-1]
@@ -410,5 +412,29 @@ func extractSubtractRelations(us *openfgav1.Userset) ([]string, []melange.Parent
 
 	default:
 		return nil, nil
+	}
+}
+
+// extractSubtractIntersectionGroups extracts intersection groups from a subtract userset.
+// For "but not (editor and owner)", returns one group: [[editor, owner]].
+// For unions, returns the union of all child intersection groups.
+func extractSubtractIntersectionGroups(us *openfgav1.Userset, relationName string) []melange.IntersectionGroup {
+	if us == nil {
+		return nil
+	}
+
+	switch v := us.Userset.(type) {
+	case *openfgav1.Userset_Intersection:
+		return expandIntersection(v.Intersection, relationName)
+	case *openfgav1.Userset_Union:
+		var groups []melange.IntersectionGroup
+		for _, child := range v.Union.GetChild() {
+			groups = append(groups, extractSubtractIntersectionGroups(child, relationName)...)
+		}
+		return groups
+	case *openfgav1.Userset_Difference:
+		return extractSubtractIntersectionGroups(v.Difference.GetSubtract(), relationName)
+	default:
+		return nil
 	}
 }

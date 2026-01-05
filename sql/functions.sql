@@ -705,7 +705,161 @@ BEGIN
         END LOOP;
     END LOOP;
 
+    -- Handle exclusions that require ALL relations in a group (intersection).
+    IF check_exclusion_intersection_groups(
+        p_subject_type, p_subject_id,
+        p_relation, p_object_type, p_object_id
+    ) THEN
+        RETURN TRUE;
+    END IF;
+
     RETURN FALSE;  -- Not excluded
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+
+-- Check exclusion groups that require ALL relations in a group.
+-- For "viewer: writer but not (editor and owner)", this returns TRUE
+-- when the subject has BOTH editor and owner on the object.
+CREATE OR REPLACE FUNCTION check_exclusion_intersection_groups(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_relation TEXT,
+    p_object_type TEXT,
+    p_object_id TEXT
+) RETURNS BOOLEAN AS $$
+DECLARE
+    v_group RECORD;
+    v_group_satisfied BOOLEAN;
+    v_check RECORD;
+    v_has_direct BOOLEAN;
+    v_parent RECORD;
+BEGIN
+    SELECT EXISTS (
+        SELECT 1
+        FROM melange_model m
+        WHERE m.object_type = p_object_type
+          AND m.relation = p_relation
+          AND m.subject_type IS NOT NULL
+          AND m.subject_relation IS NULL
+          AND m.parent_relation IS NULL
+    ) INTO v_has_direct;
+
+    FOR v_group IN
+        SELECT DISTINCT m.rule_group_id
+        FROM melange_relation_closure c
+        JOIN melange_model m
+            ON m.object_type = c.object_type
+            AND m.relation = c.satisfying_relation
+        WHERE c.object_type = p_object_type
+          AND c.relation = p_relation
+          AND m.rule_group_mode = 'exclude_intersection'
+          AND m.rule_group_id IS NOT NULL
+    LOOP
+        v_group_satisfied := TRUE;
+
+        FOR v_check IN
+            SELECT m.check_relation, m.check_excluded_relation, m.check_parent_relation, m.check_parent_type
+            FROM melange_model m
+            WHERE m.object_type = p_object_type
+              AND m.rule_group_id = v_group.rule_group_id
+              AND m.rule_group_mode = 'exclude_intersection'
+              AND (m.check_relation IS NOT NULL OR m.check_parent_relation IS NOT NULL)
+        LOOP
+            IF v_check.check_parent_relation IS NOT NULL THEN
+                v_group_satisfied := FALSE;
+                FOR v_parent IN
+                    SELECT t.subject_type AS parent_type, t.subject_id AS parent_id
+                    FROM melange_tuples t
+                    WHERE t.object_type = p_object_type
+                      AND t.object_id = p_object_id
+                      AND t.relation = v_check.check_parent_type
+                LOOP
+                    IF check_permission(
+                        p_subject_type, p_subject_id,
+                        v_check.check_parent_relation, v_parent.parent_type, v_parent.parent_id
+                    ) = 1 THEN
+                        v_group_satisfied := TRUE;
+                        EXIT;
+                    END IF;
+                END LOOP;
+
+                IF NOT v_group_satisfied THEN
+                    EXIT;
+                END IF;
+
+                CONTINUE;
+            END IF;
+
+            IF v_check.check_relation = p_relation THEN
+                IF position('#' in p_subject_id) > 0
+                    AND p_subject_type = p_object_type
+                    AND substring(p_subject_id from 1 for position('#' in p_subject_id) - 1) = p_object_id
+                    AND EXISTS (
+                        SELECT 1
+                        FROM melange_relation_closure c
+                        WHERE c.object_type = p_object_type
+                          AND c.relation = p_relation
+                          AND c.satisfying_relation = substring(p_subject_id from position('#' in p_subject_id) + 1)
+                    ) THEN
+                    v_group_satisfied := TRUE;
+                ELSEIF v_has_direct THEN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM melange_tuples t
+                        WHERE t.subject_type = p_subject_type
+                          AND (t.subject_id = p_subject_id OR t.subject_id = '*')
+                          AND t.object_type = p_object_type
+                          AND t.object_id = p_object_id
+                          AND t.relation = v_check.check_relation
+                    ) THEN
+                        v_group_satisfied := FALSE;
+                        EXIT;
+                    END IF;
+                ELSE
+                    IF NOT subject_has_grant(
+                        p_subject_type, p_subject_id,
+                        p_object_type, p_object_id,
+                        v_check.check_relation, ARRAY[]::TEXT[]
+                    ) THEN
+                        v_group_satisfied := FALSE;
+                        EXIT;
+                    END IF;
+                END IF;
+
+                IF v_group_satisfied AND v_check.check_excluded_relation IS NOT NULL THEN
+                    IF check_exclusion(p_subject_type, p_subject_id,
+                                       v_check.check_excluded_relation,
+                                       p_object_type, p_object_id) THEN
+                        v_group_satisfied := FALSE;
+                        EXIT;
+                    END IF;
+                END IF;
+            ELSE
+                IF check_permission(
+                    p_subject_type, p_subject_id,
+                    v_check.check_relation, p_object_type, p_object_id
+                ) = 0 THEN
+                    v_group_satisfied := FALSE;
+                    EXIT;
+                END IF;
+
+                IF v_group_satisfied AND v_check.check_excluded_relation IS NOT NULL THEN
+                    IF check_exclusion(p_subject_type, p_subject_id,
+                                       v_check.check_excluded_relation,
+                                       p_object_type, p_object_id) THEN
+                        v_group_satisfied := FALSE;
+                        EXIT;
+                    END IF;
+                END IF;
+            END IF;
+        END LOOP;
+
+        IF v_group_satisfied THEN
+            RETURN TRUE;
+        END IF;
+    END LOOP;
+
+    RETURN FALSE;
 END;
 $$ LANGUAGE plpgsql STABLE;
 
@@ -1263,12 +1417,9 @@ BEGIN
         -- If there are no other rules, return 0 immediately.
         SELECT EXISTS (
             SELECT 1
-            FROM melange_relation_closure c
-            JOIN melange_model m
-                ON m.object_type = c.object_type
-                AND m.relation = c.satisfying_relation
-            WHERE c.object_type = p_object_type
-              AND c.relation = p_relation
+            FROM melange_model m
+            WHERE m.object_type = p_object_type
+              AND m.relation = p_relation
               AND (m.rule_group_mode IS NULL OR m.rule_group_mode != 'intersection')
               AND (m.subject_type IS NOT NULL OR m.implied_by IS NOT NULL OR m.parent_relation IS NOT NULL)
               AND NOT (
@@ -1382,12 +1533,9 @@ BEGIN
 
         SELECT EXISTS (
             SELECT 1
-            FROM melange_relation_closure c
-            JOIN melange_model m
-                ON m.object_type = c.object_type
-                AND m.relation = c.satisfying_relation
-            WHERE c.object_type = p_object_type
-              AND c.relation = p_relation
+            FROM melange_model m
+            WHERE m.object_type = p_object_type
+              AND m.relation = p_relation
               AND (m.rule_group_mode IS NULL OR m.rule_group_mode != 'intersection')
               AND (m.subject_type IS NOT NULL OR m.implied_by IS NOT NULL OR m.parent_relation IS NOT NULL)
               AND NOT (
