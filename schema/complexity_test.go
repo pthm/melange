@@ -57,12 +57,12 @@ func TestRelationFeaturesCanGenerate(t *testing.T) {
 		{
 			name: "direct only",
 			f:    RelationFeatures{HasDirect: true},
-			want: true,
+			want: false, // Phase 1: codegen disabled
 		},
 		{
 			name: "complex combination",
 			f:    RelationFeatures{HasUserset: true, HasRecursive: true, HasExclusion: true},
-			want: true,
+			want: false, // Phase 1: codegen disabled
 		},
 	}
 	for _, tt := range tests {
@@ -287,9 +287,9 @@ func TestDetectFeatures_ComplexCombination(t *testing.T) {
 		t.Error("expected HasExclusion = true")
 	}
 
-	// Should still be generatable (we compose SQL)
-	if !got.CanGenerate() {
-		t.Error("expected CanGenerate() = true for complex combination")
+	// Phase 1: codegen disabled - complex combinations fall back to generic
+	if got.CanGenerate() {
+		t.Error("expected CanGenerate() = false for complex combination (Phase 1)")
 	}
 
 	// Features string should show all
@@ -708,9 +708,9 @@ func TestAnalyzeRelations_ComplexComposite(t *testing.T) {
 		t.Error("expected HasExclusion = true")
 	}
 
-	// Should still be generatable
-	if !f.CanGenerate() {
-		t.Error("expected CanGenerate() = true")
+	// Phase 1: codegen disabled - falls back to generic implementation
+	if f.CanGenerate() {
+		t.Error("expected CanGenerate() = false (Phase 1)")
 	}
 
 	// Check collected data

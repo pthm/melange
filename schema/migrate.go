@@ -94,36 +94,90 @@ func (m *Migrator) ApplyDDL(ctx context.Context) error {
 	return nil
 }
 
+// applyDDLTx applies DDL to a specific Execer (typically a transaction).
+// This is the transactional version of ApplyDDL.
+func (m *Migrator) applyDDLTx(ctx context.Context, db Execer) error {
+	// Apply model table and indexes
+	if _, err := db.ExecContext(ctx, melangesql.ModelSQL); err != nil {
+		return fmt.Errorf("applying model.sql: %w", err)
+	}
+
+	// Apply closure table and indexes
+	if _, err := db.ExecContext(ctx, melangesql.ClosureSQL); err != nil {
+		return fmt.Errorf("applying closure.sql: %w", err)
+	}
+
+	// Apply functions in dependency order.
+	for _, file := range melangesql.FunctionsSQLFiles {
+		if _, err := db.ExecContext(ctx, file.Contents); err != nil {
+			return fmt.Errorf("applying %s: %w", file.Path, err)
+		}
+	}
+
+	return nil
+}
+
+// applyGeneratedSQL applies generated specialized functions and dispatcher.
+func (m *Migrator) applyGeneratedSQL(ctx context.Context, db Execer, gen GeneratedSQL) error {
+	// Apply specialized check functions first (dispatcher depends on them)
+	for i, fn := range gen.Functions {
+		if _, err := db.ExecContext(ctx, fn); err != nil {
+			return fmt.Errorf("applying generated function %d: %w", i, err)
+		}
+	}
+
+	// Apply dispatcher (replaces default check_permission)
+	if gen.Dispatcher != "" {
+		if _, err := db.ExecContext(ctx, gen.Dispatcher); err != nil {
+			return fmt.Errorf("applying dispatcher: %w", err)
+		}
+	}
+
+	// Apply no-wildcard dispatcher
+	if gen.DispatcherNoWildcard != "" {
+		if _, err := db.ExecContext(ctx, gen.DispatcherNoWildcard); err != nil {
+			return fmt.Errorf("applying no-wildcard dispatcher: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // MigrateWithTypes performs database migration using pre-parsed type definitions.
 // This is the core migration method used by the tooling package's Migrate function.
 //
 // The method:
 //  1. Validates the schema (checks for cycles)
-//  2. Applies DDL (creates tables and functions)
-//  3. Converts type definitions to authorization models
-//  4. Computes relation closure for efficient implied-by resolution
-//  5. Truncates and repopulates melange_model and melange_relation_closure
+//  2. Computes all derived data (models, closure, userset rules)
+//  3. Analyzes relations and generates specialized SQL functions
+//  4. Applies everything atomically in a transaction:
+//     - DDL (tables, generic functions)
+//     - Generated specialized functions and dispatcher
+//     - Model data (types, models, closure, userset rules)
 //
 // This is idempotent - safe to run multiple times with the same types.
 //
 // Uses a transaction if the db supports it (*sql.DB). This ensures
 // the schema is updated atomically or not at all.
 func (m *Migrator) MigrateWithTypes(ctx context.Context, types []TypeDefinition) error {
-	// Validate schema before applying to database
+	// 1. Validate schema before any computation
 	if err := DetectCycles(types); err != nil {
 		return err
 	}
 
-	// Apply DDL first
-	if err := m.ApplyDDL(ctx); err != nil {
-		return err
-	}
-
+	// 2. Compute all derived data (pure computation, no DB)
 	models := ToAuthzModels(types)
 	closureRows := ComputeRelationClosure(types)
 	usersetRules := ToUsersetRules(types, closureRows)
 
-	// Use a transaction if the db supports it
+	// 3. Analyze relations and generate SQL
+	analyses := AnalyzeRelations(types, closureRows)
+	generatedSQL, err := GenerateSQL(analyses)
+	if err != nil {
+		return fmt.Errorf("generating SQL: %w", err)
+	}
+
+	// 4. Apply everything atomically
 	if txer, ok := m.db.(interface {
 		BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
 	}); ok {
@@ -133,18 +187,26 @@ func (m *Migrator) MigrateWithTypes(ctx context.Context, types []TypeDefinition)
 		}
 		defer func() { _ = tx.Rollback() }()
 
+		// Apply DDL (tables, generic functions)
+		if err := m.applyDDLTx(ctx, tx); err != nil {
+			return err
+		}
+
+		// Apply generated specialized functions
+		if err := m.applyGeneratedSQL(ctx, tx, generatedSQL); err != nil {
+			return err
+		}
+
+		// Apply model data
 		if err := m.applyTypes(ctx, tx, types); err != nil {
 			return err
 		}
-
 		if err := m.applyModels(ctx, tx, models); err != nil {
 			return err
 		}
-
 		if err := m.applyClosure(ctx, tx, closureRows); err != nil {
 			return err
 		}
-
 		if err := m.applyUsersetRules(ctx, tx, usersetRules); err != nil {
 			return err
 		}
@@ -153,6 +215,12 @@ func (m *Migrator) MigrateWithTypes(ctx context.Context, types []TypeDefinition)
 	}
 
 	// Fall back to non-transactional (for *sql.Conn)
+	if err := m.ApplyDDL(ctx); err != nil {
+		return err
+	}
+	if err := m.applyGeneratedSQL(ctx, m.db, generatedSQL); err != nil {
+		return err
+	}
 	if err := m.applyTypes(ctx, m.db, types); err != nil {
 		return err
 	}

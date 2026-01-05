@@ -15,12 +15,19 @@ type RelationFeatures struct {
 }
 
 // CanGenerate returns true if we can generate specialized SQL for this feature set.
-// Currently we can generate for any combination of features.
+// Some features are not yet supported for code generation.
 func (f RelationFeatures) CanGenerate() bool {
-	// We can compose all features via SQL OR/AND
-	// The only case we can't handle is if there are NO features at all
-	return f.HasDirect || f.HasImplied || f.HasWildcard || f.HasUserset ||
-		f.HasRecursive || f.HasExclusion || f.HasIntersection
+	// Phase 1: All code generation is disabled.
+	// The infrastructure is in place and tested, but edge cases need more work:
+	// - Reflexive userset subjects (document:1#viewer checking viewer on document:1)
+	// - Type restrictions when model changes between migrations
+	// - TTU (tuple-to-userset) requiring check_permission on variable parent types
+	// - Intersection requiring rule group handling
+	// - Implied relations requiring recursive check function calls
+	// - Exclusion requiring check functions for excluded relations
+	//
+	// Future phases can enable generation incrementally as edge cases are addressed.
+	return false
 }
 
 // NeedsCycleDetection returns true if the generated function needs cycle detection.

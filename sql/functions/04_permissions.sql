@@ -427,14 +427,18 @@ END;
 $$ LANGUAGE plpgsql STABLE;
 
 
--- Main entry point for permission checking.
+-- Generic permission checking implementation.
 -- Routes to optimal strategy based on relation rules:
 --   - Intersection groups first (AND semantics require all conditions)
 --   - Userset references via subject_has_grant (recursive group membership)
 --   - Simple relations via check_permission_simple (fast path)
 --
 -- Returns 1 if access granted, 0 if denied.
-CREATE OR REPLACE FUNCTION check_permission(
+--
+-- Note: The main check_permission() entry point is generated at migration time
+-- and dispatches to specialized per-relation functions. This generic version
+-- is used as a fallback when no specialized function exists.
+CREATE OR REPLACE FUNCTION check_permission_generic(
     p_subject_type TEXT,
     p_subject_id TEXT,
     p_relation TEXT,
@@ -564,8 +568,9 @@ END;
 $$ LANGUAGE plpgsql STABLE;
 
 
--- Permission check ignoring wildcards - used by ListUsers to enumerate specific subjects
-CREATE OR REPLACE FUNCTION check_permission_no_wildcard(
+-- Generic permission check ignoring wildcards - used by ListUsers to enumerate specific subjects.
+-- See check_permission_generic for details on the dispatch pattern.
+CREATE OR REPLACE FUNCTION check_permission_no_wildcard_generic(
     p_subject_type TEXT,
     p_subject_id TEXT,
     p_relation TEXT,
@@ -657,3 +662,35 @@ BEGIN
     RETURN 0;
 END;
 $$ LANGUAGE plpgsql STABLE;
+
+
+-- Default dispatcher for check_permission.
+-- This is replaced at migration time with a generated version that routes
+-- to specialized per-relation functions. This default version just calls
+-- the generic implementation.
+CREATE OR REPLACE FUNCTION check_permission(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_relation TEXT,
+    p_object_type TEXT,
+    p_object_id TEXT
+) RETURNS INTEGER AS $$
+    SELECT check_permission_generic(
+        p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id
+    );
+$$ LANGUAGE sql STABLE;
+
+
+-- Default dispatcher for check_permission_no_wildcard.
+-- This is replaced at migration time with a generated version.
+CREATE OR REPLACE FUNCTION check_permission_no_wildcard(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_relation TEXT,
+    p_object_type TEXT,
+    p_object_id TEXT
+) RETURNS INTEGER AS $$
+    SELECT check_permission_no_wildcard_generic(
+        p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id
+    );
+$$ LANGUAGE sql STABLE;
