@@ -1,6 +1,7 @@
 {{- /*
-  Template for generating pure SQL check functions.
-  Used when NeedsPLpgSQL() returns false.
+  Template for generating check functions without cycle detection.
+  Uses PL/pgSQL to defer validation until execution time, since
+  melange_tuples is a user-defined view created after migration.
 */ -}}
 -- Generated check function for {{.ObjectType}}.{{.Relation}}
 -- Features: {{.FeaturesString}}
@@ -10,14 +11,23 @@ CREATE OR REPLACE FUNCTION {{.FunctionName}}(
     p_object_id TEXT,
     p_visited TEXT[] DEFAULT ARRAY[]::TEXT[]
 ) RETURNS INTEGER AS $$
+BEGIN
 {{- if .HasExclusion}}
-    SELECT CASE
-        WHEN ({{.AccessChecks}})
-        THEN
-            CASE WHEN {{.ExclusionCheck}} THEN 0 ELSE 1 END
-        ELSE 0
-    END
+    IF {{.AccessChecks}} THEN
+        IF {{.ExclusionCheck}} THEN
+            RETURN 0;
+        ELSE
+            RETURN 1;
+        END IF;
+    ELSE
+        RETURN 0;
+    END IF;
 {{- else}}
-    SELECT CASE WHEN ({{.AccessChecks}}) THEN 1 ELSE 0 END
-{{- end}};
-$$ LANGUAGE sql STABLE;
+    IF {{.AccessChecks}} THEN
+        RETURN 1;
+    ELSE
+        RETURN 0;
+    END IF;
+{{- end}}
+END;
+$$ LANGUAGE plpgsql STABLE;

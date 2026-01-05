@@ -250,28 +250,28 @@ check: fmt lint test
 # OpenFGA Test Suite
 # =============================================================================
 
-# Run all OpenFGA feature tests (uses gotestfmt for pretty output)
+# Run all OpenFGA feature tests
 [group('OpenFGA Test')]
 test-openfga:
-    cd {{TEST}} && {{GO_TEST_JSON}} -timeout {{OPENFGA_TEST_TIMEOUT}} \
-        -run "TestOpenFGA_" {{OPENFGA_PKGS}} 2>&1 | gotestfmt -hide "successful-tests"
+    cd {{TEST}} && {{GO_TEST}} -count=1 -timeout {{OPENFGA_TEST_TIMEOUT}} \
+        -run "TestOpenFGA_" {{OPENFGA_PKGS}}
 
 # Run OpenFGA tests for a specific feature (e.g., just test-openfga-feature Wildcards)
 [group('OpenFGA Test')]
 test-openfga-feature FEATURE:
-    cd {{TEST}} && {{GO_TEST_JSON}} -timeout {{OPENFGA_TEST_TIMEOUT_SHORT}} \
-        -run "TestOpenFGA_{{FEATURE}}" {{OPENFGA_PKGS}} 2>&1 | gotestfmt
+    cd {{TEST}} && {{GO_TEST}} -count=1 -timeout {{OPENFGA_TEST_TIMEOUT_SHORT}} \
+        -run "TestOpenFGA_{{FEATURE}}" {{OPENFGA_PKGS}}
 
 # Run a single OpenFGA test by name (e.g., just test-openfga-name wildcard_direct)
 [group('OpenFGA Test')]
 test-openfga-name NAME:
-    cd {{TEST}} && OPENFGA_TEST_NAME="{{NAME}}" {{GO_TEST}} -v -count=1 -timeout {{OPENFGA_TEST_TIMEOUT_SHORT}} \
+    cd {{TEST}} && OPENFGA_TEST_NAME="{{NAME}}" {{GO_TEST}} -count=1 -timeout {{OPENFGA_TEST_TIMEOUT_SHORT}} \
         -run "TestOpenFGAByName" {{OPENFGA_PKGS}}
 
 # Run OpenFGA tests matching a regex pattern (e.g., just test-openfga-pattern "^wildcard")
 [group('OpenFGA Test')]
 test-openfga-pattern PATTERN:
-    cd {{TEST}} && OPENFGA_TEST_PATTERN="{{PATTERN}}" {{GO_TEST}} -v -count=1 -timeout {{OPENFGA_TEST_TIMEOUT}} \
+    cd {{TEST}} && OPENFGA_TEST_PATTERN="{{PATTERN}}" {{GO_TEST}} -count=1 -timeout {{OPENFGA_TEST_TIMEOUT}} \
         -run "TestOpenFGAByPattern" {{OPENFGA_PKGS}}
 
 # List all available OpenFGA test names
@@ -279,20 +279,14 @@ test-openfga-pattern PATTERN:
 test-openfga-list:
     cd {{TEST}} && {{GO_TEST}} -v -count=1 -run "TestOpenFGAListAvailableTests" {{OPENFGA_PKGS}}
 
-# Run OpenFGA tests in verbose mode (without gotestfmt)
-[group('OpenFGA Test')]
-test-openfga-verbose:
-    cd {{TEST}} && {{GO_TEST}} -v -count=1 -timeout {{OPENFGA_TEST_TIMEOUT}} \
-        -run "TestOpenFGA_" {{OPENFGA_PKGS}}
-
 # Run the full OpenFGA check suite (WARNING: includes unsupported features, many will fail)
 [group('OpenFGA Test')]
 test-openfga-full-check:
     @echo "⚠️  Running FULL OpenFGA check suite - this includes unsupported features!"
     @echo "   Many tests will fail. Use 'just test-openfga' for supported features only."
     @echo ""
-    cd {{TEST}} && {{GO_TEST_JSON}} -timeout {{OPENFGA_TEST_TIMEOUT_LONG}} \
-        -run "TestOpenFGACheckSuite" {{OPENFGA_PKGS}} 2>&1 | gotestfmt -hide "successful-tests" || true
+    cd {{TEST}} && {{GO_TEST}} -count=1 -timeout {{OPENFGA_TEST_TIMEOUT_LONG}} \
+        -run "TestOpenFGACheckSuite" {{OPENFGA_PKGS}} || true
 
 # Install gotestfmt if not already installed
 [group('OpenFGA Test')]
@@ -366,3 +360,23 @@ dump-openfga-pattern PATTERN: build-dumptest
 [group('OpenFGA Inspect')]
 dump-openfga-all: build-dumptest
     ./bin/dumptest -all
+
+# Build the dumpsql utility
+[group('OpenFGA Inspect')]
+build-dumpsql:
+    cd {{TEST}} && go build -o ../bin/dumpsql ./cmd/dumpsql
+
+# Dump generated SQL for a specific OpenFGA test by name (e.g., just dump-sql wildcard_direct)
+[group('OpenFGA Inspect')]
+dump-sql NAME: build-dumpsql
+    ./bin/dumpsql "{{NAME}}"
+
+# Dump only model data for a specific OpenFGA test
+[group('OpenFGA Inspect')]
+dump-sql-models NAME: build-dumpsql
+    ./bin/dumpsql -models "{{NAME}}"
+
+# Dump only analysis data for a specific OpenFGA test
+[group('OpenFGA Inspect')]
+dump-sql-analysis NAME: build-dumpsql
+    ./bin/dumpsql -analysis "{{NAME}}"

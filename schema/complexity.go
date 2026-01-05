@@ -15,19 +15,26 @@ type RelationFeatures struct {
 }
 
 // CanGenerate returns true if we can generate specialized SQL for this feature set.
-// Some features are not yet supported for code generation.
+// This checks the features themselves - for full generation eligibility, also check
+// that all dependency relations are generatable via RelationAnalysis.CanGenerate.
 func (f RelationFeatures) CanGenerate() bool {
-	// Phase 1: All code generation is disabled.
-	// The infrastructure is in place and tested, but edge cases need more work:
-	// - Reflexive userset subjects (document:1#viewer checking viewer on document:1)
-	// - Type restrictions when model changes between migrations
-	// - TTU (tuple-to-userset) requiring check_permission on variable parent types
-	// - Intersection requiring rule group handling
-	// - Implied relations requiring recursive check function calls
-	// - Exclusion requiring check functions for excluded relations
-	//
-	// Future phases can enable generation incrementally as edge cases are addressed.
-	return false
+	// We can generate SQL if:
+	// 1. The relation only has Direct, Implied, and/or Wildcard features
+	// 2. No complex features that require JOINs, recursion, etc.
+	if f.HasUserset || f.HasRecursive || f.HasExclusion || f.HasIntersection {
+		return false
+	}
+	// Must have at least one access path (direct or implied)
+	return f.HasDirect || f.HasImplied
+}
+
+// IsSimplyResolvable returns true if this relation can be resolved
+// with a simple tuple lookup (no userset JOINs, recursion, etc.).
+// This is used to check if all relations in a closure are compatible
+// with simple closure-based SQL generation.
+func (f RelationFeatures) IsSimplyResolvable() bool {
+	// Can use simple tuple lookup only if no complex features
+	return !f.HasUserset && !f.HasRecursive && !f.HasExclusion && !f.HasIntersection
 }
 
 // NeedsCycleDetection returns true if the generated function needs cycle detection.
@@ -118,6 +125,12 @@ type RelationAnalysis struct {
 	Relation   string           // The relation name (e.g., "viewer")
 	Features   RelationFeatures // Feature flags determining what SQL to generate
 
+	// CanGenerate is true if this relation can use generated SQL.
+	// This is computed by checking both the relation's own features AND
+	// ensuring all relations in the satisfying closure are simply resolvable.
+	// Set by ComputeCanGenerate after all relations are analyzed.
+	CanGenerate bool
+
 	// For Direct/Implied patterns - from closure table
 	SatisfyingRelations []string // Relations that satisfy this one (e.g., ["viewer", "editor", "owner"])
 
@@ -135,6 +148,11 @@ type RelationAnalysis struct {
 
 	// Direct subject types (for generating direct tuple checks)
 	DirectSubjectTypes []string // e.g., ["user", "org"]
+
+	// AllowedSubjectTypes is the union of all subject types from satisfying relations.
+	// This is used to enforce type restrictions in generated SQL.
+	// Computed by ComputeCanGenerate.
+	AllowedSubjectTypes []string
 }
 
 // AnalyzeRelations classifies all relations and gathers data needed for SQL generation.
@@ -217,7 +235,7 @@ func detectFeatures(r RelationDefinition, analysis RelationAnalysis) RelationFea
 		HasWildcard:     hasWildcardRefs(r),
 		HasUserset:      len(analysis.UsersetPatterns) > 0,
 		HasRecursive:    len(analysis.ParentRelations) > 0,
-		HasExclusion:    len(analysis.ExcludedRelations) > 0 || len(r.ExcludedParentRelations) > 0,
+		HasExclusion:    len(analysis.ExcludedRelations) > 0 || len(r.ExcludedParentRelations) > 0 || len(r.ExcludedIntersectionGroups) > 0,
 		HasIntersection: len(r.IntersectionGroups) > 0,
 	}
 }
@@ -374,4 +392,83 @@ func collectIntersectionGroups(r RelationDefinition) []IntersectionGroupInfo {
 	}
 
 	return groups
+}
+
+// ComputeCanGenerate walks the dependency graph and sets CanGenerate on each analysis.
+// A relation can be generated if:
+// 1. Its own features allow generation (CanGenerate() on features returns true)
+// 2. ALL relations in its satisfying closure are simply resolvable
+//
+// This ensures that closure-based SQL like `relation IN ('viewer', 'editor', 'owner')`
+// will work correctly - every relation in the list must be resolvable via direct tuple lookup.
+//
+// This function also:
+// - Propagates HasWildcard: if ANY relation in the closure supports wildcards
+// - Collects AllowedSubjectTypes: union of all subject types from satisfying relations
+func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
+	// Build lookup map: (objectType, relation) -> *RelationAnalysis
+	lookup := make(map[string]map[string]*RelationAnalysis)
+	for i := range analyses {
+		a := &analyses[i]
+		if lookup[a.ObjectType] == nil {
+			lookup[a.ObjectType] = make(map[string]*RelationAnalysis)
+		}
+		lookup[a.ObjectType][a.Relation] = a
+	}
+
+	// For each analysis, check if it can be generated and propagate properties
+	for i := range analyses {
+		a := &analyses[i]
+
+		// Collect allowed subject types from all satisfying relations
+		// This ensures type restrictions are enforced correctly
+		seenTypes := make(map[string]bool)
+		for _, rel := range a.SatisfyingRelations {
+			relAnalysis, ok := lookup[a.ObjectType][rel]
+			if !ok {
+				continue
+			}
+			for _, t := range relAnalysis.DirectSubjectTypes {
+				if !seenTypes[t] {
+					seenTypes[t] = true
+					a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
+				}
+			}
+			// Also propagate wildcard flag
+			if relAnalysis.Features.HasWildcard {
+				a.Features.HasWildcard = true
+			}
+		}
+
+		// First check: does this relation's features allow generation?
+		if !a.Features.CanGenerate() {
+			a.CanGenerate = false
+			continue
+		}
+
+		// Second check: are ALL satisfying relations simply resolvable?
+		canGenerate := true
+		for _, rel := range a.SatisfyingRelations {
+			relAnalysis, ok := lookup[a.ObjectType][rel]
+			if !ok {
+				// Unknown relation - shouldn't happen with valid closure, but be safe
+				canGenerate = false
+				break
+			}
+			if !relAnalysis.Features.IsSimplyResolvable() {
+				canGenerate = false
+				break
+			}
+		}
+
+		// Third check: must have at least one allowed subject type
+		// (relations with no direct types in closure fall back to generic)
+		if len(a.AllowedSubjectTypes) == 0 {
+			canGenerate = false
+		}
+
+		a.CanGenerate = canGenerate
+	}
+
+	return analyses
 }

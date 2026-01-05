@@ -46,7 +46,7 @@ func GenerateSQL(analyses []RelationAnalysis) (GeneratedSQL, error) {
 
 	// Generate specialized function for each relation
 	for _, a := range analyses {
-		if !a.Features.CanGenerate() {
+		if !a.CanGenerate {
 			continue
 		}
 		fn, err := generateCheckFunction(a)
@@ -192,9 +192,10 @@ func buildCheckFunctionData(a RelationAnalysis) (CheckFunctionData, error) {
 
 // DirectCheckData contains data for rendering direct check template.
 type DirectCheckData struct {
-	ObjectType     string
-	RelationList   string
-	SubjectIDCheck string
+	ObjectType        string
+	RelationList      string
+	SubjectTypeFilter string // e.g., "'user', 'employee'" - allowed subject types
+	SubjectIDCheck    string
 }
 
 // buildDirectCheck renders the direct check SQL fragment.
@@ -210,18 +211,34 @@ func buildDirectCheck(a RelationAnalysis) (string, error) {
 		relationList[i] = fmt.Sprintf("'%s'", r)
 	}
 
+	// Build subject type filter from allowed types
+	// This ensures type restrictions from the model are enforced
+	subjectTypes := a.AllowedSubjectTypes
+	if len(subjectTypes) == 0 {
+		// Fallback to direct subject types if allowed types not computed
+		subjectTypes = a.DirectSubjectTypes
+	}
+	subjectTypeList := make([]string, len(subjectTypes))
+	for i, t := range subjectTypes {
+		subjectTypeList[i] = fmt.Sprintf("'%s'", t)
+	}
+
 	// Build subject_id check (with or without wildcard)
+	// When HasWildcard is true: allow wildcard tuples to grant access to any subject
+	// When HasWildcard is false: don't match wildcard tuples (they're invalid per the model)
 	var subjectIDCheck string
 	if a.Features.HasWildcard {
 		subjectIDCheck = "(subject_id = p_subject_id OR subject_id = '*')"
 	} else {
-		subjectIDCheck = "subject_id = p_subject_id"
+		// Exclude wildcard tuples - they shouldn't grant access when model doesn't allow wildcards
+		subjectIDCheck = "subject_id = p_subject_id AND subject_id != '*'"
 	}
 
 	data := DirectCheckData{
-		ObjectType:     a.ObjectType,
-		RelationList:   strings.Join(relationList, ", "),
-		SubjectIDCheck: subjectIDCheck,
+		ObjectType:        a.ObjectType,
+		RelationList:      strings.Join(relationList, ", "),
+		SubjectTypeFilter: strings.Join(subjectTypeList, ", "),
+		SubjectIDCheck:    subjectIDCheck,
 	}
 
 	var buf bytes.Buffer
@@ -322,16 +339,21 @@ func generateDispatcher(analyses []RelationAnalysis, noWildcard bool) (string, e
 		data.GenericFunctionName = "check_permission_no_wildcard_generic"
 	}
 
-	// Build CASE branches
-	for _, a := range analyses {
-		if !a.Features.CanGenerate() {
-			continue
+	// Build CASE branches - only for regular dispatcher, not no-wildcard
+	// The no-wildcard dispatcher always falls back to generic because
+	// the specialized functions include wildcard handling that would
+	// incorrectly match wildcard tuples in no-wildcard contexts.
+	if !noWildcard {
+		for _, a := range analyses {
+			if !a.CanGenerate {
+				continue
+			}
+			data.Cases = append(data.Cases, DispatcherCase{
+				ObjectType:        a.ObjectType,
+				Relation:          a.Relation,
+				CheckFunctionName: functionName(a.ObjectType, a.Relation),
+			})
 		}
-		data.Cases = append(data.Cases, DispatcherCase{
-			ObjectType:        a.ObjectType,
-			Relation:          a.Relation,
-			CheckFunctionName: functionName(a.ObjectType, a.Relation),
-		})
 	}
 
 	data.HasSpecializedFunctions = len(data.Cases) > 0

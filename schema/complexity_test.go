@@ -52,23 +52,114 @@ func TestRelationFeaturesCanGenerate(t *testing.T) {
 		{
 			name: "no features",
 			f:    RelationFeatures{},
-			want: false,
+			want: false, // No access path
 		},
 		{
 			name: "direct only",
 			f:    RelationFeatures{HasDirect: true},
-			want: false, // Phase 1: codegen disabled
+			want: true, // Simple direct is generatable
+		},
+		{
+			name: "implied only",
+			f:    RelationFeatures{HasImplied: true},
+			want: true, // Pure implied is generatable
+		},
+		{
+			name: "direct + implied",
+			f:    RelationFeatures{HasDirect: true, HasImplied: true},
+			want: true, // Direct + implied is generatable
+		},
+		{
+			name: "direct + wildcard",
+			f:    RelationFeatures{HasDirect: true, HasWildcard: true},
+			want: true, // Direct + wildcard is generatable
+		},
+		{
+			name: "with userset",
+			f:    RelationFeatures{HasDirect: true, HasUserset: true},
+			want: false, // Userset requires JOINs
+		},
+		{
+			name: "with recursive",
+			f:    RelationFeatures{HasDirect: true, HasRecursive: true},
+			want: false, // Recursive requires cycle detection
+		},
+		{
+			name: "with exclusion",
+			f:    RelationFeatures{HasDirect: true, HasExclusion: true},
+			want: false, // Exclusion not yet supported
+		},
+		{
+			name: "with intersection",
+			f:    RelationFeatures{HasDirect: true, HasIntersection: true},
+			want: false, // Intersection not yet supported
 		},
 		{
 			name: "complex combination",
 			f:    RelationFeatures{HasUserset: true, HasRecursive: true, HasExclusion: true},
-			want: false, // Phase 1: codegen disabled
+			want: false, // Multiple complex features
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.f.CanGenerate(); got != tt.want {
 				t.Errorf("CanGenerate() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRelationFeaturesIsSimplyResolvable(t *testing.T) {
+	tests := []struct {
+		name string
+		f    RelationFeatures
+		want bool
+	}{
+		{
+			name: "no features",
+			f:    RelationFeatures{},
+			want: true, // No complex features
+		},
+		{
+			name: "direct only",
+			f:    RelationFeatures{HasDirect: true},
+			want: true,
+		},
+		{
+			name: "implied only",
+			f:    RelationFeatures{HasImplied: true},
+			want: true,
+		},
+		{
+			name: "direct + wildcard",
+			f:    RelationFeatures{HasDirect: true, HasWildcard: true},
+			want: true,
+		},
+		{
+			name: "with userset",
+			f:    RelationFeatures{HasUserset: true},
+			want: false,
+		},
+		{
+			name: "with recursive",
+			f:    RelationFeatures{HasRecursive: true},
+			want: false,
+		},
+		{
+			name: "with exclusion",
+			f:    RelationFeatures{HasExclusion: true},
+			want: false,
+		},
+		{
+			name: "with intersection",
+			f:    RelationFeatures{HasIntersection: true},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.f.IsSimplyResolvable(); got != tt.want {
+				t.Errorf("IsSimplyResolvable() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -287,9 +378,14 @@ func TestDetectFeatures_ComplexCombination(t *testing.T) {
 		t.Error("expected HasExclusion = true")
 	}
 
-	// Phase 1: codegen disabled - complex combinations fall back to generic
+	// Complex combinations with userset/recursive/exclusion cannot be generated
 	if got.CanGenerate() {
-		t.Error("expected CanGenerate() = false for complex combination (Phase 1)")
+		t.Error("expected CanGenerate() = false for complex combination")
+	}
+
+	// Should not be simply resolvable due to userset/recursive/exclusion
+	if got.IsSimplyResolvable() {
+		t.Error("expected IsSimplyResolvable() = false for complex combination")
 	}
 
 	// Features string should show all
@@ -679,6 +775,7 @@ func TestAnalyzeRelations_ComplexComposite(t *testing.T) {
 
 	closure := ComputeRelationClosure(types)
 	analyses := AnalyzeRelations(types, closure)
+	analyses = ComputeCanGenerate(analyses)
 
 	// Find folder.viewer analysis
 	var viewerAnalysis *RelationAnalysis
@@ -708,9 +805,12 @@ func TestAnalyzeRelations_ComplexComposite(t *testing.T) {
 		t.Error("expected HasExclusion = true")
 	}
 
-	// Phase 1: codegen disabled - falls back to generic implementation
+	// Complex features cannot be generated
 	if f.CanGenerate() {
-		t.Error("expected CanGenerate() = false (Phase 1)")
+		t.Error("expected Features.CanGenerate() = false due to userset/recursive/exclusion")
+	}
+	if viewerAnalysis.CanGenerate {
+		t.Error("expected CanGenerate = false due to complex features")
 	}
 
 	// Check collected data
@@ -725,5 +825,220 @@ func TestAnalyzeRelations_ComplexComposite(t *testing.T) {
 	}
 	if len(viewerAnalysis.ExcludedRelations) != 1 {
 		t.Errorf("expected 1 excluded relation, got %d", len(viewerAnalysis.ExcludedRelations))
+	}
+}
+
+func TestComputeCanGenerate_SimpleOrgModel(t *testing.T) {
+	// Test the simple organization model from user requirements:
+	// All relations should be generatable because they only use direct/implied
+	types := []TypeDefinition{
+		{
+			Name: "user",
+		},
+		{
+			Name: "organization",
+			Relations: []RelationDefinition{
+				{
+					Name:            "owner",
+					SubjectTypeRefs: []SubjectTypeRef{{Type: "user"}},
+				},
+				{
+					Name:            "admin",
+					SubjectTypeRefs: []SubjectTypeRef{{Type: "user"}},
+					ImpliedBy:       []string{"owner"},
+				},
+				{
+					Name:            "member",
+					SubjectTypeRefs: []SubjectTypeRef{{Type: "user"}},
+					ImpliedBy:       []string{"admin"},
+				},
+				{
+					Name:            "billing_manager",
+					SubjectTypeRefs: []SubjectTypeRef{{Type: "user"}},
+				},
+				{
+					Name:      "can_read",
+					ImpliedBy: []string{"member"},
+				},
+				{
+					Name:      "can_admin",
+					ImpliedBy: []string{"admin"},
+				},
+				{
+					Name:      "can_delete",
+					ImpliedBy: []string{"owner"},
+				},
+			},
+		},
+	}
+
+	closure := ComputeRelationClosure(types)
+	analyses := AnalyzeRelations(types, closure)
+	analyses = ComputeCanGenerate(analyses)
+
+	// Build lookup for easy testing
+	lookup := make(map[string]*RelationAnalysis)
+	for i := range analyses {
+		a := &analyses[i]
+		if a.ObjectType == "organization" {
+			lookup[a.Relation] = a
+		}
+	}
+
+	// All organization relations should be generatable
+	expectedGeneratable := []string{"owner", "admin", "member", "billing_manager", "can_read", "can_admin", "can_delete"}
+	for _, rel := range expectedGeneratable {
+		a, ok := lookup[rel]
+		if !ok {
+			t.Errorf("relation %q not found in analysis", rel)
+			continue
+		}
+		if !a.CanGenerate {
+			t.Errorf("organization.%s: expected CanGenerate = true, got false (features: %s)", rel, a.Features.String())
+		}
+	}
+}
+
+func TestComputeCanGenerate_ImpliedWithUserset(t *testing.T) {
+	// Test that pure implied relations cannot be generated when they
+	// depend on relations with userset patterns
+	types := []TypeDefinition{
+		{
+			Name: "user",
+		},
+		{
+			Name: "group",
+			Relations: []RelationDefinition{
+				{
+					Name:            "member",
+					SubjectTypeRefs: []SubjectTypeRef{{Type: "user"}},
+				},
+			},
+		},
+		{
+			Name: "document",
+			Relations: []RelationDefinition{
+				{
+					Name: "viewer",
+					SubjectTypeRefs: []SubjectTypeRef{
+						{Type: "group", Relation: "member"}, // userset
+					},
+				},
+				{
+					Name:      "can_view",
+					ImpliedBy: []string{"viewer"}, // Pure implied, but depends on userset
+				},
+			},
+		},
+	}
+
+	closure := ComputeRelationClosure(types)
+	analyses := AnalyzeRelations(types, closure)
+	analyses = ComputeCanGenerate(analyses)
+
+	// Build lookup
+	lookup := make(map[string]*RelationAnalysis)
+	for i := range analyses {
+		a := &analyses[i]
+		if a.ObjectType == "document" {
+			lookup[a.Relation] = a
+		}
+	}
+
+	// viewer has userset, cannot be generated
+	viewer := lookup["viewer"]
+	if viewer == nil {
+		t.Fatal("viewer not found")
+	}
+	if viewer.CanGenerate {
+		t.Error("document.viewer: expected CanGenerate = false (has userset)")
+	}
+
+	// can_view is pure implied, but its closure includes viewer which has userset
+	canView := lookup["can_view"]
+	if canView == nil {
+		t.Fatal("can_view not found")
+	}
+	if canView.CanGenerate {
+		t.Error("document.can_view: expected CanGenerate = false (depends on userset)")
+	}
+}
+
+func TestComputeCanGenerate_MixedModel(t *testing.T) {
+	// Test a model with some generatable and some non-generatable relations
+	types := []TypeDefinition{
+		{
+			Name: "user",
+		},
+		{
+			Name: "group",
+			Relations: []RelationDefinition{
+				{
+					Name:            "member",
+					SubjectTypeRefs: []SubjectTypeRef{{Type: "user"}},
+				},
+			},
+		},
+		{
+			Name: "document",
+			Relations: []RelationDefinition{
+				// Simple direct - should be generatable
+				{
+					Name:            "owner",
+					SubjectTypeRefs: []SubjectTypeRef{{Type: "user"}},
+				},
+				// Direct + userset - should NOT be generatable
+				{
+					Name: "editor",
+					SubjectTypeRefs: []SubjectTypeRef{
+						{Type: "user"},
+						{Type: "group", Relation: "member"},
+					},
+				},
+				// Implied from direct - should be generatable
+				{
+					Name:      "can_delete",
+					ImpliedBy: []string{"owner"},
+				},
+				// Implied from userset relation - should NOT be generatable
+				{
+					Name:      "can_edit",
+					ImpliedBy: []string{"editor"},
+				},
+			},
+		},
+	}
+
+	closure := ComputeRelationClosure(types)
+	analyses := AnalyzeRelations(types, closure)
+	analyses = ComputeCanGenerate(analyses)
+
+	// Build lookup
+	lookup := make(map[string]*RelationAnalysis)
+	for i := range analyses {
+		a := &analyses[i]
+		if a.ObjectType == "document" {
+			lookup[a.Relation] = a
+		}
+	}
+
+	// owner is simple direct - generatable
+	if !lookup["owner"].CanGenerate {
+		t.Error("document.owner should be generatable")
+	}
+
+	// editor has userset - not generatable
+	if lookup["editor"].CanGenerate {
+		t.Error("document.editor should NOT be generatable (has userset)")
+	}
+
+	// can_delete implied from owner (which is simple) - generatable
+	if !lookup["can_delete"].CanGenerate {
+		t.Error("document.can_delete should be generatable (owner is simple)")
+	}
+
+	// can_edit implied from editor (which has userset) - not generatable
+	if lookup["can_edit"].CanGenerate {
+		t.Error("document.can_edit should NOT be generatable (editor has userset)")
 	}
 }

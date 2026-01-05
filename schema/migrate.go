@@ -172,6 +172,7 @@ func (m *Migrator) MigrateWithTypes(ctx context.Context, types []TypeDefinition)
 
 	// 3. Analyze relations and generate SQL
 	analyses := AnalyzeRelations(types, closureRows)
+	analyses = ComputeCanGenerate(analyses) // Walk dependency graph to set CanGenerate
 	generatedSQL, err := GenerateSQL(analyses)
 	if err != nil {
 		return fmt.Errorf("generating SQL: %w", err)
