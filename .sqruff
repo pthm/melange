@@ -1,10 +1,8 @@
 [sqruff]
 dialect = postgres
-# LT01: spacing around brackets (PostgreSQL arrays use [] without spaces)
-# LT02: indentation (project uses custom indent style)
+# LT01: spacing around brackets (PostgreSQL arrays use [] without spaces, Also causes issues with go text/templates)
 # LT05: line length
-# LT12: trailing whitespace
-exclude_rules = LT01, LT02, LT05, LT12
+exclude_rules = LT01, LT05
 max_line_length = 120
 
 [sqruff:rules:capitalisation.keywords]

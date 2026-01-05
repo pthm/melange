@@ -5,11 +5,11 @@
 */ -}}
 -- Generated check function for {{.ObjectType}}.{{.Relation}}
 -- Features: {{.FeaturesString}}
-CREATE OR REPLACE FUNCTION {{.FunctionName}}(
-    p_subject_type TEXT,
-    p_subject_id TEXT,
-    p_object_id TEXT,
-    p_visited TEXT[] DEFAULT ARRAY[]::TEXT[]
+CREATE OR REPLACE FUNCTION {{.FunctionName }} (
+p_subject_type TEXT,
+p_subject_id TEXT,
+p_object_id TEXT,
+p_visited TEXT [] DEFAULT ARRAY []::TEXT []
 ) RETURNS INTEGER AS $$
 BEGIN
 {{- if .HasExclusion}}
@@ -30,4 +30,4 @@ BEGIN
     END IF;
 {{- end}}
 END;
-$$ LANGUAGE plpgsql STABLE;
+$$ LANGUAGE plpgsql STABLE ;

@@ -30,7 +30,7 @@ CREATE OR REPLACE FUNCTION list_accessible_objects(
     p_subject_id TEXT,
     p_relation TEXT,
     p_object_type TEXT
-) RETURNS TABLE(object_id TEXT) AS $$
+) RETURNS TABLE (object_id TEXT) AS $$
 BEGIN
     RETURN QUERY
     WITH candidate_objects AS (
@@ -63,7 +63,7 @@ CREATE OR REPLACE FUNCTION list_accessible_subjects(
     p_object_id TEXT,
     p_relation TEXT,
     p_subject_type TEXT
-) RETURNS TABLE(subject_id TEXT) AS $$
+) RETURNS TABLE (subject_id TEXT) AS $$
 DECLARE
     v_filter_type TEXT;     -- Parsed type part (e.g., 'group' from 'group#member')
     v_filter_relation TEXT; -- Parsed relation part (e.g., 'member' from 'group#member')

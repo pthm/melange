@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS melange_relation_closure (
     object_type VARCHAR NOT NULL,
     relation VARCHAR NOT NULL,
     satisfying_relation VARCHAR NOT NULL,
-    via_path VARCHAR[],  -- debugging: path from relation to satisfying_relation
+    via_path VARCHAR [],  -- debugging: path from relation to satisfying_relation
 
     UNIQUE (object_type, relation, satisfying_relation)
 );
@@ -32,9 +32,9 @@ CREATE TABLE IF NOT EXISTS melange_relation_closure (
 -- Primary lookup: find all relations that satisfy a target relation
 -- Used by check_permission: JOIN ... ON c.object_type = ? AND c.relation = ?
 CREATE INDEX IF NOT EXISTS idx_melange_closure_lookup
-    ON melange_relation_closure (object_type, relation);
+ON melange_relation_closure (object_type, relation);
 
 -- Reverse lookup: find which relations a given relation satisfies
 -- Useful for understanding permission inheritance
 CREATE INDEX IF NOT EXISTS idx_melange_closure_reverse
-    ON melange_relation_closure (object_type, satisfying_relation);
+ON melange_relation_closure (object_type, satisfying_relation);

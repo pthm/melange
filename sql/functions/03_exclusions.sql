@@ -27,7 +27,7 @@ CREATE OR REPLACE FUNCTION check_exclusion_with_visited(
     p_excluded_relation TEXT,
     p_object_type TEXT,
     p_object_id TEXT,
-    p_visited TEXT[]
+    p_visited TEXT []
 ) RETURNS BOOLEAN AS $$
 BEGIN
     RETURN subject_has_grant(
@@ -122,7 +122,7 @@ CREATE OR REPLACE FUNCTION check_all_exclusions_with_visited(
     p_relation TEXT,
     p_object_type TEXT,
     p_object_id TEXT,
-    p_visited TEXT[]
+    p_visited TEXT []
 ) RETURNS BOOLEAN AS $$
 DECLARE
     v_excluded TEXT;
@@ -337,7 +337,7 @@ CREATE OR REPLACE FUNCTION check_exclusion_intersection_groups_with_visited(
     p_relation TEXT,
     p_object_type TEXT,
     p_object_id TEXT,
-    p_visited TEXT[]
+    p_visited TEXT []
 ) RETURNS BOOLEAN AS $$
 DECLARE
     v_group RECORD;

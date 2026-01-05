@@ -41,7 +41,7 @@ CREATE OR REPLACE FUNCTION subject_has_grant(
     p_object_type TEXT,
     p_object_id TEXT,
     p_relation TEXT,
-    p_visited TEXT[] DEFAULT ARRAY[]::TEXT[]
+    p_visited TEXT [] DEFAULT ARRAY[]::TEXT []
 ) RETURNS BOOLEAN AS $$
 DECLARE
     v_found BOOLEAN := FALSE;
@@ -330,7 +330,7 @@ CREATE OR REPLACE FUNCTION subject_has_grant_no_wildcard(
     p_object_type TEXT,
     p_object_id TEXT,
     p_relation TEXT,
-    p_visited TEXT[] DEFAULT ARRAY[]::TEXT[]
+    p_visited TEXT [] DEFAULT ARRAY[]::TEXT []
 ) RETURNS BOOLEAN AS $$
 DECLARE
     v_found BOOLEAN := FALSE;

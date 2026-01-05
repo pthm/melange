@@ -139,7 +139,7 @@ CREATE OR REPLACE FUNCTION check_intersection_groups(
     p_relation TEXT,
     p_object_type TEXT,
     p_object_id TEXT,
-    p_visited TEXT[] DEFAULT ARRAY[]::TEXT[]
+    p_visited TEXT [] DEFAULT ARRAY[]::TEXT []
 ) RETURNS BOOLEAN AS $$
 DECLARE
     v_group RECORD;
@@ -287,7 +287,7 @@ CREATE OR REPLACE FUNCTION check_intersection_groups_no_wildcard(
     p_relation TEXT,
     p_object_type TEXT,
     p_object_id TEXT,
-    p_visited TEXT[] DEFAULT ARRAY[]::TEXT[]
+    p_visited TEXT [] DEFAULT ARRAY[]::TEXT []
 ) RETURNS BOOLEAN AS $$
 DECLARE
     v_group RECORD;
