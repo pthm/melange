@@ -114,6 +114,19 @@ func detectParentCycles(types []TypeDefinition) error {
 		if allSameType {
 			return nil
 		}
+		// Allow cross-type hierarchical recursion when relation name is consistent.
+		// Example: document.viewer -> folder.viewer -> module.viewer -> document.viewer
+		// This is a parent-chain recursion, not an invalid permission cycle.
+		allSameRelation := true
+		for i := 1; i < len(cycle); i++ {
+			if cycle[i].relation != cycle[0].relation {
+				allSameRelation = false
+				break
+			}
+		}
+		if allSameRelation {
+			return nil
+		}
 		return fmt.Errorf("%w: parent relation cycle: %s",
 			ErrCyclicSchema, formatCycle(cycle))
 	}
@@ -148,18 +161,28 @@ func buildParentGraph(types []TypeDefinition) map[relationNode][]relationNode {
 	// Build the graph
 	for _, t := range types {
 		for _, r := range t.Relations {
-			if r.ParentRelation == "" {
+			parentChecks := r.ParentRelations
+			if len(parentChecks) == 0 && r.ParentRelation != "" {
+				parentChecks = []ParentRelationCheck{{
+					Relation:   r.ParentRelation,
+					ParentType: r.ParentType,
+				}}
+			}
+
+			if len(parentChecks) == 0 {
 				continue
 			}
 
 			n := relationNode{objectType: t.Name, relation: r.Name}
 
-			// ParentType is the linking relation name (e.g., "org")
-			// We need to find what type that relation points to
-			linkingRel := r.ParentType
-			if parentType, ok := linkingRelTypes[t.Name][linkingRel]; ok {
-				target := relationNode{objectType: parentType, relation: r.ParentRelation}
-				graph[n] = append(graph[n], target)
+			for _, parent := range parentChecks {
+				// ParentType is the linking relation name (e.g., "org")
+				// We need to find what type that relation points to
+				linkingRel := parent.ParentType
+				if parentType, ok := linkingRelTypes[t.Name][linkingRel]; ok {
+					target := relationNode{objectType: parentType, relation: parent.Relation}
+					graph[n] = append(graph[n], target)
+				}
 			}
 		}
 	}

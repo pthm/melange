@@ -108,6 +108,9 @@ BEGIN
     LIMIT 1;
 
     IF v_found THEN
+        IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+            RETURN FALSE;
+        END IF;
         RETURN TRUE;
     END IF;
 
@@ -149,6 +152,9 @@ BEGIN
         LIMIT 1;
 
         IF v_found THEN
+            IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+                RETURN FALSE;
+            END IF;
             RETURN TRUE;
         END IF;
     END IF;
@@ -192,6 +198,9 @@ BEGIN
             v_userset.required_relation,
             p_visited || v_visit_key  -- append current to visited for cycle detection
         ) THEN
+            IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+                RETURN FALSE;
+            END IF;
             RETURN TRUE;
         END IF;
     END LOOP;
@@ -223,9 +232,23 @@ BEGIN
             v_parent.required_relation,
             p_visited || v_visit_key
         ) THEN
+            IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+                RETURN FALSE;
+            END IF;
             RETURN TRUE;
         END IF;
     END LOOP;
+
+    -- 4. Check intersection groups (supports computed relations in userset evaluation).
+    IF check_intersection_groups(
+        p_subject_type, p_subject_id,
+        p_relation, p_object_type, p_object_id
+    ) THEN
+        IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+            RETURN FALSE;
+        END IF;
+        RETURN TRUE;
+    END IF;
 
     RETURN FALSE;
 END;
@@ -298,6 +321,9 @@ BEGIN
     LIMIT 1;
 
     IF v_found THEN
+        IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+            RETURN FALSE;
+        END IF;
         RETURN TRUE;
     END IF;
 
@@ -327,9 +353,12 @@ BEGIN
               substring(p_subject_id from 1 for position('#' in p_subject_id) - 1)
         LIMIT 1;
 
-        IF v_found THEN
-            RETURN TRUE;
+    IF v_found THEN
+        IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+            RETURN FALSE;
         END IF;
+        RETURN TRUE;
+    END IF;
     END IF;
 
     FOR v_userset IN
@@ -365,6 +394,9 @@ BEGIN
             v_userset.required_relation,
             p_visited || v_visit_key
         ) THEN
+            IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+                RETURN FALSE;
+            END IF;
             RETURN TRUE;
         END IF;
     END LOOP;
@@ -392,9 +424,22 @@ BEGIN
             v_parent.required_relation,
             p_visited || v_visit_key
         ) THEN
+            IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+                RETURN FALSE;
+            END IF;
             RETURN TRUE;
         END IF;
     END LOOP;
+
+    IF check_intersection_groups_no_wildcard(
+        p_subject_type, p_subject_id,
+        p_relation, p_object_type, p_object_id
+    ) THEN
+        IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+            RETURN FALSE;
+        END IF;
+        RETURN TRUE;
+    END IF;
 
     RETURN FALSE;
 END;

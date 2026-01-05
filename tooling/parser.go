@@ -160,8 +160,16 @@ func extractUserset(us *openfgav1.Userset, rel *melange.RelationDefinition) {
 	case *openfgav1.Userset_TupleToUserset:
 		// Parent relation: permission inherited from related object
 		// e.g., "can_read from org" means check can_read on the org
-		rel.ParentRelation = v.TupleToUserset.GetComputedUserset().GetRelation()
-		rel.ParentType = v.TupleToUserset.GetTupleset().GetRelation()
+		parentRel := v.TupleToUserset.GetComputedUserset().GetRelation()
+		parentType := v.TupleToUserset.GetTupleset().GetRelation()
+		rel.ParentRelations = append(rel.ParentRelations, melange.ParentRelationCheck{
+			Relation:   parentRel,
+			ParentType: parentType,
+		})
+		if rel.ParentRelation == "" {
+			rel.ParentRelation = parentRel
+			rel.ParentType = parentType
+		}
 
 	case *openfgav1.Userset_Union:
 		// Union: permission granted if ANY child grants it
@@ -433,7 +441,56 @@ func extractSubtractIntersectionGroups(us *openfgav1.Userset, relationName strin
 		}
 		return groups
 	case *openfgav1.Userset_Difference:
-		return extractSubtractIntersectionGroups(v.Difference.GetSubtract(), relationName)
+		baseGroups := extractBaseIntersectionGroups(v.Difference.GetBase(), relationName)
+		if len(baseGroups) == 0 {
+			return nil
+		}
+
+		excludedRels, _ := extractSubtractRelations(v.Difference.GetSubtract())
+		if len(excludedRels) == 0 {
+			return baseGroups
+		}
+
+		for i := range baseGroups {
+			if len(baseGroups[i].Relations) == 0 {
+				continue
+			}
+			if baseGroups[i].Exclusions == nil {
+				baseGroups[i].Exclusions = make(map[string][]string)
+			}
+			for _, rel := range baseGroups[i].Relations {
+				baseGroups[i].Exclusions[rel] = append(baseGroups[i].Exclusions[rel], excludedRels...)
+			}
+		}
+
+		return baseGroups
+	default:
+		return nil
+	}
+}
+
+// extractBaseIntersectionGroups extracts intersection groups from a base userset.
+// For "editor", returns [[editor]]. For "a and b", returns [[a, b]].
+// For unions, returns the concatenation of each child group's results.
+func extractBaseIntersectionGroups(us *openfgav1.Userset, relationName string) []melange.IntersectionGroup {
+	if us == nil {
+		return nil
+	}
+
+	switch v := us.Userset.(type) {
+	case *openfgav1.Userset_ComputedUserset:
+		rel := v.ComputedUserset.GetRelation()
+		return []melange.IntersectionGroup{{Relations: []string{rel}}}
+	case *openfgav1.Userset_Intersection:
+		return expandIntersection(v.Intersection, relationName)
+	case *openfgav1.Userset_Union:
+		var groups []melange.IntersectionGroup
+		for _, child := range v.Union.GetChild() {
+			groups = append(groups, extractBaseIntersectionGroups(child, relationName)...)
+		}
+		return groups
+	case *openfgav1.Userset_Difference:
+		return extractBaseIntersectionGroups(v.Difference.GetBase(), relationName)
 	default:
 		return nil
 	}

@@ -48,8 +48,9 @@ type RelationDefinition struct {
 	Name              string   // Relation name: "owner", "can_read", etc.
 	SubjectTypes      []string // Direct subject types: ["user"], ["organization"] (legacy)
 	ImpliedBy         []string // Relations that imply this one: ["owner", "admin"]
-	ParentRelation    string   // For inheritance: "can_read from org" → "can_read"
-	ParentType        string   // The relation linking to parent: "org", "repo"
+	ParentRelation    string   // For inheritance: "can_read from org" → "can_read" (legacy)
+	ParentType        string   // The relation linking to parent: "org", "repo" (legacy)
+	ParentRelations   []ParentRelationCheck
 	ExcludedRelation  string   // For exclusions: "can_read but not author" -> "author" (deprecated, use ExcludedRelations)
 	ExcludedRelations []string // For nested exclusions: "(a but not b) but not c" -> ["b", "c"]
 	// ExcludedParentRelations captures tuple-to-userset exclusions like "but not viewer from parent".
@@ -360,16 +361,23 @@ func ToAuthzModels(types []TypeDefinition) []AuthzModel {
 				models = append(models, model)
 			}
 
-			// Add entry for parent relation (inheritance from related object)
+			// Add entries for parent relations (inheritance from related objects).
 			// For "can_read from org":
 			//   - subject_type = "org" (the LINKING RELATION, not resolved type)
 			//   - parent_relation = "can_read" (the relation to check on parent)
 			// The SQL uses t.relation = am.subject_type to find tuples with the right
 			// linking relation, then gets the actual parent type from t.subject_type.
 			// Note: Exclusions are stored in separate rows, not embedded here.
-			if r.ParentRelation != "" {
-				pr := r.ParentRelation
-				pt := r.ParentType // Keep as linking relation, don't resolve to type
+			parentChecks := r.ParentRelations
+			if len(parentChecks) == 0 && r.ParentRelation != "" {
+				parentChecks = []ParentRelationCheck{{
+					Relation:   r.ParentRelation,
+					ParentType: r.ParentType,
+				}}
+			}
+			for _, parent := range parentChecks {
+				pr := parent.Relation
+				pt := parent.ParentType
 				model := AuthzModel{
 					ObjectType:     t.Name,
 					Relation:       r.Name,
