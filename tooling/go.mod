@@ -5,7 +5,7 @@ go 1.25.3
 require (
 	github.com/openfga/api/proto v0.0.0-20251105142303-feed3db3d69d
 	github.com/openfga/language/pkg/go v0.2.0-beta.2
-	github.com/pthm/melange v0.0.0
+	github.com/pthm/melange v0.2.0
 )
 
 require (
