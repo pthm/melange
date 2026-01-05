@@ -1,8 +1,24 @@
 package melange
 
 // UsersetRule represents a precomputed userset rule with relation closure applied.
+// Userset rules handle permissions granted via group membership, expressed in OpenFGA
+// as [group#member]. Unlike direct subject types where the tuple directly grants
+// permission, usersets require checking if the subject has the specified relation
+// on the group object.
+//
 // Each row means: a tuple with tuple_relation on object_type can satisfy relation
 // when the tuple subject is subject_type#subject_relation.
+//
+// The rules are precomputed by expanding userset references through the relation
+// closure table. This allows SQL to resolve userset permissions efficiently without
+// nested subqueries for each implied relation.
+//
+// Example: For "viewer: [group#member]" where admin->member, the rules include:
+//   - {relation: "viewer", tuple_relation: "viewer", subject_type: "group", subject_relation: "member", subject_relation_satisfying: "member"}
+//   - {relation: "viewer", tuple_relation: "viewer", subject_type: "group", subject_relation: "member", subject_relation_satisfying: "admin"}
+//
+// This enables check_permission to match tuples where the subject has either member
+// or admin on the group, without recursive relation resolution at query time.
 type UsersetRule struct {
 	ObjectType                string
 	Relation                  string
@@ -14,6 +30,16 @@ type UsersetRule struct {
 
 // ToUsersetRules expands userset references using the relation closure.
 // This precomputes which tuple relations can satisfy a target relation for userset rules.
+//
+// The expansion combines two sources of transitivity:
+//  1. Object relation closure: viewer might be satisfied by editor (implied-by)
+//  2. Subject relation closure: member might be satisfied by admin (implied-by)
+//
+// By precomputing the cross-product of these closures, SQL can match userset
+// permissions with a simple JOIN instead of recursive CTEs for each check.
+//
+// This is analogous to ComputeRelationClosure but handles the subject-side
+// relation traversal required for userset references.
 func ToUsersetRules(types []TypeDefinition, closureRows []ClosureRow) []UsersetRule {
 	closureMap := make(map[string]map[string][]string)
 	targetBySatisfying := make(map[string]map[string][]string)

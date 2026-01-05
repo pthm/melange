@@ -3,8 +3,17 @@ package melange
 import "context"
 
 // Decision allows bypassing DB checks for admin tools and tests.
-// Decisions are set at Checker construction time via WithDecision, making
-// the bypass explicit and visible in code.
+// Decisions provide explicit control over authorization behavior without
+// modifying the underlying permission model or tuple data.
+//
+// The decision mechanism has two layers:
+//  1. Checker-level: Set via WithDecision() at Checker construction
+//  2. Context-level: Set via WithDecisionContext() and opt-in via WithContextDecision()
+//
+// Context-based decisions are opt-in by design. Applications must explicitly
+// enable WithContextDecision() when creating the Checker to prevent accidental
+// authorization bypasses from propagating through middleware. This makes the
+// security boundary explicit: "this Checker respects context overrides."
 type Decision int
 
 // decisionContextKey is a custom type for context keys to avoid collisions.
@@ -29,13 +38,13 @@ const (
 // This allows decision overrides to flow through context rather than
 // requiring explicit Checker construction.
 //
+// IMPORTANT: The Checker does NOT automatically consult this context value.
+// Applications must opt-in via WithContextDecision() when creating the Checker.
+// This prevents accidental authorization bypasses from middleware.
+//
 // Prefer WithDecision option for explicit control. Use context-based decisions
 // when the override needs to propagate through multiple layers where passing
-// a Checker instance is impractical.
-//
-// Note: The Checker does NOT automatically consult this context value. This is
-// a utility for applications that want to propagate authorization decisions
-// through their own middleware or handler chains.
+// a Checker instance is impractical (e.g., testing frameworks, admin mode).
 func WithDecisionContext(ctx context.Context, decision Decision) context.Context {
 	return context.WithValue(ctx, decisionKey, decision)
 }

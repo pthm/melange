@@ -84,9 +84,11 @@ func (m *Migrator) ApplyDDL(ctx context.Context) error {
 		return fmt.Errorf("applying closure.sql: %w", err)
 	}
 
-	// Apply functions
-	if _, err := m.db.ExecContext(ctx, melangesql.FunctionsSQL); err != nil {
-		return fmt.Errorf("applying functions.sql: %w", err)
+	// Apply functions in dependency order.
+	for _, file := range melangesql.FunctionsSQLFiles {
+		if _, err := m.db.ExecContext(ctx, file.Contents); err != nil {
+			return fmt.Errorf("applying %s: %w", file.Path, err)
+		}
 	}
 
 	return nil

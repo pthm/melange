@@ -813,6 +813,12 @@ func (c *Checker) ListSubjectsWithContextualTuples(
 	return ids, rows.Err()
 }
 
+// validateContextualTuples validates all contextual tuples against the loaded model.
+// Each tuple is checked to ensure the relation exists on the object type and that
+// the subject type is allowed for that relation (including userset and wildcard handling).
+//
+// This validation prevents SQL injection-like issues where invalid tuples could be
+// used to bypass authorization checks. All tuples must conform to the loaded schema.
 func (c *Checker) validateContextualTuples(ctx context.Context, tuples []ContextualTuple) error {
 	for i, tuple := range tuples {
 		if err := c.validateContextualTuple(ctx, tuple); err != nil {
@@ -822,6 +828,14 @@ func (c *Checker) validateContextualTuples(ctx context.Context, tuples []Context
 	return nil
 }
 
+// validateContextualTuple validates a single contextual tuple against the model.
+// It checks four constraints:
+//  1. The relation exists on the object type
+//  2. The subject type is allowed for this relation (direct or userset)
+//  3. Userset relations (subject_id contains #) reference valid relations
+//  4. Wildcard subjects are only allowed if subject_wildcard is true
+//
+// Returns an error if the tuple violates the authorization model.
 func (c *Checker) validateContextualTuple(ctx context.Context, tuple ContextualTuple) error {
 	var exists int
 	err := c.q.QueryRowContext(ctx,
@@ -869,6 +883,22 @@ func (c *Checker) validateContextualTuple(ctx context.Context, tuple ContextualT
 	return nil
 }
 
+// prepareContextualTuples sets up a temporary table and view for contextual tuples.
+// The lifecycle depends on the Querier type:
+//
+//  - *sql.DB: Opens a new connection, returns it with cleanup closing the connection
+//  - *sql.Tx: Uses the transaction, cleanup drops temp objects (table persists until tx ends)
+//  - *sql.Conn: Uses the connection, cleanup drops temp objects
+//
+// The temporary table (melange_contextual_tuples) is session-scoped, not transaction-scoped.
+// This allows it to persist across transaction boundaries within the same connection,
+// which is critical for contextual tuple support.
+//
+// The temp view (melange_tuples) shadows the permanent view and UNIONs base tuples with
+// contextual tuples. All permission checks within this connection see both sets.
+//
+// Returns an Execer for running permission checks, a cleanup function that MUST be
+// called when done, and an error if setup fails.
 func (c *Checker) prepareContextualTuples(ctx context.Context, tuples []ContextualTuple) (Execer, func(), error) {
 	switch q := c.q.(type) {
 	case *sql.DB:
@@ -904,6 +934,17 @@ func (c *Checker) prepareContextualTuples(ctx context.Context, tuples []Contextu
 	}
 }
 
+// setupContextualTuples creates the temporary infrastructure for contextual tuples.
+// This is called by prepareContextualTuples after acquiring the right connection/transaction.
+//
+// The setup process:
+//  1. Creates a session-scoped temp table for contextual tuples (no ON COMMIT DROP)
+//  2. Inserts all contextual tuples into the temp table
+//  3. Creates a temp view shadowing melange_tuples that UNIONs base + contextual tuples
+//
+// The temp table is session-scoped (not ON COMMIT DROP) because contextual tuples
+// need to survive transaction boundaries. Without this, committing would drop the
+// table prematurely, breaking permission checks.
 func (c *Checker) setupContextualTuples(ctx context.Context, q Execer, tuples []ContextualTuple) error {
 	baseSchema, err := c.lookupTuplesSchema(ctx, q)
 	if err != nil {
@@ -948,11 +989,18 @@ func (c *Checker) setupContextualTuples(ctx context.Context, q Execer, tuples []
 	return nil
 }
 
+// cleanupContextualTuples drops the temporary view and table.
+// This must be called after permission checks complete to prevent temp object leakage.
+// The cleanup is best-effort (ignores errors) since temp objects are automatically
+// cleaned up when the session ends anyway.
 func (c *Checker) cleanupContextualTuples(ctx context.Context, q Execer) {
 	_, _ = q.ExecContext(ctx, "DROP VIEW IF EXISTS pg_temp.melange_tuples")
 	_, _ = q.ExecContext(ctx, "DROP TABLE IF EXISTS pg_temp.melange_contextual_tuples")
 }
 
+// lookupTuplesSchema finds the schema containing the melange_tuples relation.
+// This is needed when creating the temp view to properly qualify the base relation
+// in the UNION query. Returns the schema name or ErrNoTuplesTable if not found.
 func (c *Checker) lookupTuplesSchema(ctx context.Context, q Querier) (string, error) {
 	var schema string
 	err := q.QueryRowContext(ctx, `
@@ -973,6 +1021,9 @@ func (c *Checker) lookupTuplesSchema(ctx context.Context, q Querier) (string, er
 	return schema, nil
 }
 
+// quoteIdent safely quotes a PostgreSQL identifier for use in SQL.
+// Double quotes are escaped by doubling them. This is needed when dynamically
+// constructing schema-qualified relation names in UNION queries.
 func quoteIdent(ident string) string {
 	return `"` + strings.ReplaceAll(ident, `"`, `""`) + `"`
 }

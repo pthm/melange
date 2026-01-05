@@ -68,6 +68,7 @@ type ListObjectsAssertion struct {
 		Relation string `json:"relation"`
 	} `json:"request"`
 	Expectation []string `json:"expectation"`
+	ErrorCode   int      `json:"errorCode"`
 }
 
 // ListUsersAssertion represents an expected result for ListUsers.
@@ -78,6 +79,7 @@ type ListUsersAssertion struct {
 		Relation string   `json:"relation"`
 	} `json:"request"`
 	Expectation []string `json:"expectation"`
+	ErrorCode   int      `json:"errorCode"`
 }
 
 func main() {
@@ -251,7 +253,9 @@ func dumpTest(tc TestCase) {
 			for j, l := range stage.ListObjectsAssertions {
 				fmt.Printf("  [%d] user=%s relation=%s type=%s\n",
 					j+1, l.Request.User, l.Request.Relation, l.Request.Type)
-				if len(l.Expectation) > 0 {
+				if l.ErrorCode != 0 {
+					fmt.Printf("      => ERROR(%d)\n", l.ErrorCode)
+				} else if len(l.Expectation) > 0 {
 					fmt.Printf("      => %v\n", l.Expectation)
 				} else {
 					fmt.Println("      => (empty)")
@@ -265,7 +269,9 @@ func dumpTest(tc TestCase) {
 			for j, l := range stage.ListUsersAssertions {
 				fmt.Printf("  [%d] object=%s relation=%s filters=%v\n",
 					j+1, l.Request.Object, l.Request.Relation, l.Request.Filters)
-				if len(l.Expectation) > 0 {
+				if l.ErrorCode != 0 {
+					fmt.Printf("      => ERROR(%d)\n", l.ErrorCode)
+				} else if len(l.Expectation) > 0 {
 					fmt.Printf("      => %v\n", l.Expectation)
 				} else {
 					fmt.Println("      => (empty)")

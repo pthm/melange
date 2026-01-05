@@ -1,8 +1,20 @@
 package melange
 
 // ClosureRow represents a row in the melange_relation_closure table.
+// The closure table is a critical optimization that precomputes transitive
+// implied-by relationships at schema load time, eliminating the need for
+// recursive function calls during permission checks.
+//
 // Each row indicates that having satisfying_relation grants the relation
-// on objects of object_type.
+// on objects of object_type. For example, in a role hierarchy where
+// owner -> admin -> member:
+//   - {object_type: "repo", relation: "member", satisfying_relation: "owner"}
+//   - {object_type: "repo", relation: "member", satisfying_relation: "admin"}
+//   - {object_type: "repo", relation: "member", satisfying_relation: "member"}
+//
+// This allows check_permission to evaluate "does user have member?" with a
+// simple JOIN rather than recursive traversal: just check if they have ANY
+// of the satisfying relations.
 type ClosureRow struct {
 	ObjectType         string
 	Relation           string
@@ -13,13 +25,17 @@ type ClosureRow struct {
 // ComputeRelationClosure computes the transitive closure for all relations.
 // For each relation, it finds all relations that can satisfy it (directly or transitively).
 //
+// This is a build-time optimization. Without closure, check_permission would need
+// recursive SQL functions to walk implied-by chains. With closure, a single JOIN
+// against melange_relation_closure resolves the entire hierarchy.
+//
 // Example: For schema owner -> admin -> member:
 //   - member is satisfied by: member, admin, owner
 //   - admin is satisfied by: admin, owner
 //   - owner is satisfied by: owner
 //
-// The closure enables efficient permission checks by replacing recursive
-// implied-by traversal with a single JOIN against the closure table.
+// The closure table enables O(1) lookups instead of O(depth) recursion,
+// which is critical for deeply nested role hierarchies.
 func ComputeRelationClosure(types []TypeDefinition) []ClosureRow {
 	var rows []ClosureRow
 

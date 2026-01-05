@@ -3,6 +3,7 @@ package sql
 
 import (
 	_ "embed"
+	"strings"
 )
 
 // Embedded SQL files for Melange infrastructure.
@@ -25,8 +26,38 @@ var ModelSQL string
 //
 // Applied via CREATE OR REPLACE FUNCTION for idempotence.
 //
-//go:embed functions.sql
-var FunctionsSQL string
+//go:embed functions/01_userset_helpers.sql
+var functionsUsersetHelpersSQL string
+
+//go:embed functions/02_subject_grants.sql
+var functionsSubjectGrantsSQL string
+
+//go:embed functions/03_exclusions.sql
+var functionsExclusionsSQL string
+
+//go:embed functions/04_permissions.sql
+var functionsPermissionsSQL string
+
+//go:embed functions/05_queries.sql
+var functionsQueriesSQL string
+
+// FunctionsSQLFiles lists the function SQL files in application order.
+var FunctionsSQLFiles = []SQLFile{
+	{Path: "functions/01_userset_helpers.sql", Contents: functionsUsersetHelpersSQL},
+	{Path: "functions/02_subject_grants.sql", Contents: functionsSubjectGrantsSQL},
+	{Path: "functions/03_exclusions.sql", Contents: functionsExclusionsSQL},
+	{Path: "functions/04_permissions.sql", Contents: functionsPermissionsSQL},
+	{Path: "functions/05_queries.sql", Contents: functionsQueriesSQL},
+}
+
+// FunctionsSQL concatenates all function SQL files for backwards compatibility.
+var FunctionsSQL = strings.Join([]string{
+	functionsUsersetHelpersSQL,
+	functionsSubjectGrantsSQL,
+	functionsExclusionsSQL,
+	functionsPermissionsSQL,
+	functionsQueriesSQL,
+}, "\n\n")
 
 // ClosureSQL contains the melange_relation_closure table definition and indexes.
 // This table stores the precomputed transitive closure of implied-by relations,
@@ -36,3 +67,9 @@ var FunctionsSQL string
 //
 //go:embed closure.sql
 var ClosureSQL string
+
+// SQLFile describes a named SQL payload for migration.
+type SQLFile struct {
+	Path     string
+	Contents string
+}

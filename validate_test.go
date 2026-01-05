@@ -77,8 +77,32 @@ func TestDetectCycles_Parent(t *testing.T) {
 	}
 
 	err := melange.DetectCycles(types)
+	if err != nil {
+		t.Fatalf("expected no error for same-relation parent recursion, got: %v", err)
+	}
+}
+
+func TestDetectCycles_ParentDifferentRelations(t *testing.T) {
+	types := []melange.TypeDefinition{
+		{
+			Name: "organization",
+			Relations: []melange.RelationDefinition{
+				{Name: "repo", SubjectTypes: []string{"repository"}},
+				{Name: "can_read", ParentRelation: "can_write", ParentType: "repo"},
+			},
+		},
+		{
+			Name: "repository",
+			Relations: []melange.RelationDefinition{
+				{Name: "org", SubjectTypes: []string{"organization"}},
+				{Name: "can_write", ParentRelation: "can_read", ParentType: "org"},
+			},
+		},
+	}
+
+	err := melange.DetectCycles(types)
 	if err == nil {
-		t.Fatal("expected error for parent relation cycle")
+		t.Fatal("expected error for parent relation cycle with differing relations")
 	}
 	if !melange.IsCyclicSchemaErr(err) {
 		t.Errorf("expected IsCyclicSchemaErr to return true")

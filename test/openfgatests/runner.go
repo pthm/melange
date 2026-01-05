@@ -359,6 +359,10 @@ func BenchTest(b *testing.B, tc TestCase) {
 
 			// Run list objects assertions
 			for _, assertion := range stage.listObjAssertions {
+				if assertion.ErrorCode != 0 {
+					continue // Skip error cases in benchmarks
+				}
+
 				_, err := client.ListObjects(ctx, &openfgav1.ListObjectsRequest{
 					StoreId:              storeID,
 					AuthorizationModelId: stage.modelID,
@@ -373,6 +377,10 @@ func BenchTest(b *testing.B, tc TestCase) {
 
 			// Run list users assertions
 			for _, assertion := range stage.listUserAssertion {
+				if assertion.ErrorCode != 0 {
+					continue // Skip error cases in benchmarks
+				}
+
 				var objType, objID string
 				for j := 0; j < len(assertion.Request.Object); j++ {
 					if assertion.Request.Object[j] == ':' {
