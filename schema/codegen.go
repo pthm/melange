@@ -96,12 +96,20 @@ type CheckFunctionData struct {
 	FeaturesString string
 
 	// Feature flags
-	HasDirect    bool
-	HasImplied   bool
-	HasWildcard  bool
-	HasUserset   bool
-	HasRecursive bool
-	HasExclusion bool
+	HasDirect       bool
+	HasImplied      bool
+	HasWildcard     bool
+	HasUserset      bool
+	HasRecursive    bool
+	HasExclusion    bool
+	HasIntersection bool
+
+	// HasStandaloneAccess is true if the relation has access paths outside of intersections.
+	// When false and HasIntersection is true, the only access is through intersection groups.
+	// For example, "viewer: [user] and writer" has NO standalone access - the [user] is
+	// inside the intersection. But "viewer: [user] or (writer and editor)" HAS standalone
+	// access via the [user] path.
+	HasStandaloneAccess bool
 
 	// Pre-rendered SQL fragments
 	DirectCheck    string // EXISTS clause for direct check
@@ -114,6 +122,40 @@ type CheckFunctionData struct {
 
 	// For implied relations that need function calls
 	ImpliedFunctionCalls []ImpliedFunctionCall
+
+	// For intersection patterns - each group is AND'd, groups are OR'd
+	IntersectionGroups []IntersectionGroupData
+}
+
+// IntersectionGroupData contains data for a single intersection group.
+// All parts within a group must be satisfied (AND semantics).
+type IntersectionGroupData struct {
+	Parts []IntersectionPartData
+}
+
+// IntersectionPartData contains data for a single part of an intersection.
+type IntersectionPartData struct {
+	// FunctionName is the check function to call (e.g., "check_document_writer")
+	FunctionName string
+
+	// IsThis is true if this part is a self-reference ([user] pattern)
+	// When true, we check for a direct tuple on the relation being defined
+	IsThis bool
+
+	// HasExclusion is true if this part has a nested exclusion (e.g., "editor but not owner")
+	HasExclusion bool
+
+	// ExcludedRelation is the relation to exclude (for nested exclusions)
+	ExcludedRelation string
+
+	// IsTTU is true if this part is a tuple-to-userset pattern
+	IsTTU bool
+
+	// TTULinkingRelation is the linking relation for TTU patterns (e.g., "parent")
+	TTULinkingRelation string
+
+	// TTURelation is the relation to check on the parent for TTU patterns
+	TTURelation string
 }
 
 // ImpliedFunctionCall represents a function call to a complex implied relation.
@@ -152,16 +194,17 @@ func generateCheckFunction(a RelationAnalysis) (string, error) {
 // buildCheckFunctionData constructs template data from RelationAnalysis.
 func buildCheckFunctionData(a RelationAnalysis) (CheckFunctionData, error) {
 	data := CheckFunctionData{
-		ObjectType:     a.ObjectType,
-		Relation:       a.Relation,
-		FunctionName:   functionName(a.ObjectType, a.Relation),
-		FeaturesString: a.Features.String(),
-		HasDirect:      a.Features.HasDirect,
-		HasImplied:     a.Features.HasImplied,
-		HasWildcard:    a.Features.HasWildcard,
-		HasUserset:     a.Features.HasUserset,
-		HasRecursive:   a.Features.HasRecursive,
-		HasExclusion:   a.Features.HasExclusion,
+		ObjectType:      a.ObjectType,
+		Relation:        a.Relation,
+		FunctionName:    functionName(a.ObjectType, a.Relation),
+		FeaturesString:  a.Features.String(),
+		HasDirect:       a.Features.HasDirect,
+		HasImplied:      a.Features.HasImplied,
+		HasWildcard:     a.Features.HasWildcard,
+		HasUserset:      a.Features.HasUserset,
+		HasRecursive:    a.Features.HasRecursive,
+		HasExclusion:    a.Features.HasExclusion,
+		HasIntersection: a.Features.HasIntersection,
 	}
 
 	// Build SQL fragments
@@ -201,7 +244,87 @@ func buildCheckFunctionData(a RelationAnalysis) (CheckFunctionData, error) {
 	// Build function calls for complex implied relations
 	data.ImpliedFunctionCalls = buildImpliedFunctionCalls(a)
 
+	// Build intersection groups
+	data.IntersectionGroups = buildIntersectionGroups(a)
+
+	// Compute HasStandaloneAccess - whether there are access paths outside of intersections.
+	// When an intersection contains a "This" pattern (e.g., "viewer: [user] and writer"),
+	// the direct types are constrained by the intersection and should NOT be treated as
+	// standalone access paths.
+	data.HasStandaloneAccess = computeHasStandaloneAccess(a, data.IntersectionGroups)
+
 	return data, nil
+}
+
+// computeHasStandaloneAccess determines if the relation has access paths outside of intersections.
+func computeHasStandaloneAccess(a RelationAnalysis, intersectionGroups []IntersectionGroupData) bool {
+	// If no intersection, all access paths are standalone
+	if !a.Features.HasIntersection {
+		return a.Features.HasDirect || a.Features.HasImplied || a.Features.HasUserset || a.Features.HasRecursive
+	}
+
+	// Check if any intersection group has a "This" part, meaning direct access is
+	// constrained by the intersection rather than being standalone.
+	hasIntersectionWithThis := false
+	for _, group := range intersectionGroups {
+		for _, part := range group.Parts {
+			if part.IsThis {
+				hasIntersectionWithThis = true
+				break
+			}
+		}
+		if hasIntersectionWithThis {
+			break
+		}
+	}
+
+	// If direct types are inside an intersection (This pattern), don't count them as standalone.
+	// Check for other standalone access paths (implied, userset, recursive).
+	hasStandaloneDirect := a.Features.HasDirect && !hasIntersectionWithThis
+	hasStandaloneImplied := a.Features.HasImplied
+	hasStandaloneUserset := a.Features.HasUserset
+	hasStandaloneRecursive := a.Features.HasRecursive
+
+	return hasStandaloneDirect || hasStandaloneImplied || hasStandaloneUserset || hasStandaloneRecursive
+}
+
+// buildIntersectionGroups creates intersection group data from RelationAnalysis.
+func buildIntersectionGroups(a RelationAnalysis) []IntersectionGroupData {
+	var groups []IntersectionGroupData
+
+	for _, ig := range a.IntersectionGroups {
+		group := IntersectionGroupData{}
+
+		for _, part := range ig.Parts {
+			partData := IntersectionPartData{
+				IsThis: part.IsThis,
+			}
+
+			if part.ParentRelation != nil {
+				// TTU pattern within intersection
+				partData.IsTTU = true
+				partData.TTULinkingRelation = part.ParentRelation.LinkingRelation
+				partData.TTURelation = part.ParentRelation.Relation
+			} else if !part.IsThis {
+				// Regular relation check - call its function
+				partData.FunctionName = functionName(a.ObjectType, part.Relation)
+			}
+
+			// Handle nested exclusions
+			if part.ExcludedRelation != "" {
+				partData.HasExclusion = true
+				partData.ExcludedRelation = part.ExcludedRelation
+			}
+
+			group.Parts = append(group.Parts, partData)
+		}
+
+		if len(group.Parts) > 0 {
+			groups = append(groups, group)
+		}
+	}
+
+	return groups
 }
 
 // buildImpliedFunctionCalls creates function call data for complex closure relations.

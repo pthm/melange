@@ -21,18 +21,18 @@ type RelationFeatures struct {
 // that all dependency relations are generatable via RelationAnalysis.CanGenerate.
 func (f RelationFeatures) CanGenerate() bool {
 	// We can generate SQL if:
-	// 1. The relation has Direct, Implied, Wildcard, Userset, Recursive, and/or Exclusion features
-	// 2. No intersection features (not yet supported in codegen)
+	// 1. The relation has Direct, Implied, Wildcard, Userset, Recursive, Exclusion,
+	//    and/or Intersection features
 	// Note: Exclusion is allowed here, but ComputeCanGenerate will verify that
 	// all excluded relations are simply resolvable before enabling codegen.
 	// Note: Userset is supported via JOIN-based expansion in userset_check.tpl.sql
 	// Note: Recursive (TTU) is supported for same-type recursion. ComputeCanGenerate
 	// verifies that all parent relations link to the same type.
-	if f.HasIntersection {
-		return false
-	}
-	// Must have at least one access path (direct, implied, userset, or recursive)
-	return f.HasDirect || f.HasImplied || f.HasUserset || f.HasRecursive
+	// Note: Intersection is supported by calling check functions for each part.
+	// ComputeCanGenerate verifies all intersection parts are generatable.
+
+	// Must have at least one access path
+	return f.HasDirect || f.HasImplied || f.HasUserset || f.HasRecursive || f.HasIntersection
 }
 
 // IsSimplyResolvable returns true if this relation can be fully resolved
@@ -735,6 +735,36 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 				if parent.LinkingRelation == "" || parent.Relation == "" {
 					// Invalid parent relation data - fall back to generic
 					canGenerate = false
+					break
+				}
+			}
+		}
+
+		// Eighth check: if relation has intersection groups, verify all parts can be
+		// generated or are special patterns we can handle (This, TTU).
+		// For regular relation parts, we call their check function, so they must be generatable.
+		if canGenerate && a.Features.HasIntersection {
+			for _, group := range a.IntersectionGroups {
+				for _, part := range group.Parts {
+					// This pattern and TTU patterns are handled inline, no dependency check needed
+					if part.IsThis || part.ParentRelation != nil {
+						continue
+					}
+					// Regular relation part - must be generatable
+					partAnalysis, ok := lookup[a.ObjectType][part.Relation]
+					if !ok {
+						// Unknown relation - fall back to generic
+						canGenerate = false
+						break
+					}
+					// The part's relation must be generatable since we call its function
+					// Note: We check CanGenerate on the analysis, which is computed in dependency order
+					if !partAnalysis.CanGenerate {
+						canGenerate = false
+						break
+					}
+				}
+				if !canGenerate {
 					break
 				}
 			}

@@ -92,7 +92,12 @@ func TestRelationFeaturesCanGenerate(t *testing.T) {
 		{
 			name: "with intersection",
 			f:    RelationFeatures{HasDirect: true, HasIntersection: true},
-			want: false, // Intersection not yet supported
+			want: true, // Intersection IS supported (calls check functions for each part)
+		},
+		{
+			name: "intersection only",
+			f:    RelationFeatures{HasIntersection: true},
+			want: true, // Pure intersection (e.g., viewer: writer and editor)
 		},
 		{
 			name: "complex combination",

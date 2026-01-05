@@ -22,6 +22,103 @@ BEGIN
 
     v_has_access := FALSE;
 
+{{- if .HasIntersection}}
+    -- Relation has intersection; only render standalone paths if HasStandaloneAccess is true
+{{- if .HasStandaloneAccess}}
+{{- if or .HasDirect .HasImplied}}
+
+    -- Direct/Implied access path (standalone)
+    IF {{.DirectCheck}} THEN
+        v_has_access := TRUE;
+    END IF;
+{{- end}}
+
+{{- if .HasUserset}}
+
+    -- Userset access path (standalone)
+    IF NOT v_has_access THEN
+        IF {{.UsersetCheck}} THEN
+            v_has_access := TRUE;
+        END IF;
+    END IF;
+{{- end}}
+
+{{- range .ImpliedFunctionCalls}}
+
+    -- Implied access path via {{.FunctionName}} (standalone)
+    IF NOT v_has_access THEN
+        IF {{.FunctionName}}(p_subject_type, p_subject_id, p_object_id, p_visited) = 1 THEN
+            v_has_access := TRUE;
+        END IF;
+    END IF;
+{{- end}}
+
+{{- range .ParentRelations}}
+
+    -- Recursive access path via {{.LinkingRelation}} -> {{.ParentRelation}} (standalone)
+    IF NOT v_has_access THEN
+        IF EXISTS(
+            SELECT 1 FROM melange_tuples link
+            WHERE link.object_type = '{{$.ObjectType}}'
+              AND link.object_id = p_object_id
+              AND link.relation = '{{.LinkingRelation}}'
+              AND check_permission_internal(
+                  p_subject_type, p_subject_id,
+                  '{{.ParentRelation}}',
+                  link.subject_type,
+                  link.subject_id,
+                  p_visited || v_key
+              ) = 1
+        ) THEN
+            v_has_access := TRUE;
+        END IF;
+    END IF;
+{{- end}}
+{{- end}}
+
+    -- Intersection groups (OR'd together, parts within group AND'd)
+{{- range $groupIdx, $group := .IntersectionGroups}}
+    IF NOT v_has_access THEN
+        IF {{range $partIdx, $part := $group.Parts}}{{if $partIdx}} AND {{end}}{{if $part.IsThis}}EXISTS(
+            SELECT 1 FROM melange_tuples t
+            WHERE t.object_type = '{{$.ObjectType}}'
+              AND t.object_id = p_object_id
+              AND t.relation = '{{$.Relation}}'
+              AND t.subject_type = p_subject_type
+              AND (t.subject_id = p_subject_id OR t.subject_id = '*')
+        ){{else if $part.IsTTU}}EXISTS(
+            SELECT 1 FROM melange_tuples link
+            WHERE link.object_type = '{{$.ObjectType}}'
+              AND link.object_id = p_object_id
+              AND link.relation = '{{$part.TTULinkingRelation}}'
+              AND check_permission_internal(
+                  p_subject_type, p_subject_id,
+                  '{{$part.TTURelation}}',
+                  link.subject_type,
+                  link.subject_id,
+                  p_visited || v_key
+              ) = 1
+        ){{else}}{{$part.FunctionName}}(p_subject_type, p_subject_id, p_object_id, p_visited || v_key) = 1{{end}}{{end}} THEN
+{{- range $partIdx, $part := $group.Parts}}
+{{- if $part.HasExclusion}}
+            -- Check exclusion for part {{$partIdx}}
+            IF check_permission_internal(p_subject_type, p_subject_id, '{{$part.ExcludedRelation}}', '{{$.ObjectType}}', p_object_id, p_visited || v_key) = 1 THEN
+                -- Excluded, this group fails
+            ELSE
+{{- end}}
+{{- end}}
+            v_has_access := TRUE;
+{{- range $partIdx, $part := $group.Parts}}
+{{- if $part.HasExclusion}}
+            END IF;
+{{- end}}
+{{- end}}
+        END IF;
+    END IF;
+{{- end}}
+
+{{- else}}
+    -- No intersection: all access paths are standalone
 {{- if or .HasDirect .HasImplied}}
 
     -- Direct/Implied access path
@@ -70,6 +167,7 @@ BEGIN
             v_has_access := TRUE;
         END IF;
     END IF;
+{{- end}}
 {{- end}}
 
 {{- if .HasExclusion}}
