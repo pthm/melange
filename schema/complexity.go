@@ -688,24 +688,26 @@ func (a *RelationAnalysis) CanGenerateList() bool {
 // This checks a single relation's features - the full check in ComputeCanGenerate
 // also validates that ALL relations in the closure have compatible features.
 func canGenerateListFeatures(f RelationFeatures) (bool, string) {
-	// Phase 2: Very conservative - only Direct relations without any complex features.
-	// We will expand this progressively as we verify correctness for each pattern.
+	// Phase 2: Support Direct, Implied, and Wildcard patterns.
+	// These can all be handled with simple tuple lookup using relation closure.
 	//
-	// Must have direct access path (not just implied).
-	if !f.HasDirect {
-		return false, "no direct access path"
+	// Must have at least one access path (direct or implied).
+	// - Direct: relation has [user] or similar type restriction
+	// - Implied: relation references another relation (can_view: viewer)
+	// Either is sufficient as long as the closure is simple.
+	if !f.HasDirect && !f.HasImplied {
+		return false, "no access path (neither direct nor implied)"
 	}
 
-	// For Phase 2, reject ALL complex features including wildcards and implied.
-	// Wildcards require careful handling of type restrictions when models change.
-	// Implied relations require verifying the entire closure is simple.
-	// We can relax these restrictions in later phases once we verify correctness.
-	if f.HasWildcard {
-		return false, "has wildcard patterns (requires careful type restriction handling)"
-	}
-	if f.HasImplied {
-		return false, "has implied relations (requires closure verification)"
-	}
+	// HasWildcard is allowed: SubjectIDCheck handles wildcard matching,
+	// and model changes regenerate functions with correct behavior.
+	// Type guards (AllowedSubjectTypes) ensure type restrictions are enforced.
+
+	// HasImplied is allowed: the relation closure (SatisfyingRelations) is inlined
+	// into the RelationList. The closure validation in computeCanGenerateList
+	// ensures all relations in the closure are themselves simple.
+
+	// Complex features still require later phases:
 	if f.HasUserset {
 		return false, "has userset patterns (requires Phase 4)"
 	}

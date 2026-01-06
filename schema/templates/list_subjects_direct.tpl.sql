@@ -11,8 +11,9 @@
 
   Type restriction enforcement:
   - For regular subject types: returns empty if p_subject_type is not allowed
-  - For userset filters: type guard applies only to direct tuple lookup, NOT to self-candidate
-    (self-candidate is about closure-implied permissions, not direct assignments)
+  - For userset filters: type guard applies to direct tuple lookup via WHERE clause
+  - Self-candidate path is validated by closure check instead (filter type = object type is valid
+    when the filter relation satisfies the requested relation via closure)
 
   When HasWildcard is false, excludes wildcard tuples (subject_id = '*') from results.
 */ -}}
@@ -31,14 +32,11 @@ BEGIN
         v_filter_type := substring(p_subject_type from 1 for position('#' in p_subject_type) - 1);
         v_filter_relation := substring(p_subject_type from position('#' in p_subject_type) + 1);
 
-        -- NOTE: Type guard is applied per-query below, not globally here.
-        -- Self-candidate logic should NOT be blocked by AllowedSubjectTypes because
-        -- it's about closure-based implied permissions, not direct tuple assignments.
-
         RETURN QUERY
         -- Direct tuple lookup with closure-inlined relations
+        -- Normalize results to use the filter relation (e.g., group:1#admin -> group:1#member if admin implies member)
         -- Type guard: only return results if filter type is in allowed subject types
-        SELECT DISTINCT t.subject_id
+        SELECT DISTINCT substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) || '#' || v_filter_relation AS subject_id
         FROM melange_tuples t
         WHERE t.object_type = '{{.ObjectType}}'
           AND t.object_id = p_object_id
@@ -57,9 +55,9 @@ BEGIN
           )
         UNION
         -- Self-candidate: when filter type matches object type
-        -- e.g., querying document:1.viewer with filter document#viewer
-        -- should return document:1#viewer if viewer satisfies the relation
-        -- NOTE: No type guard here - this is about closure-implied permissions
+        -- e.g., querying document:1.viewer with filter document#writer
+        -- should return document:1#writer if writer satisfies the relation
+        -- No type guard here - validity comes from the closure check below
         SELECT p_object_id || '#' || v_filter_relation AS subject_id
         WHERE v_filter_type = '{{.ObjectType}}'
           AND EXISTS (
