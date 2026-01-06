@@ -96,8 +96,11 @@ func generateListObjectsFunction(a RelationAnalysis) (string, error) {
 		FeaturesString: a.Features.String(),
 	}
 
-	// Build relation list from satisfying relations (closure)
+	// Build relation list from simple closure relations (tuple lookup)
 	data.RelationList = buildRelationList(a)
+
+	// Populate complex closure relations (need check_permission_internal)
+	data.ComplexClosureRelations = a.ComplexClosureRelations
 
 	// Build subject_id check (with or without wildcard)
 	data.SubjectIDCheck = buildSubjectIDCheck(a.Features.HasWildcard)
@@ -105,11 +108,31 @@ func generateListObjectsFunction(a RelationAnalysis) (string, error) {
 	// Build allowed subject types list for type restriction enforcement
 	data.AllowedSubjectTypes = buildAllowedSubjectTypes(a)
 
+	// Populate exclusion fields (Phase 3)
+	data.HasExclusion = a.Features.HasExclusion
+	data.SimpleExcludedRelations = a.SimpleExcludedRelations
+	data.ComplexExcludedRelations = a.ComplexExcludedRelations
+	data.ExcludedParentRelations = a.ExcludedParentRelations
+	data.ExcludedIntersectionGroups = a.ExcludedIntersectionGroups
+
+	// Select appropriate template based on features
+	templateName := selectListObjectsTemplate(a)
+
 	var buf bytes.Buffer
-	if err := templates.ExecuteTemplate(&buf, "list_objects_direct.tpl.sql", data); err != nil {
-		return "", fmt.Errorf("executing list_objects template: %w", err)
+	if err := templates.ExecuteTemplate(&buf, templateName, data); err != nil {
+		return "", fmt.Errorf("executing list_objects template %s: %w", templateName, err)
 	}
 	return buf.String(), nil
+}
+
+// selectListObjectsTemplate selects the appropriate list_objects template based on features.
+func selectListObjectsTemplate(a RelationAnalysis) string {
+	// Phase 3: Use exclusion template if relation has any exclusion patterns
+	if a.Features.HasExclusion {
+		return "list_objects_exclusion.tpl.sql"
+	}
+	// Phase 2: Direct/implied patterns use the direct template
+	return "list_objects_direct.tpl.sql"
 }
 
 // generateListSubjectsFunction generates a specialized list_subjects function for a relation.
@@ -122,17 +145,40 @@ func generateListSubjectsFunction(a RelationAnalysis) (string, error) {
 		HasWildcard:    a.Features.HasWildcard,
 	}
 
-	// Build relation list from satisfying relations (closure)
+	// Build relation list from simple closure relations (tuple lookup)
 	data.RelationList = buildRelationList(a)
+
+	// Populate complex closure relations (need check_permission_internal)
+	data.ComplexClosureRelations = a.ComplexClosureRelations
 
 	// Build allowed subject types list for type restriction enforcement
 	data.AllowedSubjectTypes = buildAllowedSubjectTypes(a)
 
+	// Populate exclusion fields (Phase 3)
+	data.HasExclusion = a.Features.HasExclusion
+	data.SimpleExcludedRelations = a.SimpleExcludedRelations
+	data.ComplexExcludedRelations = a.ComplexExcludedRelations
+	data.ExcludedParentRelations = a.ExcludedParentRelations
+	data.ExcludedIntersectionGroups = a.ExcludedIntersectionGroups
+
+	// Select appropriate template based on features
+	templateName := selectListSubjectsTemplate(a)
+
 	var buf bytes.Buffer
-	if err := templates.ExecuteTemplate(&buf, "list_subjects_direct.tpl.sql", data); err != nil {
-		return "", fmt.Errorf("executing list_subjects template: %w", err)
+	if err := templates.ExecuteTemplate(&buf, templateName, data); err != nil {
+		return "", fmt.Errorf("executing list_subjects template %s: %w", templateName, err)
 	}
 	return buf.String(), nil
+}
+
+// selectListSubjectsTemplate selects the appropriate list_subjects template based on features.
+func selectListSubjectsTemplate(a RelationAnalysis) string {
+	// Phase 3: Use exclusion template if relation has any exclusion patterns
+	if a.Features.HasExclusion {
+		return "list_subjects_exclusion.tpl.sql"
+	}
+	// Phase 2: Direct/implied patterns use the direct template
+	return "list_subjects_direct.tpl.sql"
 }
 
 // ListObjectsFunctionData contains data for rendering list_objects function templates.
@@ -142,9 +188,13 @@ type ListObjectsFunctionData struct {
 	FunctionName   string
 	FeaturesString string
 
-	// RelationList is a SQL-formatted list of relations to check (from closure).
-	// e.g., "'viewer', 'editor', 'owner'"
+	// RelationList is a SQL-formatted list of simple closure relations to check.
+	// e.g., "'viewer', 'editor', 'owner'" - only relations that can use tuple lookup
 	RelationList string
+
+	// ComplexClosureRelations are closure relations that need check_permission_internal.
+	// These have exclusions or other complex features that can't be resolved via tuple lookup.
+	ComplexClosureRelations []string
 
 	// SubjectIDCheck is the SQL fragment for checking subject_id with wildcard support.
 	// e.g., "(t.subject_id = p_subject_id OR t.subject_id = '*')"
@@ -153,6 +203,23 @@ type ListObjectsFunctionData struct {
 	// AllowedSubjectTypes is a SQL-formatted list of allowed subject types.
 	// e.g., "'user', 'employee'" - used to enforce model type restrictions.
 	AllowedSubjectTypes string
+
+	// Exclusion-related fields (Phase 3)
+	HasExclusion bool // true if this relation has exclusion patterns
+
+	// SimpleExcludedRelations are excluded relations that can use direct tuple lookup.
+	// These are relations without userset, TTU, exclusion, intersection, or implied closure.
+	SimpleExcludedRelations []string
+
+	// ComplexExcludedRelations are excluded relations that need check_permission_internal.
+	// These have userset, TTU, intersection, exclusion, or implied closure.
+	ComplexExcludedRelations []string
+
+	// ExcludedParentRelations are TTU exclusions like "but not viewer from parent".
+	ExcludedParentRelations []ParentRelationInfo
+
+	// ExcludedIntersectionGroups are intersection exclusions like "but not (editor and owner)".
+	ExcludedIntersectionGroups []IntersectionGroupInfo
 }
 
 // ListSubjectsFunctionData contains data for rendering list_subjects function templates.
@@ -162,8 +229,11 @@ type ListSubjectsFunctionData struct {
 	FunctionName   string
 	FeaturesString string
 
-	// RelationList is a SQL-formatted list of relations to check (from closure).
+	// RelationList is a SQL-formatted list of simple closure relations to check.
 	RelationList string
+
+	// ComplexClosureRelations are closure relations that need check_permission_internal.
+	ComplexClosureRelations []string
 
 	// AllowedSubjectTypes is a SQL-formatted list of allowed subject types.
 	// e.g., "'user', 'employee'" - used to enforce model type restrictions.
@@ -172,6 +242,21 @@ type ListSubjectsFunctionData struct {
 	// HasWildcard is true if the model allows wildcard subjects.
 	// When false, wildcard tuples (subject_id = '*') should be excluded from results.
 	HasWildcard bool
+
+	// Exclusion-related fields (Phase 3)
+	HasExclusion bool // true if this relation has exclusion patterns
+
+	// SimpleExcludedRelations are excluded relations that can use direct tuple lookup.
+	SimpleExcludedRelations []string
+
+	// ComplexExcludedRelations are excluded relations that need check_permission_internal.
+	ComplexExcludedRelations []string
+
+	// ExcludedParentRelations are TTU exclusions like "but not viewer from parent".
+	ExcludedParentRelations []ParentRelationInfo
+
+	// ExcludedIntersectionGroups are intersection exclusions like "but not (editor and owner)".
+	ExcludedIntersectionGroups []IntersectionGroupInfo
 }
 
 // ListDispatcherData contains data for rendering list dispatcher templates.
@@ -246,15 +331,22 @@ func generateListSubjectsDispatcher(analyses []RelationAnalysis) (string, error)
 	return buf.String(), nil
 }
 
-// buildRelationList builds a SQL-formatted list of relations from the closure.
+// buildRelationList builds a SQL-formatted list of simple relations from the closure.
 // For example: "'viewer', 'editor', 'owner'"
-// This includes the relation itself and all relations that satisfy it (from SatisfyingRelations).
+// Only includes relations that can be resolved via tuple lookup (SimpleClosureRelations).
+// Complex closure relations (with exclusions, etc.) are handled separately via check_permission_internal.
 func buildRelationList(a RelationAnalysis) string {
-	// Use SatisfyingRelations if available (includes closure)
-	relations := a.SatisfyingRelations
-	if len(relations) == 0 {
-		// Fallback to just the relation itself
-		relations = []string{a.Relation}
+	// Build relation list from self + simple closure relations
+	// Complex closure relations are handled via function calls, not tuple lookup
+	relations := []string{a.Relation}
+	relations = append(relations, a.SimpleClosureRelations...)
+
+	// Fallback to satisfying relations only if no partition was computed at all
+	// (for backwards compatibility when closure relations not yet partitioned).
+	// If ComplexClosureRelations is non-empty, the partition was computed and
+	// we should use only the simple relations (even if that's just self).
+	if len(a.SimpleClosureRelations) == 0 && len(a.ComplexClosureRelations) == 0 && len(a.SatisfyingRelations) > 0 {
+		relations = a.SatisfyingRelations
 	}
 
 	quoted := make([]string, len(relations))

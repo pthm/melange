@@ -5,6 +5,9 @@
   This template is used for relations that only have Direct and/or Implied features.
   Complex features (Userset, Recursive, Exclusion, Intersection) require different templates.
 
+  Complex closure relations (with exclusions, etc.) are handled via check_permission_internal.
+  Simple closure relations use direct tuple lookup.
+
   Includes self-candidate logic for userset subjects: when the subject is a userset
   like "document:1#viewer" and the object_type is "document", the object "document:1"
   should be considered as a candidate.
@@ -22,7 +25,7 @@ CREATE OR REPLACE FUNCTION {{.FunctionName}}(
 ) RETURNS TABLE(object_id TEXT) AS $$
 BEGIN
     RETURN QUERY
-    -- Direct tuple lookup with closure-inlined relations
+    -- Direct tuple lookup with simple closure relations
     -- Type guard: only return results if subject type is in allowed subject types
     SELECT DISTINCT t.object_id
     FROM melange_tuples t
@@ -31,6 +34,21 @@ BEGIN
       AND t.subject_type = p_subject_type
       AND p_subject_type IN ({{.AllowedSubjectTypes}})  -- Type guard in WHERE clause
       AND {{.SubjectIDCheck}}
+{{- if .ComplexClosureRelations }}
+    UNION
+    -- Complex closure relations: find candidates via tuples, validate via check_permission_internal
+    -- These relations have exclusions or other complex features that require full permission check
+{{- range .ComplexClosureRelations }}
+    SELECT DISTINCT t.object_id
+    FROM melange_tuples t
+    WHERE t.object_type = '{{$.ObjectType}}'
+      AND t.relation = '{{.}}'
+      AND t.subject_type = p_subject_type
+      AND p_subject_type IN ({{$.AllowedSubjectTypes}})
+      AND (t.subject_id = p_subject_id OR t.subject_id = '*')
+      AND check_permission_internal(p_subject_type, p_subject_id, '{{.}}', '{{$.ObjectType}}', t.object_id, ARRAY[]::TEXT[]) = 1
+{{- end }}
+{{- end }}
     UNION
     -- Self-candidate: when subject is a userset on the same object type
     -- e.g., subject_id = 'document:1#viewer' querying object_type = 'document'

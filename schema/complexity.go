@@ -714,11 +714,10 @@ func canGenerateListFeatures(f RelationFeatures) (bool, string) {
 	if f.HasRecursive {
 		return false, "has recursive/TTU patterns (requires Phase 5)"
 	}
-	if f.HasExclusion {
-		return false, "has exclusion patterns (requires Phase 3)"
-	}
+	// Phase 3: HasExclusion is now supported via NOT EXISTS anti-join
+	// or check_permission_internal for complex excluded relations.
 	if f.HasIntersection {
-		return false, "has intersection patterns (requires Phase 3+)"
+		return false, "has intersection patterns (requires Phase 5+)"
 	}
 
 	return true, ""
