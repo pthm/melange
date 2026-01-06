@@ -143,6 +143,39 @@ func (m *Migrator) applyGeneratedSQL(ctx context.Context, db Execer, gen Generat
 	return nil
 }
 
+// applyGeneratedListSQL applies generated specialized list functions and dispatchers.
+func (m *Migrator) applyGeneratedListSQL(ctx context.Context, db Execer, gen ListGeneratedSQL) error {
+	// Apply specialized list_objects functions
+	for i, fn := range gen.ListObjectsFunctions {
+		if _, err := db.ExecContext(ctx, fn); err != nil {
+			return fmt.Errorf("applying list_objects function %d: %w", i, err)
+		}
+	}
+
+	// Apply specialized list_subjects functions
+	for i, fn := range gen.ListSubjectsFunctions {
+		if _, err := db.ExecContext(ctx, fn); err != nil {
+			return fmt.Errorf("applying list_subjects function %d: %w", i, err)
+		}
+	}
+
+	// Apply list_objects dispatcher
+	if gen.ListObjectsDispatcher != "" {
+		if _, err := db.ExecContext(ctx, gen.ListObjectsDispatcher); err != nil {
+			return fmt.Errorf("applying list_objects dispatcher: %w", err)
+		}
+	}
+
+	// Apply list_subjects dispatcher
+	if gen.ListSubjectsDispatcher != "" {
+		if _, err := db.ExecContext(ctx, gen.ListSubjectsDispatcher); err != nil {
+			return fmt.Errorf("applying list_subjects dispatcher: %w", err)
+		}
+	}
+
+	return nil
+}
+
 // MigrateWithTypes performs database migration using pre-parsed type definitions.
 // This is the core migration method used by the tooling package's Migrate function.
 //
@@ -175,10 +208,16 @@ func (m *Migrator) MigrateWithTypes(ctx context.Context, types []TypeDefinition)
 	analyses = ComputeCanGenerate(analyses) // Walk dependency graph to set CanGenerate
 	generatedSQL, err := GenerateSQL(analyses)
 	if err != nil {
-		return fmt.Errorf("generating SQL: %w", err)
+		return fmt.Errorf("generating check SQL: %w", err)
 	}
 
-	// 4. Apply everything atomically
+	// 4. Generate list functions
+	listSQL, err := GenerateListSQL(analyses)
+	if err != nil {
+		return fmt.Errorf("generating list SQL: %w", err)
+	}
+
+	// 5. Apply everything atomically
 	if txer, ok := m.db.(interface {
 		BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
 	}); ok {
@@ -193,8 +232,13 @@ func (m *Migrator) MigrateWithTypes(ctx context.Context, types []TypeDefinition)
 			return err
 		}
 
-		// Apply generated specialized functions
+		// Apply generated specialized check functions
 		if err := m.applyGeneratedSQL(ctx, tx, generatedSQL); err != nil {
+			return err
+		}
+
+		// Apply generated specialized list functions
+		if err := m.applyGeneratedListSQL(ctx, tx, listSQL); err != nil {
 			return err
 		}
 
@@ -220,6 +264,9 @@ func (m *Migrator) MigrateWithTypes(ctx context.Context, types []TypeDefinition)
 		return err
 	}
 	if err := m.applyGeneratedSQL(ctx, m.db, generatedSQL); err != nil {
+		return err
+	}
+	if err := m.applyGeneratedListSQL(ctx, m.db, listSQL); err != nil {
 		return err
 	}
 	if err := m.applyTypes(ctx, m.db, types); err != nil {

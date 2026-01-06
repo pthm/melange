@@ -22,10 +22,11 @@ END;
 $$ LANGUAGE plpgsql STABLE;
 
 
--- Enumerate objects a subject can access (ListObjects API).
+-- Enumerate objects a subject can access (ListObjects API) - Generic implementation.
 -- Strategy: find all objects of target type, then filter via check_permission.
 -- Ensures consistency with Check at the cost of performance.
-CREATE OR REPLACE FUNCTION list_accessible_objects(
+-- This is the fallback for relations that don't have specialized list functions.
+CREATE OR REPLACE FUNCTION list_accessible_objects_generic(
     p_subject_type TEXT,
     p_subject_id TEXT,
     p_relation TEXT,
@@ -55,10 +56,29 @@ END;
 $$ LANGUAGE plpgsql STABLE;
 
 
--- Enumerate subjects with access to an object (ListUsers API).
+-- Entry point for list_accessible_objects - replaced by generated dispatcher.
+-- This stub calls the generic implementation by default.
+-- The generated dispatcher (from schema migration) will replace this function
+-- to route to specialized list functions when available.
+CREATE OR REPLACE FUNCTION list_accessible_objects(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_relation TEXT,
+    p_object_type TEXT
+) RETURNS TABLE (object_id TEXT) AS $$
+BEGIN
+    RETURN QUERY SELECT * FROM list_accessible_objects_generic(
+        p_subject_type, p_subject_id, p_relation, p_object_type
+    );
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+
+-- Enumerate subjects with access to an object (ListUsers API) - Generic implementation.
 -- Supports userset filters like "group#member" to find userset references.
 -- Strategy: gather candidate subjects from all relevant paths, then filter via check_permission.
-CREATE OR REPLACE FUNCTION list_accessible_subjects(
+-- This is the fallback for relations that don't have specialized list functions.
+CREATE OR REPLACE FUNCTION list_accessible_subjects_generic(
     p_object_type TEXT,
     p_object_id TEXT,
     p_relation TEXT,
@@ -364,5 +384,23 @@ BEGIN
                )
            );
     END IF;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+
+-- Entry point for list_accessible_subjects - replaced by generated dispatcher.
+-- This stub calls the generic implementation by default.
+-- The generated dispatcher (from schema migration) will replace this function
+-- to route to specialized list functions when available.
+CREATE OR REPLACE FUNCTION list_accessible_subjects(
+    p_object_type TEXT,
+    p_object_id TEXT,
+    p_relation TEXT,
+    p_subject_type TEXT
+) RETURNS TABLE (subject_id TEXT) AS $$
+BEGIN
+    RETURN QUERY SELECT * FROM list_accessible_subjects_generic(
+        p_object_type, p_object_id, p_relation, p_subject_type
+    );
 END;
 $$ LANGUAGE plpgsql STABLE;

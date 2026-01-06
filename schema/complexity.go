@@ -172,7 +172,7 @@ type RelationAnalysis struct {
 	Relation   string           // The relation name (e.g., "viewer")
 	Features   RelationFeatures // Feature flags determining what SQL to generate
 
-	// CanGenerate is true if this relation can use generated SQL.
+	// CanGenerate is true if this relation can use generated SQL for check.
 	// This is computed by checking both the relation's own features AND
 	// ensuring all relations in the satisfying closure are simply resolvable.
 	// Set by ComputeCanGenerate after all relations are analyzed.
@@ -181,6 +181,16 @@ type RelationAnalysis struct {
 	// CannotGenerateReason explains why CanGenerate is false.
 	// Empty when CanGenerate is true.
 	CannotGenerateReason string
+
+	// CanGenerateListValue is true if this relation can use generated SQL for list functions.
+	// List functions have stricter requirements than check functions because they use
+	// set operations (UNION, EXCEPT) rather than boolean composition.
+	// Set by ComputeCanGenerate after all relations are analyzed.
+	CanGenerateListValue bool
+
+	// CannotGenerateListReason explains why CanGenerateListValue is false.
+	// Empty when CanGenerateListValue is true.
+	CannotGenerateListReason string
 
 	// For Direct/Implied patterns - from closure table
 	SatisfyingRelations []string // Relations that satisfy this one (e.g., ["viewer", "editor", "owner"])
@@ -656,6 +666,62 @@ func sortByDependency(analyses []RelationAnalysis) []RelationAnalysis {
 	return sorted
 }
 
+// CanGenerateList returns true if we can generate specialized list SQL for this relation.
+// This returns the CanGenerateListValue field which is computed by ComputeCanGenerate.
+//
+// List functions have different constraints than check functions because they use set
+// operations (UNION, EXCEPT, INTERSECT) rather than boolean composition.
+//
+// This is progressively relaxed as more list codegen patterns are implemented:
+// - Phase 2: Direct/Implied patterns (simple tuple lookup with closure)
+// - Phase 3+: Will add Exclusion support
+// - Phase 4+: Will add Userset support
+// - Phase 5+: Will add Recursive/TTU support
+//
+// When CanGenerateList returns false, the list dispatcher falls through to the
+// generic list functions (list_accessible_objects, list_accessible_subjects).
+func (a *RelationAnalysis) CanGenerateList() bool {
+	return a.CanGenerateListValue
+}
+
+// canGenerateListFeatures checks if the given features allow list generation.
+// This checks a single relation's features - the full check in ComputeCanGenerate
+// also validates that ALL relations in the closure have compatible features.
+func canGenerateListFeatures(f RelationFeatures) (bool, string) {
+	// Phase 2: Very conservative - only Direct relations without any complex features.
+	// We will expand this progressively as we verify correctness for each pattern.
+	//
+	// Must have direct access path (not just implied).
+	if !f.HasDirect {
+		return false, "no direct access path"
+	}
+
+	// For Phase 2, reject ALL complex features including wildcards and implied.
+	// Wildcards require careful handling of type restrictions when models change.
+	// Implied relations require verifying the entire closure is simple.
+	// We can relax these restrictions in later phases once we verify correctness.
+	if f.HasWildcard {
+		return false, "has wildcard patterns (requires careful type restriction handling)"
+	}
+	if f.HasImplied {
+		return false, "has implied relations (requires closure verification)"
+	}
+	if f.HasUserset {
+		return false, "has userset patterns (requires Phase 4)"
+	}
+	if f.HasRecursive {
+		return false, "has recursive/TTU patterns (requires Phase 5)"
+	}
+	if f.HasExclusion {
+		return false, "has exclusion patterns (requires Phase 3)"
+	}
+	if f.HasIntersection {
+		return false, "has intersection patterns (requires Phase 3+)"
+	}
+
+	return true, ""
+}
+
 // ComputeCanGenerate walks the dependency graph and sets CanGenerate on each analysis.
 // A relation can be generated if:
 // 1. Its own features allow generation (CanGenerate() on features returns true)
@@ -941,7 +1007,52 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		// and other classification data used by the code generator. CannotGenerateReason is
 		// preserved for diagnostics but CanGenerate is always true.
 		a.CanGenerate = true
+
+		// Compute CanGenerateListValue for list function generation.
+		// List functions have stricter requirements - ALL relations in the closure
+		// must have features compatible with simple tuple lookup.
+		canGenerateList, cannotGenerateListReason := computeCanGenerateList(a, lookup)
+		a.CanGenerateListValue = canGenerateList
+		a.CannotGenerateListReason = cannotGenerateListReason
 	}
 
 	return sorted
+}
+
+// computeCanGenerateList determines if a relation can use specialized list functions.
+// For Phase 2, this requires:
+// 1. The relation itself has only Direct/Implied features (no userset, TTU, exclusion, intersection)
+// 2. ALL relations in the satisfying closure also have only Direct/Implied features
+//
+// This ensures that a simple tuple lookup with IN (relation1, relation2, ...) will produce
+// correct results without needing recursive CTEs or complex JOINs.
+func computeCanGenerateList(a *RelationAnalysis, lookup map[string]map[string]*RelationAnalysis) (bool, string) {
+	// First check: does this relation's features allow list generation?
+	canGenerate, reason := canGenerateListFeatures(a.Features)
+	if !canGenerate {
+		return false, reason
+	}
+
+	// Second check: ALL relations in the closure must also be list-compatible.
+	// This is critical because `can_view: viewer` where `viewer: viewer from parent`
+	// cannot use simple tuple lookup even though `can_view` itself only has HasImplied.
+	for _, rel := range a.SatisfyingRelations {
+		// Skip self
+		if rel == a.Relation {
+			continue
+		}
+
+		relAnalysis, ok := lookup[a.ObjectType][rel]
+		if !ok {
+			return false, "unknown relation in closure: " + rel
+		}
+
+		// Check if this closure relation has features that prevent simple tuple lookup
+		closureCanGenerate, closureReason := canGenerateListFeatures(relAnalysis.Features)
+		if !closureCanGenerate {
+			return false, "closure relation " + rel + " " + closureReason
+		}
+	}
+
+	return true, ""
 }
