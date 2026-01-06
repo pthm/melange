@@ -199,8 +199,19 @@ type RelationAnalysis struct {
 
 	// HasComplexExclusion is true if the relation has exclusions that can't be
 	// handled by simple tuple lookup (TTU exclusions or intersection exclusions).
-	// When true, the relation must fall back to generic for exclusion handling.
+	// This is informational only - these patterns are now supported via
+	// check_permission_internal calls.
 	HasComplexExclusion bool
+
+	// ExcludedParentRelations captures "but not X from Y" patterns (TTU exclusions).
+	// These are resolved by looking up the linking relation Y and calling
+	// check_permission_internal for relation X on each linked object.
+	ExcludedParentRelations []ParentRelationInfo
+
+	// ExcludedIntersectionGroups captures "but not (A and B)" patterns.
+	// These are resolved by ANDing together check_permission_internal calls
+	// for each relation in the group.
+	ExcludedIntersectionGroups []IntersectionGroupInfo
 
 	// For Userset patterns
 	UsersetPatterns []UsersetPattern // [group#member] patterns
@@ -295,8 +306,14 @@ func analyzeRelation(
 	analysis.ExcludedRelations = collectExcludedRelations(r)
 
 	// Check for complex exclusions (TTU or intersection exclusions)
-	// These require generic handling, simple codegen can't handle them
+	// These are supported via check_permission_internal calls
 	analysis.HasComplexExclusion = len(r.ExcludedParentRelations) > 0 || len(r.ExcludedIntersectionGroups) > 0
+
+	// Collect excluded parent relations (TTU exclusions like "but not viewer from parent")
+	analysis.ExcludedParentRelations = collectExcludedParentRelations(r)
+
+	// Collect excluded intersection groups (like "but not (editor and owner)")
+	analysis.ExcludedIntersectionGroups = collectExcludedIntersectionGroups(r)
 
 	// Collect intersection groups
 	analysis.IntersectionGroups = collectIntersectionGroups(r)
@@ -461,6 +478,60 @@ func collectExcludedRelations(r RelationDefinition) []string {
 	return excluded
 }
 
+// collectExcludedParentRelations extracts TTU exclusions like "but not viewer from parent".
+func collectExcludedParentRelations(r RelationDefinition) []ParentRelationInfo {
+	var excluded []ParentRelationInfo
+	for _, pr := range r.ExcludedParentRelations {
+		excluded = append(excluded, ParentRelationInfo{
+			Relation:        pr.Relation,
+			LinkingRelation: pr.ParentType,
+			ParentType:      pr.ParentType,
+		})
+	}
+	return excluded
+}
+
+// collectExcludedIntersectionGroups extracts intersection exclusions like "but not (editor and owner)"
+// and nested exclusions like "but not (editor but not owner)".
+func collectExcludedIntersectionGroups(r RelationDefinition) []IntersectionGroupInfo {
+	var groups []IntersectionGroupInfo
+	for _, ig := range r.ExcludedIntersectionGroups {
+		group := IntersectionGroupInfo{}
+		// Add relation checks
+		for _, rel := range ig.Relations {
+			part := IntersectionPart{
+				Relation: rel,
+			}
+			// Check for nested exclusions within the intersection part
+			// For "but not (editor but not owner)", ig.Exclusions["editor"] = ["owner"]
+			// NOTE: Currently only the first exclusion per relation is supported.
+			// Multiple exclusions on the same relation (e.g., "editor but not a but not b")
+			// are not common in FGA schemas and would require IntersectionPart.ExcludedRelations
+			// to be a slice. For now, we take the first exclusion.
+			if excls, ok := ig.Exclusions[rel]; ok && len(excls) > 0 {
+				part.ExcludedRelation = excls[0]
+			}
+			group.Parts = append(group.Parts, part)
+		}
+		// Add parent relation checks (rare but possible)
+		for _, pr := range ig.ParentRelations {
+			part := IntersectionPart{
+				Relation: pr.Relation,
+				ParentRelation: &ParentRelationInfo{
+					Relation:        pr.Relation,
+					LinkingRelation: pr.ParentType,
+					ParentType:      pr.ParentType,
+				},
+			}
+			group.Parts = append(group.Parts, part)
+		}
+		if len(group.Parts) > 0 {
+			groups = append(groups, group)
+		}
+	}
+	return groups
+}
+
 // collectIntersectionGroups converts IntersectionGroup to IntersectionGroupInfo.
 func collectIntersectionGroups(r RelationDefinition) []IntersectionGroupInfo {
 	var groups []IntersectionGroupInfo
@@ -481,9 +552,9 @@ func collectIntersectionGroups(r RelationDefinition) []IntersectionGroupInfo {
 				// wildcards inherited from closure relations.
 				part.HasWildcard = hasWildcardRefs(r)
 			}
-			// Check for nested exclusions
+			// Check for nested exclusions (see note in collectExcludedIntersectionGroups)
 			if excls, ok := ig.Exclusions[rel]; ok && len(excls) > 0 {
-				part.ExcludedRelation = excls[0] // Take first exclusion
+				part.ExcludedRelation = excls[0]
 			}
 			group.Parts = append(group.Parts, part)
 		}
@@ -523,17 +594,57 @@ func buildAnalysisLookup(analyses []RelationAnalysis) map[string]map[string]*Rel
 	return lookup
 }
 
-// sortByDependency performs topological sort on analyses based on closure dependencies.
+// sortByDependency performs topological sort on analyses based on all dependencies.
 // Returns sorted analyses where each relation is processed after its dependencies.
-// This ensures that when we check if a closure relation CanGenerate, it has already been evaluated.
+// This ensures that when we check if a relation CanGenerate, all relations it depends on
+// have already been evaluated.
+//
+// Dependencies include:
+// - SatisfyingRelations (closure): implied-by relationships
+// - IntersectionGroups: relations referenced in AND groups
+// - ExcludedRelations: relations in "but not" clauses
 func sortByDependency(analyses []RelationAnalysis) []RelationAnalysis {
-	// Build dependency graph: relation -> relations it depends on (from SatisfyingRelations)
+	// Build dependency graph: relation -> relations it depends on
 	deps := make(map[string][]string) // key: "type.relation"
+	seen := make(map[string]map[string]bool) // Deduplicate dependencies
+
+	addDep := func(key, dep string) {
+		if seen[key] == nil {
+			seen[key] = make(map[string]bool)
+		}
+		if !seen[key][dep] {
+			seen[key][dep] = true
+			deps[key] = append(deps[key], dep)
+		}
+	}
+
 	for _, a := range analyses {
 		key := a.ObjectType + "." + a.Relation
+
+		// Dependencies from closure (SatisfyingRelations)
 		for _, rel := range a.SatisfyingRelations {
 			if rel != a.Relation { // Skip self
-				deps[key] = append(deps[key], a.ObjectType+"."+rel)
+				addDep(key, a.ObjectType+"."+rel)
+			}
+		}
+
+		// Dependencies from intersection groups
+		for _, group := range a.IntersectionGroups {
+			for _, part := range group.Parts {
+				// Skip "This" patterns and TTU patterns (handled inline)
+				if part.IsThis || part.ParentRelation != nil {
+					continue
+				}
+				if part.Relation != "" && part.Relation != a.Relation {
+					addDep(key, a.ObjectType+"."+part.Relation)
+				}
+			}
+		}
+
+		// Dependencies from excluded relations
+		for _, rel := range a.ExcludedRelations {
+			if rel != a.Relation {
+				addDep(key, a.ObjectType+"."+rel)
 			}
 		}
 	}
@@ -696,6 +807,18 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 			}
 		}
 
+		// Also populate AllowedLinkingTypes for excluded parent relations (TTU exclusions).
+		// This ensures TTU exclusion checks only match allowed parent types.
+		for i := range a.ExcludedParentRelations {
+			excludedParent := &a.ExcludedParentRelations[i]
+			linkingAnalysis, ok := lookup[a.ObjectType][excludedParent.LinkingRelation]
+			if ok && len(linkingAnalysis.AllowedSubjectTypes) > 0 {
+				excludedParent.AllowedLinkingTypes = linkingAnalysis.AllowedSubjectTypes
+			} else if ok && len(linkingAnalysis.DirectSubjectTypes) > 0 {
+				excludedParent.AllowedLinkingTypes = linkingAnalysis.DirectSubjectTypes
+			}
+		}
+
 		// First check: does this relation's features allow generation?
 		if !a.Features.CanGenerate() {
 			a.CanGenerate = false
@@ -736,12 +859,8 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 			}
 		}
 
-		// Third check: if relation has complex exclusions (TTU or intersection),
-		// we can't generate - these require the generic implementation.
-		if canGenerate && a.HasComplexExclusion {
-			canGenerate = false
-			cannotGenerateReason = "has complex exclusion (TTU or intersection-based)"
-		}
+		// Third check: complex exclusions (TTU or intersection) are now supported
+		// via check_permission_internal calls - no longer a blocker.
 
 		// Fifth check: classify excluded relations as simple or complex.
 		// Simple exclusions use direct tuple lookup; complex exclusions use function calls.

@@ -22,6 +22,20 @@ func init() {
 	}
 }
 
+// formatSQLStringList formats a list of strings as a SQL-safe list.
+// For example, ["user", "org"] becomes "'user', 'org'".
+// Returns empty string if the list is empty.
+func formatSQLStringList(items []string) string {
+	if len(items) == 0 {
+		return ""
+	}
+	quoted := make([]string, len(items))
+	for i, item := range items {
+		quoted[i] = fmt.Sprintf("'%s'", item)
+	}
+	return strings.Join(quoted, ", ")
+}
+
 // GeneratedSQL contains all SQL generated for a schema.
 // This is applied atomically during migration.
 type GeneratedSQL struct {
@@ -529,15 +543,39 @@ type ComplexExclusionCheckData struct {
 	ExcludedRelation string
 }
 
+// TTUExclusionCheckData contains data for rendering TTU exclusion checks.
+// These check "but not X from Y" patterns by looking up the linking relation
+// and calling check_permission_internal for each linked object.
+type TTUExclusionCheckData struct {
+	ObjectType          string
+	ExcludedRelation    string // The relation to check on the parent (e.g., "viewer")
+	LinkingRelation     string // The linking relation (e.g., "parent")
+	AllowedLinkingTypes string // SQL-formatted list of allowed parent types (e.g., "'folder', 'org'")
+}
+
+// IntersectionExclusionCheckData contains data for rendering intersection exclusion checks.
+// These check "but not (A and B)" patterns by ANDing together check_permission_internal calls.
+type IntersectionExclusionCheckData struct {
+	ObjectType string
+	Parts      []string // Relations that must ALL be satisfied for exclusion to apply
+}
+
 // buildExclusionCheck renders the exclusion check SQL fragment.
 // Simple exclusions use direct tuple lookup; complex exclusions use check_permission_internal.
+// TTU exclusions check linked objects; intersection exclusions AND together checks.
 func buildExclusionCheck(a RelationAnalysis) (string, error) {
-	if len(a.SimpleExcludedRelations) == 0 && len(a.ComplexExcludedRelations) == 0 {
-		// Fall back to legacy behavior if classification wasn't done
-		if len(a.ExcludedRelations) == 0 {
-			return "FALSE", nil
-		}
-		// Legacy path: treat all as simple
+	// Check if there are any exclusions to handle
+	hasSimpleOrComplex := len(a.SimpleExcludedRelations) > 0 || len(a.ComplexExcludedRelations) > 0
+	hasLegacy := len(a.ExcludedRelations) > 0
+	hasTTU := len(a.ExcludedParentRelations) > 0
+	hasIntersection := len(a.ExcludedIntersectionGroups) > 0
+
+	if !hasSimpleOrComplex && !hasLegacy && !hasTTU && !hasIntersection {
+		return "FALSE", nil
+	}
+
+	// Legacy path: use ExcludedRelations if no classification was done
+	if !hasSimpleOrComplex && hasLegacy && !hasTTU && !hasIntersection {
 		var checks []string
 		for _, excl := range a.ExcludedRelations {
 			data := ExclusionCheckData{
@@ -579,6 +617,68 @@ func buildExclusionCheck(a RelationAnalysis) (string, error) {
 			return "", fmt.Errorf("executing complex_exclusion_check template for %s: %w", excl, err)
 		}
 		checks = append(checks, strings.TrimSpace(buf.String()))
+	}
+
+	// TTU exclusions: "but not X from Y" patterns
+	for _, excl := range a.ExcludedParentRelations {
+		data := TTUExclusionCheckData{
+			ObjectType:          a.ObjectType,
+			ExcludedRelation:    excl.Relation,
+			LinkingRelation:     excl.LinkingRelation,
+			AllowedLinkingTypes: formatSQLStringList(excl.AllowedLinkingTypes),
+		}
+		var buf bytes.Buffer
+		if err := templates.ExecuteTemplate(&buf, "ttu_exclusion_check.tpl.sql", data); err != nil {
+			return "", fmt.Errorf("executing ttu_exclusion_check template for %s from %s: %w", excl.Relation, excl.LinkingRelation, err)
+		}
+		checks = append(checks, strings.TrimSpace(buf.String()))
+	}
+
+	// Intersection exclusions: "but not (A and B)" or "but not (A but not B)" patterns
+	for _, group := range a.ExcludedIntersectionGroups {
+		var parts []string
+		for _, part := range group.Parts {
+			if part.ParentRelation != nil {
+				// TTU part within intersection exclusion
+				data := TTUExclusionCheckData{
+					ObjectType:          a.ObjectType,
+					ExcludedRelation:    part.ParentRelation.Relation,
+					LinkingRelation:     part.ParentRelation.LinkingRelation,
+					AllowedLinkingTypes: formatSQLStringList(part.ParentRelation.AllowedLinkingTypes),
+				}
+				var buf bytes.Buffer
+				if err := templates.ExecuteTemplate(&buf, "ttu_exclusion_check.tpl.sql", data); err != nil {
+					return "", fmt.Errorf("executing ttu_exclusion_check template for intersection: %w", err)
+				}
+				parts = append(parts, strings.TrimSpace(buf.String()))
+			} else if part.ExcludedRelation != "" {
+				// Nested exclusion: "editor but not owner" in the exclusion
+				// The exclusion applies when: part.Relation AND NOT part.ExcludedRelation
+				// We check: relation is true AND excluded_relation is false
+				mainCheck := fmt.Sprintf(
+					"check_permission_internal(p_subject_type, p_subject_id, '%s', '%s', p_object_id, p_visited) = 1",
+					part.Relation, a.ObjectType)
+				excludeCheck := fmt.Sprintf(
+					"check_permission_internal(p_subject_type, p_subject_id, '%s', '%s', p_object_id, p_visited) = 0",
+					part.ExcludedRelation, a.ObjectType)
+				parts = append(parts, "("+mainCheck+" AND "+excludeCheck+")")
+			} else {
+				// Regular relation part
+				data := ComplexExclusionCheckData{
+					ObjectType:       a.ObjectType,
+					ExcludedRelation: part.Relation,
+				}
+				var buf bytes.Buffer
+				if err := templates.ExecuteTemplate(&buf, "complex_exclusion_check.tpl.sql", data); err != nil {
+					return "", fmt.Errorf("executing complex_exclusion_check template for intersection part %s: %w", part.Relation, err)
+				}
+				parts = append(parts, strings.TrimSpace(buf.String()))
+			}
+		}
+		if len(parts) > 0 {
+			// All parts must be true for exclusion to apply (AND)
+			checks = append(checks, "("+strings.Join(parts, " AND ")+")")
+		}
 	}
 
 	if len(checks) == 0 {

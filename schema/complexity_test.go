@@ -951,22 +951,27 @@ func TestComputeCanGenerate_ImpliedWithUserset(t *testing.T) {
 		}
 	}
 
-	// viewer has userset, cannot be generated
+	// viewer has userset - now generatable via userset checks
 	viewer := lookup["viewer"]
 	if viewer == nil {
 		t.Fatal("viewer not found")
 	}
-	if viewer.CanGenerate {
-		t.Error("document.viewer: expected CanGenerate = false (has userset)")
+	if !viewer.CanGenerate {
+		t.Error("document.viewer: expected CanGenerate = true (userset is now supported)")
+	}
+	// The userset pattern references group#member which is a simple relation,
+	// so HasComplexUsersetPatterns should be false (simple patterns use JOIN-based lookup)
+	if viewer.HasComplexUsersetPatterns {
+		t.Error("document.viewer: expected HasComplexUsersetPatterns = false (group.member is simple)")
 	}
 
-	// can_view is pure implied, but its closure includes viewer which has userset
+	// can_view is pure implied, its closure includes viewer which is generatable
 	canView := lookup["can_view"]
 	if canView == nil {
 		t.Fatal("can_view not found")
 	}
-	if canView.CanGenerate {
-		t.Error("document.can_view: expected CanGenerate = false (depends on userset)")
+	if !canView.CanGenerate {
+		t.Error("document.can_view: expected CanGenerate = true (viewer is generatable)")
 	}
 }
 
@@ -1043,8 +1048,8 @@ func TestComputeCanGenerate_MixedModel(t *testing.T) {
 		t.Error("document.can_delete should be generatable (owner is simple)")
 	}
 
-	// can_edit implied from editor (which has userset) - not generatable
-	if lookup["can_edit"].CanGenerate {
-		t.Error("document.can_edit should NOT be generatable (editor has userset)")
+	// can_edit implied from editor (which has userset) - now generatable since editor is generatable
+	if !lookup["can_edit"].CanGenerate {
+		t.Error("document.can_edit should be generatable (editor is generatable via complex userset)")
 	}
 }
