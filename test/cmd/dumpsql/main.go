@@ -228,6 +228,25 @@ func dumpSQL(tc TestCase, opts dumpOptions) {
 			fmt.Println()
 			fmt.Println(generatedSQL.DispatcherNoWildcard)
 		}
+
+		// Generate list functions
+		listSQL, err := schema.GenerateListSQL(analyses)
+		if err != nil {
+			fmt.Printf("\n⚠️  List SQL generation error: %v\n", err)
+			continue
+		}
+
+		// Show list_subjects functions
+		if len(listSQL.ListSubjectsFunctions) > 0 {
+			fmt.Println("\n## LIST_SUBJECTS FUNCTIONS")
+			for j, fn := range listSQL.ListSubjectsFunctions {
+				if j > 0 {
+					fmt.Println("\n-- " + strings.Repeat("-", 60))
+				}
+				fmt.Println()
+				fmt.Println(fn)
+			}
+		}
 	}
 }
 
@@ -339,10 +358,17 @@ func printAnalysis(analyses []schema.RelationAnalysis) {
 		if !a.CanGenerate {
 			canGen = "✗"
 		}
-		fmt.Printf("\n%s.%s [%s] CanGenerate=%s\n",
-			a.ObjectType, a.Relation, a.Features.String(), canGen)
+		canGenList := "✓"
+		if !a.CanGenerateList() {
+			canGenList = "✗"
+		}
+		fmt.Printf("\n%s.%s [%s] CanGenerate=%s CanGenerateList=%s\n",
+			a.ObjectType, a.Relation, a.Features.String(), canGen, canGenList)
 		if !a.CanGenerate && a.CannotGenerateReason != "" {
 			fmt.Printf("  ⚠️  Reason: %s\n", a.CannotGenerateReason)
+		}
+		if !a.CanGenerateList() && a.CannotGenerateListReason != "" {
+			fmt.Printf("  ⚠️  List reason: %s\n", a.CannotGenerateListReason)
 		}
 
 		if len(a.SatisfyingRelations) > 0 {
@@ -357,6 +383,16 @@ func printAnalysis(analyses []schema.RelationAnalysis) {
 		if len(a.UsersetPatterns) > 0 {
 			fmt.Printf("  UsersetPatterns: ")
 			for i, p := range a.UsersetPatterns {
+				if i > 0 {
+					fmt.Print(", ")
+				}
+				fmt.Printf("%s#%s", p.SubjectType, p.SubjectRelation)
+			}
+			fmt.Println()
+		}
+		if len(a.ClosureUsersetPatterns) > 0 {
+			fmt.Printf("  ClosureUsersetPatterns: ")
+			for i, p := range a.ClosureUsersetPatterns {
 				if i > 0 {
 					fmt.Print(", ")
 				}

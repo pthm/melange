@@ -87,6 +87,7 @@ CREATE OR REPLACE FUNCTION list_accessible_subjects_generic(
 DECLARE
     v_filter_type TEXT;     -- Parsed type part (e.g., 'group' from 'group#member')
     v_filter_relation TEXT; -- Parsed relation part (e.g., 'member' from 'group#member')
+    v_max_depth INTEGER;    -- Track max depth reached for resolution too complex check
 BEGIN
     -- Parse userset filter if present
     IF position('#' in p_subject_type) > 0 THEN
@@ -99,6 +100,63 @@ BEGIN
 
     -- Userset filter: find all "type#relation" subjects that have access
     IF v_filter_relation IS NOT NULL THEN
+        -- First check if resolution would exceed depth limit (without cycles)
+        -- We count unique (object_type, object_id, relation) tuples - if there are >= 25 unique
+        -- nodes AND we reached depth 25, it's legitimately too complex (not just cycling)
+        DECLARE
+            v_unique_nodes INTEGER;
+        BEGIN
+            WITH RECURSIVE seed_relations AS (
+                SELECT p_relation AS relation
+                UNION
+                SELECT DISTINCT m.check_relation
+                FROM melange_relation_closure c
+                JOIN melange_model m
+                    ON m.object_type = c.object_type
+                    AND m.relation = c.satisfying_relation
+                WHERE c.object_type = p_object_type
+                  AND c.relation = p_relation
+                  AND m.rule_group_mode = 'intersection'
+                  AND m.check_relation IS NOT NULL
+            ),
+            userset_rule_tuples AS (
+                SELECT DISTINCT object_type, relation, tuple_relation, subject_type, subject_relation, subject_relation_satisfying
+                FROM melange_userset_rules
+            ),
+            userset_nodes AS (
+                SELECT p_object_type AS object_type, p_object_id AS object_id, s.relation AS relation, 0 AS depth
+                FROM seed_relations s
+                UNION
+                SELECT t.subject_type AS object_type, split.id AS object_id, split.rel AS relation, n.depth + 1 AS depth
+                FROM userset_nodes n
+                JOIN userset_rule_tuples ur
+                    ON ur.object_type = n.object_type
+                    AND ur.relation = n.relation
+                JOIN melange_tuples t
+                    ON t.object_type = n.object_type
+                    AND t.object_id = n.object_id
+                    AND t.relation = ur.tuple_relation
+                    AND t.subject_type = ur.subject_type
+                CROSS JOIN LATERAL (
+                    SELECT
+                        substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) AS id,
+                        substring(t.subject_id from position('#' in t.subject_id) + 1) AS rel
+                ) AS split
+                WHERE n.depth < 26  -- Allow one extra level to detect overflow
+                  AND position('#' in t.subject_id) > 0
+                  AND split.rel = ur.subject_relation_satisfying
+            )
+            SELECT MAX(depth), COUNT(DISTINCT (object_type, object_id, relation))
+            INTO v_max_depth, v_unique_nodes
+            FROM userset_nodes;
+
+            -- Only raise error if we have >= 25 UNIQUE nodes AND reached depth limit
+            -- This distinguishes legitimately deep chains from cycles
+            IF v_max_depth >= 25 AND v_unique_nodes >= 25 THEN
+                RAISE EXCEPTION 'resolution too complex: depth limit exceeded' USING ERRCODE = 'M2002';
+            END IF;
+        END;
+
         RETURN QUERY
         WITH RECURSIVE seed_relations AS (
             SELECT p_relation AS relation
@@ -266,6 +324,60 @@ BEGIN
         ) = 1;
     ELSE
         -- Regular subject filter: enumerate direct subjects with access
+        -- First check if resolution would exceed depth limit (without cycles)
+        DECLARE
+            v_unique_nodes INTEGER;
+        BEGIN
+            WITH RECURSIVE seed_relations AS (
+                SELECT p_relation AS relation
+                UNION
+                SELECT DISTINCT m.check_relation
+                FROM melange_relation_closure c
+                JOIN melange_model m
+                    ON m.object_type = c.object_type
+                    AND m.relation = c.satisfying_relation
+                WHERE c.object_type = p_object_type
+                  AND c.relation = p_relation
+                  AND m.rule_group_mode = 'intersection'
+                  AND m.check_relation IS NOT NULL
+            ),
+            userset_rule_tuples AS (
+                SELECT DISTINCT object_type, relation, tuple_relation, subject_type, subject_relation, subject_relation_satisfying
+                FROM melange_userset_rules
+            ),
+            userset_nodes AS (
+                SELECT p_object_type AS object_type, p_object_id AS object_id, s.relation AS relation, 0 AS depth
+                FROM seed_relations s
+                UNION
+                SELECT t.subject_type AS object_type, split.id AS object_id, split.rel AS relation, n.depth + 1 AS depth
+                FROM userset_nodes n
+                JOIN userset_rule_tuples ur
+                    ON ur.object_type = n.object_type
+                    AND ur.relation = n.relation
+                JOIN melange_tuples t
+                    ON t.object_type = n.object_type
+                    AND t.object_id = n.object_id
+                    AND t.relation = ur.tuple_relation
+                    AND t.subject_type = ur.subject_type
+                CROSS JOIN LATERAL (
+                    SELECT
+                        substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) AS id,
+                        substring(t.subject_id from position('#' in t.subject_id) + 1) AS rel
+                ) AS split
+                WHERE n.depth < 26  -- Allow one extra level to detect overflow
+                  AND position('#' in t.subject_id) > 0
+                  AND split.rel = ur.subject_relation_satisfying
+            )
+            SELECT MAX(depth), COUNT(DISTINCT (object_type, object_id, relation))
+            INTO v_max_depth, v_unique_nodes
+            FROM userset_nodes;
+
+            -- Only raise error if we have >= 25 UNIQUE nodes AND reached depth limit
+            IF v_max_depth >= 25 AND v_unique_nodes >= 25 THEN
+                RAISE EXCEPTION 'resolution too complex: depth limit exceeded' USING ERRCODE = 'M2002';
+            END IF;
+        END;
+
         RETURN QUERY
         WITH RECURSIVE seed_relations AS (
             SELECT p_relation AS relation

@@ -115,6 +115,10 @@ func generateListObjectsFunction(a RelationAnalysis) (string, error) {
 	data.ExcludedParentRelations = a.ExcludedParentRelations
 	data.ExcludedIntersectionGroups = a.ExcludedIntersectionGroups
 
+	// Populate userset fields (Phase 4)
+	data.HasUserset = a.Features.HasUserset
+	data.UsersetPatterns = buildListUsersetPatterns(a)
+
 	// Select appropriate template based on features
 	templateName := selectListObjectsTemplate(a)
 
@@ -127,6 +131,13 @@ func generateListObjectsFunction(a RelationAnalysis) (string, error) {
 
 // selectListObjectsTemplate selects the appropriate list_objects template based on features.
 func selectListObjectsTemplate(a RelationAnalysis) string {
+	// Phase 4: Use userset template if relation has userset patterns.
+	// This includes both direct patterns (UsersetPatterns) and patterns inherited
+	// from closure relations (ClosureUsersetPatterns).
+	// The userset template also handles exclusions if present.
+	if a.Features.HasUserset || len(a.ClosureUsersetPatterns) > 0 {
+		return "list_objects_userset.tpl.sql"
+	}
 	// Phase 3: Use exclusion template if relation has any exclusion patterns
 	if a.Features.HasExclusion {
 		return "list_objects_exclusion.tpl.sql"
@@ -148,6 +159,9 @@ func generateListSubjectsFunction(a RelationAnalysis) (string, error) {
 	// Build relation list from simple closure relations (tuple lookup)
 	data.RelationList = buildRelationList(a)
 
+	// Build all satisfying relations list (for userset filter case)
+	data.AllSatisfyingRelations = buildAllSatisfyingRelations(a)
+
 	// Populate complex closure relations (need check_permission_internal)
 	data.ComplexClosureRelations = a.ComplexClosureRelations
 
@@ -161,6 +175,10 @@ func generateListSubjectsFunction(a RelationAnalysis) (string, error) {
 	data.ExcludedParentRelations = a.ExcludedParentRelations
 	data.ExcludedIntersectionGroups = a.ExcludedIntersectionGroups
 
+	// Populate userset fields (Phase 4)
+	data.HasUserset = a.Features.HasUserset
+	data.UsersetPatterns = buildListUsersetPatterns(a)
+
 	// Select appropriate template based on features
 	templateName := selectListSubjectsTemplate(a)
 
@@ -173,6 +191,13 @@ func generateListSubjectsFunction(a RelationAnalysis) (string, error) {
 
 // selectListSubjectsTemplate selects the appropriate list_subjects template based on features.
 func selectListSubjectsTemplate(a RelationAnalysis) string {
+	// Phase 4: Use userset template if relation has userset patterns.
+	// This includes both direct patterns (UsersetPatterns) and patterns inherited
+	// from closure relations (ClosureUsersetPatterns).
+	// The userset template also handles exclusions if present.
+	if a.Features.HasUserset || len(a.ClosureUsersetPatterns) > 0 {
+		return "list_subjects_userset.tpl.sql"
+	}
 	// Phase 3: Use exclusion template if relation has any exclusion patterns
 	if a.Features.HasExclusion {
 		return "list_subjects_exclusion.tpl.sql"
@@ -220,6 +245,10 @@ type ListObjectsFunctionData struct {
 
 	// ExcludedIntersectionGroups are intersection exclusions like "but not (editor and owner)".
 	ExcludedIntersectionGroups []IntersectionGroupInfo
+
+	// Userset-related fields (Phase 4)
+	HasUserset      bool                       // true if this relation has userset patterns
+	UsersetPatterns []ListUsersetPatternData   // [group#member] patterns for UNION expansion
 }
 
 // ListSubjectsFunctionData contains data for rendering list_subjects function templates.
@@ -231,6 +260,11 @@ type ListSubjectsFunctionData struct {
 
 	// RelationList is a SQL-formatted list of simple closure relations to check.
 	RelationList string
+
+	// AllSatisfyingRelations is a SQL-formatted list of ALL relations that satisfy this relation.
+	// Includes both simple and complex closure relations. Used by userset filter case.
+	// e.g., "'can_view', 'viewer'" when viewer implies can_view
+	AllSatisfyingRelations string
 
 	// ComplexClosureRelations are closure relations that need check_permission_internal.
 	ComplexClosureRelations []string
@@ -257,6 +291,46 @@ type ListSubjectsFunctionData struct {
 
 	// ExcludedIntersectionGroups are intersection exclusions like "but not (editor and owner)".
 	ExcludedIntersectionGroups []IntersectionGroupInfo
+
+	// Userset-related fields (Phase 4)
+	HasUserset      bool                       // true if this relation has userset patterns
+	UsersetPatterns []ListUsersetPatternData   // [group#member] patterns for expansion
+}
+
+// ListUsersetPatternData contains data for rendering userset pattern expansion in list templates.
+// For a pattern like [group#member], this generates a UNION block that:
+// - Finds grant tuples where subject is group#member
+// - JOINs with membership tuples to find subjects who are members
+type ListUsersetPatternData struct {
+	SubjectType     string // e.g., "group"
+	SubjectRelation string // e.g., "member"
+
+	// SatisfyingRelationsList is a SQL-formatted list of relations that satisfy SubjectRelation.
+	// e.g., "'member', 'admin'" when admin implies member.
+	SatisfyingRelationsList string
+
+	// SourceRelationList is a SQL-formatted list of relations to search for userset grant tuples.
+	// For direct userset patterns, this is the same as the parent's RelationList.
+	// For closure userset patterns (inherited from implied relations), this is the source relation.
+	// e.g., "'viewer'" for a pattern inherited from viewer: [group#member]
+	SourceRelationList string
+
+	// SourceRelation is the relation where this userset pattern is defined (unquoted).
+	// Used for closure patterns to verify permission via check_permission_internal.
+	SourceRelation string
+
+	// IsClosurePattern is true if this pattern is inherited from an implied relation.
+	// When true, candidates need to be verified via check_permission_internal on the
+	// source relation to apply any exclusions or complex features.
+	IsClosurePattern bool
+
+	// HasWildcard is true if any satisfying relation allows wildcards.
+	// When true, membership check includes subject_id = '*'.
+	HasWildcard bool
+
+	// IsComplex is true if this pattern requires check_permission_internal for membership.
+	// This happens when any relation in the closure has TTU, exclusion, or intersection.
+	IsComplex bool
 }
 
 // ListDispatcherData contains data for rendering list dispatcher templates.
@@ -385,4 +459,94 @@ func buildAllowedSubjectTypes(a RelationAnalysis) string {
 		quoted[i] = fmt.Sprintf("'%s'", t)
 	}
 	return strings.Join(quoted, ", ")
+}
+
+// buildAllSatisfyingRelations builds a SQL-formatted list of ALL relations that satisfy this relation.
+// This includes both simple closure relations (tuple lookup) and complex closure relations.
+// Used by the userset filter case to find all tuples that grant access.
+func buildAllSatisfyingRelations(a RelationAnalysis) string {
+	relations := a.SatisfyingRelations
+	if len(relations) == 0 {
+		// Fallback to just self
+		relations = []string{a.Relation}
+	}
+
+	quoted := make([]string, len(relations))
+	for i, r := range relations {
+		quoted[i] = fmt.Sprintf("'%s'", r)
+	}
+	return strings.Join(quoted, ", ")
+}
+
+// buildListUsersetPatterns builds template data for userset pattern expansion.
+// For each [group#member] pattern, this creates data for a UNION block that:
+// - Finds grant tuples where subject is group#member
+// - JOINs with membership tuples to find subjects who are members
+//
+// This includes both:
+// - UsersetPatterns: patterns from the relation itself (e.g., viewer: [group#member])
+// - ClosureUsersetPatterns: patterns from implied closure relations (e.g., can_view: viewer where viewer has usersets)
+func buildListUsersetPatterns(a RelationAnalysis) []ListUsersetPatternData {
+	if len(a.UsersetPatterns) == 0 && len(a.ClosureUsersetPatterns) == 0 {
+		return nil
+	}
+
+	// Build RelationList for direct patterns (same as main function's RelationList)
+	directRelationList := buildRelationList(a)
+
+	patterns := make([]ListUsersetPatternData, 0, len(a.UsersetPatterns)+len(a.ClosureUsersetPatterns))
+
+	// Process direct userset patterns
+	for _, p := range a.UsersetPatterns {
+		pattern := ListUsersetPatternData{
+			SubjectType:        p.SubjectType,
+			SubjectRelation:    p.SubjectRelation,
+			HasWildcard:        p.HasWildcard,
+			IsComplex:          p.IsComplex,
+			SourceRelationList: directRelationList, // Use main RelationList for direct patterns
+		}
+
+		// Build satisfying relations list for the subject relation closure
+		satisfying := p.SatisfyingRelations
+		if len(satisfying) == 0 {
+			satisfying = []string{p.SubjectRelation}
+		}
+
+		quoted := make([]string, len(satisfying))
+		for i, r := range satisfying {
+			quoted[i] = fmt.Sprintf("'%s'", r)
+		}
+		pattern.SatisfyingRelationsList = strings.Join(quoted, ", ")
+
+		patterns = append(patterns, pattern)
+	}
+
+	// Process closure userset patterns (inherited from implied relations)
+	for _, p := range a.ClosureUsersetPatterns {
+		pattern := ListUsersetPatternData{
+			SubjectType:        p.SubjectType,
+			SubjectRelation:    p.SubjectRelation,
+			HasWildcard:        p.HasWildcard,
+			IsComplex:          p.IsComplex,
+			SourceRelationList: fmt.Sprintf("'%s'", p.SourceRelation), // Use source relation for closure patterns
+			SourceRelation:     p.SourceRelation,
+			IsClosurePattern:   true, // Closure patterns need source relation verification
+		}
+
+		// Build satisfying relations list for the subject relation closure
+		satisfying := p.SatisfyingRelations
+		if len(satisfying) == 0 {
+			satisfying = []string{p.SubjectRelation}
+		}
+
+		quoted := make([]string, len(satisfying))
+		for i, r := range satisfying {
+			quoted[i] = fmt.Sprintf("'%s'", r)
+		}
+		pattern.SatisfyingRelationsList = strings.Join(quoted, ", ")
+
+		patterns = append(patterns, pattern)
+	}
+
+	return patterns
 }

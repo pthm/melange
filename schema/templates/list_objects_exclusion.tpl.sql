@@ -118,7 +118,9 @@ BEGIN
     -- Self-candidate: when subject is a userset on the same object type
     -- e.g., subject_id = 'document:1#viewer' querying object_type = 'document'
     -- The object 'document:1' should be considered as a candidate
-    -- No type guard here - validity comes from the closure check below
+    -- NOTE: Exclusions DON'T apply to self-referential userset checks.
+    -- This is a structural validity check ("does the userset relation satisfy the requested relation"),
+    -- not a permission grant. See check_permission_internal for the same logic.
     SELECT split_part(p_subject_id, '#', 1) AS object_id
     WHERE position('#' in p_subject_id) > 0
       AND p_subject_type = '{{.ObjectType}}'
@@ -128,70 +130,7 @@ BEGIN
           WHERE c.object_type = '{{.ObjectType}}'
             AND c.relation = '{{.Relation}}'
             AND c.satisfying_relation = substring(p_subject_id from position('#' in p_subject_id) + 1)
-      )
-{{- if .SimpleExcludedRelations }}
-      -- Apply simple exclusions to self-candidate
-{{- range .SimpleExcludedRelations }}
-      AND NOT EXISTS (
-          SELECT 1 FROM melange_tuples excl
-          WHERE excl.object_type = '{{$.ObjectType}}'
-            AND excl.object_id = split_part(p_subject_id, '#', 1)
-            AND excl.relation = '{{.}}'
-            AND excl.subject_type = p_subject_type
-            AND (excl.subject_id = p_subject_id OR excl.subject_id = '*')
-      )
-{{- end }}
-{{- end }}
-{{- if .ComplexExcludedRelations }}
-      -- Apply complex exclusions to self-candidate
-{{- range .ComplexExcludedRelations }}
-      AND check_permission_internal(p_subject_type, p_subject_id, '{{.}}', '{{$.ObjectType}}', split_part(p_subject_id, '#', 1), ARRAY[]::TEXT[]) = 0
-{{- end }}
-{{- end }}
-{{- if .ExcludedParentRelations }}
-      -- Apply TTU exclusions to self-candidate
-{{- range .ExcludedParentRelations }}
-      AND NOT EXISTS (
-          SELECT 1 FROM melange_tuples link
-          WHERE link.object_type = '{{$.ObjectType}}'
-            AND link.object_id = split_part(p_subject_id, '#', 1)
-            AND link.relation = '{{.LinkingRelation}}'
-{{- if .AllowedLinkingTypes }}
-            AND link.subject_type IN ({{range $i, $lt := .AllowedLinkingTypes}}{{if $i}}, {{end}}'{{$lt}}'{{end}})
-{{- end }}
-            AND check_permission_internal(p_subject_type, p_subject_id, '{{.Relation}}', link.subject_type, link.subject_id, ARRAY[]::TEXT[]) = 1
-      )
-{{- end }}
-{{- end }}
-{{- if .ExcludedIntersectionGroups }}
-      -- Apply intersection exclusions to self-candidate
-{{- range .ExcludedIntersectionGroups }}
-      AND NOT (
-{{- range $i, $part := .Parts }}
-{{- if $i }}
-          AND
-{{- end }}
-{{- if $part.ParentRelation }}
-          EXISTS (
-              SELECT 1 FROM melange_tuples link
-              WHERE link.object_type = '{{$.ObjectType}}'
-                AND link.object_id = split_part(p_subject_id, '#', 1)
-                AND link.relation = '{{$part.ParentRelation.LinkingRelation}}'
-{{- if $part.ParentRelation.AllowedLinkingTypes }}
-                AND link.subject_type IN ({{range $j, $lt := $part.ParentRelation.AllowedLinkingTypes}}{{if $j}}, {{end}}'{{$lt}}'{{end}})
-{{- end }}
-                AND check_permission_internal(p_subject_type, p_subject_id, '{{$part.ParentRelation.Relation}}', link.subject_type, link.subject_id, ARRAY[]::TEXT[]) = 1
-          )
-{{- else }}
-          (check_permission_internal(p_subject_type, p_subject_id, '{{$part.Relation}}', '{{$.ObjectType}}', split_part(p_subject_id, '#', 1), ARRAY[]::TEXT[]) = 1
-{{- if $part.ExcludedRelation }}
-           AND check_permission_internal(p_subject_type, p_subject_id, '{{$part.ExcludedRelation}}', '{{$.ObjectType}}', split_part(p_subject_id, '#', 1), ARRAY[]::TEXT[]) = 0
-{{- end }}
-          )
-{{- end }}
-{{- end }}
-      )
-{{- end }}
-{{- end }};
+      );
+      -- No exclusion checks for self-candidate - this is a structural validity check
 END;
 $$ LANGUAGE plpgsql STABLE;
