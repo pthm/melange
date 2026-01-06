@@ -63,15 +63,15 @@ func TestDetectCycles_Parent(t *testing.T) {
 		{
 			Name: "organization",
 			Relations: []schema.RelationDefinition{
-				{Name: "repo", SubjectTypes: []string{"repository"}},
-				{Name: "can_read", ParentRelation: "can_read", ParentType: "repo"},
+				{Name: "repo", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "repository"}}},
+				{Name: "can_read", ParentRelations: []schema.ParentRelationCheck{{Relation: "can_read", LinkingRelation: "repo"}}},
 			},
 		},
 		{
 			Name: "repository",
 			Relations: []schema.RelationDefinition{
-				{Name: "org", SubjectTypes: []string{"organization"}},
-				{Name: "can_read", ParentRelation: "can_read", ParentType: "org"},
+				{Name: "org", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "organization"}}},
+				{Name: "can_read", ParentRelations: []schema.ParentRelationCheck{{Relation: "can_read", LinkingRelation: "org"}}},
 			},
 		},
 	}
@@ -87,15 +87,15 @@ func TestDetectCycles_ParentDifferentRelations(t *testing.T) {
 		{
 			Name: "organization",
 			Relations: []schema.RelationDefinition{
-				{Name: "repo", SubjectTypes: []string{"repository"}},
-				{Name: "can_read", ParentRelation: "can_write", ParentType: "repo"},
+				{Name: "repo", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "repository"}}},
+				{Name: "can_read", ParentRelations: []schema.ParentRelationCheck{{Relation: "can_write", LinkingRelation: "repo"}}},
 			},
 		},
 		{
 			Name: "repository",
 			Relations: []schema.RelationDefinition{
-				{Name: "org", SubjectTypes: []string{"organization"}},
-				{Name: "can_write", ParentRelation: "can_read", ParentType: "org"},
+				{Name: "org", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "organization"}}},
+				{Name: "can_write", ParentRelations: []schema.ParentRelationCheck{{Relation: "can_read", LinkingRelation: "org"}}},
 			},
 		},
 	}
@@ -120,7 +120,7 @@ func TestDetectCycles_ValidDAG(t *testing.T) {
 		{
 			Name: "resource",
 			Relations: []schema.RelationDefinition{
-				{Name: "owner", SubjectTypes: []string{"user"}},
+				{Name: "owner", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
 				{Name: "admin", ImpliedBy: []string{"owner"}},
 				{Name: "member", ImpliedBy: []string{"admin"}},
 				{Name: "viewer", ImpliedBy: []string{"member"}},
@@ -141,14 +141,14 @@ func TestDetectCycles_DisconnectedGraphs(t *testing.T) {
 		{
 			Name: "org",
 			Relations: []schema.RelationDefinition{
-				{Name: "owner", SubjectTypes: []string{"user"}},
+				{Name: "owner", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
 				{Name: "member", ImpliedBy: []string{"owner"}},
 			},
 		},
 		{
 			Name: "repo",
 			Relations: []schema.RelationDefinition{
-				{Name: "owner", SubjectTypes: []string{"user"}},
+				{Name: "owner", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
 				{Name: "viewer", ImpliedBy: []string{"owner"}},
 			},
 		},
@@ -167,22 +167,22 @@ func TestDetectCycles_ValidParentChain(t *testing.T) {
 		{
 			Name: "organization",
 			Relations: []schema.RelationDefinition{
-				{Name: "member", SubjectTypes: []string{"user"}},
+				{Name: "member", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
 				{Name: "can_read", ImpliedBy: []string{"member"}},
 			},
 		},
 		{
 			Name: "repository",
 			Relations: []schema.RelationDefinition{
-				{Name: "org", SubjectTypes: []string{"organization"}},
-				{Name: "can_read", ParentRelation: "can_read", ParentType: "org"},
+				{Name: "org", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "organization"}}},
+				{Name: "can_read", ParentRelations: []schema.ParentRelationCheck{{Relation: "can_read", LinkingRelation: "org"}}},
 			},
 		},
 		{
 			Name: "issue",
 			Relations: []schema.RelationDefinition{
-				{Name: "repo", SubjectTypes: []string{"repository"}},
-				{Name: "can_read", ParentRelation: "can_read", ParentType: "repo"},
+				{Name: "repo", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "repository"}}},
+				{Name: "can_read", ParentRelations: []schema.ParentRelationCheck{{Relation: "can_read", LinkingRelation: "repo"}}},
 			},
 		},
 	}
@@ -220,7 +220,7 @@ func TestDetectCycles_SelfLoop(t *testing.T) {
 		{
 			Name: "resource",
 			Relations: []schema.RelationDefinition{
-				{Name: "admin", SubjectTypes: []string{"user"}, ImpliedBy: []string{"admin"}},
+				{Name: "admin", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}, ImpliedBy: []string{"admin"}},
 			},
 		},
 	}
@@ -240,8 +240,8 @@ func TestDetectCycles_MultipleImpliers(t *testing.T) {
 		{
 			Name: "resource",
 			Relations: []schema.RelationDefinition{
-				{Name: "owner", SubjectTypes: []string{"user"}},
-				{Name: "admin", SubjectTypes: []string{"user"}},
+				{Name: "owner", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
+				{Name: "admin", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
 				{Name: "viewer", ImpliedBy: []string{"owner", "admin"}}, // diamond, not a cycle
 			},
 		},
@@ -302,9 +302,9 @@ func TestDetectCycles_ComplexValidSchema(t *testing.T) {
 		{
 			Name: "organization",
 			Relations: []schema.RelationDefinition{
-				{Name: "owner", SubjectTypes: []string{"user"}},
-				{Name: "admin", SubjectTypes: []string{"user"}, ImpliedBy: []string{"owner"}},
-				{Name: "member", SubjectTypes: []string{"user"}, ImpliedBy: []string{"admin"}},
+				{Name: "owner", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
+				{Name: "admin", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}, ImpliedBy: []string{"owner"}},
+				{Name: "member", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}, ImpliedBy: []string{"admin"}},
 				{Name: "can_read", ImpliedBy: []string{"member"}},
 				{Name: "can_write", ImpliedBy: []string{"admin"}},
 				{Name: "can_delete", ImpliedBy: []string{"owner"}},
@@ -313,20 +313,32 @@ func TestDetectCycles_ComplexValidSchema(t *testing.T) {
 		{
 			Name: "repository",
 			Relations: []schema.RelationDefinition{
-				{Name: "org", SubjectTypes: []string{"organization"}},
-				{Name: "owner", SubjectTypes: []string{"user"}},
-				{Name: "collaborator", SubjectTypes: []string{"user"}},
-				{Name: "can_read", ParentRelation: "can_read", ParentType: "org", ImpliedBy: []string{"collaborator", "owner"}},
-				{Name: "can_write", ParentRelation: "can_write", ParentType: "org", ImpliedBy: []string{"owner"}},
+				{Name: "org", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "organization"}}},
+				{Name: "owner", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
+				{Name: "collaborator", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
+				{
+					Name:            "can_read",
+					ImpliedBy:       []string{"collaborator", "owner"},
+					ParentRelations: []schema.ParentRelationCheck{{Relation: "can_read", LinkingRelation: "org"}},
+				},
+				{
+					Name:            "can_write",
+					ImpliedBy:       []string{"owner"},
+					ParentRelations: []schema.ParentRelationCheck{{Relation: "can_write", LinkingRelation: "org"}},
+				},
 			},
 		},
 		{
 			Name: "issue",
 			Relations: []schema.RelationDefinition{
-				{Name: "repo", SubjectTypes: []string{"repository"}},
-				{Name: "author", SubjectTypes: []string{"user"}},
-				{Name: "can_read", ParentRelation: "can_read", ParentType: "repo"},
-				{Name: "can_write", ParentRelation: "can_write", ParentType: "repo", ImpliedBy: []string{"author"}},
+				{Name: "repo", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "repository"}}},
+				{Name: "author", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
+				{Name: "can_read", ParentRelations: []schema.ParentRelationCheck{{Relation: "can_read", LinkingRelation: "repo"}}},
+				{
+					Name:            "can_write",
+					ImpliedBy:       []string{"author"},
+					ParentRelations: []schema.ParentRelationCheck{{Relation: "can_write", LinkingRelation: "repo"}},
+				},
 			},
 		},
 	}

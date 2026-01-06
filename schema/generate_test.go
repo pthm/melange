@@ -13,13 +13,13 @@ func TestGenerateGo_Defaults(t *testing.T) {
 		{
 			Name: "user",
 			Relations: []schema.RelationDefinition{
-				{Name: "self", SubjectTypes: []string{"user"}},
+				{Name: "self", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
 			},
 		},
 		{
 			Name: "repository",
 			Relations: []schema.RelationDefinition{
-				{Name: "owner", SubjectTypes: []string{"user"}},
+				{Name: "owner", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
 				{Name: "can_read", ImpliedBy: []string{"owner"}},
 			},
 		},

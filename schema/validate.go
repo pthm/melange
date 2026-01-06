@@ -147,31 +147,15 @@ func buildParentGraph(types []TypeDefinition) map[relationNode][]relationNode {
 	for _, t := range types {
 		linkingRelTypes[t.Name] = make(map[string][]string)
 		for _, r := range t.Relations {
-			// Prefer SubjectTypeRefs (new field) over SubjectTypes (legacy).
 			// Collect all direct subject types (non-userset references).
 			var parentTypes []string
 			seen := make(map[string]bool)
 
-			if len(r.SubjectTypeRefs) > 0 {
-				for _, ref := range r.SubjectTypeRefs {
-					// Only consider direct references, not userset references like group#member
-					if ref.Relation == "" && !seen[ref.Type] {
-						seen[ref.Type] = true
-						parentTypes = append(parentTypes, ref.Type)
-					}
-				}
-			} else {
-				// Legacy path: use SubjectTypes
-				for _, st := range r.SubjectTypes {
-					// Strip wildcard suffix if present (e.g., "user:*" → "user")
-					typeName := st
-					if len(typeName) > 2 && typeName[len(typeName)-2:] == ":*" {
-						typeName = typeName[:len(typeName)-2]
-					}
-					if !seen[typeName] {
-						seen[typeName] = true
-						parentTypes = append(parentTypes, typeName)
-					}
+			for _, ref := range r.SubjectTypeRefs {
+				// Only consider direct references, not userset references like group#member
+				if ref.Relation == "" && !seen[ref.Type] {
+					seen[ref.Type] = true
+					parentTypes = append(parentTypes, ref.Type)
 				}
 			}
 
@@ -184,24 +168,16 @@ func buildParentGraph(types []TypeDefinition) map[relationNode][]relationNode {
 	// Build the graph
 	for _, t := range types {
 		for _, r := range t.Relations {
-			parentChecks := r.ParentRelations
-			if len(parentChecks) == 0 && r.ParentRelation != "" {
-				parentChecks = []ParentRelationCheck{{
-					Relation:   r.ParentRelation,
-					ParentType: r.ParentType,
-				}}
-			}
-
-			if len(parentChecks) == 0 {
+			if len(r.ParentRelations) == 0 {
 				continue
 			}
 
 			n := relationNode{objectType: t.Name, relation: r.Name}
 
-			for _, parent := range parentChecks {
-				// ParentType is the linking relation name (e.g., "org")
+			for _, parent := range r.ParentRelations {
+				// LinkingRelation is the relation that links to parent (e.g., "parent")
 				// We need to find what types that relation can point to
-				linkingRel := parent.ParentType
+				linkingRel := parent.LinkingRelation
 				if parentTypes, ok := linkingRelTypes[t.Name][linkingRel]; ok {
 					// Add edges for ALL possible parent types to catch cycles
 					// through any possible path

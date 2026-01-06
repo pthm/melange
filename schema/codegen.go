@@ -564,16 +564,16 @@ type IntersectionExclusionCheckData struct {
 func buildExclusionCheck(a RelationAnalysis) (string, error) {
 	// Check if there are any exclusions to handle
 	hasSimpleOrComplex := len(a.SimpleExcludedRelations) > 0 || len(a.ComplexExcludedRelations) > 0
-	hasLegacy := len(a.ExcludedRelations) > 0
+	hasUnclassified := len(a.ExcludedRelations) > 0
 	hasTTU := len(a.ExcludedParentRelations) > 0
 	hasIntersection := len(a.ExcludedIntersectionGroups) > 0
 
-	if !hasSimpleOrComplex && !hasLegacy && !hasTTU && !hasIntersection {
+	if !hasSimpleOrComplex && !hasUnclassified && !hasTTU && !hasIntersection {
 		return "FALSE", nil
 	}
 
-	// Legacy path: use ExcludedRelations if no classification was done
-	if !hasSimpleOrComplex && hasLegacy && !hasTTU && !hasIntersection {
+	// Use ExcludedRelations if no classification was done
+	if !hasSimpleOrComplex && hasUnclassified && !hasTTU && !hasIntersection {
 		var checks []string
 		for _, excl := range a.ExcludedRelations {
 			data := ExclusionCheckData{

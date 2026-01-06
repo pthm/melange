@@ -106,36 +106,31 @@ type IntersectionGroup struct {
 // ParentRelationCheck represents a tuple-to-userset (TTU) check.
 // For "viewer from parent" on a folder type, this captures the TTU pattern.
 //
-// The naming can be confusing: "ParentType" is actually the linking relation name,
-// not the parent object type. The actual parent type(s) are determined at runtime
-// by looking up what types the linking relation can point to.
-//
 // Example: "viewer from parent" where parent: [folder]
 //   - Relation: "viewer" (the relation to check on the parent object)
-//   - ParentType: "parent" (the linking relation that points to the parent)
+//   - LinkingRelation: "parent" (the relation that links to the parent object)
+//
+// The actual parent type(s) are determined at runtime by looking up what types
+// the linking relation can point to.
 type ParentRelationCheck struct {
-	Relation   string // Relation to check on the parent object (e.g., "viewer")
-	ParentType string // Linking relation on the current object (e.g., "parent") - NOT the parent type
+	Relation        string // Relation to check on the parent object (e.g., "viewer")
+	LinkingRelation string // Relation that links to the parent object (e.g., "parent")
 }
 
 // RelationDefinition represents a parsed relation.
 // Relations describe who can have what relationship with an object.
 //
 // A relation can be:
-//   - Direct: explicitly granted via tuples (SubjectTypes)
+//   - Direct: explicitly granted via tuples (SubjectTypeRefs)
 //   - Implied: granted by having another relation (ImpliedBy)
-//   - Inherited: derived from a parent object (ParentRelation, ParentType)
-//   - Exclusive: granted except for excluded subjects (ExcludedRelation)
+//   - Inherited: derived from a parent object (ParentRelations)
+//   - Exclusive: granted except for excluded subjects (ExcludedRelations)
 //   - Userset: granted via group membership (SubjectTypeRefs with Relation set)
 //   - Intersection: granted if ALL relations in a group are satisfied
 type RelationDefinition struct {
 	Name              string   // Relation name: "owner", "can_read", etc.
-	SubjectTypes      []string // Direct subject types: ["user"], ["organization"] (legacy)
 	ImpliedBy         []string // Relations that imply this one: ["owner", "admin"]
-	ParentRelation    string   // For inheritance: "can_read from org" → "can_read" (legacy)
-	ParentType        string   // The relation linking to parent: "org", "repo" (legacy)
 	ParentRelations   []ParentRelationCheck
-	ExcludedRelation  string   // For exclusions: "can_read but not author" -> "author" (deprecated, use ExcludedRelations)
 	ExcludedRelations []string // For nested exclusions: "(a but not b) but not c" -> ["b", "c"]
 	// ExcludedParentRelations captures tuple-to-userset exclusions like "but not viewer from parent".
 	ExcludedParentRelations []ParentRelationCheck
@@ -201,7 +196,7 @@ type AuthzModel struct {
 }
 
 // SubjectTypes returns all types that can be subjects in authorization checks.
-// A type is a subject type if it appears in any relation's SubjectTypes list.
+// A type is a subject type if it appears in any relation's SubjectTypeRefs list.
 // This is useful for understanding which types can be the "who" in permission checks.
 //
 // Example:
@@ -215,26 +210,10 @@ func SubjectTypes(types []TypeDefinition) []string {
 
 	for _, t := range types {
 		for _, r := range t.Relations {
-			// Use SubjectTypeRefs if available
-			if len(r.SubjectTypeRefs) > 0 {
-				for _, ref := range r.SubjectTypeRefs {
-					if !seen[ref.Type] {
-						seen[ref.Type] = true
-						result = append(result, ref.Type)
-					}
-				}
-			} else {
-				// Fall back to SubjectTypes
-				for _, st := range r.SubjectTypes {
-					// Strip wildcard suffix if present (e.g., "user:*" → "user")
-					typeName := st
-					if len(typeName) > 2 && typeName[len(typeName)-2:] == ":*" {
-						typeName = typeName[:len(typeName)-2]
-					}
-					if !seen[typeName] {
-						seen[typeName] = true
-						result = append(result, typeName)
-					}
+			for _, ref := range r.SubjectTypeRefs {
+				if !seen[ref.Type] {
+					seen[ref.Type] = true
+					result = append(result, ref.Type)
 				}
 			}
 		}
@@ -266,23 +245,9 @@ func RelationSubjects(types []TypeDefinition, objectType string, relation string
 				continue
 			}
 
-			// Use SubjectTypeRefs if available
-			if len(r.SubjectTypeRefs) > 0 {
-				var result []string
-				for _, ref := range r.SubjectTypeRefs {
-					result = append(result, ref.Type)
-				}
-				return result
-			}
-
-			// Fall back to SubjectTypes, stripping wildcard suffix
 			var result []string
-			for _, st := range r.SubjectTypes {
-				typeName := st
-				if len(typeName) > 2 && typeName[len(typeName)-2:] == ":*" {
-					typeName = typeName[:len(typeName)-2]
-				}
-				result = append(result, typeName)
+			for _, ref := range r.SubjectTypeRefs {
+				result = append(result, ref.Type)
 			}
 			return result
 		}
@@ -328,50 +293,24 @@ func ToAuthzModels(types []TypeDefinition) []AuthzModel {
 			// Collect all exclusions for this relation.
 			// For nested exclusions like "(A but not B) but not C", this will be ["B", "C"].
 			// For simple exclusions like "A but not B", this will be ["B"].
-			// For backward compatibility, also check the deprecated ExcludedRelation field.
 			exclusions := r.ExcludedRelations
-			if len(exclusions) == 0 && r.ExcludedRelation != "" {
-				exclusions = []string{r.ExcludedRelation}
-			}
 
-			// Add entries for direct subject types
-			// Use SubjectTypeRefs if available (includes userset relation info),
-			// otherwise fall back to SubjectTypes for backward compatibility.
-			if len(r.SubjectTypeRefs) > 0 {
-				for _, ref := range r.SubjectTypeRefs {
-					st := ref.Type
-					wildcard := ref.Wildcard
-					model := AuthzModel{
-						ObjectType:      t.Name,
-						Relation:        r.Name,
-						SubjectType:     &st,
-						SubjectWildcard: &wildcard,
-					}
-					// Set subject_relation for userset references
-					if ref.Relation != "" {
-						sr := ref.Relation
-						model.SubjectRelation = &sr
-					}
-					models = append(models, model)
+			// Add entries for direct subject types and userset refs.
+			for _, ref := range r.SubjectTypeRefs {
+				st := ref.Type
+				wildcard := ref.Wildcard
+				model := AuthzModel{
+					ObjectType:      t.Name,
+					Relation:        r.Name,
+					SubjectType:     &st,
+					SubjectWildcard: &wildcard,
 				}
-			} else {
-				// Legacy path: use SubjectTypes (no userset info)
-				for _, subjectType := range r.SubjectTypes {
-					// Strip wildcard suffix for storage
-					st := subjectType
-					wildcard := false
-					if len(st) > 2 && st[len(st)-2:] == ":*" {
-						wildcard = true
-						st = st[:len(st)-2]
-					}
-					model := AuthzModel{
-						ObjectType:      t.Name,
-						Relation:        r.Name,
-						SubjectType:     &st,
-						SubjectWildcard: &wildcard,
-					}
-					models = append(models, model)
+				// Set subject_relation for userset references
+				if ref.Relation != "" {
+					sr := ref.Relation
+					model.SubjectRelation = &sr
 				}
+				models = append(models, model)
 			}
 
 			// Add separate rows for each exclusion.
@@ -389,7 +328,7 @@ func ToAuthzModels(types []TypeDefinition) []AuthzModel {
 			}
 			for _, excl := range r.ExcludedParentRelations {
 				er := excl.Relation
-				et := excl.ParentType
+				et := excl.LinkingRelation
 				model := AuthzModel{
 					ObjectType:             t.Name,
 					Relation:               r.Name,
@@ -431,7 +370,7 @@ func ToAuthzModels(types []TypeDefinition) []AuthzModel {
 
 				for _, checkParent := range group.ParentRelations {
 					cr := checkParent.Relation
-					cp := checkParent.ParentType
+					cp := checkParent.LinkingRelation
 					model := AuthzModel{
 						ObjectType:          t.Name,
 						Relation:            r.Name,
@@ -463,16 +402,9 @@ func ToAuthzModels(types []TypeDefinition) []AuthzModel {
 			// The SQL uses t.relation = am.subject_type to find tuples with the right
 			// linking relation, then gets the actual parent type from t.subject_type.
 			// Note: Exclusions are stored in separate rows, not embedded here.
-			parentChecks := r.ParentRelations
-			if len(parentChecks) == 0 && r.ParentRelation != "" {
-				parentChecks = []ParentRelationCheck{{
-					Relation:   r.ParentRelation,
-					ParentType: r.ParentType,
-				}}
-			}
-			for _, parent := range parentChecks {
+			for _, parent := range r.ParentRelations {
 				pr := parent.Relation
-				pt := parent.ParentType
+				pt := parent.LinkingRelation
 				model := AuthzModel{
 					ObjectType:     t.Name,
 					Relation:       r.Name,
@@ -521,7 +453,7 @@ func ToAuthzModels(types []TypeDefinition) []AuthzModel {
 
 				for _, checkParent := range group.ParentRelations {
 					cr := checkParent.Relation
-					cp := checkParent.ParentType
+					cp := checkParent.LinkingRelation
 					model := AuthzModel{
 						ObjectType:          t.Name,
 						Relation:            r.Name,

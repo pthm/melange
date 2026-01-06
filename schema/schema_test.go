@@ -11,22 +11,22 @@ func TestSubjectTypes(t *testing.T) {
 		{
 			Name: "user",
 			Relations: []schema.RelationDefinition{
-				{Name: "self", SubjectTypes: []string{"user"}},
+				{Name: "self", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
 			},
 		},
 		{
 			Name: "organization",
 			Relations: []schema.RelationDefinition{
-				{Name: "owner", SubjectTypes: []string{"user"}},
-				{Name: "member", SubjectTypes: []string{"user", "team"}},
+				{Name: "owner", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
+				{Name: "member", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}, {Type: "team"}}},
 			},
 		},
 		{
 			Name: "repository",
 			Relations: []schema.RelationDefinition{
-				{Name: "org", SubjectTypes: []string{"organization"}},
-				{Name: "public", SubjectTypes: []string{"user:*"}}, // wildcard
-				{Name: "can_read", ImpliedBy: []string{"owner"}},   // no direct subjects
+				{Name: "org", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "organization"}}},
+				{Name: "public", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user", Wildcard: true}}}, // wildcard
+				{Name: "can_read", ImpliedBy: []string{"owner"}},                                              // no direct subjects
 			},
 		},
 	}
@@ -56,9 +56,9 @@ func TestRelationSubjects(t *testing.T) {
 		{
 			Name: "repository",
 			Relations: []schema.RelationDefinition{
-				{Name: "owner", SubjectTypes: []string{"user"}},
-				{Name: "collaborator", SubjectTypes: []string{"user", "team"}},
-				{Name: "public", SubjectTypes: []string{"user:*"}},
+				{Name: "owner", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
+				{Name: "collaborator", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}, {Type: "team"}}},
+				{Name: "public", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user", Wildcard: true}}},
 				{Name: "can_read", ImpliedBy: []string{"owner"}}, // no direct subjects
 			},
 		},
@@ -112,12 +112,14 @@ func TestToAuthzModels(t *testing.T) {
 		{
 			Name: "repository",
 			Relations: []schema.RelationDefinition{
-				{Name: "owner", SubjectTypes: []string{"user"}},
-				{Name: "admin", SubjectTypes: []string{"user"}, ImpliedBy: []string{"owner"}},
+				{Name: "owner", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
+				{Name: "admin", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}, ImpliedBy: []string{"owner"}},
 				{
-					Name:           "can_read",
-					ParentRelation: "can_read",
-					ParentType:     "org",
+					Name: "can_read",
+					ParentRelations: []schema.ParentRelationCheck{{
+						Relation:        "can_read",
+						LinkingRelation: "org",
+					}},
 				},
 			},
 		},
@@ -176,7 +178,7 @@ func TestToAuthzModels_TransitiveClosure(t *testing.T) {
 		{
 			Name: "org",
 			Relations: []schema.RelationDefinition{
-				{Name: "owner", SubjectTypes: []string{"user"}},
+				{Name: "owner", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
 				{Name: "admin", ImpliedBy: []string{"owner"}},
 				{Name: "member", ImpliedBy: []string{"admin"}},
 			},

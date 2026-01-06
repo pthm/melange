@@ -234,7 +234,7 @@ func TestDetectFeatures_Exclusion(t *testing.T) {
 	r := RelationDefinition{
 		Name:             "viewer",
 		SubjectTypeRefs:  []SubjectTypeRef{{Type: "user"}},
-		ExcludedRelation: "blocked",
+		ExcludedRelations: []string{"blocked"},
 	}
 	analysis := RelationAnalysis{
 		DirectSubjectTypes: []string{"user"},
@@ -299,8 +299,7 @@ func TestDetectFeatures_Recursive(t *testing.T) {
 	r := RelationDefinition{
 		Name:            "viewer",
 		SubjectTypeRefs: []SubjectTypeRef{{Type: "user"}},
-		ParentRelation:  "viewer",
-		ParentType:      "parent",
+		ParentRelations: []ParentRelationCheck{{Relation: "viewer", LinkingRelation: "parent"}},
 	}
 	analysis := RelationAnalysis{
 		DirectSubjectTypes: []string{"user"},
@@ -353,9 +352,8 @@ func TestDetectFeatures_ComplexCombination(t *testing.T) {
 			{Type: "user"},
 			{Type: "group", Relation: "member"},
 		},
-		ParentRelation:   "viewer",
-		ParentType:       "parent",
-		ExcludedRelation: "blocked",
+		ParentRelations:  []ParentRelationCheck{{Relation: "viewer", LinkingRelation: "parent"}},
+		ExcludedRelations: []string{"blocked"},
 	}
 	analysis := RelationAnalysis{
 		DirectSubjectTypes: []string{"user"},
@@ -421,20 +419,6 @@ func TestHasWildcardRefs(t *testing.T) {
 			},
 			want: true,
 		},
-		{
-			name: "legacy wildcard suffix",
-			r: RelationDefinition{
-				SubjectTypes: []string{"user:*"},
-			},
-			want: true,
-		},
-		{
-			name: "legacy no wildcard",
-			r: RelationDefinition{
-				SubjectTypes: []string{"user"},
-			},
-			want: false,
-		},
 	}
 
 	for _, tt := range tests {
@@ -473,20 +457,6 @@ func TestCollectDirectSubjectTypes(t *testing.T) {
 					{Type: "user"},
 					{Type: "group", Relation: "member"},
 				},
-			},
-			want: []string{"user"},
-		},
-		{
-			name: "legacy subject types",
-			r: RelationDefinition{
-				SubjectTypes: []string{"user"},
-			},
-			want: []string{"user"},
-		},
-		{
-			name: "legacy with wildcard stripped",
-			r: RelationDefinition{
-				SubjectTypes: []string{"user:*"},
 			},
 			want: []string{"user"},
 		},
@@ -541,19 +511,11 @@ func TestCollectParentRelations(t *testing.T) {
 		want int
 	}{
 		{
-			name: "single legacy parent",
-			r: RelationDefinition{
-				ParentRelation: "viewer",
-				ParentType:     "parent",
-			},
-			want: 1,
-		},
-		{
 			name: "multiple parents",
 			r: RelationDefinition{
 				ParentRelations: []ParentRelationCheck{
-					{Relation: "viewer", ParentType: "org"},
-					{Relation: "viewer", ParentType: "team"},
+					{Relation: "viewer", LinkingRelation: "org"},
+					{Relation: "viewer", LinkingRelation: "team"},
 				},
 			},
 			want: 2,
@@ -582,13 +544,6 @@ func TestCollectExcludedRelations(t *testing.T) {
 		want []string
 	}{
 		{
-			name: "single exclusion (legacy)",
-			r: RelationDefinition{
-				ExcludedRelation: "blocked",
-			},
-			want: []string{"blocked"},
-		},
-		{
 			name: "multiple exclusions",
 			r: RelationDefinition{
 				ExcludedRelations: []string{"blocked", "suspended"},
@@ -599,14 +554,6 @@ func TestCollectExcludedRelations(t *testing.T) {
 			name: "no exclusions",
 			r:    RelationDefinition{},
 			want: nil,
-		},
-		{
-			name: "both legacy and new (no duplicate)",
-			r: RelationDefinition{
-				ExcludedRelation:  "blocked",
-				ExcludedRelations: []string{"blocked", "suspended"},
-			},
-			want: []string{"blocked", "suspended"},
 		},
 	}
 
@@ -758,9 +705,8 @@ func TestAnalyzeRelations_ComplexComposite(t *testing.T) {
 						{Type: "user"},
 						{Type: "group", Relation: "member"},
 					},
-					ParentRelation:   "viewer",
-					ParentType:       "parent",
-					ExcludedRelation: "blocked",
+					ParentRelations:  []ParentRelationCheck{{Relation: "viewer", LinkingRelation: "parent"}},
+					ExcludedRelations: []string{"blocked"},
 				},
 				{
 					Name:            "blocked",

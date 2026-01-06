@@ -77,7 +77,6 @@ func convertModel(model *openfgav1.AuthorizationModel) []schema.TypeDefinition {
 
 		// Get directly related user types from metadata
 		// This extracts both simple type references [user] and userset references [group#member]
-		directTypes := make(map[string][]string)
 		directTypeRefs := make(map[string][]schema.SubjectTypeRef)
 		if meta := td.GetMetadata(); meta != nil {
 			for relName, relMeta := range meta.GetRelations() {
@@ -94,7 +93,6 @@ func convertModel(model *openfgav1.AuthorizationModel) []schema.TypeDefinition {
 						ref.Relation = v.Relation
 					}
 
-					directTypes[relName] = append(directTypes[relName], typeName)
 					directTypeRefs[relName] = append(directTypeRefs[relName], ref)
 				}
 			}
@@ -102,7 +100,7 @@ func convertModel(model *openfgav1.AuthorizationModel) []schema.TypeDefinition {
 
 		// Convert relations
 		for relName, rel := range td.GetRelations() {
-			relDef := convertRelation(relName, rel, directTypes[relName], directTypeRefs[relName])
+			relDef := convertRelation(relName, rel, directTypeRefs[relName])
 			typeDef.Relations = append(typeDef.Relations, relDef)
 		}
 
@@ -119,10 +117,9 @@ func convertModel(model *openfgav1.AuthorizationModel) []schema.TypeDefinition {
 //   - Tuple-to-userset: inherited from related objects (parent permissions)
 //   - Union/intersection/difference: combining multiple rules
 //   - Userset references: access via group membership [type#relation]
-func convertRelation(name string, rel *openfgav1.Userset, subjectTypes []string, subjectTypeRefs []schema.SubjectTypeRef) schema.RelationDefinition {
+func convertRelation(name string, rel *openfgav1.Userset, subjectTypeRefs []schema.SubjectTypeRef) schema.RelationDefinition {
 	relDef := schema.RelationDefinition{
 		Name:            name,
-		SubjectTypes:    subjectTypes,
 		SubjectTypeRefs: subjectTypeRefs,
 	}
 
@@ -162,15 +159,11 @@ func extractUserset(us *openfgav1.Userset, rel *schema.RelationDefinition) {
 		// Parent relation: permission inherited from related object
 		// e.g., "can_read from org" means check can_read on the org
 		parentRel := v.TupleToUserset.GetComputedUserset().GetRelation()
-		parentType := v.TupleToUserset.GetTupleset().GetRelation()
+		linkingRel := v.TupleToUserset.GetTupleset().GetRelation()
 		rel.ParentRelations = append(rel.ParentRelations, schema.ParentRelationCheck{
-			Relation:   parentRel,
-			ParentType: parentType,
+			Relation:        parentRel,
+			LinkingRelation: linkingRel,
 		})
-		if rel.ParentRelation == "" {
-			rel.ParentRelation = parentRel
-			rel.ParentType = parentType
-		}
 
 	case *openfgav1.Userset_Union:
 		// Union: permission granted if ANY child grants it
@@ -203,10 +196,6 @@ func extractUserset(us *openfgav1.Userset, rel *schema.RelationDefinition) {
 			rel.ExcludedParentRelations = append(rel.ExcludedParentRelations, excludedParents...)
 			excludedIntersectionGroups := extractSubtractIntersectionGroups(subtract, rel.Name)
 			rel.ExcludedIntersectionGroups = append(rel.ExcludedIntersectionGroups, excludedIntersectionGroups...)
-			// Also set deprecated field for backward compatibility
-			if len(excludedRels) > 0 {
-				rel.ExcludedRelation = excludedRels[len(excludedRels)-1]
-			}
 		}
 	}
 }
@@ -245,11 +234,11 @@ func expandIntersection(intersection *openfgav1.Usersets, relationName string) [
 			// TTU within intersection, e.g., "writer and (can_write from org)"
 			// Add a parent-relation check to all groups
 			rel := cv.TupleToUserset.GetComputedUserset().GetRelation()
-			parent := cv.TupleToUserset.GetTupleset().GetRelation()
+			linkingRel := cv.TupleToUserset.GetTupleset().GetRelation()
 			for i := range groups {
 				groups[i].ParentRelations = append(groups[i].ParentRelations, schema.ParentRelationCheck{
-					Relation:   rel,
-					ParentType: parent,
+					Relation:        rel,
+					LinkingRelation: linkingRel,
 				})
 			}
 
@@ -415,8 +404,8 @@ func extractSubtractRelations(us *openfgav1.Userset) ([]string, []schema.ParentR
 		// TTU in subtract: "but not (viewer from parent)"
 		// Preserve the tuple-to-userset linkage for exclusion evaluation.
 		return nil, []schema.ParentRelationCheck{{
-			Relation:   v.TupleToUserset.GetComputedUserset().GetRelation(),
-			ParentType: v.TupleToUserset.GetTupleset().GetRelation(),
+			Relation:        v.TupleToUserset.GetComputedUserset().GetRelation(),
+			LinkingRelation: v.TupleToUserset.GetTupleset().GetRelation(),
 		}}
 
 	default:

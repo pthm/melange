@@ -20,16 +20,15 @@ type RelationFeatures struct {
 // This checks the features themselves - for full generation eligibility, also check
 // that all dependency relations are generatable via RelationAnalysis.CanGenerate.
 func (f RelationFeatures) CanGenerate() bool {
-	// We can generate SQL if:
-	// 1. The relation has Direct, Implied, Wildcard, Userset, Recursive, Exclusion,
-	//    and/or Intersection features
-	// Note: Exclusion is allowed here. ComputeCanGenerate classifies excluded relations
-	// as simple (direct tuple lookup) or complex (check_permission_internal call).
-	// Note: Userset is supported via JOIN-based expansion in userset_check.tpl.sql
-	// Note: Recursive (TTU) is supported for same-type recursion. ComputeCanGenerate
-	// verifies that all parent relations link to the same type.
-	// Note: Intersection is supported by calling check functions for each part.
-	// ComputeCanGenerate verifies all intersection parts are generatable.
+	// We can generate SQL if the relation has at least one access path:
+	// - Direct: tuple lookup for [user] patterns
+	// - Implied: closure-based lookup for "viewer: editor" patterns
+	// - Userset: JOIN-based expansion for [group#member] patterns
+	// - Recursive: TTU patterns like "viewer from parent" (uses check_permission_internal)
+	// - Intersection: AND patterns like "writer and editor"
+	//
+	// Note: All patterns are now supported. Complex cases (cross-type TTU, deep usersets)
+	// use check_permission_internal to delegate to the appropriate handler.
 
 	// Must have at least one access path
 	return f.HasDirect || f.HasImplied || f.HasUserset || f.HasRecursive || f.HasIntersection
@@ -364,19 +363,6 @@ func collectDirectSubjectTypes(r RelationDefinition) []string {
 		}
 	}
 
-	// Legacy path: SubjectTypes
-	for _, st := range r.SubjectTypes {
-		// Strip wildcard suffix
-		typeName := st
-		if len(typeName) > 2 && typeName[len(typeName)-2:] == ":*" {
-			typeName = typeName[:len(typeName)-2]
-		}
-		if !seen[typeName] {
-			types = append(types, typeName)
-			seen[typeName] = true
-		}
-	}
-
 	return types
 }
 
@@ -384,12 +370,6 @@ func collectDirectSubjectTypes(r RelationDefinition) []string {
 func hasWildcardRefs(r RelationDefinition) bool {
 	for _, ref := range r.SubjectTypeRefs {
 		if ref.Wildcard {
-			return true
-		}
-	}
-	// Legacy path: check SubjectTypes for :* suffix
-	for _, st := range r.SubjectTypes {
-		if len(st) > 2 && st[len(st)-2:] == ":*" {
 			return true
 		}
 	}
@@ -417,26 +397,15 @@ func collectParentRelations(r RelationDefinition) []ParentRelationInfo {
 
 	// New field: ParentRelations slice
 	for _, pr := range r.ParentRelations {
-		key := pr.Relation + ":" + pr.ParentType
+		key := pr.Relation + ":" + pr.LinkingRelation
 		if seen[key] {
 			continue
 		}
 		seen[key] = true
 		parents = append(parents, ParentRelationInfo{
 			Relation:        pr.Relation,
-			LinkingRelation: pr.ParentType,
+			LinkingRelation: pr.LinkingRelation,
 		})
-	}
-
-	// Legacy fields: single ParentRelation/ParentType
-	if r.ParentRelation != "" && r.ParentType != "" {
-		key := r.ParentRelation + ":" + r.ParentType
-		if !seen[key] {
-			parents = append(parents, ParentRelationInfo{
-				Relation:        r.ParentRelation,
-				LinkingRelation: r.ParentType,
-			})
-		}
 	}
 
 	return parents
@@ -449,21 +418,6 @@ func collectExcludedRelations(r RelationDefinition) []string {
 	// New field: ExcludedRelations slice
 	excluded = append(excluded, r.ExcludedRelations...)
 
-	// Legacy field: single ExcludedRelation
-	if r.ExcludedRelation != "" {
-		// Avoid duplicates
-		found := false
-		for _, e := range excluded {
-			if e == r.ExcludedRelation {
-				found = true
-				break
-			}
-		}
-		if !found {
-			excluded = append(excluded, r.ExcludedRelation)
-		}
-	}
-
 	return excluded
 }
 
@@ -473,7 +427,7 @@ func collectExcludedParentRelations(r RelationDefinition) []ParentRelationInfo {
 	for _, pr := range r.ExcludedParentRelations {
 		excluded = append(excluded, ParentRelationInfo{
 			Relation:        pr.Relation,
-			LinkingRelation: pr.ParentType,
+			LinkingRelation: pr.LinkingRelation,
 		})
 	}
 	return excluded
@@ -507,7 +461,7 @@ func collectExcludedIntersectionGroups(r RelationDefinition) []IntersectionGroup
 				Relation: pr.Relation,
 				ParentRelation: &ParentRelationInfo{
 					Relation:        pr.Relation,
-					LinkingRelation: pr.ParentType,
+					LinkingRelation: pr.LinkingRelation,
 				},
 			}
 			group.Parts = append(group.Parts, part)
@@ -552,7 +506,7 @@ func collectIntersectionGroups(r RelationDefinition) []IntersectionGroupInfo {
 				Relation: pr.Relation,
 				ParentRelation: &ParentRelationInfo{
 					Relation:        pr.Relation,
-					LinkingRelation: pr.ParentType,
+					LinkingRelation: pr.LinkingRelation,
 				},
 			}
 			group.Parts = append(group.Parts, part)
@@ -973,9 +927,19 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		} else {
 			a.CannotGenerateReason = cannotGenerateReason
 		}
-		// Phase 5: All relations now generate specialized functions.
-		// We've achieved 100% codegen coverage, so always set CanGenerate = true.
-		// The CannotGenerateReason is preserved for debugging/diagnostics only.
+
+		// Design decision: Always generate specialized functions for all relations.
+		//
+		// Previously, complex patterns (deep TTU, complex usersets, etc.) would fall back
+		// to check_permission_generic. Now we generate specialized SQL for every relation,
+		// using check_permission_internal to delegate when needed. This achieves:
+		//   1. Consistent code path for all permission checks
+		//   2. Better debugging (all relations have named functions)
+		//   3. Potential for future optimizations in generated code
+		//
+		// The checks above still run to populate SimpleClosureRelations, ComplexClosureRelations,
+		// and other classification data used by the code generator. CannotGenerateReason is
+		// preserved for diagnostics but CanGenerate is always true.
 		a.CanGenerate = true
 	}
 

@@ -11,7 +11,7 @@ func TestComputeRelationClosure_Simple(t *testing.T) {
 		{
 			Name: "repo",
 			Relations: []schema.RelationDefinition{
-				{Name: "owner", SubjectTypes: []string{"user"}},
+				{Name: "owner", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
 			},
 		},
 	}
@@ -34,7 +34,7 @@ func TestComputeRelationClosure_TwoLevel(t *testing.T) {
 		{
 			Name: "repo",
 			Relations: []schema.RelationDefinition{
-				{Name: "owner", SubjectTypes: []string{"user"}},
+				{Name: "owner", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
 				{Name: "admin", ImpliedBy: []string{"owner"}},
 			},
 		},
@@ -71,7 +71,7 @@ func TestComputeRelationClosure_ThreeLevel(t *testing.T) {
 		{
 			Name: "repo",
 			Relations: []schema.RelationDefinition{
-				{Name: "owner", SubjectTypes: []string{"user"}},
+				{Name: "owner", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
 				{Name: "admin", ImpliedBy: []string{"owner"}},
 				{Name: "member", ImpliedBy: []string{"admin"}},
 			},
@@ -118,7 +118,7 @@ func TestComputeRelationClosure_Diamond(t *testing.T) {
 		{
 			Name: "doc",
 			Relations: []schema.RelationDefinition{
-				{Name: "admin", SubjectTypes: []string{"user"}},
+				{Name: "admin", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
 				{Name: "reader", ImpliedBy: []string{"admin"}},
 				{Name: "writer", ImpliedBy: []string{"admin"}},
 				{Name: "viewer", ImpliedBy: []string{"reader", "writer"}},
@@ -149,14 +149,14 @@ func TestComputeRelationClosure_MultipleTypes(t *testing.T) {
 		{
 			Name: "org",
 			Relations: []schema.RelationDefinition{
-				{Name: "owner", SubjectTypes: []string{"user"}},
+				{Name: "owner", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
 				{Name: "member", ImpliedBy: []string{"owner"}},
 			},
 		},
 		{
 			Name: "repo",
 			Relations: []schema.RelationDefinition{
-				{Name: "admin", SubjectTypes: []string{"user"}},
+				{Name: "admin", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
 				{Name: "viewer", ImpliedBy: []string{"admin"}},
 			},
 		},
@@ -186,9 +186,9 @@ func TestComputeRelationClosure_NoImpliedBy(t *testing.T) {
 		{
 			Name: "repo",
 			Relations: []schema.RelationDefinition{
-				{Name: "owner", SubjectTypes: []string{"user"}},
-				{Name: "admin", SubjectTypes: []string{"user"}},
-				{Name: "viewer", SubjectTypes: []string{"user"}},
+				{Name: "owner", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
+				{Name: "admin", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
+				{Name: "viewer", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
 			},
 		},
 	}
@@ -244,7 +244,7 @@ func TestComputeRelationClosure_ViaPath(t *testing.T) {
 		{
 			Name: "org",
 			Relations: []schema.RelationDefinition{
-				{Name: "owner", SubjectTypes: []string{"user"}},
+				{Name: "owner", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
 				{Name: "admin", ImpliedBy: []string{"owner"}},
 				{Name: "member", ImpliedBy: []string{"admin"}},
 				{Name: "viewer", ImpliedBy: []string{"member"}},
