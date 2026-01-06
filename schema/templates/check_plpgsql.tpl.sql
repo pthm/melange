@@ -156,6 +156,9 @@ BEGIN
             WHERE link.object_type = '{{$.ObjectType}}'
               AND link.object_id = p_object_id
               AND link.relation = '{{.LinkingRelation}}'
+{{- if .AllowedLinkingTypes}}
+              AND link.subject_type IN ({{.AllowedLinkingTypes}})
+{{- end}}
               AND check_permission_internal(
                   p_subject_type, p_subject_id,
                   '{{.ParentRelation}}',

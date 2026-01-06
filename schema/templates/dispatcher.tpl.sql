@@ -6,6 +6,7 @@
 {{- if .HasSpecializedFunctions -}}
 -- Generated internal dispatcher for {{.FunctionName}}_internal
 -- Routes to specialized functions with p_visited for cycle detection in TTU patterns
+-- Enforces depth limit of 25 to prevent stack overflow from deep permission chains
 CREATE OR REPLACE FUNCTION {{.FunctionName}}_internal (
 p_subject_type TEXT,
 p_subject_id TEXT,
@@ -14,7 +15,14 @@ p_object_type TEXT,
 p_object_id TEXT,
 p_visited TEXT[] DEFAULT ARRAY[]::TEXT[]
 ) RETURNS INTEGER AS $$
-    SELECT CASE
+BEGIN
+    -- Depth limit check: prevent excessively deep permission resolution chains
+    -- This catches both recursive TTU patterns and long userset chains
+    IF array_length(p_visited, 1) >= 25 THEN
+        RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';
+    END IF;
+
+    RETURN (SELECT CASE
         -- Userset subjects (e.g., "group:eng#member") require generic implementation for reflexive checks
         -- Note: only subject_id contains '#' for usersets, not subject_type
         WHEN position('#' in p_subject_id) > 0 THEN {{.GenericFunctionName}}_internal(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, p_visited)
@@ -22,8 +30,9 @@ p_visited TEXT[] DEFAULT ARRAY[]::TEXT[]
         WHEN p_object_type = '{{.ObjectType}}' AND p_relation = '{{.Relation}}' THEN {{.CheckFunctionName}}(p_subject_type, p_subject_id, p_object_id, p_visited)
 {{- end}}
         ELSE {{.GenericFunctionName}}_internal(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, p_visited)
-    END;
-$$ LANGUAGE sql STABLE;
+    END);
+END;
+$$ LANGUAGE plpgsql STABLE;
 
 -- Generated dispatcher for {{.FunctionName}}
 -- Routes to specialized functions or falls back to generic implementation

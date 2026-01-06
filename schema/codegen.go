@@ -172,9 +172,10 @@ type ImpliedFunctionCall struct {
 
 // ParentRelationData contains data for rendering recursive access checks.
 type ParentRelationData struct {
-	LinkingRelation    string // The relation that links to parent (e.g., "parent", "org")
-	ParentRelation     string // The relation to check on the parent (e.g., "viewer", "member")
-	ParentFunctionName string // Deprecated: kept for compatibility, use check_permission_internal instead
+	LinkingRelation     string // The relation that links to parent (e.g., "parent", "org")
+	ParentRelation      string // The relation to check on the parent (e.g., "viewer", "member")
+	ParentFunctionName  string // Deprecated: kept for compatibility, use check_permission_internal instead
+	AllowedLinkingTypes string // SQL-formatted list of allowed parent types (e.g., "'folder', 'org'")
 }
 
 // generateCheckFunction generates a specialized check function for a relation.
@@ -243,10 +244,20 @@ func buildCheckFunctionData(a RelationAnalysis) (CheckFunctionData, error) {
 
 	// Build parent relation data for recursive checks
 	for _, parent := range a.ParentRelations {
+		// Format allowed linking types as SQL list (e.g., "'group1', 'group2'")
+		var allowedTypes string
+		if len(parent.AllowedLinkingTypes) > 0 {
+			quoted := make([]string, len(parent.AllowedLinkingTypes))
+			for i, t := range parent.AllowedLinkingTypes {
+				quoted[i] = fmt.Sprintf("'%s'", t)
+			}
+			allowedTypes = strings.Join(quoted, ", ")
+		}
 		data.ParentRelations = append(data.ParentRelations, ParentRelationData{
-			LinkingRelation:    parent.LinkingRelation,
-			ParentRelation:     parent.Relation,
-			ParentFunctionName: functionName(a.ObjectType, parent.Relation),
+			LinkingRelation:     parent.LinkingRelation,
+			ParentRelation:      parent.Relation,
+			ParentFunctionName:  functionName(a.ObjectType, parent.Relation),
+			AllowedLinkingTypes: allowedTypes,
 		})
 	}
 
@@ -360,6 +371,12 @@ type DirectCheckData struct {
 
 // buildDirectCheck renders the direct check SQL fragment.
 func buildDirectCheck(a RelationAnalysis) (string, error) {
+	// If there are no allowed subject types, the direct check can never match.
+	// Return FALSE to avoid generating invalid SQL like "subject_type IN ()".
+	if len(a.AllowedSubjectTypes) == 0 && len(a.DirectSubjectTypes) == 0 {
+		return "FALSE", nil
+	}
+
 	// Build relation list from self + simple closure relations
 	// Complex closure relations are handled via function calls, not tuple lookup
 	relations := []string{a.Relation}

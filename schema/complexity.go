@@ -140,9 +140,10 @@ type UsersetPattern struct {
 //   - LinkingRelation: "parent" (the relation that links to the parent)
 //   - ParentType: "folder" (the type of the parent object)
 type ParentRelationInfo struct {
-	Relation        string // Relation to check on parent (e.g., "viewer")
-	LinkingRelation string // Relation that links to parent (e.g., "parent")
-	ParentType      string // Type of parent object (e.g., "folder")
+	Relation            string   // Relation to check on parent (e.g., "viewer")
+	LinkingRelation     string   // Relation that links to parent (e.g., "parent")
+	ParentType          string   // Type of parent object (e.g., "folder")
+	AllowedLinkingTypes []string // Types allowed for linking relation (e.g., ["folder", "org"])
 }
 
 // IntersectionPart represents one part of an intersection check.
@@ -404,9 +405,15 @@ func collectUsersetPatterns(r RelationDefinition) []UsersetPattern {
 // collectParentRelations extracts "X from Y" patterns from a relation.
 func collectParentRelations(r RelationDefinition) []ParentRelationInfo {
 	var parents []ParentRelationInfo
+	seen := make(map[string]bool) // Deduplicate by "relation:linkingRelation" key
 
 	// New field: ParentRelations slice
 	for _, pr := range r.ParentRelations {
+		key := pr.Relation + ":" + pr.ParentType
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		parents = append(parents, ParentRelationInfo{
 			Relation:        pr.Relation,
 			LinkingRelation: pr.ParentType,
@@ -416,11 +423,14 @@ func collectParentRelations(r RelationDefinition) []ParentRelationInfo {
 
 	// Legacy fields: single ParentRelation/ParentType
 	if r.ParentRelation != "" && r.ParentType != "" {
-		parents = append(parents, ParentRelationInfo{
-			Relation:        r.ParentRelation,
-			LinkingRelation: r.ParentType,
-			ParentType:      r.ParentType,
-		})
+		key := r.ParentRelation + ":" + r.ParentType
+		if !seen[key] {
+			parents = append(parents, ParentRelationInfo{
+				Relation:        r.ParentRelation,
+				LinkingRelation: r.ParentType,
+				ParentType:      r.ParentType,
+			})
+		}
 	}
 
 	return parents
@@ -674,6 +684,18 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 			}
 		}
 
+		// Populate AllowedLinkingTypes for parent relations from the linking relation's analysis.
+		// This ensures TTU lookups only match parent types allowed by the current model.
+		for i := range a.ParentRelations {
+			parent := &a.ParentRelations[i]
+			linkingAnalysis, ok := lookup[a.ObjectType][parent.LinkingRelation]
+			if ok && len(linkingAnalysis.AllowedSubjectTypes) > 0 {
+				parent.AllowedLinkingTypes = linkingAnalysis.AllowedSubjectTypes
+			} else if ok && len(linkingAnalysis.DirectSubjectTypes) > 0 {
+				parent.AllowedLinkingTypes = linkingAnalysis.DirectSubjectTypes
+			}
+		}
+
 		// First check: does this relation's features allow generation?
 		if !a.Features.CanGenerate() {
 			a.CanGenerate = false
@@ -703,8 +725,8 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 			if relAnalysis.Features.IsClosureCompatible() {
 				// Simple: can use tuple lookup
 				simpleRels = append(simpleRels, rel)
-			} else if relAnalysis.CanGenerate && relAnalysis.Features.HasExclusion {
-				// Complex but generatable: delegate to its check function
+			} else if relAnalysis.CanGenerate {
+				// Complex but generatable: delegate to check_permission_internal
 				complexRels = append(complexRels, rel)
 			} else {
 				// Truly incompatible: fall back to generic
@@ -714,14 +736,7 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 			}
 		}
 
-		// Third check: must have at least one allowed subject type
-		// (relations with no direct types in closure fall back to generic)
-		if canGenerate && len(a.AllowedSubjectTypes) == 0 {
-			canGenerate = false
-			cannotGenerateReason = "no allowed subject types in closure"
-		}
-
-		// Fourth check: if relation has complex exclusions (TTU or intersection),
+		// Third check: if relation has complex exclusions (TTU or intersection),
 		// we can't generate - these require the generic implementation.
 		if canGenerate && a.HasComplexExclusion {
 			canGenerate = false
