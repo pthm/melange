@@ -23,8 +23,8 @@ func (f RelationFeatures) CanGenerate() bool {
 	// We can generate SQL if:
 	// 1. The relation has Direct, Implied, Wildcard, Userset, Recursive, Exclusion,
 	//    and/or Intersection features
-	// Note: Exclusion is allowed here, but ComputeCanGenerate will verify that
-	// all excluded relations are simply resolvable before enabling codegen.
+	// Note: Exclusion is allowed here. ComputeCanGenerate classifies excluded relations
+	// as simple (direct tuple lookup) or complex (check_permission_internal call).
 	// Note: Userset is supported via JOIN-based expansion in userset_check.tpl.sql
 	// Note: Recursive (TTU) is supported for same-type recursion. ComputeCanGenerate
 	// verifies that all parent relations link to the same type.
@@ -179,6 +179,15 @@ type RelationAnalysis struct {
 
 	// For Exclusion patterns
 	ExcludedRelations []string // Relations to exclude (for simple "but not X" patterns)
+
+	// SimpleExcludedRelations are excluded relations that can be checked with
+	// a direct tuple lookup (no userset, TTU, exclusion, or intersection).
+	SimpleExcludedRelations []string
+
+	// ComplexExcludedRelations are excluded relations that need function calls
+	// (have userset, TTU, exclusion, intersection, or implied closure).
+	// The generated code will call check_permission_internal for these.
+	ComplexExcludedRelations []string
 
 	// HasComplexExclusion is true if the relation has exclusions that can't be
 	// handled by simple tuple lookup (TTU exclusions or intersection exclusions).
@@ -580,9 +589,9 @@ func sortByDependency(analyses []RelationAnalysis) []RelationAnalysis {
 // 2. ALL relations in its satisfying closure are either:
 //   - Simply resolvable (can use tuple lookup), OR
 //   - Complex but generatable (have exclusions but can generate their own function)
-// 3. If the relation has exclusions, ALL excluded relations must be:
-//   - Simply resolvable (no usersets, TTU, etc.)
-//   - Have no implied relations (closure must be just the relation itself)
+// 3. If the relation has exclusions, excluded relations are classified as:
+//   - Simple: can use direct tuple lookup (simply resolvable AND no implied closure)
+//   - Complex: use check_permission_internal call (has TTU, userset, intersection, etc.)
 //
 // For relations in the closure that need function calls (have exclusions but are generatable),
 // the generated SQL will call their specialized check function rather than using tuple lookup.
@@ -591,6 +600,7 @@ func sortByDependency(analyses []RelationAnalysis) []RelationAnalysis {
 // - Propagates HasWildcard: if ANY relation in the closure supports wildcards
 // - Collects AllowedSubjectTypes: union of all subject types from satisfying relations
 // - Partitions closure relations into SimpleClosureRelations and ComplexClosureRelations
+// - Partitions excluded relations into SimpleExcludedRelations and ComplexExcludedRelations
 func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 	// Sort by dependency order first - ensures relations are processed after their dependencies
 	sorted := sortByDependency(analyses)
@@ -706,9 +716,10 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 			cannotGenerateReason = "has complex exclusion (TTU or intersection-based)"
 		}
 
-		// Fifth check: if relation has simple exclusions, verify all excluded relations
-		// are suitable for simple codegen (simply resolvable and no implied relations).
-		// This ensures the exclusion check can be a direct tuple lookup.
+		// Fifth check: classify excluded relations as simple or complex.
+		// Simple exclusions use direct tuple lookup; complex exclusions use function calls.
+		// Unknown excluded relations still prevent generation.
+		var simpleExcluded, complexExcluded []string
 		if canGenerate && a.Features.HasExclusion {
 			for _, excludedRel := range a.ExcludedRelations {
 				excludedAnalysis, ok := lookup[a.ObjectType][excludedRel]
@@ -718,21 +729,21 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 					cannotGenerateReason = "unknown excluded relation: " + excludedRel
 					break
 				}
-				// Excluded relation must be simply resolvable
-				if !excludedAnalysis.Features.IsSimplyResolvable() {
-					canGenerate = false
-					cannotGenerateReason = "excluded relation not simply resolvable: " + excludedRel
-					break
-				}
-				// Excluded relation must not have implied relations (closure must be just itself)
-				// because our exclusion template does a direct lookup: relation = 'blocked'
-				// If blocked had implied relations, we'd need: relation IN ('blocked', 'editor', ...)
-				if len(excludedAnalysis.SatisfyingRelations) > 1 {
-					canGenerate = false
-					cannotGenerateReason = "excluded relation has implied closure: " + excludedRel
-					break
+				// Classify excluded relation as simple or complex:
+				// Simple: can use direct tuple lookup (simply resolvable AND no implied closure)
+				// Complex: needs check_permission_internal call
+				isSimple := excludedAnalysis.Features.IsSimplyResolvable() &&
+					len(excludedAnalysis.SatisfyingRelations) <= 1
+				if isSimple {
+					simpleExcluded = append(simpleExcluded, excludedRel)
+				} else {
+					complexExcluded = append(complexExcluded, excludedRel)
 				}
 			}
+		}
+		if canGenerate {
+			a.SimpleExcludedRelations = simpleExcluded
+			a.ComplexExcludedRelations = complexExcluded
 		}
 
 		// Sixth check: if relation has userset patterns, verify ALL relations in each

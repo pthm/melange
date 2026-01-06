@@ -475,19 +475,45 @@ type ExclusionCheckData struct {
 	ExcludedRelation string
 }
 
+// ComplexExclusionCheckData contains data for rendering complex exclusion checks.
+// These use check_permission_internal instead of direct tuple lookup.
+type ComplexExclusionCheckData struct {
+	ObjectType       string
+	ExcludedRelation string
+}
+
 // buildExclusionCheck renders the exclusion check SQL fragment.
+// Simple exclusions use direct tuple lookup; complex exclusions use check_permission_internal.
 func buildExclusionCheck(a RelationAnalysis) (string, error) {
-	if len(a.ExcludedRelations) == 0 {
-		return "FALSE", nil
+	if len(a.SimpleExcludedRelations) == 0 && len(a.ComplexExcludedRelations) == 0 {
+		// Fall back to legacy behavior if classification wasn't done
+		if len(a.ExcludedRelations) == 0 {
+			return "FALSE", nil
+		}
+		// Legacy path: treat all as simple
+		var checks []string
+		for _, excl := range a.ExcludedRelations {
+			data := ExclusionCheckData{
+				ObjectType:       a.ObjectType,
+				ExcludedRelation: excl,
+			}
+			var buf bytes.Buffer
+			if err := templates.ExecuteTemplate(&buf, "exclusion_check.tpl.sql", data); err != nil {
+				return "", fmt.Errorf("executing exclusion_check template for %s: %w", excl, err)
+			}
+			checks = append(checks, strings.TrimSpace(buf.String()))
+		}
+		return strings.Join(checks, " OR "), nil
 	}
 
 	var checks []string
-	for _, excl := range a.ExcludedRelations {
+
+	// Simple exclusions: direct tuple lookup
+	for _, excl := range a.SimpleExcludedRelations {
 		data := ExclusionCheckData{
 			ObjectType:       a.ObjectType,
 			ExcludedRelation: excl,
 		}
-
 		var buf bytes.Buffer
 		if err := templates.ExecuteTemplate(&buf, "exclusion_check.tpl.sql", data); err != nil {
 			return "", fmt.Errorf("executing exclusion_check template for %s: %w", excl, err)
@@ -495,6 +521,22 @@ func buildExclusionCheck(a RelationAnalysis) (string, error) {
 		checks = append(checks, strings.TrimSpace(buf.String()))
 	}
 
+	// Complex exclusions: use check_permission_internal
+	for _, excl := range a.ComplexExcludedRelations {
+		data := ComplexExclusionCheckData{
+			ObjectType:       a.ObjectType,
+			ExcludedRelation: excl,
+		}
+		var buf bytes.Buffer
+		if err := templates.ExecuteTemplate(&buf, "complex_exclusion_check.tpl.sql", data); err != nil {
+			return "", fmt.Errorf("executing complex_exclusion_check template for %s: %w", excl, err)
+		}
+		checks = append(checks, strings.TrimSpace(buf.String()))
+	}
+
+	if len(checks) == 0 {
+		return "FALSE", nil
+	}
 	return strings.Join(checks, " OR "), nil
 }
 
