@@ -184,9 +184,12 @@ func generateCheckFunction(a RelationAnalysis) (string, error) {
 		return "", fmt.Errorf("building template data for %s.%s: %w", a.ObjectType, a.Relation, err)
 	}
 
-	// Choose template based on whether we need PL/pgSQL
+	// Choose template based on whether we need PL/pgSQL.
+	// PL/pgSQL is required for:
+	// - Recursive patterns (TTU) that need cycle detection
+	// - Complex userset patterns that call check_permission_internal and may create cycles
 	templateName := "check_sql.tpl.sql"
-	if a.Features.NeedsPLpgSQL() {
+	if a.Features.NeedsPLpgSQL() || a.HasComplexUsersetPatterns {
 		templateName = "check_plpgsql.tpl.sql"
 	}
 
@@ -285,10 +288,12 @@ func computeHasStandaloneAccess(a RelationAnalysis, intersectionGroups []Interse
 	}
 
 	// If direct types are inside an intersection (This pattern), don't count them as standalone.
-	// Check for other standalone access paths (implied, userset, recursive).
+	// Userset patterns from subject type restrictions (e.g., [group#member]) are also part of
+	// the "This" pattern, so they shouldn't be standalone either.
+	// Check for other standalone access paths (implied, recursive).
 	hasStandaloneDirect := a.Features.HasDirect && !hasIntersectionWithThis
 	hasStandaloneImplied := a.Features.HasImplied
-	hasStandaloneUserset := a.Features.HasUserset
+	hasStandaloneUserset := a.Features.HasUserset && !hasIntersectionWithThis
 	hasStandaloneRecursive := a.Features.HasRecursive
 
 	return hasStandaloneDirect || hasStandaloneImplied || hasStandaloneUserset || hasStandaloneRecursive
@@ -426,6 +431,15 @@ type UsersetCheckData struct {
 	HasWildcard bool
 }
 
+// ComplexUsersetCheckData contains data for rendering complex userset check template.
+// Used when the userset closure contains relations with complex features.
+type ComplexUsersetCheckData struct {
+	ObjectType      string
+	Relation        string
+	SubjectType     string
+	SubjectRelation string
+}
+
 // buildUsersetCheck renders the userset check SQL fragment.
 func buildUsersetCheck(a RelationAnalysis) (string, error) {
 	if len(a.UsersetPatterns) == 0 {
@@ -434,31 +448,47 @@ func buildUsersetCheck(a RelationAnalysis) (string, error) {
 
 	var checks []string
 	for _, pattern := range a.UsersetPatterns {
-		// Build SQL-formatted list of satisfying relations for the subject relation.
-		// For [group#member_c4], if member_c4 is satisfied by member, we generate:
-		// membership.relation IN ('member_c4', 'member_c3', 'member_c2', 'member_c1', 'member')
-		satisfyingRels := pattern.SatisfyingRelations
-		if len(satisfyingRels) == 0 {
-			// Fallback: use just the subject relation itself
-			satisfyingRels = []string{pattern.SubjectRelation}
-		}
-		quotedRels := make([]string, len(satisfyingRels))
-		for i, rel := range satisfyingRels {
-			quotedRels[i] = fmt.Sprintf("'%s'", rel)
-		}
-
-		data := UsersetCheckData{
-			ObjectType:              a.ObjectType,
-			Relation:                a.Relation,
-			SubjectType:             pattern.SubjectType,
-			SubjectRelation:         pattern.SubjectRelation,
-			SatisfyingRelationsList: strings.Join(quotedRels, ", "),
-			HasWildcard:             pattern.HasWildcard,
-		}
-
 		var buf bytes.Buffer
-		if err := templates.ExecuteTemplate(&buf, "userset_check.tpl.sql", data); err != nil {
-			return "", fmt.Errorf("executing userset_check template for %s#%s: %w", pattern.SubjectType, pattern.SubjectRelation, err)
+
+		if pattern.IsComplex {
+			// Complex pattern: use check_permission_internal to verify membership.
+			// This handles cases where the userset closure contains relations with
+			// exclusions, usersets, TTU, or intersections.
+			data := ComplexUsersetCheckData{
+				ObjectType:      a.ObjectType,
+				Relation:        a.Relation,
+				SubjectType:     pattern.SubjectType,
+				SubjectRelation: pattern.SubjectRelation,
+			}
+			if err := templates.ExecuteTemplate(&buf, "complex_userset_check.tpl.sql", data); err != nil {
+				return "", fmt.Errorf("executing complex_userset_check template for %s#%s: %w", pattern.SubjectType, pattern.SubjectRelation, err)
+			}
+		} else {
+			// Simple pattern: use tuple JOIN for membership lookup.
+			// Build SQL-formatted list of satisfying relations for the subject relation.
+			// For [group#member_c4], if member_c4 is satisfied by member, we generate:
+			// membership.relation IN ('member_c4', 'member_c3', 'member_c2', 'member_c1', 'member')
+			satisfyingRels := pattern.SatisfyingRelations
+			if len(satisfyingRels) == 0 {
+				// Fallback: use just the subject relation itself
+				satisfyingRels = []string{pattern.SubjectRelation}
+			}
+			quotedRels := make([]string, len(satisfyingRels))
+			for i, rel := range satisfyingRels {
+				quotedRels[i] = fmt.Sprintf("'%s'", rel)
+			}
+
+			data := UsersetCheckData{
+				ObjectType:              a.ObjectType,
+				Relation:                a.Relation,
+				SubjectType:             pattern.SubjectType,
+				SubjectRelation:         pattern.SubjectRelation,
+				SatisfyingRelationsList: strings.Join(quotedRels, ", "),
+				HasWildcard:             pattern.HasWildcard,
+			}
+			if err := templates.ExecuteTemplate(&buf, "userset_check.tpl.sql", data); err != nil {
+				return "", fmt.Errorf("executing userset_check template for %s#%s: %w", pattern.SubjectType, pattern.SubjectRelation, err)
+			}
 		}
 		checks = append(checks, strings.TrimSpace(buf.String()))
 	}

@@ -125,6 +125,13 @@ type UsersetPattern struct {
 	// When true, the userset check should match membership tuples with subject_id = '*'.
 	// This is populated by ComputeCanGenerate from the subject relation's features.
 	HasWildcard bool
+
+	// IsComplex is true if any relation in the closure is not closure-compatible
+	// (has userset, TTU, exclusion, or intersection). When true, the userset check
+	// must call check_permission_internal to verify membership instead of using
+	// a simple tuple JOIN.
+	// This is populated by ComputeCanGenerate.
+	IsComplex bool
 }
 
 // ParentRelationInfo represents a "X from Y" pattern (tuple-to-userset).
@@ -202,6 +209,11 @@ type RelationAnalysis struct {
 
 	// For Intersection patterns
 	IntersectionGroups []IntersectionGroupInfo
+
+	// HasComplexUsersetPatterns is true if any userset pattern is complex
+	// (requires check_permission_internal call). When true, the generated
+	// function needs PL/pgSQL with cycle detection.
+	HasComplexUsersetPatterns bool
 
 	// Direct subject types (for generating direct tuple checks)
 	DirectSubjectTypes []string // e.g., ["user", "org"]
@@ -746,13 +758,24 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 			a.ComplexExcludedRelations = complexExcluded
 		}
 
-		// Sixth check: if relation has userset patterns, verify ALL relations in each
-		// pattern's closure are suitable for simple codegen (can use tuple lookup).
-		// This ensures the userset JOIN can find membership tuples directly.
-		// For example, [group#member_c4] requires ALL satisfying relations (member_c4,
-		// member_c3, ... member) to be simply resolvable tuple lookups.
+		// Sixth check: if relation has userset patterns, classify each pattern as
+		// simple or complex. Simple patterns use tuple JOINs; complex patterns call
+		// check_permission_internal for membership verification.
+		//
+		// A pattern is complex if ANY relation in its closure is not closure-compatible
+		// (has userset, TTU, exclusion, or intersection).
+		//
+		// For complex patterns, we call check_permission_internal which always works
+		// because it falls back to check_permission_generic_internal for non-generatable
+		// relations. So we don't need to check if the subject relation is generatable -
+		// we just mark the pattern as complex and use the function call approach.
+		//
+		// We only reject if a relation in the closure is truly unknown (not in the schema).
 		if canGenerate && a.Features.HasUserset {
-			for _, pattern := range a.UsersetPatterns {
+			for i := range a.UsersetPatterns {
+				pattern := &a.UsersetPatterns[i]
+				patternIsComplex := false
+
 				for _, rel := range pattern.SatisfyingRelations {
 					relAnalysis, ok := lookup[pattern.SubjectType][rel]
 					if !ok {
@@ -761,16 +784,21 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 						cannotGenerateReason = "unknown relation in userset closure: " + pattern.SubjectType + "#" + rel
 						break
 					}
-					// Each satisfying relation must be resolvable via tuple lookup
-					// (no TTU, userset, intersection, or exclusion)
+
+					// If any relation in the closure is not closure-compatible, the pattern is complex.
+					// We'll use check_permission_internal which handles this via generic fallback.
 					if !relAnalysis.Features.IsClosureCompatible() {
-						canGenerate = false
-						cannotGenerateReason = "userset closure relation not closure-compatible: " + pattern.SubjectType + "#" + rel
-						break
+						patternIsComplex = true
+						// No need to verify the subject relation is generatable -
+						// check_permission_internal falls back to generic for non-generatable relations
 					}
 				}
 				if !canGenerate {
 					break
+				}
+				pattern.IsComplex = patternIsComplex
+				if patternIsComplex {
+					a.HasComplexUsersetPatterns = true
 				}
 			}
 		}
