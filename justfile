@@ -380,3 +380,23 @@ dump-sql-models NAME: build-dumpsql
 [group('OpenFGA Inspect')]
 dump-sql-analysis NAME: build-dumpsql
     ./bin/dumpsql -analysis "{{NAME}}"
+
+# Build the dumpinventory utility
+[group('OpenFGA Inspect')]
+build-dumpinventory:
+    cd {{TEST}} && go build -o ../bin/dumpinventory ./cmd/dumpinventory
+
+# Show codegen coverage inventory report (relations falling back to generic)
+[group('OpenFGA Inspect')]
+dump-inventory: build-dumpinventory
+    ./bin/dumpinventory
+
+# Show codegen inventory summary only (counts by reason)
+[group('OpenFGA Inspect')]
+dump-inventory-summary: build-dumpinventory
+    ./bin/dumpinventory -summary
+
+# Show codegen inventory for a specific test
+[group('OpenFGA Inspect')]
+dump-inventory-test NAME: build-dumpinventory
+    ./bin/dumpinventory "{{NAME}}"

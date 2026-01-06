@@ -499,7 +499,7 @@ BEGIN
             p_relation, p_object_type, p_object_id,
             p_visited
         ) THEN
-            IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+            IF check_all_exclusions_with_visited(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, p_visited) THEN
                 RETURN 0;  -- Excluded
             END IF;
 
@@ -558,7 +558,7 @@ BEGIN
         p_object_type, p_object_id,
         p_relation, p_visited
     ) THEN
-        IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+        IF check_all_exclusions_with_visited(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, p_visited) THEN
             RETURN 0;
         END IF;
         RETURN 1;
@@ -637,7 +637,7 @@ BEGIN
             p_relation, p_object_type, p_object_id,
             p_visited
         ) THEN
-            IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+            IF check_all_exclusions_with_visited(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, p_visited) THEN
                 RETURN 0;
             END IF;
 
@@ -679,7 +679,7 @@ BEGIN
         p_object_type, p_object_id,
         p_relation, p_visited
     ) THEN
-        IF check_all_exclusions(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id) THEN
+        IF check_all_exclusions_with_visited(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, p_visited) THEN
             RETURN 0;
         END IF;
 

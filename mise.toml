@@ -9,6 +9,9 @@ experimental = true
 # SQL linter/formatter (from GitHub releases via ubi)
 "ubi:quarylabs/sqruff" = "latest"
 
+# Code search tool with semantic search (from crates.io)
+"cargo:ck-search" = "latest"
+
 # Go tools are managed via go.mod tool directive
 # Run: go install tool to install them
 

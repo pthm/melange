@@ -144,6 +144,7 @@ type ParentRelationInfo struct {
 //   - {Relation: "editor", IsExcluded: false, ExcludedRelation: "owner"}
 type IntersectionPart struct {
 	IsThis           bool                // [user] - direct assignment check on the same relation
+	HasWildcard      bool                // For IsThis parts: whether direct assignment allows wildcards
 	Relation         string              // Relation to check
 	IsExcluded       bool                // "but not" - negate the check
 	ExcludedRelation string              // For nested exclusions like "editor but not owner"
@@ -168,6 +169,10 @@ type RelationAnalysis struct {
 	// ensuring all relations in the satisfying closure are simply resolvable.
 	// Set by ComputeCanGenerate after all relations are analyzed.
 	CanGenerate bool
+
+	// CannotGenerateReason explains why CanGenerate is false.
+	// Empty when CanGenerate is true.
+	CannotGenerateReason string
 
 	// For Direct/Implied patterns - from closure table
 	SatisfyingRelations []string // Relations that satisfy this one (e.g., ["viewer", "editor", "owner"])
@@ -440,6 +445,10 @@ func collectIntersectionGroups(r RelationDefinition) []IntersectionGroupInfo {
 			// Check if this is a self-reference (same as the relation being defined)
 			if rel == r.Name {
 				part.IsThis = true
+				// For "This" parts, check if the relation's own direct assignments allow wildcards.
+				// This is distinct from the relation's overall HasWildcard, which may include
+				// wildcards inherited from closure relations.
+				part.HasWildcard = hasWildcardRefs(r)
 			}
 			// Check for nested exclusions
 			if excls, ok := ig.Exclusions[rel]; ok && len(excls) > 0 {
@@ -646,6 +655,7 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		// First check: does this relation's features allow generation?
 		if !a.Features.CanGenerate() {
 			a.CanGenerate = false
+			a.CannotGenerateReason = "features do not allow generation (no access paths)"
 			continue
 		}
 
@@ -654,6 +664,7 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		// - Simple: can use tuple lookup (closure-compatible)
 		// - Complex: has exclusion but is itself generatable (delegate to function)
 		canGenerate := true
+		cannotGenerateReason := ""
 		var simpleRels, complexRels []string
 		for _, rel := range a.SatisfyingRelations {
 			// Skip self - the relation's own features are handled by its generated code
@@ -664,6 +675,7 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 			if !ok {
 				// Unknown relation - shouldn't happen with valid closure, but be safe
 				canGenerate = false
+				cannotGenerateReason = "unknown relation in closure: " + rel
 				break
 			}
 			if relAnalysis.Features.IsClosureCompatible() {
@@ -675,20 +687,23 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 			} else {
 				// Truly incompatible: fall back to generic
 				canGenerate = false
+				cannotGenerateReason = "closure relation not generatable: " + rel
 				break
 			}
 		}
 
 		// Third check: must have at least one allowed subject type
 		// (relations with no direct types in closure fall back to generic)
-		if len(a.AllowedSubjectTypes) == 0 {
+		if canGenerate && len(a.AllowedSubjectTypes) == 0 {
 			canGenerate = false
+			cannotGenerateReason = "no allowed subject types in closure"
 		}
 
 		// Fourth check: if relation has complex exclusions (TTU or intersection),
 		// we can't generate - these require the generic implementation.
 		if canGenerate && a.HasComplexExclusion {
 			canGenerate = false
+			cannotGenerateReason = "has complex exclusion (TTU or intersection-based)"
 		}
 
 		// Fifth check: if relation has simple exclusions, verify all excluded relations
@@ -700,11 +715,13 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 				if !ok {
 					// Unknown excluded relation - fall back to generic
 					canGenerate = false
+					cannotGenerateReason = "unknown excluded relation: " + excludedRel
 					break
 				}
 				// Excluded relation must be simply resolvable
 				if !excludedAnalysis.Features.IsSimplyResolvable() {
 					canGenerate = false
+					cannotGenerateReason = "excluded relation not simply resolvable: " + excludedRel
 					break
 				}
 				// Excluded relation must not have implied relations (closure must be just itself)
@@ -712,6 +729,7 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 				// If blocked had implied relations, we'd need: relation IN ('blocked', 'editor', ...)
 				if len(excludedAnalysis.SatisfyingRelations) > 1 {
 					canGenerate = false
+					cannotGenerateReason = "excluded relation has implied closure: " + excludedRel
 					break
 				}
 			}
@@ -729,12 +747,14 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 					if !ok {
 						// Unknown relation - fall back to generic
 						canGenerate = false
+						cannotGenerateReason = "unknown relation in userset closure: " + pattern.SubjectType + "#" + rel
 						break
 					}
 					// Each satisfying relation must be resolvable via tuple lookup
 					// (no TTU, userset, intersection, or exclusion)
 					if !relAnalysis.Features.IsClosureCompatible() {
 						canGenerate = false
+						cannotGenerateReason = "userset closure relation not closure-compatible: " + pattern.SubjectType + "#" + rel
 						break
 					}
 				}
@@ -753,6 +773,7 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 				if parent.LinkingRelation == "" || parent.Relation == "" {
 					// Invalid parent relation data - fall back to generic
 					canGenerate = false
+					cannotGenerateReason = "invalid parent relation data (empty linking or relation)"
 					break
 				}
 			}
@@ -773,12 +794,14 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 					if !ok {
 						// Unknown relation - fall back to generic
 						canGenerate = false
+						cannotGenerateReason = "unknown relation in intersection: " + part.Relation
 						break
 					}
 					// The part's relation must be generatable since we call its function
 					// Note: We check CanGenerate on the analysis, which is computed in dependency order
 					if !partAnalysis.CanGenerate {
 						canGenerate = false
+						cannotGenerateReason = "intersection part not generatable: " + part.Relation
 						break
 					}
 				}
@@ -791,6 +814,8 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		if canGenerate {
 			a.SimpleClosureRelations = simpleRels
 			a.ComplexClosureRelations = complexRels
+		} else {
+			a.CannotGenerateReason = cannotGenerateReason
 		}
 		a.CanGenerate = canGenerate
 	}

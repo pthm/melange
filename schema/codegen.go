@@ -142,6 +142,12 @@ type IntersectionPartData struct {
 	// When true, we check for a direct tuple on the relation being defined
 	IsThis bool
 
+	// ThisHasWildcard is true if this "This" part allows wildcard tuples.
+	// This is only relevant when IsThis is true. It reflects whether the relation's
+	// own direct subject types allow wildcards, NOT whether the relation's overall
+	// HasWildcard flag is set (which may include wildcards from closure relations).
+	ThisHasWildcard bool
+
 	// HasExclusion is true if this part has a nested exclusion (e.g., "editor but not owner")
 	HasExclusion bool
 
@@ -297,7 +303,8 @@ func buildIntersectionGroups(a RelationAnalysis) []IntersectionGroupData {
 
 		for _, part := range ig.Parts {
 			partData := IntersectionPartData{
-				IsThis: part.IsThis,
+				IsThis:          part.IsThis,
+				ThisHasWildcard: part.HasWildcard, // For "This" parts, use the part's own wildcard flag
 			}
 
 			if part.ParentRelation != nil {

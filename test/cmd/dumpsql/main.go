@@ -335,12 +335,15 @@ func printAnalysis(analyses []schema.RelationAnalysis) {
 	})
 
 	for _, a := range analyses {
-		canGen := "✗"
-		if a.CanGenerate {
-			canGen = "✓"
+		canGen := "✓"
+		if !a.CanGenerate {
+			canGen = "✗"
 		}
 		fmt.Printf("\n%s.%s [%s] CanGenerate=%s\n",
 			a.ObjectType, a.Relation, a.Features.String(), canGen)
+		if !a.CanGenerate && a.CannotGenerateReason != "" {
+			fmt.Printf("  ⚠️  Reason: %s\n", a.CannotGenerateReason)
+		}
 
 		if len(a.SatisfyingRelations) > 0 {
 			fmt.Printf("  Satisfying: %v\n", a.SatisfyingRelations)
