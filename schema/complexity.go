@@ -138,23 +138,24 @@ type UsersetPattern struct {
 // For "viewer from parent" on a folder type, this would have:
 //   - Relation: "viewer" (the relation to check on the parent)
 //   - LinkingRelation: "parent" (the relation that links to the parent)
-//   - ParentType: "folder" (the type of the parent object)
+//   - AllowedLinkingTypes: ["folder"] (types the linking relation can point to)
+//
+// The actual parent type is determined at runtime from the linking relation's
+// subject types. AllowedLinkingTypes captures these for code generation.
 type ParentRelationInfo struct {
 	Relation            string   // Relation to check on parent (e.g., "viewer")
 	LinkingRelation     string   // Relation that links to parent (e.g., "parent")
-	ParentType          string   // Type of parent object (e.g., "folder")
 	AllowedLinkingTypes []string // Types allowed for linking relation (e.g., ["folder", "org"])
 }
 
 // IntersectionPart represents one part of an intersection check.
 // For "writer and (editor but not owner)", we'd have:
 //   - {Relation: "writer"}
-//   - {Relation: "editor", IsExcluded: false, ExcludedRelation: "owner"}
+//   - {Relation: "editor", ExcludedRelation: "owner"}
 type IntersectionPart struct {
 	IsThis           bool                // [user] - direct assignment check on the same relation
 	HasWildcard      bool                // For IsThis parts: whether direct assignment allows wildcards
 	Relation         string              // Relation to check
-	IsExcluded       bool                // "but not" - negate the check
 	ExcludedRelation string              // For nested exclusions like "editor but not owner"
 	ParentRelation   *ParentRelationInfo // For tuple-to-userset in intersection
 }
@@ -196,12 +197,6 @@ type RelationAnalysis struct {
 	// (have userset, TTU, exclusion, intersection, or implied closure).
 	// The generated code will call check_permission_internal for these.
 	ComplexExcludedRelations []string
-
-	// HasComplexExclusion is true if the relation has exclusions that can't be
-	// handled by simple tuple lookup (TTU exclusions or intersection exclusions).
-	// This is informational only - these patterns are now supported via
-	// check_permission_internal calls.
-	HasComplexExclusion bool
 
 	// ExcludedParentRelations captures "but not X from Y" patterns (TTU exclusions).
 	// These are resolved by looking up the linking relation Y and calling
@@ -304,10 +299,6 @@ func analyzeRelation(
 
 	// Collect excluded relations
 	analysis.ExcludedRelations = collectExcludedRelations(r)
-
-	// Check for complex exclusions (TTU or intersection exclusions)
-	// These are supported via check_permission_internal calls
-	analysis.HasComplexExclusion = len(r.ExcludedParentRelations) > 0 || len(r.ExcludedIntersectionGroups) > 0
 
 	// Collect excluded parent relations (TTU exclusions like "but not viewer from parent")
 	analysis.ExcludedParentRelations = collectExcludedParentRelations(r)
@@ -434,7 +425,6 @@ func collectParentRelations(r RelationDefinition) []ParentRelationInfo {
 		parents = append(parents, ParentRelationInfo{
 			Relation:        pr.Relation,
 			LinkingRelation: pr.ParentType,
-			ParentType:      pr.ParentType, // Note: In current model, ParentType is the linking relation
 		})
 	}
 
@@ -445,7 +435,6 @@ func collectParentRelations(r RelationDefinition) []ParentRelationInfo {
 			parents = append(parents, ParentRelationInfo{
 				Relation:        r.ParentRelation,
 				LinkingRelation: r.ParentType,
-				ParentType:      r.ParentType,
 			})
 		}
 	}
@@ -485,7 +474,6 @@ func collectExcludedParentRelations(r RelationDefinition) []ParentRelationInfo {
 		excluded = append(excluded, ParentRelationInfo{
 			Relation:        pr.Relation,
 			LinkingRelation: pr.ParentType,
-			ParentType:      pr.ParentType,
 		})
 	}
 	return excluded
@@ -520,7 +508,6 @@ func collectExcludedIntersectionGroups(r RelationDefinition) []IntersectionGroup
 				ParentRelation: &ParentRelationInfo{
 					Relation:        pr.Relation,
 					LinkingRelation: pr.ParentType,
-					ParentType:      pr.ParentType,
 				},
 			}
 			group.Parts = append(group.Parts, part)
@@ -566,7 +553,6 @@ func collectIntersectionGroups(r RelationDefinition) []IntersectionGroupInfo {
 				ParentRelation: &ParentRelationInfo{
 					Relation:        pr.Relation,
 					LinkingRelation: pr.ParentType,
-					ParentType:      pr.ParentType,
 				},
 			}
 			group.Parts = append(group.Parts, part)
@@ -859,10 +845,7 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 			}
 		}
 
-		// Third check: complex exclusions (TTU or intersection) are now supported
-		// via check_permission_internal calls - no longer a blocker.
-
-		// Fifth check: classify excluded relations as simple or complex.
+		// Third check: classify excluded relations as simple or complex.
 		// Simple exclusions use direct tuple lookup; complex exclusions use function calls.
 		// Unknown excluded relations still prevent generation.
 		var simpleExcluded, complexExcluded []string
@@ -892,7 +875,7 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 			a.ComplexExcludedRelations = complexExcluded
 		}
 
-		// Sixth check: if relation has userset patterns, classify each pattern as
+		// Fourth check: if relation has userset patterns, classify each pattern as
 		// simple or complex. Simple patterns use tuple JOINs; complex patterns call
 		// check_permission_internal for membership verification.
 		//
@@ -937,7 +920,7 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 			}
 		}
 
-		// Seventh check: if relation has recursive/TTU patterns, verify parent relations
+		// Fifth check: if relation has recursive/TTU patterns, verify parent relations
 		// have valid data. The parent type may vary at runtime (e.g., parent: [folder, org]),
 		// so we use check_permission_internal to dispatch to the correct type's function.
 		// This check just ensures the parent relation definitions are present.
@@ -952,7 +935,7 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 			}
 		}
 
-		// Eighth check: if relation has intersection groups, verify all parts can be
+		// Sixth check: if relation has intersection groups, verify all parts can be
 		// generated or are special patterns we can handle (This, TTU).
 		// For regular relation parts, we call their check function, so they must be generatable.
 		if canGenerate && a.Features.HasIntersection {

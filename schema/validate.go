@@ -139,21 +139,44 @@ func detectParentCycles(types []TypeDefinition) error {
 func buildParentGraph(types []TypeDefinition) map[relationNode][]relationNode {
 	graph := make(map[relationNode][]relationNode)
 
-	// Build a lookup for resolving linking relations to parent types
-	// linkingRelTypes[objectType][linkingRel] = parentType
-	linkingRelTypes := make(map[string]map[string]string)
+	// Build a lookup for resolving linking relations to parent types.
+	// linkingRelTypes[objectType][linkingRel] = []parentTypes
+	// We collect ALL subject types (not just the first) to detect cycles through
+	// any possible parent type.
+	linkingRelTypes := make(map[string]map[string][]string)
 	for _, t := range types {
-		linkingRelTypes[t.Name] = make(map[string]string)
+		linkingRelTypes[t.Name] = make(map[string][]string)
 		for _, r := range t.Relations {
-			// If this relation has direct subject types, record the first one
-			// This is the type that the linking relation points to
-			if len(r.SubjectTypes) > 0 {
-				// Strip wildcard suffix if present (e.g., "user:*" → "user")
-				st := r.SubjectTypes[0]
-				if len(st) > 2 && st[len(st)-2:] == ":*" {
-					st = st[:len(st)-2]
+			// Prefer SubjectTypeRefs (new field) over SubjectTypes (legacy).
+			// Collect all direct subject types (non-userset references).
+			var parentTypes []string
+			seen := make(map[string]bool)
+
+			if len(r.SubjectTypeRefs) > 0 {
+				for _, ref := range r.SubjectTypeRefs {
+					// Only consider direct references, not userset references like group#member
+					if ref.Relation == "" && !seen[ref.Type] {
+						seen[ref.Type] = true
+						parentTypes = append(parentTypes, ref.Type)
+					}
 				}
-				linkingRelTypes[t.Name][r.Name] = st
+			} else {
+				// Legacy path: use SubjectTypes
+				for _, st := range r.SubjectTypes {
+					// Strip wildcard suffix if present (e.g., "user:*" → "user")
+					typeName := st
+					if len(typeName) > 2 && typeName[len(typeName)-2:] == ":*" {
+						typeName = typeName[:len(typeName)-2]
+					}
+					if !seen[typeName] {
+						seen[typeName] = true
+						parentTypes = append(parentTypes, typeName)
+					}
+				}
+			}
+
+			if len(parentTypes) > 0 {
+				linkingRelTypes[t.Name][r.Name] = parentTypes
 			}
 		}
 	}
@@ -177,11 +200,15 @@ func buildParentGraph(types []TypeDefinition) map[relationNode][]relationNode {
 
 			for _, parent := range parentChecks {
 				// ParentType is the linking relation name (e.g., "org")
-				// We need to find what type that relation points to
+				// We need to find what types that relation can point to
 				linkingRel := parent.ParentType
-				if parentType, ok := linkingRelTypes[t.Name][linkingRel]; ok {
-					target := relationNode{objectType: parentType, relation: parent.Relation}
-					graph[n] = append(graph[n], target)
+				if parentTypes, ok := linkingRelTypes[t.Name][linkingRel]; ok {
+					// Add edges for ALL possible parent types to catch cycles
+					// through any possible path
+					for _, parentType := range parentTypes {
+						target := relationNode{objectType: parentType, relation: parent.Relation}
+						graph[n] = append(graph[n], target)
+					}
 				}
 			}
 		}

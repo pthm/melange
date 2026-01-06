@@ -188,7 +188,6 @@ type ImpliedFunctionCall struct {
 type ParentRelationData struct {
 	LinkingRelation     string // The relation that links to parent (e.g., "parent", "org")
 	ParentRelation      string // The relation to check on the parent (e.g., "viewer", "member")
-	ParentFunctionName  string // Deprecated: kept for compatibility, use check_permission_internal instead
 	AllowedLinkingTypes string // SQL-formatted list of allowed parent types (e.g., "'folder', 'org'")
 }
 
@@ -270,7 +269,6 @@ func buildCheckFunctionData(a RelationAnalysis) (CheckFunctionData, error) {
 		data.ParentRelations = append(data.ParentRelations, ParentRelationData{
 			LinkingRelation:     parent.LinkingRelation,
 			ParentRelation:      parent.Relation,
-			ParentFunctionName:  functionName(a.ObjectType, parent.Relation),
 			AllowedLinkingTypes: allowedTypes,
 		})
 	}

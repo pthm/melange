@@ -305,7 +305,7 @@ func TestDetectFeatures_Recursive(t *testing.T) {
 	analysis := RelationAnalysis{
 		DirectSubjectTypes: []string{"user"},
 		ParentRelations: []ParentRelationInfo{
-			{Relation: "viewer", LinkingRelation: "parent", ParentType: "parent"},
+			{Relation: "viewer", LinkingRelation: "parent"},
 		},
 	}
 	got := detectFeatures(r, analysis)
@@ -363,7 +363,7 @@ func TestDetectFeatures_ComplexCombination(t *testing.T) {
 			{SubjectType: "group", SubjectRelation: "member"},
 		},
 		ParentRelations: []ParentRelationInfo{
-			{Relation: "viewer", LinkingRelation: "parent", ParentType: "parent"},
+			{Relation: "viewer", LinkingRelation: "parent"},
 		},
 		ExcludedRelations: []string{"blocked"},
 	}

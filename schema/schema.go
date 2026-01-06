@@ -103,11 +103,19 @@ type IntersectionGroup struct {
 	Exclusions      map[string][]string   // Per-relation exclusions: relation -> list of excluded relations
 }
 
-// ParentRelationCheck represents a tuple-to-userset check in an intersection group.
-// For "viewer: writer and (viewer from parent)", this captures the parent relation.
+// ParentRelationCheck represents a tuple-to-userset (TTU) check.
+// For "viewer from parent" on a folder type, this captures the TTU pattern.
+//
+// The naming can be confusing: "ParentType" is actually the linking relation name,
+// not the parent object type. The actual parent type(s) are determined at runtime
+// by looking up what types the linking relation can point to.
+//
+// Example: "viewer from parent" where parent: [folder]
+//   - Relation: "viewer" (the relation to check on the parent object)
+//   - ParentType: "parent" (the linking relation that points to the parent)
 type ParentRelationCheck struct {
 	Relation   string // Relation to check on the parent object (e.g., "viewer")
-	ParentType string // Linking relation on the current object (e.g., "parent")
+	ParentType string // Linking relation on the current object (e.g., "parent") - NOT the parent type
 }
 
 // RelationDefinition represents a parsed relation.
@@ -146,6 +154,17 @@ type RelationDefinition struct {
 	IntersectionGroups []IntersectionGroup
 }
 
+// RuleGroupMode constants define how rules within a group are combined.
+const (
+	// RuleGroupModeIntersection indicates all rules in the group must be satisfied (AND).
+	// Used for "viewer: writer and editor" patterns.
+	RuleGroupModeIntersection = "intersection"
+
+	// RuleGroupModeExcludeIntersection indicates an exclusion where all rules must be
+	// satisfied for the exclusion to apply. Used for "but not (editor and owner)" patterns.
+	RuleGroupModeExcludeIntersection = "exclude_intersection"
+)
+
 // AuthzModel represents an entry in the melange_model table.
 // Each row defines one authorization rule that check_permission evaluates.
 //
@@ -174,7 +193,7 @@ type AuthzModel struct {
 	// New fields for userset references and intersection support
 	SubjectRelation       *string // For userset refs [type#relation]: the relation part
 	RuleGroupID           *int64  // Groups rules that form an intersection
-	RuleGroupMode         *string // 'intersection' for AND, 'union' or NULL for OR
+	RuleGroupMode         *string // RuleGroupModeIntersection or RuleGroupModeExcludeIntersection
 	CheckRelation         *string // For intersection: which relation to check
 	CheckExcludedRelation *string // For intersection: exclusion on check_relation (e.g., "editor but not owner")
 	CheckParentRelation   *string // For intersection: parent relation to check (tuple-to-userset)
@@ -392,7 +411,7 @@ func ToAuthzModels(types []TypeDefinition) []AuthzModel {
 				}
 				groupID := ruleGroupIDCounter
 				ruleGroupIDCounter++
-				mode := "exclude_intersection"
+				mode := RuleGroupModeExcludeIntersection
 
 				for _, checkRel := range group.Relations {
 					cr := checkRel
@@ -479,7 +498,7 @@ func ToAuthzModels(types []TypeDefinition) []AuthzModel {
 				}
 				groupID := ruleGroupIDCounter
 				ruleGroupIDCounter++
-				mode := "intersection"
+				mode := RuleGroupModeIntersection
 
 				for _, checkRel := range group.Relations {
 					cr := checkRel
