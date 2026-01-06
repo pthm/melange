@@ -195,11 +195,11 @@ type document
 	require.NoError(t, err)
 	require.False(t, ok, "cheetah should NOT have viewer on document:3 (only has editor)")
 
-	// Debug: Test subject_has_grant directly
-	var hasWriter, hasEditor bool
-	err = db.QueryRowContext(ctx, `SELECT subject_has_grant('user', 'badger', 'document', '2', 'writer', ARRAY[]::TEXT[])`).Scan(&hasWriter)
+	// Debug: Test check_permission directly (Phase 5: replaced subject_has_grant)
+	var hasWriter, hasEditor int
+	err = db.QueryRowContext(ctx, `SELECT check_permission('user', 'badger', 'writer', 'document', '2')`).Scan(&hasWriter)
 	require.NoError(t, err)
-	err = db.QueryRowContext(ctx, `SELECT subject_has_grant('user', 'badger', 'document', '2', 'editor', ARRAY[]::TEXT[])`).Scan(&hasEditor)
+	err = db.QueryRowContext(ctx, `SELECT check_permission('user', 'badger', 'editor', 'document', '2')`).Scan(&hasEditor)
 	require.NoError(t, err)
 	t.Logf("badger on document:2: writer=%v, editor=%v", hasWriter, hasEditor)
 }
@@ -422,18 +422,13 @@ type document
 	}
 	_ = rows.Close()
 
-	// Debug: Check what SQL functions return for badger
-	var intersectionResult bool
-	err = db.QueryRowContext(ctx, `SELECT check_intersection_groups('user', 'badger', 'viewer', 'document', '2')`).Scan(&intersectionResult)
+	// Debug: Check what SQL functions return for badger (Phase 5: using check_permission)
+	var hasViewerGrant, hasWriterGrant int
+	err = db.QueryRowContext(ctx, `SELECT check_permission('user', 'badger', 'viewer', 'document', '2')`).Scan(&hasViewerGrant)
 	require.NoError(t, err)
-	t.Logf("check_intersection_groups for badger: %v", intersectionResult)
-
-	var hasViewerGrant, hasWriterGrant bool
-	err = db.QueryRowContext(ctx, `SELECT subject_has_grant('user', 'badger', 'document', '2', 'viewer', ARRAY[]::TEXT[])`).Scan(&hasViewerGrant)
+	err = db.QueryRowContext(ctx, `SELECT check_permission('user', 'badger', 'writer', 'document', '2')`).Scan(&hasWriterGrant)
 	require.NoError(t, err)
-	err = db.QueryRowContext(ctx, `SELECT subject_has_grant('user', 'badger', 'document', '2', 'writer', ARRAY[]::TEXT[])`).Scan(&hasWriterGrant)
-	require.NoError(t, err)
-	t.Logf("subject_has_grant for badger: viewer=%v, writer=%v", hasViewerGrant, hasWriterGrant)
+	t.Logf("check_permission for badger: viewer=%d, writer=%d", hasViewerGrant, hasWriterGrant)
 
 	var checkResult int
 	err = db.QueryRowContext(ctx, `SELECT check_permission('user', 'badger', 'viewer', 'document', '2')`).Scan(&checkResult)

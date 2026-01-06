@@ -692,6 +692,7 @@ type DispatcherData struct {
 	FunctionName            string
 	GenericFunctionName     string
 	HasSpecializedFunctions bool
+	IsNoWildcard            bool // True for check_permission_no_wildcard dispatcher
 	Cases                   []DispatcherCase
 }
 
@@ -707,6 +708,7 @@ func generateDispatcher(analyses []RelationAnalysis, noWildcard bool) (string, e
 	data := DispatcherData{
 		FunctionName:        "check_permission",
 		GenericFunctionName: "check_permission_generic",
+		IsNoWildcard:        noWildcard,
 	}
 	if noWildcard {
 		data.FunctionName = "check_permission_no_wildcard"

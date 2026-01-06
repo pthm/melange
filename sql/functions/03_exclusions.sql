@@ -1,5 +1,6 @@
--- Exclusion check: delegates to subject_has_grant since exclusions use the same
+-- Exclusion check: uses check_permission since exclusions use the same
 -- permission resolution logic as grants (direct tuples, usersets, parent inheritance)
+-- Phase 5: Uses check_permission instead of subject_has_grant
 CREATE OR REPLACE FUNCTION check_exclusion(
     p_subject_type TEXT,
     p_subject_id TEXT,
@@ -8,19 +9,19 @@ CREATE OR REPLACE FUNCTION check_exclusion(
     p_object_id TEXT
 ) RETURNS BOOLEAN AS $$
 BEGIN
-    RETURN subject_has_grant(
+    RETURN check_permission(
         p_subject_type,
         p_subject_id,
-        p_object_type,
-        p_object_id,
         p_excluded_relation,
-        ARRAY[]::TEXT[]
-    );
+        p_object_type,
+        p_object_id
+    ) = 1;
 END;
 $$ LANGUAGE plpgsql STABLE;
 
 
 -- Variant that preserves visited state across recursive checks to prevent cycles
+-- Note: check_permission_internal handles cycle detection via p_visited
 CREATE OR REPLACE FUNCTION check_exclusion_with_visited(
     p_subject_type TEXT,
     p_subject_id TEXT,
@@ -30,14 +31,14 @@ CREATE OR REPLACE FUNCTION check_exclusion_with_visited(
     p_visited TEXT []
 ) RETURNS BOOLEAN AS $$
 BEGIN
-    RETURN subject_has_grant(
+    RETURN check_permission_internal(
         p_subject_type,
         p_subject_id,
+        p_excluded_relation,
         p_object_type,
         p_object_id,
-        p_excluded_relation,
         p_visited
-    );
+    ) = 1;
 END;
 $$ LANGUAGE plpgsql STABLE;
 
@@ -92,11 +93,11 @@ BEGIN
               AND t.object_id = p_object_id
               AND t.relation = v_parent_excl.excluded_parent_type
         LOOP
-            IF subject_has_grant(
+            IF check_permission(
                 p_subject_type, p_subject_id,
-                v_parent.parent_type, v_parent.parent_id,
-                v_parent_excl.excluded_parent_relation, ARRAY[]::TEXT[]
-            ) THEN
+                v_parent_excl.excluded_parent_relation,
+                v_parent.parent_type, v_parent.parent_id
+            ) = 1 THEN
                 RETURN TRUE;
             END IF;
         END LOOP;
@@ -161,11 +162,12 @@ BEGIN
               AND t.object_id = p_object_id
               AND t.relation = v_parent_excl.excluded_parent_type
         LOOP
-            IF subject_has_grant(
+            IF check_permission_internal(
                 p_subject_type, p_subject_id,
+                v_parent_excl.excluded_parent_relation,
                 v_parent.parent_type, v_parent.parent_id,
-                v_parent_excl.excluded_parent_relation, p_visited
-            ) THEN
+                p_visited
+            ) = 1 THEN
                 RETURN TRUE;
             END IF;
         END LOOP;
@@ -240,11 +242,11 @@ BEGIN
                       AND t.object_id = p_object_id
                       AND t.relation = v_check.check_parent_type
                 LOOP
-                    IF subject_has_grant(
+                    IF check_permission(
                         p_subject_type, p_subject_id,
-                        v_parent.parent_type, v_parent.parent_id,
-                        v_check.check_parent_relation, p_visited
-                    ) THEN
+                        v_check.check_parent_relation,
+                        v_parent.parent_type, v_parent.parent_id
+                    ) = 1 THEN
                         v_group_satisfied := TRUE;
                         EXIT;
                     END IF;
@@ -282,11 +284,11 @@ BEGIN
                         EXIT;
                     END IF;
                 ELSE
-                    IF NOT subject_has_grant(
+                    IF check_permission(
                         p_subject_type, p_subject_id,
-                        p_object_type, p_object_id,
-                        v_check.check_relation, p_visited
-                    ) THEN
+                        v_check.check_relation,
+                        p_object_type, p_object_id
+                    ) = 0 THEN
                         v_group_satisfied := FALSE;
                         EXIT;
                     END IF;
@@ -386,9 +388,10 @@ BEGIN
                       AND t.object_id = p_object_id
                       AND t.relation = v_check.check_parent_type
                 LOOP
-                    IF check_permission(
+                    IF check_permission_internal(
                         p_subject_type, p_subject_id,
-                        v_check.check_parent_relation, v_parent.parent_type, v_parent.parent_id
+                        v_check.check_parent_relation, v_parent.parent_type, v_parent.parent_id,
+                        p_visited
                     ) = 1 THEN
                         v_group_satisfied := TRUE;
                         EXIT;
@@ -427,11 +430,12 @@ BEGIN
                         EXIT;
                     END IF;
                 ELSE
-                    IF NOT subject_has_grant(
+                    IF check_permission_internal(
                         p_subject_type, p_subject_id,
+                        v_check.check_relation,
                         p_object_type, p_object_id,
-                        v_check.check_relation, p_visited
-                    ) THEN
+                        p_visited
+                    ) = 0 THEN
                         v_group_satisfied := FALSE;
                         EXIT;
                     END IF;
@@ -446,9 +450,10 @@ BEGIN
                     END IF;
                 END IF;
             ELSE
-                IF check_permission(
+                IF check_permission_internal(
                     p_subject_type, p_subject_id,
-                    v_check.check_relation, p_object_type, p_object_id
+                    v_check.check_relation, p_object_type, p_object_id,
+                    p_visited
                 ) = 0 THEN
                     v_group_satisfied := FALSE;
                     EXIT;

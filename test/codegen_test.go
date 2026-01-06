@@ -99,8 +99,9 @@ func TestCodegen_DispatcherRouting(t *testing.T) {
 	// It should contain CASE statements for routing to specialized functions
 	assert.Contains(t, internalDispatcherDef, "check_organization_owner",
 		"internal dispatcher should route to check_organization_owner")
-	assert.Contains(t, internalDispatcherDef, "check_permission_generic",
-		"internal dispatcher should fall back to generic for unhandled cases")
+	// Phase 5: Dispatcher returns 0 for unknown type/relation pairs (no generic fallback)
+	assert.Contains(t, internalDispatcherDef, "ELSE 0",
+		"internal dispatcher should return 0 for unknown type/relation pairs")
 
 	// Also verify the public check_permission delegates to internal
 	var publicDispatcherDef string
