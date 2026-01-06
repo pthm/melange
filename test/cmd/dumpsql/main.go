@@ -236,6 +236,32 @@ func dumpSQL(tc TestCase, opts dumpOptions) {
 			continue
 		}
 
+		// Show list_objects dispatcher
+		if listSQL.ListObjectsDispatcher != "" {
+			fmt.Println("\n## LIST_OBJECTS DISPATCHER")
+			fmt.Println()
+			fmt.Println(listSQL.ListObjectsDispatcher)
+		}
+
+		// Show list_objects functions
+		if len(listSQL.ListObjectsFunctions) > 0 {
+			fmt.Println("\n## LIST_OBJECTS FUNCTIONS")
+			for j, fn := range listSQL.ListObjectsFunctions {
+				if j > 0 {
+					fmt.Println("\n-- " + strings.Repeat("-", 60))
+				}
+				fmt.Println()
+				fmt.Println(fn)
+			}
+		}
+
+		// Show list_subjects dispatcher
+		if listSQL.ListSubjectsDispatcher != "" {
+			fmt.Println("\n## LIST_SUBJECTS DISPATCHER")
+			fmt.Println()
+			fmt.Println(listSQL.ListSubjectsDispatcher)
+		}
+
 		// Show list_subjects functions
 		if len(listSQL.ListSubjectsFunctions) > 0 {
 			fmt.Println("\n## LIST_SUBJECTS FUNCTIONS")

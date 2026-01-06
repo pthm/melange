@@ -119,6 +119,10 @@ func generateListObjectsFunction(a RelationAnalysis) (string, error) {
 	data.HasUserset = a.Features.HasUserset
 	data.UsersetPatterns = buildListUsersetPatterns(a)
 
+	// Populate TTU/recursive fields (Phase 5)
+	data.ParentRelations = buildListParentRelations(a)
+	data.SelfReferentialLinkingRelations = buildSelfReferentialLinkingRelations(data.ParentRelations)
+
 	// Select appropriate template based on features
 	templateName := selectListObjectsTemplate(a)
 
@@ -131,6 +135,13 @@ func generateListObjectsFunction(a RelationAnalysis) (string, error) {
 
 // selectListObjectsTemplate selects the appropriate list_objects template based on features.
 func selectListObjectsTemplate(a RelationAnalysis) string {
+	// Phase 5: Use recursive template if relation has TTU patterns.
+	// The recursive template is comprehensive and handles all pattern combinations
+	// (direct, userset, exclusion, TTU) since TTU is the most complex pattern.
+	// Also use recursive template if any closure relation has TTU (inherited TTU).
+	if a.Features.HasRecursive || len(a.ClosureParentRelations) > 0 {
+		return "list_objects_recursive.tpl.sql"
+	}
 	// Phase 4: Use userset template if relation has userset patterns.
 	// This includes both direct patterns (UsersetPatterns) and patterns inherited
 	// from closure relations (ClosureUsersetPatterns).
@@ -179,6 +190,9 @@ func generateListSubjectsFunction(a RelationAnalysis) (string, error) {
 	data.HasUserset = a.Features.HasUserset
 	data.UsersetPatterns = buildListUsersetPatterns(a)
 
+	// Populate TTU/recursive fields (Phase 5)
+	data.ParentRelations = buildListParentRelations(a)
+
 	// Select appropriate template based on features
 	templateName := selectListSubjectsTemplate(a)
 
@@ -191,6 +205,13 @@ func generateListSubjectsFunction(a RelationAnalysis) (string, error) {
 
 // selectListSubjectsTemplate selects the appropriate list_subjects template based on features.
 func selectListSubjectsTemplate(a RelationAnalysis) string {
+	// Phase 5: Use recursive template if relation has TTU patterns.
+	// The recursive template is comprehensive and handles all pattern combinations
+	// (direct, userset, exclusion, TTU) since TTU is the most complex pattern.
+	// Also use recursive template if any closure relation has TTU (inherited TTU).
+	if a.Features.HasRecursive || len(a.ClosureParentRelations) > 0 {
+		return "list_subjects_recursive.tpl.sql"
+	}
 	// Phase 4: Use userset template if relation has userset patterns.
 	// This includes both direct patterns (UsersetPatterns) and patterns inherited
 	// from closure relations (ClosureUsersetPatterns).
@@ -247,8 +268,16 @@ type ListObjectsFunctionData struct {
 	ExcludedIntersectionGroups []IntersectionGroupInfo
 
 	// Userset-related fields (Phase 4)
-	HasUserset      bool                       // true if this relation has userset patterns
-	UsersetPatterns []ListUsersetPatternData   // [group#member] patterns for UNION expansion
+	HasUserset      bool                     // true if this relation has userset patterns
+	UsersetPatterns []ListUsersetPatternData // [group#member] patterns for UNION expansion
+
+	// TTU/Recursive-related fields (Phase 5)
+	ParentRelations []ListParentRelationData // TTU patterns like "viewer from parent"
+
+	// SelfReferentialLinkingRelations is a SQL-formatted list of linking relations
+	// from self-referential TTU patterns. Used for depth checking in recursive CTE.
+	// e.g., "'parent', 'folder'" when there are TTU patterns viewer from parent, viewer from folder
+	SelfReferentialLinkingRelations string
 }
 
 // ListSubjectsFunctionData contains data for rendering list_subjects function templates.
@@ -293,8 +322,29 @@ type ListSubjectsFunctionData struct {
 	ExcludedIntersectionGroups []IntersectionGroupInfo
 
 	// Userset-related fields (Phase 4)
-	HasUserset      bool                       // true if this relation has userset patterns
-	UsersetPatterns []ListUsersetPatternData   // [group#member] patterns for expansion
+	HasUserset      bool                     // true if this relation has userset patterns
+	UsersetPatterns []ListUsersetPatternData // [group#member] patterns for expansion
+
+	// TTU/Recursive-related fields (Phase 5)
+	ParentRelations []ListParentRelationData // TTU patterns like "viewer from parent"
+}
+
+// ListParentRelationData contains data for rendering TTU pattern expansion in list templates.
+// For a pattern like "viewer from parent", this represents the parent traversal.
+type ListParentRelationData struct {
+	Relation            string // Relation to check on parent (e.g., "viewer")
+	LinkingRelation     string // Relation that links to parent (e.g., "parent")
+	AllowedLinkingTypes string // SQL-formatted list of parent types (e.g., "'folder', 'org'")
+	ParentType          string // First allowed linking type (for self-referential check)
+	IsSelfReferential   bool   // True if any parent type equals the object type
+
+	// CrossTypeLinkingTypes is a SQL-formatted list of linking types that are NOT self-referential.
+	// When a parent relation allows both self-referential and cross-type links (e.g., [folder, document]
+	// for document.parent), this contains only the cross-type entries (e.g., "'folder'").
+	// Used to generate check_permission_internal calls for cross-type parents even when
+	// IsSelfReferential is true for the same linking relation.
+	CrossTypeLinkingTypes string
+	HasCrossTypeLinks     bool // True if CrossTypeLinkingTypes is non-empty
 }
 
 // ListUsersetPatternData contains data for rendering userset pattern expansion in list templates.
@@ -549,4 +599,92 @@ func buildListUsersetPatterns(a RelationAnalysis) []ListUsersetPatternData {
 	}
 
 	return patterns
+}
+
+// buildListParentRelations builds template data for TTU pattern expansion in list templates.
+// For each "viewer from parent" pattern, this creates data for recursive CTE traversal or
+// cross-type lookup using check_permission_internal.
+//
+// Includes both direct parent relations (a.ParentRelations) and inherited parent relations
+// from closure (a.ClosureParentRelations). For implied relations like "can_view: viewer"
+// where viewer has TTU patterns, the TTU info comes from ClosureParentRelations.
+func buildListParentRelations(a RelationAnalysis) []ListParentRelationData {
+	// Combine direct and closure parent relations
+	allParentRelations := make([]ParentRelationInfo, 0, len(a.ParentRelations)+len(a.ClosureParentRelations))
+	allParentRelations = append(allParentRelations, a.ParentRelations...)
+	allParentRelations = append(allParentRelations, a.ClosureParentRelations...)
+
+	if len(allParentRelations) == 0 {
+		return nil
+	}
+
+	// Deduplicate by LinkingRelation + Relation combination
+	seen := make(map[string]bool)
+	result := make([]ListParentRelationData, 0, len(allParentRelations))
+
+	for _, p := range allParentRelations {
+		key := p.LinkingRelation + "->" + p.Relation
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		data := ListParentRelationData{
+			Relation:        p.Relation,
+			LinkingRelation: p.LinkingRelation,
+		}
+
+		// Build SQL-formatted list of allowed linking types
+		// Also track cross-type (non-self-referential) types separately
+		if len(p.AllowedLinkingTypes) > 0 {
+			var allQuoted []string
+			var crossTypeQuoted []string
+
+			for _, t := range p.AllowedLinkingTypes {
+				quoted := fmt.Sprintf("'%s'", t)
+				allQuoted = append(allQuoted, quoted)
+
+				if t == a.ObjectType {
+					data.IsSelfReferential = true
+				} else {
+					crossTypeQuoted = append(crossTypeQuoted, quoted)
+				}
+			}
+
+			data.AllowedLinkingTypes = strings.Join(allQuoted, ", ")
+			data.ParentType = p.AllowedLinkingTypes[0]
+
+			// Set cross-type fields for generating check_permission_internal calls
+			// even when the relation has self-referential links
+			if len(crossTypeQuoted) > 0 {
+				data.CrossTypeLinkingTypes = strings.Join(crossTypeQuoted, ", ")
+				data.HasCrossTypeLinks = true
+			}
+		}
+
+		result = append(result, data)
+	}
+
+	return result
+}
+
+// buildSelfReferentialLinkingRelations extracts linking relations from self-referential
+// parent relations and formats them as a SQL IN clause list.
+// Returns empty string if no self-referential patterns exist.
+func buildSelfReferentialLinkingRelations(parentRelations []ListParentRelationData) string {
+	var linkingRelations []string
+	seen := make(map[string]bool)
+
+	for _, p := range parentRelations {
+		if p.IsSelfReferential && !seen[p.LinkingRelation] {
+			seen[p.LinkingRelation] = true
+			linkingRelations = append(linkingRelations, fmt.Sprintf("'%s'", p.LinkingRelation))
+		}
+	}
+
+	if len(linkingRelations) == 0 {
+		return ""
+	}
+
+	return strings.Join(linkingRelations, ", ")
 }

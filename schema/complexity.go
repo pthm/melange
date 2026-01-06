@@ -262,6 +262,13 @@ type RelationAnalysis struct {
 	// This is used by list functions to expand usersets from implied relations.
 	// Computed by ComputeCanGenerate.
 	ClosureUsersetPatterns []UsersetPattern
+
+	// ClosureParentRelations contains TTU patterns from closure relations.
+	// For example, if `can_view: viewer` and `viewer: viewer from parent`, then
+	// can_view's ClosureParentRelations includes the parent relation info.
+	// This is used by list functions to traverse TTU paths from implied relations.
+	// Computed by ComputeCanGenerate.
+	ClosureParentRelations []ParentRelationInfo
 }
 
 // AnalyzeRelations classifies all relations and gathers data needed for SQL generation.
@@ -728,12 +735,13 @@ func canGenerateListFeatures(f RelationFeatures) (bool, string) {
 	// Simple userset patterns use tuple JOINs; complex patterns (where the
 	// subject relation has TTU/exclusion/etc.) use check_permission_internal.
 
+	// Phase 5: HasRecursive is now supported via recursive CTEs.
+	// Self-referential TTU uses true recursive CTEs with depth limit.
+	// Cross-type TTU uses check_permission_internal on parent objects.
+
 	// Complex features still require later phases:
-	if f.HasRecursive {
-		return false, "has recursive/TTU patterns (requires Phase 5)"
-	}
 	if f.HasIntersection {
-		return false, "has intersection patterns (requires Phase 5+)"
+		return false, "has intersection patterns (requires Phase 6+)"
 	}
 
 	return true, ""
@@ -1056,6 +1064,30 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 				}
 			}
 			a.ClosureUsersetPatterns = closureUsersetPatterns
+
+			// Collect parent relations from all closure relations (for list functions).
+			// This allows implied relations like `can_view: viewer` to traverse TTU paths
+			// from viewer when generating list functions for can_view.
+			var closureParentRelations []ParentRelationInfo
+			seenParent := make(map[string]bool)
+			for _, rel := range a.SatisfyingRelations {
+				if rel == a.Relation {
+					continue
+				}
+				relAnalysis, ok := lookup[a.ObjectType][rel]
+				if !ok {
+					continue
+				}
+				for _, parent := range relAnalysis.ParentRelations {
+					// Create a unique key for this parent relation pattern
+					key := parent.LinkingRelation + "->" + parent.Relation
+					if !seenParent[key] {
+						seenParent[key] = true
+						closureParentRelations = append(closureParentRelations, parent)
+					}
+				}
+			}
+			a.ClosureParentRelations = closureParentRelations
 		} else {
 			a.CannotGenerateReason = cannotGenerateReason
 		}
@@ -1126,7 +1158,7 @@ func computeCanGenerateList(a *RelationAnalysis, lookup map[string]map[string]*R
 		return false, "userset chain too deep - no reachable subject types (depth limit protection)"
 	}
 
-	// Second check: ensure closure relations are valid and don't have recursive patterns.
+	// Second check: ensure closure relations are valid.
 	for _, rel := range a.SatisfyingRelations {
 		// Skip self
 		if rel == a.Relation {
@@ -1138,16 +1170,20 @@ func computeCanGenerateList(a *RelationAnalysis, lookup map[string]map[string]*R
 			return false, "unknown relation in closure: " + rel
 		}
 
-		// Closure relations with recursive patterns (TTU) cannot be handled by
-		// check_permission_internal for list operations - they need recursive CTEs
-		// to discover accessible objects. Fall back to generic for these.
-		if relAnalysis.Features.HasRecursive {
-			return false, "closure relation " + rel + " has recursive/TTU patterns (requires Phase 5)"
+		// Phase 5: Closure relations with recursive patterns (TTU) are now supported.
+		// They are handled via check_permission_internal for cross-type TTU or
+		// recursive CTEs for self-referential TTU.
+
+		// If a closure relation is not list-generatable, we can't generate list for this relation either.
+		// This handles cases like "can_view: viewer" where viewer is pure TTU (no direct/implied access).
+		// The closure relation was already computed (dependency order), so check its result.
+		if !relAnalysis.CanGenerateListValue {
+			return false, "closure relation " + rel + " is not list-generatable: " + relAnalysis.CannotGenerateListReason
 		}
 
-		// Closure relations with intersection also need special handling
+		// Closure relations with intersection still need special handling
 		if relAnalysis.Features.HasIntersection {
-			return false, "closure relation " + rel + " has intersection patterns (requires Phase 5+)"
+			return false, "closure relation " + rel + " has intersection patterns (requires Phase 6+)"
 		}
 
 		// Check for self-referential userset in closure relations too
@@ -1157,7 +1193,7 @@ func computeCanGenerateList(a *RelationAnalysis, lookup map[string]map[string]*R
 			}
 		}
 
-		// Userset and exclusion in closure are OK - handled via check_permission_internal
+		// Userset, exclusion, and recursive in closure are OK - handled via check_permission_internal
 	}
 
 	return true, ""
