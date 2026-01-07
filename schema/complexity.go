@@ -739,10 +739,9 @@ func canGenerateListFeatures(f RelationFeatures) (bool, string) {
 	// Self-referential TTU uses true recursive CTEs with depth limit.
 	// Cross-type TTU uses check_permission_internal on parent objects.
 
-	// Complex features still require later phases:
-	if f.HasIntersection {
-		return false, "has intersection patterns (requires Phase 6+)"
-	}
+	// Phase 6: HasIntersection is now supported via INTERSECT set operations.
+	// Each intersection group uses INTERSECT on its parts, groups are UNION'd.
+	// For list_subjects, candidates are gathered and filtered with check_permission.
 
 	return true, ""
 }

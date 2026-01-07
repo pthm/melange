@@ -123,6 +123,11 @@ func generateListObjectsFunction(a RelationAnalysis) (string, error) {
 	data.ParentRelations = buildListParentRelations(a)
 	data.SelfReferentialLinkingRelations = buildSelfReferentialLinkingRelations(data.ParentRelations)
 
+	// Populate intersection fields (Phase 6)
+	data.HasIntersection = a.Features.HasIntersection
+	data.IntersectionGroups = a.IntersectionGroups
+	data.HasStandaloneAccess = computeListHasStandaloneAccess(a)
+
 	// Select appropriate template based on features
 	templateName := selectListObjectsTemplate(a)
 
@@ -135,6 +140,12 @@ func generateListObjectsFunction(a RelationAnalysis) (string, error) {
 
 // selectListObjectsTemplate selects the appropriate list_objects template based on features.
 func selectListObjectsTemplate(a RelationAnalysis) string {
+	// Phase 6: Use intersection template if relation has intersection patterns.
+	// The intersection template is the most comprehensive and handles all pattern
+	// combinations (direct, userset, exclusion, TTU, intersection).
+	if a.Features.HasIntersection {
+		return "list_objects_intersection.tpl.sql"
+	}
 	// Phase 5: Use recursive template if relation has TTU patterns.
 	// The recursive template is comprehensive and handles all pattern combinations
 	// (direct, userset, exclusion, TTU) since TTU is the most complex pattern.
@@ -193,6 +204,10 @@ func generateListSubjectsFunction(a RelationAnalysis) (string, error) {
 	// Populate TTU/recursive fields (Phase 5)
 	data.ParentRelations = buildListParentRelations(a)
 
+	// Populate intersection fields (Phase 6)
+	data.HasIntersection = a.Features.HasIntersection
+	data.IntersectionGroups = a.IntersectionGroups
+
 	// Select appropriate template based on features
 	templateName := selectListSubjectsTemplate(a)
 
@@ -205,6 +220,12 @@ func generateListSubjectsFunction(a RelationAnalysis) (string, error) {
 
 // selectListSubjectsTemplate selects the appropriate list_subjects template based on features.
 func selectListSubjectsTemplate(a RelationAnalysis) string {
+	// Phase 6: Use intersection template if relation has intersection patterns.
+	// The intersection template is the most comprehensive and handles all pattern
+	// combinations (direct, userset, exclusion, TTU, intersection).
+	if a.Features.HasIntersection {
+		return "list_subjects_intersection.tpl.sql"
+	}
 	// Phase 5: Use recursive template if relation has TTU patterns.
 	// The recursive template is comprehensive and handles all pattern combinations
 	// (direct, userset, exclusion, TTU) since TTU is the most complex pattern.
@@ -278,6 +299,11 @@ type ListObjectsFunctionData struct {
 	// from self-referential TTU patterns. Used for depth checking in recursive CTE.
 	// e.g., "'parent', 'folder'" when there are TTU patterns viewer from parent, viewer from folder
 	SelfReferentialLinkingRelations string
+
+	// Intersection-related fields (Phase 6)
+	HasIntersection     bool                   // true if this relation has intersection patterns
+	IntersectionGroups  []IntersectionGroupInfo // Intersection groups for list functions
+	HasStandaloneAccess bool                   // true if there are access paths outside intersections
 }
 
 // ListSubjectsFunctionData contains data for rendering list_subjects function templates.
@@ -327,6 +353,10 @@ type ListSubjectsFunctionData struct {
 
 	// TTU/Recursive-related fields (Phase 5)
 	ParentRelations []ListParentRelationData // TTU patterns like "viewer from parent"
+
+	// Intersection-related fields (Phase 6)
+	HasIntersection    bool                   // true if this relation has intersection patterns
+	IntersectionGroups []IntersectionGroupInfo // Intersection groups for list functions
 }
 
 // ListParentRelationData contains data for rendering TTU pattern expansion in list templates.
@@ -687,4 +717,40 @@ func buildSelfReferentialLinkingRelations(parentRelations []ListParentRelationDa
 	}
 
 	return strings.Join(linkingRelations, ", ")
+}
+
+// computeListHasStandaloneAccess determines if the relation has access paths outside of intersections.
+// This is similar to computeHasStandaloneAccess in codegen.go but adapted for list functions.
+// When false and HasIntersection is true, the only access is through intersection groups.
+func computeListHasStandaloneAccess(a RelationAnalysis) bool {
+	// If no intersection, all access paths are standalone
+	if !a.Features.HasIntersection {
+		return a.Features.HasDirect || a.Features.HasImplied || a.Features.HasUserset || a.Features.HasRecursive
+	}
+
+	// Check if any intersection group has a "This" part, meaning direct access is
+	// constrained by the intersection rather than being standalone.
+	hasIntersectionWithThis := false
+	for _, group := range a.IntersectionGroups {
+		for _, part := range group.Parts {
+			if part.IsThis {
+				hasIntersectionWithThis = true
+				break
+			}
+		}
+		if hasIntersectionWithThis {
+			break
+		}
+	}
+
+	// If direct types are inside an intersection (This pattern), don't count them as standalone.
+	// Userset patterns from subject type restrictions (e.g., [group#member]) are also part of
+	// the "This" pattern, so they shouldn't be standalone either.
+	// Check for other standalone access paths (implied, recursive).
+	hasStandaloneDirect := a.Features.HasDirect && !hasIntersectionWithThis
+	hasStandaloneImplied := a.Features.HasImplied
+	hasStandaloneUserset := a.Features.HasUserset && !hasIntersectionWithThis
+	hasStandaloneRecursive := a.Features.HasRecursive
+
+	return hasStandaloneDirect || hasStandaloneImplied || hasStandaloneUserset || hasStandaloneRecursive
 }
