@@ -128,6 +128,10 @@ func generateListObjectsFunction(a RelationAnalysis) (string, error) {
 	data.IntersectionGroups = a.IntersectionGroups
 	data.HasStandaloneAccess = computeListHasStandaloneAccess(a)
 
+	// Populate indirect anchor fields (Phase 8)
+	data.IndirectAnchor = buildListIndirectAnchorData(a)
+	data.HasIndirectAnchor = data.IndirectAnchor != nil
+
 	// Select appropriate template based on features
 	templateName := selectListObjectsTemplate(a)
 
@@ -140,6 +144,12 @@ func generateListObjectsFunction(a RelationAnalysis) (string, error) {
 
 // selectListObjectsTemplate selects the appropriate list_objects template based on features.
 func selectListObjectsTemplate(a RelationAnalysis) string {
+	// Phase 8: Use composed template for indirect anchor patterns.
+	// These are relations with no direct/implied access but reach subjects through
+	// TTU or userset patterns to an anchor relation.
+	if a.IndirectAnchor != nil {
+		return "list_objects_composed.tpl.sql"
+	}
 	// Phase 6: Use intersection template if relation has intersection patterns.
 	// The intersection template is the most comprehensive and handles all pattern
 	// combinations (direct, userset, exclusion, TTU, intersection).
@@ -208,6 +218,10 @@ func generateListSubjectsFunction(a RelationAnalysis) (string, error) {
 	data.HasIntersection = a.Features.HasIntersection
 	data.IntersectionGroups = a.IntersectionGroups
 
+	// Populate indirect anchor fields (Phase 8)
+	data.IndirectAnchor = buildListIndirectAnchorData(a)
+	data.HasIndirectAnchor = data.IndirectAnchor != nil
+
 	// Select appropriate template based on features
 	templateName := selectListSubjectsTemplate(a)
 
@@ -220,6 +234,12 @@ func generateListSubjectsFunction(a RelationAnalysis) (string, error) {
 
 // selectListSubjectsTemplate selects the appropriate list_subjects template based on features.
 func selectListSubjectsTemplate(a RelationAnalysis) string {
+	// Phase 8: Use composed template for indirect anchor patterns.
+	// These are relations with no direct/implied access but reach subjects through
+	// TTU or userset patterns to an anchor relation.
+	if a.IndirectAnchor != nil {
+		return "list_subjects_composed.tpl.sql"
+	}
 	// Phase 6: Use intersection template if relation has intersection patterns.
 	// The intersection template is the most comprehensive and handles all pattern
 	// combinations (direct, userset, exclusion, TTU, intersection).
@@ -304,6 +324,10 @@ type ListObjectsFunctionData struct {
 	HasIntersection     bool                   // true if this relation has intersection patterns
 	IntersectionGroups  []IntersectionGroupInfo // Intersection groups for list functions
 	HasStandaloneAccess bool                   // true if there are access paths outside intersections
+
+	// Phase 8: Indirect anchor for composed access patterns
+	HasIndirectAnchor bool                   // true if access is via indirect anchor
+	IndirectAnchor    *ListIndirectAnchorData // Anchor info for composed templates
 }
 
 // ListSubjectsFunctionData contains data for rendering list_subjects function templates.
@@ -357,6 +381,10 @@ type ListSubjectsFunctionData struct {
 	// Intersection-related fields (Phase 6)
 	HasIntersection    bool                   // true if this relation has intersection patterns
 	IntersectionGroups []IntersectionGroupInfo // Intersection groups for list functions
+
+	// Phase 8: Indirect anchor for composed access patterns
+	HasIndirectAnchor bool                   // true if access is via indirect anchor
+	IndirectAnchor    *ListIndirectAnchorData // Anchor info for composed templates
 }
 
 // ListParentRelationData contains data for rendering TTU pattern expansion in list templates.
@@ -411,6 +439,46 @@ type ListUsersetPatternData struct {
 	// IsComplex is true if this pattern requires check_permission_internal for membership.
 	// This happens when any relation in the closure has TTU, exclusion, or intersection.
 	IsComplex bool
+}
+
+// ListIndirectAnchorData contains data for rendering composed access patterns in list templates.
+// This is used when a relation has no direct/implied access but can reach subjects through
+// TTU or userset patterns to an anchor relation that has direct grants.
+type ListIndirectAnchorData struct {
+	// Path steps from this relation to the anchor
+	Path []ListAnchorPathStepData
+
+	// First step's target function (used for composition)
+	// For multi-hop chains, we compose with the first step's target, not the anchor.
+	// e.g., for job.can_read -> permission.assignee -> role.assignee, we call
+	// list_permission_assignee_objects (first step's target), not list_role_assignee_objects (anchor).
+	FirstStepTargetFunctionName string // e.g., "list_permission_assignee_objects"
+
+	// Anchor relation info (end of the chain)
+	AnchorType             string // Type of anchor relation (e.g., "folder")
+	AnchorRelation         string // Anchor relation name (e.g., "viewer")
+	AnchorFunctionName     string // Name of anchor's list function (e.g., "list_folder_viewer_objects")
+	AnchorSubjectTypes     string // SQL-formatted allowed subject types from anchor
+	AnchorHasWildcard      bool   // Whether anchor supports wildcards
+	SatisfyingRelationsList string // SQL-formatted list of relations that satisfy the anchor
+}
+
+// ListAnchorPathStepData contains data for rendering one step in an indirect anchor path.
+type ListAnchorPathStepData struct {
+	Type string // "ttu" or "userset"
+
+	// For TTU steps (e.g., "viewer from parent"):
+	LinkingRelation string   // "parent"
+	TargetType      string   // "folder" (first type with direct anchor)
+	TargetRelation  string   // "viewer"
+	AllTargetTypes  []string // All types with direct anchor (e.g., ["document", "folder"])
+	RecursiveTypes  []string // Types needing check_permission_internal (same-type recursive TTU)
+
+	// For userset steps (e.g., [group#member]):
+	SubjectType             string // "group"
+	SubjectRelation         string // "member"
+	SatisfyingRelationsList string // SQL-formatted satisfying relations
+	HasWildcard             bool   // Whether membership allows wildcards
 }
 
 // ListDispatcherData contains data for rendering list dispatcher templates.
@@ -717,6 +785,65 @@ func buildSelfReferentialLinkingRelations(parentRelations []ListParentRelationDa
 	}
 
 	return strings.Join(linkingRelations, ", ")
+}
+
+// buildListIndirectAnchorData builds template data for indirect anchor composed access.
+// Returns nil if the relation has no indirect anchor.
+func buildListIndirectAnchorData(a RelationAnalysis) *ListIndirectAnchorData {
+	if a.IndirectAnchor == nil {
+		return nil
+	}
+
+	anchor := a.IndirectAnchor
+	data := &ListIndirectAnchorData{
+		AnchorType:         anchor.AnchorType,
+		AnchorRelation:     anchor.AnchorRelation,
+		AnchorFunctionName: listObjectsFunctionName(anchor.AnchorType, anchor.AnchorRelation),
+	}
+
+	// Build path step data
+	for _, step := range anchor.Path {
+		stepData := ListAnchorPathStepData{
+			Type:            step.Type,
+			LinkingRelation: step.LinkingRelation,
+			TargetType:      step.TargetType,
+			TargetRelation:  step.TargetRelation,
+			AllTargetTypes:  step.AllTargetTypes,
+			RecursiveTypes:  step.RecursiveTypes,
+			SubjectType:     step.SubjectType,
+			SubjectRelation: step.SubjectRelation,
+		}
+		data.Path = append(data.Path, stepData)
+	}
+
+	// Set FirstStepTargetFunctionName - used for composition.
+	// For multi-hop chains, we compose with the first step's target function,
+	// not the anchor's. This allows each step to handle its own traversal.
+	if len(anchor.Path) > 0 {
+		firstStep := anchor.Path[0]
+		if firstStep.Type == "ttu" {
+			// For TTU, the first step's target is the relation we're looking up on the parent type
+			data.FirstStepTargetFunctionName = listObjectsFunctionName(firstStep.TargetType, firstStep.TargetRelation)
+		} else if firstStep.Type == "userset" {
+			// For userset, the first step's target is the membership relation on the subject type
+			data.FirstStepTargetFunctionName = listObjectsFunctionName(firstStep.SubjectType, firstStep.SubjectRelation)
+		}
+	}
+
+	// Build AllowedSubjectTypes from the relation's propagated types
+	if len(a.AllowedSubjectTypes) > 0 {
+		quoted := make([]string, len(a.AllowedSubjectTypes))
+		for i, t := range a.AllowedSubjectTypes {
+			quoted[i] = fmt.Sprintf("'%s'", t)
+		}
+		data.AnchorSubjectTypes = strings.Join(quoted, ", ")
+	} else {
+		data.AnchorSubjectTypes = "''"
+	}
+
+	data.AnchorHasWildcard = a.Features.HasWildcard
+
+	return data
 }
 
 // computeListHasStandaloneAccess determines if the relation has access paths outside of intersections.

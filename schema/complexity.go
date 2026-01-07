@@ -200,11 +200,19 @@ type AnchorPathStep struct {
 
 	// For TTU patterns (e.g., "viewer from parent"):
 	// LinkingRelation is "parent" (the relation that links to the parent object)
-	// TargetType is the parent object type (e.g., "folder")
+	// TargetType is the first parent object type found with an anchor (e.g., "folder")
 	// TargetRelation is the relation to check on the parent (e.g., "viewer")
+	// AllTargetTypes contains ALL object types that the linking relation can point to
+	// when each type has the target relation with direct grants. This is used for
+	// generating UNION queries when parent can be multiple types (e.g., [document, folder]).
+	// RecursiveTypes contains object types where the target relation is recursive
+	// (same type as the object type being checked). These require check_permission_internal
+	// instead of list function composition to handle the recursion correctly.
 	LinkingRelation string
 	TargetType      string
 	TargetRelation  string
+	AllTargetTypes  []string
+	RecursiveTypes  []string
 
 	// For userset patterns (e.g., [group#member]):
 	// SubjectType is "group"
@@ -623,6 +631,9 @@ func buildAnalysisLookup(analyses []RelationAnalysis) map[string]map[string]*Rel
 // - IntersectionGroups: relations referenced in AND groups
 // - ExcludedRelations: relations in "but not" clauses
 func sortByDependency(analyses []RelationAnalysis) []RelationAnalysis {
+	// Build lookup map for finding analyses during dependency tracking
+	lookup := buildAnalysisLookup(analyses)
+
 	// Build dependency graph: relation -> relations it depends on
 	deps := make(map[string][]string) // key: "type.relation"
 	seen := make(map[string]map[string]bool) // Deduplicate dependencies
@@ -644,6 +655,25 @@ func sortByDependency(analyses []RelationAnalysis) []RelationAnalysis {
 		for _, rel := range a.SatisfyingRelations {
 			if rel != a.Relation { // Skip self
 				addDep(key, a.ObjectType+"."+rel)
+			}
+		}
+
+		// Dependencies from TTU patterns (ParentRelations) - cross-type dependencies
+		// This ensures that when we process a TTU pattern like "viewer from parent",
+		// the target relation on the parent type has already been processed.
+		// Note: AllowedLinkingTypes isn't populated yet, so we look up the linking
+		// relation's DirectSubjectTypes directly.
+		for _, parent := range a.ParentRelations {
+			// Look up the linking relation to find what types it allows
+			linkingRel := parent.LinkingRelation
+			linkingAnalysis := lookup[a.ObjectType][linkingRel]
+			if linkingAnalysis == nil {
+				continue
+			}
+			for _, parentType := range linkingAnalysis.DirectSubjectTypes {
+				if parentType != a.ObjectType { // Cross-type dependency
+					addDep(key, parentType+"."+parent.Relation)
+				}
 			}
 		}
 
@@ -688,7 +718,7 @@ func sortByDependency(analyses []RelationAnalysis) []RelationAnalysis {
 	// Process in order using Kahn's algorithm
 	var sorted []RelationAnalysis
 	processed := make(map[string]bool)
-	lookup := buildAnalysisLookup(analyses)
+	// Note: lookup already built at start of function
 
 	for len(queue) > 0 {
 		key := queue[0]
@@ -761,20 +791,25 @@ func (a *RelationAnalysis) CanGenerateList() bool {
 // via findIndirectAnchor(). When true, list generation is allowed even without
 // direct/implied access paths, as the access comes through the indirect anchor.
 func canGenerateListFeatures(f RelationFeatures, hasIndirectAnchor bool) (bool, string) {
-	// Phase 8 infrastructure: indirect anchor tracking is in place but not yet enabled
-	// for list generation. The templates need to be updated to compose with anchor
-	// relations before this can be enabled.
-	// TODO(phase8): Enable when composed templates are ready
-	_ = hasIndirectAnchor // Silence unused parameter warning
+	// Phase 8: If we have an indirect anchor, we can generate even without direct/implied.
+	// The composed template will trace through TTU paths to the anchor.
+	if hasIndirectAnchor {
+		// Indirect anchor provides access path - allow generation.
+		// The composed template will compose with the anchor relation's list function.
+		return true, ""
+	}
 
-	// Phase 2: Support Direct, Implied, and Wildcard patterns.
-	// These can all be handled with simple tuple lookup using relation closure.
+	// Phase 2 & 4: Support Direct, Implied, Userset, and Wildcard patterns.
+	// These can all be handled with tuple lookup or JOIN patterns.
 	//
-	// Must have at least one access path (direct or implied).
+	// Must have at least one access path:
 	// - Direct: relation has [user] or similar type restriction
 	// - Implied: relation references another relation (can_view: viewer)
-	// Either is sufficient as long as the closure is simple.
-	if !f.HasDirect && !f.HasImplied {
+	// - Userset: relation has [group#member] patterns (Phase 4 handles these)
+	// - Recursive (TTU): relation has "viewer from parent" patterns (Phase 5 handles these)
+	//
+	// Any of these is sufficient as long as the closure validation passes.
+	if !f.HasDirect && !f.HasImplied && !f.HasUserset && !f.HasRecursive {
 		return false, "no access path (neither direct nor implied)"
 	}
 
@@ -872,6 +907,32 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 						a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
 					}
 				}
+			}
+		}
+
+		// Also propagate from this relation's own userset patterns
+		// This handles cases like viewer: [group#member] where we need to
+		// include subject types from group.member (user).
+		for _, pattern := range a.UsersetPatterns {
+			subjectAnalysis, ok := lookup[pattern.SubjectType][pattern.SubjectRelation]
+			if !ok {
+				continue
+			}
+			for _, t := range subjectAnalysis.DirectSubjectTypes {
+				if !seenTypes[t] {
+					seenTypes[t] = true
+					a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
+				}
+			}
+			for _, t := range subjectAnalysis.AllowedSubjectTypes {
+				if !seenTypes[t] {
+					seenTypes[t] = true
+					a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
+				}
+			}
+			// Propagate wildcard from userset subject relation
+			if subjectAnalysis.Features.HasWildcard {
+				a.Features.HasWildcard = true
 			}
 		}
 
@@ -1194,17 +1255,39 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 // this function tries to find an indirect anchor by tracing through the patterns.
 // If found, the IndirectAnchor field is set and list generation proceeds.
 func computeCanGenerateList(a *RelationAnalysis, lookup map[string]map[string]*RelationAnalysis) (bool, string) {
-	// Phase 8: Track indirect anchors for future use, but don't enable generation yet.
-	// The templates need to be updated to compose with anchor relations.
+	// Phase 8: Find indirect anchors for relations without direct/implied access.
+	// This enables list generation for pure TTU patterns (not userset - those use Phase 4 templates).
+	//
+	// IMPORTANT: Only look for indirect anchors when the relation has NO userset patterns.
+	// The Phase 4 userset template already correctly handles userset patterns by generating
+	// UNION blocks for all patterns. The composed template is only for pure TTU access
+	// where we trace through parent relations to reach an anchor.
 	hasIndirectAnchor := false
-	if !a.Features.HasDirect && !a.Features.HasImplied {
-		// Try to find an indirect anchor via TTU or userset patterns
+	if !a.Features.HasDirect && !a.Features.HasImplied && !a.Features.HasUserset {
+		// Try to find an indirect anchor via TTU patterns only
+		// (userset patterns are handled by Phase 4 template)
 		visited := make(map[string]bool)
 		anchor := findIndirectAnchor(a, lookup, visited)
 		if anchor != nil {
 			a.IndirectAnchor = anchor
 			hasIndirectAnchor = true
-			// TODO(phase8): Propagate AllowedSubjectTypes from anchor when templates support it
+
+			// Phase 8: Propagate AllowedSubjectTypes from anchor relation.
+			// The anchor relation has the direct subject types that ultimately grant access.
+			anchorAnalysis := lookup[anchor.AnchorType][anchor.AnchorRelation]
+			if anchorAnalysis != nil && len(a.AllowedSubjectTypes) == 0 {
+				// Copy AllowedSubjectTypes from anchor
+				if len(anchorAnalysis.AllowedSubjectTypes) > 0 {
+					a.AllowedSubjectTypes = anchorAnalysis.AllowedSubjectTypes
+				} else if len(anchorAnalysis.DirectSubjectTypes) > 0 {
+					a.AllowedSubjectTypes = anchorAnalysis.DirectSubjectTypes
+				}
+
+				// Also propagate wildcard flag from anchor
+				if anchorAnalysis.Features.HasWildcard {
+					a.Features.HasWildcard = true
+				}
+			}
 		}
 	}
 
@@ -1297,6 +1380,14 @@ func findIndirectAnchor(
 
 	// Check TTU paths first - these are "viewer from parent" patterns
 	for _, parent := range a.ParentRelations {
+		// Collect ALL target types that have the target relation with direct/implied grants
+		// This is needed because parent relations can point to multiple types (e.g., [document, folder])
+		// and we need to check the target relation on ALL of them
+		var directAnchorTypes []string
+		var recursiveTypes []string // Types where target is same as object type with recursive TTU
+		var firstDirectType string
+		var firstDeeperResult *IndirectAnchorInfo
+
 		for _, parentType := range parent.AllowedLinkingTypes {
 			// Look up the target relation on the parent type
 			typeAnalyses := lookup[parentType]
@@ -1310,31 +1401,58 @@ func findIndirectAnchor(
 
 			// Found direct anchor?
 			if targetAnalysis.Features.HasDirect || targetAnalysis.Features.HasImplied {
-				return &IndirectAnchorInfo{
-					Path: []AnchorPathStep{{
+				directAnchorTypes = append(directAnchorTypes, parentType)
+				if firstDirectType == "" {
+					firstDirectType = parentType
+				}
+				continue
+			}
+
+			// Check if this is a recursive same-type TTU pattern
+			// e.g., document.can_view: can_view from parent where parent: [document, folder]
+			// When parentType == a.ObjectType and target has recursive TTU, we need special handling
+			if parentType == a.ObjectType && targetAnalysis.Features.HasRecursive {
+				recursiveTypes = append(recursiveTypes, parentType)
+				continue
+			}
+
+			// Recurse to find deeper anchor (only if we haven't found a direct one)
+			if firstDirectType == "" && firstDeeperResult == nil {
+				deeper := findIndirectAnchor(targetAnalysis, lookup, visited)
+				if deeper != nil {
+					// Prepend our step to the path
+					step := AnchorPathStep{
 						Type:            "ttu",
 						LinkingRelation: parent.LinkingRelation,
 						TargetType:      parentType,
 						TargetRelation:  parent.Relation,
-					}},
-					AnchorType:     parentType,
-					AnchorRelation: parent.Relation,
+						AllTargetTypes:  []string{parentType},
+					}
+					deeper.Path = append([]AnchorPathStep{step}, deeper.Path...)
+					firstDeeperResult = deeper
 				}
 			}
+		}
 
-			// Recurse to find deeper anchor
-			deeper := findIndirectAnchor(targetAnalysis, lookup, visited)
-			if deeper != nil {
-				// Prepend our step to the path
-				step := AnchorPathStep{
+		// If we found direct anchors, return that (prefer direct over deeper)
+		if len(directAnchorTypes) > 0 {
+			return &IndirectAnchorInfo{
+				Path: []AnchorPathStep{{
 					Type:            "ttu",
 					LinkingRelation: parent.LinkingRelation,
-					TargetType:      parentType,
+					TargetType:      firstDirectType,
 					TargetRelation:  parent.Relation,
-				}
-				deeper.Path = append([]AnchorPathStep{step}, deeper.Path...)
-				return deeper
+					AllTargetTypes:  directAnchorTypes,
+					RecursiveTypes:  recursiveTypes,
+				}},
+				AnchorType:     firstDirectType,
+				AnchorRelation: parent.Relation,
 			}
+		}
+
+		// Return deeper result if found
+		if firstDeeperResult != nil {
+			return firstDeeperResult
 		}
 	}
 
