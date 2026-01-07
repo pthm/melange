@@ -396,6 +396,16 @@ dump-inventory: build-dumpinventory
 dump-inventory-summary: build-dumpinventory
     ./bin/dumpinventory -summary
 
+# Show only list function codegen inventory
+[group('OpenFGA Inspect')]
+dump-inventory-list: build-dumpinventory
+    ./bin/dumpinventory -list
+
+# Show only check function codegen inventory
+[group('OpenFGA Inspect')]
+dump-inventory-check: build-dumpinventory
+    ./bin/dumpinventory -check
+
 # Show codegen inventory for a specific test
 [group('OpenFGA Inspect')]
 dump-inventory-test NAME: build-dumpinventory

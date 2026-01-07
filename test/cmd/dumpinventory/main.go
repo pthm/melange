@@ -1,14 +1,16 @@
 // Command dumpinventory produces an inventory report of relations that fall back
-// to generic permission checking, grouped by the reason they cannot generate
-// specialized SQL functions.
+// to generic permission checking or list functions, grouped by the reason they
+// cannot generate specialized SQL functions.
 //
 // This is a Phase 0 tool for tracking progress toward full codegen coverage.
 //
 // Usage:
 //
-//	dumpinventory              # Show summary for all OpenFGA tests
+//	dumpinventory              # Show summary for all OpenFGA tests (check + list)
 //	dumpinventory <name>       # Show details for a specific test
 //	dumpinventory -summary     # Show only the summary counts by reason
+//	dumpinventory -check       # Show only check codegen inventory
+//	dumpinventory -list        # Show only list codegen inventory
 //
 // Output:
 //
@@ -53,11 +55,22 @@ type RelationInfo struct {
 	Relation   string
 	Features   string
 	Reason     string
+	Kind       string // "check" or "list"
 }
 
 func main() {
 	summaryOnly := flag.Bool("summary", false, "Show only summary counts by reason")
+	checkOnly := flag.Bool("check", false, "Show only check codegen inventory")
+	listOnly := flag.Bool("list", false, "Show only list codegen inventory")
 	flag.Parse()
+
+	// Default to showing both if neither -check nor -list specified
+	showCheck := !*listOnly
+	showList := !*checkOnly
+	if *checkOnly && *listOnly {
+		showCheck = true
+		showList = true
+	}
 
 	tests, err := loadTests()
 	if err != nil {
@@ -70,7 +83,7 @@ func main() {
 		name := flag.Arg(0)
 		for _, tc := range tests {
 			if tc.Name == name {
-				dumpTestInventory(tc)
+				dumpTestInventory(tc, showCheck, showList)
 				return
 			}
 		}
@@ -79,8 +92,11 @@ func main() {
 	}
 
 	// Collect all relations that can't generate across all tests
-	byReason := make(map[string][]RelationInfo)
-	var totalRelations, canGenerateCount, cannotGenerateCount int
+	checkByReason := make(map[string][]RelationInfo)
+	listByReason := make(map[string][]RelationInfo)
+	var totalRelations int
+	var checkCanGenerate, checkCannotGenerate int
+	var listCanGenerate, listCannotGenerate int
 
 	for _, tc := range tests {
 		for _, stage := range tc.Stages {
@@ -95,20 +111,42 @@ func main() {
 
 			for _, a := range analyses {
 				totalRelations++
+
+				// Check codegen stats
 				if a.CanGenerate {
-					canGenerateCount++
+					checkCanGenerate++
 				} else {
-					cannotGenerateCount++
+					checkCannotGenerate++
 					reason := a.CannotGenerateReason
 					if reason == "" {
 						reason = "(no reason recorded)"
 					}
-					byReason[reason] = append(byReason[reason], RelationInfo{
+					checkByReason[reason] = append(checkByReason[reason], RelationInfo{
 						TestName:   tc.Name,
 						ObjectType: a.ObjectType,
 						Relation:   a.Relation,
 						Features:   a.Features.String(),
 						Reason:     reason,
+						Kind:       "check",
+					})
+				}
+
+				// List codegen stats
+				if a.CanGenerateList() {
+					listCanGenerate++
+				} else {
+					listCannotGenerate++
+					reason := a.CannotGenerateListReason
+					if reason == "" {
+						reason = "(no reason recorded)"
+					}
+					listByReason[reason] = append(listByReason[reason], RelationInfo{
+						TestName:   tc.Name,
+						ObjectType: a.ObjectType,
+						Relation:   a.Relation,
+						Features:   a.Features.String(),
+						Reason:     reason,
+						Kind:       "list",
 					})
 				}
 			}
@@ -119,10 +157,34 @@ func main() {
 	fmt.Println("# Codegen Coverage Inventory Report")
 	fmt.Println()
 	fmt.Printf("Total relations analyzed: %d\n", totalRelations)
-	fmt.Printf("Can generate:            %d (%.1f%%)\n", canGenerateCount, float64(canGenerateCount)/float64(totalRelations)*100)
-	fmt.Printf("Cannot generate:         %d (%.1f%%)\n", cannotGenerateCount, float64(cannotGenerateCount)/float64(totalRelations)*100)
 	fmt.Println()
 
+	if showCheck {
+		fmt.Println("## Check Function Coverage")
+		fmt.Printf("Can generate:    %d (%.1f%%)\n", checkCanGenerate, float64(checkCanGenerate)/float64(totalRelations)*100)
+		fmt.Printf("Cannot generate: %d (%.1f%%)\n", checkCannotGenerate, float64(checkCannotGenerate)/float64(totalRelations)*100)
+		fmt.Println()
+	}
+
+	if showList {
+		fmt.Println("## List Function Coverage")
+		fmt.Printf("Can generate:    %d (%.1f%%)\n", listCanGenerate, float64(listCanGenerate)/float64(totalRelations)*100)
+		fmt.Printf("Cannot generate: %d (%.1f%%)\n", listCannotGenerate, float64(listCannotGenerate)/float64(totalRelations)*100)
+		fmt.Println()
+	}
+
+	// Print check reasons
+	if showCheck && checkCannotGenerate > 0 {
+		printReasonSection("Check Functions", checkByReason, *summaryOnly)
+	}
+
+	// Print list reasons
+	if showList && listCannotGenerate > 0 {
+		printReasonSection("List Functions", listByReason, *summaryOnly)
+	}
+}
+
+func printReasonSection(title string, byReason map[string][]RelationInfo, summaryOnly bool) {
 	// Sort reasons by count (descending)
 	type reasonCount struct {
 		reason string
@@ -137,11 +199,11 @@ func main() {
 	})
 
 	// Print by reason
-	fmt.Println("## Relations by Reason")
+	fmt.Printf("## %s - Cannot Generate by Reason\n", title)
 	fmt.Println()
 	for _, rc := range reasons {
 		fmt.Printf("### %s (%d relations)\n", rc.reason, rc.count)
-		if !*summaryOnly {
+		if !summaryOnly {
 			fmt.Println()
 			infos := byReason[rc.reason]
 			// Sort by test name, then object type, then relation
@@ -195,7 +257,7 @@ func loadTests() ([]TestCase, error) {
 	return allTests, nil
 }
 
-func dumpTestInventory(tc TestCase) {
+func dumpTestInventory(tc TestCase, showCheck, showList bool) {
 	fmt.Printf("# Inventory for: %s\n", tc.Name)
 	fmt.Println(strings.Repeat("-", len(tc.Name)+16))
 
@@ -225,27 +287,59 @@ func dumpTestInventory(tc TestCase) {
 			return analyses[i].Relation < analyses[j].Relation
 		})
 
-		var canGenerate, cannotGenerate []schema.RelationAnalysis
-		for _, a := range analyses {
-			if a.CanGenerate {
-				canGenerate = append(canGenerate, a)
-			} else {
-				cannotGenerate = append(cannotGenerate, a)
+		if showCheck {
+			var checkCanGenerate, checkCannotGenerate []schema.RelationAnalysis
+			for _, a := range analyses {
+				if a.CanGenerate {
+					checkCanGenerate = append(checkCanGenerate, a)
+				} else {
+					checkCannotGenerate = append(checkCannotGenerate, a)
+				}
+			}
+
+			fmt.Println()
+			fmt.Println("## Check Functions")
+			fmt.Println()
+			fmt.Printf("**Can Generate (%d):**\n", len(checkCanGenerate))
+			for _, a := range checkCanGenerate {
+				fmt.Printf("  ✓ %s.%s [%s]\n", a.ObjectType, a.Relation, a.Features.String())
+			}
+
+			fmt.Println()
+			fmt.Printf("**Cannot Generate (%d):**\n", len(checkCannotGenerate))
+			for _, a := range checkCannotGenerate {
+				fmt.Printf("  ✗ %s.%s [%s]\n", a.ObjectType, a.Relation, a.Features.String())
+				if a.CannotGenerateReason != "" {
+					fmt.Printf("    Reason: %s\n", a.CannotGenerateReason)
+				}
 			}
 		}
 
-		fmt.Println()
-		fmt.Printf("**Can Generate (%d):**\n", len(canGenerate))
-		for _, a := range canGenerate {
-			fmt.Printf("  ✓ %s.%s [%s]\n", a.ObjectType, a.Relation, a.Features.String())
-		}
+		if showList {
+			var listCanGenerate, listCannotGenerate []schema.RelationAnalysis
+			for _, a := range analyses {
+				if a.CanGenerateList() {
+					listCanGenerate = append(listCanGenerate, a)
+				} else {
+					listCannotGenerate = append(listCannotGenerate, a)
+				}
+			}
 
-		fmt.Println()
-		fmt.Printf("**Cannot Generate (%d):**\n", len(cannotGenerate))
-		for _, a := range cannotGenerate {
-			fmt.Printf("  ✗ %s.%s [%s]\n", a.ObjectType, a.Relation, a.Features.String())
-			if a.CannotGenerateReason != "" {
-				fmt.Printf("    Reason: %s\n", a.CannotGenerateReason)
+			fmt.Println()
+			fmt.Println("## List Functions")
+			fmt.Println()
+			fmt.Printf("**Can Generate (%d):**\n", len(listCanGenerate))
+			for _, a := range listCanGenerate {
+				fmt.Printf("  ✓ %s.%s [%s]\n", a.ObjectType, a.Relation, a.Features.String())
+			}
+
+			fmt.Println()
+			fmt.Printf("**Cannot Generate (%d):**\n", len(listCannotGenerate))
+			for _, a := range listCannotGenerate {
+				fmt.Printf("  ✗ %s.%s [%s]\n", a.ObjectType, a.Relation, a.Features.String())
+				if a.CannotGenerateListReason != "" {
+					fmt.Printf("    Reason: %s\n", a.CannotGenerateListReason)
+				}
 			}
 		}
 	}
