@@ -173,40 +173,33 @@ BEGIN
             UNION
             -- Path: Via {{.SubjectType}}#{{.SubjectRelation}} - expand group membership to return individual subjects
 {{- if .IsComplex }}
-            -- Complex userset: use check_permission_internal for membership verification
-            SELECT DISTINCT m.subject_id
+            -- Complex userset: use LATERAL join with userset's list_subjects function
+            -- This handles userset-to-userset chains where there are no direct subject tuples
+            SELECT DISTINCT s.subject_id
             FROM melange_tuples t
-            JOIN melange_tuples m
-              ON m.object_type = '{{.SubjectType}}'
-              AND m.object_id = split_part(t.subject_id, '#', 1)
-              AND m.subject_type = p_subject_type
-              AND p_subject_type IN ({{$.AllowedSubjectTypes}})  -- Type guard for userset expansion
-{{- if not $.HasWildcard }}
-              AND m.subject_id != '*'
-{{- end }}
+            CROSS JOIN LATERAL list_{{.SubjectType}}_{{.SubjectRelation}}_subjects(split_part(t.subject_id, '#', 1), p_subject_type) s
             WHERE t.object_type = '{{$.ObjectType}}'
               AND t.object_id = p_object_id
               AND t.relation IN ({{.SourceRelationList}})
               AND t.subject_type = '{{.SubjectType}}'
               AND position('#' in t.subject_id) > 0
               AND split_part(t.subject_id, '#', 2) = '{{.SubjectRelation}}'
-              AND check_permission_internal(m.subject_type, m.subject_id, '{{.SubjectRelation}}', '{{.SubjectType}}', split_part(t.subject_id, '#', 1), ARRAY[]::TEXT[]) = 1
 {{- if .IsClosurePattern }}
               -- Closure pattern: verify permission via source relation (applies exclusions)
-              AND check_permission_internal(m.subject_type, m.subject_id, '{{.SourceRelation}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 1
+              AND check_permission_internal(p_subject_type, s.subject_id, '{{.SourceRelation}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 1
 {{- end }}
 {{- else }}
             -- Simple userset: JOIN with membership tuples
-            SELECT DISTINCT m.subject_id
+            SELECT DISTINCT s.subject_id
             FROM melange_tuples t
-            JOIN melange_tuples m
-              ON m.object_type = '{{.SubjectType}}'
-              AND m.object_id = split_part(t.subject_id, '#', 1)
-              AND m.relation IN ({{.SatisfyingRelationsList}})
-              AND m.subject_type = p_subject_type
+            JOIN melange_tuples s
+              ON s.object_type = '{{.SubjectType}}'
+              AND s.object_id = split_part(t.subject_id, '#', 1)
+              AND s.relation IN ({{.SatisfyingRelationsList}})
+              AND s.subject_type = p_subject_type
               AND p_subject_type IN ({{$.AllowedSubjectTypes}})  -- Type guard for userset expansion
 {{- if not $.HasWildcard }}
-              AND m.subject_id != '*'
+              AND s.subject_id != '*'
 {{- end }}
             WHERE t.object_type = '{{$.ObjectType}}'
               AND t.object_id = p_object_id
@@ -216,7 +209,7 @@ BEGIN
               AND split_part(t.subject_id, '#', 2) = '{{.SubjectRelation}}'
 {{- if .IsClosurePattern }}
               -- Closure pattern: verify permission via source relation (applies exclusions)
-              AND check_permission_internal(m.subject_type, m.subject_id, '{{.SourceRelation}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 1
+              AND check_permission_internal(s.subject_type, s.subject_id, '{{.SourceRelation}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 1
 {{- end }}
 {{- end }}
 {{- if $.SimpleExcludedRelations }}
@@ -227,15 +220,15 @@ BEGIN
                   WHERE excl.object_type = '{{$.ObjectType}}'
                     AND excl.object_id = p_object_id
                     AND excl.relation = '{{.}}'
-                    AND excl.subject_type = m.subject_type
-                    AND (excl.subject_id = m.subject_id OR excl.subject_id = '*')
+                    AND excl.subject_type = p_subject_type
+                    AND (excl.subject_id = s.subject_id OR excl.subject_id = '*')
               )
 {{- end }}
 {{- end }}
 {{- if $.ComplexExcludedRelations }}
               -- Apply complex exclusions to userset expansion path
 {{- range $.ComplexExcludedRelations }}
-              AND check_permission_internal(m.subject_type, m.subject_id, '{{.}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 0
+              AND check_permission_internal(p_subject_type, s.subject_id, '{{.}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 0
 {{- end }}
 {{- end }}
 {{- if $.ExcludedParentRelations }}
@@ -249,7 +242,7 @@ BEGIN
 {{- if .AllowedLinkingTypes }}
                     AND link.subject_type IN ({{range $i, $lt := .AllowedLinkingTypes}}{{if $i}}, {{end}}'{{$lt}}'{{end}})
 {{- end }}
-                    AND check_permission_internal(m.subject_type, m.subject_id, '{{.Relation}}', link.subject_type, link.subject_id, ARRAY[]::TEXT[]) = 1
+                    AND check_permission_internal(p_subject_type, s.subject_id, '{{.Relation}}', link.subject_type, link.subject_id, ARRAY[]::TEXT[]) = 1
               )
 {{- end }}
 {{- end }}
@@ -270,12 +263,12 @@ BEGIN
 {{- if $part.ParentRelation.AllowedLinkingTypes }}
                         AND link.subject_type IN ({{range $j, $lt := $part.ParentRelation.AllowedLinkingTypes}}{{if $j}}, {{end}}'{{$lt}}'{{end}})
 {{- end }}
-                        AND check_permission_internal(m.subject_type, m.subject_id, '{{$part.ParentRelation.Relation}}', link.subject_type, link.subject_id, ARRAY[]::TEXT[]) = 1
+                        AND check_permission_internal(p_subject_type, s.subject_id, '{{$part.ParentRelation.Relation}}', link.subject_type, link.subject_id, ARRAY[]::TEXT[]) = 1
                   )
 {{- else }}
-                  (check_permission_internal(m.subject_type, m.subject_id, '{{$part.Relation}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 1
+                  (check_permission_internal(p_subject_type, s.subject_id, '{{$part.Relation}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 1
 {{- if $part.ExcludedRelation }}
-                   AND check_permission_internal(m.subject_type, m.subject_id, '{{$part.ExcludedRelation}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 0
+                   AND check_permission_internal(p_subject_type, s.subject_id, '{{$part.ExcludedRelation}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 0
 {{- end }}
                   )
 {{- end }}

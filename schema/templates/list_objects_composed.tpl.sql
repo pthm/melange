@@ -27,8 +27,26 @@ CREATE OR REPLACE FUNCTION {{.FunctionName}}(
     p_subject_id TEXT
 ) RETURNS TABLE(object_id TEXT) AS $$
 BEGIN
+    -- Self-candidate check: when subject is a userset on the same object type
+    -- This must be checked BEFORE the type guard since userset subjects (e.g., document:1#viewer)
+    -- have a different type than the AllowedSubjectTypes (e.g., 'document' vs 'user')
+    IF position('#' in p_subject_id) > 0 AND p_subject_type = '{{.ObjectType}}' THEN
+        IF EXISTS (
+            SELECT 1 FROM melange_relation_closure c
+            WHERE c.object_type = '{{.ObjectType}}'
+              AND c.relation = '{{.Relation}}'
+              AND c.satisfying_relation = substring(p_subject_id from position('#' in p_subject_id) + 1)
+        ) THEN
+            RETURN QUERY SELECT split_part(p_subject_id, '#', 1);
+            RETURN;
+        END IF;
+    END IF;
+
     -- Type guard: only return results if subject type is allowed
-    IF p_subject_type NOT IN ({{.AllowedSubjectTypes}}) THEN
+    -- Skip the guard for userset subjects (e.g., 'folder:x#viewer') since:
+    -- 1. The composed inner function calls handle userset subjects via their self-candidate logic
+    -- 2. Cross-type usersets (e.g., folder#viewer checking document objects) are valid via TTU
+    IF position('#' in p_subject_id) = 0 AND p_subject_type NOT IN ({{.AllowedSubjectTypes}}) THEN
         RETURN;
     END IF;
 
@@ -141,19 +159,7 @@ BEGIN
 {{- end }}
 {{- end }}
 {{- end }}
-
-    UNION
-
-    -- Self-candidate: when subject is a userset on the same object type
-    SELECT split_part(p_subject_id, '#', 1) AS object_id
-    WHERE position('#' in p_subject_id) > 0
-      AND p_subject_type = '{{.ObjectType}}'
-      AND EXISTS (
-          SELECT 1 FROM melange_relation_closure c
-          WHERE c.object_type = '{{.ObjectType}}'
-            AND c.relation = '{{.Relation}}'
-            AND c.satisfying_relation = substring(p_subject_id from position('#' in p_subject_id) + 1)
-      );
+    ;
 {{- else }}
     -- Fallback: no indirect anchor (this shouldn't happen)
     SELECT NULL::TEXT WHERE FALSE;

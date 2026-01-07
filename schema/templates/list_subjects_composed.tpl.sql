@@ -42,6 +42,21 @@ BEGIN
 {{- $firstStep := index .IndirectAnchor.Path 0 }}
 
     IF v_is_userset_filter THEN
+        -- Self-candidate: when filter type matches object type
+        -- e.g., querying document:1.viewer with filter document#viewer
+        -- should return document:1#viewer if viewer satisfies the relation via closure
+        IF v_filter_type = '{{.ObjectType}}' THEN
+            IF EXISTS (
+                SELECT 1 FROM melange_relation_closure c
+                WHERE c.object_type = '{{.ObjectType}}'
+                  AND c.relation = '{{.Relation}}'
+                  AND c.satisfying_relation = v_filter_relation
+            ) THEN
+                RETURN QUERY SELECT p_object_id || '#' || v_filter_relation;
+                RETURN;
+            END IF;
+        END IF;
+
         -- Userset filter case: find subjects of type v_filter_type#v_filter_relation
         -- that have the requested relation on the object
         RETURN QUERY

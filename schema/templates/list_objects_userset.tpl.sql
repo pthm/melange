@@ -94,6 +94,37 @@ BEGIN
       )
 {{- end }}
 {{- end }}
+    UNION
+    -- Direct userset subject matching: when the subject IS a userset (e.g., group:fga#member)
+    -- and there's a tuple with that exact userset as the subject
+    -- This handles cases like: tuple(document:1, viewer, group:fga#member) queried by group:fga#member
+    -- No type guard - we're matching the exact userset subject in tuples
+    SELECT DISTINCT t.object_id
+    FROM melange_tuples t
+    WHERE t.object_type = '{{.ObjectType}}'
+      AND t.relation IN ({{.RelationList}})
+      AND t.subject_type = p_subject_type
+      AND position('#' in p_subject_id) > 0  -- Subject is a userset
+      AND t.subject_id = p_subject_id        -- Exact match with userset subject
+{{- if .SimpleExcludedRelations }}
+      -- Apply simple exclusions to direct userset path
+{{- range .SimpleExcludedRelations }}
+      AND NOT EXISTS (
+          SELECT 1 FROM melange_tuples excl
+          WHERE excl.object_type = '{{$.ObjectType}}'
+            AND excl.object_id = t.object_id
+            AND excl.relation = '{{.}}'
+            AND excl.subject_type = p_subject_type
+            AND (excl.subject_id = p_subject_id OR excl.subject_id = '*')
+      )
+{{- end }}
+{{- end }}
+{{- if .ComplexExcludedRelations }}
+      -- Apply complex exclusions to direct userset path
+{{- range .ComplexExcludedRelations }}
+      AND check_permission_internal(p_subject_type, p_subject_id, '{{.}}', '{{$.ObjectType}}', t.object_id, ARRAY[]::TEXT[]) = 0
+{{- end }}
+{{- end }}
 {{- if .ComplexClosureRelations }}
     UNION
     -- Complex closure relations: find candidates via tuples, validate via check_permission_internal
