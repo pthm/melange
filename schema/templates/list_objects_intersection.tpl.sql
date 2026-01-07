@@ -242,7 +242,9 @@ BEGIN
 
     UNION ALL
     -- Self-referential TTU: recursive expansion from accessible parents
-    WITH RECURSIVE accessible_rec(object_id, depth) AS (
+    -- Note: WITH RECURSIVE must be wrapped in a subquery when used after UNION
+    SELECT rec.object_id FROM (
+        WITH RECURSIVE accessible_rec(object_id, depth) AS (
         -- Seed: all objects from above queries
         SELECT DISTINCT seed.object_id, 0
         FROM (
@@ -319,8 +321,9 @@ BEGIN
           AND child.subject_type = '{{.ObjectType}}'
           AND child.subject_id = a.object_id
         WHERE a.depth < 25
-    )
-    SELECT DISTINCT object_id FROM accessible_rec
+        )
+        SELECT DISTINCT object_id FROM accessible_rec
+    ) AS rec
 {{- end }}
 
     UNION

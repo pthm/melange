@@ -172,6 +172,47 @@ type IntersectionGroupInfo struct {
 	Parts []IntersectionPart
 }
 
+// IndirectAnchorInfo describes how to reach a relation with direct grants
+// when the relation itself has no direct/implied access paths.
+// This enables list generation for "pure" patterns like pure TTU or pure userset
+// by tracing through to find an anchor relation that has [user] or similar direct grants.
+//
+// For example, for "document.viewer: viewer from folder" where folder.viewer: [user],
+// the IndirectAnchor would point to folder.viewer with a TTU path step.
+type IndirectAnchorInfo struct {
+	// Path describes the traversal from this relation to the anchor.
+	// For "document.viewer: viewer from folder" where folder.viewer: [user],
+	// Path would contain one TTU step pointing to folder.viewer.
+	// For multi-hop chains, Path contains multiple steps.
+	Path []AnchorPathStep
+
+	// AnchorType and AnchorRelation identify the relation with direct grants.
+	// This is the final destination of the path - a relation that has HasDirect.
+	AnchorType     string
+	AnchorRelation string
+}
+
+// AnchorPathStep represents one step in the path from a relation to its anchor.
+// Steps can be either TTU (tuple-to-userset) or userset patterns.
+type AnchorPathStep struct {
+	// Type is either "ttu" or "userset"
+	Type string
+
+	// For TTU patterns (e.g., "viewer from parent"):
+	// LinkingRelation is "parent" (the relation that links to the parent object)
+	// TargetType is the parent object type (e.g., "folder")
+	// TargetRelation is the relation to check on the parent (e.g., "viewer")
+	LinkingRelation string
+	TargetType      string
+	TargetRelation  string
+
+	// For userset patterns (e.g., [group#member]):
+	// SubjectType is "group"
+	// SubjectRelation is "member"
+	SubjectType     string
+	SubjectRelation string
+}
+
 // RelationAnalysis contains all data needed to generate SQL for a relation.
 // This struct is populated by AnalyzeRelations and consumed by the SQL generator.
 type RelationAnalysis struct {
@@ -269,6 +310,13 @@ type RelationAnalysis struct {
 	// This is used by list functions to traverse TTU paths from implied relations.
 	// Computed by ComputeCanGenerate.
 	ClosureParentRelations []ParentRelationInfo
+
+	// IndirectAnchor describes how to reach a relation with direct grants when this
+	// relation has no direct/implied access paths. For pure TTU or pure userset patterns,
+	// this traces through the pattern to find an anchor relation with [user] or similar.
+	// Nil if the relation has direct/implied access or if no anchor can be found.
+	// Computed by ComputeCanGenerate via findIndirectAnchor.
+	IndirectAnchor *IndirectAnchorInfo
 }
 
 // AnalyzeRelations classifies all relations and gathers data needed for SQL generation.
@@ -708,7 +756,17 @@ func (a *RelationAnalysis) CanGenerateList() bool {
 // canGenerateListFeatures checks if the given features allow list generation.
 // This checks a single relation's features - the full check in ComputeCanGenerate
 // also validates that ALL relations in the closure have compatible features.
-func canGenerateListFeatures(f RelationFeatures) (bool, string) {
+//
+// The hasIndirectAnchor parameter indicates whether an indirect anchor was found
+// via findIndirectAnchor(). When true, list generation is allowed even without
+// direct/implied access paths, as the access comes through the indirect anchor.
+func canGenerateListFeatures(f RelationFeatures, hasIndirectAnchor bool) (bool, string) {
+	// Phase 8 infrastructure: indirect anchor tracking is in place but not yet enabled
+	// for list generation. The templates need to be updated to compose with anchor
+	// relations before this can be enabled.
+	// TODO(phase8): Enable when composed templates are ready
+	_ = hasIndirectAnchor // Silence unused parameter warning
+
 	// Phase 2: Support Direct, Implied, and Wildcard patterns.
 	// These can all be handled with simple tuple lookup using relation closure.
 	//
@@ -1131,9 +1189,27 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 // check_permission_internal for list operations because check_permission_internal
 // only verifies a specific object - it doesn't help discover which objects are
 // accessible via recursive traversal. TTU in closure requires recursive CTEs.
+//
+// Phase 8: For relations without direct/implied access paths (pure TTU, pure userset),
+// this function tries to find an indirect anchor by tracing through the patterns.
+// If found, the IndirectAnchor field is set and list generation proceeds.
 func computeCanGenerateList(a *RelationAnalysis, lookup map[string]map[string]*RelationAnalysis) (bool, string) {
+	// Phase 8: Track indirect anchors for future use, but don't enable generation yet.
+	// The templates need to be updated to compose with anchor relations.
+	hasIndirectAnchor := false
+	if !a.Features.HasDirect && !a.Features.HasImplied {
+		// Try to find an indirect anchor via TTU or userset patterns
+		visited := make(map[string]bool)
+		anchor := findIndirectAnchor(a, lookup, visited)
+		if anchor != nil {
+			a.IndirectAnchor = anchor
+			hasIndirectAnchor = true
+			// TODO(phase8): Propagate AllowedSubjectTypes from anchor when templates support it
+		}
+	}
+
 	// First check: does this relation's features allow list generation?
-	canGenerate, reason := canGenerateListFeatures(a.Features)
+	canGenerate, reason := canGenerateListFeatures(a.Features, hasIndirectAnchor)
 	if !canGenerate {
 		return false, reason
 	}
@@ -1196,4 +1272,110 @@ func computeCanGenerateList(a *RelationAnalysis, lookup map[string]map[string]*R
 	}
 
 	return true, ""
+}
+
+// findIndirectAnchor traces through TTU and userset paths to find a relation
+// with direct grants. Returns nil if the relation itself has HasDirect or HasImplied,
+// or if no anchor can be found (unsatisfiable pattern or cycle).
+//
+// This enables list generation for "pure" patterns:
+//   - Pure TTU: document.viewer: viewer from folder → folder.viewer: [user]
+//   - Pure userset: document.viewer: [group#member] → group.member: [user]
+//   - Userset chains: job.can_read: [permission#assignee] → permission.assignee: [role#assignee] → role.assignee: [user]
+//
+// The function performs depth-first search with cycle detection.
+func findIndirectAnchor(
+	a *RelationAnalysis,
+	lookup map[string]map[string]*RelationAnalysis,
+	visited map[string]bool,
+) *IndirectAnchorInfo {
+	key := a.ObjectType + "." + a.Relation
+	if visited[key] {
+		return nil // Cycle detected
+	}
+	visited[key] = true
+
+	// Check TTU paths first - these are "viewer from parent" patterns
+	for _, parent := range a.ParentRelations {
+		for _, parentType := range parent.AllowedLinkingTypes {
+			// Look up the target relation on the parent type
+			typeAnalyses := lookup[parentType]
+			if typeAnalyses == nil {
+				continue
+			}
+			targetAnalysis := typeAnalyses[parent.Relation]
+			if targetAnalysis == nil {
+				continue
+			}
+
+			// Found direct anchor?
+			if targetAnalysis.Features.HasDirect || targetAnalysis.Features.HasImplied {
+				return &IndirectAnchorInfo{
+					Path: []AnchorPathStep{{
+						Type:            "ttu",
+						LinkingRelation: parent.LinkingRelation,
+						TargetType:      parentType,
+						TargetRelation:  parent.Relation,
+					}},
+					AnchorType:     parentType,
+					AnchorRelation: parent.Relation,
+				}
+			}
+
+			// Recurse to find deeper anchor
+			deeper := findIndirectAnchor(targetAnalysis, lookup, visited)
+			if deeper != nil {
+				// Prepend our step to the path
+				step := AnchorPathStep{
+					Type:            "ttu",
+					LinkingRelation: parent.LinkingRelation,
+					TargetType:      parentType,
+					TargetRelation:  parent.Relation,
+				}
+				deeper.Path = append([]AnchorPathStep{step}, deeper.Path...)
+				return deeper
+			}
+		}
+	}
+
+	// Check userset paths - these are [group#member] patterns
+	for _, pattern := range a.UsersetPatterns {
+		// Look up the subject relation on the subject type
+		typeAnalyses := lookup[pattern.SubjectType]
+		if typeAnalyses == nil {
+			continue
+		}
+		targetAnalysis := typeAnalyses[pattern.SubjectRelation]
+		if targetAnalysis == nil {
+			continue
+		}
+
+		// Found direct anchor?
+		if targetAnalysis.Features.HasDirect || targetAnalysis.Features.HasImplied {
+			return &IndirectAnchorInfo{
+				Path: []AnchorPathStep{{
+					Type:            "userset",
+					SubjectType:     pattern.SubjectType,
+					SubjectRelation: pattern.SubjectRelation,
+				}},
+				AnchorType:     pattern.SubjectType,
+				AnchorRelation: pattern.SubjectRelation,
+			}
+		}
+
+		// Recurse to find deeper anchor
+		deeper := findIndirectAnchor(targetAnalysis, lookup, visited)
+		if deeper != nil {
+			// Prepend our step to the path
+			step := AnchorPathStep{
+				Type:            "userset",
+				SubjectType:     pattern.SubjectType,
+				SubjectRelation: pattern.SubjectRelation,
+			}
+			deeper.Path = append([]AnchorPathStep{step}, deeper.Path...)
+			return deeper
+		}
+	}
+
+	return nil // No anchor found
 }
