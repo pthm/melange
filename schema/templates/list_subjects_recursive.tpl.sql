@@ -83,6 +83,40 @@ BEGIN
               )
           )
           AND check_permission(v_filter_type, pt.subject_id, '{{$.Relation}}', '{{$.ObjectType}}', p_object_id) = 1
+        UNION
+        -- TTU intermediate object: return the parent object itself as a userset reference
+        -- e.g., for document.viewer: viewer from parent, querying folder#viewer returns folder:X#viewer
+        -- This handles the case where the userset filter type matches the TTU parent type
+        SELECT DISTINCT link.subject_id || '#' || v_filter_relation AS subject_id
+        FROM melange_tuples link
+        WHERE link.object_type = '{{$.ObjectType}}'
+          AND link.object_id = p_object_id
+          AND link.relation = '{{.LinkingRelation}}'
+{{- if .AllowedLinkingTypes }}
+          AND link.subject_type IN ({{.AllowedLinkingTypes}})
+{{- end }}
+          -- Filter type must match the parent type
+          AND link.subject_type = v_filter_type
+          -- Filter relation must satisfy the parent relation via closure
+          AND EXISTS (
+              SELECT 1 FROM melange_relation_closure c
+              WHERE c.object_type = link.subject_type
+                AND c.relation = '{{.Relation}}'
+                AND c.satisfying_relation = v_filter_relation
+          )
+        UNION
+        -- TTU nested intermediate objects: recursively resolve multi-hop TTU chains
+        -- e.g., document -> folder -> organization, querying organization#viewer
+        -- Uses LATERAL to call list_accessible_subjects on each parent
+        SELECT nested.subject_id
+        FROM melange_tuples link,
+             LATERAL list_accessible_subjects(link.subject_type, link.subject_id, '{{.Relation}}', p_subject_type) nested
+        WHERE link.object_type = '{{$.ObjectType}}'
+          AND link.object_id = p_object_id
+          AND link.relation = '{{.LinkingRelation}}'
+{{- if .AllowedLinkingTypes }}
+          AND link.subject_type IN ({{.AllowedLinkingTypes}})
+{{- end }}
 {{- end }}
         UNION
         -- Self-referential userset

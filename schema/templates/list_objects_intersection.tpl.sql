@@ -237,6 +237,28 @@ BEGIN
 {{- end }}
 {{- end }}
     ) AS ig_{{$groupIdx}}
+{{- /* Apply relation-level exclusions to the intersection result */ -}}
+{{- if $.SimpleExcludedRelations }}
+    WHERE TRUE
+{{- range $.SimpleExcludedRelations }}
+      AND NOT EXISTS (
+          SELECT 1 FROM melange_tuples excl
+          WHERE excl.object_type = '{{$.ObjectType}}'
+            AND excl.object_id = ig_{{$groupIdx}}.object_id
+            AND excl.relation = '{{.}}'
+            AND excl.subject_type = p_subject_type
+            AND (excl.subject_id = p_subject_id OR excl.subject_id = '*')
+      )
+{{- end }}
+{{- end }}
+{{- if $.ComplexExcludedRelations }}
+{{- if not $.SimpleExcludedRelations }}
+    WHERE TRUE
+{{- end }}
+{{- range $.ComplexExcludedRelations }}
+      AND check_permission_internal(p_subject_type, p_subject_id, '{{.}}', '{{$.ObjectType}}', ig_{{$groupIdx}}.object_id, ARRAY[]::TEXT[]) = 0
+{{- end }}
+{{- end }}
 {{- end }}
 {{- if .SelfReferentialLinkingRelations }}
 

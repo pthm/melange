@@ -319,6 +319,13 @@ type RelationAnalysis struct {
 	// Computed by ComputeCanGenerate.
 	ClosureParentRelations []ParentRelationInfo
 
+	// ClosureExcludedRelations contains excluded relations from closure relations.
+	// For example, if `can_read: reader` and `reader: [user] but not restricted`,
+	// then can_read's ClosureExcludedRelations includes "restricted".
+	// This ensures exclusions are applied when accessing through implied relations.
+	// Computed by ComputeCanGenerate.
+	ClosureExcludedRelations []string
+
 	// IndirectAnchor describes how to reach a relation with direct grants when this
 	// relation has no direct/implied access paths. For pure TTU or pure userset patterns,
 	// this traces through the pattern to find an anchor relation with [user] or similar.
@@ -1107,9 +1114,11 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		// Skip the relation itself - its features are already checked by CanGenerate().
 		// - Simple: can use tuple lookup (closure-compatible)
 		// - Complex: has exclusion but is itself generatable (delegate to function)
+		// Also collect closure exclusions while iterating through satisfying relations.
 		canGenerate := true
 		cannotGenerateReason := ""
 		var simpleRels, complexRels []string
+		seenClosureExcl := make(map[string]bool)
 		for _, rel := range a.SatisfyingRelations {
 			// Skip self - the relation's own features are handled by its generated code
 			if rel == a.Relation {
@@ -1134,33 +1143,70 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 				cannotGenerateReason = "closure relation not generatable: " + rel
 				break
 			}
+
+			// Collect closure exclusions from this satisfying relation.
+			// This allows implied relations like `can_read: reader` to inherit exclusions
+			// from reader (e.g., "but not restricted").
+			for _, excl := range relAnalysis.ExcludedRelations {
+				if !seenClosureExcl[excl] {
+					seenClosureExcl[excl] = true
+					a.ClosureExcludedRelations = append(a.ClosureExcludedRelations, excl)
+				}
+			}
 		}
 
 		// Third check: classify excluded relations as simple or complex.
 		// Simple exclusions use direct tuple lookup; complex exclusions use function calls.
 		// Unknown excluded relations still prevent generation.
+		// This includes both the relation's own exclusions AND closure-inherited exclusions.
 		var simpleExcluded, complexExcluded []string
+		seenExcluded := make(map[string]bool) // Avoid duplicates
+		classifyExcluded := func(excludedRel string) bool {
+			if seenExcluded[excludedRel] {
+				return true // Already processed
+			}
+			seenExcluded[excludedRel] = true
+
+			excludedAnalysis, ok := lookup[a.ObjectType][excludedRel]
+			if !ok {
+				// Unknown excluded relation - fall back to generic
+				canGenerate = false
+				cannotGenerateReason = "unknown excluded relation: " + excludedRel
+				return false
+			}
+			// Classify excluded relation as simple or complex:
+			// Simple: can use direct tuple lookup (simply resolvable AND no implied closure)
+			// Complex: needs check_permission_internal call
+			isSimple := excludedAnalysis.Features.IsSimplyResolvable() &&
+				len(excludedAnalysis.SatisfyingRelations) <= 1
+			if isSimple {
+				simpleExcluded = append(simpleExcluded, excludedRel)
+			} else {
+				complexExcluded = append(complexExcluded, excludedRel)
+			}
+			return true
+		}
+
+		// Classify the relation's own exclusions
 		if canGenerate && a.Features.HasExclusion {
 			for _, excludedRel := range a.ExcludedRelations {
-				excludedAnalysis, ok := lookup[a.ObjectType][excludedRel]
-				if !ok {
-					// Unknown excluded relation - fall back to generic
-					canGenerate = false
-					cannotGenerateReason = "unknown excluded relation: " + excludedRel
+				if !classifyExcluded(excludedRel) {
 					break
-				}
-				// Classify excluded relation as simple or complex:
-				// Simple: can use direct tuple lookup (simply resolvable AND no implied closure)
-				// Complex: needs check_permission_internal call
-				isSimple := excludedAnalysis.Features.IsSimplyResolvable() &&
-					len(excludedAnalysis.SatisfyingRelations) <= 1
-				if isSimple {
-					simpleExcluded = append(simpleExcluded, excludedRel)
-				} else {
-					complexExcluded = append(complexExcluded, excludedRel)
 				}
 			}
 		}
+
+		// Also classify closure-inherited exclusions (for list functions).
+		// These are exclusions from implied relations like `can_read: reader`
+		// where reader has "but not restricted".
+		if canGenerate {
+			for _, excludedRel := range a.ClosureExcludedRelations {
+				if !classifyExcluded(excludedRel) {
+					break
+				}
+			}
+		}
+
 		if canGenerate {
 			a.SimpleExcludedRelations = simpleExcluded
 			a.ComplexExcludedRelations = complexExcluded
@@ -1312,6 +1358,10 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 				}
 			}
 			a.ClosureParentRelations = closureParentRelations
+
+			// Note: ClosureExcludedRelations is now collected earlier in the "Second check"
+			// loop, before exclusion classification. This ensures exclusions from closure
+			// relations are properly classified as simple or complex.
 		} else {
 			a.CannotGenerateReason = cannotGenerateReason
 		}
