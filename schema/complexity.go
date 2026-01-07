@@ -809,7 +809,9 @@ func canGenerateListFeatures(f RelationFeatures, hasIndirectAnchor bool) (bool, 
 	// - Recursive (TTU): relation has "viewer from parent" patterns (Phase 5 handles these)
 	//
 	// Any of these is sufficient as long as the closure validation passes.
-	if !f.HasDirect && !f.HasImplied && !f.HasUserset && !f.HasRecursive {
+	// Phase 6: HasIntersection is also a valid access path - intersection groups
+	// combine direct relations and/or TTU patterns into a single access check.
+	if !f.HasDirect && !f.HasImplied && !f.HasUserset && !f.HasRecursive && !f.HasIntersection {
 		return false, "no access path (neither direct nor implied)"
 	}
 
@@ -877,6 +879,16 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 				continue
 			}
 			for _, t := range relAnalysis.DirectSubjectTypes {
+				if !seenTypes[t] {
+					seenTypes[t] = true
+					a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
+				}
+			}
+			// Also propagate AllowedSubjectTypes from satisfying relations.
+			// This is critical for purely implied relations (like "can_view: viewer")
+			// where the satisfying relation (viewer) may only have AllowedSubjectTypes
+			// from TTU chains, not DirectSubjectTypes.
+			for _, t := range relAnalysis.AllowedSubjectTypes {
 				if !seenTypes[t] {
 					seenTypes[t] = true
 					a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
@@ -987,6 +999,100 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 				excludedParent.AllowedLinkingTypes = linkingAnalysis.AllowedSubjectTypes
 			} else if ok && len(linkingAnalysis.DirectSubjectTypes) > 0 {
 				excludedParent.AllowedLinkingTypes = linkingAnalysis.DirectSubjectTypes
+			}
+		}
+
+		// Propagate AllowedSubjectTypes from intersection group parts.
+		// For intersection patterns like "writer AND viewer from parent", we need to
+		// collect subject types from both parts.
+		for _, group := range a.IntersectionGroups {
+			for _, part := range group.Parts {
+				// Skip "This" patterns - already handled by DirectSubjectTypes
+				if part.IsThis {
+					continue
+				}
+				// For regular relation parts (like "writer"), get types from that relation
+				if part.Relation != "" && part.ParentRelation == nil {
+					partAnalysis, ok := lookup[a.ObjectType][part.Relation]
+					if ok {
+						for _, t := range partAnalysis.DirectSubjectTypes {
+							if !seenTypes[t] {
+								seenTypes[t] = true
+								a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
+							}
+						}
+						for _, t := range partAnalysis.AllowedSubjectTypes {
+							if !seenTypes[t] {
+								seenTypes[t] = true
+								a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
+							}
+						}
+					}
+				}
+				// For TTU parts (like "viewer from parent"), get types from the target relation
+				if part.ParentRelation != nil {
+					parent := part.ParentRelation
+					// Get the linking relation to find target types
+					linkingAnalysis, ok := lookup[a.ObjectType][parent.LinkingRelation]
+					if ok {
+						// For each possible target type, get the target relation's types
+						targetTypes := linkingAnalysis.AllowedSubjectTypes
+						if len(targetTypes) == 0 {
+							targetTypes = linkingAnalysis.DirectSubjectTypes
+						}
+						for _, targetType := range targetTypes {
+							targetAnalysis, ok := lookup[targetType][parent.Relation]
+							if ok {
+								for _, t := range targetAnalysis.DirectSubjectTypes {
+									if !seenTypes[t] {
+										seenTypes[t] = true
+										a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
+									}
+								}
+								for _, t := range targetAnalysis.AllowedSubjectTypes {
+									if !seenTypes[t] {
+										seenTypes[t] = true
+										a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		// Propagate AllowedSubjectTypes from TTU target relations (ParentRelations).
+		// For patterns like "viewer from parent" where parent links to folders,
+		// we need the subject types from folder.viewer.
+		for _, parent := range a.ParentRelations {
+			// Get the linking relation to find target types
+			linkingAnalysis, ok := lookup[a.ObjectType][parent.LinkingRelation]
+			if !ok {
+				continue
+			}
+			// For each possible target type, get the target relation's types
+			targetTypes := linkingAnalysis.AllowedSubjectTypes
+			if len(targetTypes) == 0 {
+				targetTypes = linkingAnalysis.DirectSubjectTypes
+			}
+			for _, targetType := range targetTypes {
+				targetAnalysis, ok := lookup[targetType][parent.Relation]
+				if !ok {
+					continue
+				}
+				for _, t := range targetAnalysis.DirectSubjectTypes {
+					if !seenTypes[t] {
+						seenTypes[t] = true
+						a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
+					}
+				}
+				for _, t := range targetAnalysis.AllowedSubjectTypes {
+					if !seenTypes[t] {
+						seenTypes[t] = true
+						a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
+					}
+				}
 			}
 		}
 
