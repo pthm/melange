@@ -1,6 +1,9 @@
 package schema
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // RelationFeatures tracks which features a relation uses.
 // Multiple features can be present and will be composed in generated SQL.
@@ -748,12 +751,22 @@ func sortByDependency(analyses []RelationAnalysis) []RelationAnalysis {
 		}
 	}
 
-	// Build reverse mapping: for each relation, which relations depend on it
+	// Build reverse mapping: for each relation, which relations depend on it.
+	// We iterate over deps in sorted order for deterministic results.
 	dependents := make(map[string][]string)
-	for key, depList := range deps {
-		for _, dep := range depList {
+	var depsKeys []string
+	for key := range deps {
+		depsKeys = append(depsKeys, key)
+	}
+	sort.Strings(depsKeys)
+	for _, key := range depsKeys {
+		for _, dep := range deps[key] {
 			dependents[dep] = append(dependents[dep], key)
 		}
+	}
+	// Sort dependents lists for deterministic processing order.
+	for key := range dependents {
+		sort.Strings(dependents[key])
 	}
 
 	// Start with relations that have no dependencies
@@ -1441,6 +1454,101 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		canGenerateList, cannotGenerateListReason := computeCanGenerateList(a, lookup)
 		a.CanGenerateListValue = canGenerateList
 		a.CannotGenerateListReason = cannotGenerateListReason
+	}
+
+	// Second pass: propagate AllowedSubjectTypes through cross-type userset patterns.
+	// This is needed because cross-type relations (e.g., folder.viewer: [group#member])
+	// aren't ordered as dependencies to avoid creating cycles. After the first pass,
+	// all relations have their AllowedSubjectTypes computed for same-type chains.
+	// Now we can propagate types across type boundaries.
+	for i := range sorted {
+		a := &sorted[i]
+		if !a.Features.HasUserset {
+			continue
+		}
+
+		// Collect types from cross-type userset patterns
+		seenTypes := make(map[string]bool)
+		for _, t := range a.AllowedSubjectTypes {
+			seenTypes[t] = true
+		}
+
+		for _, pattern := range a.UsersetPatterns {
+			// Skip same-type patterns (already handled in first pass)
+			if pattern.SubjectType == a.ObjectType {
+				continue
+			}
+
+			subjectAnalysis, ok := lookup[pattern.SubjectType][pattern.SubjectRelation]
+			if !ok {
+				continue
+			}
+
+			// Propagate subject types from the cross-type userset's subject relation
+			for _, t := range subjectAnalysis.DirectSubjectTypes {
+				if !seenTypes[t] {
+					seenTypes[t] = true
+					a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
+				}
+			}
+			for _, t := range subjectAnalysis.AllowedSubjectTypes {
+				if !seenTypes[t] {
+					seenTypes[t] = true
+					a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
+				}
+			}
+		}
+
+		// Also propagate through closure userset patterns (for implied relations)
+		for _, pattern := range a.ClosureUsersetPatterns {
+			// Skip same-type patterns
+			if pattern.SubjectType == a.ObjectType {
+				continue
+			}
+
+			subjectAnalysis, ok := lookup[pattern.SubjectType][pattern.SubjectRelation]
+			if !ok {
+				continue
+			}
+
+			for _, t := range subjectAnalysis.DirectSubjectTypes {
+				if !seenTypes[t] {
+					seenTypes[t] = true
+					a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
+				}
+			}
+			for _, t := range subjectAnalysis.AllowedSubjectTypes {
+				if !seenTypes[t] {
+					seenTypes[t] = true
+					a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
+				}
+			}
+		}
+	}
+
+	// Third pass: re-compute CanGenerateList for all failed relations.
+	// Type propagation may have enabled relations that were previously blocked.
+	// Iterate until no more changes (fixpoint) to handle cascading dependencies.
+	for iteration := 0; iteration < 10; iteration++ { // Max 10 iterations to prevent infinite loops
+		changed := false
+		for i := range sorted {
+			a := &sorted[i]
+			// Skip relations that already can generate
+			if a.CanGenerateListValue {
+				continue
+			}
+
+			// Re-run the list generation check
+			canGenerateList, cannotGenerateListReason := computeCanGenerateList(a, lookup)
+			if canGenerateList != a.CanGenerateListValue {
+				a.CanGenerateListValue = canGenerateList
+				a.CannotGenerateListReason = cannotGenerateListReason
+				changed = true
+			}
+		}
+		if !changed {
+			break // Reached fixpoint
+		}
 	}
 
 	return sorted

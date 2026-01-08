@@ -96,16 +96,32 @@ BEGIN
 {{- end }}
     UNION
     -- Direct userset subject matching: when the subject IS a userset (e.g., group:fga#member)
-    -- and there's a tuple with that exact userset as the subject
-    -- This handles cases like: tuple(document:1, viewer, group:fga#member) queried by group:fga#member
-    -- No type guard - we're matching the exact userset subject in tuples
+    -- and there's a tuple with that userset (or a satisfying relation) as the subject
+    -- This handles cases like: tuple(document:1, viewer, group:fga#member_c4) queried by group:fga#member
+    -- where member satisfies member_c4 via the closure (member → member_c1 → ... → member_c4)
+    -- No type guard - we're matching userset subjects via closure
     SELECT DISTINCT t.object_id
     FROM melange_tuples t
     WHERE t.object_type = '{{.ObjectType}}'
       AND t.relation IN ({{.RelationList}})
       AND t.subject_type = p_subject_type
       AND position('#' in p_subject_id) > 0  -- Subject is a userset
-      AND t.subject_id = p_subject_id        -- Exact match with userset subject
+      AND position('#' in t.subject_id) > 0  -- Tuple subject is also a userset
+      AND (
+          -- Exact match (same object and relation)
+          t.subject_id = p_subject_id
+          OR (
+              -- Same object, and query's relation satisfies tuple's relation via closure
+              -- e.g., query 'fga#member' matches tuple 'fga#member_c4' if member satisfies member_c4
+              split_part(t.subject_id, '#', 1) = split_part(p_subject_id, '#', 1)
+              AND EXISTS (
+                  SELECT 1 FROM melange_relation_closure c
+                  WHERE c.object_type = p_subject_type
+                    AND c.relation = split_part(t.subject_id, '#', 2)
+                    AND c.satisfying_relation = substring(p_subject_id from position('#' in p_subject_id) + 1)
+              )
+          )
+      )
 {{- if .SimpleExcludedRelations }}
       -- Apply simple exclusions to direct userset path
 {{- range .SimpleExcludedRelations }}
