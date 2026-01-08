@@ -96,6 +96,12 @@ BEGIN
       AND (t.subject_id = p_subject_id OR t.subject_id = '*')
       AND check_permission_internal(p_subject_type, p_subject_id, '{{.}}', '{{$.ObjectType}}', t.object_id, ARRAY[]::TEXT[]) = 1
 {{- end }}
+{{- range .IntersectionClosureRelations }}
+
+    UNION
+    -- Compose with intersection closure relation: {{.}}
+    SELECT * FROM list_{{$.ObjectType}}_{{.}}_objects(p_subject_type, p_subject_id)
+{{- end }}
 {{- range .UsersetPatterns }}
 
     UNION

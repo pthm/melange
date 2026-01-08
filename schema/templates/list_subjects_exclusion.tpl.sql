@@ -145,6 +145,16 @@ BEGIN
           AND check_permission_internal(t.subject_type, t.subject_id, '{{.}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 1
 {{- end }}
 {{- end }}
+{{- if .IntersectionClosureRelations }}
+{{- range .IntersectionClosureRelations }}
+        UNION
+        -- Compose with intersection closure relation: {{.}}
+        -- Validate with parent relation's check to apply exclusions
+        SELECT DISTINCT ics.subject_id
+        FROM list_{{$.ObjectType}}_{{.}}_subjects(p_object_id, v_filter_type || '#' || v_filter_relation) AS ics
+        WHERE check_permission(v_filter_type, ics.subject_id, '{{$.Relation}}', '{{$.ObjectType}}', p_object_id) = 1
+{{- end }}
+{{- end }}
         UNION
         -- Self-candidate: when filter type matches object type
         -- e.g., querying document:1.viewer with filter document#writer
@@ -318,6 +328,16 @@ BEGIN
           AND t.subject_id != '*'
 {{- end }}
           AND check_permission_internal(p_subject_type, t.subject_id, '{{.}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 1
+{{- end }}
+{{- end }}
+{{- if .IntersectionClosureRelations }}
+{{- range .IntersectionClosureRelations }}
+        UNION
+        -- Compose with intersection closure relation: {{.}}
+        -- Validate with parent relation's check to apply exclusions
+        SELECT DISTINCT ics.subject_id
+        FROM list_{{$.ObjectType}}_{{.}}_subjects(p_object_id, p_subject_type) AS ics
+        WHERE check_permission(p_subject_type, ics.subject_id, '{{$.Relation}}', '{{$.ObjectType}}', p_object_id) = 1
 {{- end }}
 {{- end }};
     END IF;

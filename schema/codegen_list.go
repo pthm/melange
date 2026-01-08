@@ -102,7 +102,19 @@ func generateListObjectsFunction(a RelationAnalysis) (string, error) {
 	data.RelationList = buildRelationList(a)
 
 	// Populate complex closure relations (need check_permission_internal)
-	data.ComplexClosureRelations = a.ComplexClosureRelations
+	// Filter out intersection closure relations since they're handled separately via function composition
+	intersectionSet := make(map[string]bool)
+	for _, rel := range a.IntersectionClosureRelations {
+		intersectionSet[rel] = true
+	}
+	for _, rel := range a.ComplexClosureRelations {
+		if !intersectionSet[rel] {
+			data.ComplexClosureRelations = append(data.ComplexClosureRelations, rel)
+		}
+	}
+
+	// Populate intersection closure relations (compose with their list functions)
+	data.IntersectionClosureRelations = a.IntersectionClosureRelations
 
 	// Build subject_id check (with or without wildcard)
 	data.SubjectIDCheck = buildSubjectIDCheck(a.Features.HasWildcard)
@@ -212,7 +224,19 @@ func generateListSubjectsFunction(a RelationAnalysis) (string, error) {
 	data.AllSatisfyingRelations = buildAllSatisfyingRelations(a)
 
 	// Populate complex closure relations (need check_permission_internal)
-	data.ComplexClosureRelations = a.ComplexClosureRelations
+	// Filter out intersection closure relations since they're handled separately via function composition
+	intersectionSet := make(map[string]bool)
+	for _, rel := range a.IntersectionClosureRelations {
+		intersectionSet[rel] = true
+	}
+	for _, rel := range a.ComplexClosureRelations {
+		if !intersectionSet[rel] {
+			data.ComplexClosureRelations = append(data.ComplexClosureRelations, rel)
+		}
+	}
+
+	// Populate intersection closure relations (compose with their list functions)
+	data.IntersectionClosureRelations = a.IntersectionClosureRelations
 
 	// Build allowed subject types list for type restriction enforcement
 	data.AllowedSubjectTypes = buildAllowedSubjectTypes(a)
@@ -321,6 +345,10 @@ type ListObjectsFunctionData struct {
 	// These have exclusions or other complex features that can't be resolved via tuple lookup.
 	ComplexClosureRelations []string
 
+	// IntersectionClosureRelations are closure relations that have intersection patterns
+	// and are list-generatable. These need to be composed with their list function.
+	IntersectionClosureRelations []string
+
 	// SubjectIDCheck is the SQL fragment for checking subject_id with wildcard support.
 	// e.g., "(t.subject_id = p_subject_id OR t.subject_id = '*')"
 	SubjectIDCheck string
@@ -396,6 +424,10 @@ type ListSubjectsFunctionData struct {
 
 	// ComplexClosureRelations are closure relations that need check_permission_internal.
 	ComplexClosureRelations []string
+
+	// IntersectionClosureRelations are closure relations that have intersection patterns
+	// and are list-generatable. These need to be composed with their list function.
+	IntersectionClosureRelations []string
 
 	// AllowedSubjectTypes is a SQL-formatted list of allowed subject types.
 	// e.g., "'user', 'employee'" - used to enforce model type restrictions.

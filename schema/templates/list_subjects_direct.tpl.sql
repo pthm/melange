@@ -80,6 +80,13 @@ BEGIN
           AND check_permission_internal(t.subject_type, t.subject_id, '{{.}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 1
 {{- end }}
 {{- end }}
+{{- if .IntersectionClosureRelations }}
+{{- range .IntersectionClosureRelations }}
+        UNION
+        -- Compose with intersection closure relation: {{.}}
+        SELECT * FROM list_{{$.ObjectType}}_{{.}}_subjects(p_object_id, v_filter_type || '#' || v_filter_relation)
+{{- end }}
+{{- end }}
         UNION
         -- Self-candidate: when filter type matches object type
         -- e.g., querying document:1.viewer with filter document#writer
@@ -125,6 +132,13 @@ BEGIN
           AND t.subject_id != '*'
 {{- end }}
           AND check_permission_internal(p_subject_type, t.subject_id, '{{.}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 1
+{{- end }}
+{{- end }}
+{{- if .IntersectionClosureRelations }}
+{{- range .IntersectionClosureRelations }}
+        UNION
+        -- Compose with intersection closure relation: {{.}}
+        SELECT * FROM list_{{$.ObjectType}}_{{.}}_subjects(p_object_id, p_subject_type)
 {{- end }}
 {{- end }};
     END IF;

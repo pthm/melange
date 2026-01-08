@@ -114,6 +114,16 @@ BEGIN
       AND check_permission_internal(p_subject_type, p_subject_id, '{{.}}', '{{$.ObjectType}}', t.object_id, ARRAY[]::TEXT[]) = 1
 {{- end }}
 {{- end }}
+{{- if .IntersectionClosureRelations }}
+{{- range .IntersectionClosureRelations }}
+    UNION
+    -- Compose with intersection closure relation: {{.}}
+    -- Validate with parent relation's check to apply exclusions
+    SELECT DISTINCT icr.object_id
+    FROM list_{{$.ObjectType}}_{{.}}_objects(p_subject_type, p_subject_id) AS icr
+    WHERE check_permission_internal(p_subject_type, p_subject_id, '{{$.Relation}}', '{{$.ObjectType}}', icr.object_id, ARRAY[]::TEXT[]) = 1
+{{- end }}
+{{- end }}
     UNION
     -- Self-candidate: when subject is a userset on the same object type
     -- e.g., subject_id = 'document:1#viewer' querying object_type = 'document'

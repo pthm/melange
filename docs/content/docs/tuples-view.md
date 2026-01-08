@@ -27,6 +27,39 @@ The view must provide these columns:
 | `object_type` | `text` | Type of the object (e.g., `'organization'`, `'repository'`) |
 | `object_id` | `text` | ID of the object |
 
+### Why TEXT Columns?
+
+All ID columns (`subject_id`, `object_id`) must be TEXT for two important reasons:
+
+**1. Wildcard Support**
+
+Melange supports wildcard permissions using `'*'` as the subject_id. For example, `(user:*, reader, repository:123)` grants all users read access. This requires TEXT columns since `'*'` cannot be stored in integer or UUID columns.
+
+**2. ID Type Flexibility**
+
+Your application tables may use different ID types:
+- Integer primary keys (`BIGINT`, `SERIAL`)
+- UUIDs (`UUID`)
+- String identifiers (`VARCHAR`)
+- Composite keys
+
+TEXT columns accommodate all of these. When creating your view, cast IDs to text:
+
+```sql
+-- Integer IDs
+user_id::text AS subject_id
+
+-- UUIDs
+user_id::text AS subject_id  -- UUID casts to text automatically
+
+-- Already text/varchar
+user_id AS subject_id        -- No cast needed
+```
+
+{{< callout type="warning" >}}
+**Performance Note**: The `::text` conversion prevents PostgreSQL from using integer indexes directly. See [Expression Indexes](#expression-indexes-for-text-id-conversion) below to restore efficient index usage.
+{{< /callout >}}
+
 ## Basic Example
 
 ```sql
@@ -170,6 +203,73 @@ CREATE INDEX idx_repo_collabs_user_role_repo
     ON repository_collaborators (user_id, role, repository_id);
 ```
 
+### Expression Indexes for Text ID Conversion
+
+The `melange_tuples` view converts integer IDs to text (e.g., `id::text AS object_id`). This conversion prevents PostgreSQL from using your existing integer-based primary key and foreign key indexes when querying through the view.
+
+**Expression indexes** (also called functional indexes) solve this by indexing the result of the `::text` conversion:
+
+```sql
+-- Index the text-converted ID for object lookups
+CREATE INDEX idx_org_members_text
+    ON organization_members ((organization_id::text), (user_id::text));
+```
+
+With this index, queries like `WHERE object_id = '123'` can use an index scan instead of a sequential scan.
+
+#### Why Expression Indexes Matter
+
+Without expression indexes, PostgreSQL must perform sequential scans on each table in the UNION ALL view. At scale, this causes severe performance degradation:
+
+| Scale | Without Expression Indexes | With Expression Indexes |
+|-------|---------------------------|------------------------|
+| 10K tuples | ~1ms | ~0.3ms |
+| 100K tuples | ~7ms | ~0.5ms |
+| 1M tuples | ~80ms | ~3ms |
+
+The improvement is most dramatic for **exclusion patterns** (`but not author`) and **tuple-to-userset patterns** (`viewer from parent`) which require multiple view lookups per permission check.
+
+#### Complete Expression Index Example
+
+For the view example above, add these expression indexes alongside your regular indexes:
+
+```sql
+-- Expression indexes for text ID conversion
+-- These enable efficient lookups through the UNION ALL view
+
+-- organization_members: object and subject lookups
+CREATE INDEX idx_org_members_obj_text
+    ON organization_members ((organization_id::text), (user_id::text));
+CREATE INDEX idx_org_members_subj_text
+    ON organization_members ((user_id::text), (organization_id::text));
+
+-- repositories: parent relationship lookup
+CREATE INDEX idx_repos_id_text
+    ON repositories ((id::text));
+CREATE INDEX idx_repos_org_text
+    ON repositories ((id::text), (organization_id::text));
+
+-- repository_collaborators: object and subject lookups
+CREATE INDEX idx_repo_collabs_obj_text
+    ON repository_collaborators ((repository_id::text), (user_id::text));
+CREATE INDEX idx_repo_collabs_subj_text
+    ON repository_collaborators ((user_id::text), (repository_id::text));
+```
+
+#### When to Use Expression Indexes
+
+Add expression indexes when:
+- You have more than 10K tuples
+- Permission checks involve exclusion patterns (`but not`)
+- Permission checks involve tuple-to-userset patterns (`viewer from parent`)
+- You see sequential scans in `EXPLAIN ANALYZE` output for view queries
+
+Expression indexes add minimal write overhead and can dramatically improve read performance.
+
+{{< callout type="info" >}}
+**Tip**: Run `ANALYZE` after creating expression indexes to update PostgreSQL's query planner statistics.
+{{< /callout >}}
+
 ## Scaling Strategies
 
 For high-traffic applications or large datasets, consider these strategies to improve performance.
@@ -305,9 +405,13 @@ This provides:
 | Scale | Recommended Approach |
 |-------|---------------------|
 | < 10K tuples | Regular view + source table indexes |
-| 10K-100K tuples | Regular view + source indexes + application cache |
-| 100K-1M tuples | Materialized view with periodic refresh |
+| 10K-100K tuples | Regular view + expression indexes + application cache |
+| 100K-1M tuples | Regular view + expression indexes + application cache, or materialized view |
 | > 1M tuples | Dedicated table with trigger sync + application cache |
+
+{{< callout type="warning" >}}
+**Expression indexes are critical at scale.** Without them, permission checks involving exclusions or parent relationships can be 10-15x slower due to sequential scans through the UNION ALL view.
+{{< /callout >}}
 
 ## Verifying Your View
 
@@ -346,6 +450,18 @@ REFRESH MATERIALIZED VIEW CONCURRENTLY melange_tuples;
 ### Slow permission checks
 
 1. Run `EXPLAIN ANALYZE` on the underlying queries
-2. Add indexes to source tables (see patterns above)
-3. Consider a materialized view or dedicated table for read-heavy workloads
-4. Enable application-level caching
+2. Check for sequential scans on source tables—add expression indexes for `::text` columns
+3. Add standard indexes to source tables (see patterns above)
+4. Consider a materialized view or dedicated table for read-heavy workloads
+5. Enable application-level caching
+
+**Diagnosing with EXPLAIN ANALYZE:**
+
+```sql
+EXPLAIN ANALYZE
+SELECT 1 FROM melange_tuples
+WHERE object_type = 'repository' AND object_id = '123'
+  AND relation = 'reader' AND subject_type = 'user';
+```
+
+Look for `Seq Scan` in the output. If you see sequential scans with filters like `Filter: ((id)::text = '123'::text)`, you need expression indexes on the `(id::text)` column.

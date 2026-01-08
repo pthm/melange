@@ -139,6 +139,13 @@ BEGIN
       AND check_permission_internal(p_subject_type, p_subject_id, '{{.}}', '{{$.ObjectType}}', t.object_id, ARRAY[]::TEXT[]) = 1
 {{- end }}
 {{- end }}
+{{- if .IntersectionClosureRelations }}
+{{- range .IntersectionClosureRelations }}
+    UNION
+    -- Compose with intersection closure relation: {{.}}
+    SELECT * FROM list_{{$.ObjectType}}_{{.}}_objects(p_subject_type, p_subject_id)
+{{- end }}
+{{- end }}
 {{- range .UsersetPatterns }}
     UNION
     -- Path: Via {{.SubjectType}}#{{.SubjectRelation}} membership

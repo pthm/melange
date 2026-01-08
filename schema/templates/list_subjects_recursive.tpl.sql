@@ -118,6 +118,13 @@ BEGIN
           AND link.subject_type IN ({{.AllowedLinkingTypes}})
 {{- end }}
 {{- end }}
+{{- if .IntersectionClosureRelations }}
+{{- range .IntersectionClosureRelations }}
+        UNION
+        -- Compose with intersection closure relation: {{.}}
+        SELECT * FROM list_{{$.ObjectType}}_{{.}}_subjects(p_object_id, v_filter_type || '#' || v_filter_relation)
+{{- end }}
+{{- end }}
         UNION
         -- Self-referential userset
         SELECT p_object_id || '#' || v_filter_relation AS subject_id
@@ -230,6 +237,11 @@ BEGIN
               AND t.subject_id != '*'
 {{- end }}
               AND check_permission_internal(t.subject_type, t.subject_id, '{{.}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 1
+{{- end }}
+{{- range .IntersectionClosureRelations }}
+            UNION
+            -- Compose with intersection closure relation: {{.}}
+            SELECT * FROM list_{{$.ObjectType}}_{{.}}_subjects(p_object_id, p_subject_type)
 {{- end }}
 {{- range .UsersetPatterns }}
             UNION

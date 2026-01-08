@@ -305,6 +305,12 @@ type RelationAnalysis struct {
 	// Computed by ComputeCanGenerate.
 	ComplexClosureRelations []string
 
+	// IntersectionClosureRelations contains relations in the closure that have intersection
+	// patterns and are list-generatable. These need to be handled by composing with their
+	// list function rather than tuple lookup (since intersection relations have no tuples).
+	// Computed by computeCanGenerateList.
+	IntersectionClosureRelations []string
+
 	// ClosureUsersetPatterns contains userset patterns from closure relations.
 	// For example, if `can_view: viewer` and `viewer: [group#member]`, then
 	// can_view's ClosureUsersetPatterns includes group#member.
@@ -1548,9 +1554,12 @@ func computeCanGenerateList(a *RelationAnalysis, lookup map[string]map[string]*R
 			return false, "closure relation " + rel + " is not list-generatable: " + relAnalysis.CannotGenerateListReason
 		}
 
-		// Closure relations with intersection still need special handling
+		// Phase 9C: Closure relations with intersection are now supported.
+		// These are handled by composing with their list function (they are list-generatable).
+		// We track them in IntersectionClosureRelations so templates can compose correctly.
+		// Note: The check at line 1553 already ensures the closure relation IS list-generatable.
 		if relAnalysis.Features.HasIntersection {
-			return false, "closure relation " + rel + " has intersection patterns (requires Phase 6+)"
+			a.IntersectionClosureRelations = append(a.IntersectionClosureRelations, rel)
 		}
 
 		// Phase 9B: Self-referential usersets in closure relations are now supported.

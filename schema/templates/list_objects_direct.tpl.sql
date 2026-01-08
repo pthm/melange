@@ -49,6 +49,13 @@ BEGIN
       AND check_permission_internal(p_subject_type, p_subject_id, '{{.}}', '{{$.ObjectType}}', t.object_id, ARRAY[]::TEXT[]) = 1
 {{- end }}
 {{- end }}
+{{- if .IntersectionClosureRelations }}
+{{- range .IntersectionClosureRelations }}
+    UNION
+    -- Compose with intersection closure relation: {{.}}
+    SELECT * FROM list_{{$.ObjectType}}_{{.}}_objects(p_subject_type, p_subject_id)
+{{- end }}
+{{- end }}
     UNION
     -- Self-candidate: when subject is a userset on the same object type
     -- e.g., subject_id = 'document:1#viewer' querying object_type = 'document'

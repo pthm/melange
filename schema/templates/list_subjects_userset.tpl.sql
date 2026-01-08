@@ -59,6 +59,13 @@ BEGIN
           -- 2. Wildcard access (type:*) applies to individual subjects, not userset references
           -- 3. Userset references can't be wildcards (group:*#member is not valid syntax)
           AND check_permission(v_filter_type, t.subject_id, '{{.Relation}}', '{{.ObjectType}}', p_object_id) = 1
+{{- if .IntersectionClosureRelations }}
+{{- range .IntersectionClosureRelations }}
+        UNION
+        -- Compose with intersection closure relation: {{.}}
+        SELECT * FROM list_{{$.ObjectType}}_{{.}}_subjects(p_object_id, v_filter_type || '#' || v_filter_relation)
+{{- end }}
+{{- end }}
         UNION
         -- Self-referential userset: when object_type matches filter_type and filter_relation
         -- satisfies the requested relation, the userset reference object_id#filter_relation has access
@@ -167,6 +174,13 @@ BEGIN
               AND t.subject_id != '*'
 {{- end }}
               AND check_permission_internal(t.subject_type, t.subject_id, '{{.}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 1
+{{- end }}
+{{- end }}
+{{- if .IntersectionClosureRelations }}
+{{- range .IntersectionClosureRelations }}
+            UNION
+            -- Compose with intersection closure relation: {{.}}
+            SELECT * FROM list_{{$.ObjectType}}_{{.}}_subjects(p_object_id, p_subject_type)
 {{- end }}
 {{- end }}
 {{- range .UsersetPatterns }}
