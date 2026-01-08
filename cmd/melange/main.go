@@ -5,6 +5,7 @@
 //   - generate: Produce Go code with type-safe constants from schema
 //   - migrate: Load schema into PostgreSQL (creates tables and functions)
 //   - status: Check current migration state
+//   - doctor: Run health checks on authorization infrastructure
 //
 // This tool is typically run during development and deployment to keep
 // the database schema synchronized with .fga files.
@@ -27,6 +28,7 @@ import (
 
 	_ "github.com/lib/pq"
 
+	"github.com/pthm/melange/doctor"
 	"github.com/pthm/melange/schema"
 	"github.com/pthm/melange/tooling"
 )
@@ -42,6 +44,7 @@ func main() {
 		configFile     = flag.String("config", "melange.yaml", "Config file (optional)")
 		dryRun         = flag.Bool("dry-run", false, "Output migration SQL without applying (migrate only)")
 		force          = flag.Bool("force", false, "Force migration even if schema unchanged (migrate only)")
+		verbose        = flag.Bool("verbose", false, "Show detailed output (doctor only)")
 	)
 	flag.Parse()
 
@@ -81,6 +84,8 @@ func main() {
 		status(ctx, migrator)
 	case "migrate":
 		migrate(ctx, db, *schemasDir, *dryRun, *force)
+	case "doctor":
+		runDoctor(ctx, db, *schemasDir, *verbose)
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", flag.Arg(0))
 		printUsage()
@@ -99,6 +104,7 @@ func printUsage() {
 	fmt.Println("  generate    Generate Go types from schema")
 	fmt.Println("  validate    Validate schema syntax")
 	fmt.Println("  status      Show current schema status")
+	fmt.Println("  doctor      Run health checks on authorization infrastructure")
 	fmt.Println()
 	fmt.Println("Global Flags:")
 	flag.PrintDefaults()
@@ -121,6 +127,12 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("  # Check status")
 	fmt.Println("  melange status --db postgres://localhost/mydb")
+	fmt.Println()
+	fmt.Println("  # Run health checks")
+	fmt.Println("  melange doctor --db postgres://localhost/mydb")
+	fmt.Println()
+	fmt.Println("  # Run health checks with verbose output")
+	fmt.Println("  melange doctor --db postgres://localhost/mydb --verbose")
 }
 
 // status queries the database for current migration state.
@@ -266,4 +278,22 @@ func generate(schemasDir, generateDir, generatePkg, idType, relationPrefix strin
 	}
 
 	fmt.Printf("Generated %s from %s\n", outPath, schemaPath)
+}
+
+// runDoctor performs health checks on the authorization infrastructure.
+// Validates schema files, database state, generated functions, and data health.
+func runDoctor(ctx context.Context, db *sql.DB, schemasDir string, verbose bool) {
+	fmt.Println("melange doctor - Health Check")
+
+	d := doctor.New(db, schemasDir)
+	report, err := d.Run(ctx)
+	if err != nil {
+		log.Fatalf("running doctor: %v", err)
+	}
+
+	report.Print(os.Stdout, verbose)
+
+	if report.HasErrors() {
+		os.Exit(1)
+	}
 }
