@@ -1,5 +1,7 @@
 package schema
 
+import "sort"
+
 // ClosureRow represents a row in the melange_relation_closure table.
 // The closure table is a critical optimization that precomputes transitive
 // implied-by relationships at schema load time, eliminating the need for
@@ -51,12 +53,21 @@ func ComputeRelationClosure(types []TypeDefinition) []ClosureRow {
 		for _, r := range t.Relations {
 			satisfying := computeTransitiveSatisfiers(r.Name, impliedBy)
 
-			for rel, path := range satisfying {
+			// Sort map keys for deterministic output order.
+			// This ensures consistent ordering of SatisfyingRelations in
+			// downstream processing (complexity analysis, code generation).
+			var satisfyingRels []string
+			for rel := range satisfying {
+				satisfyingRels = append(satisfyingRels, rel)
+			}
+			sort.Strings(satisfyingRels)
+
+			for _, rel := range satisfyingRels {
 				rows = append(rows, ClosureRow{
 					ObjectType:         t.Name,
 					Relation:           r.Name,
 					SatisfyingRelation: rel,
-					ViaPath:            path,
+					ViaPath:            satisfying[rel],
 				})
 			}
 		}

@@ -11,6 +11,7 @@ package tooling
 import (
 	"fmt"
 	"os"
+	"sort"
 
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/language/pkg/go/transformer"
@@ -79,7 +80,16 @@ func convertModel(model *openfgav1.AuthorizationModel) []schema.TypeDefinition {
 		// This extracts both simple type references [user] and userset references [group#member]
 		directTypeRefs := make(map[string][]schema.SubjectTypeRef)
 		if meta := td.GetMetadata(); meta != nil {
-			for relName, relMeta := range meta.GetRelations() {
+			// Sort relation names for deterministic order
+			relMetaMap := meta.GetRelations()
+			var relNames []string
+			for relName := range relMetaMap {
+				relNames = append(relNames, relName)
+			}
+			sort.Strings(relNames)
+
+			for _, relName := range relNames {
+				relMeta := relMetaMap[relName]
 				for _, t := range relMeta.GetDirectlyRelatedUserTypes() {
 					typeName := t.GetType()
 					ref := schema.SubjectTypeRef{Type: typeName}
@@ -98,8 +108,16 @@ func convertModel(model *openfgav1.AuthorizationModel) []schema.TypeDefinition {
 			}
 		}
 
-		// Convert relations
-		for relName, rel := range td.GetRelations() {
+		// Convert relations - sort for deterministic order
+		relMap := td.GetRelations()
+		var relNames []string
+		for relName := range relMap {
+			relNames = append(relNames, relName)
+		}
+		sort.Strings(relNames)
+
+		for _, relName := range relNames {
+			rel := relMap[relName]
 			relDef := convertRelation(relName, rel, directTypeRefs[relName])
 			typeDef.Relations = append(typeDef.Relations, relDef)
 		}

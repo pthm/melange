@@ -22,15 +22,14 @@ var ModelSQL string
 // FunctionsSQL contains the PostgreSQL functions for permission checking:
 //   - check_permission: evaluates if subject has relation on object
 //   - list_accessible_objects: returns all objects subject has relation on
-//   - has_tuple: checks for direct tuple existence
+//   - list_accessible_subjects: returns all subjects with access to an object
 //
 // Applied via CREATE OR REPLACE FUNCTION for idempotence.
+// The list functions are stubs that get replaced by generated dispatchers
+// during migration.
 //
 //go:embed functions/01_userset_helpers.sql
 var functionsUsersetHelpersSQL string
-
-//go:embed functions/02_subject_grants.sql
-var functionsSubjectGrantsSQL string
 
 //go:embed functions/03_exclusions.sql
 var functionsExclusionsSQL string
@@ -44,7 +43,6 @@ var functionsQueriesSQL string
 // FunctionsSQLFiles lists the function SQL files in application order.
 var FunctionsSQLFiles = []SQLFile{
 	{Path: "functions/01_userset_helpers.sql", Contents: functionsUsersetHelpersSQL},
-	{Path: "functions/02_subject_grants.sql", Contents: functionsSubjectGrantsSQL},
 	{Path: "functions/03_exclusions.sql", Contents: functionsExclusionsSQL},
 	{Path: "functions/04_permissions.sql", Contents: functionsPermissionsSQL},
 	{Path: "functions/05_queries.sql", Contents: functionsQueriesSQL},
@@ -53,7 +51,6 @@ var FunctionsSQLFiles = []SQLFile{
 // FunctionsSQL concatenates all function SQL files for backwards compatibility.
 var FunctionsSQL = strings.Join([]string{
 	functionsUsersetHelpersSQL,
-	functionsSubjectGrantsSQL,
 	functionsExclusionsSQL,
 	functionsPermissionsSQL,
 	functionsQueriesSQL,

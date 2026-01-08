@@ -67,9 +67,13 @@ func (m *Migrator) HasSchema() bool {
 // The DDL creates:
 //   - melange_model table with performance indexes (stores parsed FGA schema)
 //   - melange_relation_closure table (precomputed transitive closure)
-//   - check_permission function (evaluates permissions)
-//   - list_accessible_objects function (reverse lookup)
-//   - has_tuple function (direct tuple checks)
+//   - check_permission function stub (replaced by generated dispatcher)
+//   - list_accessible_objects function stub (replaced by generated dispatcher)
+//   - list_accessible_subjects function stub (replaced by generated dispatcher)
+//
+// The stub functions are placeholders that get replaced by generated
+// dispatchers during schema migration. The stubs return errors until
+// migration runs with an authorization schema.
 //
 // This can be called independently of schema migration to update function
 // implementations without reloading the authorization model.

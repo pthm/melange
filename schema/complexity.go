@@ -769,7 +769,8 @@ func sortByDependency(analyses []RelationAnalysis) []RelationAnalysis {
 		sort.Strings(dependents[key])
 	}
 
-	// Start with relations that have no dependencies
+	// Start with relations that have no dependencies.
+	// Sort for deterministic processing order.
 	var queue []string
 	for _, a := range analyses {
 		key := a.ObjectType + "." + a.Relation
@@ -777,6 +778,7 @@ func sortByDependency(analyses []RelationAnalysis) []RelationAnalysis {
 			queue = append(queue, key)
 		}
 	}
+	sort.Strings(queue)
 
 	// Process in order using Kahn's algorithm
 	var sorted []RelationAnalysis
@@ -1526,13 +1528,44 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		}
 	}
 
-	// Third pass: re-compute CanGenerateList for all failed relations.
-	// Type propagation may have enabled relations that were previously blocked.
+	// Third pass: re-propagate AllowedSubjectTypes and re-compute CanGenerateList.
+	// This handles cycles in the dependency graph where userset relations depend on
+	// each other (e.g., allowed -> member -> allowed_member -> allowed).
+	// In such cycles, AllowedSubjectTypes may not be fully propagated in the first pass.
 	// Iterate until no more changes (fixpoint) to handle cascading dependencies.
 	for iteration := 0; iteration < 10; iteration++ { // Max 10 iterations to prevent infinite loops
 		changed := false
 		for i := range sorted {
 			a := &sorted[i]
+
+			// Re-propagate AllowedSubjectTypes from userset patterns.
+			// This is needed for cyclic dependencies where the subject relation
+			// may have been processed after this relation in the first pass.
+			seenTypes := make(map[string]bool)
+			for _, t := range a.AllowedSubjectTypes {
+				seenTypes[t] = true
+			}
+			for _, pattern := range a.UsersetPatterns {
+				subjectAnalysis, ok := lookup[pattern.SubjectType][pattern.SubjectRelation]
+				if !ok {
+					continue
+				}
+				for _, t := range subjectAnalysis.DirectSubjectTypes {
+					if !seenTypes[t] {
+						seenTypes[t] = true
+						a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
+						changed = true
+					}
+				}
+				for _, t := range subjectAnalysis.AllowedSubjectTypes {
+					if !seenTypes[t] {
+						seenTypes[t] = true
+						a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
+						changed = true
+					}
+				}
+			}
+
 			// Skip relations that already can generate
 			if a.CanGenerateListValue {
 				continue

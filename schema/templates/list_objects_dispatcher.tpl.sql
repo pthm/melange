@@ -1,13 +1,13 @@
 {{- /*
   Template for generating the list_accessible_objects dispatcher function.
-  Routes to specialized list_objects functions for known type/relation pairs,
-  falling back to the generic list_accessible_objects_generic function for unsupported patterns.
+  Routes to specialized list_objects functions for known type/relation pairs.
 
-  Unlike check_permission which must deny unknown patterns, list functions can
-  safely fall back to generic because they filter results through check_permission.
+  All relations have specialized functions generated at migration time.
+  Unknown type/relation pairs indicate either a model error or a query
+  against an undefined relation - both should return an error.
 */ -}}
 -- Generated dispatcher for list_accessible_objects
--- Routes to specialized functions or falls back to generic implementation
+-- Routes to specialized functions for all type/relation pairs
 CREATE OR REPLACE FUNCTION list_accessible_objects(
     p_subject_type TEXT,
     p_subject_id TEXT,
@@ -16,7 +16,7 @@ CREATE OR REPLACE FUNCTION list_accessible_objects(
 ) RETURNS TABLE (object_id TEXT) AS $$
 BEGIN
 {{- if .HasSpecializedFunctions }}
-    -- Route to specialized functions for supported type/relation pairs
+    -- Route to specialized functions for all type/relation pairs
 {{- range .Cases }}
     IF p_object_type = '{{.ObjectType}}' AND p_relation = '{{.Relation}}' THEN
         RETURN QUERY SELECT * FROM {{.FunctionName}}(p_subject_type, p_subject_id);
@@ -25,9 +25,8 @@ BEGIN
 {{- end }}
 {{- end }}
 
-    -- Fall back to generic implementation for unsupported patterns
-    RETURN QUERY SELECT * FROM list_accessible_objects_generic(
-        p_subject_type, p_subject_id, p_relation, p_object_type
-    );
+    -- Unknown type/relation pair - return empty result (relation not defined in model)
+    -- This matches check_permission behavior for unknown relations (returns 0/denied)
+    RETURN;
 END;
 $$ LANGUAGE plpgsql STABLE;
