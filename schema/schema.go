@@ -59,17 +59,17 @@
 // # Validation
 //
 // DetectCycles validates schemas before migration. It checks for:
-//  - Implied-by cycles within a type (admin -> owner -> admin)
-//  - Cross-type parent relation cycles
-//  - Allows hierarchical recursion (folder -> parent folder)
+//   - Implied-by cycles within a type (admin -> owner -> admin)
+//   - Cross-type parent relation cycles
+//   - Allows hierarchical recursion (folder -> parent folder)
 //
 // Invalid schemas are rejected with ErrCyclicSchema before reaching the database.
 //
 // # Relationship to Other Packages
 //
 // The schema package is dependency-free (stdlib only) and imported by both:
-//  - tooling package (adds OpenFGA parser, provides convenience functions)
-//  - root melange package (uses Execer interface but no other types)
+//   - tooling package (adds OpenFGA parser, provides convenience functions)
+//   - root melange package (uses Execer interface but no other types)
 //
 // This layering keeps the core runtime (melange package) lightweight while
 // supporting rich schema manipulation in tooling contexts.

@@ -516,7 +516,7 @@ func collectUsersetPatterns(r RelationDefinition) []UsersetPattern {
 
 // collectParentRelations extracts "X from Y" patterns from a relation.
 func collectParentRelations(r RelationDefinition) []ParentRelationInfo {
-	var parents []ParentRelationInfo
+	parents := make([]ParentRelationInfo, 0, len(r.ParentRelations))
 	seen := make(map[string]bool) // Deduplicate by "relation:linkingRelation" key
 
 	// New field: ParentRelations slice
@@ -547,7 +547,7 @@ func collectExcludedRelations(r RelationDefinition) []string {
 
 // collectExcludedParentRelations extracts TTU exclusions like "but not viewer from parent".
 func collectExcludedParentRelations(r RelationDefinition) []ParentRelationInfo {
-	var excluded []ParentRelationInfo
+	excluded := make([]ParentRelationInfo, 0, len(r.ExcludedParentRelations))
 	for _, pr := range r.ExcludedParentRelations {
 		excluded = append(excluded, ParentRelationInfo{
 			Relation:        pr.Relation,
@@ -672,7 +672,7 @@ func sortByDependency(analyses []RelationAnalysis) []RelationAnalysis {
 	lookup := buildAnalysisLookup(analyses)
 
 	// Build dependency graph: relation -> relations it depends on
-	deps := make(map[string][]string) // key: "type.relation"
+	deps := make(map[string][]string)        // key: "type.relation"
 	seen := make(map[string]map[string]bool) // Deduplicate dependencies
 
 	addDep := func(key, dep string) {
@@ -747,7 +747,7 @@ func sortByDependency(analyses []RelationAnalysis) []RelationAnalysis {
 	// Build reverse mapping: for each relation, which relations depend on it.
 	// We iterate over deps in sorted order for deterministic results.
 	dependents := make(map[string][]string)
-	var depsKeys []string
+	depsKeys := make([]string, 0, len(deps))
 	for key := range deps {
 		depsKeys = append(depsKeys, key)
 	}
@@ -905,6 +905,7 @@ func canGenerateListFeatures(f RelationFeatures, hasIndirectAnchor bool) (bool, 
 // 2. ALL relations in its satisfying closure are either:
 //   - Simply resolvable (can use tuple lookup), OR
 //   - Complex but generatable (have exclusions but can generate their own function)
+//
 // 3. If the relation has exclusions, excluded relations are classified as:
 //   - Simple: can use direct tuple lookup (simply resolvable AND no implied closure)
 //   - Complex: use check_permission_internal call (has TTU, userset, intersection, etc.)
@@ -1170,6 +1171,7 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		cannotGenerateReason := ""
 		var simpleRels, complexRels []string
 		seenClosureExcl := make(map[string]bool)
+	closureLoop:
 		for _, rel := range a.SatisfyingRelations {
 			// Skip self - the relation's own features are handled by its generated code
 			if rel == a.Relation {
@@ -1182,17 +1184,18 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 				cannotGenerateReason = "unknown relation in closure: " + rel
 				break
 			}
-			if relAnalysis.Features.IsClosureCompatible() {
+			switch {
+			case relAnalysis.Features.IsClosureCompatible():
 				// Simple: can use tuple lookup
 				simpleRels = append(simpleRels, rel)
-			} else if relAnalysis.CanGenerate {
+			case relAnalysis.CanGenerate:
 				// Complex but generatable: delegate to check_permission_internal
 				complexRels = append(complexRels, rel)
-			} else {
+			default:
 				// Truly incompatible: fall back to generic
 				canGenerate = false
 				cannotGenerateReason = "closure relation not generatable: " + rel
-				break
+				break closureLoop
 			}
 
 			// Collect closure exclusions from this satisfying relation.

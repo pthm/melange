@@ -190,7 +190,7 @@ func printReasonSection(title string, byReason map[string][]RelationInfo, summar
 		reason string
 		count  int
 	}
-	var reasons []reasonCount
+	reasons := make([]reasonCount, 0, len(byReason))
 	for reason, infos := range byReason {
 		reasons = append(reasons, reasonCount{reason, len(infos)})
 	}

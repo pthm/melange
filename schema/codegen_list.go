@@ -390,12 +390,12 @@ type ListObjectsFunctionData struct {
 	SelfReferentialLinkingRelations string
 
 	// Intersection-related fields (Phase 6)
-	HasIntersection     bool                   // true if this relation has intersection patterns
+	HasIntersection     bool                    // true if this relation has intersection patterns
 	IntersectionGroups  []IntersectionGroupInfo // Intersection groups for list functions
-	HasStandaloneAccess bool                   // true if there are access paths outside intersections
+	HasStandaloneAccess bool                    // true if there are access paths outside intersections
 
 	// Phase 8: Indirect anchor for composed access patterns
-	HasIndirectAnchor bool                   // true if access is via indirect anchor
+	HasIndirectAnchor bool                    // true if access is via indirect anchor
 	IndirectAnchor    *ListIndirectAnchorData // Anchor info for composed templates
 
 	// Phase 9B: Self-referential userset patterns
@@ -464,11 +464,11 @@ type ListSubjectsFunctionData struct {
 	ParentRelations []ListParentRelationData // TTU patterns like "viewer from parent"
 
 	// Intersection-related fields (Phase 6)
-	HasIntersection    bool                   // true if this relation has intersection patterns
+	HasIntersection    bool                    // true if this relation has intersection patterns
 	IntersectionGroups []IntersectionGroupInfo // Intersection groups for list functions
 
 	// Phase 8: Indirect anchor for composed access patterns
-	HasIndirectAnchor bool                   // true if access is via indirect anchor
+	HasIndirectAnchor bool                    // true if access is via indirect anchor
 	IndirectAnchor    *ListIndirectAnchorData // Anchor info for composed templates
 
 	// Phase 9B: Self-referential userset patterns
@@ -548,11 +548,11 @@ type ListIndirectAnchorData struct {
 	FirstStepTargetFunctionName string // e.g., "list_permission_assignee_objects"
 
 	// Anchor relation info (end of the chain)
-	AnchorType             string // Type of anchor relation (e.g., "folder")
-	AnchorRelation         string // Anchor relation name (e.g., "viewer")
-	AnchorFunctionName     string // Name of anchor's list function (e.g., "list_folder_viewer_objects")
-	AnchorSubjectTypes     string // SQL-formatted allowed subject types from anchor
-	AnchorHasWildcard      bool   // Whether anchor supports wildcards
+	AnchorType              string // Type of anchor relation (e.g., "folder")
+	AnchorRelation          string // Anchor relation name (e.g., "viewer")
+	AnchorFunctionName      string // Name of anchor's list function (e.g., "list_folder_viewer_objects")
+	AnchorSubjectTypes      string // SQL-formatted allowed subject types from anchor
+	AnchorHasWildcard       bool   // Whether anchor supports wildcards
 	SatisfyingRelationsList string // SQL-formatted list of relations that satisfy the anchor
 }
 
@@ -919,10 +919,11 @@ func buildListIndirectAnchorData(a RelationAnalysis) *ListIndirectAnchorData {
 	// not the anchor's. This allows each step to handle its own traversal.
 	if len(anchor.Path) > 0 {
 		firstStep := anchor.Path[0]
-		if firstStep.Type == "ttu" {
+		switch firstStep.Type {
+		case "ttu":
 			// For TTU, the first step's target is the relation we're looking up on the parent type
 			data.FirstStepTargetFunctionName = listObjectsFunctionName(firstStep.TargetType, firstStep.TargetRelation)
-		} else if firstStep.Type == "userset" {
+		case "userset":
 			// For userset, the first step's target is the membership relation on the subject type
 			data.FirstStepTargetFunctionName = listObjectsFunctionName(firstStep.SubjectType, firstStep.SubjectRelation)
 		}

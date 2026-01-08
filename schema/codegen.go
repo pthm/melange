@@ -400,7 +400,7 @@ func buildIntersectionGroups(a RelationAnalysis, noWildcard bool) []Intersection
 
 // buildImpliedFunctionCalls creates function call data for complex closure relations.
 func buildImpliedFunctionCalls(a RelationAnalysis, noWildcard bool) []ImpliedFunctionCall {
-	var calls []ImpliedFunctionCall
+	calls := make([]ImpliedFunctionCall, 0, len(a.ComplexClosureRelations))
 	for _, rel := range a.ComplexClosureRelations {
 		name := functionName(a.ObjectType, rel)
 		if noWildcard {
@@ -519,7 +519,7 @@ func buildUsersetCheck(a RelationAnalysis, allowWildcard bool, internalCheckFn s
 		return "FALSE", nil
 	}
 
-	var checks []string
+	checks := make([]string, 0, len(a.UsersetPatterns))
 	for _, pattern := range a.UsersetPatterns {
 		var buf bytes.Buffer
 
@@ -610,7 +610,7 @@ type IntersectionExclusionCheckData struct {
 // buildExclusionCheck renders the exclusion check SQL fragment.
 // Simple exclusions use direct tuple lookup; complex exclusions use check_permission_internal.
 // TTU exclusions check linked objects; intersection exclusions AND together checks.
-func buildExclusionCheck(a RelationAnalysis, allowWildcard bool, internalCheckFn string) (string, error) {
+func buildExclusionCheck(a RelationAnalysis, _ bool, internalCheckFn string) (string, error) {
 	// Check if there are any exclusions to handle
 	hasSimpleOrComplex := len(a.SimpleExcludedRelations) > 0 || len(a.ComplexExcludedRelations) > 0
 	hasUnclassified := len(a.ExcludedRelations) > 0
@@ -645,7 +645,7 @@ func buildExclusionCheck(a RelationAnalysis, allowWildcard bool, internalCheckFn
 		return strings.Join(checks, " OR "), nil
 	}
 
-	var checks []string
+	checks := make([]string, 0, len(a.SimpleExcludedRelations)+len(a.ComplexExcludedRelations)+len(a.ExcludedParentRelations)+len(a.ExcludedIntersectionGroups))
 
 	// Simple exclusions: direct tuple lookup
 	for _, excl := range a.SimpleExcludedRelations {
@@ -701,7 +701,8 @@ func buildExclusionCheck(a RelationAnalysis, allowWildcard bool, internalCheckFn
 	for _, group := range a.ExcludedIntersectionGroups {
 		var parts []string
 		for _, part := range group.Parts {
-			if part.ParentRelation != nil {
+			switch {
+			case part.ParentRelation != nil:
 				// TTU part within intersection exclusion
 				data := TTUExclusionCheckData{
 					ObjectType:                a.ObjectType,
@@ -715,7 +716,7 @@ func buildExclusionCheck(a RelationAnalysis, allowWildcard bool, internalCheckFn
 					return "", fmt.Errorf("executing ttu_exclusion_check template for intersection: %w", err)
 				}
 				parts = append(parts, strings.TrimSpace(buf.String()))
-			} else if part.ExcludedRelation != "" {
+			case part.ExcludedRelation != "":
 				// Nested exclusion: "editor but not owner" in the exclusion
 				// The exclusion applies when: part.Relation AND NOT part.ExcludedRelation
 				// We check: relation is true AND excluded_relation is false
@@ -726,7 +727,7 @@ func buildExclusionCheck(a RelationAnalysis, allowWildcard bool, internalCheckFn
 					"%s(p_subject_type, p_subject_id, '%s', '%s', p_object_id, p_visited) = 0",
 					internalCheckFn, part.ExcludedRelation, a.ObjectType)
 				parts = append(parts, "("+mainCheck+" AND "+excludeCheck+")")
-			} else {
+			default:
 				// Regular relation part
 				data := ComplexExclusionCheckData{
 					ObjectType:                a.ObjectType,

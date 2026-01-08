@@ -448,7 +448,6 @@ func BenchAllTests(b *testing.B) {
 	}
 }
 
-
 // RunTest runs a single test case with its own isolated database.
 // Each test gets a fresh database to enable parallel execution.
 func RunTest(t *testing.T, _ *Client, tc TestCase) {

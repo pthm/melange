@@ -96,7 +96,6 @@ func convertModel(model *openfgav1.AuthorizationModel) []schema.TypeDefinition {
 
 					switch v := t.GetRelationOrWildcard().(type) {
 					case *openfgav1.RelationReference_Wildcard:
-						typeName += ":*"
 						ref.Wildcard = true
 					case *openfgav1.RelationReference_Relation:
 						// This is a userset reference like [group#member]
