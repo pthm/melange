@@ -734,21 +734,14 @@ func sortByDependency(analyses []RelationAnalysis) []RelationAnalysis {
 			}
 		}
 
-		// Dependencies from SAME-TYPE userset patterns only.
-		// This ensures subject relations are processed first so AllowedSubjectTypes
-		// can be propagated correctly through userset chains.
-		// For example, in "a2: [resource#a1]" on type resource, a2 depends on a1.
-		// Cross-type usersets (e.g., folder.viewer: [group#member]) are NOT added
-		// as dependencies because they don't need type propagation in the same way.
-		for _, pattern := range a.UsersetPatterns {
-			// Only add dependency for same-type usersets
-			if pattern.SubjectType == a.ObjectType {
-				depKey := pattern.SubjectType + "." + pattern.SubjectRelation
-				if depKey != key { // Skip self-reference
-					addDep(key, depKey)
-				}
-			}
-		}
+		// NOTE: Same-type userset patterns (e.g., group.blocked: [group#member])
+		// are NOT added as dependencies because:
+		// 1. They often create cycles (member -> blocked -> member via exclusion + userset)
+		// 2. CanGenerate doesn't need this ordering - usersets are handled via check_permission_internal
+		// 3. AllowedSubjectTypes propagation happens in the fixpoint iteration (lines 1532+)
+		//
+		// Previously this code added same-type userset dependencies which caused cycles
+		// that resulted in can_read being processed before reader (its closure dependency).
 	}
 
 	// Build reverse mapping: for each relation, which relations depend on it.
@@ -1532,19 +1525,46 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 	// This handles cycles in the dependency graph where userset relations depend on
 	// each other (e.g., allowed -> member -> allowed_member -> allowed).
 	// In such cycles, AllowedSubjectTypes may not be fully propagated in the first pass.
+	// Also handles implied relations where the implied relation (e.g., reader for can_read)
+	// may have had its AllowedSubjectTypes computed after this relation was processed.
 	// Iterate until no more changes (fixpoint) to handle cascading dependencies.
 	for iteration := 0; iteration < 10; iteration++ { // Max 10 iterations to prevent infinite loops
 		changed := false
 		for i := range sorted {
 			a := &sorted[i]
 
-			// Re-propagate AllowedSubjectTypes from userset patterns.
-			// This is needed for cyclic dependencies where the subject relation
-			// may have been processed after this relation in the first pass.
+			// Re-propagate AllowedSubjectTypes from satisfying relations.
+			// This is needed for implied relations (e.g., can_read: reader but not nblocked)
+			// where the satisfying relation (reader) may have been processed after this
+			// relation in the first pass (especially for intersection relations).
 			seenTypes := make(map[string]bool)
 			for _, t := range a.AllowedSubjectTypes {
 				seenTypes[t] = true
 			}
+			for _, rel := range a.SatisfyingRelations {
+				relAnalysis, ok := lookup[a.ObjectType][rel]
+				if !ok {
+					continue
+				}
+				for _, t := range relAnalysis.DirectSubjectTypes {
+					if !seenTypes[t] {
+						seenTypes[t] = true
+						a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
+						changed = true
+					}
+				}
+				for _, t := range relAnalysis.AllowedSubjectTypes {
+					if !seenTypes[t] {
+						seenTypes[t] = true
+						a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
+						changed = true
+					}
+				}
+			}
+
+			// Re-propagate AllowedSubjectTypes from userset patterns.
+			// This is needed for cyclic dependencies where the subject relation
+			// may have been processed after this relation in the first pass.
 			for _, pattern := range a.UsersetPatterns {
 				subjectAnalysis, ok := lookup[pattern.SubjectType][pattern.SubjectRelation]
 				if !ok {
