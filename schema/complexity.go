@@ -342,6 +342,17 @@ type RelationAnalysis struct {
 	// ExceedsDepthLimit is true if MaxUsersetDepth >= 25.
 	// These relations generate functions that immediately raise M2002.
 	ExceedsDepthLimit bool
+
+	// SelfReferentialUsersets lists userset patterns that reference the same type and relation.
+	// e.g., for group.member: [user, group#member], this would contain
+	// UsersetPattern{SubjectType: "group", SubjectRelation: "member"}
+	// These patterns require recursive CTEs to expand nested group membership.
+	// Computed by ComputeCanGenerate.
+	SelfReferentialUsersets []UsersetPattern
+
+	// HasSelfReferentialUserset is true if len(SelfReferentialUsersets) > 0.
+	// When true, the list templates use recursive CTEs to expand the userset chain.
+	HasSelfReferentialUserset bool
 }
 
 // AnalyzeRelations classifies all relations and gathers data needed for SQL generation.
@@ -1412,6 +1423,12 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		a.MaxUsersetDepth = computeMaxUsersetDepth(a, lookup)
 		a.ExceedsDepthLimit = a.MaxUsersetDepth >= 25
 
+		// Detect self-referential userset patterns for list function generation.
+		// These are patterns like [group#member] on group.member where the userset
+		// references the same type and relation, requiring recursive CTEs.
+		a.SelfReferentialUsersets = detectSelfReferentialUsersets(a)
+		a.HasSelfReferentialUserset = len(a.SelfReferentialUsersets) > 0
+
 		// Compute CanGenerateListValue for list function generation.
 		// List functions have stricter requirements - ALL relations in the closure
 		// must have features compatible with simple tuple lookup.
@@ -1485,13 +1502,10 @@ func computeCanGenerateList(a *RelationAnalysis, lookup map[string]map[string]*R
 		return false, reason
 	}
 
-	// Check for self-referential userset patterns (e.g., group#member on group.member)
-	// These require recursive expansion which the current templates don't support.
-	for _, pattern := range a.UsersetPatterns {
-		if pattern.SubjectType == a.ObjectType && pattern.SubjectRelation == a.Relation {
-			return false, "self-referential userset pattern " + pattern.SubjectType + "#" + pattern.SubjectRelation + " requires recursive expansion"
-		}
-	}
+	// Phase 9B: Self-referential userset patterns (e.g., group#member on group.member)
+	// are now supported via recursive CTEs. The self_ref_userset templates handle these.
+	// We already detected and populated HasSelfReferentialUserset in ComputeCanGenerate.
+	// No need to reject here - the template selection will route to the correct template.
 
 	// Phase 9A: If the relation exceeds the depth limit, we can still generate a specialized
 	// function that immediately raises M2002. This is more efficient than falling back to
@@ -1539,12 +1553,9 @@ func computeCanGenerateList(a *RelationAnalysis, lookup map[string]map[string]*R
 			return false, "closure relation " + rel + " has intersection patterns (requires Phase 6+)"
 		}
 
-		// Check for self-referential userset in closure relations too
-		for _, pattern := range relAnalysis.UsersetPatterns {
-			if pattern.SubjectType == relAnalysis.ObjectType && pattern.SubjectRelation == relAnalysis.Relation {
-				return false, "closure relation " + rel + " has self-referential userset pattern"
-			}
-		}
+		// Phase 9B: Self-referential usersets in closure relations are now supported.
+		// The closure relation itself will generate a self_ref_userset template.
+		// If the closure relation is generatable (checked above), we can generate for this relation too.
 
 		// Userset, exclusion, and recursive in closure are OK - handled via check_permission_internal
 	}
@@ -1802,4 +1813,18 @@ func computeDepthRecursive(
 
 	memo[key] = maxDepth
 	return maxDepth
+}
+
+// detectSelfReferentialUsersets identifies userset patterns that reference the same type and relation.
+// For example, group.member: [user, group#member] has a self-referential userset because
+// SubjectType="group" matches ObjectType and SubjectRelation="member" matches Relation.
+// These patterns require recursive CTEs to expand nested membership.
+func detectSelfReferentialUsersets(a *RelationAnalysis) []UsersetPattern {
+	var selfRef []UsersetPattern
+	for _, pattern := range a.UsersetPatterns {
+		if pattern.SubjectType == a.ObjectType && pattern.SubjectRelation == a.Relation {
+			selfRef = append(selfRef, pattern)
+		}
+	}
+	return selfRef
 }

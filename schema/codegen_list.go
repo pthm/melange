@@ -134,6 +134,9 @@ func generateListObjectsFunction(a RelationAnalysis) (string, error) {
 	data.IndirectAnchor = buildListIndirectAnchorData(a)
 	data.HasIndirectAnchor = data.IndirectAnchor != nil
 
+	// Populate self-referential userset fields (Phase 9B)
+	data.HasSelfReferentialUserset = a.HasSelfReferentialUserset
+
 	// Select appropriate template based on features
 	templateName := selectListObjectsTemplate(a)
 
@@ -150,6 +153,11 @@ func selectListObjectsTemplate(a RelationAnalysis) string {
 	// These immediately raise M2002 without any computation.
 	if a.ExceedsDepthLimit {
 		return "list_objects_depth_exceeded.tpl.sql"
+	}
+	// Phase 9B: Use self-referential userset template for patterns like group.member: [group#member].
+	// These require recursive CTEs to expand nested userset membership.
+	if a.HasSelfReferentialUserset {
+		return "list_objects_self_ref_userset.tpl.sql"
 	}
 	// Phase 8: Use composed template for indirect anchor patterns.
 	// These are relations with no direct/implied access but reach subjects through
@@ -231,6 +239,9 @@ func generateListSubjectsFunction(a RelationAnalysis) (string, error) {
 	data.IndirectAnchor = buildListIndirectAnchorData(a)
 	data.HasIndirectAnchor = data.IndirectAnchor != nil
 
+	// Populate self-referential userset fields (Phase 9B)
+	data.HasSelfReferentialUserset = a.HasSelfReferentialUserset
+
 	// Select appropriate template based on features
 	templateName := selectListSubjectsTemplate(a)
 
@@ -247,6 +258,11 @@ func selectListSubjectsTemplate(a RelationAnalysis) string {
 	// These immediately raise M2002 without any computation.
 	if a.ExceedsDepthLimit {
 		return "list_subjects_depth_exceeded.tpl.sql"
+	}
+	// Phase 9B: Use self-referential userset template for patterns like group.member: [group#member].
+	// These require recursive CTEs to expand nested userset membership.
+	if a.HasSelfReferentialUserset {
+		return "list_subjects_self_ref_userset.tpl.sql"
 	}
 	// Phase 8: Use composed template for indirect anchor patterns.
 	// These are relations with no direct/implied access but reach subjects through
@@ -350,6 +366,9 @@ type ListObjectsFunctionData struct {
 	// Phase 8: Indirect anchor for composed access patterns
 	HasIndirectAnchor bool                   // true if access is via indirect anchor
 	IndirectAnchor    *ListIndirectAnchorData // Anchor info for composed templates
+
+	// Phase 9B: Self-referential userset patterns
+	HasSelfReferentialUserset bool // true if any userset pattern references same type/relation
 }
 
 // ListSubjectsFunctionData contains data for rendering list_subjects function templates.
@@ -415,6 +434,9 @@ type ListSubjectsFunctionData struct {
 	// Phase 8: Indirect anchor for composed access patterns
 	HasIndirectAnchor bool                   // true if access is via indirect anchor
 	IndirectAnchor    *ListIndirectAnchorData // Anchor info for composed templates
+
+	// Phase 9B: Self-referential userset patterns
+	HasSelfReferentialUserset bool // true if any userset pattern references same type/relation
 }
 
 // ListParentRelationData contains data for rendering TTU pattern expansion in list templates.
@@ -469,6 +491,11 @@ type ListUsersetPatternData struct {
 	// IsComplex is true if this pattern requires check_permission_internal for membership.
 	// This happens when any relation in the closure has TTU, exclusion, or intersection.
 	IsComplex bool
+
+	// IsSelfReferential is true if SubjectType == ObjectType and SubjectRelation == Relation.
+	// Self-referential usersets (e.g., group.member: [group#member]) require recursive CTEs.
+	// Non-self-referential usersets use JOIN-based expansion.
+	IsSelfReferential bool
 }
 
 // ListIndirectAnchorData contains data for rendering composed access patterns in list templates.
@@ -682,6 +709,8 @@ func buildListUsersetPatterns(a RelationAnalysis) []ListUsersetPatternData {
 			HasWildcard:        p.HasWildcard,
 			IsComplex:          p.IsComplex,
 			SourceRelationList: directRelationList, // Use main RelationList for direct patterns
+			// Mark as self-referential if it references the same type and relation
+			IsSelfReferential: p.SubjectType == a.ObjectType && p.SubjectRelation == a.Relation,
 		}
 
 		// Build satisfying relations list for the subject relation closure
@@ -709,6 +738,9 @@ func buildListUsersetPatterns(a RelationAnalysis) []ListUsersetPatternData {
 			SourceRelationList: fmt.Sprintf("'%s'", p.SourceRelation), // Use source relation for closure patterns
 			SourceRelation:     p.SourceRelation,
 			IsClosurePattern:   true, // Closure patterns need source relation verification
+			// Closure patterns are self-referential if they reference the same type and relation
+			// (rare, but possible in complex models)
+			IsSelfReferential: p.SubjectType == a.ObjectType && p.SubjectRelation == a.Relation,
 		}
 
 		// Build satisfying relations list for the subject relation closure
