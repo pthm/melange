@@ -625,10 +625,12 @@ func buildExclusionCheck(a RelationAnalysis, allowWildcard bool, internalCheckFn
 	if !hasSimpleOrComplex && hasUnclassified && !hasTTU && !hasIntersection {
 		var checks []string
 		for _, excl := range a.ExcludedRelations {
-			subjectIDCheck := "subject_id = p_subject_id AND subject_id != '*'"
-			if allowWildcard {
-				subjectIDCheck = "(subject_id = p_subject_id OR subject_id = '*')"
-			}
+			// Always include wildcard check in exclusion lookups.
+			// The excluded relation may support wildcards even if the main relation doesn't.
+			// For example: "can_read_safe: can_read but not banned" where "banned: [user:*]"
+			// If there are no wildcard tuples, the check is harmless.
+			// This matches list_objects_exclusion.tpl.sql behavior.
+			subjectIDCheck := "(subject_id = p_subject_id OR subject_id = '*')"
 			data := ExclusionCheckData{
 				ObjectType:       a.ObjectType,
 				ExcludedRelation: excl,
@@ -647,10 +649,12 @@ func buildExclusionCheck(a RelationAnalysis, allowWildcard bool, internalCheckFn
 
 	// Simple exclusions: direct tuple lookup
 	for _, excl := range a.SimpleExcludedRelations {
-		subjectIDCheck := "subject_id = p_subject_id AND subject_id != '*'"
-		if allowWildcard {
-			subjectIDCheck = "(subject_id = p_subject_id OR subject_id = '*')"
-		}
+		// Always include wildcard check in exclusion lookups.
+		// The excluded relation may support wildcards even if the main relation doesn't.
+		// For example: "can_read_safe: can_read but not banned" where "banned: [user:*]"
+		// If there are no wildcard tuples, the check is harmless.
+		// This matches list_objects_exclusion.tpl.sql behavior.
+		subjectIDCheck := "(subject_id = p_subject_id OR subject_id = '*')"
 		data := ExclusionCheckData{
 			ObjectType:       a.ObjectType,
 			ExcludedRelation: excl,
