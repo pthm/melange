@@ -1,0 +1,93 @@
+name: CI - Internal Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Tidy modules
+        run: |
+          go mod tidy
+          cd tooling && go mod tidy
+          cd ../test && go mod tidy
+
+      - name: Lint root module
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2
+
+      - name: Lint tooling module
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2
+          working-directory: tooling
+
+      - name: Lint test module
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2
+          working-directory: test
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Tidy modules
+        run: |
+          go mod tidy
+          cd tooling && go mod tidy
+
+      - name: Run unit tests (root module)
+        run: go test -short -race ./...
+
+      - name: Run unit tests (tooling module)
+        working-directory: tooling
+        run: go test -short -race ./...
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Tidy modules
+        run: |
+          go mod tidy
+          cd tooling && go mod tidy
+          cd ../test && go mod tidy
+
+      - name: Run integration tests
+        working-directory: test
+        run: go test -timeout 5m -race ./...
