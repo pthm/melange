@@ -212,7 +212,22 @@ func dumpSQL(tc TestCase, opts dumpOptions) {
 			}
 		} else {
 			fmt.Println("\n## GENERATED FUNCTIONS")
-			fmt.Println("(none - all relations use generic check_permission)")
+			fmt.Println("(none - no generatable relations)")
+		}
+
+		// Show generated no-wildcard functions
+		if len(generatedSQL.NoWildcardFunctions) > 0 {
+			fmt.Println("\n## GENERATED FUNCTIONS NO-WILDCARD")
+			for j, fn := range generatedSQL.NoWildcardFunctions {
+				if j > 0 {
+					fmt.Println("\n-- " + strings.Repeat("-", 60))
+				}
+				fmt.Println()
+				fmt.Println(fn)
+			}
+		} else {
+			fmt.Println("\n## GENERATED FUNCTIONS NO-WILDCARD")
+			fmt.Println("(none - no generatable relations)")
 		}
 
 		// Show dispatcher

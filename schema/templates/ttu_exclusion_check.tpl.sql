@@ -11,7 +11,7 @@ EXISTS(
 {{- if .AllowedLinkingTypes}}
       AND link.subject_type IN ({{.AllowedLinkingTypes}})
 {{- end}}
-      AND check_permission_internal(
+      AND {{.InternalCheckFunctionName}}(
           p_subject_type, p_subject_id,
           '{{.ExcludedRelation}}',
           link.subject_type,

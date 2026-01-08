@@ -23,7 +23,7 @@ AND grant_tuple.relation = '{{.Relation}}'
 AND grant_tuple.subject_type = '{{.SubjectType}}'
 AND position ('#' in grant_tuple.subject_id) > 0
 AND split_part (grant_tuple.subject_id, '#', 2) = '{{.SubjectRelation}}'
-AND check_permission_internal (
+AND {{.InternalCheckFunctionName}} (
     p_subject_type,
     p_subject_id,
     '{{.SubjectRelation}}',

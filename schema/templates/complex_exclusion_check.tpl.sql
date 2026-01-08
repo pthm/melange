@@ -3,4 +3,4 @@
   Used when the excluded relation has userset, TTU, intersection, exclusion,
   or implied closure - patterns that can't be resolved with a simple tuple lookup.
 */ -}}
-check_permission_internal(p_subject_type, p_subject_id, '{{.ExcludedRelation}}', '{{.ObjectType}}', p_object_id, p_visited) = 1
+{{.InternalCheckFunctionName}}(p_subject_type, p_subject_id, '{{.ExcludedRelation}}', '{{.ObjectType}}', p_object_id, p_visited) = 1

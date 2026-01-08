@@ -129,6 +129,11 @@ func (m *Migrator) applyGeneratedSQL(ctx context.Context, db Execer, gen Generat
 			return fmt.Errorf("applying generated function %d: %w", i, err)
 		}
 	}
+	for i, fn := range gen.NoWildcardFunctions {
+		if _, err := db.ExecContext(ctx, fn); err != nil {
+			return fmt.Errorf("applying generated no-wildcard function %d: %w", i, err)
+		}
+	}
 
 	// Apply dispatcher (replaces default check_permission)
 	if gen.Dispatcher != "" {

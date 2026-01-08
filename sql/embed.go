@@ -3,7 +3,6 @@ package sql
 
 import (
 	_ "embed"
-	"strings"
 )
 
 // Embedded SQL files for Melange infrastructure.
@@ -19,42 +18,12 @@ import (
 //go:embed model.sql
 var ModelSQL string
 
-// FunctionsSQL contains the PostgreSQL functions for permission checking:
-//   - check_permission: evaluates if subject has relation on object
-//   - list_accessible_objects: returns all objects subject has relation on
-//   - list_accessible_subjects: returns all subjects with access to an object
-//
-// Applied via CREATE OR REPLACE FUNCTION for idempotence.
-// The list functions are stubs that get replaced by generated dispatchers
-// during migration.
-//
-//go:embed functions/01_userset_helpers.sql
-var functionsUsersetHelpersSQL string
-
-//go:embed functions/03_exclusions.sql
-var functionsExclusionsSQL string
-
-//go:embed functions/04_permissions.sql
-var functionsPermissionsSQL string
-
-//go:embed functions/05_queries.sql
-var functionsQueriesSQL string
-
 // FunctionsSQLFiles lists the function SQL files in application order.
-var FunctionsSQLFiles = []SQLFile{
-	{Path: "functions/01_userset_helpers.sql", Contents: functionsUsersetHelpersSQL},
-	{Path: "functions/03_exclusions.sql", Contents: functionsExclusionsSQL},
-	{Path: "functions/04_permissions.sql", Contents: functionsPermissionsSQL},
-	{Path: "functions/05_queries.sql", Contents: functionsQueriesSQL},
-}
+// No generic functions are embedded; all functions are generated during migration.
+var FunctionsSQLFiles = []SQLFile{}
 
-// FunctionsSQL concatenates all function SQL files for backwards compatibility.
-var FunctionsSQL = strings.Join([]string{
-	functionsUsersetHelpersSQL,
-	functionsExclusionsSQL,
-	functionsPermissionsSQL,
-	functionsQueriesSQL,
-}, "\n\n")
+// FunctionsSQL is retained for backwards compatibility, but is now empty.
+var FunctionsSQL = ""
 
 // ClosureSQL contains the melange_relation_closure table definition and indexes.
 // This table stores the precomputed transitive closure of implied-by relations,
