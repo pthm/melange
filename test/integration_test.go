@@ -85,13 +85,13 @@ func TestDB_IndexesApplied(t *testing.T) {
 	}
 	require.NoError(t, rows.Err())
 
-	// Verify we have the expected indexes (from model.sql and indexes.sql)
+	// Verify we have the expected indexes from the model DDL.
 	expectedIndexes := []string{
-		"idx_melange_model_implied",         // from model.sql
-		"idx_melange_model_implied_lookup",  // from indexes.sql
-		"idx_melange_model_object_relation", // from model.sql
-		"idx_melange_model_parent",          // from model.sql
-		"idx_melange_model_parent_lookup",   // from indexes.sql
+		"idx_melange_model_implied",
+		"idx_melange_model_implied_lookup",
+		"idx_melange_model_object_relation",
+		"idx_melange_model_parent",
+		"idx_melange_model_parent_lookup",
 	}
 
 	for _, expected := range expectedIndexes {

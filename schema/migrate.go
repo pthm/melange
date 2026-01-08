@@ -7,8 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	melangesql "github.com/pthm/melange/sql"
 )
 
 // Migrator handles loading authorization schemas into PostgreSQL.
@@ -79,20 +77,13 @@ func (m *Migrator) HasSchema() bool {
 // implementations without reloading the authorization model.
 func (m *Migrator) ApplyDDL(ctx context.Context) error {
 	// Apply model table and indexes
-	if _, err := m.db.ExecContext(ctx, melangesql.ModelSQL); err != nil {
-		return fmt.Errorf("applying model.sql: %w", err)
+	if _, err := m.db.ExecContext(ctx, modelDDL); err != nil {
+		return fmt.Errorf("applying model DDL: %w", err)
 	}
 
 	// Apply closure table and indexes
-	if _, err := m.db.ExecContext(ctx, melangesql.ClosureSQL); err != nil {
-		return fmt.Errorf("applying closure.sql: %w", err)
-	}
-
-	// Apply functions in dependency order.
-	for _, file := range melangesql.FunctionsSQLFiles {
-		if _, err := m.db.ExecContext(ctx, file.Contents); err != nil {
-			return fmt.Errorf("applying %s: %w", file.Path, err)
-		}
+	if _, err := m.db.ExecContext(ctx, closureDDL); err != nil {
+		return fmt.Errorf("applying closure DDL: %w", err)
 	}
 
 	return nil
@@ -102,20 +93,13 @@ func (m *Migrator) ApplyDDL(ctx context.Context) error {
 // This is the transactional version of ApplyDDL.
 func (m *Migrator) applyDDLTx(ctx context.Context, db Execer) error {
 	// Apply model table and indexes
-	if _, err := db.ExecContext(ctx, melangesql.ModelSQL); err != nil {
-		return fmt.Errorf("applying model.sql: %w", err)
+	if _, err := db.ExecContext(ctx, modelDDL); err != nil {
+		return fmt.Errorf("applying model DDL: %w", err)
 	}
 
 	// Apply closure table and indexes
-	if _, err := db.ExecContext(ctx, melangesql.ClosureSQL); err != nil {
-		return fmt.Errorf("applying closure.sql: %w", err)
-	}
-
-	// Apply functions in dependency order.
-	for _, file := range melangesql.FunctionsSQLFiles {
-		if _, err := db.ExecContext(ctx, file.Contents); err != nil {
-			return fmt.Errorf("applying %s: %w", file.Path, err)
-		}
+	if _, err := db.ExecContext(ctx, closureDDL); err != nil {
+		return fmt.Errorf("applying closure DDL: %w", err)
 	}
 
 	return nil

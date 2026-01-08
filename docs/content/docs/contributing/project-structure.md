@@ -91,21 +91,15 @@ tooling/
 - `Migrate(ctx, db, dir)` - One-step migration
 - `MigrateFromString(ctx, db, dsl)` - Migrate from string
 
-## SQL Functions
+## SQL Generation
 
-SQL functions are embedded and deployed by the migrator:
+SQL is generated from templates and applied by the migrator:
 
 ```
-sql/
-├── closure.sql    # melange_relation_closure table DDL
-├── model.sql      # melange_model table DDL
-├── functions/     # check_permission, list_accessible_* and helpers
-│   ├── 01_userset_helpers.sql
-│   ├── 02_subject_grants.sql
-│   ├── 03_exclusions.sql
-│   ├── 04_permissions.sql
-│   └── 05_queries.sql
-└── embed.go       # Go embed directives
+schema/
+├── ddl.go         # melange_model + melange_relation_closure DDL
+└── templates/     # check_permission, list_accessible_* and helpers
+    ├── *.tpl.sql
 ```
 
 ### Key Functions
@@ -195,12 +189,12 @@ docs/
 
 1. **Core changes** go in the root module (`*.go`)
 2. **Parser changes** go in `tooling/parser.go`
-3. **SQL changes** go in `sql/functions/*.sql`
+3. **SQL changes** go in `schema/templates/*.tpl.sql` or `schema/ddl.go`
 4. **Tests** go in `test/` or the appropriate `*_test.go` file
 
-### SQL Function Changes
+### SQL Template Changes
 
-When modifying `sql/functions/*.sql`:
+When modifying `schema/templates/*.tpl.sql`:
 
 1. Update the SQL function
 2. Run `just test-openfga` to verify compatibility

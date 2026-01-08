@@ -1,8 +1,10 @@
--- Melange type definitions table
+package schema
+
+const modelDDL = `-- Melange type definitions table
 -- Stores all defined types from the FGA schema for validation
 -- This includes types without relations (e.g., "type user")
 --
--- This file is idempotent and applied by `melange migrate`.
+-- This file is idempotent and applied by "melange migrate".
 
 CREATE TABLE IF NOT EXISTS melange_types (
     object_type VARCHAR NOT NULL PRIMARY KEY
@@ -17,7 +19,7 @@ CREATE TABLE IF NOT EXISTS melange_types (
 -- - Parent inheritance: object X, relation Y inherits from parent relation Z
 -- - Exclusions: object X, relation Y excludes subjects with relation Z
 --
--- This file is idempotent and applied by `melange migrate`.
+-- This file is idempotent and applied by "melange migrate".
 
 CREATE TABLE IF NOT EXISTS melange_model (
     id BIGSERIAL PRIMARY KEY,
@@ -33,7 +35,7 @@ CREATE TABLE IF NOT EXISTS melange_model (
     -- New columns for userset references and intersection support
     subject_relation VARCHAR,      -- For userset references [type#relation]: stores the relation part
     rule_group_id BIGINT,          -- Groups rules that form an intersection
-    rule_group_mode VARCHAR,       -- 'intersection' for AND semantics, 'union' or NULL for OR
+    rule_group_mode VARCHAR,       -- "intersection" for AND semantics, "union" or NULL for OR
     check_relation VARCHAR,        -- For intersection rules: which relation to check
     -- For intersection rules: exclusion on the check_relation (e.g., "editor but not owner")
     check_excluded_relation VARCHAR,
@@ -115,3 +117,46 @@ ON melange_userset_rules (subject_type, subject_relation);
 -- Subject closure lookup: match satisfying subject relations
 CREATE INDEX IF NOT EXISTS idx_melange_userset_rules_subject_satisfying
 ON melange_userset_rules (subject_type, subject_relation_satisfying);
+`
+
+const closureDDL = `-- Melange relation closure table
+-- Stores the precomputed transitive closure of implied-by relations.
+--
+-- This optimization eliminates recursive function calls for role hierarchy
+-- resolution. Instead of traversing the implied-by graph at runtime,
+-- check_permission can use a single JOIN against this table.
+--
+-- Each row means: having "satisfying_relation" satisfies "relation" for "object_type".
+--
+-- Example for schema: owner -> admin -> member
+--   | object_type | relation | satisfying_relation |
+--   |-------------|----------|---------------------|
+--   | repository  | owner    | owner               |
+--   | repository  | admin    | admin               |
+--   | repository  | admin    | owner               |
+--   | repository  | member   | member              |
+--   | repository  | member   | admin               |
+--   | repository  | member   | owner               |
+--
+-- This file is idempotent and applied by "melange migrate".
+
+CREATE TABLE IF NOT EXISTS melange_relation_closure (
+    id BIGSERIAL PRIMARY KEY,
+    object_type VARCHAR NOT NULL,
+    relation VARCHAR NOT NULL,
+    satisfying_relation VARCHAR NOT NULL,
+    via_path VARCHAR [],  -- debugging: path from relation to satisfying_relation
+
+    UNIQUE (object_type, relation, satisfying_relation)
+);
+
+-- Primary lookup: find all relations that satisfy a target relation
+-- Used by check_permission: JOIN ... ON c.object_type = ? AND c.relation = ?
+CREATE INDEX IF NOT EXISTS idx_melange_closure_lookup
+ON melange_relation_closure (object_type, relation);
+
+-- Reverse lookup: find which relations a given relation satisfies
+-- Useful for understanding permission inheritance
+CREATE INDEX IF NOT EXISTS idx_melange_closure_reverse
+ON melange_relation_closure (object_type, satisfying_relation);
+`

@@ -189,7 +189,7 @@ fmt-go:
 # Format SQL files with sqruff
 [group('Lint')]
 fmt-sql:
-    mise exec -- sqruff fix sql/
+    mise exec -- sqruff fix test/testutil/testdata/
 
 # Lint all code (Go + SQL)
 [group('Lint')]
@@ -203,7 +203,7 @@ lint-go:
 # Lint SQL files with sqruff
 [group('Lint')]
 lint-sql:
-    mise exec -- sqruff lint sql/
+    mise exec -- sqruff lint test/testutil/testdata/
 
 # Install linting and formatting tools
 [group('Lint')]
