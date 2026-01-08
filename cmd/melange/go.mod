@@ -4,8 +4,8 @@ go 1.25.3
 
 require (
 	github.com/lib/pq v1.10.9
-	github.com/pthm/melange v0.2.0
-	github.com/pthm/melange/tooling v0.2.0
+	github.com/pthm/melange v0.3.0
+	github.com/pthm/melange/tooling v0.3.0
 )
 
 require (

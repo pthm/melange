@@ -36,8 +36,8 @@ release-prepare VERSION ALLOW_DIRTY="":
     if [ "${version#v}" = "$version" ]; then \
         version="v$version"; \
     fi; \
-    printf "%s\n" "$version" > VERSION; \
     just _assert-clean ALLOW_DIRTY={{ALLOW_DIRTY}}; \
+    printf "%s\n" "$version" > VERSION; \
     cd cmd/melange; \
     go mod edit -require=github.com/pthm/melange@$version; \
     go mod edit -require=github.com/pthm/melange/tooling@$version; \
