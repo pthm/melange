@@ -332,6 +332,16 @@ type RelationAnalysis struct {
 	// Nil if the relation has direct/implied access or if no anchor can be found.
 	// Computed by ComputeCanGenerate via findIndirectAnchor.
 	IndirectAnchor *IndirectAnchorInfo
+
+	// MaxUsersetDepth is the maximum userset chain depth reachable from this relation.
+	// -1 means infinite (self-referential userset cycle), 0 means no userset patterns.
+	// Values >= 25 indicate the relation will always exceed the depth limit.
+	// Computed by ComputeCanGenerate via computeMaxUsersetDepth.
+	MaxUsersetDepth int
+
+	// ExceedsDepthLimit is true if MaxUsersetDepth >= 25.
+	// These relations generate functions that immediately raise M2002.
+	ExceedsDepthLimit bool
 }
 
 // AnalyzeRelations classifies all relations and gathers data needed for SQL generation.
@@ -701,6 +711,22 @@ func sortByDependency(analyses []RelationAnalysis) []RelationAnalysis {
 		for _, rel := range a.ExcludedRelations {
 			if rel != a.Relation {
 				addDep(key, a.ObjectType+"."+rel)
+			}
+		}
+
+		// Dependencies from SAME-TYPE userset patterns only.
+		// This ensures subject relations are processed first so AllowedSubjectTypes
+		// can be propagated correctly through userset chains.
+		// For example, in "a2: [resource#a1]" on type resource, a2 depends on a1.
+		// Cross-type usersets (e.g., folder.viewer: [group#member]) are NOT added
+		// as dependencies because they don't need type propagation in the same way.
+		for _, pattern := range a.UsersetPatterns {
+			// Only add dependency for same-type usersets
+			if pattern.SubjectType == a.ObjectType {
+				depKey := pattern.SubjectType + "." + pattern.SubjectRelation
+				if depKey != key { // Skip self-reference
+					addDep(key, depKey)
+				}
 			}
 		}
 	}
@@ -1380,6 +1406,12 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		// preserved for diagnostics but CanGenerate is always true.
 		a.CanGenerate = true
 
+		// Compute maximum userset depth for this relation.
+		// This enables generating functions that immediately raise M2002 for
+		// relations with userset chains exceeding the 25-level depth limit.
+		a.MaxUsersetDepth = computeMaxUsersetDepth(a, lookup)
+		a.ExceedsDepthLimit = a.MaxUsersetDepth >= 25
+
 		// Compute CanGenerateListValue for list function generation.
 		// List functions have stricter requirements - ALL relations in the closure
 		// must have features compatible with simple tuple lookup.
@@ -1459,6 +1491,13 @@ func computeCanGenerateList(a *RelationAnalysis, lookup map[string]map[string]*R
 		if pattern.SubjectType == a.ObjectType && pattern.SubjectRelation == a.Relation {
 			return false, "self-referential userset pattern " + pattern.SubjectType + "#" + pattern.SubjectRelation + " requires recursive expansion"
 		}
+	}
+
+	// Phase 9A: If the relation exceeds the depth limit, we can still generate a specialized
+	// function that immediately raises M2002. This is more efficient than falling back to
+	// the generic handler and provides clearer error semantics.
+	if a.ExceedsDepthLimit {
+		return true, "" // Will use depth-exceeded template
 	}
 
 	// Check for deeply nested userset chains: if we have userset patterns (direct or via closure)
@@ -1652,4 +1691,115 @@ func findIndirectAnchor(
 	}
 
 	return nil // No anchor found
+}
+
+// computeMaxUsersetDepth calculates the maximum userset chain depth reachable from a relation.
+// Returns:
+//   - 0 if the relation has no userset patterns
+//   - -1 if the relation has a self-referential userset cycle
+//   - positive value for the maximum depth of userset chains
+//
+// The depth limit of 25 is enforced at runtime, so values >= 25 indicate the relation
+// will always fail with M2002 (resolution too complex).
+//
+// This uses BFS with memoization to efficiently compute depths even for complex chains.
+func computeMaxUsersetDepth(a *RelationAnalysis, lookup map[string]map[string]*RelationAnalysis) int {
+	// Use memoization to avoid redundant computation
+	memo := make(map[string]int) // key: "type.relation", value: computed depth or -1 for cycle
+	return computeDepthRecursive(a.ObjectType, a.Relation, lookup, memo, make(map[string]bool))
+}
+
+// computeDepthRecursive recursively computes the maximum userset depth from a relation.
+// visited tracks the current path for cycle detection.
+// memo caches computed results to avoid redundant work.
+func computeDepthRecursive(
+	objectType string,
+	relation string,
+	lookup map[string]map[string]*RelationAnalysis,
+	memo map[string]int,
+	visited map[string]bool,
+) int {
+	key := objectType + "." + relation
+
+	// Check if we're in a cycle
+	if visited[key] {
+		return -1 // Cycle detected
+	}
+
+	// Check memo
+	if depth, ok := memo[key]; ok {
+		return depth
+	}
+
+	// Get the analysis for this relation
+	typeAnalyses := lookup[objectType]
+	if typeAnalyses == nil {
+		memo[key] = 0
+		return 0
+	}
+	a := typeAnalyses[relation]
+	if a == nil {
+		memo[key] = 0
+		return 0
+	}
+
+	// Mark as visited for cycle detection
+	visited[key] = true
+	defer func() { delete(visited, key) }()
+
+	maxDepth := 0
+
+	// Check direct userset patterns
+	for _, pattern := range a.UsersetPatterns {
+		// Check for self-referential userset (same type and relation)
+		if pattern.SubjectType == objectType && pattern.SubjectRelation == relation {
+			memo[key] = -1
+			return -1 // Self-referential cycle
+		}
+
+		// Each userset pattern adds 1 to the depth, then we recursively check
+		// the subject relation for its depth
+		subDepth := computeDepthRecursive(
+			pattern.SubjectType,
+			pattern.SubjectRelation,
+			lookup,
+			memo,
+			visited,
+		)
+
+		if subDepth == -1 {
+			// Cycle found in sub-chain
+			memo[key] = -1
+			return -1
+		}
+
+		// This pattern's depth is 1 (for this hop) + the sub-relation's depth
+		patternDepth := 1 + subDepth
+		if patternDepth > maxDepth {
+			maxDepth = patternDepth
+		}
+	}
+
+	// Also check implied relations for userset chains.
+	// If this relation implies another that has userset patterns, we need to count those too.
+	// This handles cases like "can_view: a27" where a27 has the userset patterns.
+	for _, impliedRel := range a.SatisfyingRelations {
+		if impliedRel == relation {
+			continue // Skip self
+		}
+
+		// Compute depth for implied relation (it may have userset patterns)
+		impliedDepth := computeDepthRecursive(objectType, impliedRel, lookup, memo, visited)
+		if impliedDepth == -1 {
+			memo[key] = -1
+			return -1
+		}
+
+		if impliedDepth > maxDepth {
+			maxDepth = impliedDepth
+		}
+	}
+
+	memo[key] = maxDepth
+	return maxDepth
 }

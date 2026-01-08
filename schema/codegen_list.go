@@ -90,10 +90,12 @@ func listSubjectsFunctionName(objectType, relation string) string {
 // generateListObjectsFunction generates a specialized list_objects function for a relation.
 func generateListObjectsFunction(a RelationAnalysis) (string, error) {
 	data := ListObjectsFunctionData{
-		ObjectType:     a.ObjectType,
-		Relation:       a.Relation,
-		FunctionName:   listObjectsFunctionName(a.ObjectType, a.Relation),
-		FeaturesString: a.Features.String(),
+		ObjectType:        a.ObjectType,
+		Relation:          a.Relation,
+		FunctionName:      listObjectsFunctionName(a.ObjectType, a.Relation),
+		FeaturesString:    a.Features.String(),
+		MaxUsersetDepth:   a.MaxUsersetDepth,
+		ExceedsDepthLimit: a.ExceedsDepthLimit,
 	}
 
 	// Build relation list from simple closure relations (tuple lookup)
@@ -144,6 +146,11 @@ func generateListObjectsFunction(a RelationAnalysis) (string, error) {
 
 // selectListObjectsTemplate selects the appropriate list_objects template based on features.
 func selectListObjectsTemplate(a RelationAnalysis) string {
+	// Phase 9A: Use depth-exceeded template for relations with userset chains >= 25 levels.
+	// These immediately raise M2002 without any computation.
+	if a.ExceedsDepthLimit {
+		return "list_objects_depth_exceeded.tpl.sql"
+	}
 	// Phase 8: Use composed template for indirect anchor patterns.
 	// These are relations with no direct/implied access but reach subjects through
 	// TTU or userset patterns to an anchor relation.
@@ -181,11 +188,13 @@ func selectListObjectsTemplate(a RelationAnalysis) string {
 // generateListSubjectsFunction generates a specialized list_subjects function for a relation.
 func generateListSubjectsFunction(a RelationAnalysis) (string, error) {
 	data := ListSubjectsFunctionData{
-		ObjectType:     a.ObjectType,
-		Relation:       a.Relation,
-		FunctionName:   listSubjectsFunctionName(a.ObjectType, a.Relation),
-		FeaturesString: a.Features.String(),
-		HasWildcard:    a.Features.HasWildcard,
+		ObjectType:        a.ObjectType,
+		Relation:          a.Relation,
+		FunctionName:      listSubjectsFunctionName(a.ObjectType, a.Relation),
+		FeaturesString:    a.Features.String(),
+		HasWildcard:       a.Features.HasWildcard,
+		MaxUsersetDepth:   a.MaxUsersetDepth,
+		ExceedsDepthLimit: a.ExceedsDepthLimit,
 	}
 
 	// Build relation list from simple closure relations (tuple lookup)
@@ -234,6 +243,11 @@ func generateListSubjectsFunction(a RelationAnalysis) (string, error) {
 
 // selectListSubjectsTemplate selects the appropriate list_subjects template based on features.
 func selectListSubjectsTemplate(a RelationAnalysis) string {
+	// Phase 9A: Use depth-exceeded template for relations with userset chains >= 25 levels.
+	// These immediately raise M2002 without any computation.
+	if a.ExceedsDepthLimit {
+		return "list_subjects_depth_exceeded.tpl.sql"
+	}
 	// Phase 8: Use composed template for indirect anchor patterns.
 	// These are relations with no direct/implied access but reach subjects through
 	// TTU or userset patterns to an anchor relation.
@@ -274,6 +288,14 @@ type ListObjectsFunctionData struct {
 	Relation       string
 	FunctionName   string
 	FeaturesString string
+
+	// MaxUsersetDepth is the maximum userset chain depth reachable from this relation.
+	// Used by depth-exceeded template to report the actual depth in error messages.
+	MaxUsersetDepth int
+
+	// ExceedsDepthLimit is true if MaxUsersetDepth >= 25.
+	// Routes to depth-exceeded template which immediately raises M2002.
+	ExceedsDepthLimit bool
 
 	// RelationList is a SQL-formatted list of simple closure relations to check.
 	// e.g., "'viewer', 'editor', 'owner'" - only relations that can use tuple lookup
@@ -336,6 +358,14 @@ type ListSubjectsFunctionData struct {
 	Relation       string
 	FunctionName   string
 	FeaturesString string
+
+	// MaxUsersetDepth is the maximum userset chain depth reachable from this relation.
+	// Used by depth-exceeded template to report the actual depth in error messages.
+	MaxUsersetDepth int
+
+	// ExceedsDepthLimit is true if MaxUsersetDepth >= 25.
+	// Routes to depth-exceeded template which immediately raises M2002.
+	ExceedsDepthLimit bool
 
 	// RelationList is a SQL-formatted list of simple closure relations to check.
 	RelationList string
