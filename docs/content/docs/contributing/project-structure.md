@@ -97,7 +97,6 @@ SQL is generated from templates and applied by the migrator:
 
 ```
 schema/
-├── ddl.go         # melange_model + melange_relation_closure DDL
 └── templates/     # check_permission, list_accessible_* and helpers
     ├── *.tpl.sql
 ```
@@ -189,7 +188,7 @@ docs/
 
 1. **Core changes** go in the root module (`*.go`)
 2. **Parser changes** go in `tooling/parser.go`
-3. **SQL changes** go in `schema/templates/*.tpl.sql` or `schema/ddl.go`
+3. **SQL changes** go in `schema/templates/*.tpl.sql`
 4. **Tests** go in `test/` or the appropriate `*_test.go` file
 
 ### SQL Template Changes

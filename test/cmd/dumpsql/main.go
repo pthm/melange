@@ -50,7 +50,6 @@ type Stage struct {
 }
 
 func main() {
-	modelsOnly := flag.Bool("models", false, "Only show model data (melange_model rows), not generated functions")
 	analysisOnly := flag.Bool("analysis", false, "Only show relation analysis, not generated SQL")
 	flag.Parse()
 
@@ -65,14 +64,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Usage: dumpsql [options] <test_name>\n\n")
 		fmt.Fprintf(os.Stderr, "Dump the generated SQL for an OpenFGA test case.\n\n")
 		fmt.Fprintf(os.Stderr, "Options:\n")
-		fmt.Fprintf(os.Stderr, "  -models      Only show model data (melange_model rows)\n")
 		fmt.Fprintf(os.Stderr, "  -analysis    Only show relation analysis (features, patterns)\n\n")
 		fmt.Fprintf(os.Stderr, "Use 'dumptest' to list available test names.\n")
 		os.Exit(1)
 	}
 
 	opts := dumpOptions{
-		modelsOnly:   *modelsOnly,
 		analysisOnly: *analysisOnly,
 	}
 
@@ -130,7 +127,6 @@ func loadTests() ([]TestCase, error) {
 }
 
 type dumpOptions struct {
-	modelsOnly   bool
 	analysisOnly bool
 }
 
@@ -161,29 +157,11 @@ func dumpSQL(tc TestCase, opts dumpOptions) {
 		}
 
 		// Compute derived data
-		models := schema.ToAuthzModels(types)
 		closureRows := schema.ComputeRelationClosure(types)
-		usersetRules := schema.ToUsersetRules(types, closureRows)
-
-		// Show model data
-		if opts.modelsOnly || !opts.analysisOnly {
-			fmt.Println("\n## MODEL DATA (melange_model rows)")
-			printModelData(models)
-
-			fmt.Println("\n## CLOSURE DATA (melange_relation_closure rows)")
-			printClosureData(closureRows)
-
-			fmt.Println("\n## USERSET RULES (melange_userset_rules rows)")
-			printUsersetRules(usersetRules)
-		}
-
-		if opts.modelsOnly {
-			continue
-		}
-
 		// Analyze relations
 		analyses := schema.AnalyzeRelations(types, closureRows)
 		analyses = schema.ComputeCanGenerate(analyses)
+		inline := schema.BuildInlineSQLData(closureRows, analyses)
 
 		// Show analysis
 		fmt.Println("\n## RELATION ANALYSIS")
@@ -194,7 +172,7 @@ func dumpSQL(tc TestCase, opts dumpOptions) {
 		}
 
 		// Generate SQL
-		generatedSQL, err := schema.GenerateSQL(analyses)
+		generatedSQL, err := schema.GenerateSQL(analyses, inline)
 		if err != nil {
 			fmt.Printf("\n⚠️  SQL generation error: %v\n", err)
 			continue
@@ -245,7 +223,7 @@ func dumpSQL(tc TestCase, opts dumpOptions) {
 		}
 
 		// Generate list functions
-		listSQL, err := schema.GenerateListSQL(analyses)
+		listSQL, err := schema.GenerateListSQL(analyses, inline)
 		if err != nil {
 			fmt.Printf("\n⚠️  List SQL generation error: %v\n", err)
 			continue
@@ -291,94 +269,6 @@ func dumpSQL(tc TestCase, opts dumpOptions) {
 	}
 }
 
-func printModelData(models []schema.AuthzModel) {
-	if len(models) == 0 {
-		fmt.Println("(empty)")
-		return
-	}
-
-	// Group by object_type and relation for readability
-	fmt.Printf("%-15s %-15s %-12s %-12s %-15s %-12s\n",
-		"object_type", "relation", "subject_type", "implied_by", "parent_rel", "excluded")
-	fmt.Println(strings.Repeat("-", 85))
-
-	for _, m := range models {
-		subjectType := "-"
-		if m.SubjectType != nil {
-			subjectType = *m.SubjectType
-		}
-		impliedBy := "-"
-		if m.ImpliedBy != nil {
-			impliedBy = *m.ImpliedBy
-		}
-		parentRel := "-"
-		if m.ParentRelation != nil {
-			parentRel = *m.ParentRelation
-		}
-		excluded := "-"
-		if m.ExcludedRelation != nil {
-			excluded = *m.ExcludedRelation
-		}
-		wildcard := ""
-		if m.SubjectWildcard != nil && *m.SubjectWildcard {
-			wildcard = " [*]"
-		}
-		fmt.Printf("%-15s %-15s %-12s %-12s %-15s %-12s%s\n",
-			m.ObjectType, m.Relation, subjectType, impliedBy, parentRel, excluded, wildcard)
-	}
-}
-
-func printClosureData(closure []schema.ClosureRow) {
-	if len(closure) == 0 {
-		fmt.Println("(empty)")
-		return
-	}
-
-	fmt.Printf("%-15s %-15s %-20s %s\n",
-		"object_type", "relation", "satisfying_relation", "via_path")
-	fmt.Println(strings.Repeat("-", 70))
-
-	for _, c := range closure {
-		viaPath := "-"
-		if len(c.ViaPath) > 0 {
-			viaPath = strings.Join(c.ViaPath, " -> ")
-		}
-		fmt.Printf("%-15s %-15s %-20s %s\n",
-			c.ObjectType, c.Relation, c.SatisfyingRelation, viaPath)
-	}
-}
-
-func printUsersetRules(rules []schema.UsersetRule) {
-	if len(rules) == 0 {
-		fmt.Println("(empty)")
-		return
-	}
-
-	fmt.Printf("%-15s %-12s %-12s %-12s %-15s %s\n",
-		"object_type", "relation", "tuple_rel", "subj_type", "subj_relation", "satisfying")
-	fmt.Println(strings.Repeat("-", 85))
-
-	for _, r := range rules {
-		tupleRel := r.TupleRelation
-		if tupleRel == "" {
-			tupleRel = "-"
-		}
-		subjType := r.SubjectType
-		if subjType == "" {
-			subjType = "-"
-		}
-		subjRel := r.SubjectRelation
-		if subjRel == "" {
-			subjRel = "-"
-		}
-		satisfying := r.SubjectRelationSatisfying
-		if satisfying == "" {
-			satisfying = "-"
-		}
-		fmt.Printf("%-15s %-12s %-12s %-12s %-15s %s\n",
-			r.ObjectType, r.Relation, tupleRel, subjType, subjRel, satisfying)
-	}
-}
 
 func printAnalysis(analyses []schema.RelationAnalysis) {
 	if len(analyses) == 0 {

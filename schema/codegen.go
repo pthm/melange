@@ -58,7 +58,7 @@ type GeneratedSQL struct {
 // The generated SQL includes:
 //   - Per-relation check functions (check_{type}_{relation})
 //   - A dispatcher that routes check_permission to specialized functions
-func GenerateSQL(analyses []RelationAnalysis) (GeneratedSQL, error) {
+func GenerateSQL(analyses []RelationAnalysis, inline InlineSQLData) (GeneratedSQL, error) {
 	var result GeneratedSQL
 
 	// Generate specialized function for each relation
@@ -66,12 +66,12 @@ func GenerateSQL(analyses []RelationAnalysis) (GeneratedSQL, error) {
 		if !a.CanGenerate {
 			continue
 		}
-		fn, err := generateCheckFunction(a, false)
+		fn, err := generateCheckFunction(a, inline, false)
 		if err != nil {
 			return GeneratedSQL{}, fmt.Errorf("generating check function: %w", err)
 		}
 		result.Functions = append(result.Functions, fn)
-		noWildcardFn, err := generateCheckFunction(a, true)
+		noWildcardFn, err := generateCheckFunction(a, inline, true)
 		if err != nil {
 			return GeneratedSQL{}, fmt.Errorf("generating no-wildcard check function: %w", err)
 		}
@@ -123,6 +123,8 @@ type CheckFunctionData struct {
 	// for recursive or complex checks.
 	InternalCheckFunctionName string
 	FeaturesString            string
+	ClosureValues             string
+	UsersetValues             string
 
 	// Feature flags
 	HasDirect       bool
@@ -207,8 +209,8 @@ type ParentRelationData struct {
 }
 
 // generateCheckFunction generates a specialized check function for a relation.
-func generateCheckFunction(a RelationAnalysis, noWildcard bool) (string, error) {
-	data, err := buildCheckFunctionData(a, noWildcard)
+func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, noWildcard bool) (string, error) {
+	data, err := buildCheckFunctionData(a, inline, noWildcard)
 	if err != nil {
 		return "", fmt.Errorf("building template data for %s.%s: %w", a.ObjectType, a.Relation, err)
 	}
@@ -230,7 +232,7 @@ func generateCheckFunction(a RelationAnalysis, noWildcard bool) (string, error) 
 }
 
 // buildCheckFunctionData constructs template data from RelationAnalysis.
-func buildCheckFunctionData(a RelationAnalysis, noWildcard bool) (CheckFunctionData, error) {
+func buildCheckFunctionData(a RelationAnalysis, inline InlineSQLData, noWildcard bool) (CheckFunctionData, error) {
 	hasWildcard := a.Features.HasWildcard && !noWildcard
 	functionNameForRelation := functionName(a.ObjectType, a.Relation)
 	internalCheckFn := "check_permission_internal"
@@ -245,6 +247,8 @@ func buildCheckFunctionData(a RelationAnalysis, noWildcard bool) (CheckFunctionD
 		FunctionName:              functionNameForRelation,
 		InternalCheckFunctionName: internalCheckFn,
 		FeaturesString:            a.Features.String(),
+		ClosureValues:             inline.ClosureValues,
+		UsersetValues:             inline.UsersetValues,
 		HasDirect:                 a.Features.HasDirect,
 		HasImplied:                a.Features.HasImplied,
 		HasWildcard:               hasWildcard,
@@ -790,4 +794,39 @@ func generateDispatcher(analyses []RelationAnalysis, noWildcard bool) (string, e
 		return "", fmt.Errorf("executing dispatcher template: %w", err)
 	}
 	return buf.String(), nil
+}
+
+// CollectFunctionNames returns all function names that will be generated for the given analyses.
+// This is used for migration tracking and orphan detection.
+//
+// The returned list includes:
+//   - Specialized check functions: check_{type}_{relation}
+//   - No-wildcard check variants: check_{type}_{relation}_no_wildcard
+//   - Specialized list functions: list_{type}_{relation}_objects, list_{type}_{relation}_subjects
+//   - Dispatcher functions (always included)
+func CollectFunctionNames(analyses []RelationAnalysis) []string {
+	var names []string
+
+	for _, a := range analyses {
+		if a.CanGenerate {
+			names = append(names, functionName(a.ObjectType, a.Relation))
+			names = append(names, functionNameNoWildcard(a.ObjectType, a.Relation))
+		}
+		if a.CanGenerateList() {
+			names = append(names, listObjectsFunctionName(a.ObjectType, a.Relation))
+			names = append(names, listSubjectsFunctionName(a.ObjectType, a.Relation))
+		}
+	}
+
+	// Dispatchers are always generated
+	names = append(names,
+		"check_permission",
+		"check_permission_internal",
+		"check_permission_no_wildcard",
+		"check_permission_no_wildcard_internal",
+		"list_accessible_objects",
+		"list_accessible_subjects",
+	)
+
+	return names
 }

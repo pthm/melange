@@ -15,15 +15,6 @@ var (
 	// over its domain tables. See the melange documentation for view creation examples.
 	ErrNoTuplesTable = errors.New("melange: melange_tuples view/table not found")
 
-	// ErrMissingModel is returned when the melange_model table doesn't exist.
-	// Run `melange migrate` to create the table and load the FGA schema.
-	ErrMissingModel = errors.New("melange: melange_model table missing")
-
-	// ErrEmptyModel is returned when the melange_model table exists but is empty.
-	// This means the schema hasn't been loaded. Run `melange migrate` to
-	// parse the .fga file and populate the model.
-	ErrEmptyModel = errors.New("melange: authorization model empty")
-
 	// ErrInvalidSchema is returned when schema parsing fails.
 	// Check the .fga file syntax using `fga model validate` from the OpenFGA CLI.
 	ErrInvalidSchema = errors.New("melange: invalid schema")
@@ -48,16 +39,6 @@ var (
 // IsNoTuplesTableErr returns true if err is or wraps ErrNoTuplesTable.
 func IsNoTuplesTableErr(err error) bool {
 	return errors.Is(err, ErrNoTuplesTable)
-}
-
-// IsMissingModelErr returns true if err is or wraps ErrMissingModel.
-func IsMissingModelErr(err error) bool {
-	return errors.Is(err, ErrMissingModel)
-}
-
-// IsEmptyModelErr returns true if err is or wraps ErrEmptyModel.
-func IsEmptyModelErr(err error) bool {
-	return errors.Is(err, ErrEmptyModel)
 }
 
 // IsInvalidSchemaErr returns true if err is or wraps ErrInvalidSchema.

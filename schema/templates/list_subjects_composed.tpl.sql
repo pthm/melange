@@ -47,7 +47,7 @@ BEGIN
         -- should return document:1#viewer if viewer satisfies the relation via closure
         IF v_filter_type = '{{.ObjectType}}' THEN
             IF EXISTS (
-                SELECT 1 FROM melange_relation_closure c
+                SELECT 1 FROM (VALUES {{$.ClosureValues}}) AS c(object_type, relation, satisfying_relation)
                 WHERE c.object_type = '{{.ObjectType}}'
                   AND c.relation = '{{.Relation}}'
                   AND c.satisfying_relation = v_filter_relation

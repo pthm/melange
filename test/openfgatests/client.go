@@ -111,49 +111,9 @@ func (c *Client) debugUserset(
 	}
 
 	tb.Logf("debug userset: object=%s:%s relation=%s filters=%v", objectType, objectID, relation, filters)
+	tb.Logf("debug userset: inline schema data enabled (no model tables to query)")
 
 	rows, err := store.db.QueryContext(ctx, `
-		SELECT object_type, relation, tuple_relation, subject_type, subject_relation, subject_relation_satisfying
-		FROM melange_userset_rules
-		WHERE object_type = $1 AND relation = $2
-		ORDER BY tuple_relation, subject_type, subject_relation, subject_relation_satisfying
-	`, objectType, relation)
-	if err != nil {
-		tb.Logf("debug userset rules error: %v", err)
-		return
-	}
-	for rows.Next() {
-		var ot, rel, tupleRel, subjType, subjRel, subjRelSat string
-		if scanErr := rows.Scan(&ot, &rel, &tupleRel, &subjType, &subjRel, &subjRelSat); scanErr != nil {
-			tb.Logf("debug userset rules scan error: %v", scanErr)
-			break
-		}
-		tb.Logf("userset_rule: object_type=%s relation=%s tuple_relation=%s subject_type=%s subject_relation=%s subject_relation_satisfying=%s",
-			ot, rel, tupleRel, subjType, subjRel, subjRelSat)
-	}
-	_ = rows.Close()
-
-	rows, err = store.db.QueryContext(ctx, `
-		SELECT relation, satisfying_relation
-		FROM melange_relation_closure
-		WHERE object_type = $1 AND relation = $2
-		ORDER BY satisfying_relation
-	`, objectType, relation)
-	if err != nil {
-		tb.Logf("debug closure error: %v", err)
-		return
-	}
-	for rows.Next() {
-		var rel, satisfying string
-		if scanErr := rows.Scan(&rel, &satisfying); scanErr != nil {
-			tb.Logf("debug closure scan error: %v", scanErr)
-			break
-		}
-		tb.Logf("closure: relation=%s satisfying_relation=%s", rel, satisfying)
-	}
-	_ = rows.Close()
-
-	rows, err = store.db.QueryContext(ctx, `
 		SELECT subject_type, subject_id, relation
 		FROM melange_tuples
 		WHERE object_type = $1 AND object_id = $2
@@ -173,33 +133,6 @@ func (c *Client) debugUserset(
 	}
 	_ = rows.Close()
 
-	for _, filter := range filters {
-		hash := strings.Index(filter, "#")
-		if hash == -1 {
-			continue
-		}
-		filterType := filter[:hash]
-		filterRel := filter[hash+1:]
-		rows, err = store.db.QueryContext(ctx, `
-			SELECT relation, satisfying_relation
-			FROM melange_relation_closure
-			WHERE object_type = $1 AND (relation = $2 OR satisfying_relation = $2)
-			ORDER BY relation, satisfying_relation
-		`, filterType, filterRel)
-		if err != nil {
-			tb.Logf("debug subject closure error: %v", err)
-			continue
-		}
-		for rows.Next() {
-			var rel, satisfying string
-			if scanErr := rows.Scan(&rel, &satisfying); scanErr != nil {
-				tb.Logf("debug subject closure scan error: %v", scanErr)
-				break
-			}
-			tb.Logf("subject_closure: type=%s relation=%s satisfying_relation=%s", filterType, rel, satisfying)
-		}
-		_ = rows.Close()
-	}
 }
 
 // initializeMelangeSchema applies the melange DDL without domain-specific tables.
@@ -357,7 +290,16 @@ func (c *Client) Check(ctx context.Context, req *openfgav1.CheckRequest, opts ..
 	relation := tk.GetRelation()
 
 	// Perform the check using melange
-	checker := melange.NewChecker(store.db, melange.WithUsersetValidation(), melange.WithRequestValidation())
+	validator, err := validatorForStore(store, req.GetAuthorizationModelId())
+	if err != nil {
+		return nil, err
+	}
+	checker := melange.NewChecker(
+		store.db,
+		melange.WithUsersetValidation(),
+		melange.WithRequestValidation(),
+		melange.WithValidator(validator),
+	)
 	contextualTuples, err := contextualTuplesFromKeys(req.GetContextualTuples().GetTupleKeys())
 	if err != nil {
 		return nil, fmt.Errorf("parsing contextual tuples: %w", err)
@@ -389,7 +331,16 @@ func (c *Client) ListObjects(ctx context.Context, req *openfgav1.ListObjectsRequ
 		return nil, fmt.Errorf("parsing subject: %w", err)
 	}
 
-	checker := melange.NewChecker(store.db, melange.WithUsersetValidation(), melange.WithRequestValidation())
+	validator, err := validatorForStore(store, req.GetAuthorizationModelId())
+	if err != nil {
+		return nil, err
+	}
+	checker := melange.NewChecker(
+		store.db,
+		melange.WithUsersetValidation(),
+		melange.WithRequestValidation(),
+		melange.WithValidator(validator),
+	)
 	contextualTuples, err := contextualTuplesFromKeys(req.GetContextualTuples().GetTupleKeys())
 	if err != nil {
 		return nil, fmt.Errorf("parsing contextual tuples: %w", err)
@@ -439,7 +390,16 @@ func (c *Client) ListUsers(ctx context.Context, req *openfgav1.ListUsersRequest,
 			outputType = filterType[:idx] // Extract just the type part
 		}
 
-		checker := melange.NewChecker(store.db, melange.WithUsersetValidation(), melange.WithRequestValidation())
+		validator, err := validatorForStore(store, req.GetAuthorizationModelId())
+		if err != nil {
+			return nil, err
+		}
+		checker := melange.NewChecker(
+			store.db,
+			melange.WithUsersetValidation(),
+			melange.WithRequestValidation(),
+			melange.WithValidator(validator),
+		)
 		contextualTuples, err := contextualTuplesFromKeys(req.GetContextualTuples())
 		if err != nil {
 			return nil, fmt.Errorf("parsing contextual tuples: %w", err)
@@ -520,7 +480,7 @@ func (c *Client) loadModel(ctx context.Context, db *sql.DB, m *model) error {
 		return fmt.Errorf("model not found")
 	}
 
-	// Use the Migrator to handle model and closure insertion
+	// Use the Migrator to apply generated SQL for this model
 	// The empty string for schemasDir is fine since we're using MigrateWithTypes directly
 	migrator := schema.NewMigrator(db, "")
 	return migrator.MigrateWithTypes(ctx, m.types)

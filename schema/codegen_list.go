@@ -36,7 +36,7 @@ type ListGeneratedSQL struct {
 // During the migration phase, relations that cannot be generated will use
 // the generic list functions as fallback. As more patterns are supported,
 // the CanGenerateList criteria will be relaxed.
-func GenerateListSQL(analyses []RelationAnalysis) (ListGeneratedSQL, error) {
+func GenerateListSQL(analyses []RelationAnalysis, inline InlineSQLData) (ListGeneratedSQL, error) {
 	var result ListGeneratedSQL
 
 	// Generate specialized functions for each relation that can be generated
@@ -46,7 +46,7 @@ func GenerateListSQL(analyses []RelationAnalysis) (ListGeneratedSQL, error) {
 		}
 
 		// Generate list_objects function
-		objFn, err := generateListObjectsFunction(a)
+		objFn, err := generateListObjectsFunction(a, inline)
 		if err != nil {
 			return ListGeneratedSQL{}, fmt.Errorf("generating list_objects function for %s.%s: %w",
 				a.ObjectType, a.Relation, err)
@@ -54,7 +54,7 @@ func GenerateListSQL(analyses []RelationAnalysis) (ListGeneratedSQL, error) {
 		result.ListObjectsFunctions = append(result.ListObjectsFunctions, objFn)
 
 		// Generate list_subjects function
-		subjFn, err := generateListSubjectsFunction(a)
+		subjFn, err := generateListSubjectsFunction(a, inline)
 		if err != nil {
 			return ListGeneratedSQL{}, fmt.Errorf("generating list_subjects function for %s.%s: %w",
 				a.ObjectType, a.Relation, err)
@@ -88,7 +88,7 @@ func listSubjectsFunctionName(objectType, relation string) string {
 }
 
 // generateListObjectsFunction generates a specialized list_objects function for a relation.
-func generateListObjectsFunction(a RelationAnalysis) (string, error) {
+func generateListObjectsFunction(a RelationAnalysis, inline InlineSQLData) (string, error) {
 	data := ListObjectsFunctionData{
 		ObjectType:        a.ObjectType,
 		Relation:          a.Relation,
@@ -96,6 +96,7 @@ func generateListObjectsFunction(a RelationAnalysis) (string, error) {
 		FeaturesString:    a.Features.String(),
 		MaxUsersetDepth:   a.MaxUsersetDepth,
 		ExceedsDepthLimit: a.ExceedsDepthLimit,
+		ClosureValues:     inline.ClosureValues,
 	}
 
 	// Build relation list from simple closure relations (tuple lookup)
@@ -206,7 +207,7 @@ func selectListObjectsTemplate(a RelationAnalysis) string {
 }
 
 // generateListSubjectsFunction generates a specialized list_subjects function for a relation.
-func generateListSubjectsFunction(a RelationAnalysis) (string, error) {
+func generateListSubjectsFunction(a RelationAnalysis, inline InlineSQLData) (string, error) {
 	data := ListSubjectsFunctionData{
 		ObjectType:        a.ObjectType,
 		Relation:          a.Relation,
@@ -215,6 +216,7 @@ func generateListSubjectsFunction(a RelationAnalysis) (string, error) {
 		HasWildcard:       a.Features.HasWildcard,
 		MaxUsersetDepth:   a.MaxUsersetDepth,
 		ExceedsDepthLimit: a.ExceedsDepthLimit,
+		ClosureValues:     inline.ClosureValues,
 	}
 
 	// Build relation list from simple closure relations (tuple lookup)
@@ -328,6 +330,7 @@ type ListObjectsFunctionData struct {
 	Relation       string
 	FunctionName   string
 	FeaturesString string
+	ClosureValues  string
 
 	// MaxUsersetDepth is the maximum userset chain depth reachable from this relation.
 	// Used by depth-exceeded template to report the actual depth in error messages.
@@ -405,6 +408,7 @@ type ListSubjectsFunctionData struct {
 	Relation       string
 	FunctionName   string
 	FeaturesString string
+	ClosureValues  string
 
 	// MaxUsersetDepth is the maximum userset chain depth reachable from this relation.
 	// Used by depth-exceeded template to report the actual depth in error messages.

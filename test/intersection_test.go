@@ -122,61 +122,6 @@ type document
 	`)
 	require.NoError(t, err)
 
-	// Debug: Check what's in the model table
-	rows, err := db.QueryContext(ctx, `
-		SELECT object_type, relation, subject_type, implied_by, parent_relation,
-		       excluded_relation, subject_relation, rule_group_id, rule_group_mode, check_relation
-		FROM melange_model
-		WHERE object_type = 'document'
-		ORDER BY relation, id
-	`)
-	require.NoError(t, err)
-	t.Log("Model entries for document:")
-	for rows.Next() {
-		var objType, rel string
-		var subjType, impliedBy, parentRel, excludedRel, subjRel, rgMode, checkRel *string
-		var rgID *int64
-		err := rows.Scan(&objType, &rel, &subjType, &impliedBy, &parentRel, &excludedRel, &subjRel, &rgID, &rgMode, &checkRel)
-		require.NoError(t, err)
-		t.Logf("  %s.%s: subject_type=%v, rule_group_id=%v, rule_group_mode=%v, check_relation=%v",
-			objType, rel, subjType, rgID, rgMode, checkRel)
-	}
-	_ = rows.Close()
-
-	// Debug: Check closure table
-	rows, err = db.QueryContext(ctx, `
-		SELECT relation, satisfying_relation
-		FROM melange_relation_closure
-		WHERE object_type = 'document'
-		ORDER BY relation
-	`)
-	require.NoError(t, err)
-	t.Log("Closure entries for document:")
-	for rows.Next() {
-		var rel, satRel string
-		err := rows.Scan(&rel, &satRel)
-		require.NoError(t, err)
-		t.Logf("  %s -> %s", rel, satRel)
-	}
-	_ = rows.Close()
-
-	// Debug: Check intersection detection
-	var hasIntersection bool
-	err = db.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1
-			FROM melange_relation_closure c
-			JOIN melange_model m
-				ON m.object_type = c.object_type
-				AND m.relation = c.satisfying_relation
-			WHERE c.object_type = 'document'
-			  AND c.relation = 'viewer'
-			  AND m.rule_group_mode = 'intersection'
-		)
-	`).Scan(&hasIntersection)
-	require.NoError(t, err)
-	t.Logf("Has intersection for viewer: %v", hasIntersection)
-
 	// Test permission checks
 	checker := melange.NewChecker(db)
 
@@ -390,37 +335,6 @@ type document
 		) AS t(subject_id, relation, object_id)
 	`)
 	require.NoError(t, err)
-
-	// Debug: Check what's in the model table
-	rows, err := db.QueryContext(ctx, `
-		SELECT object_type, relation, subject_type, rule_group_id, rule_group_mode, check_relation
-		FROM melange_model
-		WHERE object_type = 'document' AND relation = 'viewer'
-		ORDER BY id
-	`)
-	require.NoError(t, err)
-	t.Log("Model entries for document.viewer:")
-	for rows.Next() {
-		var objType, rel string
-		var subjType, rgMode, checkRel *string
-		var rgID *int64
-		err := rows.Scan(&objType, &rel, &subjType, &rgID, &rgMode, &checkRel)
-		require.NoError(t, err)
-		subjTypeStr := "<nil>"
-		if subjType != nil {
-			subjTypeStr = *subjType
-		}
-		rgModeStr := "<nil>"
-		if rgMode != nil {
-			rgModeStr = *rgMode
-		}
-		checkRelStr := "<nil>"
-		if checkRel != nil {
-			checkRelStr = *checkRel
-		}
-		t.Logf("  subject_type=%s, rule_group_mode=%s, check_relation=%s", subjTypeStr, rgModeStr, checkRelStr)
-	}
-	_ = rows.Close()
 
 	// Debug: Check what SQL functions return for badger (Phase 5: using check_permission)
 	var hasViewerGrant, hasWriterGrant int

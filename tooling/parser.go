@@ -66,7 +66,7 @@ func ConvertProtoModel(model *openfgav1.AuthorizationModel) []schema.TypeDefinit
 //   - Userset rules (implied relations, parent inheritance, exclusions)
 //
 // The conversion preserves all information needed to generate Go code and
-// populate the melange_model table.
+// populate the generated SQL entrypoints.
 func convertModel(model *openfgav1.AuthorizationModel) []schema.TypeDefinition {
 	typeDefs := model.GetTypeDefinitions()
 	types := make([]schema.TypeDefinition, 0, len(typeDefs))

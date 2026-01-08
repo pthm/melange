@@ -24,11 +24,12 @@ func TestDB_Integration(t *testing.T) {
 	db := testutil.DB(t)
 	ctx := context.Background()
 
-	// Verify melange_model table exists and has data
-	var modelCount int
-	err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM melange_model").Scan(&modelCount)
+	// Verify check_permission exists
+	var result int
+	err := db.QueryRowContext(ctx,
+		"SELECT check_permission('__test__', '__test__', '__test__', '__test__', '__test__')",
+	).Scan(&result)
 	require.NoError(t, err)
-	assert.Greater(t, modelCount, 0, "melange_model should have entries from GitHub schema")
 
 	// Verify domain tables exist
 	tables := []string{"users", "organizations", "repositories", "issues", "pull_requests"}
@@ -59,49 +60,6 @@ func TestDB_Integration(t *testing.T) {
 	assert.True(t, tuplesExists, "melange_tuples should exist")
 }
 
-// TestDB_IndexesApplied verifies that melange performance indexes are created.
-func TestDB_IndexesApplied(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode")
-	}
-
-	db := testutil.DB(t)
-	ctx := context.Background()
-
-	// Get all melange indexes
-	rows, err := db.QueryContext(ctx, `
-		SELECT indexname FROM pg_indexes
-		WHERE indexname LIKE 'idx_melange_%'
-		ORDER BY indexname
-	`)
-	require.NoError(t, err)
-	defer func() { _ = rows.Close() }()
-
-	var indexes []string
-	for rows.Next() {
-		var name string
-		require.NoError(t, rows.Scan(&name))
-		indexes = append(indexes, name)
-	}
-	require.NoError(t, rows.Err())
-
-	// Verify we have the expected indexes from the model DDL.
-	expectedIndexes := []string{
-		"idx_melange_model_implied",
-		"idx_melange_model_implied_lookup",
-		"idx_melange_model_object_relation",
-		"idx_melange_model_parent",
-		"idx_melange_model_parent_lookup",
-	}
-
-	for _, expected := range expectedIndexes {
-		assert.Contains(t, indexes, expected, "expected index %s to exist", expected)
-	}
-
-	// Verify we have at least 5 indexes
-	assert.GreaterOrEqual(t, len(indexes), 5, "should have at least 5 melange indexes")
-}
-
 // TestMigrator_GetStatus verifies the GetStatus method returns correct info.
 func TestMigrator_GetStatus(t *testing.T) {
 	if testing.Short() {
@@ -114,12 +72,6 @@ func TestMigrator_GetStatus(t *testing.T) {
 	migrator := schema.NewMigrator(db, "testdata")
 	status, err := migrator.GetStatus(ctx)
 	require.NoError(t, err)
-
-	// Template database has schema loaded
-	assert.Greater(t, status.ModelCount, int64(0), "should have model entries")
-
-	// Should have performance indexes
-	assert.GreaterOrEqual(t, status.IndexCount, 5, "should have at least 5 indexes")
 
 	// Template database has tuples relation
 	assert.True(t, status.TuplesExists, "melange_tuples should exist")

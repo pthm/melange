@@ -22,7 +22,7 @@ BEGIN
         IF p_subject_type = '{{.ObjectType}}' AND
            substring(p_subject_id from 1 for position('#' in p_subject_id) - 1) = p_object_id THEN
             SELECT 1 INTO v_userset_check
-            FROM melange_relation_closure c
+            FROM (VALUES {{.ClosureValues}}) AS c(object_type, relation, satisfying_relation)
             WHERE c.object_type = '{{.ObjectType}}'
               AND c.relation = '{{.Relation}}'
               AND c.satisfying_relation = substring(p_subject_id from position('#' in p_subject_id) + 1)
@@ -35,17 +35,15 @@ BEGIN
         -- Case 2: Computed userset matching
         SELECT 1 INTO v_userset_check
         FROM melange_tuples t
-        JOIN melange_relation_closure c
+        JOIN (VALUES {{.ClosureValues}}) AS c(object_type, relation, satisfying_relation)
             ON c.object_type = '{{.ObjectType}}'
             AND c.relation = '{{.Relation}}'
             AND c.satisfying_relation = t.relation
-        JOIN melange_model m
+        JOIN (VALUES {{.UsersetValues}}) AS m(object_type, relation, subject_type, subject_relation)
             ON m.object_type = '{{.ObjectType}}'
             AND m.relation = c.satisfying_relation
             AND m.subject_type = t.subject_type
-            AND m.subject_relation IS NOT NULL
-            AND m.parent_relation IS NULL
-        JOIN melange_relation_closure subj_c
+        JOIN (VALUES {{.ClosureValues}}) AS subj_c(object_type, relation, satisfying_relation)
             ON subj_c.object_type = t.subject_type
             AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1)
             AND subj_c.satisfying_relation = substring(p_subject_id from position('#' in p_subject_id) + 1)
@@ -138,7 +136,7 @@ BEGIN
         IF p_subject_type = '{{.ObjectType}}' AND
            substring(p_subject_id from 1 for position('#' in p_subject_id) - 1) = p_object_id THEN
             SELECT 1 INTO v_userset_check
-            FROM melange_relation_closure c
+            FROM (VALUES {{.ClosureValues}}) AS c(object_type, relation, satisfying_relation)
             WHERE c.object_type = '{{.ObjectType}}'
               AND c.relation = '{{.Relation}}'
               AND c.satisfying_relation = substring(p_subject_id from position('#' in p_subject_id) + 1)
@@ -151,17 +149,15 @@ BEGIN
         -- Case 2: Computed userset matching
         SELECT 1 INTO v_userset_check
         FROM melange_tuples t
-        JOIN melange_relation_closure c
+        JOIN (VALUES {{.ClosureValues}}) AS c(object_type, relation, satisfying_relation)
             ON c.object_type = '{{.ObjectType}}'
             AND c.relation = '{{.Relation}}'
             AND c.satisfying_relation = t.relation
-        JOIN melange_model m
+        JOIN (VALUES {{.UsersetValues}}) AS m(object_type, relation, subject_type, subject_relation)
             ON m.object_type = '{{.ObjectType}}'
             AND m.relation = c.satisfying_relation
             AND m.subject_type = t.subject_type
-            AND m.subject_relation IS NOT NULL
-            AND m.parent_relation IS NULL
-        JOIN melange_relation_closure subj_c
+        JOIN (VALUES {{.ClosureValues}}) AS subj_c(object_type, relation, satisfying_relation)
             ON subj_c.object_type = t.subject_type
             AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1)
             AND subj_c.satisfying_relation = substring(p_subject_id from position('#' in p_subject_id) + 1)

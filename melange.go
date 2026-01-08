@@ -17,7 +17,7 @@
 // views over your existing application tables rather than maintaining separate
 // tuple storage. You define a melange_tuples view over tables like users,
 // repositories, etc. Permission checks query this view combined with the
-// authorization model stored in melange_model.
+// authorization model encoded in generated SQL functions.
 //
 // # Core Concepts
 //

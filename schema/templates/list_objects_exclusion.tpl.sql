@@ -136,7 +136,7 @@ BEGIN
       AND p_subject_type = '{{.ObjectType}}'
       AND EXISTS (
           -- Verify the userset relation satisfies the requested relation via closure
-          SELECT 1 FROM melange_relation_closure c
+          SELECT 1 FROM (VALUES {{$.ClosureValues}}) AS c(object_type, relation, satisfying_relation)
           WHERE c.object_type = '{{.ObjectType}}'
             AND c.relation = '{{.Relation}}'
             AND c.satisfying_relation = substring(p_subject_id from position('#' in p_subject_id) + 1)

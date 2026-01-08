@@ -285,9 +285,6 @@ func (l *loggingDB) QueryRowContext(ctx context.Context, query string, args ...a
 ### Inspect Database State
 
 ```sql
--- View loaded schema rules
-SELECT * FROM melange_model ORDER BY object_type, relation;
-
 -- View all tuples
 SELECT * FROM melange_tuples ORDER BY object_type, object_id;
 

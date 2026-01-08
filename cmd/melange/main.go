@@ -116,7 +116,7 @@ func printUsage() {
 }
 
 // status queries the database for current migration state.
-// Checks both filesystem (schema.fga) and database (melange_model).
+// Checks filesystem (schema.fga) and melange_tuples availability.
 func status(ctx context.Context, m *schema.Migrator) {
 	s, err := m.GetStatus(ctx)
 	if err != nil {
@@ -128,13 +128,17 @@ func status(ctx context.Context, m *schema.Migrator) {
 	} else {
 		fmt.Println("Schema file:  missing")
 	}
-	fmt.Printf("Model count:  %d rows\n", s.ModelCount)
+	if s.TuplesExists {
+		fmt.Println("Tuples view:  present")
+	} else {
+		fmt.Println("Tuples view:  missing")
+	}
 
 	if !s.SchemaExists {
 		fmt.Println("\nNo schema found. Create schemas/schema.fga to start.")
-	} else if s.ModelCount == 0 {
-		fmt.Println("\nDatabase has no schema loaded.")
-		fmt.Println("Run 'melange migrate' to apply.")
+	} else if !s.TuplesExists {
+		fmt.Println("\nTuples view not found.")
+		fmt.Println("Create melange_tuples before running checks.")
 	}
 }
 

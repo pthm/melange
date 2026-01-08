@@ -10,7 +10,7 @@ package schema
 // when the tuple subject is subject_type#subject_relation.
 //
 // The rules are precomputed by expanding userset references through the relation
-// closure table. This allows SQL to resolve userset permissions efficiently without
+// closure data. This allows SQL to resolve userset permissions efficiently without
 // nested subqueries for each implied relation.
 //
 // Example: For "viewer: [group#member]" where admin->member, the rules include:

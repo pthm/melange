@@ -45,7 +45,7 @@ BEGIN
               AND (
                   substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation
                   OR EXISTS (
-                      SELECT 1 FROM melange_relation_closure subj_c
+                      SELECT 1 FROM (VALUES {{$.ClosureValues}}) AS subj_c(object_type, relation, satisfying_relation)
                       WHERE subj_c.object_type = v_filter_type
                         AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1)
                         AND subj_c.satisfying_relation = v_filter_relation
@@ -71,7 +71,7 @@ BEGIN
               AND (
                   substring(pt.subject_id from position('#' in pt.subject_id) + 1) = v_filter_relation
                   OR EXISTS (
-                      SELECT 1 FROM melange_relation_closure subj_c
+                      SELECT 1 FROM (VALUES {{$.ClosureValues}}) AS subj_c(object_type, relation, satisfying_relation)
                       WHERE subj_c.object_type = v_filter_type
                         AND subj_c.relation = substring(pt.subject_id from position('#' in pt.subject_id) + 1)
                         AND subj_c.satisfying_relation = v_filter_relation
@@ -91,7 +91,7 @@ BEGIN
               AND (
                   substring(t.subject_id from position('#' in t.subject_id) + 1) = v_filter_relation
                   OR EXISTS (
-                      SELECT 1 FROM melange_relation_closure subj_c
+                      SELECT 1 FROM (VALUES {{$.ClosureValues}}) AS subj_c(object_type, relation, satisfying_relation)
                       WHERE subj_c.object_type = v_filter_type
                         AND subj_c.relation = substring(t.subject_id from position('#' in t.subject_id) + 1)
                         AND subj_c.satisfying_relation = v_filter_relation
@@ -121,7 +121,7 @@ BEGIN
               AND (
                   substring(pt.subject_id from position('#' in pt.subject_id) + 1) = v_filter_relation
                   OR EXISTS (
-                      SELECT 1 FROM melange_relation_closure subj_c
+                      SELECT 1 FROM (VALUES {{$.ClosureValues}}) AS subj_c(object_type, relation, satisfying_relation)
                       WHERE subj_c.object_type = v_filter_type
                         AND subj_c.relation = substring(pt.subject_id from position('#' in pt.subject_id) + 1)
                         AND subj_c.satisfying_relation = v_filter_relation
@@ -139,7 +139,7 @@ BEGIN
         SELECT p_object_id || '#' || v_filter_relation AS subject_id
         WHERE v_filter_type = '{{.ObjectType}}'
           AND EXISTS (
-              SELECT 1 FROM melange_relation_closure c
+              SELECT 1 FROM (VALUES {{$.ClosureValues}}) AS c(object_type, relation, satisfying_relation)
               WHERE c.object_type = '{{.ObjectType}}'
                 AND c.relation = '{{.Relation}}'
                 AND c.satisfying_relation = v_filter_relation

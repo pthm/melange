@@ -32,7 +32,7 @@ BEGIN
     -- have a different type than the AllowedSubjectTypes (e.g., 'document' vs 'user')
     IF position('#' in p_subject_id) > 0 AND p_subject_type = '{{.ObjectType}}' THEN
         IF EXISTS (
-            SELECT 1 FROM melange_relation_closure c
+            SELECT 1 FROM (VALUES {{$.ClosureValues}}) AS c(object_type, relation, satisfying_relation)
             WHERE c.object_type = '{{.ObjectType}}'
               AND c.relation = '{{.Relation}}'
               AND c.satisfying_relation = substring(p_subject_id from position('#' in p_subject_id) + 1)

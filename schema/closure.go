@@ -2,7 +2,7 @@ package schema
 
 import "sort"
 
-// ClosureRow represents a row in the melange_relation_closure table.
+// ClosureRow represents a precomputed relation closure row.
 // The closure table is a critical optimization that precomputes transitive
 // implied-by relationships at schema load time, eliminating the need for
 // recursive function calls during permission checks.
@@ -29,7 +29,7 @@ type ClosureRow struct {
 //
 // This is a build-time optimization. Without closure, check_permission would need
 // recursive SQL functions to walk implied-by chains. With closure, a single JOIN
-// against melange_relation_closure resolves the entire hierarchy.
+// against the inlined closure resolves the entire hierarchy.
 //
 // Example: For schema owner -> admin -> member:
 //   - member is satisfied by: member, admin, owner

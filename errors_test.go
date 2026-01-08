@@ -19,26 +19,6 @@ func TestErrorHelpers(t *testing.T) {
 		}
 	})
 
-	t.Run("IsMissingModelErr", func(t *testing.T) {
-		err := fmt.Errorf("wrapped: %w", melange.ErrMissingModel)
-		if !melange.IsMissingModelErr(err) {
-			t.Error("IsMissingModelErr should return true for wrapped ErrMissingModel")
-		}
-		if melange.IsMissingModelErr(errors.New("other error")) {
-			t.Error("IsMissingModelErr should return false for other errors")
-		}
-	})
-
-	t.Run("IsEmptyModelErr", func(t *testing.T) {
-		err := fmt.Errorf("wrapped: %w", melange.ErrEmptyModel)
-		if !melange.IsEmptyModelErr(err) {
-			t.Error("IsEmptyModelErr should return true for wrapped ErrEmptyModel")
-		}
-		if melange.IsEmptyModelErr(errors.New("other error")) {
-			t.Error("IsEmptyModelErr should return false for other errors")
-		}
-	})
-
 	t.Run("IsInvalidSchemaErr", func(t *testing.T) {
 		err := fmt.Errorf("wrapped: %w", melange.ErrInvalidSchema)
 		if !melange.IsInvalidSchemaErr(err) {
@@ -67,8 +47,6 @@ func TestSentinelErrors(t *testing.T) {
 		wantMsg string
 	}{
 		{melange.ErrNoTuplesTable, "melange_tuples view/table not found"},
-		{melange.ErrMissingModel, "melange_model table missing"},
-		{melange.ErrEmptyModel, "authorization model empty"},
 		{melange.ErrInvalidSchema, "invalid schema"},
 		{melange.ErrMissingFunction, "authorization function missing"},
 	}

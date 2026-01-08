@@ -115,7 +115,7 @@ BEGIN
               -- e.g., query 'fga#member' matches tuple 'fga#member_c4' if member satisfies member_c4
               split_part(t.subject_id, '#', 1) = split_part(p_subject_id, '#', 1)
               AND EXISTS (
-                  SELECT 1 FROM melange_relation_closure c
+                  SELECT 1 FROM (VALUES {{$.ClosureValues}}) AS c(object_type, relation, satisfying_relation)
                   WHERE c.object_type = p_subject_type
                     AND c.relation = split_part(t.subject_id, '#', 2)
                     AND c.satisfying_relation = substring(p_subject_id from position('#' in p_subject_id) + 1)
@@ -283,7 +283,7 @@ BEGIN
       AND p_subject_type = '{{.ObjectType}}'
       AND EXISTS (
           -- Verify the userset relation satisfies the requested relation via closure
-          SELECT 1 FROM melange_relation_closure c
+          SELECT 1 FROM (VALUES {{$.ClosureValues}}) AS c(object_type, relation, satisfying_relation)
           WHERE c.object_type = '{{.ObjectType}}'
             AND c.relation = '{{.Relation}}'
             AND c.satisfying_relation = substring(p_subject_id from position('#' in p_subject_id) + 1)

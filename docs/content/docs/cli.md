@@ -111,11 +111,10 @@ melange migrate \
 | `--schemas-dir` | `schemas` | Directory containing `schema.fga` |
 
 This command:
-1. Creates the `melange_model` table if it doesn't exist
-2. Installs SQL functions (`check_permission`, `list_accessible_objects`, etc.)
-3. Loads your schema into `melange_model`
+1. Installs generated SQL functions (`check_permission`, `list_accessible_objects`, etc.)
+2. Inlines schema-derived logic into those functions
 
-The migration is idempotent - safe to run multiple times. Each run replaces the schema in `melange_model`.
+The migration is idempotent - safe to run multiple times.
 
 ### status
 
@@ -130,12 +129,12 @@ melange status \
 **Output:**
 ```
 Schema file:  present
-Model count:  15 rows
+Tuples view:  present
 ```
 
 This helps you verify that:
 - Your schema file exists
-- The schema has been loaded into the database
+- The tuples view exists in the database
 
 ## Global Flags
 

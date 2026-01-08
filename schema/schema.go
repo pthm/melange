@@ -10,7 +10,7 @@
 // The schema package handles three critical transformations:
 //
 //  1. Schema representation (TypeDefinition, RelationDefinition) - parsed FGA models
-//  2. Database model generation (ToAuthzModels) - flattening rules for SQL queries
+//  2. SQL model generation (ToAuthzModels) - flattening rules for SQL generation
 //  3. Precomputation (ComputeRelationClosure, ToUsersetRules) - optimizing runtime checks
 //
 // # Key Types
@@ -23,21 +23,20 @@
 //	    define owner: [user]
 //	    define can_read: owner or [user]
 //
-// AuthzModel represents a row in the melange_model table. The ToAuthzModels function
-// converts TypeDefinitions into database rows, performing transitive closure of
-// implied-by relationships to support efficient permission checks.
+// AuthzModel represents a flattened authorization rule used during SQL generation.
+// The ToAuthzModels function converts TypeDefinitions into rule rows, performing
+// transitive closure of implied-by relationships to support efficient checks.
 //
-// ClosureRow represents precomputed transitive relationships in melange_relation_closure.
-// This table eliminates recursive SQL during permission checks by answering "what
-// relations satisfy this relation?" with a simple JOIN.
+// ClosureRow represents precomputed transitive relationships.
+// This eliminates recursive SQL during permission checks by answering "what
+// relations satisfy this relation?" with a simple lookup.
 //
 // # Migration Workflow
 //
 // The Migrator orchestrates loading schemas into PostgreSQL:
 //
-//  1. ApplyDDL - creates tables and functions (idempotent)
-//  2. Parse schema via tooling package (returns []TypeDefinition)
-//  3. MigrateWithTypes - validates, transforms, and loads data
+//  1. Parse schema via tooling package (returns []TypeDefinition)
+//  2. MigrateWithTypes - validates, transforms, and loads generated SQL
 //
 // Typical usage:
 //
@@ -160,11 +159,10 @@ const (
 	RuleGroupModeExcludeIntersection = "exclude_intersection"
 )
 
-// AuthzModel represents an entry in the melange_model table.
-// Each row defines one authorization rule that check_permission evaluates.
+// AuthzModel represents an entry in the flattened authorization model.
+// Each row defines one authorization rule that generated SQL evaluates.
 //
-// The table stores the flattened authorization model, precomputing transitive
-// closures and normalizing rules for efficient query execution.
+// The model stores normalized rules for efficient query execution.
 //
 // Rule types:
 //   - Direct: SubjectType is set, others NULL (user can have relation)
@@ -315,7 +313,7 @@ func ToAuthzModels(types []TypeDefinition) []AuthzModel {
 
 			// Add separate rows for each exclusion.
 			// This allows the SQL to find ALL exclusions via:
-			//   SELECT excluded_relation FROM melange_model WHERE ... AND excluded_relation IS NOT NULL
+			//   SELECT excluded_relation FROM model WHERE ... AND excluded_relation IS NOT NULL
 			// Each exclusion is stored in its own row with no other rule fields set.
 			for _, excl := range exclusions {
 				er := excl

@@ -131,7 +131,7 @@ melange migrate \
   --schemas-dir schemas
 ```
 
-This creates the `melange_model` table and installs the SQL permission functions.
+This installs the generated SQL permission functions.
 
 ### Step 4: Generate Type-Safe Go Code (Optional)
 
@@ -249,6 +249,7 @@ allowed, _ = checker.Check(ctx, user, "can_read", repo) // ~79ns vs ~980us
 
 ## Next Steps
 
+- [How It Works]({{< relref "how-it-works" >}}) - Understand specialized SQL generation and performance
 - [Tuples View]({{< relref "tuples-view" >}}) - Detailed guidance on mapping your domain tables
 - [CLI Reference]({{< relref "cli" >}}) - Full CLI command documentation
 - [Checking Permissions]({{< relref "checking-permissions" >}}) - Complete Checker API reference

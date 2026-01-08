@@ -17,6 +17,7 @@ Melange is a pure PostgreSQL authorization library implementing OpenFGA/Zanzibar
 
 {{< cards >}}
   {{< card link="getting-started" title="Getting Started" subtitle="Install Melange, set up your first schema, and run permission checks" icon="play" >}}
+  {{< card link="how-it-works" title="How It Works" subtitle="Specialized SQL generation, precomputed closures, and sub-millisecond checks" icon="cog" >}}
   {{< card link="tuples-view" title="Tuples View" subtitle="Map your domain tables to authorization tuples" icon="database" >}}
   {{< card link="cli" title="CLI Reference" subtitle="Commands for migrations, code generation, and validation" icon="terminal" >}}
   {{< card link="modelling" title="Authorization Modelling" subtitle="Write OpenFGA schemas for your permission model" icon="document-text" >}}

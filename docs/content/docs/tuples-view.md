@@ -10,6 +10,7 @@ The `melange_tuples` view is the bridge between your application's domain tables
 Melange's `check_permission` function queries the `melange_tuples` view to find authorization tuples. You must create this view to map your existing domain tables (users, organizations, memberships, etc.) into the tuple format that Melange expects.
 
 This "zero tuple sync" approach means:
+
 - Permissions are always in sync with your domain data
 - No separate tuple storage or replication
 - Changes to domain tables immediately affect permissions
@@ -19,13 +20,13 @@ This "zero tuple sync" approach means:
 
 The view must provide these columns:
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `subject_type` | `text` | Type of the subject (e.g., `'user'`, `'team'`) |
-| `subject_id` | `text` | ID of the subject |
-| `relation` | `text` | The relation name (e.g., `'owner'`, `'member'`, `'org'`) |
-| `object_type` | `text` | Type of the object (e.g., `'organization'`, `'repository'`) |
-| `object_id` | `text` | ID of the object |
+| Column         | Type   | Description                                                 |
+| -------------- | ------ | ----------------------------------------------------------- |
+| `subject_type` | `text` | Type of the subject (e.g., `'user'`, `'team'`)              |
+| `subject_id`   | `text` | ID of the subject                                           |
+| `relation`     | `text` | The relation name (e.g., `'owner'`, `'member'`, `'org'`)    |
+| `object_type`  | `text` | Type of the object (e.g., `'organization'`, `'repository'`) |
+| `object_id`    | `text` | ID of the object                                            |
 
 ### Why TEXT Columns?
 
@@ -38,6 +39,7 @@ Melange supports wildcard permissions using `'*'` as the subject_id. For example
 **2. ID Type Flexibility**
 
 Your application tables may use different ID types:
+
 - Integer primary keys (`BIGINT`, `SERIAL`)
 - UUIDs (`UUID`)
 - String identifiers (`VARCHAR`)
@@ -123,6 +125,7 @@ Since `melange_tuples` is a view over your application tables, you cannot create
 The `check_permission` function uses these primary access patterns:
 
 1. **Direct tuple check** (most common):
+
    ```sql
    SELECT 1 FROM melange_tuples
    WHERE object_type = ? AND object_id = ? AND relation = ?
@@ -130,6 +133,7 @@ The `check_permission` function uses these primary access patterns:
    ```
 
 2. **Parent relation lookup**:
+
    ```sql
    SELECT subject_type, subject_id FROM melange_tuples
    WHERE object_type = ? AND object_id = ? AND relation = ?
@@ -221,11 +225,11 @@ With this index, queries like `WHERE object_id = '123'` can use an index scan in
 
 Without expression indexes, PostgreSQL must perform sequential scans on each table in the UNION ALL view. At scale, this causes severe performance degradation:
 
-| Scale | Without Expression Indexes | With Expression Indexes |
-|-------|---------------------------|------------------------|
-| 10K tuples | ~1ms | ~0.3ms |
-| 100K tuples | ~7ms | ~0.5ms |
-| 1M tuples | ~80ms | ~3ms |
+| Scale       | Without Expression Indexes | With Expression Indexes |
+| ----------- | -------------------------- | ----------------------- |
+| 10K tuples  | ~1ms                       | ~0.3ms                  |
+| 100K tuples | ~7ms                       | ~0.5ms                  |
+| 1M tuples   | ~80ms                      | ~3ms                    |
 
 The improvement is most dramatic for **exclusion patterns** (`but not author`) and **tuple-to-userset patterns** (`viewer from parent`) which require multiple view lookups per permission check.
 
@@ -259,6 +263,7 @@ CREATE INDEX idx_repo_collabs_subj_text
 #### When to Use Expression Indexes
 
 Add expression indexes when:
+
 - You have more than 10K tuples
 - Permission checks involve exclusion patterns (`but not`)
 - Permission checks involve tuple-to-userset patterns (`viewer from parent`)
@@ -325,13 +330,13 @@ CREATE TRIGGER refresh_tuples_on_members
 
 #### Trade-offs
 
-| Aspect | Regular View | Materialized View |
-|--------|--------------|-------------------|
-| Query speed | Slower (joins at query time) | Faster (pre-computed) |
-| Data freshness | Always current | Stale until refresh |
-| Transaction visibility | Sees uncommitted changes | Only sees committed data |
-| Index support | Must index source tables | Direct indexes on view |
-| Maintenance | None | Refresh required |
+| Aspect                 | Regular View                 | Materialized View        |
+| ---------------------- | ---------------------------- | ------------------------ |
+| Query speed            | Slower (joins at query time) | Faster (pre-computed)    |
+| Data freshness         | Always current               | Stale until refresh      |
+| Transaction visibility | Sees uncommitted changes     | Only sees committed data |
+| Index support          | Must index source tables     | Direct indexes on view   |
+| Maintenance            | None                         | Refresh required         |
 
 ### Strategy 2: Dedicated Tuples Table
 
@@ -385,7 +390,7 @@ CREATE TRIGGER sync_org_members
 
 ### Strategy 3: Application-Level Caching
 
-Combine any of the above with Melange's built-in cache:
+Combine any of the above with Melange's built-in cache or build your own:
 
 ```go
 cache := melange.NewCache(
@@ -396,18 +401,19 @@ checker := melange.NewChecker(db, melange.WithCache(cache))
 ```
 
 This provides:
+
 - Sub-microsecond repeated checks (~79ns vs ~1ms)
 - Reduced database load
 - Configurable TTL for freshness requirements
 
 ### Scaling Recommendations
 
-| Scale | Recommended Approach |
-|-------|---------------------|
-| < 10K tuples | Regular view + source table indexes |
-| 10K-100K tuples | Regular view + expression indexes + application cache |
-| 100K-1M tuples | Regular view + expression indexes + application cache, or materialized view |
-| > 1M tuples | Dedicated table with trigger sync + application cache |
+| Scale           | Recommended Approach                                                        |
+| --------------- | --------------------------------------------------------------------------- |
+| < 10K tuples    | Regular view + source table indexes                                         |
+| 10K-100K tuples | Regular view + expression indexes + application cache                       |
+| 100K-1M tuples  | Regular view + expression indexes + application cache, or materialized view |
+| > 1M tuples     | Dedicated table with trigger sync + application cache                       |
 
 {{< callout type="warning" >}}
 **Expression indexes are critical at scale.** Without them, permission checks involving exclusions or parent relationships can be 10-15x slower due to sequential scans through the UNION ALL view.
@@ -439,10 +445,12 @@ The view hasn't been created. Create it using the patterns above.
 ### Permissions not updating
 
 If using a regular view, check that:
+
 1. Your domain table changes are committed
 2. The view query correctly maps your table columns
 
 If using a materialized view, refresh it:
+
 ```sql
 REFRESH MATERIALIZED VIEW CONCURRENTLY melange_tuples;
 ```

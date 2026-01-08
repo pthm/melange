@@ -3,26 +3,38 @@ title: OpenFGA Compatibility
 weight: 10
 ---
 
-Melange implements a subset of the OpenFGA specification, providing compatibility with OpenFGA schemas while running entirely in PostgreSQL.
+Melange provides **full OpenFGA Schema 1.1 compatibility**, running entirely in PostgreSQL. Melange is tested against the official OpenFGA test suite and passes all Schema 1.1 tests.
+
+## Test Suite Compliance
+
+Melange is validated against the **official OpenFGA compatibility test suite**. This ensures that authorization behavior matches the OpenFGA specification for all supported features. The test suite covers:
+
+- Direct assignments and userset references
+- Union, intersection, and exclusion operators
+- Tuple-to-userset (parent inheritance)
+- Wildcards and contextual tuples
+- Complex nested permission patterns
+
+All Schema 1.1 tests pass, ensuring reliable compatibility with OpenFGA schemas.
 
 ## Feature Support
 
 | Feature | OpenFGA | Melange | Notes |
 |---------|---------|---------|-------|
 | **Direct assignment** `[user]` | Yes | **Full** | Subjects explicitly granted via tuples |
-| **Userset references** `[type#relation]` | Yes | **Partial** | Parsed but limited runtime evaluation |
+| **Userset references** `[type#relation]` | Yes | **Full** | Full runtime evaluation |
 | **Wildcards** `[user:*]` | Yes | **Full** | Public access, `subject_id = '*'` in tuples |
 | **Union (OR)** | Yes | **Full** | Any rule matches |
-| **Intersection (AND)** | Yes | **Not enforced** | Parsed but treated as union |
+| **Intersection (AND)** | Yes | **Full** | All rules must match |
 | **Exclusion (BUT NOT)** | Yes | **Full** | Recursive with parent inheritance |
 | **Computed relations** | Yes | **Full** | `implied_by` with transitive closure |
 | **Tuple-to-userset (FROM)** | Yes | **Full** | Parent inheritance |
-| **Conditions** | Yes (1.2+) | **None** | CEL expressions, contextual params |
+| **Contextual tuples** | Yes | **Full** | Temporary tuples passed with check request |
+| **Grouping `()`** | Yes | **Full** | Complex nested expressions |
+| **Schema 1.1** | Yes | **Full** | Fully supported and tested |
+| **Conditions** | Yes (1.2+) | **None** | CEL expressions not supported |
 | **Modular models** | Yes (1.2+) | **None** | Multi-file, `module`, `extend type` |
-| **Schema 1.0** | Yes | **Untested** | Parser may handle, not validated |
-| **Schema 1.1** | Yes | **Full** | Primary supported version |
 | **Schema 1.2** | Yes | **None** | Conditions, modules |
-| **Grouping `()`** | Yes | **Partial** | Parser handles, flattened on extraction |
 
 ## Supported Features
 
@@ -84,11 +96,31 @@ define public: [user:*]
 define can_read: public or member
 ```
 
+### Intersection (AND)
+
+Require multiple conditions to all be satisfied:
+
+```fga
+define viewer: editor and can_read from org
+define can_delete: owner and active
+```
+
+### Contextual Tuples
+
+Pass temporary tuples with a check request without storing them in the database. Useful for evaluating hypothetical permissions or time-limited access:
+
+```go
+// Check with contextual tuples
+allowed, err := checker.CheckWithContext(ctx, user, "can_read", doc, []melange.Tuple{
+    {Subject: user, Relation: "temp_access", Object: doc},
+})
+```
+
 ## Unsupported Features
 
 ### Conditions (Schema 1.2)
 
-CEL expressions and contextual parameters are not supported:
+CEL expressions for conditional authorization are not supported:
 
 ```fga
 # NOT SUPPORTED
@@ -99,16 +131,7 @@ condition ip_allowed(user_ip: ipaddress) {
 define viewer: [user with ip_allowed]
 ```
 
-### Intersection (AND)
-
-Intersection is parsed but treated as union at runtime:
-
-```fga
-# Parsed but NOT enforced correctly
-define viewer: editor and can_read from org
-```
-
-### Modular Models
+### Modular Models (Schema 1.2)
 
 Multi-file schemas and module extends are not supported:
 
@@ -125,11 +148,12 @@ extend type document
 
 Melange is designed to be a stepping stone. If you outgrow its capabilities, you can migrate to the full OpenFGA service.
 
+**Planned**: Support for the official OpenFGA client SDK is on the roadmap, which will make migration even simpler by allowing you to use the same client code with both Melange and OpenFGA.
+
 ### When to Consider Migrating
 
-- You need **conditions** for context-aware authorization
-- You need **intersection (AND)** logic
-- You need **modular models** for large schemas
+- You need **conditions** (Schema 1.2) for context-aware authorization with CEL expressions
+- You need **modular models** for large multi-file schemas
 - You need a **dedicated authorization service** for horizontal scaling
 - Your **tuple volume** exceeds what PostgreSQL can handle efficiently
 
@@ -186,16 +210,21 @@ Melange is designed to be a stepping stone. If you outgrow its capabilities, you
 
 ## Testing Compatibility
 
-Run the OpenFGA test suite against Melange:
+Melange includes the official OpenFGA test suite to validate Schema 1.1 compliance. Run the full suite:
 
 ```bash
-# Run supported feature tests
+# Run the complete OpenFGA compatibility test suite
 just test-openfga
 
-# Run specific category
+# Run specific feature categories
 just test-openfga-feature DirectAssignment
 just test-openfga-feature ComputedUserset
 just test-openfga-feature TupleToUserset
+just test-openfga-feature Intersection
+just test-openfga-feature Exclusion
+just test-openfga-feature Wildcards
 ```
+
+The test suite validates behavior against the official OpenFGA specification, ensuring that permission checks return identical results to the OpenFGA server for all supported patterns.
 
 See [Contributing - Testing]({{< relref "contributing/testing" >}}) for details on running the compatibility test suite.

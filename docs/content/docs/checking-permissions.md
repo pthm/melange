@@ -190,8 +190,6 @@ import "github.com/pthm/melange"
 
 var (
     melange.ErrNoTuplesTable   // melange_tuples view doesn't exist
-    melange.ErrMissingModel    // melange_model table doesn't exist
-    melange.ErrEmptyModel      // melange_model table is empty
     melange.ErrMissingFunction // SQL functions not installed
 )
 ```
@@ -204,7 +202,7 @@ if err != nil {
     if melange.IsNoTuplesTableErr(err) {
         // melange_tuples view needs to be created
         log.Error("Authorization not configured: missing melange_tuples view")
-    } else if melange.IsMissingModelErr(err) {
+    } else if melange.IsMissingFunctionErr(err) {
         // Run melange migrate
         log.Error("Authorization not configured: run 'melange migrate'")
     }
@@ -333,8 +331,6 @@ See [Listing Objects]({{< relref "listing-objects" >}}) for details.
 On first Checker creation, Melange validates the database schema (once per process). Issues are logged as warnings:
 
 ```
-[melange] WARNING: melange_model table not found. Run 'melange migrate' to create it.
-[melange] WARNING: melange_model table is empty. Run 'melange migrate' to load your schema.
 [melange] WARNING: check_permission function not found. Run 'melange migrate' to create it.
 ```
 

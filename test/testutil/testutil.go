@@ -60,7 +60,7 @@ func ensureSingleton() (string, error) {
 
 		// Start PostgreSQL with increased max_connections for parallel tests
 		container, err := postgres.Run(ctx,
-			"postgres:17-alpine",
+			"postgres:18-alpine",
 			postgres.WithDatabase("postgres"),
 			postgres.WithUsername("test"),
 			postgres.WithPassword("test"),
