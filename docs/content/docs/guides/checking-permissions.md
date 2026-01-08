@@ -1,6 +1,6 @@
 ---
 title: Checking Permissions
-weight: 5
+weight: 1
 ---
 
 The `Checker` is the core API for evaluating permissions. It calls PostgreSQL functions to validate access based on your authorization model and tuple data.
@@ -324,7 +324,7 @@ for _, repo := range repos {
 }
 ```
 
-See [Listing Objects]({{< relref "listing-objects" >}}) for details.
+See [Listing Objects](./listing-objects.md) for details.
 
 ## Schema Validation
 

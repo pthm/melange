@@ -9,6 +9,8 @@ go 1.25.3
 // For schema parsing and code generation, use github.com/pthm/melange/tooling
 // which depends on the OpenFGA parser.
 
+require github.com/lib/pq v1.10.9
+
 require (
 	4d63.com/gocheckcompilerdirectives v1.3.0 // indirect
 	4d63.com/gochecknoglobals v0.2.2 // indirect

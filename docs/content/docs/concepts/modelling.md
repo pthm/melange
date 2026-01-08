@@ -1,6 +1,6 @@
 ---
 title: Authorization Modelling
-weight: 4
+weight: 2
 ---
 
 Melange uses [OpenFGA](https://openfga.dev)'s DSL syntax to define authorization models. This page covers the basics - for comprehensive modelling guidance, see the [OpenFGA documentation](https://openfga.dev/docs/modeling).
@@ -23,6 +23,7 @@ type organization
 ```
 
 Key elements:
+
 - **`model`** - Required header
 - **`schema 1.1`** - Schema version (Melange supports 1.1)
 - **`type`** - Defines an object type (users, resources, etc.)
@@ -86,6 +87,7 @@ type repository
 ```
 
 The `from` keyword creates a tuple-to-userset relationship:
+
 1. Look up the `org` relation to find the parent organization
 2. Check `can_read` on that organization
 
@@ -264,4 +266,4 @@ define can_review: can_read from repo but not author
 - [OpenFGA Modelling Guide](https://openfga.dev/docs/modeling) - Comprehensive modelling documentation
 - [OpenFGA Playground](https://play.fga.dev) - Interactive schema editor and testing
 - [Building Blocks](https://openfga.dev/docs/modeling/building-blocks) - Detailed explanation of relations
-- [OpenFGA Compatibility]({{< relref "openfga-compatibility" >}}) - What features Melange supports
+- [OpenFGA Compatibility](../reference/openfga-compatibility.md) - What features Melange supports

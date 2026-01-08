@@ -1,6 +1,6 @@
 ---
 title: Listing Subjects
-weight: 7
+weight: 3
 ---
 
 The `ListSubjects` method returns all subjects of a given type that have a specific relation on an object. This answers the question: "Who has access to this resource?"
@@ -267,5 +267,5 @@ func GetTeamMembers(ctx context.Context, teamID string) ([]User, error) {
 
 ## See Also
 
-- [Listing Objects]({{< relref "listing-objects" >}}) - Find what objects a subject can access
-- [Checking Permissions]({{< relref "checking-permissions" >}}) - Single permission checks
+- [Listing Objects](./listing-objects.md) - Find what objects a subject can access
+- [Checking Permissions](./checking-permissions.md) - Single permission checks

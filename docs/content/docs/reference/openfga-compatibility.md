@@ -1,6 +1,6 @@
 ---
 title: OpenFGA Compatibility
-weight: 10
+weight: 3
 ---
 
 Melange provides **full OpenFGA Schema 1.1 compatibility**, running entirely in PostgreSQL. Melange is tested against the official OpenFGA test suite and passes all Schema 1.1 tests.
@@ -19,22 +19,23 @@ All Schema 1.1 tests pass, ensuring reliable compatibility with OpenFGA schemas.
 
 ## Feature Support
 
-| Feature | OpenFGA | Melange | Notes |
-|---------|---------|---------|-------|
-| **Direct assignment** `[user]` | Yes | **Full** | Subjects explicitly granted via tuples |
-| **Userset references** `[type#relation]` | Yes | **Full** | Full runtime evaluation |
-| **Wildcards** `[user:*]` | Yes | **Full** | Public access, `subject_id = '*'` in tuples |
-| **Union (OR)** | Yes | **Full** | Any rule matches |
-| **Intersection (AND)** | Yes | **Full** | All rules must match |
-| **Exclusion (BUT NOT)** | Yes | **Full** | Recursive with parent inheritance |
-| **Computed relations** | Yes | **Full** | `implied_by` with transitive closure |
-| **Tuple-to-userset (FROM)** | Yes | **Full** | Parent inheritance |
-| **Contextual tuples** | Yes | **Full** | Temporary tuples passed with check request |
-| **Grouping `()`** | Yes | **Full** | Complex nested expressions |
-| **Schema 1.1** | Yes | **Full** | Fully supported and tested |
-| **Conditions** | Yes (1.2+) | **None** | CEL expressions not supported |
-| **Modular models** | Yes (1.2+) | **None** | Multi-file, `module`, `extend type` |
-| **Schema 1.2** | Yes | **None** | Conditions, modules |
+| Feature                                  | Melange | Level        | Notes                                       |
+| ---------------------------------------- | ------- | ------------ | ------------------------------------------- |
+| **Direct assignment** `[user]`           | ✅      | **Full**     | Subjects explicitly granted via tuples      |
+| **Userset references** `[type#relation]` | ✅      | **Full**     | Full runtime evaluation                     |
+| **Wildcards** `[user:*]`                 | ✅      | **Full**     | Public access, `subject_id = '*'` in tuples |
+| **Union (OR)**                           | ✅      | **Full**     | Any rule matches                            |
+| **Intersection (AND)**                   | ✅      | **Full**     | All rules must match                        |
+| **Exclusion (BUT NOT)**                  | ✅      | **Full**     | Recursive with parent inheritance           |
+| **Computed relations**                   | ✅      | **Full**     | `implied_by` with transitive closure        |
+| **Tuple-to-userset (FROM)**              | ✅      | **Full**     | Parent inheritance                          |
+| **Contextual tuples**                    | ✅      | **Full**     | Temporary tuples passed with check request  |
+| **Grouping `()`**                        | ✅      | **Full**     | Complex nested expressions                  |
+| **Schema 1.0**                           | ⚠️      | **Untested** | Parser potentially works, but untested      |
+| **Schema 1.1**                           | ✅      | **Full**     | Fully supported and tested                  |
+| **Conditions**                           | ❌      | **None**     | CEL expressions not supported               |
+| **Modular models**                       | ❌      | **None**     | Multi-file, `module`, `extend type`         |
+| **Schema 1.2**                           | ❌      | **None**     | Conditions, modules                         |
 
 ## Supported Features
 
@@ -162,18 +163,21 @@ Melange is designed to be a stepping stone. If you outgrow its capabilities, you
 1. **Schema compatibility**: Your `.fga` schema files work with both Melange and OpenFGA.
 
 2. **Export tuples**: Query your `melange_tuples` view to export tuples:
+
    ```sql
    SELECT subject_type, subject_id, relation, object_type, object_id
    FROM melange_tuples;
    ```
 
 3. **Import to OpenFGA**: Use the OpenFGA API to write tuples:
+
    ```bash
    fga tuple write --store-id $STORE_ID \
      user:alice owner repository:123
    ```
 
 4. **Update application code**: Replace Melange Checker with OpenFGA SDK:
+
    ```go
    // Before (Melange)
    allowed, err := checker.Check(ctx, user, "can_read", repo)
@@ -193,13 +197,13 @@ Melange is designed to be a stepping stone. If you outgrow its capabilities, you
 
 ### What Changes
 
-| Aspect | Melange | OpenFGA |
-|--------|---------|---------|
-| Deployment | Embedded in PostgreSQL | Separate service |
-| Tuple storage | View over existing tables | Dedicated tuple store |
+| Aspect                 | Melange                   | OpenFGA                   |
+| ---------------------- | ------------------------- | ------------------------- |
+| Deployment             | Embedded in PostgreSQL    | Separate service          |
+| Tuple storage          | View over existing tables | Dedicated tuple store     |
 | Transaction visibility | Yes (uncommitted changes) | No (eventual consistency) |
-| Latency | Single database query | Network round-trip |
-| Scaling | PostgreSQL limits | Horizontal scaling |
+| Latency                | Single database query     | Network round-trip        |
+| Scaling                | PostgreSQL limits         | Horizontal scaling        |
 
 ### What Stays the Same
 
@@ -227,4 +231,4 @@ just test-openfga-feature Wildcards
 
 The test suite validates behavior against the official OpenFGA specification, ensuring that permission checks return identical results to the OpenFGA server for all supported patterns.
 
-See [Contributing - Testing]({{< relref "contributing/testing" >}}) for details on running the compatibility test suite.
+See [Contributing - Testing](../contributing/testing.md) for details on running the compatibility test suite.

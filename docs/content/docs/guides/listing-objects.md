@@ -1,6 +1,6 @@
 ---
 title: Listing Objects
-weight: 6
+weight: 2
 ---
 
 The `ListObjects` method returns all objects of a given type that a subject has a specific relation on. This answers the question: "What can this user access?"
@@ -251,5 +251,5 @@ func GetVisibleRepos(ctx context.Context, user User, isAdmin bool) ([]Repository
 
 ## See Also
 
-- [Listing Subjects]({{< relref "listing-subjects" >}}) - Find who has access to an object
-- [Checking Permissions]({{< relref "checking-permissions" >}}) - Single permission checks
+- [Listing Subjects](./listing-subjects.md) - Find who has access to an object
+- [Checking Permissions](./checking-permissions.md) - Single permission checks

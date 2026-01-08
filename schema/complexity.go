@@ -10,12 +10,12 @@ import (
 // For example, a relation with HasDirect, HasUserset, and HasRecursive
 // will generate SQL that ORs together all three access paths.
 type RelationFeatures struct {
-	HasDirect       bool // [user] - direct tuple lookup
-	HasImplied      bool // viewer: editor - uses closure for satisfying relations
-	HasWildcard     bool // [user:*] - checks subject_id = '*'
-	HasUserset      bool // [group#member] - requires JOIN for membership
-	HasRecursive    bool // viewer from parent - requires cycle detection
-	HasExclusion    bool // but not blocked - adds AND NOT check
+	HasDirect       bool // [user] - direct tuple lookup, the relation accepts specific subject types
+	HasImplied      bool // viewer: editor - this relation is satisfied by another relation via closure
+	HasWildcard     bool // [user:*] - allows wildcard grants that match any subject_id
+	HasUserset      bool // [group#member] - grants via membership in another object's relation
+	HasRecursive    bool // viewer from parent - grants inherited through parent/child relationships (TTU)
+	HasExclusion    bool // but not blocked - denies access based on negative conditions
 	HasIntersection bool // writer and editor - requires AND of all parts
 }
 

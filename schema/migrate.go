@@ -2,11 +2,47 @@ package schema
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/lib/pq"
 )
+
+// CodegenVersion is incremented when SQL generation templates or logic change.
+// This ensures migrations re-run even if schema checksum matches.
+// Bump this when:
+//   - SQL templates in schema/templates/ change
+//   - Codegen logic in schema/codegen.go or schema/codegen_list.go changes
+//   - New function patterns are added
+const CodegenVersion = "1"
+
+// MigrateOptions controls migration behavior.
+type MigrateOptions struct {
+	// DryRun outputs SQL to the provided writer without applying changes to the database.
+	// If nil, migration proceeds normally. Use for previewing migrations or generating migration scripts.
+	DryRun io.Writer
+
+	// Force re-runs migration even if schema/codegen unchanged. Use when manually fixing corrupted state or testing.
+	Force bool
+
+	// SchemaContent is the raw schema text used for checksum calculation to detect schema changes.
+	// If empty, skip-if-unchanged optimization is disabled.
+	SchemaContent string
+}
+
+// MigrationRecord represents a row in the melange_migrations table.
+type MigrationRecord struct {
+	SchemaChecksum string
+	CodegenVersion string
+	FunctionNames  []string
+}
 
 // Migrator handles loading authorization schemas into PostgreSQL.
 // The migrator is idempotent - safe to run on every application startup.
@@ -238,4 +274,344 @@ func (m *Migrator) GetStatus(ctx context.Context) (*Status, error) {
 	status.TuplesExists = tuplesExists
 
 	return status, nil
+}
+
+// ComputeSchemaChecksum returns a SHA256 hash of the schema content.
+// Used to detect schema changes for skip-if-unchanged optimization.
+func ComputeSchemaChecksum(content string) string {
+	h := sha256.Sum256([]byte(content))
+	return hex.EncodeToString(h[:])
+}
+
+// GetLastMigration returns the most recent migration record, or nil if none exists.
+// This can be used to check if migration is needed before calling MigrateWithTypesAndOptions.
+func (m *Migrator) GetLastMigration(ctx context.Context) (*MigrationRecord, error) {
+	return m.getLastMigration(ctx, m.db)
+}
+
+// getLastMigration returns the most recent migration record, or nil if none exists.
+func (m *Migrator) getLastMigration(ctx context.Context, db Execer) (*MigrationRecord, error) {
+	// First check if the migrations table exists
+	var tableExists bool
+	err := db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM pg_class c
+			JOIN pg_namespace n ON n.oid = c.relnamespace
+			WHERE c.relname = 'melange_migrations'
+			AND n.nspname = current_schema()
+		)
+	`).Scan(&tableExists)
+	if err != nil {
+		return nil, fmt.Errorf("checking melange_migrations table: %w", err)
+	}
+	if !tableExists {
+		return nil, nil // No migrations table yet
+	}
+
+	var rec MigrationRecord
+	err = db.QueryRowContext(ctx, `
+		SELECT schema_checksum, codegen_version, function_names
+		FROM melange_migrations
+		ORDER BY id DESC
+		LIMIT 1
+	`).Scan(&rec.SchemaChecksum, &rec.CodegenVersion, pq.Array(&rec.FunctionNames))
+	if err == sql.ErrNoRows {
+		return nil, nil // No previous migration
+	}
+	if err != nil {
+		return nil, fmt.Errorf("querying last migration: %w", err)
+	}
+	return &rec, nil
+}
+
+// shouldSkipMigration returns true if the schema and codegen version are unchanged.
+func shouldSkipMigration(lastMigration *MigrationRecord, schemaChecksum string) bool {
+	if lastMigration == nil {
+		return false
+	}
+	return lastMigration.SchemaChecksum == schemaChecksum &&
+		lastMigration.CodegenVersion == CodegenVersion
+}
+
+// getCurrentFunctions returns all melange-generated function names from pg_proc.
+func (m *Migrator) getCurrentFunctions(ctx context.Context, db Execer) ([]string, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT p.proname
+		FROM pg_proc p
+		JOIN pg_namespace n ON p.pronamespace = n.oid
+		WHERE n.nspname = current_schema()
+		AND (
+			p.proname LIKE 'check_%'
+			OR p.proname LIKE 'list_%'
+		)
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("querying pg_proc: %w", err)
+	}
+	defer rows.Close()
+
+	var functions []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("scanning function name: %w", err)
+		}
+		functions = append(functions, name)
+	}
+	return functions, rows.Err()
+}
+
+// dropOrphanedFunctions drops functions that exist but are not in the expected list.
+func (m *Migrator) dropOrphanedFunctions(ctx context.Context, db Execer, currentFunctions, expectedFunctions []string) ([]string, error) {
+	expected := make(map[string]bool)
+	for _, fn := range expectedFunctions {
+		expected[fn] = true
+	}
+
+	var dropped []string
+	for _, fn := range currentFunctions {
+		if !expected[fn] {
+			// Use CASCADE to handle any edge case dependencies
+			_, err := db.ExecContext(ctx, fmt.Sprintf("DROP FUNCTION IF EXISTS %s CASCADE", fn))
+			if err != nil {
+				return dropped, fmt.Errorf("dropping orphaned function %s: %w", fn, err)
+			}
+			dropped = append(dropped, fn)
+		}
+	}
+	return dropped, nil
+}
+
+// applyMigrationsDDL creates the melange_migrations table if it doesn't exist.
+func (m *Migrator) applyMigrationsDDL(ctx context.Context, db Execer) error {
+	if _, err := db.ExecContext(ctx, migrationsDDL); err != nil {
+		return fmt.Errorf("applying migrations DDL: %w", err)
+	}
+	return nil
+}
+
+// insertMigrationRecord records the migration in melange_migrations.
+func (m *Migrator) insertMigrationRecord(ctx context.Context, db Execer, schemaChecksum string, functionNames []string) error {
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO melange_migrations (schema_checksum, codegen_version, function_names)
+		VALUES ($1, $2, $3)
+	`, schemaChecksum, CodegenVersion, pq.Array(functionNames))
+	if err != nil {
+		return fmt.Errorf("inserting migration record: %w", err)
+	}
+	return nil
+}
+
+// MigrateWithTypesAndOptions performs database migration with options.
+// This is the full-featured migration method that supports dry-run, skip-if-unchanged,
+// and orphan cleanup.
+//
+// See MigrateWithTypes for basic usage without options.
+func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeDefinition, opts MigrateOptions) error {
+	// 1. Validate schema before any computation
+	if err := DetectCycles(types); err != nil {
+		return err
+	}
+
+	// 2. Compute schema checksum if content provided
+	var schemaChecksum string
+	if opts.SchemaContent != "" {
+		schemaChecksum = ComputeSchemaChecksum(opts.SchemaContent)
+	}
+
+	// 3. Check if we can skip migration (unless force or dry-run)
+	if !opts.Force && opts.DryRun == nil && schemaChecksum != "" {
+		lastMigration, err := m.getLastMigration(ctx, m.db)
+		if err != nil {
+			return fmt.Errorf("checking last migration: %w", err)
+		}
+		if shouldSkipMigration(lastMigration, schemaChecksum) {
+			return nil // Schema unchanged, skip migration
+		}
+	}
+
+	// 4. Compute derived data (pure computation, no DB)
+	closureRows := ComputeRelationClosure(types)
+
+	// 5. Analyze relations and generate SQL
+	analyses := AnalyzeRelations(types, closureRows)
+	analyses = ComputeCanGenerate(analyses)
+	inline := buildInlineSQLData(closureRows, analyses)
+	generatedSQL, err := GenerateSQL(analyses, inline)
+	if err != nil {
+		return fmt.Errorf("generating check SQL: %w", err)
+	}
+
+	// 6. Generate list functions
+	listSQL, err := GenerateListSQL(analyses, inline)
+	if err != nil {
+		return fmt.Errorf("generating list SQL: %w", err)
+	}
+
+	// 7. Collect expected function names for tracking and orphan detection
+	expectedFunctions := CollectFunctionNames(analyses)
+
+	// 8. Handle dry-run mode
+	if opts.DryRun != nil {
+		return m.outputDryRun(opts.DryRun, schemaChecksum, generatedSQL, listSQL, expectedFunctions)
+	}
+
+	// 9. Apply everything atomically
+	if txer, ok := m.db.(interface {
+		BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+	}); ok {
+		tx, err := txer.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("starting transaction: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+
+		// Apply migrations DDL (creates tracking table)
+		if err := m.applyMigrationsDDL(ctx, tx); err != nil {
+			return err
+		}
+
+		// Get current functions before applying new ones (for orphan detection)
+		currentFunctions, err := m.getCurrentFunctions(ctx, tx)
+		if err != nil {
+			return fmt.Errorf("getting current functions: %w", err)
+		}
+
+		// Apply generated specialized check functions
+		if err := m.applyGeneratedSQL(ctx, tx, generatedSQL); err != nil {
+			return err
+		}
+
+		// Apply generated specialized list functions
+		if err := m.applyGeneratedListSQL(ctx, tx, listSQL); err != nil {
+			return err
+		}
+
+		// Drop orphaned functions
+		if _, err := m.dropOrphanedFunctions(ctx, tx, currentFunctions, expectedFunctions); err != nil {
+			return err
+		}
+
+		// Record migration
+		if schemaChecksum != "" {
+			if err := m.insertMigrationRecord(ctx, tx, schemaChecksum, expectedFunctions); err != nil {
+				return err
+			}
+		}
+
+		return tx.Commit()
+	}
+
+	// Fall back to non-transactional (for *sql.Conn)
+	if err := m.applyMigrationsDDL(ctx, m.db); err != nil {
+		return err
+	}
+	currentFunctions, err := m.getCurrentFunctions(ctx, m.db)
+	if err != nil {
+		return fmt.Errorf("getting current functions: %w", err)
+	}
+	if err := m.applyGeneratedSQL(ctx, m.db, generatedSQL); err != nil {
+		return err
+	}
+	if err := m.applyGeneratedListSQL(ctx, m.db, listSQL); err != nil {
+		return err
+	}
+	if _, err := m.dropOrphanedFunctions(ctx, m.db, currentFunctions, expectedFunctions); err != nil {
+		return err
+	}
+	if schemaChecksum != "" {
+		if err := m.insertMigrationRecord(ctx, m.db, schemaChecksum, expectedFunctions); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// outputDryRun writes the migration SQL to the provided writer.
+func (m *Migrator) outputDryRun(w io.Writer, schemaChecksum string, generatedSQL GeneratedSQL, listSQL ListGeneratedSQL, expectedFunctions []string) error {
+	// Header
+	fmt.Fprintf(w, "-- Melange Migration (dry-run)\n")
+	fmt.Fprintf(w, "-- Schema checksum: %s\n", schemaChecksum)
+	fmt.Fprintf(w, "-- Codegen version: %s\n", CodegenVersion)
+	fmt.Fprintf(w, "\n")
+
+	// Migrations DDL
+	fmt.Fprintf(w, "-- ============================================================\n")
+	fmt.Fprintf(w, "-- DDL: Migration Tracking Table\n")
+	fmt.Fprintf(w, "-- ============================================================\n\n")
+	fmt.Fprintf(w, "%s\n\n", migrationsDDL)
+
+	// Check functions
+	fmt.Fprintf(w, "-- ============================================================\n")
+	fmt.Fprintf(w, "-- Check Functions (%d functions)\n", len(generatedSQL.Functions))
+	fmt.Fprintf(w, "-- ============================================================\n\n")
+	for _, fn := range generatedSQL.Functions {
+		fmt.Fprintf(w, "%s\n\n", fn)
+	}
+
+	// No-wildcard check functions
+	fmt.Fprintf(w, "-- ============================================================\n")
+	fmt.Fprintf(w, "-- No-Wildcard Check Functions (%d functions)\n", len(generatedSQL.NoWildcardFunctions))
+	fmt.Fprintf(w, "-- ============================================================\n\n")
+	for _, fn := range generatedSQL.NoWildcardFunctions {
+		fmt.Fprintf(w, "%s\n\n", fn)
+	}
+
+	// Check dispatchers
+	fmt.Fprintf(w, "-- ============================================================\n")
+	fmt.Fprintf(w, "-- Check Dispatchers\n")
+	fmt.Fprintf(w, "-- ============================================================\n\n")
+	if generatedSQL.Dispatcher != "" {
+		fmt.Fprintf(w, "%s\n\n", generatedSQL.Dispatcher)
+	}
+	if generatedSQL.DispatcherNoWildcard != "" {
+		fmt.Fprintf(w, "%s\n\n", generatedSQL.DispatcherNoWildcard)
+	}
+
+	// List objects functions
+	fmt.Fprintf(w, "-- ============================================================\n")
+	fmt.Fprintf(w, "-- List Objects Functions (%d functions)\n", len(listSQL.ListObjectsFunctions))
+	fmt.Fprintf(w, "-- ============================================================\n\n")
+	for _, fn := range listSQL.ListObjectsFunctions {
+		fmt.Fprintf(w, "%s\n\n", fn)
+	}
+
+	// List subjects functions
+	fmt.Fprintf(w, "-- ============================================================\n")
+	fmt.Fprintf(w, "-- List Subjects Functions (%d functions)\n", len(listSQL.ListSubjectsFunctions))
+	fmt.Fprintf(w, "-- ============================================================\n\n")
+	for _, fn := range listSQL.ListSubjectsFunctions {
+		fmt.Fprintf(w, "%s\n\n", fn)
+	}
+
+	// List dispatchers
+	fmt.Fprintf(w, "-- ============================================================\n")
+	fmt.Fprintf(w, "-- List Dispatchers\n")
+	fmt.Fprintf(w, "-- ============================================================\n\n")
+	if listSQL.ListObjectsDispatcher != "" {
+		fmt.Fprintf(w, "%s\n\n", listSQL.ListObjectsDispatcher)
+	}
+	if listSQL.ListSubjectsDispatcher != "" {
+		fmt.Fprintf(w, "%s\n\n", listSQL.ListSubjectsDispatcher)
+	}
+
+	// Migration record
+	fmt.Fprintf(w, "-- ============================================================\n")
+	fmt.Fprintf(w, "-- Migration Record\n")
+	fmt.Fprintf(w, "-- ============================================================\n\n")
+
+	// Sort function names for deterministic output
+	sortedFunctions := make([]string, len(expectedFunctions))
+	copy(sortedFunctions, expectedFunctions)
+	sort.Strings(sortedFunctions)
+
+	// Format as SQL array literal
+	quotedFunctions := make([]string, len(sortedFunctions))
+	for i, fn := range sortedFunctions {
+		quotedFunctions[i] = fmt.Sprintf("'%s'", fn)
+	}
+	fmt.Fprintf(w, "INSERT INTO melange_migrations (schema_checksum, codegen_version, function_names)\n")
+	fmt.Fprintf(w, "VALUES ('%s', '%s', ARRAY[%s]);\n", schemaChecksum, CodegenVersion, strings.Join(quotedFunctions, ", "))
+
+	return nil
 }

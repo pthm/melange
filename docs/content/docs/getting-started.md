@@ -249,8 +249,8 @@ allowed, _ = checker.Check(ctx, user, "can_read", repo) // ~79ns vs ~980us
 
 ## Next Steps
 
-- [How It Works]({{< relref "how-it-works" >}}) - Understand specialized SQL generation and performance
-- [Tuples View]({{< relref "tuples-view" >}}) - Detailed guidance on mapping your domain tables
-- [CLI Reference]({{< relref "cli" >}}) - Full CLI command documentation
-- [Checking Permissions]({{< relref "checking-permissions" >}}) - Complete Checker API reference
-- [OpenFGA Compatibility]({{< relref "openfga-compatibility" >}}) - Supported features and migration path
+- [How It Works](./concepts/how-it-works.md) - Understand specialized SQL generation and performance
+- [Tuples View](./concepts/tuples-view.md) - Detailed guidance on mapping your domain tables
+- [CLI Reference](./reference/cli.md) - Full CLI command documentation
+- [Checking Permissions](./guides/checking-permissions.md) - Complete Checker API reference
+- [OpenFGA Compatibility](./reference/openfga-compatibility.md) - Supported features and migration path

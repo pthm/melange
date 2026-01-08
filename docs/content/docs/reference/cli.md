@@ -1,6 +1,6 @@
 ---
 title: CLI Reference
-weight: 3
+weight: 1
 ---
 
 The Melange CLI provides commands for validating schemas, generating Go code, and applying migrations to your database.
@@ -109,12 +109,61 @@ melange migrate \
 |------|---------|-------------|
 | `--db` | `$DATABASE_URL` | PostgreSQL connection string |
 | `--schemas-dir` | `schemas` | Directory containing `schema.fga` |
+| `--dry-run` | `false` | Output SQL to stdout without applying changes |
+| `--force` | `false` | Force migration even if schema is unchanged |
 
 This command:
-1. Installs generated SQL functions (`check_permission`, `list_accessible_objects`, etc.)
-2. Inlines schema-derived logic into those functions
+1. Checks if the schema has changed since the last migration
+2. Installs generated SQL functions (`check_permission`, `list_accessible_objects`, etc.)
+3. Cleans up orphaned functions from removed relations
+4. Records the migration in `melange_migrations` table
 
-The migration is idempotent - safe to run multiple times.
+**Skip-if-unchanged behavior:**
+
+Melange tracks schema changes using a SHA256 checksum. If you run `migrate` and the schema hasn't changed since the last migration, it will be skipped automatically:
+
+```
+Schema unchanged, migration skipped.
+Use --force to re-apply.
+```
+
+Use `--force` to re-apply the migration anyway (useful after updating Melange itself).
+
+**Dry-run mode:**
+
+Preview the migration SQL without applying it:
+
+```bash
+melange migrate --db postgres://localhost/mydb --dry-run
+```
+
+This outputs the complete SQL that would be executed, including:
+- DDL for the migrations tracking table
+- All generated check functions
+- All generated list functions
+- Dispatcher functions
+- The migration record insert
+
+Dry-run output goes to stdout, so you can redirect it:
+
+```bash
+melange migrate --db postgres://localhost/mydb --dry-run > migration.sql
+```
+
+**Orphan cleanup:**
+
+When you remove a relation from your schema, Melange automatically drops the orphaned SQL functions during migration. For example, if you remove the `editor` relation from `document`, the next migration will drop `check_document_editor`, `list_document_editor_objects`, etc.
+
+**melange_tuples warning:**
+
+After migration, if the `melange_tuples` view doesn't exist, you'll see a warning:
+
+```
+WARNING: melange_tuples view/table does not exist.
+         Permission checks will fail until you create it.
+```
+
+See [Tuples View](../concepts/tuples-view.md) for setup instructions.
 
 ### status
 
@@ -178,6 +227,9 @@ melange generate \
 # Validate schema (fails fast if syntax error)
 melange validate --schemas-dir schemas
 
+# Preview migration (optional, for review)
+melange migrate --db $DATABASE_URL --dry-run
+
 # Apply migrations to staging/production
 melange migrate \
   --db $DATABASE_URL \
@@ -185,6 +237,12 @@ melange migrate \
 
 # Verify migration succeeded
 melange status --db $DATABASE_URL
+```
+
+For pipelines where you want to ensure migrations are always applied (e.g., after a Melange version update):
+
+```bash
+melange migrate --db $DATABASE_URL --force
 ```
 
 ### Schema Updates
@@ -231,4 +289,32 @@ migrator := schema.NewMigrator(db, "schemas")
 err = migrator.MigrateWithTypes(ctx, types)
 ```
 
-See [Checking Permissions]({{< relref "checking-permissions" >}}) for the full Go API reference.
+**With options (dry-run, force, skip-if-unchanged):**
+
+```go
+import (
+    "os"
+    "github.com/pthm/melange/tooling"
+)
+
+// Dry-run: output SQL to stdout
+opts := tooling.MigrateOptions{
+    DryRun: os.Stdout,
+}
+skipped, err := tooling.MigrateWithOptions(ctx, db, "schemas", opts)
+
+// Force migration even if unchanged
+opts := tooling.MigrateOptions{
+    Force: true,
+}
+skipped, err := tooling.MigrateWithOptions(ctx, db, "schemas", opts)
+
+// Normal migration with skip detection
+opts := tooling.MigrateOptions{}
+skipped, err := tooling.MigrateWithOptions(ctx, db, "schemas", opts)
+if skipped {
+    log.Println("Schema unchanged, migration skipped")
+}
+```
+
+See [Checking Permissions](../guides/checking-permissions.md) for the full Go API reference.

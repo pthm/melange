@@ -13,13 +13,13 @@ layout: hextra-home
 
 <div class="hx:mt-6 hx:mb-6">
 {{< hextra/hero-headline >}}
-  Zero-copy Authorization&nbsp;<br class="hx:sm:block hx:hidden" />for PostgreSQL
+  Zero-copy Zanzibar-Style Authorization&nbsp;<br class="hx:sm:block hx:hidden" />in PostgreSQL
 {{< /hextra/hero-headline >}}
 </div>
 
 <div class="hx:mb-12">
 {{< hextra/hero-subtitle >}}
-  OpenFGA-compatible permission checking that queries&nbsp;<br class="hx:sm:block hx:hidden" />your existing domain tables directly.
+  No external services, no tuple syncing, no eventual consistency.&nbsp;<br class="hx:sm:block hx:hidden" />Just SQL.
 {{< /hextra/hero-subtitle >}}
 </div>
 
@@ -34,22 +34,27 @@ layout: hextra-home
 
 {{< hextra/feature-grid >}}
   {{< hextra/feature-card
-    title="Zero Tuple Sync"
-    subtitle="No separate tuple storage. Permissions are computed directly from your existing domain tables, always in sync."
-    icon="refresh"
-    style="background: radial-gradient(ellipse at 50% 80%,rgba(194,97,254,0.15),hsla(0,0%,100%,0));"
+    title="Pure PostgreSQL"
+    subtitle="Zero external dependencies. No sidecars, no services. Everything runs as SQL functions inside your database."
+    icon="database"
+    style="background: radial-gradient(ellipse at 50% 80%,rgba(51,103,145,0.2),hsla(0,0%,100%,0));"
   >}}
   {{< hextra/feature-card
     title="OpenFGA Compatible"
-    subtitle="Write your authorization model using familiar OpenFGA DSL syntax. Melange compiles it to efficient PostgreSQL."
+    subtitle="100% schema 1.1 conformance. Use familiar DSL syntax with full feature support, tested against the official test suite."
     icon="badge-check"
     style="background: radial-gradient(ellipse at 50% 80%,rgba(0,180,140,0.15),hsla(0,0%,100%,0));"
   >}}
   {{< hextra/feature-card
-    title="Pure PostgreSQL"
-    subtitle="No external services required. Everything runs as PostgreSQL functions with zero external dependencies."
-    icon="database"
-    style="background: radial-gradient(ellipse at 50% 80%,rgba(51,103,145,0.2),hsla(0,0%,100%,0));"
+    title="Sub-Millisecond Checks"
+    subtitle="Benchmarked performance. Permission checks, object listing, and subject listing all complete in under 1ms."
+    icon="lightning-bolt"
+    style="background: radial-gradient(ellipse at 50% 80%,rgba(194,97,254,0.15),hsla(0,0%,100%,0));"
+  >}}
+  {{< hextra/feature-card
+    title="No Tuple Sync"
+    subtitle="Permissions derived from views over your domain tables. Always in sync, transaction-aware, zero data duplication."
+    icon="refresh"
   >}}
   {{< hextra/feature-card
     title="Transaction Aware"
@@ -57,13 +62,8 @@ layout: hextra-home
     icon="clock"
   >}}
   {{< hextra/feature-card
-    title="High Performance"
-    subtitle="Optimized recursive CTEs provide 10-50x faster list operations. Query your permissions efficiently."
-    icon="lightning-bolt"
-  >}}
-  {{< hextra/feature-card
-    title="Easy Integration"
-    subtitle="Simple Go library with automatic migrations. Works with any PostgreSQL driver."
+    title="Use From Anywhere"
+    subtitle="Go client library included, or call SQL functions directly from any language. Use in triggers, RLS policies, or application code."
     icon="puzzle"
   >}}
 {{< /hextra/feature-grid >}}

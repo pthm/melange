@@ -1,6 +1,6 @@
 ---
 title: How It Works
-weight: 2
+weight: 1
 ---
 
 Melange is an **OpenFGA-compatible authorization library** that runs entirely in **PostgreSQL**. Unlike traditional FGA implementations that perform graph traversal in application code, Melange generates specialized SQL functions that execute permission checks directly in the database.
@@ -12,39 +12,21 @@ Melange operates in two distinct phases:
 1. **Build Time (Migration)**: Parses your OpenFGA schema and generates optimized SQL functions
 2. **Runtime**: Permission checks execute as single SQL queries against your existing data
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                            BUILD TIME                                   │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│   schema.fga           melange migrate            PostgreSQL            │
-│   ┌──────────┐         ┌────────────┐         ┌─────────────────────┐  │
-│   │ type doc │  ──────>│  Parser &  │ ──────> │ check_document_*()  │  │
-│   │   define │         │  Codegen   │         │ check_folder_*()    │  │
-│   │   viewer │         └────────────┘         │ check_permission()  │  │
-│   └──────────┘                                └─────────────────────┘  │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
+### Build Time
 
-┌─────────────────────────────────────────────────────────────────────────┐
-│                             RUNTIME                                     │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                         │
-│   Your Application                             PostgreSQL               │
-│   ┌────────────────┐                          ┌────────────────────┐   │
-│   │ checker.Check( │ ─── Single SQL Query ──> │ check_permission() │   │
-│   │   user, viewer,│ <── 1 (allowed) ──────── │       ↓            │   │
-│   │   document)    │      0 (denied)          │ check_document_    │   │
-│   └────────────────┘                          │   viewer()         │   │
-│                                               │       ↓            │   │
-│   Your Domain Tables                          │ melange_tuples     │   │
-│   ┌────────────────┐                          │   (your view)      │   │
-│   │ documents      │ ←───────────────────────>└────────────────────┘   │
-│   │ team_members   │                                                    │
-│   │ folder_access  │                                                    │
-│   └────────────────┘                                                    │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+    schema[schema.fga] --> migrate[melange migrate] --> funcs[Generated SQL Functions]
+```
+
+### Runtime
+
+```mermaid
+flowchart LR
+    app[Your Application] -- SQL Query --> pg[check_permission]
+    pg -- 1 or 0 --> app
+    pg --> tuples[melange_tuples view]
+    tuples --> tables[Your Domain Tables]
 ```
 
 ## Specialized SQL Function Generation
@@ -76,14 +58,14 @@ type document
 
 Melange generates:
 
-| Function | Purpose |
-|----------|---------|
-| `check_folder_owner()` | Direct tuple lookup for folder owners |
-| `check_folder_viewer()` | Union check: direct assignment OR implied by owner |
-| `check_document_owner()` | Direct tuple lookup for document owners |
-| `check_document_editor()` | Union check: direct assignment OR implied by owner |
+| Function                  | Purpose                                                           |
+| ------------------------- | ----------------------------------------------------------------- |
+| `check_folder_owner()`    | Direct tuple lookup for folder owners                             |
+| `check_folder_viewer()`   | Union check: direct assignment OR implied by owner                |
+| `check_document_owner()`  | Direct tuple lookup for document owners                           |
+| `check_document_editor()` | Union check: direct assignment OR implied by owner                |
 | `check_document_viewer()` | Complex check: direct, editor hierarchy, AND parent folder access |
-| `check_permission()` | Dispatcher that routes to specialized functions |
+| `check_permission()`      | Dispatcher that routes to specialized functions                   |
 
 ### Template-Based Generation
 
@@ -179,6 +161,7 @@ This eliminates runtime interpretation of the schema and allows PostgreSQL's que
 Role hierarchies like `owner -> admin -> member` are resolved at migration time, not runtime. Melange computes the transitive closure of implied-by relationships:
 
 For a schema with:
+
 ```fga
 define owner: [user]
 define admin: [user] or owner
@@ -188,7 +171,7 @@ define member: [user] or admin
 Melange precomputes:
 
 | relation | satisfying_relation |
-|----------|---------------------|
+| -------- | ------------------- |
 | member   | member              |
 | member   | admin               |
 | member   | owner               |
@@ -224,62 +207,26 @@ FROM documents;
 ```
 
 This approach means:
+
 - **Zero tuple sync**: No separate tuple storage to maintain
 - **Transaction awareness**: Permission checks see uncommitted changes
 - **Real-time consistency**: Tuples reflect current database state
 
-## OpenFGA Schema 1.1 Compatibility
+## OpenFGA Schema Compatibility
 
-Melange provides **full OpenFGA Schema 1.1 compatibility** (excluding conditions). The same `.fga` schema files work with both Melange and OpenFGA:
+Melange provides **full OpenFGA Schema 1.1 compatibility** (excluding conditions). The same `.fga` schema files work with both Melange and OpenFGA, continuously validated against the official OpenFGA test suite.
 
-| Feature | Support |
-|---------|---------|
-| Direct assignment `[user]` | Full |
-| Userset references `[type#relation]` | Full |
-| Wildcards `[user:*]` | Full |
-| Union (OR) | Full |
-| Intersection (AND) | Full |
-| Exclusion (BUT NOT) | Full |
-| Computed relations | Full |
-| Tuple-to-userset (FROM) | Full |
-| Contextual tuples | Full |
-| Schema 1.1 | Full |
-| Conditions (Schema 1.2) | Not supported |
+{{< cards cols="1" >}}
+{{< card link="../reference/openfga-compatibility" title="OpenFGA Compatibility" subtitle="Supported features, limitations, and behavioral compatibility details" icon="check-circle" >}}
+{{< /cards >}}
 
-Melange is continuously validated against the official OpenFGA test suite to ensure behavioral compatibility.
+## Performance
 
-## Performance Characteristics
+Melange delivers sub-millisecond permission checks with **O(1) constant time scaling** — specialized SQL functions, precomputed closures, and in-database execution eliminate runtime overhead.
 
-Melange delivers sub-millisecond permission checks for most scenarios, benchmarked with tuple volumes up to 1 million rows.
-
-### Benchmark Results
-
-| Operation | 1K Tuples | 10K Tuples | 100K Tuples | 1M Tuples | Scaling |
-|-----------|-----------|------------|-------------|-----------|---------|
-| Direct Membership | ~426us | ~397us | ~384us | ~428us | O(1) |
-| Inherited Permission | ~995us | ~1.1ms | ~1.4ms | ~3.4ms | O(log n) |
-| Exclusion Pattern | ~1.8ms | ~3.4ms | ~18ms | ~173ms | O(n) |
-| Denied Permission | ~612us | ~683us | ~739us | ~1.2ms | O(log n) |
-
-### Why It's Fast
-
-1. **Specialized functions**: No runtime schema interpretation
-2. **Precomputed closure**: Role hierarchies resolved at build time
-3. **Index utilization**: Generated SQL is optimized for index scans
-4. **Query planning**: PostgreSQL optimizes each function independently
-5. **No network hops**: Everything executes in-database
-
-### With Caching
-
-For high-throughput applications, the optional in-memory cache provides dramatic speedups:
-
-- Cold cache: ~980us (database query)
-- Warm cache: ~79ns (12,400x faster)
-
-```go
-cache := melange.NewCache(melange.WithTTL(time.Minute))
-checker := melange.NewChecker(db, melange.WithCache(cache))
-```
+{{< cards cols="1" >}}
+{{< card link="../reference/performance" title="Performance Guide" subtitle="Detailed benchmarks, optimization strategies, and caching configuration" icon="chart-bar" >}}
+{{< /cards >}}
 
 ## Summary
 

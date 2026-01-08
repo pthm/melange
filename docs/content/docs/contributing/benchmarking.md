@@ -58,12 +58,12 @@ BenchmarkOpenFGA_DirectAssignment/this-12              1   14359250 ns/op   2.00
 BenchmarkOpenFGA_DirectAssignment/this_and_union-12    1   11305875 ns/op   4.000 checks/op
 ```
 
-| Metric | Description |
-|--------|-------------|
-| `ns/op` | Nanoseconds per operation (lower is better) |
-| `checks/op` | Number of Check assertions per operation |
-| `listobjs/op` | Number of ListObjects assertions per operation |
-| `listusers/op` | Number of ListUsers assertions per operation |
+| Metric         | Description                                    |
+| -------------- | ---------------------------------------------- |
+| `ns/op`        | Nanoseconds per operation (lower is better)    |
+| `checks/op`    | Number of Check assertions per operation       |
+| `listobjs/op`  | Number of ListObjects assertions per operation |
+| `listusers/op` | Number of ListUsers assertions per operation   |
 
 ## Scale Benchmarks
 
@@ -83,16 +83,52 @@ just bench SCALE=1M
 just bench-quick
 ```
 
+### Test Schema
+
+Scale benchmarks use a GitHub-like model with organizations, repositories, and pull requests. See [Performance Reference](../reference/performance.md#test-schema) for the full schema.
+
+### Test Data Configuration
+
+| Scale    | Users  | Orgs | Repos/Org | Members/Org | PRs/Repo | Total Repos | Total PRs | ~Tuples   |
+| -------- | ------ | ---- | --------- | ----------- | -------- | ----------- | --------- | --------- |
+| **1K**   | 100    | 5    | 10        | 20          | 10       | 50          | 500       | 1,150     |
+| **10K**  | 500    | 10   | 50        | 50          | 20       | 500         | 10,000    | 21,000    |
+| **100K** | 2,000  | 20   | 100       | 100         | 50       | 2,000       | 100,000   | 204,000   |
+| **1M**   | 10,000 | 50   | 200       | 200         | 100      | 10,000      | 1,000,000 | 2,020,000 |
+
 ### Expected Performance
 
-| Operation | 1K Tuples | 10K Tuples | 100K Tuples | 1M Tuples | Scaling |
-|-----------|-----------|------------|-------------|-----------|---------|
-| Direct Membership | ~426us | ~397us | ~384us | ~428us | O(1) |
-| Inherited Permission | ~995us | ~1.1ms | ~1.4ms | ~3.4ms | O(log n) |
-| Exclusion Pattern | ~1.8ms | ~3.4ms | ~18ms | ~173ms | O(n) |
-| Denied Permission | ~612us | ~683us | ~739us | ~1.2ms | O(log n) |
-| ListObjects | ~2.3ms | ~23ms | ~192ms | ~1.5s | O(n) |
-| ListSubjects | ~708us | ~6.3ms | ~42ms | ~864ms | O(n) |
+**Check Operations** (specialized SQL code generation):
+
+| Operation            | Description                                  | 1K      | 10K     | 100K    | 1M      | Scaling |
+| -------------------- | -------------------------------------------- | ------- | ------- | ------- | ------- | ------- |
+| Direct Membership    | `user` → `can_read` → `organization`         | ~246 µs | ~196 µs | ~210 µs | ~202 µs | O(1)    |
+| Inherited Permission | `user` → `can_read` → `repository` (via org) | ~319 µs | ~318 µs | ~309 µs | ~307 µs | O(1)    |
+| Exclusion Pattern    | `user` → `can_review` → `pull_request`       | ~391 µs | ~388 µs | ~393 µs | ~392 µs | O(1)    |
+| Denied Permission    | Non-member checking org access               | ~193 µs | ~208 µs | ~235 µs | ~210 µs | O(1)    |
+
+**ListObjects Operations** (performance varies by relation complexity):
+
+| Operation             | Description                          | 1K      | 10K     | 100K    | 1M      | Scaling |
+| --------------------- | ------------------------------------ | ------- | ------- | ------- | ------- | ------- |
+| List Accessible Repos | All repos user can read (via org)    | ~2.9 ms | ~26 ms  | ~102 ms | ~531 ms | O(n)    |
+| List Accessible Orgs  | All orgs user is member of           | ~184 µs | ~200 µs | ~195 µs | ~194 µs | O(1)    |
+| List Accessible PRs   | All PRs user can read (via repo→org) | ~3.2 ms | ~30 ms  | ~113 ms | ~605 ms | O(n)    |
+
+**ListSubjects Operations** (performance varies by relation complexity):
+
+| Operation         | Description                             | 1K      | 10K     | 100K    | 1M      | Scaling  |
+| ----------------- | --------------------------------------- | ------- | ------- | ------- | ------- | -------- |
+| List Org Members  | All users who can read an org           | ~178 µs | ~203 µs | ~255 µs | ~330 µs | O(log n) |
+| List Repo Readers | All users who can read a repo (via org) | ~6.7 ms | ~27 ms  | ~117 ms | ~682 ms | O(n)     |
+| List Repo Writers | All users who can write to a repo       | ~176 µs | ~184 µs | ~184 µs | ~184 µs | O(1)     |
+
+**Parallel Check Operations**:
+
+| Operation                | Time per Op |
+| ------------------------ | ----------- |
+| Parallel Direct Check    | ~55 µs      |
+| Parallel Inherited Check | ~70 µs      |
 
 ### Caching Benchmark
 
@@ -114,8 +150,9 @@ func BenchmarkCacheHit(b *testing.B) {
 ```
 
 Expected results:
-- Cold cache: ~980us
-- Warm cache: ~79ns (12,400x faster)
+
+- Cold cache: ~336 µs
+- Warm cache: ~79 ns (~4,250x faster)
 
 ## Profiling
 
@@ -151,6 +188,7 @@ go tool trace trace.out
 ### Before Making Changes
 
 1. Run benchmarks to establish a baseline:
+
    ```bash
    just bench-openfga-save baseline.txt
    ```
@@ -158,6 +196,7 @@ go tool trace trace.out
 2. Make your changes
 
 3. Run benchmarks again:
+
    ```bash
    just bench-openfga-save after.txt
    ```

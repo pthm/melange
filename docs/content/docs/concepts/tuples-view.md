@@ -1,6 +1,6 @@
 ---
 title: Tuples View
-weight: 2
+weight: 3
 ---
 
 The `melange_tuples` view is the bridge between your application's domain tables and Melange's permission checking system. This document explains how to create, optimize, and scale this view.

@@ -40,6 +40,8 @@ func main() {
 		idType         = flag.String("id-type", "string", "ID type for generated constructors (e.g., string, int64)")
 		relationPrefix = flag.String("relation-prefix", "", "Prefix filter for relation constants (e.g., can_)")
 		configFile     = flag.String("config", "melange.yaml", "Config file (optional)")
+		dryRun         = flag.Bool("dry-run", false, "Output migration SQL without applying (migrate only)")
+		force          = flag.Bool("force", false, "Force migration even if schema unchanged (migrate only)")
 	)
 	flag.Parse()
 
@@ -78,7 +80,7 @@ func main() {
 		migrator := schema.NewMigrator(db, *schemasDir)
 		status(ctx, migrator)
 	case "migrate":
-		migrate(ctx, db, *schemasDir)
+		migrate(ctx, db, *schemasDir, *dryRun, *force)
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", flag.Arg(0))
 		printUsage()
@@ -110,6 +112,12 @@ func printUsage() {
 	fmt.Println()
 	fmt.Println("  # Apply schema to database")
 	fmt.Println("  melange migrate --db postgres://localhost/mydb --schemas-dir schemas")
+	fmt.Println()
+	fmt.Println("  # Preview migration SQL without applying")
+	fmt.Println("  melange migrate --db postgres://localhost/mydb --dry-run")
+	fmt.Println()
+	fmt.Println("  # Force re-migration even if schema unchanged")
+	fmt.Println("  melange migrate --db postgres://localhost/mydb --force")
 	fmt.Println()
 	fmt.Println("  # Check status")
 	fmt.Println("  melange status --db postgres://localhost/mydb")
@@ -144,13 +152,48 @@ func status(ctx context.Context, m *schema.Migrator) {
 
 // migrate applies the schema to the database.
 // Idempotent - safe to run multiple times.
-func migrate(ctx context.Context, db *sql.DB, schemasDir string) {
-	fmt.Println("Applying authz infrastructure...")
-	if err := tooling.Migrate(ctx, db, schemasDir); err != nil {
+func migrate(ctx context.Context, db *sql.DB, schemasDir string, dryRun, force bool) {
+	opts := tooling.MigrateOptions{
+		Force: force,
+	}
+
+	if dryRun {
+		opts.DryRun = os.Stdout
+		fmt.Fprintln(os.Stderr, "-- Dry-run mode: SQL will be output but not applied")
+		fmt.Fprintln(os.Stderr, "")
+	} else {
+		fmt.Println("Applying authz infrastructure...")
+	}
+
+	skipped, err := tooling.MigrateWithOptions(ctx, db, schemasDir, opts)
+	if err != nil {
 		log.Fatalf("migrating: %v", err)
 	}
 
-	fmt.Println("Authz schema applied successfully.")
+	if dryRun {
+		// Dry-run output was written to stdout
+		return
+	}
+
+	if skipped {
+		fmt.Println("Schema unchanged, migration skipped.")
+		fmt.Println("Use --force to re-apply.")
+	} else {
+		fmt.Println("Authz schema applied successfully.")
+	}
+
+	// Check for melange_tuples and warn if missing
+	migrator := schema.NewMigrator(db, schemasDir)
+	status, err := migrator.GetStatus(ctx)
+	if err != nil {
+		log.Printf("Warning: could not check status: %v", err)
+		return
+	}
+	if !status.TuplesExists {
+		fmt.Println()
+		fmt.Println("WARNING: melange_tuples view/table does not exist.")
+		fmt.Println("         Permission checks will fail until you create it.")
+	}
 }
 
 // validate checks .fga schema syntax using the OpenFGA parser.

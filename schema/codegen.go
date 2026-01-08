@@ -116,15 +116,15 @@ func sanitizeIdentifier(s string) string {
 
 // CheckFunctionData contains data for rendering check function templates.
 type CheckFunctionData struct {
-	ObjectType   string
-	Relation     string
-	FunctionName string
+	ObjectType   string // The authorization object type (e.g., "document", "folder")
+	Relation     string // The relation name (e.g., "viewer", "editor")
+	FunctionName string // The generated function name (e.g., "check_document_viewer")
 	// InternalCheckFunctionName is the dispatcher internal function name to call
 	// for recursive or complex checks.
 	InternalCheckFunctionName string
-	FeaturesString            string
-	ClosureValues             string
-	UsersetValues             string
+	FeaturesString            string // Human-readable list of enabled features for SQL comments
+	ClosureValues             string // Inline SQL VALUES for closure lookups, eliminates JOIN
+	UsersetValues             string // Inline SQL VALUES for userset patterns, eliminates JOIN
 
 	// Feature flags
 	HasDirect       bool
@@ -143,25 +143,25 @@ type CheckFunctionData struct {
 	HasStandaloneAccess bool
 
 	// Pre-rendered SQL fragments
-	DirectCheck    string // EXISTS clause for direct check
-	UsersetCheck   string // EXISTS clause(s) for userset check
-	ExclusionCheck string // EXISTS clause(s) for exclusion check
-	AccessChecks   string // Combined access checks (OR'd together)
+	DirectCheck    string // Pre-rendered SQL EXISTS for direct tuple lookup
+	UsersetCheck   string // Pre-rendered SQL EXISTS for userset membership checks
+	ExclusionCheck string // Pre-rendered SQL EXISTS for exclusion (denial) checks
+	AccessChecks   string // All access paths OR'd together for the final permission decision
 
 	// For recursive (TTU) patterns
-	ParentRelations []ParentRelationData
+	ParentRelations []ParentRelationData // TTU patterns: parent object relations to check recursively
 
 	// For implied relations that need function calls
-	ImpliedFunctionCalls []ImpliedFunctionCall
+	ImpliedFunctionCalls []ImpliedFunctionCall // Complex closure relations requiring function calls
 
 	// For intersection patterns - each group is AND'd, groups are OR'd
-	IntersectionGroups []IntersectionGroupData
+	IntersectionGroups []IntersectionGroupData // AND groups where all parts must be satisfied
 }
 
 // IntersectionGroupData contains data for a single intersection group.
 // All parts within a group must be satisfied (AND semantics).
 type IntersectionGroupData struct {
-	Parts []IntersectionPartData
+	Parts []IntersectionPartData // Individual checks within this AND group
 }
 
 // IntersectionPartData contains data for a single part of an intersection.
@@ -198,13 +198,13 @@ type IntersectionPartData struct {
 // ImpliedFunctionCall represents a function call to a complex implied relation.
 // Used when an implied relation has exclusions and can't use simple tuple lookup.
 type ImpliedFunctionCall struct {
-	FunctionName string // e.g., "check_document_editor"
+	FunctionName string // Function to call for this implied relation (e.g., "check_document_editor")
 }
 
 // ParentRelationData contains data for rendering recursive access checks.
 type ParentRelationData struct {
-	LinkingRelation     string // The relation that links to parent (e.g., "parent", "org")
-	ParentRelation      string // The relation to check on the parent (e.g., "viewer", "member")
+	LinkingRelation     string // Relation linking to parent object (e.g., "parent" in "viewer from parent")
+	ParentRelation      string // Relation to verify on parent (e.g., "viewer" in "viewer from parent")
 	AllowedLinkingTypes string // SQL-formatted list of allowed parent types (e.g., "'folder', 'org'")
 }
 

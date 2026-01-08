@@ -7,6 +7,11 @@ import (
 )
 
 // InlineSQLData contains SQL VALUES payloads that replace database-backed model tables.
+// Rationale: Model data is inlined into SQL VALUES clauses rather than querying
+// database tables. This eliminates the need for persistent melange_model tables
+// and ensures generated functions are self-contained. When the schema changes,
+// migration regenerates all functions with updated inline data. This approach
+// trades function size for runtime simplicity and removes a JOIN from every check.
 type InlineSQLData struct {
 	// ClosureValues contains tuples of (object_type, relation, satisfying_relation).
 	ClosureValues string
