@@ -19,37 +19,34 @@ linters:
     - prealloc
     - unconvert
     - unparam
+  settings:
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+      disabled-checks:
+        - hugeParam
+        - rangeValCopy
+    misspell:
+      locale: US
+    prealloc:
+      simple: true
+      for-loops: true
+  exclusions:
+    rules:
+      # Allow unchecked errors in tests
+      - path: _test\.go
+        linters:
+          - errcheck
+      # Allow unused parameters in test helpers
+      - path: test/
+        linters:
+          - unparam
 
 formatters:
   enable:
     - gofumpt
-
-linters-settings:
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - style
-      - performance
-    disabled-checks:
-      - hugeParam
-      - rangeValCopy
-  misspell:
-    locale: US
-  prealloc:
-    simple: true
-    for-loops: true
-
-formatters-settings:
-  gofumpt:
-    extra-rules: true
-
-issues:
-  exclude-rules:
-    # Allow unchecked errors in tests
-    - path: _test\.go
-      linters:
-        - errcheck
-    # Allow unused parameters in test helpers
-    - path: test/
-      linters:
-        - unparam
+  settings:
+    gofumpt:
+      extra-rules: true

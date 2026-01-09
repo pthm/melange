@@ -32,18 +32,18 @@ jobs:
       - name: Lint root module
         uses: golangci/golangci-lint-action@v7
         with:
-          version: v2
+          version: v2.8.0
 
       - name: Lint tooling module
         uses: golangci/golangci-lint-action@v7
         with:
-          version: v2
+          version: v2.8.0
           working-directory: tooling
 
       - name: Lint test module
         uses: golangci/golangci-lint-action@v7
         with:
-          version: v2
+          version: v2.8.0
           working-directory: test
 
   unit-tests:
