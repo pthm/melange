@@ -2,43 +2,11 @@ package schema
 
 import (
 	"bytes"
-	"embed"
 	"fmt"
 	"strings"
-	"text/template"
 
 	"github.com/pthm/melange/tooling/schema/sqlgen"
 )
-
-//go:embed templates/list_*.tpl.sql templates/partials/list_*.tpl.sql
-var templatesFS embed.FS
-
-// templates holds the parsed SQL templates.
-var templates *template.Template
-
-func init() {
-	var err error
-	templates = template.New("sql").Funcs(template.FuncMap{
-		"dict": func(items ...any) (map[string]any, error) {
-			if len(items)%2 != 0 {
-				return nil, fmt.Errorf("dict expects even number of args")
-			}
-			values := make(map[string]any, len(items)/2)
-			for i := 0; i < len(items); i += 2 {
-				key, ok := items[i].(string)
-				if !ok {
-					return nil, fmt.Errorf("dict keys must be strings")
-				}
-				values[key] = items[i+1]
-			}
-			return values, nil
-		},
-	})
-	templates, err = templates.ParseFS(templatesFS, "templates/list_*.tpl.sql", "templates/partials/list_*.tpl.sql")
-	if err != nil {
-		panic(fmt.Sprintf("failed to parse SQL templates: %v", err))
-	}
-}
 
 // formatSQLStringList formats a list of strings as a SQL-safe list.
 // For example, ["user", "org"] becomes "'user', 'org'".

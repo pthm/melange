@@ -1,9 +1,6 @@
 package schema
 
-import (
-	"bytes"
-	"fmt"
-)
+import "fmt"
 
 // ListGeneratedSQL contains all SQL generated for list functions.
 // This is separate from check function generation to keep concerns isolated.
@@ -152,19 +149,22 @@ func generateListObjectsFunction(a RelationAnalysis, inline InlineSQLData) (stri
 	// Select appropriate template based on features
 	templateName := selectListObjectsTemplate(a)
 
-	if templateName == "list_objects_direct.tpl.sql" ||
-		templateName == "list_objects_exclusion.tpl.sql" ||
-		templateName == "list_objects_userset.tpl.sql" ||
-		templateName == "list_objects_recursive.tpl.sql" ||
-		templateName == "list_objects_intersection.tpl.sql" {
+	switch templateName {
+	case "list_objects_direct.tpl.sql",
+		"list_objects_exclusion.tpl.sql",
+		"list_objects_userset.tpl.sql",
+		"list_objects_recursive.tpl.sql",
+		"list_objects_intersection.tpl.sql":
 		return generateListObjectsFunctionBob(a, inline, templateName)
+	case "list_objects_depth_exceeded.tpl.sql":
+		return generateListObjectsDepthExceededFunctionBob(a), nil
+	case "list_objects_self_ref_userset.tpl.sql":
+		return generateListObjectsSelfRefUsersetFunctionBob(a, inline)
+	case "list_objects_composed.tpl.sql":
+		return generateListObjectsComposedFunctionBob(a, inline)
+	default:
+		return "", fmt.Errorf("unknown list_objects template %s", templateName)
 	}
-
-	var buf bytes.Buffer
-	if err := templates.ExecuteTemplate(&buf, templateName, data); err != nil {
-		return "", fmt.Errorf("executing list_objects template %s: %w", templateName, err)
-	}
-	return buf.String(), nil
 }
 
 // selectListObjectsTemplate selects the appropriate list_objects template based on features.
@@ -278,19 +278,22 @@ func generateListSubjectsFunction(a RelationAnalysis, inline InlineSQLData) (str
 	// Select appropriate template based on features
 	templateName := selectListSubjectsTemplate(a)
 
-	if templateName == "list_subjects_direct.tpl.sql" ||
-		templateName == "list_subjects_exclusion.tpl.sql" ||
-		templateName == "list_subjects_userset.tpl.sql" ||
-		templateName == "list_subjects_recursive.tpl.sql" ||
-		templateName == "list_subjects_intersection.tpl.sql" {
+	switch templateName {
+	case "list_subjects_direct.tpl.sql",
+		"list_subjects_exclusion.tpl.sql",
+		"list_subjects_userset.tpl.sql",
+		"list_subjects_recursive.tpl.sql",
+		"list_subjects_intersection.tpl.sql":
 		return generateListSubjectsFunctionBob(a, inline, templateName)
+	case "list_subjects_depth_exceeded.tpl.sql":
+		return generateListSubjectsDepthExceededFunctionBob(a), nil
+	case "list_subjects_self_ref_userset.tpl.sql":
+		return generateListSubjectsSelfRefUsersetFunctionBob(a, inline)
+	case "list_subjects_composed.tpl.sql":
+		return generateListSubjectsComposedFunctionBob(a, inline)
+	default:
+		return "", fmt.Errorf("unknown list_subjects template %s", templateName)
 	}
-
-	var buf bytes.Buffer
-	if err := templates.ExecuteTemplate(&buf, templateName, data); err != nil {
-		return "", fmt.Errorf("executing list_subjects template %s: %w", templateName, err)
-	}
-	return buf.String(), nil
 }
 
 // selectListSubjectsTemplate selects the appropriate list_subjects template based on features.
@@ -608,57 +611,13 @@ type ListDispatcherCase struct {
 // generateListObjectsDispatcher generates the list_accessible_objects dispatcher.
 // For Phase 1, this always falls through to the generic implementation.
 func generateListObjectsDispatcher(analyses []RelationAnalysis) (string, error) {
-	data := ListDispatcherData{
-		HasSpecializedFunctions: false,
-		Cases:                   nil,
-	}
-
-	// Build cases for relations that can be generated
-	for _, a := range analyses {
-		if !a.CanGenerateList() {
-			continue
-		}
-		data.Cases = append(data.Cases, ListDispatcherCase{
-			ObjectType:   a.ObjectType,
-			Relation:     a.Relation,
-			FunctionName: listObjectsFunctionName(a.ObjectType, a.Relation),
-		})
-	}
-	data.HasSpecializedFunctions = len(data.Cases) > 0
-
-	var buf bytes.Buffer
-	if err := templates.ExecuteTemplate(&buf, "list_objects_dispatcher.tpl.sql", data); err != nil {
-		return "", fmt.Errorf("executing list_objects_dispatcher template: %w", err)
-	}
-	return buf.String(), nil
+	return generateListObjectsDispatcherBob(analyses)
 }
 
 // generateListSubjectsDispatcher generates the list_accessible_subjects dispatcher.
 // For Phase 1, this always falls through to the generic implementation.
 func generateListSubjectsDispatcher(analyses []RelationAnalysis) (string, error) {
-	data := ListDispatcherData{
-		HasSpecializedFunctions: false,
-		Cases:                   nil,
-	}
-
-	// Build cases for relations that can be generated
-	for _, a := range analyses {
-		if !a.CanGenerateList() {
-			continue
-		}
-		data.Cases = append(data.Cases, ListDispatcherCase{
-			ObjectType:   a.ObjectType,
-			Relation:     a.Relation,
-			FunctionName: listSubjectsFunctionName(a.ObjectType, a.Relation),
-		})
-	}
-	data.HasSpecializedFunctions = len(data.Cases) > 0
-
-	var buf bytes.Buffer
-	if err := templates.ExecuteTemplate(&buf, "list_subjects_dispatcher.tpl.sql", data); err != nil {
-		return "", fmt.Errorf("executing list_subjects_dispatcher template: %w", err)
-	}
-	return buf.String(), nil
+	return generateListSubjectsDispatcherBob(analyses)
 }
 
 // buildRelationList builds a SQL-formatted list of simple relations from the closure.

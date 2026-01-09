@@ -17,6 +17,7 @@ type listUsersetPatternInput struct {
 	IsClosurePattern    bool
 	HasWildcard         bool
 	IsComplex           bool
+	IsSelfReferential   bool
 }
 
 func generateListObjectsFunctionBob(a RelationAnalysis, inline InlineSQLData, templateName string) (string, error) {
@@ -943,6 +944,7 @@ func buildListUsersetPatternInputs(a RelationAnalysis) []listUsersetPatternInput
 			IsClosurePattern:    false,
 			HasWildcard:         p.HasWildcard,
 			IsComplex:           p.IsComplex,
+			IsSelfReferential:   p.SubjectType == a.ObjectType && p.SubjectRelation == a.Relation,
 		})
 	}
 
@@ -960,6 +962,7 @@ func buildListUsersetPatternInputs(a RelationAnalysis) []listUsersetPatternInput
 			IsClosurePattern:    true,
 			HasWildcard:         p.HasWildcard,
 			IsComplex:           p.IsComplex,
+			IsSelfReferential:   p.SubjectType == a.ObjectType && p.SubjectRelation == a.Relation,
 		})
 	}
 
