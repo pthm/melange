@@ -402,7 +402,7 @@ For programmatic schema management without the CLI, use the Go API:
 
 ```go
 import (
-    "github.com/pthm/melange/schema"
+    "github.com/pthm/melange/tooling/schema"
     "github.com/pthm/melange/tooling"
 )
 
@@ -411,8 +411,8 @@ err := tooling.Migrate(ctx, db, "schemas")
 
 // Or with more control
 types, err := tooling.ParseSchema("schemas/schema.fga")
-migrator := schema.NewMigrator(db, "schemas")
-err = migrator.MigrateWithTypes(ctx, types)
+    migrator := schema.NewMigrator(db, "schemas")
+    err = migrator.MigrateWithTypes(ctx, types)
 ```
 
 **With options (dry-run, force, skip-if-unchanged):**

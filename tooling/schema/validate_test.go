@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pthm/melange/schema"
+	"github.com/pthm/melange/tooling/schema"
 )
 
 func TestDetectCycles_ImpliedBy(t *testing.T) {

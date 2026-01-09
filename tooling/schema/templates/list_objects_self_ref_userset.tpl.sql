@@ -39,25 +39,7 @@ BEGIN
           AND t.subject_type = p_subject_type
           AND p_subject_type IN ({{.AllowedSubjectTypes}})
           AND {{.SubjectIDCheck}}
-{{- if .SimpleExcludedRelations }}
-          -- Simple exclusions for direct path
-{{- range .SimpleExcludedRelations }}
-          AND NOT EXISTS (
-              SELECT 1 FROM melange_tuples excl
-              WHERE excl.object_type = '{{$.ObjectType}}'
-                AND excl.object_id = t.object_id
-                AND excl.relation = '{{.}}'
-                AND excl.subject_type = p_subject_type
-                AND (excl.subject_id = p_subject_id OR excl.subject_id = '*')
-          )
-{{- end }}
-{{- end }}
-{{- if .ComplexExcludedRelations }}
-          -- Complex exclusions for direct path
-{{- range .ComplexExcludedRelations }}
-          AND check_permission_internal(p_subject_type, p_subject_id, '{{.}}', '{{$.ObjectType}}', t.object_id, ARRAY[]::TEXT[]) = 0
-{{- end }}
-{{- end }}
+{{template "list_objects_exclusions.tpl.sql" (dict "Root" . "ObjectIDExpr" "t.object_id" "SubjectTypeExpr" "p_subject_type" "SubjectIDExpr" "p_subject_id")}}
 {{- range .ComplexClosureRelations }}
 
         UNION
@@ -123,25 +105,7 @@ BEGIN
           AND check_permission_internal(p_subject_type, p_subject_id, '{{.SourceRelation}}', '{{$.ObjectType}}', t.object_id, ARRAY[]::TEXT[]) = 1
 {{- end }}
 {{- end }}
-{{- if $.SimpleExcludedRelations }}
-          -- Apply simple exclusions to userset path
-{{- range $.SimpleExcludedRelations }}
-          AND NOT EXISTS (
-              SELECT 1 FROM melange_tuples excl
-              WHERE excl.object_type = '{{$.ObjectType}}'
-                AND excl.object_id = t.object_id
-                AND excl.relation = '{{.}}'
-                AND excl.subject_type = p_subject_type
-                AND (excl.subject_id = p_subject_id OR excl.subject_id = '*')
-          )
-{{- end }}
-{{- end }}
-{{- if $.ComplexExcludedRelations }}
-          -- Apply complex exclusions to userset path
-{{- range $.ComplexExcludedRelations }}
-          AND check_permission_internal(p_subject_type, p_subject_id, '{{.}}', '{{$.ObjectType}}', t.object_id, ARRAY[]::TEXT[]) = 0
-{{- end }}
-{{- end }}
+{{template "list_objects_exclusions.tpl.sql" (dict "Root" $ "ObjectIDExpr" "t.object_id" "SubjectTypeExpr" "p_subject_type" "SubjectIDExpr" "p_subject_id")}}
 {{- end }}
 {{- end }}
 
@@ -163,90 +127,13 @@ BEGIN
           AND split_part(t.subject_id, '#', 1) = me.object_id
           AND split_part(t.subject_id, '#', 2) = '{{.Relation}}'
         WHERE me.depth < 25
-{{- if .SimpleExcludedRelations }}
-          -- Apply simple exclusions to recursive userset path
-{{- range .SimpleExcludedRelations }}
-          AND NOT EXISTS (
-              SELECT 1 FROM melange_tuples excl
-              WHERE excl.object_type = '{{$.ObjectType}}'
-                AND excl.object_id = t.object_id
-                AND excl.relation = '{{.}}'
-                AND excl.subject_type = p_subject_type
-                AND (excl.subject_id = p_subject_id OR excl.subject_id = '*')
-          )
-{{- end }}
-{{- end }}
-{{- if .ComplexExcludedRelations }}
-          -- Apply complex exclusions to recursive userset path
-{{- range .ComplexExcludedRelations }}
-          AND check_permission_internal(p_subject_type, p_subject_id, '{{.}}', '{{$.ObjectType}}', t.object_id, ARRAY[]::TEXT[]) = 0
-{{- end }}
-{{- end }}
+{{template "list_objects_exclusions.tpl.sql" (dict "Root" . "ObjectIDExpr" "t.object_id" "SubjectTypeExpr" "p_subject_type" "SubjectIDExpr" "p_subject_id")}}
     )
     SELECT DISTINCT me.object_id
     FROM member_expansion me
-{{- if .ExcludedParentRelations }}
-    -- TTU exclusions
     WHERE TRUE
-{{- range .ExcludedParentRelations }}
-      AND NOT EXISTS (
-          SELECT 1 FROM melange_tuples link
-          WHERE link.object_type = '{{$.ObjectType}}'
-            AND link.object_id = me.object_id
-            AND link.relation = '{{.LinkingRelation}}'
-{{- if .AllowedLinkingTypes }}
-            AND link.subject_type IN ({{.AllowedLinkingTypes}})
-{{- end }}
-            AND check_permission_internal(p_subject_type, p_subject_id, '{{.Relation}}', link.subject_type, link.subject_id, ARRAY[]::TEXT[]) = 1
-      )
-{{- end }}
-{{- end }}
-{{- if .ExcludedIntersectionGroups }}
-    -- Intersection exclusions
-{{- if not .ExcludedParentRelations }}
-    WHERE TRUE
-{{- end }}
-{{- range .ExcludedIntersectionGroups }}
-      AND NOT (
-{{- range $i, $part := .Parts }}
-{{- if $i }}
-          AND
-{{- end }}
-{{- if $part.ParentRelation }}
-          EXISTS (
-              SELECT 1 FROM melange_tuples link
-              WHERE link.object_type = '{{$.ObjectType}}'
-                AND link.object_id = me.object_id
-                AND link.relation = '{{$part.ParentRelation.LinkingRelation}}'
-{{- if $part.ParentRelation.AllowedLinkingTypes }}
-                AND link.subject_type IN ({{range $j, $lt := $part.ParentRelation.AllowedLinkingTypes}}{{if $j}}, {{end}}'{{$lt}}'{{end}})
-{{- end }}
-                AND check_permission_internal(p_subject_type, p_subject_id, '{{$part.ParentRelation.Relation}}', link.subject_type, link.subject_id, ARRAY[]::TEXT[]) = 1
-          )
-{{- else }}
-          (check_permission_internal(p_subject_type, p_subject_id, '{{$part.Relation}}', '{{$.ObjectType}}', me.object_id, ARRAY[]::TEXT[]) = 1
-{{- if $part.ExcludedRelation }}
-           AND check_permission_internal(p_subject_type, p_subject_id, '{{$part.ExcludedRelation}}', '{{$.ObjectType}}', me.object_id, ARRAY[]::TEXT[]) = 0
-{{- end }}
-          )
-{{- end }}
-{{- end }}
-      )
-{{- end }}
-{{- end }}
+{{template "list_objects_exclusions.tpl.sql" (dict "Root" . "ObjectIDExpr" "me.object_id" "SubjectTypeExpr" "p_subject_type" "SubjectIDExpr" "p_subject_id")}}
 
-    UNION
-
-    -- Self-candidate: when subject is a userset on the same object type
-    -- e.g., group:1#member checking what groups group:1#member is a member of
-    SELECT split_part(p_subject_id, '#', 1) AS object_id
-    WHERE position('#' in p_subject_id) > 0
-      AND p_subject_type = '{{.ObjectType}}'
-      AND EXISTS (
-          SELECT 1 FROM (VALUES {{$.ClosureValues}}) AS c(object_type, relation, satisfying_relation)
-          WHERE c.object_type = '{{.ObjectType}}'
-            AND c.relation = '{{.Relation}}'
-            AND c.satisfying_relation = substring(p_subject_id from position('#' in p_subject_id) + 1)
-      );
+{{template "list_objects_self_candidate.tpl.sql" .}}
 END;
 $$ LANGUAGE plpgsql STABLE;

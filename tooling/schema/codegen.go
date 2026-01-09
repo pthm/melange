@@ -16,7 +16,23 @@ var templates *template.Template
 
 func init() {
 	var err error
-	templates, err = template.ParseFS(templatesFS, "templates/*.tpl.sql", "templates/partials/*.tpl.sql")
+	templates = template.New("sql").Funcs(template.FuncMap{
+		"dict": func(items ...any) (map[string]any, error) {
+			if len(items)%2 != 0 {
+				return nil, fmt.Errorf("dict expects even number of args")
+			}
+			values := make(map[string]any, len(items)/2)
+			for i := 0; i < len(items); i += 2 {
+				key, ok := items[i].(string)
+				if !ok {
+					return nil, fmt.Errorf("dict keys must be strings")
+				}
+				values[key] = items[i+1]
+			}
+			return values, nil
+		},
+	})
+	templates, err = templates.ParseFS(templatesFS, "templates/*.tpl.sql", "templates/partials/*.tpl.sql")
 	if err != nil {
 		panic(fmt.Sprintf("failed to parse SQL templates: %v", err))
 	}

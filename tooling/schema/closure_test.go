@@ -3,7 +3,7 @@ package schema_test
 import (
 	"testing"
 
-	"github.com/pthm/melange/schema"
+	"github.com/pthm/melange/tooling/schema"
 )
 
 func TestComputeRelationClosure_Simple(t *testing.T) {

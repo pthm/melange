@@ -6,7 +6,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/pthm/melange/schema"
+	"github.com/pthm/melange/tooling/schema"
 )
 
 // MigrateOptions controls migration behavior.

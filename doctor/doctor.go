@@ -22,7 +22,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/pthm/melange/schema"
+	"github.com/pthm/melange/tooling/schema"
 	"github.com/pthm/melange/tooling"
 )
 

@@ -159,70 +159,7 @@ BEGIN
 {{- if not .HasWildcard }}
               AND t.subject_id != '*'
 {{- end }}
-{{- if .SimpleExcludedRelations }}
-              -- Simple exclusions
-{{- range .SimpleExcludedRelations }}
-              AND NOT EXISTS (
-                  SELECT 1 FROM melange_tuples excl
-                  WHERE excl.object_type = '{{$.ObjectType}}'
-                    AND excl.object_id = p_object_id
-                    AND excl.relation = '{{.}}'
-                    AND excl.subject_type = t.subject_type
-                    AND (excl.subject_id = t.subject_id OR excl.subject_id = '*')
-              )
-{{- end }}
-{{- end }}
-{{- if .ComplexExcludedRelations }}
-              -- Complex exclusions
-{{- range .ComplexExcludedRelations }}
-              AND check_permission_internal(t.subject_type, t.subject_id, '{{.}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 0
-{{- end }}
-{{- end }}
-{{- if .ExcludedParentRelations }}
-              -- TTU exclusions
-{{- range .ExcludedParentRelations }}
-              AND NOT EXISTS (
-                  SELECT 1 FROM melange_tuples link
-                  WHERE link.object_type = '{{$.ObjectType}}'
-                    AND link.object_id = p_object_id
-                    AND link.relation = '{{.LinkingRelation}}'
-{{- if .AllowedLinkingTypes }}
-                    AND link.subject_type IN ({{.AllowedLinkingTypes}})
-{{- end }}
-                    AND check_permission_internal(t.subject_type, t.subject_id, '{{.Relation}}', link.subject_type, link.subject_id, ARRAY[]::TEXT[]) = 1
-              )
-{{- end }}
-{{- end }}
-{{- if .ExcludedIntersectionGroups }}
-              -- Intersection exclusions
-{{- range .ExcludedIntersectionGroups }}
-              AND NOT (
-{{- range $i, $part := .Parts }}
-{{- if $i }}
-                  AND
-{{- end }}
-{{- if $part.ParentRelation }}
-                  EXISTS (
-                      SELECT 1 FROM melange_tuples link
-                      WHERE link.object_type = '{{$.ObjectType}}'
-                        AND link.object_id = p_object_id
-                        AND link.relation = '{{$part.ParentRelation.LinkingRelation}}'
-{{- if $part.ParentRelation.AllowedLinkingTypes }}
-                        AND link.subject_type IN ({{range $j, $lt := $part.ParentRelation.AllowedLinkingTypes}}{{if $j}}, {{end}}'{{$lt}}'{{end}})
-{{- end }}
-                        AND check_permission_internal(t.subject_type, t.subject_id, '{{$part.ParentRelation.Relation}}', link.subject_type, link.subject_id, ARRAY[]::TEXT[]) = 1
-                  )
-{{- else }}
-                  (check_permission_internal(t.subject_type, t.subject_id, '{{$part.Relation}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 1
-{{- if $part.ExcludedRelation }}
-                   AND check_permission_internal(t.subject_type, t.subject_id, '{{$part.ExcludedRelation}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 0
-{{- end }}
-                  )
-{{- end }}
-{{- end }}
-              )
-{{- end }}
-{{- end }}
+{{template "list_subjects_exclusions.tpl.sql" (dict "Root" . "ObjectIDExpr" "p_object_id" "SubjectTypeExpr" "t.subject_type" "SubjectIDExpr" "t.subject_id")}}
 {{- range .ComplexClosureRelations }}
             UNION
             -- Complex closure relation: {{.}}
@@ -237,25 +174,7 @@ BEGIN
               AND t.subject_id != '*'
 {{- end }}
               AND check_permission_internal(t.subject_type, t.subject_id, '{{.}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 1
-{{- if $.SimpleExcludedRelations }}
-              -- Apply simple exclusions to complex closure relation path
-{{- range $.SimpleExcludedRelations }}
-              AND NOT EXISTS (
-                  SELECT 1 FROM melange_tuples excl
-                  WHERE excl.object_type = '{{$.ObjectType}}'
-                    AND excl.object_id = p_object_id
-                    AND excl.relation = '{{.}}'
-                    AND excl.subject_type = t.subject_type
-                    AND (excl.subject_id = t.subject_id OR excl.subject_id = '*')
-              )
-{{- end }}
-{{- end }}
-{{- if $.ComplexExcludedRelations }}
-              -- Apply complex exclusions to complex closure relation path
-{{- range $.ComplexExcludedRelations }}
-              AND check_permission_internal(t.subject_type, t.subject_id, '{{.}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 0
-{{- end }}
-{{- end }}
+{{template "list_subjects_exclusions.tpl.sql" (dict "Root" $ "ObjectIDExpr" "p_object_id" "SubjectTypeExpr" "t.subject_type" "SubjectIDExpr" "t.subject_id")}}
 {{- end }}
 {{- range .IntersectionClosureRelations }}
             UNION
@@ -308,66 +227,7 @@ BEGIN
               AND check_permission_internal(m.subject_type, m.subject_id, '{{.SourceRelation}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 1
 {{- end }}
 {{- end }}
-{{- if $.SimpleExcludedRelations }}
-{{- range $.SimpleExcludedRelations }}
-              AND NOT EXISTS (
-                  SELECT 1 FROM melange_tuples excl
-                  WHERE excl.object_type = '{{$.ObjectType}}'
-                    AND excl.object_id = p_object_id
-                    AND excl.relation = '{{.}}'
-                    AND excl.subject_type = m.subject_type
-                    AND (excl.subject_id = m.subject_id OR excl.subject_id = '*')
-              )
-{{- end }}
-{{- end }}
-{{- if $.ComplexExcludedRelations }}
-{{- range $.ComplexExcludedRelations }}
-              AND check_permission_internal(m.subject_type, m.subject_id, '{{.}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 0
-{{- end }}
-{{- end }}
-{{- if $.ExcludedParentRelations }}
-{{- range $.ExcludedParentRelations }}
-              AND NOT EXISTS (
-                  SELECT 1 FROM melange_tuples link
-                  WHERE link.object_type = '{{$.ObjectType}}'
-                    AND link.object_id = p_object_id
-                    AND link.relation = '{{.LinkingRelation}}'
-{{- if .AllowedLinkingTypes }}
-                    AND link.subject_type IN ({{.AllowedLinkingTypes}})
-{{- end }}
-                    AND check_permission_internal(m.subject_type, m.subject_id, '{{.Relation}}', link.subject_type, link.subject_id, ARRAY[]::TEXT[]) = 1
-              )
-{{- end }}
-{{- end }}
-{{- if $.ExcludedIntersectionGroups }}
-{{- range $.ExcludedIntersectionGroups }}
-              AND NOT (
-{{- range $i, $part := .Parts }}
-{{- if $i }}
-                  AND
-{{- end }}
-{{- if $part.ParentRelation }}
-                  EXISTS (
-                      SELECT 1 FROM melange_tuples link
-                      WHERE link.object_type = '{{$.ObjectType}}'
-                        AND link.object_id = p_object_id
-                        AND link.relation = '{{$part.ParentRelation.LinkingRelation}}'
-{{- if $part.ParentRelation.AllowedLinkingTypes }}
-                        AND link.subject_type IN ({{range $j, $lt := $part.ParentRelation.AllowedLinkingTypes}}{{if $j}}, {{end}}'{{$lt}}'{{end}})
-{{- end }}
-                        AND check_permission_internal(m.subject_type, m.subject_id, '{{$part.ParentRelation.Relation}}', link.subject_type, link.subject_id, ARRAY[]::TEXT[]) = 1
-                  )
-{{- else }}
-                  (check_permission_internal(m.subject_type, m.subject_id, '{{$part.Relation}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 1
-{{- if $part.ExcludedRelation }}
-                   AND check_permission_internal(m.subject_type, m.subject_id, '{{$part.ExcludedRelation}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 0
-{{- end }}
-                  )
-{{- end }}
-{{- end }}
-              )
-{{- end }}
-{{- end }}
+{{template "list_subjects_exclusions.tpl.sql" (dict "Root" $ "ObjectIDExpr" "p_object_id" "SubjectTypeExpr" "m.subject_type" "SubjectIDExpr" "m.subject_id")}}
 {{- end }}
 {{- range .ParentRelations }}
             UNION
@@ -384,37 +244,7 @@ BEGIN
 {{- end }}
               -- Verify subject has the parent relation on the linked object
             WHERE check_permission_internal(p_subject_type, sp.subject_id, '{{.Relation}}', link.subject_type, link.subject_id, ARRAY[]::TEXT[]) = 1
-{{- if $.SimpleExcludedRelations }}
-{{- range $.SimpleExcludedRelations }}
-              AND NOT EXISTS (
-                  SELECT 1 FROM melange_tuples excl
-                  WHERE excl.object_type = '{{$.ObjectType}}'
-                    AND excl.object_id = p_object_id
-                    AND excl.relation = '{{.}}'
-                    AND excl.subject_type = p_subject_type
-                    AND (excl.subject_id = sp.subject_id OR excl.subject_id = '*')
-              )
-{{- end }}
-{{- end }}
-{{- if $.ComplexExcludedRelations }}
-{{- range $.ComplexExcludedRelations }}
-              AND check_permission_internal(p_subject_type, sp.subject_id, '{{.}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 0
-{{- end }}
-{{- end }}
-{{- if $.ExcludedParentRelations }}
-{{- range $.ExcludedParentRelations }}
-              AND NOT EXISTS (
-                  SELECT 1 FROM melange_tuples excl_link
-                  WHERE excl_link.object_type = '{{$.ObjectType}}'
-                    AND excl_link.object_id = p_object_id
-                    AND excl_link.relation = '{{.LinkingRelation}}'
-{{- if .AllowedLinkingTypes }}
-                    AND excl_link.subject_type IN ({{.AllowedLinkingTypes}})
-{{- end }}
-                    AND check_permission_internal(p_subject_type, sp.subject_id, '{{.Relation}}', excl_link.subject_type, excl_link.subject_id, ARRAY[]::TEXT[]) = 1
-              )
-{{- end }}
-{{- end }}
+{{template "list_subjects_exclusions.tpl.sql" (dict "Root" $ "ObjectIDExpr" "p_object_id" "SubjectTypeExpr" "p_subject_type" "SubjectIDExpr" "sp.subject_id")}}
 {{- end }}
         ),
         has_wildcard AS (

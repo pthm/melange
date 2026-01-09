@@ -29,7 +29,7 @@ import (
 	_ "github.com/lib/pq"
 
 	"github.com/pthm/melange/doctor"
-	"github.com/pthm/melange/schema"
+	"github.com/pthm/melange/tooling/schema"
 	"github.com/pthm/melange/tooling"
 )
 

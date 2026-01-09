@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/pthm/melange/schema"
+	"github.com/pthm/melange/tooling/schema"
 	"github.com/pthm/melange/test/testutil"
 	"github.com/pthm/melange/tooling"
 	"github.com/stretchr/testify/require"

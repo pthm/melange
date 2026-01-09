@@ -3,7 +3,7 @@ package tooling
 import (
 	"io"
 
-	"github.com/pthm/melange/schema"
+	"github.com/pthm/melange/tooling/schema"
 )
 
 // GenerateConfig is an alias for schema.GenerateConfig.

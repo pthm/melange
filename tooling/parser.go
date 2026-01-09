@@ -17,7 +17,7 @@ import (
 	"github.com/openfga/language/pkg/go/transformer"
 
 	"github.com/pthm/melange"
-	"github.com/pthm/melange/schema"
+	"github.com/pthm/melange/tooling/schema"
 )
 
 // ParseSchema reads an OpenFGA .fga file and returns type definitions.

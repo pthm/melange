@@ -18,7 +18,7 @@ import (
 // CodegenVersion is incremented when SQL generation templates or logic change.
 // This ensures migrations re-run even if schema checksum matches.
 // Bump this when:
-//   - SQL templates in schema/templates/ change
+//   - SQL templates in tooling/schema/templates/ change
 //   - Codegen logic in schema/codegen.go or schema/codegen_list.go changes
 //   - New function patterns are added
 const CodegenVersion = "1"
