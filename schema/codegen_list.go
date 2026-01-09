@@ -666,18 +666,7 @@ func buildSubjectIDCheck(hasWildcard bool) string {
 // buildAllowedSubjectTypes builds a SQL-formatted list of allowed subject types.
 // This enforces model type restrictions in list queries.
 func buildAllowedSubjectTypes(a RelationAnalysis) string {
-	// Use AllowedSubjectTypes if available (computed from closure)
-	types := a.AllowedSubjectTypes
-	if len(types) == 0 {
-		// Fallback to DirectSubjectTypes
-		types = a.DirectSubjectTypes
-	}
-	if len(types) == 0 {
-		// No types - return empty which will cause no matches
-		return "''"
-	}
-
-	return formatSQLStringList(types)
+	return buildAllowedSubjectTypeList(a, "''")
 }
 
 // buildAllSatisfyingRelations builds a SQL-formatted list of ALL relations that satisfy this relation.
@@ -910,34 +899,5 @@ func buildListIndirectAnchorData(a RelationAnalysis) *ListIndirectAnchorData {
 // This is similar to computeHasStandaloneAccess in codegen.go but adapted for list functions.
 // When false and HasIntersection is true, the only access is through intersection groups.
 func computeListHasStandaloneAccess(a RelationAnalysis) bool {
-	// If no intersection, all access paths are standalone
-	if !a.Features.HasIntersection {
-		return a.Features.HasDirect || a.Features.HasImplied || a.Features.HasUserset || a.Features.HasRecursive
-	}
-
-	// Check if any intersection group has a "This" part, meaning direct access is
-	// constrained by the intersection rather than being standalone.
-	hasIntersectionWithThis := false
-	for _, group := range a.IntersectionGroups {
-		for _, part := range group.Parts {
-			if part.IsThis {
-				hasIntersectionWithThis = true
-				break
-			}
-		}
-		if hasIntersectionWithThis {
-			break
-		}
-	}
-
-	// If direct types are inside an intersection (This pattern), don't count them as standalone.
-	// Userset patterns from subject type restrictions (e.g., [group#member]) are also part of
-	// the "This" pattern, so they shouldn't be standalone either.
-	// Check for other standalone access paths (implied, recursive).
-	hasStandaloneDirect := a.Features.HasDirect && !hasIntersectionWithThis
-	hasStandaloneImplied := a.Features.HasImplied
-	hasStandaloneUserset := a.Features.HasUserset && !hasIntersectionWithThis
-	hasStandaloneRecursive := a.Features.HasRecursive
-
-	return hasStandaloneDirect || hasStandaloneImplied || hasStandaloneUserset || hasStandaloneRecursive
+	return computeHasStandaloneAccess(a)
 }

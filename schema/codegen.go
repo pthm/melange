@@ -8,7 +8,7 @@ import (
 	"text/template"
 )
 
-//go:embed templates/*.tpl.sql
+//go:embed templates/*.tpl.sql templates/partials/*.tpl.sql
 var templatesFS embed.FS
 
 // templates holds the parsed SQL templates.
@@ -16,7 +16,7 @@ var templates *template.Template
 
 func init() {
 	var err error
-	templates, err = template.ParseFS(templatesFS, "templates/*.tpl.sql")
+	templates, err = template.ParseFS(templatesFS, "templates/*.tpl.sql", "templates/partials/*.tpl.sql")
 	if err != nil {
 		panic(fmt.Sprintf("failed to parse SQL templates: %v", err))
 	}
@@ -34,6 +34,18 @@ func formatSQLStringList(items []string) string {
 		quoted[i] = fmt.Sprintf("'%s'", item)
 	}
 	return strings.Join(quoted, ", ")
+}
+
+func buildAllowedSubjectTypeList(a RelationAnalysis, emptyValue string) string {
+	subjectTypes := a.AllowedSubjectTypes
+	if len(subjectTypes) == 0 {
+		// Fallback to direct subject types if allowed types not computed.
+		subjectTypes = a.DirectSubjectTypes
+	}
+	if len(subjectTypes) == 0 {
+		return emptyValue
+	}
+	return formatSQLStringList(subjectTypes)
 }
 
 // buildTupleLookupRelationList builds a SQL list of relations that can be resolved
@@ -332,13 +344,13 @@ func buildCheckFunctionData(a RelationAnalysis, inline InlineSQLData, noWildcard
 	// When an intersection contains a "This" pattern (e.g., "viewer: [user] and writer"),
 	// the direct types are constrained by the intersection and should NOT be treated as
 	// standalone access paths.
-	data.HasStandaloneAccess = computeHasStandaloneAccess(a, data.IntersectionGroups)
+	data.HasStandaloneAccess = computeHasStandaloneAccess(a)
 
 	return data, nil
 }
 
 // computeHasStandaloneAccess determines if the relation has access paths outside of intersections.
-func computeHasStandaloneAccess(a RelationAnalysis, intersectionGroups []IntersectionGroupData) bool {
+func computeHasStandaloneAccess(a RelationAnalysis) bool {
 	// If no intersection, all access paths are standalone
 	if !a.Features.HasIntersection {
 		return a.Features.HasDirect || a.Features.HasImplied || a.Features.HasUserset || a.Features.HasRecursive
@@ -347,7 +359,7 @@ func computeHasStandaloneAccess(a RelationAnalysis, intersectionGroups []Interse
 	// Check if any intersection group has a "This" part, meaning direct access is
 	// constrained by the intersection rather than being standalone.
 	hasIntersectionWithThis := false
-	for _, group := range intersectionGroups {
+	for _, group := range a.IntersectionGroups {
 		for _, part := range group.Parts {
 			if part.IsThis {
 				hasIntersectionWithThis = true
@@ -454,12 +466,7 @@ func buildDirectCheck(a RelationAnalysis, allowWildcard bool) (string, error) {
 
 	// Build subject type filter from allowed types
 	// This ensures type restrictions from the model are enforced
-	subjectTypes := a.AllowedSubjectTypes
-	if len(subjectTypes) == 0 {
-		// Fallback to direct subject types if allowed types not computed
-		subjectTypes = a.DirectSubjectTypes
-	}
-	subjectTypeList := formatSQLStringList(subjectTypes)
+	subjectTypeList := buildAllowedSubjectTypeList(a, "")
 
 	// Build subject_id check (with or without wildcard)
 	// When HasWildcard is true: allow wildcard tuples to grant access to any subject
