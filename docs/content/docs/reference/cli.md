@@ -185,6 +185,110 @@ This helps you verify that:
 - Your schema file exists
 - The tuples view exists in the database
 
+### doctor
+
+Run comprehensive health checks on your authorization infrastructure.
+
+```bash
+melange doctor \
+  --db postgres://localhost/mydb \
+  --schemas-dir schemas
+```
+
+**Flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--db` | `$DATABASE_URL` | PostgreSQL connection string |
+| `--schemas-dir` | `schemas` | Directory containing `schema.fga` |
+| `--verbose` | `false` | Show detailed output with additional context |
+
+**Output:**
+```
+melange doctor - Health Check
+
+Schema File
+  ✓ Schema file exists at schemas/schema.fga
+  ✓ Schema is valid (3 types, 8 relations)
+  ✓ No cyclic dependencies detected
+
+Migration State
+  ✓ melange_migrations table exists
+  ✓ Schema migrated (24 functions tracked)
+  ✓ Schema is in sync with database
+
+Generated Functions
+  ✓ All dispatcher functions present
+  ✓ All 24 expected functions present
+
+Tuples Source
+  ✓ melange_tuples exists (view)
+  ✓ All required columns present
+
+Data Health
+  ✓ melange_tuples contains 1523 tuples
+  ✓ All sampled tuples reference valid types and relations
+
+Summary: 11 passed, 0 warnings, 0 errors
+```
+
+The doctor command performs the following checks:
+
+**Schema File:**
+- Verifies the schema file exists
+- Parses and validates schema syntax
+- Detects cyclic dependencies in implied-by relationships
+
+**Migration State:**
+- Checks if the `melange_migrations` tracking table exists
+- Verifies a migration has been applied
+- Compares schema checksum to detect if schema has changed since last migration
+- Checks if codegen version has changed (indicating Melange was updated)
+
+**Generated Functions:**
+- Verifies all dispatcher functions exist (`check_permission`, `list_accessible_objects`, etc.)
+- Compares expected functions from schema against actual functions in database
+- Identifies orphan functions from previous schema versions
+
+**Tuples Source:**
+- Verifies `melange_tuples` view/table exists
+- Checks required columns: `object_type`, `object_id`, `relation`, `subject_type`, `subject_id`
+- Warns if using a materialized view (requires manual refresh)
+
+**Data Health:**
+- Reports tuple count
+- Validates that tuples reference valid types and relations defined in the schema
+
+**Exit codes:**
+- Returns `0` if all checks pass (warnings are allowed)
+- Returns `1` if any check fails
+
+**Verbose mode:**
+
+Use `--verbose` to see additional details for each check:
+
+```bash
+melange doctor --db postgres://localhost/mydb --verbose
+```
+
+This shows:
+- Exact file paths and checksums
+- Lists of missing or orphan functions
+- Specific unknown types or relations found in data
+
+**Common issues and fixes:**
+
+| Issue | Fix |
+|-------|-----|
+| Schema file not found | Create `schemas/schema.fga` |
+| Schema has syntax errors | Run `fga model validate` for detailed errors |
+| Schema out of sync | Run `melange migrate` |
+| Missing functions | Run `melange migrate` |
+| Orphan functions | Run `melange migrate` (cleanup is automatic) |
+| melange_tuples missing | Create a view over your domain tables |
+| Missing columns | Update melange_tuples to include all required columns |
+| Unknown types in tuples | Update tuples view or schema to match |
+
 ## Global Flags
 
 These flags apply to all commands:
@@ -235,8 +339,8 @@ melange migrate \
   --db $DATABASE_URL \
   --schemas-dir schemas
 
-# Verify migration succeeded
-melange status --db $DATABASE_URL
+# Run health checks to verify everything is working
+melange doctor --db $DATABASE_URL
 ```
 
 For pipelines where you want to ensure migrations are always applied (e.g., after a Melange version update):
@@ -262,6 +366,28 @@ melange generate \
 # 3. Apply to database
 melange migrate --db $DATABASE_URL --schemas-dir schemas
 ```
+
+### Troubleshooting
+
+When permission checks aren't working as expected, use `doctor` to diagnose issues:
+
+```bash
+# Run comprehensive health checks
+melange doctor --db $DATABASE_URL --schemas-dir schemas
+
+# With verbose output for more details
+melange doctor --db $DATABASE_URL --verbose
+```
+
+Common scenarios where `doctor` helps:
+
+1. **Permission checks returning unexpected results** - Doctor validates that your schema, generated functions, and tuples are all in sync.
+
+2. **After updating Melange** - Doctor detects if the codegen version has changed and functions need regenerating.
+
+3. **New environment setup** - Doctor validates the complete authorization stack is properly configured.
+
+4. **Data migration issues** - Doctor samples tuples and validates they reference valid types and relations.
 
 ## Exit Codes
 
@@ -314,6 +440,39 @@ opts := tooling.MigrateOptions{}
 skipped, err := tooling.MigrateWithOptions(ctx, db, "schemas", opts)
 if skipped {
     log.Println("Schema unchanged, migration skipped")
+}
+```
+
+**Running health checks programmatically:**
+
+```go
+import (
+    "os"
+    "github.com/pthm/melange/doctor"
+)
+
+d := doctor.New(db, "schemas")
+report, err := d.Run(ctx)
+if err != nil {
+    log.Fatal(err)
+}
+
+// Print report (verbose=true for detailed output)
+report.Print(os.Stdout, true)
+
+// Check for critical failures
+if report.HasErrors() {
+    os.Exit(1)
+}
+
+// Access individual check results
+for _, check := range report.Checks {
+    if check.Status == doctor.StatusFail {
+        log.Printf("FAIL: %s - %s", check.Name, check.Message)
+        if check.FixHint != "" {
+            log.Printf("  Fix: %s", check.FixHint)
+        }
+    }
 }
 ```
 
