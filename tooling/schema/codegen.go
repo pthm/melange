@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"text/template"
+
+	"github.com/pthm/melange/tooling/schema/sqlgen"
 )
 
 //go:embed templates/*.tpl.sql templates/partials/*.tpl.sql
@@ -64,9 +66,21 @@ func buildAllowedSubjectTypeList(a RelationAnalysis, emptyValue string) string {
 	return formatSQLStringList(subjectTypes)
 }
 
+func allowedSubjectTypesForCheck(a RelationAnalysis) []string {
+	subjectTypes := a.AllowedSubjectTypes
+	if len(subjectTypes) == 0 {
+		subjectTypes = a.DirectSubjectTypes
+	}
+	return subjectTypes
+}
+
 // buildTupleLookupRelationList builds a SQL list of relations that can be resolved
 // via tuple lookup for the current relation.
 func buildTupleLookupRelationList(a RelationAnalysis) string {
+	return formatSQLStringList(buildTupleLookupRelations(a))
+}
+
+func buildTupleLookupRelations(a RelationAnalysis) []string {
 	// Build relation list from self + simple closure relations.
 	relations := []string{a.Relation}
 	relations = append(relations, a.SimpleClosureRelations...)
@@ -79,7 +93,7 @@ func buildTupleLookupRelationList(a RelationAnalysis) string {
 		relations = a.SatisfyingRelations
 	}
 
-	return formatSQLStringList(relations)
+	return relations
 }
 
 // GeneratedSQL contains all SQL generated for a schema.
@@ -474,39 +488,17 @@ type DirectCheckData struct {
 func buildDirectCheck(a RelationAnalysis, allowWildcard bool) (string, error) {
 	// If there are no allowed subject types, the direct check can never match.
 	// Return FALSE to avoid generating invalid SQL like "subject_type IN ()".
-	if len(a.AllowedSubjectTypes) == 0 && len(a.DirectSubjectTypes) == 0 {
+	subjectTypes := allowedSubjectTypesForCheck(a)
+	if len(subjectTypes) == 0 {
 		return "FALSE", nil
 	}
 
-	relationList := buildTupleLookupRelationList(a)
-
-	// Build subject type filter from allowed types
-	// This ensures type restrictions from the model are enforced
-	subjectTypeList := buildAllowedSubjectTypeList(a, "")
-
-	// Build subject_id check (with or without wildcard)
-	// When HasWildcard is true: allow wildcard tuples to grant access to any subject
-	// When HasWildcard is false: don't match wildcard tuples (they're invalid per the model)
-	var subjectIDCheck string
-	if allowWildcard {
-		subjectIDCheck = "(subject_id = p_subject_id OR subject_id = '*')"
-	} else {
-		// Exclude wildcard tuples - they shouldn't grant access when model doesn't allow wildcards
-		subjectIDCheck = "subject_id = p_subject_id AND subject_id != '*'"
-	}
-
-	data := DirectCheckData{
-		ObjectType:        a.ObjectType,
-		RelationList:      relationList,
-		SubjectTypeFilter: subjectTypeList,
-		SubjectIDCheck:    subjectIDCheck,
-	}
-
-	var buf bytes.Buffer
-	if err := templates.ExecuteTemplate(&buf, "direct_check.tpl.sql", data); err != nil {
-		return "", fmt.Errorf("executing direct_check template: %w", err)
-	}
-	return strings.TrimSpace(buf.String()), nil
+	return sqlgen.DirectCheck(sqlgen.DirectCheckInput{
+		ObjectType:    a.ObjectType,
+		Relations:     buildTupleLookupRelations(a),
+		SubjectTypes:  subjectTypes,
+		AllowWildcard: allowWildcard,
+	})
 }
 
 // UsersetCheckData contains data for rendering userset check template.
@@ -572,20 +564,18 @@ func buildUsersetCheck(a RelationAnalysis, allowWildcard bool, internalCheckFn s
 				// Fallback: use just the subject relation itself
 				satisfyingRels = []string{pattern.SubjectRelation}
 			}
-			quotedRels := formatSQLStringList(satisfyingRels)
-
-			data := UsersetCheckData{
-				ObjectType:                a.ObjectType,
-				Relation:                  a.Relation,
-				SubjectType:               pattern.SubjectType,
-				SubjectRelation:           pattern.SubjectRelation,
-				SatisfyingRelationsList:   quotedRels,
-				HasWildcard:               pattern.HasWildcard && allowWildcard,
-				InternalCheckFunctionName: internalCheckFn,
+			usersetSQL, err := sqlgen.UsersetCheck(sqlgen.UsersetCheckInput{
+				ObjectType:          a.ObjectType,
+				Relation:            a.Relation,
+				SubjectType:         pattern.SubjectType,
+				SubjectRelation:     pattern.SubjectRelation,
+				SatisfyingRelations: satisfyingRels,
+				AllowWildcard:       pattern.HasWildcard && allowWildcard,
+			})
+			if err != nil {
+				return "", fmt.Errorf("building userset_check query for %s#%s: %w", pattern.SubjectType, pattern.SubjectRelation, err)
 			}
-			if err := templates.ExecuteTemplate(&buf, "userset_check.tpl.sql", data); err != nil {
-				return "", fmt.Errorf("executing userset_check template for %s#%s: %w", pattern.SubjectType, pattern.SubjectRelation, err)
-			}
+			buf.WriteString(usersetSQL)
 		}
 		checks = append(checks, strings.TrimSpace(buf.String()))
 	}
@@ -652,17 +642,15 @@ func buildExclusionCheck(a RelationAnalysis, _ bool, internalCheckFn string) (st
 			// For example: "can_read_safe: can_read but not banned" where "banned: [user:*]"
 			// If there are no wildcard tuples, the check is harmless.
 			// This matches list_objects_exclusion.tpl.sql behavior.
-			subjectIDCheck := "(subject_id = p_subject_id OR subject_id = '*')"
-			data := ExclusionCheckData{
+			exclusionSQL, err := sqlgen.ExclusionCheck(sqlgen.ExclusionCheckInput{
 				ObjectType:       a.ObjectType,
 				ExcludedRelation: excl,
-				SubjectIDCheck:   subjectIDCheck,
+				AllowWildcard:    true,
+			})
+			if err != nil {
+				return "", fmt.Errorf("building exclusion_check query for %s: %w", excl, err)
 			}
-			var buf bytes.Buffer
-			if err := templates.ExecuteTemplate(&buf, "exclusion_check.tpl.sql", data); err != nil {
-				return "", fmt.Errorf("executing exclusion_check template for %s: %w", excl, err)
-			}
-			checks = append(checks, strings.TrimSpace(buf.String()))
+			checks = append(checks, strings.TrimSpace(exclusionSQL))
 		}
 		return strings.Join(checks, " OR "), nil
 	}
@@ -676,17 +664,15 @@ func buildExclusionCheck(a RelationAnalysis, _ bool, internalCheckFn string) (st
 		// For example: "can_read_safe: can_read but not banned" where "banned: [user:*]"
 		// If there are no wildcard tuples, the check is harmless.
 		// This matches list_objects_exclusion.tpl.sql behavior.
-		subjectIDCheck := "(subject_id = p_subject_id OR subject_id = '*')"
-		data := ExclusionCheckData{
+		exclusionSQL, err := sqlgen.ExclusionCheck(sqlgen.ExclusionCheckInput{
 			ObjectType:       a.ObjectType,
 			ExcludedRelation: excl,
-			SubjectIDCheck:   subjectIDCheck,
+			AllowWildcard:    true,
+		})
+		if err != nil {
+			return "", fmt.Errorf("building exclusion_check query for %s: %w", excl, err)
 		}
-		var buf bytes.Buffer
-		if err := templates.ExecuteTemplate(&buf, "exclusion_check.tpl.sql", data); err != nil {
-			return "", fmt.Errorf("executing exclusion_check template for %s: %w", excl, err)
-		}
-		checks = append(checks, strings.TrimSpace(buf.String()))
+		checks = append(checks, strings.TrimSpace(exclusionSQL))
 	}
 
 	// Complex exclusions: use check_permission_internal
