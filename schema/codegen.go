@@ -36,6 +36,24 @@ func formatSQLStringList(items []string) string {
 	return strings.Join(quoted, ", ")
 }
 
+// buildTupleLookupRelationList builds a SQL list of relations that can be resolved
+// via tuple lookup for the current relation.
+func buildTupleLookupRelationList(a RelationAnalysis) string {
+	// Build relation list from self + simple closure relations.
+	relations := []string{a.Relation}
+	relations = append(relations, a.SimpleClosureRelations...)
+
+	// Fallback to satisfying relations only if no partition was computed at all
+	// (for backwards compatibility when closure relations not yet partitioned).
+	// If ComplexClosureRelations is non-empty, the partition was computed and
+	// we should use only the simple relations (even if that's just self).
+	if len(a.SimpleClosureRelations) == 0 && len(a.ComplexClosureRelations) == 0 && len(a.SatisfyingRelations) > 0 {
+		relations = a.SatisfyingRelations
+	}
+
+	return formatSQLStringList(relations)
+}
+
 // GeneratedSQL contains all SQL generated for a schema.
 // This is applied atomically during migration.
 type GeneratedSQL struct {
@@ -99,6 +117,20 @@ func functionName(objectType, relation string) string {
 
 func functionNameNoWildcard(objectType, relation string) string {
 	return fmt.Sprintf("check_%s_%s_no_wildcard", sanitizeIdentifier(objectType), sanitizeIdentifier(relation))
+}
+
+func selectCheckTemplate(a RelationAnalysis) string {
+	needsPLpgSQL := a.Features.NeedsPLpgSQL() || a.HasComplexUsersetPatterns
+	if needsPLpgSQL {
+		if a.Features.HasIntersection {
+			return "check_recursive_intersection.tpl.sql"
+		}
+		return "check_recursive.tpl.sql"
+	}
+	if a.Features.HasIntersection {
+		return "check_intersection.tpl.sql"
+	}
+	return "check_direct.tpl.sql"
 }
 
 // sanitizeIdentifier converts a type/relation name to a valid SQL identifier.
@@ -215,14 +247,7 @@ func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, noWildcard 
 		return "", fmt.Errorf("building template data for %s.%s: %w", a.ObjectType, a.Relation, err)
 	}
 
-	// Choose template based on whether we need PL/pgSQL.
-	// PL/pgSQL is required for:
-	// - Recursive patterns (TTU) that need cycle detection
-	// - Complex userset patterns that call check_permission_internal and may create cycles
-	templateName := "check_sql.tpl.sql"
-	if a.Features.NeedsPLpgSQL() || a.HasComplexUsersetPatterns {
-		templateName = "check_plpgsql.tpl.sql"
-	}
+	templateName := selectCheckTemplate(a)
 
 	var buf bytes.Buffer
 	if err := templates.ExecuteTemplate(&buf, templateName, data); err != nil {
@@ -288,11 +313,7 @@ func buildCheckFunctionData(a RelationAnalysis, inline InlineSQLData, noWildcard
 		// Format allowed linking types as SQL list (e.g., "'group1', 'group2'")
 		var allowedTypes string
 		if len(parent.AllowedLinkingTypes) > 0 {
-			quoted := make([]string, len(parent.AllowedLinkingTypes))
-			for i, t := range parent.AllowedLinkingTypes {
-				quoted[i] = fmt.Sprintf("'%s'", t)
-			}
-			allowedTypes = strings.Join(quoted, ", ")
+			allowedTypes = formatSQLStringList(parent.AllowedLinkingTypes)
 		}
 		data.ParentRelations = append(data.ParentRelations, ParentRelationData{
 			LinkingRelation:     parent.LinkingRelation,
@@ -429,23 +450,7 @@ func buildDirectCheck(a RelationAnalysis, allowWildcard bool) (string, error) {
 		return "FALSE", nil
 	}
 
-	// Build relation list from self + simple closure relations
-	// Complex closure relations are handled via function calls, not tuple lookup
-	relations := []string{a.Relation}
-	relations = append(relations, a.SimpleClosureRelations...)
-
-	// Fallback to satisfying relations only if no partition was computed at all
-	// (for backwards compatibility when closure relations not yet partitioned).
-	// If ComplexClosureRelations is non-empty, the partition was computed and
-	// we should use only the simple relations (even if that's just self).
-	if len(a.SimpleClosureRelations) == 0 && len(a.ComplexClosureRelations) == 0 && len(a.SatisfyingRelations) > 0 {
-		relations = a.SatisfyingRelations
-	}
-
-	relationList := make([]string, len(relations))
-	for i, r := range relations {
-		relationList[i] = fmt.Sprintf("'%s'", r)
-	}
+	relationList := buildTupleLookupRelationList(a)
 
 	// Build subject type filter from allowed types
 	// This ensures type restrictions from the model are enforced
@@ -454,10 +459,7 @@ func buildDirectCheck(a RelationAnalysis, allowWildcard bool) (string, error) {
 		// Fallback to direct subject types if allowed types not computed
 		subjectTypes = a.DirectSubjectTypes
 	}
-	subjectTypeList := make([]string, len(subjectTypes))
-	for i, t := range subjectTypes {
-		subjectTypeList[i] = fmt.Sprintf("'%s'", t)
-	}
+	subjectTypeList := formatSQLStringList(subjectTypes)
 
 	// Build subject_id check (with or without wildcard)
 	// When HasWildcard is true: allow wildcard tuples to grant access to any subject
@@ -472,8 +474,8 @@ func buildDirectCheck(a RelationAnalysis, allowWildcard bool) (string, error) {
 
 	data := DirectCheckData{
 		ObjectType:        a.ObjectType,
-		RelationList:      strings.Join(relationList, ", "),
-		SubjectTypeFilter: strings.Join(subjectTypeList, ", "),
+		RelationList:      relationList,
+		SubjectTypeFilter: subjectTypeList,
 		SubjectIDCheck:    subjectIDCheck,
 	}
 
@@ -547,17 +549,14 @@ func buildUsersetCheck(a RelationAnalysis, allowWildcard bool, internalCheckFn s
 				// Fallback: use just the subject relation itself
 				satisfyingRels = []string{pattern.SubjectRelation}
 			}
-			quotedRels := make([]string, len(satisfyingRels))
-			for i, rel := range satisfyingRels {
-				quotedRels[i] = fmt.Sprintf("'%s'", rel)
-			}
+			quotedRels := formatSQLStringList(satisfyingRels)
 
 			data := UsersetCheckData{
 				ObjectType:                a.ObjectType,
 				Relation:                  a.Relation,
 				SubjectType:               pattern.SubjectType,
 				SubjectRelation:           pattern.SubjectRelation,
-				SatisfyingRelationsList:   strings.Join(quotedRels, ", "),
+				SatisfyingRelationsList:   quotedRels,
 				HasWildcard:               pattern.HasWildcard && allowWildcard,
 				InternalCheckFunctionName: internalCheckFn,
 			}

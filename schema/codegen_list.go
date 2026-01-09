@@ -3,7 +3,6 @@ package schema
 import (
 	"bytes"
 	"fmt"
-	"strings"
 )
 
 // ListGeneratedSQL contains all SQL generated for list functions.
@@ -651,24 +650,7 @@ func generateListSubjectsDispatcher(analyses []RelationAnalysis) (string, error)
 // Only includes relations that can be resolved via tuple lookup (SimpleClosureRelations).
 // Complex closure relations (with exclusions, etc.) are handled separately via check_permission_internal.
 func buildRelationList(a RelationAnalysis) string {
-	// Build relation list from self + simple closure relations
-	// Complex closure relations are handled via function calls, not tuple lookup
-	relations := []string{a.Relation}
-	relations = append(relations, a.SimpleClosureRelations...)
-
-	// Fallback to satisfying relations only if no partition was computed at all
-	// (for backwards compatibility when closure relations not yet partitioned).
-	// If ComplexClosureRelations is non-empty, the partition was computed and
-	// we should use only the simple relations (even if that's just self).
-	if len(a.SimpleClosureRelations) == 0 && len(a.ComplexClosureRelations) == 0 && len(a.SatisfyingRelations) > 0 {
-		relations = a.SatisfyingRelations
-	}
-
-	quoted := make([]string, len(relations))
-	for i, r := range relations {
-		quoted[i] = fmt.Sprintf("'%s'", r)
-	}
-	return strings.Join(quoted, ", ")
+	return buildTupleLookupRelationList(a)
 }
 
 // buildSubjectIDCheck builds the SQL fragment for checking subject_id.
@@ -695,11 +677,7 @@ func buildAllowedSubjectTypes(a RelationAnalysis) string {
 		return "''"
 	}
 
-	quoted := make([]string, len(types))
-	for i, t := range types {
-		quoted[i] = fmt.Sprintf("'%s'", t)
-	}
-	return strings.Join(quoted, ", ")
+	return formatSQLStringList(types)
 }
 
 // buildAllSatisfyingRelations builds a SQL-formatted list of ALL relations that satisfy this relation.
@@ -712,11 +690,7 @@ func buildAllSatisfyingRelations(a RelationAnalysis) string {
 		relations = []string{a.Relation}
 	}
 
-	quoted := make([]string, len(relations))
-	for i, r := range relations {
-		quoted[i] = fmt.Sprintf("'%s'", r)
-	}
-	return strings.Join(quoted, ", ")
+	return formatSQLStringList(relations)
 }
 
 // buildListUsersetPatterns builds template data for userset pattern expansion.
@@ -755,11 +729,7 @@ func buildListUsersetPatterns(a RelationAnalysis) []ListUsersetPatternData {
 			satisfying = []string{p.SubjectRelation}
 		}
 
-		quoted := make([]string, len(satisfying))
-		for i, r := range satisfying {
-			quoted[i] = fmt.Sprintf("'%s'", r)
-		}
-		pattern.SatisfyingRelationsList = strings.Join(quoted, ", ")
+		pattern.SatisfyingRelationsList = formatSQLStringList(satisfying)
 
 		patterns = append(patterns, pattern)
 	}
@@ -771,7 +741,7 @@ func buildListUsersetPatterns(a RelationAnalysis) []ListUsersetPatternData {
 			SubjectRelation:    p.SubjectRelation,
 			HasWildcard:        p.HasWildcard,
 			IsComplex:          p.IsComplex,
-			SourceRelationList: fmt.Sprintf("'%s'", p.SourceRelation), // Use source relation for closure patterns
+			SourceRelationList: formatSQLStringList([]string{p.SourceRelation}), // Use source relation for closure patterns
 			SourceRelation:     p.SourceRelation,
 			IsClosurePattern:   true, // Closure patterns need source relation verification
 			// Closure patterns are self-referential if they reference the same type and relation
@@ -785,11 +755,7 @@ func buildListUsersetPatterns(a RelationAnalysis) []ListUsersetPatternData {
 			satisfying = []string{p.SubjectRelation}
 		}
 
-		quoted := make([]string, len(satisfying))
-		for i, r := range satisfying {
-			quoted[i] = fmt.Sprintf("'%s'", r)
-		}
-		pattern.SatisfyingRelationsList = strings.Join(quoted, ", ")
+		pattern.SatisfyingRelationsList = formatSQLStringList(satisfying)
 
 		patterns = append(patterns, pattern)
 	}
@@ -833,27 +799,26 @@ func buildListParentRelations(a RelationAnalysis) []ListParentRelationData {
 		// Build SQL-formatted list of allowed linking types
 		// Also track cross-type (non-self-referential) types separately
 		if len(p.AllowedLinkingTypes) > 0 {
-			var allQuoted []string
-			var crossTypeQuoted []string
+			var allTypes []string
+			var crossTypes []string
 
 			for _, t := range p.AllowedLinkingTypes {
-				quoted := fmt.Sprintf("'%s'", t)
-				allQuoted = append(allQuoted, quoted)
+				allTypes = append(allTypes, t)
 
 				if t == a.ObjectType {
 					data.IsSelfReferential = true
 				} else {
-					crossTypeQuoted = append(crossTypeQuoted, quoted)
+					crossTypes = append(crossTypes, t)
 				}
 			}
 
-			data.AllowedLinkingTypes = strings.Join(allQuoted, ", ")
+			data.AllowedLinkingTypes = formatSQLStringList(allTypes)
 			data.ParentType = p.AllowedLinkingTypes[0]
 
 			// Set cross-type fields for generating check_permission_internal calls
 			// even when the relation has self-referential links
-			if len(crossTypeQuoted) > 0 {
-				data.CrossTypeLinkingTypes = strings.Join(crossTypeQuoted, ", ")
+			if len(crossTypes) > 0 {
+				data.CrossTypeLinkingTypes = formatSQLStringList(crossTypes)
 				data.HasCrossTypeLinks = true
 			}
 		}
@@ -874,7 +839,7 @@ func buildSelfReferentialLinkingRelations(parentRelations []ListParentRelationDa
 	for _, p := range parentRelations {
 		if p.IsSelfReferential && !seen[p.LinkingRelation] {
 			seen[p.LinkingRelation] = true
-			linkingRelations = append(linkingRelations, fmt.Sprintf("'%s'", p.LinkingRelation))
+			linkingRelations = append(linkingRelations, p.LinkingRelation)
 		}
 	}
 
@@ -882,7 +847,7 @@ func buildSelfReferentialLinkingRelations(parentRelations []ListParentRelationDa
 		return ""
 	}
 
-	return strings.Join(linkingRelations, ", ")
+	return formatSQLStringList(linkingRelations)
 }
 
 // buildListIndirectAnchorData builds template data for indirect anchor composed access.
@@ -931,11 +896,7 @@ func buildListIndirectAnchorData(a RelationAnalysis) *ListIndirectAnchorData {
 
 	// Build AllowedSubjectTypes from the relation's propagated types
 	if len(a.AllowedSubjectTypes) > 0 {
-		quoted := make([]string, len(a.AllowedSubjectTypes))
-		for i, t := range a.AllowedSubjectTypes {
-			quoted[i] = fmt.Sprintf("'%s'", t)
-		}
-		data.AnchorSubjectTypes = strings.Join(quoted, ", ")
+		data.AnchorSubjectTypes = formatSQLStringList(a.AllowedSubjectTypes)
 	} else {
 		data.AnchorSubjectTypes = "''"
 	}
