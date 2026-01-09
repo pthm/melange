@@ -269,7 +269,6 @@ func dumpSQL(tc TestCase, opts dumpOptions) {
 	}
 }
 
-
 func printAnalysis(analyses []schema.RelationAnalysis) {
 	if len(analyses) == 0 {
 		fmt.Println("(no relations)")
@@ -352,11 +351,12 @@ func printAnalysis(analyses []schema.RelationAnalysis) {
 					if pi > 0 {
 						fmt.Print(" AND ")
 					}
-					if p.IsThis {
+					switch {
+					case p.IsThis:
 						fmt.Print("[this]")
-					} else if p.ParentRelation != nil {
+					case p.ParentRelation != nil:
 						fmt.Printf("(%s from %s)", p.ParentRelation.Relation, p.ParentRelation.LinkingRelation)
-					} else {
+					default:
 						fmt.Print(p.Relation)
 					}
 					if p.ExcludedRelation != "" {
@@ -367,8 +367,4 @@ func printAnalysis(analyses []schema.RelationAnalysis) {
 			}
 		}
 	}
-}
-
-func strPtr(s string) *string {
-	return &s
 }

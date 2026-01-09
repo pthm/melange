@@ -185,7 +185,7 @@ type document
 }
 
 func TestIntersectionExclusionInSubtractSQL(t *testing.T) {
-	schema := `
+	dsl := `
 model
   schema 1.1
 
@@ -202,7 +202,7 @@ type document
 	db := testutil.EmptyDB(t)
 	ctx := context.Background()
 
-	err := tooling.MigrateFromString(ctx, db, schema)
+	err := tooling.MigrateFromString(ctx, db, dsl)
 	require.NoError(t, err)
 
 	_, err = db.ExecContext(ctx, `
@@ -236,7 +236,7 @@ type document
 }
 
 func TestIntersectionWildcardInComputedRelation(t *testing.T) {
-	schema := `
+	dsl := `
 model
   schema 1.1
 
@@ -252,7 +252,7 @@ type document
 	db := testutil.EmptyDB(t)
 	ctx := context.Background()
 
-	err := tooling.MigrateFromString(ctx, db, schema)
+	err := tooling.MigrateFromString(ctx, db, dsl)
 	require.NoError(t, err)
 
 	_, err = db.ExecContext(ctx, `
@@ -283,7 +283,7 @@ type document
 	require.NoError(t, err)
 	defer func() { _ = rows.Close() }()
 
-	var subjects []string
+	subjects := make([]string, 0, 4)
 	for rows.Next() {
 		var id string
 		require.NoError(t, rows.Scan(&id))
@@ -297,7 +297,7 @@ type document
 // This tests that having a direct tuple for the relation is not sufficient;
 // the subject must also satisfy the other parts of the intersection.
 func TestThisAndIntersection(t *testing.T) {
-	schema := `
+	dsl := `
 model
   schema 1.1
 
@@ -313,7 +313,7 @@ type document
 	ctx := context.Background()
 
 	// Migrate schema
-	err := tooling.MigrateFromString(ctx, db, schema)
+	err := tooling.MigrateFromString(ctx, db, dsl)
 	require.NoError(t, err)
 
 	// Create tuples view

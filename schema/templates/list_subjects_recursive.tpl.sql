@@ -237,6 +237,25 @@ BEGIN
               AND t.subject_id != '*'
 {{- end }}
               AND check_permission_internal(t.subject_type, t.subject_id, '{{.}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 1
+{{- if $.SimpleExcludedRelations }}
+              -- Apply simple exclusions to complex closure relation path
+{{- range $.SimpleExcludedRelations }}
+              AND NOT EXISTS (
+                  SELECT 1 FROM melange_tuples excl
+                  WHERE excl.object_type = '{{$.ObjectType}}'
+                    AND excl.object_id = p_object_id
+                    AND excl.relation = '{{.}}'
+                    AND excl.subject_type = t.subject_type
+                    AND (excl.subject_id = t.subject_id OR excl.subject_id = '*')
+              )
+{{- end }}
+{{- end }}
+{{- if $.ComplexExcludedRelations }}
+              -- Apply complex exclusions to complex closure relation path
+{{- range $.ComplexExcludedRelations }}
+              AND check_permission_internal(t.subject_type, t.subject_id, '{{.}}', '{{$.ObjectType}}', p_object_id, ARRAY[]::TEXT[]) = 0
+{{- end }}
+{{- end }}
 {{- end }}
 {{- range .IntersectionClosureRelations }}
             UNION

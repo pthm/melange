@@ -60,8 +60,8 @@ func setupBenchmarkData(b *testing.B, scale BenchmarkScale) *benchmarkData {
 		b.Fatalf("create orgs: %v", err)
 	}
 
-	var allRepos []int64
-	var allPRs []int64
+	allRepos := make([]int64, 0, scale.Orgs*scale.ReposPerOrg)
+	allPRs := make([]int64, 0, scale.Orgs*scale.ReposPerOrg*scale.PRsPerRepo)
 
 	// For each org, add members and create repos
 	for i, orgID := range orgs {

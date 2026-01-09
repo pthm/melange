@@ -370,7 +370,13 @@ func AnalyzeRelations(types []TypeDefinition, closure []ClosureRow) []RelationAn
 	// Build closure lookup: (object_type, relation) -> satisfying relations
 	closureLookup := buildClosureLookup(closure)
 
-	var results []RelationAnalysis
+	// Count total relations for pre-allocation
+	totalRelations := 0
+	for _, t := range types {
+		totalRelations += len(t.Relations)
+	}
+
+	results := make([]RelationAnalysis, 0, totalRelations)
 	for _, t := range types {
 		for _, r := range t.Relations {
 			analysis := analyzeRelation(t, r, closureLookup)
@@ -516,7 +522,7 @@ func collectUsersetPatterns(r RelationDefinition) []UsersetPattern {
 
 // collectParentRelations extracts "X from Y" patterns from a relation.
 func collectParentRelations(r RelationDefinition) []ParentRelationInfo {
-	var parents []ParentRelationInfo
+	parents := make([]ParentRelationInfo, 0, len(r.ParentRelations))
 	seen := make(map[string]bool) // Deduplicate by "relation:linkingRelation" key
 
 	// New field: ParentRelations slice
@@ -537,17 +543,14 @@ func collectParentRelations(r RelationDefinition) []ParentRelationInfo {
 
 // collectExcludedRelations extracts all "but not X" patterns from a relation.
 func collectExcludedRelations(r RelationDefinition) []string {
-	var excluded []string
-
-	// New field: ExcludedRelations slice
-	excluded = append(excluded, r.ExcludedRelations...)
-
+	excluded := make([]string, len(r.ExcludedRelations))
+	copy(excluded, r.ExcludedRelations)
 	return excluded
 }
 
 // collectExcludedParentRelations extracts TTU exclusions like "but not viewer from parent".
 func collectExcludedParentRelations(r RelationDefinition) []ParentRelationInfo {
-	var excluded []ParentRelationInfo
+	excluded := make([]ParentRelationInfo, 0, len(r.ExcludedParentRelations))
 	for _, pr := range r.ExcludedParentRelations {
 		excluded = append(excluded, ParentRelationInfo{
 			Relation:        pr.Relation,
@@ -672,7 +675,7 @@ func sortByDependency(analyses []RelationAnalysis) []RelationAnalysis {
 	lookup := buildAnalysisLookup(analyses)
 
 	// Build dependency graph: relation -> relations it depends on
-	deps := make(map[string][]string) // key: "type.relation"
+	deps := make(map[string][]string)        // key: "type.relation"
 	seen := make(map[string]map[string]bool) // Deduplicate dependencies
 
 	addDep := func(key, dep string) {
@@ -747,7 +750,7 @@ func sortByDependency(analyses []RelationAnalysis) []RelationAnalysis {
 	// Build reverse mapping: for each relation, which relations depend on it.
 	// We iterate over deps in sorted order for deterministic results.
 	dependents := make(map[string][]string)
-	var depsKeys []string
+	depsKeys := make([]string, 0, len(deps))
 	for key := range deps {
 		depsKeys = append(depsKeys, key)
 	}
@@ -774,7 +777,7 @@ func sortByDependency(analyses []RelationAnalysis) []RelationAnalysis {
 	sort.Strings(queue)
 
 	// Process in order using Kahn's algorithm
-	var sorted []RelationAnalysis
+	sorted := make([]RelationAnalysis, 0, len(analyses))
 	processed := make(map[string]bool)
 	// Note: lookup already built at start of function
 
@@ -848,7 +851,7 @@ func (a *RelationAnalysis) CanGenerateList() bool {
 // The hasIndirectAnchor parameter indicates whether an indirect anchor was found
 // via findIndirectAnchor(). When true, list generation is allowed even without
 // direct/implied access paths, as the access comes through the indirect anchor.
-func canGenerateListFeatures(f RelationFeatures, hasIndirectAnchor bool) (bool, string) {
+func canGenerateListFeatures(f RelationFeatures, hasIndirectAnchor bool) (canGenerate bool, reason string) {
 	// Phase 8: If we have an indirect anchor, we can generate even without direct/implied.
 	// The composed template will trace through TTU paths to the anchor.
 	if hasIndirectAnchor {
@@ -905,6 +908,7 @@ func canGenerateListFeatures(f RelationFeatures, hasIndirectAnchor bool) (bool, 
 // 2. ALL relations in its satisfying closure are either:
 //   - Simply resolvable (can use tuple lookup), OR
 //   - Complex but generatable (have exclusions but can generate their own function)
+//
 // 3. If the relation has exclusions, excluded relations are classified as:
 //   - Simple: can use direct tuple lookup (simply resolvable AND no implied closure)
 //   - Complex: use check_permission_internal call (has TTU, userset, intersection, etc.)
@@ -1170,6 +1174,7 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		cannotGenerateReason := ""
 		var simpleRels, complexRels []string
 		seenClosureExcl := make(map[string]bool)
+	closureLoop:
 		for _, rel := range a.SatisfyingRelations {
 			// Skip self - the relation's own features are handled by its generated code
 			if rel == a.Relation {
@@ -1182,17 +1187,18 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 				cannotGenerateReason = "unknown relation in closure: " + rel
 				break
 			}
-			if relAnalysis.Features.IsClosureCompatible() {
+			switch {
+			case relAnalysis.Features.IsClosureCompatible():
 				// Simple: can use tuple lookup
 				simpleRels = append(simpleRels, rel)
-			} else if relAnalysis.CanGenerate {
+			case relAnalysis.CanGenerate:
 				// Complex but generatable: delegate to check_permission_internal
 				complexRels = append(complexRels, rel)
-			} else {
+			default:
 				// Truly incompatible: fall back to generic
 				canGenerate = false
 				cannotGenerateReason = "closure relation not generatable: " + rel
-				break
+				break closureLoop
 			}
 
 			// Collect closure exclusions from this satisfying relation.
@@ -1626,7 +1632,7 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 // Phase 8: For relations without direct/implied access paths (pure TTU, pure userset),
 // this function tries to find an indirect anchor by tracing through the patterns.
 // If found, the IndirectAnchor field is set and list generation proceeds.
-func computeCanGenerateList(a *RelationAnalysis, lookup map[string]map[string]*RelationAnalysis) (bool, string) {
+func computeCanGenerateList(a *RelationAnalysis, lookup map[string]map[string]*RelationAnalysis) (canGenerate bool, reason string) {
 	// Phase 8: Find indirect anchors for relations without direct/implied access.
 	// This enables list generation for pure TTU patterns (not userset - those use Phase 4 templates).
 	//
@@ -1664,9 +1670,9 @@ func computeCanGenerateList(a *RelationAnalysis, lookup map[string]map[string]*R
 	}
 
 	// First check: does this relation's features allow list generation?
-	canGenerate, reason := canGenerateListFeatures(a.Features, hasIndirectAnchor)
+	canGenerate, reason = canGenerateListFeatures(a.Features, hasIndirectAnchor)
 	if !canGenerate {
-		return false, reason
+		return canGenerate, reason
 	}
 
 	// Phase 9B: Self-referential userset patterns (e.g., group#member on group.member)
