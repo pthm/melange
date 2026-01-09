@@ -154,7 +154,9 @@ func generateListObjectsFunction(a RelationAnalysis, inline InlineSQLData) (stri
 
 	if templateName == "list_objects_direct.tpl.sql" ||
 		templateName == "list_objects_exclusion.tpl.sql" ||
-		templateName == "list_objects_userset.tpl.sql" {
+		templateName == "list_objects_userset.tpl.sql" ||
+		templateName == "list_objects_recursive.tpl.sql" ||
+		templateName == "list_objects_intersection.tpl.sql" {
 		return generateListObjectsFunctionBob(a, inline, templateName)
 	}
 
@@ -278,7 +280,9 @@ func generateListSubjectsFunction(a RelationAnalysis, inline InlineSQLData) (str
 
 	if templateName == "list_subjects_direct.tpl.sql" ||
 		templateName == "list_subjects_exclusion.tpl.sql" ||
-		templateName == "list_subjects_userset.tpl.sql" {
+		templateName == "list_subjects_userset.tpl.sql" ||
+		templateName == "list_subjects_recursive.tpl.sql" ||
+		templateName == "list_subjects_intersection.tpl.sql" {
 		return generateListSubjectsFunctionBob(a, inline, templateName)
 	}
 

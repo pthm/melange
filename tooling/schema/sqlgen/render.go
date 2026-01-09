@@ -19,6 +19,10 @@ func renderQuery(q bob.Query) (string, error) {
 	return strings.TrimSpace(sql), nil
 }
 
+func RenderQuery(q bob.Query) (string, error) {
+	return renderQuery(q)
+}
+
 func existsSQL(q bob.Query) (string, error) {
 	sql, err := renderQuery(q)
 	if err != nil {

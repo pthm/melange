@@ -239,6 +239,10 @@ func generateListObjectsFunctionBob(a RelationAnalysis, inline InlineSQLData, te
 			},
 			selfSQL,
 		))
+	case "list_objects_recursive.tpl.sql":
+		return generateListObjectsRecursiveFunctionBob(a, inline)
+	case "list_objects_intersection.tpl.sql":
+		return generateListObjectsIntersectionFunctionBob(a, inline)
 	default:
 		return "", fmt.Errorf("unexpected list_objects template %s", templateName)
 	}
@@ -624,6 +628,10 @@ func generateListSubjectsFunctionBob(a RelationAnalysis, inline InlineSQLData, t
 				patternSQL,
 			))
 		}
+	case "list_subjects_recursive.tpl.sql":
+		return generateListSubjectsRecursiveFunctionBob(a, inline)
+	case "list_subjects_intersection.tpl.sql":
+		return generateListSubjectsIntersectionFunctionBob(a, inline)
 	default:
 		return "", fmt.Errorf("unexpected list_subjects template %s", templateName)
 	}

@@ -303,3 +303,74 @@ func ListObjectsSelfCandidateQuery(input ListObjectsSelfCandidateInput) (string,
 
 	return renderQuery(query)
 }
+
+type ListObjectsCrossTypeTTUInput struct {
+	ObjectType      string
+	LinkingRelation string
+	Relation        string
+	CrossTypes      []string
+	Exclusions      ExclusionInput
+}
+
+func ListObjectsCrossTypeTTUQuery(input ListObjectsCrossTypeTTUInput) (string, error) {
+	where := []bob.Expression{
+		psql.Quote("child", "object_type").EQ(psql.S(input.ObjectType)),
+		psql.Quote("child", "relation").EQ(psql.S(input.LinkingRelation)),
+		psql.Quote("child", "subject_type").In(literalList(input.CrossTypes)...),
+		CheckPermissionInternalExpr(
+			"p_subject_type",
+			"p_subject_id",
+			input.Relation,
+			"child.subject_type",
+			"child.subject_id",
+			true,
+		),
+	}
+	exclusions, err := ExclusionPredicates(input.Exclusions)
+	if err != nil {
+		return "", err
+	}
+	where = append(where, exclusions...)
+
+	query := psql.Select(
+		sm.Columns(psql.Raw("child.object_id")),
+		sm.From("melange_tuples").As("child"),
+		sm.Where(psql.And(where...)),
+		sm.Distinct(),
+	)
+
+	return renderQuery(query)
+}
+
+type ListObjectsRecursiveTTUInput struct {
+	ObjectType       string
+	LinkingRelations []string
+	Exclusions       ExclusionInput
+}
+
+func ListObjectsRecursiveTTUQuery(input ListObjectsRecursiveTTUInput) (string, error) {
+	joinConditions := []bob.Expression{
+		psql.Quote("child", "object_type").EQ(psql.S(input.ObjectType)),
+		psql.Quote("child", "relation").In(literalList(input.LinkingRelations)...),
+		psql.Quote("child", "subject_type").EQ(psql.S(input.ObjectType)),
+		psql.Quote("child", "subject_id").EQ(psql.Raw("a.object_id")),
+	}
+	where := []bob.Expression{
+		psql.Raw("a.depth").LT(psql.Raw("25")),
+	}
+	exclusions, err := ExclusionPredicates(input.Exclusions)
+	if err != nil {
+		return "", err
+	}
+	where = append(where, exclusions...)
+
+	query := psql.Select(
+		sm.Columns(psql.Raw("child.object_id"), psql.Raw("a.depth + 1 AS depth")),
+		sm.From("accessible").As("a"),
+		sm.InnerJoin("melange_tuples").As("child").On(joinConditions...),
+		sm.Where(psql.And(where...)),
+		sm.Distinct(),
+	)
+
+	return renderQuery(query)
+}

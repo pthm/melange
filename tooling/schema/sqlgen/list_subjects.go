@@ -316,3 +316,71 @@ func ListSubjectsUsersetPatternComplexQuery(input ListSubjectsUsersetPatternComp
 
 	return renderQuery(query)
 }
+
+type ListSubjectsUsersetPatternRecursiveComplexInput struct {
+	ObjectType          string
+	SubjectType         string
+	SubjectRelation     string
+	SourceRelations     []string
+	ObjectIDExpr        string
+	SubjectTypeExpr     string
+	AllowedSubjectTypes []string
+	ExcludeWildcard     bool
+	IsClosurePattern    bool
+	SourceRelation      string
+	Exclusions          ExclusionInput
+}
+
+func ListSubjectsUsersetPatternRecursiveComplexQuery(input ListSubjectsUsersetPatternRecursiveComplexInput) (string, error) {
+	joinConditions := []bob.Expression{
+		psql.Quote("m", "object_type").EQ(psql.S(input.SubjectType)),
+		psql.Quote("m", "object_id").EQ(psql.Raw("split_part(t.subject_id, '#', 1)")),
+		psql.Quote("m", "subject_type").EQ(psql.Raw(input.SubjectTypeExpr)),
+		psql.Raw(input.SubjectTypeExpr).In(literalList(input.AllowedSubjectTypes)...),
+	}
+	if input.ExcludeWildcard {
+		joinConditions = append(joinConditions, psql.Quote("m", "subject_id").NE(psql.S("*")))
+	}
+
+	where := []bob.Expression{
+		psql.Quote("t", "object_type").EQ(psql.S(input.ObjectType)),
+		psql.Quote("t", "object_id").EQ(psql.Raw(input.ObjectIDExpr)),
+		psql.Quote("t", "relation").In(literalList(input.SourceRelations)...),
+		psql.Quote("t", "subject_type").EQ(psql.S(input.SubjectType)),
+		psql.Raw("position('#' in t.subject_id)").GT(psql.Raw("0")),
+		psql.Raw("split_part(t.subject_id, '#', 2)").EQ(psql.S(input.SubjectRelation)),
+		CheckPermissionInternalExpr(
+			input.SubjectTypeExpr,
+			"m.subject_id",
+			input.SubjectRelation,
+			fmt.Sprintf("'%s'", input.SubjectType),
+			"split_part(t.subject_id, '#', 1)",
+			true,
+		),
+	}
+	if input.IsClosurePattern {
+		where = append(where, CheckPermissionInternalExpr(
+			input.SubjectTypeExpr,
+			"m.subject_id",
+			input.SourceRelation,
+			fmt.Sprintf("'%s'", input.ObjectType),
+			input.ObjectIDExpr,
+			true,
+		))
+	}
+	exclusions, err := ExclusionPredicates(input.Exclusions)
+	if err != nil {
+		return "", err
+	}
+	where = append(where, exclusions...)
+
+	query := psql.Select(
+		sm.Columns(psql.Raw("m.subject_id")),
+		sm.From("melange_tuples").As("t"),
+		sm.InnerJoin("melange_tuples").As("m").On(joinConditions...),
+		sm.Where(psql.And(where...)),
+		sm.Distinct(),
+	)
+
+	return renderQuery(query)
+}
