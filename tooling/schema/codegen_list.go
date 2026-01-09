@@ -152,6 +152,12 @@ func generateListObjectsFunction(a RelationAnalysis, inline InlineSQLData) (stri
 	// Select appropriate template based on features
 	templateName := selectListObjectsTemplate(a)
 
+	if templateName == "list_objects_direct.tpl.sql" ||
+		templateName == "list_objects_exclusion.tpl.sql" ||
+		templateName == "list_objects_userset.tpl.sql" {
+		return generateListObjectsFunctionBob(a, inline, templateName)
+	}
+
 	var buf bytes.Buffer
 	if err := templates.ExecuteTemplate(&buf, templateName, data); err != nil {
 		return "", fmt.Errorf("executing list_objects template %s: %w", templateName, err)
@@ -269,6 +275,12 @@ func generateListSubjectsFunction(a RelationAnalysis, inline InlineSQLData) (str
 
 	// Select appropriate template based on features
 	templateName := selectListSubjectsTemplate(a)
+
+	if templateName == "list_subjects_direct.tpl.sql" ||
+		templateName == "list_subjects_exclusion.tpl.sql" ||
+		templateName == "list_subjects_userset.tpl.sql" {
+		return generateListSubjectsFunctionBob(a, inline, templateName)
+	}
 
 	var buf bytes.Buffer
 	if err := templates.ExecuteTemplate(&buf, templateName, data); err != nil {
