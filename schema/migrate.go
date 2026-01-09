@@ -344,7 +344,7 @@ func (m *Migrator) getCurrentFunctions(ctx context.Context, db Execer) ([]string
 	}
 	defer func() { _ = rows.Close() }()
 
-	var functions []string
+	functions := make([]string, 0, 32)
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {

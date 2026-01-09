@@ -405,7 +405,7 @@ func BenchTest(b *testing.B, tc TestCase) {
 						}
 					}
 
-					var filters []*openfgav1.UserTypeFilter
+					filters := make([]*openfgav1.UserTypeFilter, 0, len(op.assertion.Request.Filters))
 					for _, f := range op.assertion.Request.Filters {
 						filters = append(filters, &openfgav1.UserTypeFilter{Type: f})
 					}
@@ -579,7 +579,7 @@ func RunTest(t *testing.T, _ *Client, tc TestCase) {
 						}
 
 						// Convert filters to UserTypeFilter
-						var filters []*openfgav1.UserTypeFilter
+						filters := make([]*openfgav1.UserTypeFilter, 0, len(assertion.Request.Filters))
 						for _, f := range assertion.Request.Filters {
 							filters = append(filters, &openfgav1.UserTypeFilter{Type: f})
 						}

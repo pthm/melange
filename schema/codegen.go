@@ -814,12 +814,16 @@ func CollectFunctionNames(analyses []RelationAnalysis) []string {
 
 	for _, a := range analyses {
 		if a.CanGenerate {
-			names = append(names, functionName(a.ObjectType, a.Relation))
-			names = append(names, functionNameNoWildcard(a.ObjectType, a.Relation))
+			names = append(names,
+				functionName(a.ObjectType, a.Relation),
+				functionNameNoWildcard(a.ObjectType, a.Relation),
+			)
 		}
 		if a.CanGenerateList() {
-			names = append(names, listObjectsFunctionName(a.ObjectType, a.Relation))
-			names = append(names, listSubjectsFunctionName(a.ObjectType, a.Relation))
+			names = append(names,
+				listObjectsFunctionName(a.ObjectType, a.Relation),
+				listSubjectsFunctionName(a.ObjectType, a.Relation),
+			)
 		}
 	}
 

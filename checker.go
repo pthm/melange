@@ -444,7 +444,7 @@ func (c *Checker) ListObjects(ctx context.Context, subject SubjectLike, relation
 	}
 	defer func() { _ = rows.Close() }()
 
-	var ids []string
+	ids := make([]string, 0, 16)
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
@@ -512,7 +512,7 @@ func (c *Checker) ListObjectsWithContextualTuples(
 	}
 	defer func() { _ = rows.Close() }()
 
-	var ids []string
+	ids := make([]string, 0, 16)
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
@@ -571,7 +571,7 @@ func (c *Checker) ListSubjects(ctx context.Context, object ObjectLike, relation 
 	}
 	defer func() { _ = rows.Close() }()
 
-	var ids []string
+	ids := make([]string, 0, 16)
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
@@ -633,7 +633,7 @@ func (c *Checker) ListSubjectsWithContextualTuples(
 	}
 	defer func() { _ = rows.Close() }()
 
-	var ids []string
+	ids := make([]string, 0, 16)
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {

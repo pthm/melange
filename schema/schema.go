@@ -232,7 +232,7 @@ func SubjectTypes(types []TypeDefinition) []string {
 //
 //	readers := schema.RelationSubjects(types, "repository", "can_read")
 //	// Returns: ["user", "organization"] - users and orgs can read repositories
-func RelationSubjects(types []TypeDefinition, objectType string, relation string) []string {
+func RelationSubjects(types []TypeDefinition, objectType, relation string) []string {
 	for _, t := range types {
 		if t.Name != objectType {
 			continue
@@ -243,7 +243,10 @@ func RelationSubjects(types []TypeDefinition, objectType string, relation string
 				continue
 			}
 
-			var result []string
+			if len(r.SubjectTypeRefs) == 0 {
+				return nil
+			}
+			result := make([]string, 0, len(r.SubjectTypeRefs))
 			for _, ref := range r.SubjectTypeRefs {
 				result = append(result, ref.Type)
 			}

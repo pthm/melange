@@ -29,22 +29,16 @@ jobs:
           cd tooling && go mod tidy
           cd ../test && go mod tidy
 
-      - name: Lint root module
-        uses: golangci/golangci-lint-action@v7
-        with:
-          version: v2.8.0
+      - name: Install tools
+        run: go install tool
 
-      - name: Lint tooling module
-        uses: golangci/golangci-lint-action@v7
-        with:
-          version: v2.8.0
-          working-directory: tooling
-
-      - name: Lint test module
-        uses: golangci/golangci-lint-action@v7
-        with:
-          version: v2.8.0
-          working-directory: test
+      - name: Lint all modules
+        run: |
+          # Uses golangci-lint version pinned in go.mod via tool directive
+          # After `go install tool`, binary is in $GOPATH/bin which is in PATH
+          golangci-lint run ./...
+          cd tooling && golangci-lint run ./...
+          cd ../test && golangci-lint run ./...
 
   unit-tests:
     name: Unit Tests

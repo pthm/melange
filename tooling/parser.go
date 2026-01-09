@@ -82,7 +82,7 @@ func convertModel(model *openfgav1.AuthorizationModel) []schema.TypeDefinition {
 		if meta := td.GetMetadata(); meta != nil {
 			// Sort relation names for deterministic order
 			relMetaMap := meta.GetRelations()
-			var relNames []string
+			relNames := make([]string, 0, len(relMetaMap))
 			for relName := range relMetaMap {
 				relNames = append(relNames, relName)
 			}
@@ -109,7 +109,7 @@ func convertModel(model *openfgav1.AuthorizationModel) []schema.TypeDefinition {
 
 		// Convert relations - sort for deterministic order
 		relMap := td.GetRelations()
-		var relNames []string
+		relNames := make([]string, 0, len(relMap))
 		for relName := range relMap {
 			relNames = append(relNames, relName)
 		}
@@ -363,7 +363,7 @@ func extractUnionRelations(union *openfgav1.Usersets) []string {
 // expanded for each union member.
 // E.g., groups=[[a]], unionRels=[b,c] → [[a,b], [a,c]]
 func distributeUnion(groups []schema.IntersectionGroup, unionRels []string) []schema.IntersectionGroup {
-	var expanded []schema.IntersectionGroup
+	expanded := make([]schema.IntersectionGroup, 0, len(groups)*len(unionRels))
 	for _, g := range groups {
 		for _, rel := range unionRels {
 			// Clone the group and add this union member
