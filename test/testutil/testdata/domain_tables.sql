@@ -115,58 +115,49 @@ CREATE INDEX IF NOT EXISTS idx_prs_repo ON pull_requests(repository_id);
 CREATE INDEX IF NOT EXISTS idx_repo_bans_repo ON repository_bans(repository_id);
 
 -- Expression indexes for melange_tuples view performance.
--- The view converts integer IDs to text (id::text), which prevents PostgreSQL from
+-- The view converts integer IDs to text (id::TEXT), which prevents PostgreSQL from
 -- using standard integer indexes. These expression indexes enable efficient lookups
 -- through the UNION ALL view by indexing the text-converted columns.
 -- See: docs/content/docs/tuples-view.md#expression-indexes-for-text-id-conversion
 
 -- Organizations: ID lookup
-CREATE INDEX IF NOT EXISTS idx_org_id_text ON organizations ((id::text));
+CREATE INDEX IF NOT EXISTS idx_org_id_text ON organizations ((id::TEXT));
 
 -- Organization members: object and subject lookups
-CREATE INDEX IF NOT EXISTS idx_org_members_obj_text
-    ON organization_members ((organization_id::text), (user_id::text));
-CREATE INDEX IF NOT EXISTS idx_org_members_subj_text
-    ON organization_members ((user_id::text), (organization_id::text));
+CREATE INDEX IF NOT EXISTS idx_org_members_obj_text ON organization_members ((organization_id::TEXT), (user_id::TEXT));
+CREATE INDEX IF NOT EXISTS idx_org_members_subj_text ON organization_members ((user_id::TEXT), (organization_id::TEXT));
 
 -- Teams: ID and org relationship lookups
-CREATE INDEX IF NOT EXISTS idx_teams_id_text ON teams ((id::text));
-CREATE INDEX IF NOT EXISTS idx_teams_org_text ON teams ((id::text), (organization_id::text));
+CREATE INDEX IF NOT EXISTS idx_teams_id_text ON teams ((id::TEXT));
+CREATE INDEX IF NOT EXISTS idx_teams_org_text ON teams ((id::TEXT), (organization_id::TEXT));
 
 -- Team members: object and subject lookups
-CREATE INDEX IF NOT EXISTS idx_team_members_obj_text
-    ON team_members ((team_id::text), (user_id::text));
-CREATE INDEX IF NOT EXISTS idx_team_members_subj_text
-    ON team_members ((user_id::text), (team_id::text));
+CREATE INDEX IF NOT EXISTS idx_team_members_obj_text ON team_members ((team_id::TEXT), (user_id::TEXT));
+CREATE INDEX IF NOT EXISTS idx_team_members_subj_text ON team_members ((user_id::TEXT), (team_id::TEXT));
 
 -- Repositories: ID and org relationship lookups
-CREATE INDEX IF NOT EXISTS idx_repos_id_text ON repositories ((id::text));
-CREATE INDEX IF NOT EXISTS idx_repos_org_text ON repositories ((id::text), (organization_id::text));
-CREATE INDEX IF NOT EXISTS idx_repos_owner_text ON repositories ((id::text), (owner_id::text));
+CREATE INDEX IF NOT EXISTS idx_repos_id_text ON repositories ((id::TEXT));
+CREATE INDEX IF NOT EXISTS idx_repos_org_text ON repositories ((id::TEXT), (organization_id::TEXT));
+CREATE INDEX IF NOT EXISTS idx_repos_owner_text ON repositories ((id::TEXT), (owner_id::TEXT));
 
 -- Repository collaborators: object and subject lookups
-CREATE INDEX IF NOT EXISTS idx_repo_collabs_obj_text
-    ON repository_collaborators ((repository_id::text), (user_id::text));
-CREATE INDEX IF NOT EXISTS idx_repo_collabs_subj_text
-    ON repository_collaborators ((user_id::text), (repository_id::text));
+CREATE INDEX IF NOT EXISTS idx_repo_collabs_obj_text ON repository_collaborators ((repository_id::TEXT), (user_id::TEXT));
+CREATE INDEX IF NOT EXISTS idx_repo_collabs_subj_text ON repository_collaborators ((user_id::TEXT), (repository_id::TEXT));
 
 -- Issues: ID, repo relationship, and author/assignee lookups
-CREATE INDEX IF NOT EXISTS idx_issues_id_text ON issues ((id::text));
-CREATE INDEX IF NOT EXISTS idx_issues_repo_text ON issues ((id::text), (repository_id::text));
-CREATE INDEX IF NOT EXISTS idx_issues_author_text ON issues ((id::text), (author_id::text));
-CREATE INDEX IF NOT EXISTS idx_issues_assignee_text ON issues ((id::text), (assignee_id::text));
+CREATE INDEX IF NOT EXISTS idx_issues_id_text ON issues ((id::TEXT));
+CREATE INDEX IF NOT EXISTS idx_issues_repo_text ON issues ((id::TEXT), (repository_id::TEXT));
+CREATE INDEX IF NOT EXISTS idx_issues_author_text ON issues ((id::TEXT), (author_id::TEXT));
+CREATE INDEX IF NOT EXISTS idx_issues_assignee_text ON issues ((id::TEXT), (assignee_id::TEXT));
 
 -- Pull requests: ID, repo relationship, and author lookups
-CREATE INDEX IF NOT EXISTS idx_prs_id_text ON pull_requests ((id::text));
-CREATE INDEX IF NOT EXISTS idx_prs_repo_text ON pull_requests ((id::text), (repository_id::text));
-CREATE INDEX IF NOT EXISTS idx_prs_author_text ON pull_requests ((id::text), (author_id::text));
+CREATE INDEX IF NOT EXISTS idx_prs_id_text ON pull_requests ((id::TEXT));
+CREATE INDEX IF NOT EXISTS idx_prs_repo_text ON pull_requests ((id::TEXT), (repository_id::TEXT));
+CREATE INDEX IF NOT EXISTS idx_prs_author_text ON pull_requests ((id::TEXT), (author_id::TEXT));
 
 -- Pull request reviewers: object and subject lookups
-CREATE INDEX IF NOT EXISTS idx_pr_reviewers_obj_text
-    ON pull_request_reviewers ((pull_request_id::text), (user_id::text));
-CREATE INDEX IF NOT EXISTS idx_pr_reviewers_subj_text
-    ON pull_request_reviewers ((user_id::text), (pull_request_id::text));
+CREATE INDEX IF NOT EXISTS idx_pr_reviewers_obj_text ON pull_request_reviewers ((pull_request_id::TEXT), (user_id::TEXT));
+CREATE INDEX IF NOT EXISTS idx_pr_reviewers_subj_text ON pull_request_reviewers ((user_id::TEXT), (pull_request_id::TEXT));
 
 -- Repository bans: lookup for exclusion checks (includes wildcard support)
-CREATE INDEX IF NOT EXISTS idx_repo_bans_text
-    ON repository_bans ((repository_id::text), (user_id::text));
+CREATE INDEX IF NOT EXISTS idx_repo_bans_text ON repository_bans ((repository_id::TEXT), (user_id::TEXT));

@@ -184,7 +184,7 @@ fmt: fmt-go fmt-sql
 # Format Go code with gofumpt
 [group('Lint')]
 fmt-go:
-    for dir in {{ROOT}} {{TOOLING}} {{TEST}}; do (cd "$dir" && gofumpt -w .); done
+    for dir in {{ROOT}} {{TOOLING}} {{TEST}}; do (cd "$dir" && go tool gofumpt -w .); done
 
 # Format SQL files with sqruff
 [group('Lint')]
@@ -198,7 +198,7 @@ lint: lint-go lint-sql
 # Lint Go code with golangci-lint
 [group('Lint')]
 lint-go:
-    for dir in {{ROOT}} {{TOOLING}} {{TEST}}; do (cd "$dir" && golangci-lint run ./...); done
+    for dir in {{ROOT}} {{TOOLING}} {{TEST}}; do (cd "$dir" && go tool golangci-lint run ./...); done
 
 # Lint SQL files with sqruff
 [group('Lint')]

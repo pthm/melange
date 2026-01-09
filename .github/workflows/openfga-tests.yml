@@ -1,0 +1,36 @@
+name: OpenFGA Compatibility Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: openfga-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  openfga-tests:
+    name: OpenFGA Test Suite
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Tidy modules
+        run: |
+          go mod tidy
+          cd tooling && go mod tidy
+          cd ../test && go mod tidy
+
+      - name: Run OpenFGA feature tests
+        working-directory: test
+        run: |
+          go test -count=1 -timeout 5m -v \
+            -run "TestOpenFGA_" ./openfgatests/...

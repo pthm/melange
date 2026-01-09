@@ -39,7 +39,12 @@ type ClosureRow struct {
 // The closure table enables O(1) lookups instead of O(depth) recursion,
 // which is critical for deeply nested role hierarchies.
 func ComputeRelationClosure(types []TypeDefinition) []ClosureRow {
-	var rows []ClosureRow
+	// Estimate capacity: each relation typically has a few satisfying relations
+	totalRelations := 0
+	for _, t := range types {
+		totalRelations += len(t.Relations)
+	}
+	rows := make([]ClosureRow, 0, totalRelations*3)
 
 	for _, t := range types {
 		// Build adjacency: relation -> relations that imply it
@@ -56,7 +61,7 @@ func ComputeRelationClosure(types []TypeDefinition) []ClosureRow {
 			// Sort map keys for deterministic output order.
 			// This ensures consistent ordering of SatisfyingRelations in
 			// downstream processing (complexity analysis, code generation).
-			var satisfyingRels []string
+			satisfyingRels := make([]string, 0, len(satisfying))
 			for rel := range satisfying {
 				satisfyingRels = append(satisfyingRels, rel)
 			}
@@ -94,14 +99,16 @@ func computeTransitiveSatisfiers(start string, impliedBy map[string][]string) ma
 		queue = queue[1:]
 
 		for _, implied := range impliedBy[current] {
-			if _, seen := result[implied]; !seen {
-				// Build path: current's path + implied
-				path := make([]string, len(result[current]))
-				copy(path, result[current])
-				path = append(path, implied)
-				result[implied] = path
-				queue = append(queue, implied)
+			if _, seen := result[implied]; seen {
+				continue
 			}
+			// Build path: current's path + implied
+			currentPath := result[current]
+			path := make([]string, len(currentPath), len(currentPath)+1)
+			copy(path, currentPath)
+			path = append(path, implied)
+			result[implied] = path
+			queue = append(queue, implied)
 		}
 	}
 

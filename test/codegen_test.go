@@ -31,9 +31,9 @@ func TestCodegen_SpecializedFunctionsExist(t *testing.T) {
 		ORDER BY p.proname
 	`)
 	require.NoError(t, err)
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
-	var functions []string
+	functions := make([]string, 0, 16)
 	for rows.Next() {
 		var name, args string
 		require.NoError(t, rows.Scan(&name, &args))

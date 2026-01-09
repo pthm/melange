@@ -123,23 +123,23 @@ func (r *Report) Print(w io.Writer, verbose bool) {
 
 	// Print each category
 	for _, cat := range categoryOrder {
-		fmt.Fprintf(w, "\n%s\n", cat)
+		_, _ = fmt.Fprintf(w, "\n%s\n", cat)
 		for _, check := range categories[cat] {
-			fmt.Fprintf(w, "  %s %s\n", check.Status.Symbol(), check.Message)
+			_, _ = fmt.Fprintf(w, "  %s %s\n", check.Status.Symbol(), check.Message)
 			if verbose && check.Details != "" {
 				// Indent details
 				for _, line := range strings.Split(check.Details, "\n") {
-					fmt.Fprintf(w, "      %s\n", line)
+					_, _ = fmt.Fprintf(w, "      %s\n", line)
 				}
 			}
 			if check.Status != StatusPass && check.FixHint != "" {
-				fmt.Fprintf(w, "      Fix: %s\n", check.FixHint)
+				_, _ = fmt.Fprintf(w, "      Fix: %s\n", check.FixHint)
 			}
 		}
 	}
 
 	// Print summary
-	fmt.Fprintf(w, "\nSummary: %d passed, %d warnings, %d errors\n",
+	_, _ = fmt.Fprintf(w, "\nSummary: %d passed, %d warnings, %d errors\n",
 		r.Passed, r.Warnings, r.Errors)
 }
 
@@ -154,12 +154,12 @@ type Doctor struct {
 	schemasDir string
 
 	// Cached data from checks (populated during Run)
-	parsedTypes      []schema.TypeDefinition
-	schemaContent    string
-	lastMigration    *schema.MigrationRecord
-	expectedFuncs    []string
-	currentFuncs     []string
-	tuplesInfo       *TuplesInfo
+	parsedTypes   []schema.TypeDefinition
+	schemaContent string
+	lastMigration *schema.MigrationRecord
+	expectedFuncs []string
+	currentFuncs  []string
+	tuplesInfo    *TuplesInfo
 }
 
 // TuplesInfo contains information about the melange_tuples relation.
@@ -347,7 +347,8 @@ func (d *Doctor) checkMigrationState(ctx context.Context, report *Report) error 
 			d.schemaContent = content
 			currentChecksum := schema.ComputeSchemaChecksum(content)
 
-			if currentChecksum != lastMigration.SchemaChecksum {
+			switch {
+			case currentChecksum != lastMigration.SchemaChecksum:
 				report.AddCheck(CheckResult{
 					Category: "Migration State",
 					Name:     "schema_sync",
@@ -356,7 +357,7 @@ func (d *Doctor) checkMigrationState(ctx context.Context, report *Report) error 
 					Details:  fmt.Sprintf("File checksum: %s...\nDB checksum:   %s...", currentChecksum[:16], lastMigration.SchemaChecksum[:16]),
 					FixHint:  "Run 'melange migrate' to apply changes",
 				})
-			} else if lastMigration.CodegenVersion != schema.CodegenVersion {
+			case lastMigration.CodegenVersion != schema.CodegenVersion:
 				report.AddCheck(CheckResult{
 					Category: "Migration State",
 					Name:     "schema_sync",
@@ -365,7 +366,7 @@ func (d *Doctor) checkMigrationState(ctx context.Context, report *Report) error 
 					Details:  fmt.Sprintf("Current: %s, DB: %s", schema.CodegenVersion, lastMigration.CodegenVersion),
 					FixHint:  "Run 'melange migrate' to regenerate functions",
 				})
-			} else {
+			default:
 				report.AddCheck(CheckResult{
 					Category: "Migration State",
 					Name:     "schema_sync",
@@ -659,7 +660,7 @@ func (d *Doctor) validateSampleTuples(ctx context.Context, report *Report) error
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var unknownTypes []string
 	var unknownRelations []string
@@ -735,7 +736,7 @@ func (d *Doctor) getCurrentFunctions(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var functions []string
 	for rows.Next() {
@@ -796,7 +797,7 @@ func (d *Doctor) getTuplesInfo(ctx context.Context) (*TuplesInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {
 		var col string

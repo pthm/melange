@@ -26,7 +26,7 @@ func TestSubjectTypes(t *testing.T) {
 			Relations: []schema.RelationDefinition{
 				{Name: "org", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "organization"}}},
 				{Name: "public", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user", Wildcard: true}}}, // wildcard
-				{Name: "can_read", ImpliedBy: []string{"owner"}},                                              // no direct subjects
+				{Name: "can_read", ImpliedBy: []string{"owner"}},                                           // no direct subjects
 			},
 		},
 	}

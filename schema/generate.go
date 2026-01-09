@@ -204,7 +204,7 @@ func (ew *errWriter) writef(format string, args ...any) {
 func pascalCase(s string) string {
 	parts := strings.Split(s, "_")
 	for i, p := range parts {
-		if len(p) > 0 {
+		if p != "" {
 			parts[i] = strings.ToUpper(p[:1]) + p[1:]
 		}
 	}

@@ -132,7 +132,6 @@ func (c *Client) debugUserset(
 		tb.Logf("tuple: subject_type=%s subject_id=%s relation=%s", subjType, subjID, rel)
 	}
 	_ = rows.Close()
-
 }
 
 // initializeMelangeSchema applies the melange DDL without domain-specific tables.

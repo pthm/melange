@@ -59,17 +59,17 @@
 // # Validation
 //
 // DetectCycles validates schemas before migration. It checks for:
-//  - Implied-by cycles within a type (admin -> owner -> admin)
-//  - Cross-type parent relation cycles
-//  - Allows hierarchical recursion (folder -> parent folder)
+//   - Implied-by cycles within a type (admin -> owner -> admin)
+//   - Cross-type parent relation cycles
+//   - Allows hierarchical recursion (folder -> parent folder)
 //
 // Invalid schemas are rejected with ErrCyclicSchema before reaching the database.
 //
 // # Relationship to Other Packages
 //
 // The schema package is dependency-free (stdlib only) and imported by both:
-//  - tooling package (adds OpenFGA parser, provides convenience functions)
-//  - root melange package (uses Execer interface but no other types)
+//   - tooling package (adds OpenFGA parser, provides convenience functions)
+//   - root melange package (uses Execer interface but no other types)
 //
 // This layering keeps the core runtime (melange package) lightweight while
 // supporting rich schema manipulation in tooling contexts.
@@ -232,7 +232,7 @@ func SubjectTypes(types []TypeDefinition) []string {
 //
 //	readers := schema.RelationSubjects(types, "repository", "can_read")
 //	// Returns: ["user", "organization"] - users and orgs can read repositories
-func RelationSubjects(types []TypeDefinition, objectType string, relation string) []string {
+func RelationSubjects(types []TypeDefinition, objectType, relation string) []string {
 	for _, t := range types {
 		if t.Name != objectType {
 			continue
@@ -243,7 +243,10 @@ func RelationSubjects(types []TypeDefinition, objectType string, relation string
 				continue
 			}
 
-			var result []string
+			if len(r.SubjectTypeRefs) == 0 {
+				return nil
+			}
+			result := make([]string, 0, len(r.SubjectTypeRefs))
 			for _, ref := range r.SubjectTypeRefs {
 				result = append(result, ref.Type)
 			}

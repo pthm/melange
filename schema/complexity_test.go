@@ -232,8 +232,8 @@ func TestDetectFeatures_Implied(t *testing.T) {
 func TestDetectFeatures_Exclusion(t *testing.T) {
 	// define viewer: [user] but not blocked
 	r := RelationDefinition{
-		Name:             "viewer",
-		SubjectTypeRefs:  []SubjectTypeRef{{Type: "user"}},
+		Name:              "viewer",
+		SubjectTypeRefs:   []SubjectTypeRef{{Type: "user"}},
 		ExcludedRelations: []string{"blocked"},
 	}
 	analysis := RelationAnalysis{
@@ -352,7 +352,7 @@ func TestDetectFeatures_ComplexCombination(t *testing.T) {
 			{Type: "user"},
 			{Type: "group", Relation: "member"},
 		},
-		ParentRelations:  []ParentRelationCheck{{Relation: "viewer", LinkingRelation: "parent"}},
+		ParentRelations:   []ParentRelationCheck{{Relation: "viewer", LinkingRelation: "parent"}},
 		ExcludedRelations: []string{"blocked"},
 	}
 	analysis := RelationAnalysis{
@@ -705,7 +705,7 @@ func TestAnalyzeRelations_ComplexComposite(t *testing.T) {
 						{Type: "user"},
 						{Type: "group", Relation: "member"},
 					},
-					ParentRelations:  []ParentRelationCheck{{Relation: "viewer", LinkingRelation: "parent"}},
+					ParentRelations:   []ParentRelationCheck{{Relation: "viewer", LinkingRelation: "parent"}},
 					ExcludedRelations: []string{"blocked"},
 				},
 				{

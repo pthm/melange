@@ -318,7 +318,7 @@ func (c *Checker) mapError(operation string, err error) error {
 	return fmt.Errorf("%s: %w", operation, err)
 }
 
-func (c *Checker) validateUsersetSubject(ctx context.Context, q Querier, subject Object) error {
+func (c *Checker) validateUsersetSubject(_ context.Context, _ Querier, subject Object) error {
 	if c.validator != nil {
 		return c.validator.ValidateUsersetSubject(subject)
 	}
@@ -339,7 +339,7 @@ func (c *Checker) validateUsersetSubject(ctx context.Context, q Querier, subject
 
 // validateCheckRequest validates basic check request structure.
 // Model-backed validation is unavailable when schema data is inlined.
-func (c *Checker) validateCheckRequest(ctx context.Context, q Querier, subject Object, relation Relation, object Object) error {
+func (c *Checker) validateCheckRequest(_ context.Context, _ Querier, subject Object, relation Relation, object Object) error {
 	if c.validator != nil {
 		return c.validator.ValidateCheckRequest(subject, relation, object)
 	}
@@ -348,7 +348,7 @@ func (c *Checker) validateCheckRequest(ctx context.Context, q Querier, subject O
 }
 
 // validateListUsersRequest validates basic list request structure.
-func (c *Checker) validateListUsersRequest(ctx context.Context, q Querier, relation Relation, object Object, subjectType ObjectType) error {
+func (c *Checker) validateListUsersRequest(_ context.Context, _ Querier, relation Relation, object Object, subjectType ObjectType) error {
 	if c.validator != nil {
 		return c.validator.ValidateListUsersRequest(relation, object, subjectType)
 	}
@@ -444,7 +444,7 @@ func (c *Checker) ListObjects(ctx context.Context, subject SubjectLike, relation
 	}
 	defer func() { _ = rows.Close() }()
 
-	var ids []string
+	ids := make([]string, 0, 16)
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
@@ -512,7 +512,7 @@ func (c *Checker) ListObjectsWithContextualTuples(
 	}
 	defer func() { _ = rows.Close() }()
 
-	var ids []string
+	ids := make([]string, 0, 16)
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
@@ -571,7 +571,7 @@ func (c *Checker) ListSubjects(ctx context.Context, object ObjectLike, relation 
 	}
 	defer func() { _ = rows.Close() }()
 
-	var ids []string
+	ids := make([]string, 0, 16)
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
@@ -633,7 +633,7 @@ func (c *Checker) ListSubjectsWithContextualTuples(
 	}
 	defer func() { _ = rows.Close() }()
 
-	var ids []string
+	ids := make([]string, 0, 16)
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
@@ -658,7 +658,7 @@ func (c *Checker) validateContextualTuples(ctx context.Context, tuples []Context
 
 // validateContextualTuple validates a single contextual tuple for basic shape errors.
 // Returns an error if the tuple is structurally invalid.
-func (c *Checker) validateContextualTuple(ctx context.Context, tuple ContextualTuple) error {
+func (c *Checker) validateContextualTuple(_ context.Context, tuple ContextualTuple) error {
 	if c.validator != nil {
 		return c.validator.ValidateContextualTuple(tuple)
 	}

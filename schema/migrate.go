@@ -98,12 +98,6 @@ func (m *Migrator) ApplyDDL(ctx context.Context) error {
 	return nil
 }
 
-// applyDDLTx applies DDL to a specific Execer (typically a transaction).
-// This is the transactional version of ApplyDDL.
-func (m *Migrator) applyDDLTx(ctx context.Context, db Execer) error {
-	return nil
-}
-
 // applyGeneratedSQL applies generated specialized functions and dispatcher.
 func (m *Migrator) applyGeneratedSQL(ctx context.Context, db Execer, gen GeneratedSQL) error {
 	// Apply specialized check functions first (dispatcher depends on them)
@@ -348,9 +342,9 @@ func (m *Migrator) getCurrentFunctions(ctx context.Context, db Execer) ([]string
 	if err != nil {
 		return nil, fmt.Errorf("querying pg_proc: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
-	var functions []string
+	functions := make([]string, 0, 32)
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
@@ -362,24 +356,22 @@ func (m *Migrator) getCurrentFunctions(ctx context.Context, db Execer) ([]string
 }
 
 // dropOrphanedFunctions drops functions that exist but are not in the expected list.
-func (m *Migrator) dropOrphanedFunctions(ctx context.Context, db Execer, currentFunctions, expectedFunctions []string) ([]string, error) {
+func (m *Migrator) dropOrphanedFunctions(ctx context.Context, db Execer, currentFunctions, expectedFunctions []string) error {
 	expected := make(map[string]bool)
 	for _, fn := range expectedFunctions {
 		expected[fn] = true
 	}
 
-	var dropped []string
 	for _, fn := range currentFunctions {
 		if !expected[fn] {
 			// Use CASCADE to handle any edge case dependencies
 			_, err := db.ExecContext(ctx, fmt.Sprintf("DROP FUNCTION IF EXISTS %s CASCADE", fn))
 			if err != nil {
-				return dropped, fmt.Errorf("dropping orphaned function %s: %w", fn, err)
+				return fmt.Errorf("dropping orphaned function %s: %w", fn, err)
 			}
-			dropped = append(dropped, fn)
 		}
 	}
-	return dropped, nil
+	return nil
 }
 
 // applyMigrationsDDL creates the melange_migrations table if it doesn't exist.
@@ -453,7 +445,8 @@ func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeD
 
 	// 8. Handle dry-run mode
 	if opts.DryRun != nil {
-		return m.outputDryRun(opts.DryRun, schemaChecksum, generatedSQL, listSQL, expectedFunctions)
+		m.outputDryRun(opts.DryRun, schemaChecksum, generatedSQL, listSQL, expectedFunctions)
+		return nil
 	}
 
 	// 9. Apply everything atomically
@@ -488,7 +481,7 @@ func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeD
 		}
 
 		// Drop orphaned functions
-		if _, err := m.dropOrphanedFunctions(ctx, tx, currentFunctions, expectedFunctions); err != nil {
+		if err := m.dropOrphanedFunctions(ctx, tx, currentFunctions, expectedFunctions); err != nil {
 			return err
 		}
 
@@ -516,7 +509,7 @@ func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeD
 	if err := m.applyGeneratedListSQL(ctx, m.db, listSQL); err != nil {
 		return err
 	}
-	if _, err := m.dropOrphanedFunctions(ctx, m.db, currentFunctions, expectedFunctions); err != nil {
+	if err := m.dropOrphanedFunctions(ctx, m.db, currentFunctions, expectedFunctions); err != nil {
 		return err
 	}
 	if schemaChecksum != "" {
@@ -528,77 +521,77 @@ func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeD
 }
 
 // outputDryRun writes the migration SQL to the provided writer.
-func (m *Migrator) outputDryRun(w io.Writer, schemaChecksum string, generatedSQL GeneratedSQL, listSQL ListGeneratedSQL, expectedFunctions []string) error {
+func (m *Migrator) outputDryRun(w io.Writer, schemaChecksum string, generatedSQL GeneratedSQL, listSQL ListGeneratedSQL, expectedFunctions []string) {
 	// Header
-	fmt.Fprintf(w, "-- Melange Migration (dry-run)\n")
-	fmt.Fprintf(w, "-- Schema checksum: %s\n", schemaChecksum)
-	fmt.Fprintf(w, "-- Codegen version: %s\n", CodegenVersion)
-	fmt.Fprintf(w, "\n")
+	_, _ = fmt.Fprintf(w, "-- Melange Migration (dry-run)\n")
+	_, _ = fmt.Fprintf(w, "-- Schema checksum: %s\n", schemaChecksum)
+	_, _ = fmt.Fprintf(w, "-- Codegen version: %s\n", CodegenVersion)
+	_, _ = fmt.Fprintf(w, "\n")
 
 	// Migrations DDL
-	fmt.Fprintf(w, "-- ============================================================\n")
-	fmt.Fprintf(w, "-- DDL: Migration Tracking Table\n")
-	fmt.Fprintf(w, "-- ============================================================\n\n")
-	fmt.Fprintf(w, "%s\n\n", migrationsDDL)
+	_, _ = fmt.Fprintf(w, "-- ============================================================\n")
+	_, _ = fmt.Fprintf(w, "-- DDL: Migration Tracking Table\n")
+	_, _ = fmt.Fprintf(w, "-- ============================================================\n\n")
+	_, _ = fmt.Fprintf(w, "%s\n\n", migrationsDDL)
 
 	// Check functions
-	fmt.Fprintf(w, "-- ============================================================\n")
-	fmt.Fprintf(w, "-- Check Functions (%d functions)\n", len(generatedSQL.Functions))
-	fmt.Fprintf(w, "-- ============================================================\n\n")
+	_, _ = fmt.Fprintf(w, "-- ============================================================\n")
+	_, _ = fmt.Fprintf(w, "-- Check Functions (%d functions)\n", len(generatedSQL.Functions))
+	_, _ = fmt.Fprintf(w, "-- ============================================================\n\n")
 	for _, fn := range generatedSQL.Functions {
-		fmt.Fprintf(w, "%s\n\n", fn)
+		_, _ = fmt.Fprintf(w, "%s\n\n", fn)
 	}
 
 	// No-wildcard check functions
-	fmt.Fprintf(w, "-- ============================================================\n")
-	fmt.Fprintf(w, "-- No-Wildcard Check Functions (%d functions)\n", len(generatedSQL.NoWildcardFunctions))
-	fmt.Fprintf(w, "-- ============================================================\n\n")
+	_, _ = fmt.Fprintf(w, "-- ============================================================\n")
+	_, _ = fmt.Fprintf(w, "-- No-Wildcard Check Functions (%d functions)\n", len(generatedSQL.NoWildcardFunctions))
+	_, _ = fmt.Fprintf(w, "-- ============================================================\n\n")
 	for _, fn := range generatedSQL.NoWildcardFunctions {
-		fmt.Fprintf(w, "%s\n\n", fn)
+		_, _ = fmt.Fprintf(w, "%s\n\n", fn)
 	}
 
 	// Check dispatchers
-	fmt.Fprintf(w, "-- ============================================================\n")
-	fmt.Fprintf(w, "-- Check Dispatchers\n")
-	fmt.Fprintf(w, "-- ============================================================\n\n")
+	_, _ = fmt.Fprintf(w, "-- ============================================================\n")
+	_, _ = fmt.Fprintf(w, "-- Check Dispatchers\n")
+	_, _ = fmt.Fprintf(w, "-- ============================================================\n\n")
 	if generatedSQL.Dispatcher != "" {
-		fmt.Fprintf(w, "%s\n\n", generatedSQL.Dispatcher)
+		_, _ = fmt.Fprintf(w, "%s\n\n", generatedSQL.Dispatcher)
 	}
 	if generatedSQL.DispatcherNoWildcard != "" {
-		fmt.Fprintf(w, "%s\n\n", generatedSQL.DispatcherNoWildcard)
+		_, _ = fmt.Fprintf(w, "%s\n\n", generatedSQL.DispatcherNoWildcard)
 	}
 
 	// List objects functions
-	fmt.Fprintf(w, "-- ============================================================\n")
-	fmt.Fprintf(w, "-- List Objects Functions (%d functions)\n", len(listSQL.ListObjectsFunctions))
-	fmt.Fprintf(w, "-- ============================================================\n\n")
+	_, _ = fmt.Fprintf(w, "-- ============================================================\n")
+	_, _ = fmt.Fprintf(w, "-- List Objects Functions (%d functions)\n", len(listSQL.ListObjectsFunctions))
+	_, _ = fmt.Fprintf(w, "-- ============================================================\n\n")
 	for _, fn := range listSQL.ListObjectsFunctions {
-		fmt.Fprintf(w, "%s\n\n", fn)
+		_, _ = fmt.Fprintf(w, "%s\n\n", fn)
 	}
 
 	// List subjects functions
-	fmt.Fprintf(w, "-- ============================================================\n")
-	fmt.Fprintf(w, "-- List Subjects Functions (%d functions)\n", len(listSQL.ListSubjectsFunctions))
-	fmt.Fprintf(w, "-- ============================================================\n\n")
+	_, _ = fmt.Fprintf(w, "-- ============================================================\n")
+	_, _ = fmt.Fprintf(w, "-- List Subjects Functions (%d functions)\n", len(listSQL.ListSubjectsFunctions))
+	_, _ = fmt.Fprintf(w, "-- ============================================================\n\n")
 	for _, fn := range listSQL.ListSubjectsFunctions {
-		fmt.Fprintf(w, "%s\n\n", fn)
+		_, _ = fmt.Fprintf(w, "%s\n\n", fn)
 	}
 
 	// List dispatchers
-	fmt.Fprintf(w, "-- ============================================================\n")
-	fmt.Fprintf(w, "-- List Dispatchers\n")
-	fmt.Fprintf(w, "-- ============================================================\n\n")
+	_, _ = fmt.Fprintf(w, "-- ============================================================\n")
+	_, _ = fmt.Fprintf(w, "-- List Dispatchers\n")
+	_, _ = fmt.Fprintf(w, "-- ============================================================\n\n")
 	if listSQL.ListObjectsDispatcher != "" {
-		fmt.Fprintf(w, "%s\n\n", listSQL.ListObjectsDispatcher)
+		_, _ = fmt.Fprintf(w, "%s\n\n", listSQL.ListObjectsDispatcher)
 	}
 	if listSQL.ListSubjectsDispatcher != "" {
-		fmt.Fprintf(w, "%s\n\n", listSQL.ListSubjectsDispatcher)
+		_, _ = fmt.Fprintf(w, "%s\n\n", listSQL.ListSubjectsDispatcher)
 	}
 
 	// Migration record
-	fmt.Fprintf(w, "-- ============================================================\n")
-	fmt.Fprintf(w, "-- Migration Record\n")
-	fmt.Fprintf(w, "-- ============================================================\n\n")
+	_, _ = fmt.Fprintf(w, "-- ============================================================\n")
+	_, _ = fmt.Fprintf(w, "-- Migration Record\n")
+	_, _ = fmt.Fprintf(w, "-- ============================================================\n\n")
 
 	// Sort function names for deterministic output
 	sortedFunctions := make([]string, len(expectedFunctions))
@@ -610,8 +603,6 @@ func (m *Migrator) outputDryRun(w io.Writer, schemaChecksum string, generatedSQL
 	for i, fn := range sortedFunctions {
 		quotedFunctions[i] = fmt.Sprintf("'%s'", fn)
 	}
-	fmt.Fprintf(w, "INSERT INTO melange_migrations (schema_checksum, codegen_version, function_names)\n")
-	fmt.Fprintf(w, "VALUES ('%s', '%s', ARRAY[%s]);\n", schemaChecksum, CodegenVersion, strings.Join(quotedFunctions, ", "))
-
-	return nil
+	_, _ = fmt.Fprintf(w, "INSERT INTO melange_migrations (schema_checksum, codegen_version, function_names)\n")
+	_, _ = fmt.Fprintf(w, "VALUES ('%s', '%s', ARRAY[%s]);\n", schemaChecksum, CodegenVersion, strings.Join(quotedFunctions, ", "))
 }
