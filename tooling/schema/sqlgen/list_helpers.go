@@ -6,58 +6,8 @@ import (
 	"github.com/pthm/melange/tooling/schema/sqlgen/dsl"
 )
 
-// toDSLExclusionConfig converts ExclusionInput to dsl.ExclusionConfig
-func toDSLExclusionConfig(input ExclusionInput) dsl.ExclusionConfig {
-	// Convert string expressions to dsl.Expr
-	objectIDExpr := stringToDSLExpr(input.ObjectIDExpr)
-	subjectTypeExpr := stringToDSLExpr(input.SubjectTypeExpr)
-	subjectIDExpr := stringToDSLExpr(input.SubjectIDExpr)
-
-	// Convert ExcludedParentRelation types
-	var parentRels []dsl.ExcludedParentRelation
-	for _, rel := range input.ExcludedParentRelations {
-		parentRels = append(parentRels, dsl.ExcludedParentRelation{
-			Relation:            rel.Relation,
-			LinkingRelation:     rel.LinkingRelation,
-			AllowedLinkingTypes: rel.AllowedLinkingTypes,
-		})
-	}
-
-	// Convert ExcludedIntersectionGroup types
-	var intersectionGroups []dsl.ExcludedIntersectionGroup
-	for _, group := range input.ExcludedIntersection {
-		var parts []dsl.ExcludedIntersectionPart
-		for _, part := range group.Parts {
-			dslPart := dsl.ExcludedIntersectionPart{
-				Relation:         part.Relation,
-				ExcludedRelation: part.ExcludedRelation,
-			}
-			if part.ParentRelation != nil {
-				dslPart.ParentRelation = &dsl.ExcludedParentRelation{
-					Relation:            part.ParentRelation.Relation,
-					LinkingRelation:     part.ParentRelation.LinkingRelation,
-					AllowedLinkingTypes: part.ParentRelation.AllowedLinkingTypes,
-				}
-			}
-			parts = append(parts, dslPart)
-		}
-		intersectionGroups = append(intersectionGroups, dsl.ExcludedIntersectionGroup{Parts: parts})
-	}
-
-	return dsl.ExclusionConfig{
-		ObjectType:               input.ObjectType,
-		ObjectIDExpr:             objectIDExpr,
-		SubjectTypeExpr:          subjectTypeExpr,
-		SubjectIDExpr:            subjectIDExpr,
-		SimpleExcludedRelations:  input.SimpleExcludedRelations,
-		ComplexExcludedRelations: input.ComplexExcludedRelations,
-		ExcludedParentRelations:  parentRels,
-		ExcludedIntersection:     intersectionGroups,
-	}
-}
-
-// stringToDSLExpr converts a string expression to dsl.Expr
-// Recognizes common parameter names and converts them to DSL constants
+// stringToDSLExpr converts a string expression to dsl.Expr.
+// Recognizes common parameter names and converts them to DSL constants.
 func stringToDSLExpr(s string) dsl.Expr {
 	if s == "" {
 		return nil
@@ -76,7 +26,7 @@ func stringToDSLExpr(s string) dsl.Expr {
 	}
 }
 
-// CheckPermissionExprDSL returns a DSL expression for a check_permission call
+// CheckPermissionExprDSL returns a DSL expression for a check_permission call.
 func CheckPermissionExprDSL(functionName, subjectTypeExpr, subjectIDExpr, relation, objectTypeExpr, objectIDExpr string, expect bool) dsl.Expr {
 	result := "1"
 	if !expect {
@@ -94,7 +44,7 @@ func CheckPermissionExprDSL(functionName, subjectTypeExpr, subjectIDExpr, relati
 	))
 }
 
-// CheckPermissionInternalExprDSL returns a DSL expression for a check_permission_internal call
+// CheckPermissionInternalExprDSL returns a DSL expression for a check_permission_internal call.
 func CheckPermissionInternalExprDSL(subjectTypeExpr, subjectIDExpr, relation, objectTypeExpr, objectIDExpr string, expect bool) dsl.Expr {
 	result := "1"
 	if !expect {
@@ -111,13 +61,7 @@ func CheckPermissionInternalExprDSL(subjectTypeExpr, subjectIDExpr, relation, ob
 	))
 }
 
-// ExclusionPredicatesDSL converts an ExclusionInput to a slice of DSL expressions
-func ExclusionPredicatesDSL(input ExclusionInput) []dsl.Expr {
-	config := toDSLExclusionConfig(input)
-	return config.BuildPredicates()
-}
-
-// RenderDSLExprs converts a slice of DSL expressions to SQL strings
+// RenderDSLExprs converts a slice of DSL expressions to SQL strings.
 func RenderDSLExprs(exprs []dsl.Expr) []string {
 	result := make([]string, 0, len(exprs))
 	for _, expr := range exprs {

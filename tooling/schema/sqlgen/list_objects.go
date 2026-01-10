@@ -11,7 +11,7 @@ type ListObjectsDirectInput struct {
 	Relations           []string
 	AllowedSubjectTypes []string
 	AllowWildcard       bool
-	Exclusions          ExclusionInput
+	Exclusions          dsl.ExclusionConfig
 }
 
 func ListObjectsDirectQuery(input ListObjectsDirectInput) (string, error) {
@@ -27,8 +27,7 @@ func ListObjectsDirectQuery(input ListObjectsDirectInput) (string, error) {
 		Distinct()
 
 	// Add exclusion predicates
-	exclusionConfig := toDSLExclusionConfig(input.Exclusions)
-	for _, pred := range exclusionConfig.BuildPredicates() {
+	for _, pred := range input.Exclusions.BuildPredicates() {
 		q.Where(pred)
 	}
 
@@ -39,7 +38,7 @@ type ListObjectsUsersetSubjectInput struct {
 	ObjectType    string
 	Relations     []string
 	ClosureValues string
-	Exclusions    ExclusionInput
+	Exclusions    dsl.ExclusionConfig
 }
 
 func ListObjectsUsersetSubjectQuery(input ListObjectsUsersetSubjectInput) (string, error) {
@@ -81,8 +80,7 @@ func ListObjectsUsersetSubjectQuery(input ListObjectsUsersetSubjectInput) (strin
 		Distinct()
 
 	// Add exclusion predicates
-	exclusionConfig := toDSLExclusionConfig(input.Exclusions)
-	for _, pred := range exclusionConfig.BuildPredicates() {
+	for _, pred := range input.Exclusions.BuildPredicates() {
 		q.Where(pred)
 	}
 
@@ -94,7 +92,7 @@ type ListObjectsComplexClosureInput struct {
 	Relation            string
 	AllowedSubjectTypes []string
 	AllowWildcard       bool
-	Exclusions          ExclusionInput
+	Exclusions          dsl.ExclusionConfig
 }
 
 func ListObjectsComplexClosureQuery(input ListObjectsComplexClosureInput) (string, error) {
@@ -116,8 +114,7 @@ func ListObjectsComplexClosureQuery(input ListObjectsComplexClosureInput) (strin
 		Distinct()
 
 	// Add exclusion predicates
-	exclusionConfig := toDSLExclusionConfig(input.Exclusions)
-	for _, pred := range exclusionConfig.BuildPredicates() {
+	for _, pred := range input.Exclusions.BuildPredicates() {
 		q.Where(pred)
 	}
 
@@ -158,7 +155,7 @@ type ListObjectsUsersetPatternSimpleInput struct {
 	AllowWildcard       bool
 	IsClosurePattern    bool
 	SourceRelation      string
-	Exclusions          ExclusionInput
+	Exclusions          dsl.ExclusionConfig
 }
 
 func ListObjectsUsersetPatternSimpleQuery(input ListObjectsUsersetPatternSimpleInput) (string, error) {
@@ -199,8 +196,7 @@ func ListObjectsUsersetPatternSimpleQuery(input ListObjectsUsersetPatternSimpleI
 		Distinct()
 
 	// Add exclusion predicates
-	exclusionConfig := toDSLExclusionConfig(input.Exclusions)
-	for _, pred := range exclusionConfig.BuildPredicates() {
+	for _, pred := range input.Exclusions.BuildPredicates() {
 		q.Where(pred)
 	}
 
@@ -214,7 +210,7 @@ type ListObjectsUsersetPatternComplexInput struct {
 	SourceRelations  []string
 	IsClosurePattern bool
 	SourceRelation   string
-	Exclusions       ExclusionInput
+	Exclusions       dsl.ExclusionConfig
 }
 
 func ListObjectsUsersetPatternComplexQuery(input ListObjectsUsersetPatternComplexInput) (string, error) {
@@ -253,8 +249,7 @@ func ListObjectsUsersetPatternComplexQuery(input ListObjectsUsersetPatternComple
 		Distinct()
 
 	// Add exclusion predicates
-	exclusionConfig := toDSLExclusionConfig(input.Exclusions)
-	for _, pred := range exclusionConfig.BuildPredicates() {
+	for _, pred := range input.Exclusions.BuildPredicates() {
 		q.Where(pred)
 	}
 
@@ -298,7 +293,7 @@ type ListObjectsCrossTypeTTUInput struct {
 	LinkingRelation string
 	Relation        string
 	CrossTypes      []string
-	Exclusions      ExclusionInput
+	Exclusions      dsl.ExclusionConfig
 }
 
 func ListObjectsCrossTypeTTUQuery(input ListObjectsCrossTypeTTUInput) (string, error) {
@@ -321,8 +316,7 @@ func ListObjectsCrossTypeTTUQuery(input ListObjectsCrossTypeTTUInput) (string, e
 		Distinct()
 
 	// Add exclusion predicates
-	exclusionConfig := toDSLExclusionConfig(input.Exclusions)
-	for _, pred := range exclusionConfig.BuildPredicates() {
+	for _, pred := range input.Exclusions.BuildPredicates() {
 		q.Where(pred)
 	}
 
@@ -332,7 +326,7 @@ func ListObjectsCrossTypeTTUQuery(input ListObjectsCrossTypeTTUInput) (string, e
 type ListObjectsRecursiveTTUInput struct {
 	ObjectType       string
 	LinkingRelations []string
-	Exclusions       ExclusionInput
+	Exclusions       dsl.ExclusionConfig
 }
 
 func ListObjectsRecursiveTTUQuery(input ListObjectsRecursiveTTUInput) (string, error) {
@@ -359,8 +353,7 @@ func ListObjectsRecursiveTTUQuery(input ListObjectsRecursiveTTUInput) (string, e
 	}
 
 	// Add exclusion predicates to WHERE
-	exclusionConfig := toDSLExclusionConfig(input.Exclusions)
-	predicates := exclusionConfig.BuildPredicates()
+	predicates := input.Exclusions.BuildPredicates()
 	if len(predicates) > 0 {
 		allPredicates := append([]dsl.Expr{stmt.Where}, predicates...)
 		stmt.Where = dsl.And(allPredicates...)

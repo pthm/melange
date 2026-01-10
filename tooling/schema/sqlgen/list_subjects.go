@@ -120,7 +120,7 @@ type ListSubjectsDirectInput struct {
 	ObjectIDExpr    string
 	SubjectTypeExpr string
 	ExcludeWildcard bool
-	Exclusions      ExclusionInput
+	Exclusions      dsl.ExclusionConfig
 }
 
 func ListSubjectsDirectQuery(input ListSubjectsDirectInput) (string, error) {
@@ -144,8 +144,7 @@ func ListSubjectsDirectQuery(input ListSubjectsDirectInput) (string, error) {
 		Distinct()
 
 	// Add exclusion predicates
-	exclusionConfig := toDSLExclusionConfig(input.Exclusions)
-	for _, pred := range exclusionConfig.BuildPredicates() {
+	for _, pred := range input.Exclusions.BuildPredicates() {
 		q.Where(pred)
 	}
 
@@ -158,7 +157,7 @@ type ListSubjectsComplexClosureInput struct {
 	ObjectIDExpr    string
 	SubjectTypeExpr string
 	ExcludeWildcard bool
-	Exclusions      ExclusionInput
+	Exclusions      dsl.ExclusionConfig
 }
 
 func ListSubjectsComplexClosureQuery(input ListSubjectsComplexClosureInput) (string, error) {
@@ -191,8 +190,7 @@ func ListSubjectsComplexClosureQuery(input ListSubjectsComplexClosureInput) (str
 		Distinct()
 
 	// Add exclusion predicates
-	exclusionConfig := toDSLExclusionConfig(input.Exclusions)
-	for _, pred := range exclusionConfig.BuildPredicates() {
+	for _, pred := range input.Exclusions.BuildPredicates() {
 		q.Where(pred)
 	}
 
@@ -242,7 +240,7 @@ type ListSubjectsUsersetPatternSimpleInput struct {
 	ExcludeWildcard     bool
 	IsClosurePattern    bool
 	SourceRelation      string
-	Exclusions          ExclusionInput
+	Exclusions          dsl.ExclusionConfig
 }
 
 func ListSubjectsUsersetPatternSimpleQuery(input ListSubjectsUsersetPatternSimpleInput) (string, error) {
@@ -290,8 +288,7 @@ func ListSubjectsUsersetPatternSimpleQuery(input ListSubjectsUsersetPatternSimpl
 		Distinct()
 
 	// Add exclusion predicates
-	exclusionConfig := toDSLExclusionConfig(input.Exclusions)
-	for _, pred := range exclusionConfig.BuildPredicates() {
+	for _, pred := range input.Exclusions.BuildPredicates() {
 		q.Where(pred)
 	}
 
@@ -307,7 +304,7 @@ type ListSubjectsUsersetPatternComplexInput struct {
 	SubjectTypeExpr  string
 	IsClosurePattern bool
 	SourceRelation   string
-	Exclusions       ExclusionInput
+	Exclusions       dsl.ExclusionConfig
 }
 
 func ListSubjectsUsersetPatternComplexQuery(input ListSubjectsUsersetPatternComplexInput) (string, error) {
@@ -357,8 +354,7 @@ func ListSubjectsUsersetPatternComplexQuery(input ListSubjectsUsersetPatternComp
 	}
 
 	// Add exclusion predicates to WHERE
-	exclusionConfig := toDSLExclusionConfig(input.Exclusions)
-	predicates := exclusionConfig.BuildPredicates()
+	predicates := input.Exclusions.BuildPredicates()
 	if len(predicates) > 0 {
 		allPredicates := append([]dsl.Expr{stmt.Where}, predicates...)
 		stmt.Where = dsl.And(allPredicates...)
@@ -378,7 +374,7 @@ type ListSubjectsUsersetPatternRecursiveComplexInput struct {
 	ExcludeWildcard     bool
 	IsClosurePattern    bool
 	SourceRelation      string
-	Exclusions          ExclusionInput
+	Exclusions          dsl.ExclusionConfig
 }
 
 func ListSubjectsUsersetPatternRecursiveComplexQuery(input ListSubjectsUsersetPatternRecursiveComplexInput) (string, error) {
@@ -437,8 +433,7 @@ func ListSubjectsUsersetPatternRecursiveComplexQuery(input ListSubjectsUsersetPa
 		Distinct()
 
 	// Add exclusion predicates
-	exclusionConfig := toDSLExclusionConfig(input.Exclusions)
-	for _, pred := range exclusionConfig.BuildPredicates() {
+	for _, pred := range input.Exclusions.BuildPredicates() {
 		q.Where(pred)
 	}
 
