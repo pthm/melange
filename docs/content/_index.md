@@ -13,13 +13,13 @@ layout: hextra-home
 
 <div class="hx:mt-6 hx:mb-6">
 {{< hextra/hero-headline >}}
-  Zero-copy Zanzibar-Style Authorization&nbsp;<br class="hx:sm:block hx:hidden" />in PostgreSQL
+  Zanzibar-Style Authorization&nbsp;<br class="hx:sm:block hx:hidden" />for PostgreSQL
 {{< /hextra/hero-headline >}}
 </div>
 
 <div class="hx:mb-12">
 {{< hextra/hero-subtitle >}}
-  No external services, no tuple syncing, no eventual consistency.&nbsp;<br class="hx:sm:block hx:hidden" />Just SQL.
+  Implement fine-grained, relationship-based access control without external services.&nbsp;<br class="hx:sm:block hx:hidden" />Melange compiles OpenFGA schemas into SQL functions that run inside your existing database.
 {{< /hextra/hero-subtitle >}}
 </div>
 
