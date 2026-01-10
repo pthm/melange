@@ -53,34 +53,43 @@ func optf(cond bool, format string, args ...any) string {
 
 // JoinClause represents a SQL JOIN clause.
 type JoinClause struct {
-	Type  string // "INNER", "LEFT", etc.
-	Table string
-	Alias string
-	On    Expr
+	Type      string    // "INNER", "LEFT", etc.
+	Table     string    // Deprecated: use TableExpr instead
+	TableExpr TableExpr // Preferred: typed table expression
+	Alias     string    // Deprecated: use TableExpr's alias instead
+	On        Expr
 }
 
 // SQL renders the JOIN clause.
 func (j JoinClause) SQL() string {
-	alias := ""
-	if j.Alias != "" {
-		alias = " AS " + j.Alias
+	// Use TableExpr if provided, otherwise fall back to Table string
+	var tableSQL string
+	if j.TableExpr != nil {
+		tableSQL = j.TableExpr.TableSQL()
+	} else {
+		tableSQL = j.Table
+		if j.Alias != "" {
+			tableSQL += " AS " + j.Alias
+		}
 	}
 	// CROSS JOIN doesn't have an ON clause
 	if j.Type == "CROSS" || j.On == nil {
-		return fmt.Sprintf("%s JOIN %s%s", j.Type, j.Table, alias)
+		return j.Type + " JOIN " + tableSQL
 	}
-	return fmt.Sprintf("%s JOIN %s%s ON %s", j.Type, j.Table, alias, j.On.SQL())
+	return j.Type + " JOIN " + tableSQL + " ON " + j.On.SQL()
 }
 
 // SelectStmt represents a SELECT query.
 type SelectStmt struct {
-	Distinct bool
-	Columns  []string
-	From     string
-	Alias    string
-	Joins    []JoinClause
-	Where    Expr
-	Limit    int
+	Distinct    bool
+	Columns     []string  // Deprecated: use ColumnExprs instead
+	ColumnExprs []Expr    // Preferred: typed column expressions
+	From        string    // Deprecated: use FromExpr instead
+	FromExpr    TableExpr // Preferred: typed table expression
+	Alias       string    // Deprecated: use FromExpr's alias instead
+	Joins       []JoinClause
+	Where       Expr
+	Limit       int
 }
 
 // SQL renders the SELECT statement.
@@ -92,7 +101,7 @@ func (s SelectStmt) SQL() string {
 		%s
 		%s`,
 		optf(s.Distinct, "DISTINCT "),
-		strings.Join(s.Columns, ", "),
+		s.columnsSQL(),
 		s.fromSQL(),
 		s.joinsSQL(),
 		s.whereSQL(),
@@ -100,11 +109,33 @@ func (s SelectStmt) SQL() string {
 	)
 }
 
+func (s SelectStmt) columnsSQL() string {
+	// Use ColumnExprs if provided, otherwise fall back to Columns
+	if len(s.ColumnExprs) > 0 {
+		parts := make([]string, len(s.ColumnExprs))
+		for i, e := range s.ColumnExprs {
+			parts[i] = e.SQL()
+		}
+		return strings.Join(parts, ", ")
+	}
+	if len(s.Columns) > 0 {
+		return strings.Join(s.Columns, ", ")
+	}
+	return "1"
+}
+
 func (s SelectStmt) fromSQL() string {
+	// Use FromExpr if provided, otherwise fall back to From string
+	if s.FromExpr != nil {
+		return "FROM " + s.FromExpr.TableSQL()
+	}
 	if s.From == "" {
 		return ""
 	}
-	return fmt.Sprintf("FROM %s%s", s.From, optf(s.Alias != "", " AS %s", s.Alias))
+	if s.Alias != "" {
+		return "FROM " + s.From + " AS " + s.Alias
+	}
+	return "FROM " + s.From
 }
 
 func (s SelectStmt) joinsSQL() string {
@@ -160,9 +191,19 @@ type ValuesTable struct {
 // SQL renders the VALUES table expression.
 func (v ValuesTable) SQL() string {
 	if len(v.Columns) == 0 {
-		return fmt.Sprintf("(VALUES %s) AS %s", v.Values, v.Alias)
+		return "(VALUES " + v.Values + ") AS " + v.Alias
 	}
-	return fmt.Sprintf("(VALUES %s) AS %s(%s)", v.Values, v.Alias, strings.Join(v.Columns, ", "))
+	return "(VALUES " + v.Values + ") AS " + v.Alias + "(" + strings.Join(v.Columns, ", ") + ")"
+}
+
+// TableSQL implements TableExpr.
+func (v ValuesTable) TableSQL() string {
+	return v.SQL()
+}
+
+// TableAlias implements TableExpr.
+func (v ValuesTable) TableAlias() string {
+	return v.Alias
 }
 
 // ClosureValuesTable creates a standard closure VALUES table.
@@ -246,6 +287,16 @@ func (f FunctionTable) SQL() string {
 	return call
 }
 
+// TableSQL implements TableExpr.
+func (f FunctionTable) TableSQL() string {
+	return f.SQL()
+}
+
+// TableAlias implements TableExpr.
+func (f FunctionTable) TableAlias() string {
+	return f.Alias
+}
+
 // LateralFunction represents a LATERAL function call in a JOIN.
 // Example: LateralFunction{Name: "list_doc_viewer_subjects", Args: []Expr{...}, Alias: "s"}
 // Renders: LATERAL list_doc_viewer_subjects(...) AS s
@@ -268,10 +319,68 @@ func (l LateralFunction) SQL() string {
 	return call
 }
 
+// TableSQL implements TableExpr.
+func (l LateralFunction) TableSQL() string {
+	return l.SQL()
+}
+
+// TableAlias implements TableExpr.
+func (l LateralFunction) TableAlias() string {
+	return l.Alias
+}
+
 // CrossJoinLateral creates a JoinClause for CROSS JOIN LATERAL with a function.
 func CrossJoinLateral(funcName string, args []Expr, alias string) JoinClause {
 	return JoinClause{
-		Type:  "CROSS",
-		Table: LateralFunction{Name: funcName, Args: args, Alias: alias}.SQL(),
+		Type:      "CROSS",
+		TableExpr: LateralFunction{Name: funcName, Args: args, Alias: alias},
+	}
+}
+
+// =============================================================================
+// Join Helper Constructors
+// =============================================================================
+
+// InnerJoin creates an INNER JOIN clause with a typed table expression.
+func InnerJoin(table TableExpr, on Expr) JoinClause {
+	return JoinClause{
+		Type:      "INNER",
+		TableExpr: table,
+		On:        on,
+	}
+}
+
+// LeftJoin creates a LEFT JOIN clause with a typed table expression.
+func LeftJoin(table TableExpr, on Expr) JoinClause {
+	return JoinClause{
+		Type:      "LEFT",
+		TableExpr: table,
+		On:        on,
+	}
+}
+
+// CrossJoin creates a CROSS JOIN clause with a typed table expression.
+func CrossJoin(table TableExpr) JoinClause {
+	return JoinClause{
+		Type:      "CROSS",
+		TableExpr: table,
+	}
+}
+
+// JoinClosure creates an INNER JOIN to a closure VALUES table.
+func JoinClosure(closureValues, alias string, on Expr) JoinClause {
+	return JoinClause{
+		Type:      "INNER",
+		TableExpr: ClosureValuesTable(closureValues, alias),
+		On:        on,
+	}
+}
+
+// JoinUserset creates an INNER JOIN to a userset VALUES table.
+func JoinUserset(usersetValues, alias string, on Expr) JoinClause {
+	return JoinClause{
+		Type:      "INNER",
+		TableExpr: UsersetValuesTable(usersetValues, alias),
+		On:        on,
 	}
 }

@@ -209,6 +209,18 @@ func (n NotExists) SQL() string {
 	return "NOT EXISTS (\n" + n.Query.SQL() + "\n)"
 }
 
+// ExistsExpr creates an Exists expression from a SelectStmt.
+// Use when you need EXISTS as part of a larger expression (e.g., in WHERE clause).
+func ExistsExpr(stmt SelectStmt) Exists {
+	return Exists{Query: stmt}
+}
+
+// NotExistsExpr creates a NotExists expression from a SelectStmt.
+// Use when you need NOT EXISTS as part of a larger expression (e.g., in WHERE clause).
+func NotExistsExpr(stmt SelectStmt) NotExists {
+	return NotExists{Query: stmt}
+}
+
 // IsNull represents IS NULL check.
 type IsNull struct {
 	Expr Expr

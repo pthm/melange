@@ -120,12 +120,9 @@ type UsersetSubjectSelfCheckInput struct {
 }
 
 func UsersetSubjectSelfCheckQuery(input UsersetSubjectSelfCheckInput) (string, error) {
-	closureTable := fmt.Sprintf("(VALUES %s)", input.ClosureValues)
-
 	stmt := SelectStmt{
-		Columns: []string{"1"},
-		From:    closureTable,
-		Alias:   "c(object_type, relation, satisfying_relation)",
+		ColumnExprs: []Expr{Int(1)},
+		FromExpr:    ClosureValuesTable(input.ClosureValues, "c"),
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(input.ObjectType)},
 			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(input.Relation)},
@@ -147,18 +144,13 @@ type UsersetSubjectComputedCheckInput struct {
 }
 
 func UsersetSubjectComputedCheckQuery(input UsersetSubjectComputedCheckInput) (string, error) {
-	closureTable := fmt.Sprintf("(VALUES %s) AS c(object_type, relation, satisfying_relation)", input.ClosureValues)
-	usersetTable := fmt.Sprintf("(VALUES %s) AS m(object_type, relation, subject_type, subject_relation)", input.UsersetValues)
-	subjClosureTable := fmt.Sprintf("(VALUES %s) AS subj_c(object_type, relation, satisfying_relation)", input.ClosureValues)
-
 	stmt := SelectStmt{
-		Columns: []string{"1"},
-		From:    "melange_tuples",
-		Alias:   "t",
+		ColumnExprs: []Expr{Int(1)},
+		FromExpr:    TableAs("melange_tuples", "t"),
 		Joins: []JoinClause{
 			{
-				Type:  "INNER",
-				Table: closureTable,
+				Type:      "INNER",
+				TableExpr: ClosureValuesTable(input.ClosureValues, "c"),
 				On: And(
 					Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(input.ObjectType)},
 					Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(input.Relation)},
@@ -166,8 +158,8 @@ func UsersetSubjectComputedCheckQuery(input UsersetSubjectComputedCheckInput) (s
 				),
 			},
 			{
-				Type:  "INNER",
-				Table: usersetTable,
+				Type:      "INNER",
+				TableExpr: UsersetValuesTable(input.UsersetValues, "m"),
 				On: And(
 					Eq{Left: Col{Table: "m", Column: "object_type"}, Right: Lit(input.ObjectType)},
 					Eq{Left: Col{Table: "m", Column: "relation"}, Right: Col{Table: "c", Column: "satisfying_relation"}},
@@ -175,8 +167,8 @@ func UsersetSubjectComputedCheckQuery(input UsersetSubjectComputedCheckInput) (s
 				),
 			},
 			{
-				Type:  "INNER",
-				Table: subjClosureTable,
+				Type:      "INNER",
+				TableExpr: ClosureValuesTable(input.ClosureValues, "subj_c"),
 				On: And(
 					Eq{Left: Col{Table: "subj_c", Column: "object_type"}, Right: Col{Table: "t", Column: "subject_type"}},
 					Eq{

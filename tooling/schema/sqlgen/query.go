@@ -1,17 +1,16 @@
 package sqlgen
 
-import "fmt"
-
 // TupleQuery is a fluent builder for queries against melange_tuples.
 type TupleQuery struct {
-	alias      string
-	objectType string
-	relations  []string
-	conditions []Expr
-	columns    []string
-	joins      []JoinClause
-	distinct   bool
-	limit      int
+	alias       string
+	objectType  string
+	relations   []string
+	conditions  []Expr
+	columns     []string // Deprecated: use columnExprs
+	columnExprs []Expr   // Preferred: typed column expressions
+	joins       []JoinClause
+	distinct    bool
+	limit       int
 }
 
 // Tuples creates a new TupleQuery with the given table alias.
@@ -53,11 +52,9 @@ func (q *TupleQuery) SelectCol(columns ...string) *TupleQuery {
 	return q
 }
 
-// SelectExpr adds an expression as a column.
+// SelectExpr adds typed expressions as columns.
 func (q *TupleQuery) SelectExpr(exprs ...Expr) *TupleQuery {
-	for _, e := range exprs {
-		q.columns = append(q.columns, e.SQL())
-	}
+	q.columnExprs = append(q.columnExprs, exprs...)
 	return q
 }
 
@@ -175,15 +172,12 @@ func (q *TupleQuery) JoinTuples(alias string, on ...Expr) *TupleQuery {
 }
 
 // JoinClosure adds an INNER JOIN to an inline VALUES closure table.
-// closureValues should be in the format "'type1','rel1','sat1'),('type2','rel2','sat2')"
+// closureValues should be in the format "('type1','rel1','sat1'),('type2','rel2','sat2')"
 func (q *TupleQuery) JoinClosure(alias, closureValues string, on ...Expr) *TupleQuery {
-	valuesTable := fmt.Sprintf("(VALUES %s) AS %s(object_type, relation, satisfying_relation)",
-		closureValues, alias)
 	q.joins = append(q.joins, JoinClause{
-		Type:  "INNER",
-		Table: valuesTable,
-		Alias: "", // Already included in valuesTable
-		On:    And(on...),
+		Type:      "INNER",
+		TableExpr: ClosureValuesTable(closureValues, alias),
+		On:        And(on...),
 	})
 	return q
 }
@@ -227,21 +221,23 @@ func (q *TupleQuery) Build() SelectStmt {
 		whereExpr = And(where...)
 	}
 
-	// Default columns if none specified
-	columns := q.columns
-	if len(columns) == 0 {
-		columns = []string{"1"}
-	}
-
-	return SelectStmt{
+	stmt := SelectStmt{
 		Distinct: q.distinct,
-		Columns:  columns,
-		From:     "melange_tuples",
-		Alias:    q.alias,
+		FromExpr: TableAs("melange_tuples", q.alias),
 		Joins:    q.joins,
 		Where:    whereExpr,
 		Limit:    q.limit,
 	}
+
+	// Use typed columns if available, otherwise string columns
+	if len(q.columnExprs) > 0 {
+		stmt.ColumnExprs = q.columnExprs
+	} else if len(q.columns) > 0 {
+		stmt.Columns = q.columns
+	}
+	// If neither, SelectStmt.columnsSQL() will default to "1"
+
+	return stmt
 }
 
 // SQL renders the query to a SQL string.

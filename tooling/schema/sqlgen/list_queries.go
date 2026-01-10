@@ -1,9 +1,5 @@
 package sqlgen
 
-import (
-	"fmt"
-)
-
 // =============================================================================
 // Helper Functions
 // =============================================================================
@@ -68,12 +64,10 @@ type ListObjectsUsersetSubjectInput struct {
 }
 
 func ListObjectsUsersetSubjectQuery(input ListObjectsUsersetSubjectInput) (string, error) {
-	closureTable := fmt.Sprintf("(VALUES %s) AS c(object_type, relation, satisfying_relation)", input.ClosureValues)
-
 	// Build the closure EXISTS subquery
 	closureExistsStmt := SelectStmt{
-		Columns: []string{"1"},
-		From:    closureTable,
+		ColumnExprs: []Expr{Int(1)},
+		FromExpr:    ClosureValuesTable(input.ClosureValues, "c"),
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: SubjectType},
 			Eq{Left: Col{Table: "c", Column: "relation"}, Right: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}},
@@ -289,12 +283,10 @@ type ListObjectsSelfCandidateInput struct {
 }
 
 func ListObjectsSelfCandidateQuery(input ListObjectsSelfCandidateInput) (string, error) {
-	closureTable := fmt.Sprintf("(VALUES %s) AS c(object_type, relation, satisfying_relation)", input.ClosureValues)
-
 	// Build the closure EXISTS subquery
 	closureExistsStmt := SelectStmt{
-		Columns: []string{"1"},
-		From:    closureTable,
+		ColumnExprs: []Expr{Int(1)},
+		FromExpr:    ClosureValuesTable(input.ClosureValues, "c"),
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(input.ObjectType)},
 			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(input.Relation)},
@@ -303,7 +295,7 @@ func ListObjectsSelfCandidateQuery(input ListObjectsSelfCandidateInput) (string,
 	}
 
 	stmt := SelectStmt{
-		Columns: []string{"split_part(p_subject_id, '#', 1) AS object_id"},
+		ColumnExprs: []Expr{SelectAs(UsersetObjectID{Source: SubjectID}, "object_id")},
 		Where: And(
 			HasUserset{Source: SubjectID},
 			Eq{Left: SubjectType, Right: Lit(input.ObjectType)},
@@ -405,16 +397,14 @@ type ListSubjectsUsersetFilterInput struct {
 }
 
 func ListSubjectsUsersetFilterQuery(input ListSubjectsUsersetFilterInput) (string, error) {
-	closureTable := fmt.Sprintf("(VALUES %s) AS subj_c(object_type, relation, satisfying_relation)", input.ClosureValues)
-
 	filterTypeExpr := stringToDSLExpr(input.FilterTypeExpr)
 	filterRelationExpr := stringToDSLExpr(input.FilterRelationExpr)
 	objectIDExpr := stringToDSLExpr(input.ObjectIDExpr)
 
 	// Build the closure EXISTS subquery
 	closureExistsStmt := SelectStmt{
-		Columns: []string{"1"},
-		From:    closureTable,
+		ColumnExprs: []Expr{Int(1)},
+		FromExpr:    ClosureValuesTable(input.ClosureValues, "subj_c"),
 		Where: And(
 			Eq{Left: Col{Table: "subj_c", Column: "object_type"}, Right: filterTypeExpr},
 			Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: SubstringUsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}},
@@ -422,8 +412,8 @@ func ListSubjectsUsersetFilterQuery(input ListSubjectsUsersetFilterInput) (strin
 		),
 	}
 
-	// Normalized subject expression
-	normalizedSubject := fmt.Sprintf("substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) || '#' || %s AS subject_id", input.FilterRelationExpr)
+	// Normalized subject expression: split_part(subject_id, '#', 1) || '#' || filter_relation
+	normalizedSubject := SelectAs(NormalizedUsersetSubject(Col{Table: "t", Column: "subject_id"}, filterRelationExpr), "subject_id")
 
 	conditions := []Expr{
 		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: objectIDExpr},
@@ -431,7 +421,7 @@ func ListSubjectsUsersetFilterQuery(input ListSubjectsUsersetFilterInput) (strin
 		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
 		Or(
 			Eq{Left: SubstringUsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: filterRelationExpr},
-			Raw(closureExistsStmt.Exists()),
+			ExistsExpr(closureExistsStmt),
 		),
 	}
 
@@ -447,7 +437,7 @@ func ListSubjectsUsersetFilterQuery(input ListSubjectsUsersetFilterInput) (strin
 		ObjectType(input.ObjectType).
 		Relations(input.RelationList...).
 		Where(conditions...).
-		Select(normalizedSubject).
+		SelectExpr(normalizedSubject).
 		Distinct()
 
 	return q.SQL(), nil
@@ -464,15 +454,14 @@ type ListSubjectsSelfCandidateInput struct {
 }
 
 func ListSubjectsSelfCandidateQuery(input ListSubjectsSelfCandidateInput) (string, error) {
-	closureTable := fmt.Sprintf("(VALUES %s) AS c(object_type, relation, satisfying_relation)", input.ClosureValues)
-
 	filterTypeExpr := stringToDSLExpr(input.FilterTypeExpr)
 	filterRelationExpr := stringToDSLExpr(input.FilterRelationExpr)
+	objectIDExpr := stringToDSLExpr(input.ObjectIDExpr)
 
 	// Build the closure EXISTS subquery
 	closureExistsStmt := SelectStmt{
-		Columns: []string{"1"},
-		From:    closureTable,
+		ColumnExprs: []Expr{Int(1)},
+		FromExpr:    ClosureValuesTable(input.ClosureValues, "c"),
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(input.ObjectType)},
 			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(input.Relation)},
@@ -482,19 +471,19 @@ func ListSubjectsSelfCandidateQuery(input ListSubjectsSelfCandidateInput) (strin
 
 	conditions := []Expr{
 		Eq{Left: filterTypeExpr, Right: Lit(input.ObjectType)},
-		Raw(closureExistsStmt.Exists()),
+		ExistsExpr(closureExistsStmt),
 	}
 
 	for _, sql := range input.ExtraPredicatesSQL {
 		conditions = append(conditions, Raw(sql))
 	}
 
-	// Subject ID output: object_id + '#' + filter_relation
-	subjectIDExpr := fmt.Sprintf("%s || '#' || %s AS subject_id", input.ObjectIDExpr, input.FilterRelationExpr)
+	// Subject ID output: object_id || '#' || filter_relation
+	subjectIDCol := SelectAs(Concat{Parts: []Expr{objectIDExpr, Lit("#"), filterRelationExpr}}, "subject_id")
 
 	stmt := SelectStmt{
-		Columns: []string{subjectIDExpr},
-		Where:   And(conditions...),
+		ColumnExprs: []Expr{subjectIDCol},
+		Where:       And(conditions...),
 	}
 
 	return stmt.SQL(), nil
@@ -717,19 +706,21 @@ func ListSubjectsUsersetPatternComplexQuery(input ListSubjectsUsersetPatternComp
 	}
 
 	// Use lateral join with list function
-	listFunction := fmt.Sprintf("list_%s_%s_subjects(split_part(t.subject_id, '#', 1), %s)", input.SubjectType, input.SubjectRelation, input.SubjectTypeExpr)
+	listFuncName := "list_" + Ident(input.SubjectType) + "_" + Ident(input.SubjectRelation) + "_subjects"
+	listFunc := LateralFunction{
+		Name:  listFuncName,
+		Args:  []Expr{UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}}, subjectTypeExpr},
+		Alias: "s",
+	}
 
 	stmt := SelectStmt{
-		Distinct: true,
-		Columns:  []string{"s.subject_id"},
-		From:     "melange_tuples",
-		Alias:    "t",
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "s", Column: "subject_id"}},
+		FromExpr:    TableAs("melange_tuples", "t"),
 		Joins: []JoinClause{
 			{
-				Type:  "CROSS",
-				Table: "LATERAL " + listFunction,
-				Alias: "s",
-				On:    Raw("TRUE"),
+				Type:      "CROSS",
+				TableExpr: listFunc,
 			},
 		},
 		Where: And(

@@ -237,3 +237,40 @@ func NormalizedUsersetSubject(subjectID Expr, relation Expr) Expr {
 		relation,
 	}}
 }
+
+// =============================================================================
+// Column Expression Helpers
+// =============================================================================
+
+// SelectAs creates an aliased column expression (expr AS alias).
+// Shorthand for Alias{Expr: expr, Name: alias}.
+func SelectAs(expr Expr, alias string) Alias {
+	return Alias{Expr: expr, Name: alias}
+}
+
+// SelectOne returns an Int(1) expression for EXISTS queries.
+func SelectOne() Expr {
+	return Int(1)
+}
+
+// ColAs creates a column reference with an alias.
+func ColAs(table, column, alias string) Alias {
+	return Alias{Expr: Col{Table: table, Column: column}, Name: alias}
+}
+
+// =============================================================================
+// Userset Composition Helpers
+// =============================================================================
+
+// UsersetRef creates a userset reference: object_id || '#' || relation.
+// This is the canonical format for referencing a userset.
+func UsersetRef(objectID, relation Expr) Expr {
+	return Concat{Parts: []Expr{objectID, Lit("#"), relation}}
+}
+
+// UsersetRefFromSubject creates a normalized userset from a subject_id column.
+// Extracts the object part from subject_id and combines with the given relation.
+// Equivalent to: split_part(subject_id, '#', 1) || '#' || relation
+func UsersetRefFromSubject(subjectID Expr, relation Expr) Expr {
+	return NormalizedUsersetSubject(subjectID, relation)
+}
