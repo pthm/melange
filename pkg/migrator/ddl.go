@@ -1,4 +1,4 @@
-package schema
+package migrator
 
 // migrationsDDL defines the melange_migrations table for tracking migration state.
 const migrationsDDL = `-- Melange migrations tracking table

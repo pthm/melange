@@ -3,7 +3,7 @@ package schema_test
 import (
 	"testing"
 
-	"github.com/pthm/melange/tooling/schema"
+	"github.com/pthm/melange/pkg/schema"
 )
 
 func TestSubjectTypes(t *testing.T) {

@@ -22,8 +22,10 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/pthm/melange"
-	"github.com/pthm/melange/tooling"
+	"github.com/pthm/melange/melange"
+	"github.com/pthm/melange/pkg/clientgen"
+	"github.com/pthm/melange/pkg/migrator"
+	"github.com/pthm/melange/pkg/parser"
 )
 
 // Embedded test fixtures
@@ -107,18 +109,18 @@ func ensureCodegen() error {
 // runCodegen generates the authz package from the schema.
 func runCodegen() error {
 	// Parse the schema
-	types, err := tooling.ParseSchemaString(schemaFGA)
+	types, err := parser.ParseSchemaString(schemaFGA)
 	if err != nil {
 		return fmt.Errorf("parse schema: %w", err)
 	}
 
 	// Generate the code
 	var buf bytes.Buffer
-	cfg := &tooling.GenerateConfig{
+	cfg := &clientgen.GenerateConfig{
 		Package: "authz",
 		IDType:  "int64",
 	}
-	if err := tooling.GenerateGo(&buf, types, cfg); err != nil {
+	if err := clientgen.GenerateGo(&buf, types, cfg); err != nil {
 		return fmt.Errorf("generate code: %w", err)
 	}
 
@@ -352,7 +354,7 @@ func applyMelangeMigrations(dsn string) error {
 	defer func() { _ = db.Close() }()
 
 	// Apply melange DDL and schema from embedded file
-	err = tooling.MigrateFromString(ctx, db, schemaFGA)
+	err = migrator.MigrateFromString(ctx, db, schemaFGA)
 	if err != nil {
 		return fmt.Errorf("apply melange migration: %w", err)
 	}

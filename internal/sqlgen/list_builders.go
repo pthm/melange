@@ -1,10 +1,8 @@
-package schema
+package sqlgen
 
 import (
 	"fmt"
 	"strings"
-
-	"github.com/pthm/melange/tooling/schema/sqlgen"
 )
 
 type listUsersetPatternInput struct {
@@ -36,7 +34,7 @@ type ListObjectsBuilder struct {
 	complexClosure      []string
 
 	// Configuration based on features
-	exclusions    sqlgen.ExclusionConfig
+	exclusions    ExclusionConfig
 	allowWildcard bool
 
 	// Built blocks
@@ -135,7 +133,7 @@ func (b *ListObjectsBuilder) hasUsersetPatterns() bool {
 
 // addDirectBlock adds the direct tuple lookup block.
 func (b *ListObjectsBuilder) addDirectBlock() error {
-	baseSQL, err := sqlgen.ListObjectsDirectQuery(sqlgen.ListObjectsDirectInput{
+	baseSQL, err := ListObjectsDirectQuery(ListObjectsDirectInput{
 		ObjectType:          b.analysis.ObjectType,
 		Relations:           b.relationList,
 		AllowedSubjectTypes: b.allowedSubjectTypes,
@@ -158,7 +156,7 @@ func (b *ListObjectsBuilder) addDirectBlock() error {
 // addUsersetSubjectBlock adds the userset subject matching block.
 // This handles cases like querying with subject "group:1#member".
 func (b *ListObjectsBuilder) addUsersetSubjectBlock() error {
-	usersetSubjectSQL, err := sqlgen.ListObjectsUsersetSubjectQuery(sqlgen.ListObjectsUsersetSubjectInput{
+	usersetSubjectSQL, err := ListObjectsUsersetSubjectQuery(ListObjectsUsersetSubjectInput{
 		ObjectType:    b.analysis.ObjectType,
 		Relations:     b.relationList,
 		ClosureValues: b.inline.ClosureValues,
@@ -186,7 +184,7 @@ func (b *ListObjectsBuilder) addComplexClosureBlocks() error {
 	// For non-exclusion cases, don't apply exclusions to complex closure blocks
 	exclusions := b.exclusions
 	if !b.analysis.Features.HasExclusion {
-		exclusions = sqlgen.ExclusionConfig{}
+		exclusions = ExclusionConfig{}
 	}
 
 	blocks, err := buildListObjectsComplexClosureBlocks(
@@ -220,7 +218,7 @@ func (b *ListObjectsBuilder) addIntersectionClosureBlocks() error {
 func (b *ListObjectsBuilder) addUsersetPatternBlocks() error {
 	for _, pattern := range buildListUsersetPatternInputs(b.analysis) {
 		if pattern.IsComplex {
-			patternSQL, err := sqlgen.ListObjectsUsersetPatternComplexQuery(sqlgen.ListObjectsUsersetPatternComplexInput{
+			patternSQL, err := ListObjectsUsersetPatternComplexQuery(ListObjectsUsersetPatternComplexInput{
 				ObjectType:       b.analysis.ObjectType,
 				SubjectType:      pattern.SubjectType,
 				SubjectRelation:  pattern.SubjectRelation,
@@ -244,7 +242,7 @@ func (b *ListObjectsBuilder) addUsersetPatternBlocks() error {
 			continue
 		}
 
-		patternSQL, err := sqlgen.ListObjectsUsersetPatternSimpleQuery(sqlgen.ListObjectsUsersetPatternSimpleInput{
+		patternSQL, err := ListObjectsUsersetPatternSimpleQuery(ListObjectsUsersetPatternSimpleInput{
 			ObjectType:          b.analysis.ObjectType,
 			SubjectType:         pattern.SubjectType,
 			SubjectRelation:     pattern.SubjectRelation,
@@ -272,7 +270,7 @@ func (b *ListObjectsBuilder) addUsersetPatternBlocks() error {
 
 // addSelfCandidateBlock adds the self-candidate block for userset self-referencing.
 func (b *ListObjectsBuilder) addSelfCandidateBlock() error {
-	selfSQL, err := sqlgen.ListObjectsSelfCandidateQuery(sqlgen.ListObjectsSelfCandidateInput{
+	selfSQL, err := ListObjectsSelfCandidateQuery(ListObjectsSelfCandidateInput{
 		ObjectType:    b.analysis.ObjectType,
 		Relation:      b.analysis.Relation,
 		ClosureValues: b.inline.ClosureValues,
@@ -407,7 +405,7 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPath() error {
 // buildUsersetFilterPathDirect builds userset filter blocks for direct template.
 func (b *ListSubjectsBuilder) buildUsersetFilterPathDirect() error {
 	// Direct tuple lookup
-	usersetBaseSQL, err := sqlgen.ListSubjectsUsersetFilterQuery(sqlgen.ListSubjectsUsersetFilterInput{
+	usersetBaseSQL, err := ListSubjectsUsersetFilterQuery(ListSubjectsUsersetFilterInput{
 		ObjectType:          b.analysis.ObjectType,
 		RelationList:        b.relationList,
 		AllowedSubjectTypes: b.allowedSubjectTypes,
@@ -455,7 +453,7 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathDirect() error {
 	b.usersetFilterBlocks = append(b.usersetFilterBlocks, intersectionBlocks...)
 
 	// Self-candidate block
-	selfBlock, err := sqlgen.ListSubjectsSelfCandidateQuery(sqlgen.ListSubjectsSelfCandidateInput{
+	selfBlock, err := ListSubjectsSelfCandidateQuery(ListSubjectsSelfCandidateInput{
 		ObjectType:         b.analysis.ObjectType,
 		Relation:           b.analysis.Relation,
 		ObjectIDExpr:       "p_object_id",
@@ -485,8 +483,8 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathExclusion() error {
 	usersetExclusions := buildExclusionInput(b.analysis, "p_object_id", "v_filter_type", usersetNormalized)
 
 	usersetPreds := usersetExclusions.BuildPredicates()
-	usersetPredsSQL := sqlgen.RenderDSLExprs(usersetPreds)
-	usersetBaseSQL, err := sqlgen.ListSubjectsUsersetFilterQuery(sqlgen.ListSubjectsUsersetFilterInput{
+	usersetPredsSQL := RenderDSLExprs(usersetPreds)
+	usersetBaseSQL, err := ListSubjectsUsersetFilterQuery(ListSubjectsUsersetFilterInput{
 		ObjectType:          b.analysis.ObjectType,
 		RelationList:        b.relationList,
 		AllowedSubjectTypes: b.allowedSubjectTypes,
@@ -537,8 +535,8 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathExclusion() error {
 	// Self-candidate block with exclusions
 	selfExclusions := buildExclusionInput(b.analysis, "p_object_id", fmt.Sprintf("'%s'", b.analysis.ObjectType), "p_object_id || '#' || v_filter_relation")
 	selfPreds := selfExclusions.BuildPredicates()
-	selfPredsSQL := sqlgen.RenderDSLExprs(selfPreds)
-	selfBlock, err := sqlgen.ListSubjectsSelfCandidateQuery(sqlgen.ListSubjectsSelfCandidateInput{
+	selfPredsSQL := RenderDSLExprs(selfPreds)
+	selfBlock, err := ListSubjectsSelfCandidateQuery(ListSubjectsSelfCandidateInput{
 		ObjectType:         b.analysis.ObjectType,
 		Relation:           b.analysis.Relation,
 		ObjectIDExpr:       "p_object_id",
@@ -565,8 +563,8 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathExclusion() error {
 
 // buildUsersetFilterPathUserset builds userset filter blocks for userset template.
 func (b *ListSubjectsBuilder) buildUsersetFilterPathUserset() error {
-	checkExprSQL := sqlgen.CheckPermissionExprDSL("check_permission", "v_filter_type", "t.subject_id", b.analysis.Relation, fmt.Sprintf("'%s'", b.analysis.ObjectType), "p_object_id", true).SQL()
-	usersetBaseSQL, err := sqlgen.ListSubjectsUsersetFilterQuery(sqlgen.ListSubjectsUsersetFilterInput{
+	checkExprSQL := CheckPermissionExprDSL("check_permission", "v_filter_type", "t.subject_id", b.analysis.Relation, fmt.Sprintf("'%s'", b.analysis.ObjectType), "p_object_id", true).SQL()
+	usersetBaseSQL, err := ListSubjectsUsersetFilterQuery(ListSubjectsUsersetFilterInput{
 		ObjectType:          b.analysis.ObjectType,
 		RelationList:        b.allSatisfyingRelations,
 		ObjectIDExpr:        "p_object_id",
@@ -599,7 +597,7 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathUserset() error {
 	b.usersetFilterBlocks = append(b.usersetFilterBlocks, intersectionBlocks...)
 
 	// Self-candidate block
-	selfBlock, err := sqlgen.ListSubjectsSelfCandidateQuery(sqlgen.ListSubjectsSelfCandidateInput{
+	selfBlock, err := ListSubjectsSelfCandidateQuery(ListSubjectsSelfCandidateInput{
 		ObjectType:         b.analysis.ObjectType,
 		Relation:           b.analysis.Relation,
 		ObjectIDExpr:       "p_object_id",
@@ -640,13 +638,13 @@ func (b *ListSubjectsBuilder) buildRegularPath() error {
 
 // buildRegularPathDirect builds regular blocks for direct template.
 func (b *ListSubjectsBuilder) buildRegularPathDirect() error {
-	regularBaseSQL, err := sqlgen.ListSubjectsDirectQuery(sqlgen.ListSubjectsDirectInput{
+	regularBaseSQL, err := ListSubjectsDirectQuery(ListSubjectsDirectInput{
 		ObjectType:      b.analysis.ObjectType,
 		RelationList:    b.relationList,
 		ObjectIDExpr:    "p_object_id",
 		SubjectTypeExpr: "p_subject_type",
 		ExcludeWildcard: b.excludeWildcard,
-		Exclusions:      sqlgen.ExclusionConfig{},
+		Exclusions:      ExclusionConfig{},
 	})
 	if err != nil {
 		return err
@@ -659,7 +657,7 @@ func (b *ListSubjectsBuilder) buildRegularPathDirect() error {
 		b.complexClosure,
 		"p_subject_type",
 		b.excludeWildcard,
-		sqlgen.ExclusionConfig{},
+		ExclusionConfig{},
 	)
 	if err != nil {
 		return err
@@ -684,7 +682,7 @@ func (b *ListSubjectsBuilder) buildRegularPathDirect() error {
 // buildRegularPathExclusion builds regular blocks for exclusion template.
 func (b *ListSubjectsBuilder) buildRegularPathExclusion() error {
 	regularExclusions := buildExclusionInput(b.analysis, "p_object_id", "p_subject_type", "t.subject_id")
-	regularBaseSQL, err := sqlgen.ListSubjectsDirectQuery(sqlgen.ListSubjectsDirectInput{
+	regularBaseSQL, err := ListSubjectsDirectQuery(ListSubjectsDirectInput{
 		ObjectType:      b.analysis.ObjectType,
 		RelationList:    b.relationList,
 		ObjectIDExpr:    "p_object_id",
@@ -730,7 +728,7 @@ func (b *ListSubjectsBuilder) buildRegularPathUserset() error {
 	baseExclusions := buildExclusionInput(b.analysis, "p_object_id", "p_subject_type", "t.subject_id")
 
 	// Direct tuple lookup
-	regularBaseSQL, err := sqlgen.ListSubjectsDirectQuery(sqlgen.ListSubjectsDirectInput{
+	regularBaseSQL, err := ListSubjectsDirectQuery(ListSubjectsDirectInput{
 		ObjectType:      b.analysis.ObjectType,
 		RelationList:    b.relationList,
 		ObjectIDExpr:    "p_object_id",
@@ -776,7 +774,7 @@ func (b *ListSubjectsBuilder) buildRegularPathUserset() error {
 	// Userset pattern expansion blocks
 	for _, pattern := range buildListUsersetPatternInputs(b.analysis) {
 		if pattern.IsComplex {
-			patternSQL, err := sqlgen.ListSubjectsUsersetPatternComplexQuery(sqlgen.ListSubjectsUsersetPatternComplexInput{
+			patternSQL, err := ListSubjectsUsersetPatternComplexQuery(ListSubjectsUsersetPatternComplexInput{
 				ObjectType:       b.analysis.ObjectType,
 				SubjectType:      pattern.SubjectType,
 				SubjectRelation:  pattern.SubjectRelation,
@@ -801,7 +799,7 @@ func (b *ListSubjectsBuilder) buildRegularPathUserset() error {
 			continue
 		}
 
-		patternSQL, err := sqlgen.ListSubjectsUsersetPatternSimpleQuery(sqlgen.ListSubjectsUsersetPatternSimpleInput{
+		patternSQL, err := ListSubjectsUsersetPatternSimpleQuery(ListSubjectsUsersetPatternSimpleInput{
 			ObjectType:          b.analysis.ObjectType,
 			SubjectType:         pattern.SubjectType,
 			SubjectRelation:     pattern.SubjectRelation,
@@ -866,10 +864,10 @@ func generateListSubjectsFunctionBob(a RelationAnalysis, inline InlineSQLData, t
 	return NewListSubjectsBuilder(a, inline).Build()
 }
 
-func buildListObjectsComplexClosureBlocks(a RelationAnalysis, relations []string, allowedSubjectTypes []string, allowWildcard bool, exclusions sqlgen.ExclusionConfig) ([]string, error) {
+func buildListObjectsComplexClosureBlocks(a RelationAnalysis, relations []string, allowedSubjectTypes []string, allowWildcard bool, exclusions ExclusionConfig) ([]string, error) {
 	var blocks []string
 	for _, rel := range relations {
-		blockSQL, err := sqlgen.ListObjectsComplexClosureQuery(sqlgen.ListObjectsComplexClosureInput{
+		blockSQL, err := ListObjectsComplexClosureQuery(ListObjectsComplexClosureInput{
 			ObjectType:          a.ObjectType,
 			Relation:            rel,
 			AllowedSubjectTypes: allowedSubjectTypes,
@@ -897,9 +895,9 @@ func buildListObjectsIntersectionBlocks(a RelationAnalysis, validate bool) ([]st
 		var blockSQL string
 		var err error
 		if validate {
-			blockSQL, err = sqlgen.ListObjectsIntersectionClosureValidatedQuery(a.ObjectType, a.Relation, functionName)
+			blockSQL, err = ListObjectsIntersectionClosureValidatedQuery(a.ObjectType, a.Relation, functionName)
 		} else {
-			blockSQL, err = sqlgen.ListObjectsIntersectionClosureQuery(functionName)
+			blockSQL, err = ListObjectsIntersectionClosureQuery(functionName)
 		}
 		if err != nil {
 			return nil, err
@@ -918,15 +916,15 @@ func buildListSubjectsComplexClosureFilterBlocks(a RelationAnalysis, relations [
 	var blocks []string
 	normalized := "substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) || '#' || v_filter_relation"
 	for _, rel := range relations {
-		exclusions := sqlgen.ExclusionConfig{}
+		exclusions := ExclusionConfig{}
 		if applyExclusions {
 			exclusions = buildExclusionInput(a, "p_object_id", "t.subject_type", normalized)
 		}
 		exclusionPreds := exclusions.BuildPredicates()
-		checkPred := sqlgen.CheckPermissionInternalExprDSL("t.subject_type", "t.subject_id", rel, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true)
+		checkPred := CheckPermissionInternalExprDSL("t.subject_type", "t.subject_id", rel, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true)
 		allPreds := append(exclusionPreds, checkPred)
-		extraPredsSQL := sqlgen.RenderDSLExprs(allPreds)
-		blockSQL, err := sqlgen.ListSubjectsUsersetFilterQuery(sqlgen.ListSubjectsUsersetFilterInput{
+		extraPredsSQL := RenderDSLExprs(allPreds)
+		blockSQL, err := ListSubjectsUsersetFilterQuery(ListSubjectsUsersetFilterInput{
 			ObjectType:          a.ObjectType,
 			RelationList:        []string{rel},
 			AllowedSubjectTypes: allowedSubjectTypes,
@@ -950,10 +948,10 @@ func buildListSubjectsComplexClosureFilterBlocks(a RelationAnalysis, relations [
 	return blocks, nil
 }
 
-func buildListSubjectsComplexClosureBlocks(a RelationAnalysis, relations []string, subjectTypeExpr string, excludeWildcard bool, exclusions sqlgen.ExclusionConfig) ([]string, error) {
+func buildListSubjectsComplexClosureBlocks(a RelationAnalysis, relations []string, subjectTypeExpr string, excludeWildcard bool, exclusions ExclusionConfig) ([]string, error) {
 	var blocks []string
 	for _, rel := range relations {
-		blockSQL, err := sqlgen.ListSubjectsComplexClosureQuery(sqlgen.ListSubjectsComplexClosureInput{
+		blockSQL, err := ListSubjectsComplexClosureQuery(ListSubjectsComplexClosureInput{
 			ObjectType:      a.ObjectType,
 			Relation:        rel,
 			ObjectIDExpr:    "p_object_id",
@@ -981,9 +979,9 @@ func buildListSubjectsIntersectionBlocks(a RelationAnalysis, validate bool, func
 		var blockSQL string
 		var err error
 		if validate {
-			blockSQL, err = sqlgen.ListSubjectsIntersectionClosureValidatedQuery(a.ObjectType, a.Relation, functionName, functionSubjectTypeExpr, checkSubjectTypeExpr, "p_object_id")
+			blockSQL, err = ListSubjectsIntersectionClosureValidatedQuery(a.ObjectType, a.Relation, functionName, functionSubjectTypeExpr, checkSubjectTypeExpr, "p_object_id")
 		} else {
-			blockSQL, err = sqlgen.ListSubjectsIntersectionClosureQuery(functionName, functionSubjectTypeExpr)
+			blockSQL, err = ListSubjectsIntersectionClosureQuery(functionName, functionSubjectTypeExpr)
 		}
 		if err != nil {
 			return nil, err
@@ -1192,8 +1190,8 @@ func buildListUsersetPatternInputs(a RelationAnalysis) []listUsersetPatternInput
 	return patterns
 }
 
-func buildExclusionInput(a RelationAnalysis, objectIDExpr, subjectTypeExpr, subjectIDExpr string) sqlgen.ExclusionConfig {
-	return sqlgen.ExclusionConfig{
+func buildExclusionInput(a RelationAnalysis, objectIDExpr, subjectTypeExpr, subjectIDExpr string) ExclusionConfig {
+	return ExclusionConfig{
 		ObjectType:               a.ObjectType,
 		ObjectIDExpr:             stringToDSLExpr(objectIDExpr),
 		SubjectTypeExpr:          stringToDSLExpr(subjectTypeExpr),
@@ -1205,33 +1203,13 @@ func buildExclusionInput(a RelationAnalysis, objectIDExpr, subjectTypeExpr, subj
 	}
 }
 
-// stringToDSLExpr converts a string expression to sqlgen.Expr.
-// Recognizes common parameter names and converts them to DSL constants.
-func stringToDSLExpr(s string) sqlgen.Expr {
-	if s == "" {
-		return nil
-	}
-	switch s {
-	case "p_subject_type":
-		return sqlgen.SubjectType
-	case "p_subject_id":
-		return sqlgen.SubjectID
-	case "p_object_type":
-		return sqlgen.ObjectType
-	case "p_object_id":
-		return sqlgen.ObjectID
-	default:
-		return sqlgen.Raw(s)
-	}
-}
-
-func convertParentRelations(relations []ParentRelationInfo) []sqlgen.ExcludedParentRelation {
+func convertParentRelations(relations []ParentRelationInfo) []ExcludedParentRelation {
 	if len(relations) == 0 {
 		return nil
 	}
-	result := make([]sqlgen.ExcludedParentRelation, 0, len(relations))
+	result := make([]ExcludedParentRelation, 0, len(relations))
 	for _, rel := range relations {
-		result = append(result, sqlgen.ExcludedParentRelation{
+		result = append(result, ExcludedParentRelation{
 			Relation:            rel.Relation,
 			LinkingRelation:     rel.LinkingRelation,
 			AllowedLinkingTypes: rel.AllowedLinkingTypes,
@@ -1240,17 +1218,17 @@ func convertParentRelations(relations []ParentRelationInfo) []sqlgen.ExcludedPar
 	return result
 }
 
-func convertIntersectionGroups(groups []IntersectionGroupInfo) []sqlgen.ExcludedIntersectionGroup {
+func convertIntersectionGroups(groups []IntersectionGroupInfo) []ExcludedIntersectionGroup {
 	if len(groups) == 0 {
 		return nil
 	}
-	result := make([]sqlgen.ExcludedIntersectionGroup, 0, len(groups))
+	result := make([]ExcludedIntersectionGroup, 0, len(groups))
 	for _, group := range groups {
-		parts := make([]sqlgen.ExcludedIntersectionPart, 0, len(group.Parts))
+		parts := make([]ExcludedIntersectionPart, 0, len(group.Parts))
 		for _, part := range group.Parts {
 			if part.ParentRelation != nil {
-				parts = append(parts, sqlgen.ExcludedIntersectionPart{
-					ParentRelation: &sqlgen.ExcludedParentRelation{
+				parts = append(parts, ExcludedIntersectionPart{
+					ParentRelation: &ExcludedParentRelation{
 						Relation:            part.ParentRelation.Relation,
 						LinkingRelation:     part.ParentRelation.LinkingRelation,
 						AllowedLinkingTypes: part.ParentRelation.AllowedLinkingTypes,
@@ -1258,12 +1236,12 @@ func convertIntersectionGroups(groups []IntersectionGroupInfo) []sqlgen.Excluded
 				})
 				continue
 			}
-			parts = append(parts, sqlgen.ExcludedIntersectionPart{
+			parts = append(parts, ExcludedIntersectionPart{
 				Relation:         part.Relation,
 				ExcludedRelation: part.ExcludedRelation,
 			})
 		}
-		result = append(result, sqlgen.ExcludedIntersectionGroup{Parts: parts})
+		result = append(result, ExcludedIntersectionGroup{Parts: parts})
 	}
 	return result
 }
@@ -1310,7 +1288,7 @@ func generateListObjectsRecursiveFunctionBob(a RelationAnalysis, inline InlineSQ
 	var recursiveBlock string
 	if len(selfRefRelations) > 0 {
 		recursiveExclusions := buildExclusionInput(a, "child.object_id", "p_subject_type", "p_subject_id")
-		recursiveSQL, err := sqlgen.ListObjectsRecursiveTTUQuery(sqlgen.ListObjectsRecursiveTTUInput{
+		recursiveSQL, err := ListObjectsRecursiveTTUQuery(ListObjectsRecursiveTTUInput{
 			ObjectType:       a.ObjectType,
 			LinkingRelations: selfRefRelations,
 			Exclusions:       recursiveExclusions,
@@ -1332,7 +1310,7 @@ func generateListObjectsRecursiveFunctionBob(a RelationAnalysis, inline InlineSQ
 		return "", err
 	}
 
-	selfCandidateSQL, err := sqlgen.ListObjectsSelfCandidateQuery(sqlgen.ListObjectsSelfCandidateInput{
+	selfCandidateSQL, err := ListObjectsSelfCandidateQuery(ListObjectsSelfCandidateInput{
 		ObjectType:    a.ObjectType,
 		Relation:      a.Relation,
 		ClosureValues: inline.ClosureValues,
@@ -1388,7 +1366,7 @@ func buildListObjectsRecursiveBaseBlocks(a RelationAnalysis, inline InlineSQLDat
 	var blocks []string
 	baseExclusions := buildExclusionInput(a, "t.object_id", "p_subject_type", "p_subject_id")
 
-	directSQL, err := sqlgen.ListObjectsDirectQuery(sqlgen.ListObjectsDirectInput{
+	directSQL, err := ListObjectsDirectQuery(ListObjectsDirectInput{
 		ObjectType:          a.ObjectType,
 		Relations:           relationList,
 		AllowedSubjectTypes: allowedSubjectTypes,
@@ -1406,7 +1384,7 @@ func buildListObjectsRecursiveBaseBlocks(a RelationAnalysis, inline InlineSQLDat
 	))
 
 	for _, rel := range complexClosure {
-		complexSQL, err := sqlgen.ListObjectsComplexClosureQuery(sqlgen.ListObjectsComplexClosureInput{
+		complexSQL, err := ListObjectsComplexClosureQuery(ListObjectsComplexClosureInput{
 			ObjectType:          a.ObjectType,
 			Relation:            rel,
 			AllowedSubjectTypes: allowedSubjectTypes,
@@ -1426,7 +1404,7 @@ func buildListObjectsRecursiveBaseBlocks(a RelationAnalysis, inline InlineSQLDat
 
 	for _, rel := range a.IntersectionClosureRelations {
 		functionName := fmt.Sprintf("list_%s_%s_objects", a.ObjectType, rel)
-		closureSQL, err := sqlgen.ListObjectsIntersectionClosureQuery(functionName)
+		closureSQL, err := ListObjectsIntersectionClosureQuery(functionName)
 		if err != nil {
 			return nil, err
 		}
@@ -1440,7 +1418,7 @@ func buildListObjectsRecursiveBaseBlocks(a RelationAnalysis, inline InlineSQLDat
 
 	for _, pattern := range buildListUsersetPatternInputs(a) {
 		if pattern.IsComplex {
-			patternSQL, err := sqlgen.ListObjectsUsersetPatternComplexQuery(sqlgen.ListObjectsUsersetPatternComplexInput{
+			patternSQL, err := ListObjectsUsersetPatternComplexQuery(ListObjectsUsersetPatternComplexInput{
 				ObjectType:       a.ObjectType,
 				SubjectType:      pattern.SubjectType,
 				SubjectRelation:  pattern.SubjectRelation,
@@ -1462,7 +1440,7 @@ func buildListObjectsRecursiveBaseBlocks(a RelationAnalysis, inline InlineSQLDat
 			continue
 		}
 
-		patternSQL, err := sqlgen.ListObjectsUsersetPatternSimpleQuery(sqlgen.ListObjectsUsersetPatternSimpleInput{
+		patternSQL, err := ListObjectsUsersetPatternSimpleQuery(ListObjectsUsersetPatternSimpleInput{
 			ObjectType:          a.ObjectType,
 			SubjectType:         pattern.SubjectType,
 			SubjectRelation:     pattern.SubjectRelation,
@@ -1491,7 +1469,7 @@ func buildListObjectsRecursiveBaseBlocks(a RelationAnalysis, inline InlineSQLDat
 			continue
 		}
 		crossExclusions := buildExclusionInput(a, "child.object_id", "p_subject_type", "p_subject_id")
-		crossSQL, err := sqlgen.ListObjectsCrossTypeTTUQuery(sqlgen.ListObjectsCrossTypeTTUInput{
+		crossSQL, err := ListObjectsCrossTypeTTUQuery(ListObjectsCrossTypeTTUInput{
 			ObjectType:      a.ObjectType,
 			LinkingRelation: parent.LinkingRelation,
 			Relation:        parent.Relation,
@@ -1523,14 +1501,14 @@ func buildAccessibleObjectsCTE(a RelationAnalysis, baseBlocks []string, recursiv
 	finalExclusions := buildExclusionInput(a, "acc.object_id", "p_subject_type", "p_subject_id")
 	exclusionPreds := finalExclusions.BuildPredicates()
 
-	var whereExpr sqlgen.Expr
+	var whereExpr Expr
 	if len(exclusionPreds) > 0 {
 		// Prepend TRUE to ensure valid AND expression when there are exclusions
-		allPreds := append([]sqlgen.Expr{sqlgen.Bool(true)}, exclusionPreds...)
-		whereExpr = sqlgen.And(allPreds...)
+		allPreds := append([]Expr{Bool(true)}, exclusionPreds...)
+		whereExpr = And(allPreds...)
 	}
 
-	finalStmt := sqlgen.SelectStmt{
+	finalStmt := SelectStmt{
 		Distinct: true,
 		Columns:  []string{"acc.object_id"},
 		From:     "accessible",
@@ -1604,7 +1582,7 @@ func generateListObjectsIntersectionFunctionBob(a RelationAnalysis, inline Inlin
 	var blocks []string
 	if hasStandalone {
 		standaloneExclusions := buildSimpleComplexExclusionInput(a, "t.object_id", "p_subject_type", "p_subject_id")
-		directSQL, err := sqlgen.ListObjectsDirectQuery(sqlgen.ListObjectsDirectInput{
+		directSQL, err := ListObjectsDirectQuery(ListObjectsDirectInput{
 			ObjectType:          a.ObjectType,
 			Relations:           relationList,
 			AllowedSubjectTypes: allowedSubjectTypes,
@@ -1622,7 +1600,7 @@ func generateListObjectsIntersectionFunctionBob(a RelationAnalysis, inline Inlin
 		))
 
 		for _, rel := range complexClosure {
-			complexSQL, err := sqlgen.ListObjectsComplexClosureQuery(sqlgen.ListObjectsComplexClosureInput{
+			complexSQL, err := ListObjectsComplexClosureQuery(ListObjectsComplexClosureInput{
 				ObjectType:          a.ObjectType,
 				Relation:            rel,
 				AllowedSubjectTypes: allowedSubjectTypes,
@@ -1642,7 +1620,7 @@ func generateListObjectsIntersectionFunctionBob(a RelationAnalysis, inline Inlin
 
 		for _, rel := range a.IntersectionClosureRelations {
 			functionName := fmt.Sprintf("list_%s_%s_objects", a.ObjectType, rel)
-			closureSQL, err := sqlgen.ListObjectsIntersectionClosureQuery(functionName)
+			closureSQL, err := ListObjectsIntersectionClosureQuery(functionName)
 			if err != nil {
 				return "", err
 			}
@@ -1656,7 +1634,7 @@ func generateListObjectsIntersectionFunctionBob(a RelationAnalysis, inline Inlin
 
 		for _, pattern := range buildListUsersetPatternInputs(a) {
 			if pattern.IsComplex {
-				patternSQL, err := sqlgen.ListObjectsUsersetPatternComplexQuery(sqlgen.ListObjectsUsersetPatternComplexInput{
+				patternSQL, err := ListObjectsUsersetPatternComplexQuery(ListObjectsUsersetPatternComplexInput{
 					ObjectType:       a.ObjectType,
 					SubjectType:      pattern.SubjectType,
 					SubjectRelation:  pattern.SubjectRelation,
@@ -1677,7 +1655,7 @@ func generateListObjectsIntersectionFunctionBob(a RelationAnalysis, inline Inlin
 				continue
 			}
 
-			patternSQL, err := sqlgen.ListObjectsUsersetPatternSimpleQuery(sqlgen.ListObjectsUsersetPatternSimpleInput{
+			patternSQL, err := ListObjectsUsersetPatternSimpleQuery(ListObjectsUsersetPatternSimpleInput{
 				ObjectType:          a.ObjectType,
 				SubjectType:         pattern.SubjectType,
 				SubjectRelation:     pattern.SubjectRelation,
@@ -1705,7 +1683,7 @@ func generateListObjectsIntersectionFunctionBob(a RelationAnalysis, inline Inlin
 				continue
 			}
 			crossExclusions := buildSimpleComplexExclusionInput(a, "child.object_id", "p_subject_type", "p_subject_id")
-			crossSQL, err := sqlgen.ListObjectsCrossTypeTTUQuery(sqlgen.ListObjectsCrossTypeTTUInput{
+			crossSQL, err := ListObjectsCrossTypeTTUQuery(ListObjectsCrossTypeTTUInput{
 				ObjectType:      a.ObjectType,
 				LinkingRelation: parent.LinkingRelation,
 				Relation:        parent.Relation,
@@ -1741,7 +1719,7 @@ func generateListObjectsIntersectionFunctionBob(a RelationAnalysis, inline Inlin
 		recursiveBlock = recursiveSQL
 	}
 
-	selfCandidateSQL, err := sqlgen.ListObjectsSelfCandidateQuery(sqlgen.ListObjectsSelfCandidateInput{
+	selfCandidateSQL, err := ListObjectsSelfCandidateQuery(ListObjectsSelfCandidateInput{
 		ObjectType:    a.ObjectType,
 		Relation:      a.Relation,
 		ClosureValues: inline.ClosureValues,
@@ -1816,46 +1794,46 @@ func buildObjectsIntersectionGroupSQL(a RelationAnalysis, idx int, group Interse
 		return groupSQL, nil
 	}
 
-	groupSQL = groupSQL + "\n    WHERE " + sqlgen.And(exclusionPreds...).SQL()
+	groupSQL = groupSQL + "\n    WHERE " + And(exclusionPreds...).SQL()
 	return groupSQL, nil
 }
 
 func buildObjectsIntersectionPartSQL(a RelationAnalysis, partIdx int, part IntersectionPart) (string, error) {
 	switch {
 	case part.IsThis:
-		q := sqlgen.Tuples("t").
+		q := Tuples("t").
 			ObjectType(a.ObjectType).
 			Relations(a.Relation).
 			Select("t.object_id").
-			WhereSubjectType(sqlgen.SubjectType).
-			WhereSubjectID(sqlgen.SubjectID, part.HasWildcard).
+			WhereSubjectType(SubjectType).
+			WhereSubjectID(SubjectID, part.HasWildcard).
 			Distinct()
 
 		if part.ExcludedRelation != "" {
-			q = q.Where(sqlgen.CheckPermissionInternalExprDSL("p_subject_type", "p_subject_id", part.ExcludedRelation, fmt.Sprintf("'%s'", a.ObjectType), "t.object_id", false))
+			q = q.Where(CheckPermissionInternalExprDSL("p_subject_type", "p_subject_id", part.ExcludedRelation, fmt.Sprintf("'%s'", a.ObjectType), "t.object_id", false))
 		}
 		return q.SQL(), nil
 	case part.ParentRelation != nil:
-		q := sqlgen.Tuples("child").
+		q := Tuples("child").
 			ObjectType(a.ObjectType).
 			Relations(part.ParentRelation.LinkingRelation).
 			Select("child.object_id").
-			Where(sqlgen.CheckPermissionInternalExprDSL("p_subject_type", "p_subject_id", part.ParentRelation.Relation, "child.subject_type", "child.subject_id", true)).
+			Where(CheckPermissionInternalExprDSL("p_subject_type", "p_subject_id", part.ParentRelation.Relation, "child.subject_type", "child.subject_id", true)).
 			Distinct()
 
 		if part.ExcludedRelation != "" {
-			q = q.Where(sqlgen.CheckPermissionInternalExprDSL("p_subject_type", "p_subject_id", part.ExcludedRelation, fmt.Sprintf("'%s'", a.ObjectType), "child.object_id", false))
+			q = q.Where(CheckPermissionInternalExprDSL("p_subject_type", "p_subject_id", part.ExcludedRelation, fmt.Sprintf("'%s'", a.ObjectType), "child.object_id", false))
 		}
 		return q.SQL(), nil
 	default:
-		q := sqlgen.Tuples("t").
+		q := Tuples("t").
 			ObjectType(a.ObjectType).
 			Select("t.object_id").
-			Where(sqlgen.CheckPermissionInternalExprDSL("p_subject_type", "p_subject_id", part.Relation, fmt.Sprintf("'%s'", a.ObjectType), "t.object_id", true)).
+			Where(CheckPermissionInternalExprDSL("p_subject_type", "p_subject_id", part.Relation, fmt.Sprintf("'%s'", a.ObjectType), "t.object_id", true)).
 			Distinct()
 
 		if part.ExcludedRelation != "" {
-			q = q.Where(sqlgen.CheckPermissionInternalExprDSL("p_subject_type", "p_subject_id", part.ExcludedRelation, fmt.Sprintf("'%s'", a.ObjectType), "t.object_id", false))
+			q = q.Where(CheckPermissionInternalExprDSL("p_subject_type", "p_subject_id", part.ExcludedRelation, fmt.Sprintf("'%s'", a.ObjectType), "t.object_id", false))
 		}
 		return q.SQL(), nil
 	}
@@ -1864,13 +1842,13 @@ func buildObjectsIntersectionPartSQL(a RelationAnalysis, partIdx int, part Inter
 func buildObjectsIntersectionRecursiveSQL(a RelationAnalysis, relationList, allowedSubjectTypes, selfRefRelations []string, hasStandalone bool) (string, error) {
 	var seedBlocks []string
 	if hasStandalone && len(relationList) > 0 {
-		q := sqlgen.Tuples("t").
+		q := Tuples("t").
 			ObjectType(a.ObjectType).
 			Relations(relationList...).
 			Select("t.object_id").
-			WhereSubjectType(sqlgen.SubjectType).
-			Where(sqlgen.In{Expr: sqlgen.SubjectType, Values: allowedSubjectTypes}).
-			WhereSubjectID(sqlgen.SubjectID, a.Features.HasWildcard)
+			WhereSubjectType(SubjectType).
+			Where(In{Expr: SubjectType, Values: allowedSubjectTypes}).
+			WhereSubjectID(SubjectID, a.Features.HasWildcard)
 		seedBlocks = append(seedBlocks, q.SQL())
 	}
 
@@ -1915,8 +1893,8 @@ func buildObjectsIntersectionRecursiveSQL(a RelationAnalysis, relationList, allo
 	return recursiveSQL, nil
 }
 
-func buildSimpleComplexExclusionInput(a RelationAnalysis, objectIDExpr, subjectTypeExpr, subjectIDExpr string) sqlgen.ExclusionConfig {
-	return sqlgen.ExclusionConfig{
+func buildSimpleComplexExclusionInput(a RelationAnalysis, objectIDExpr, subjectTypeExpr, subjectIDExpr string) ExclusionConfig {
+	return ExclusionConfig{
 		ObjectType:               a.ObjectType,
 		ObjectIDExpr:             stringToDSLExpr(objectIDExpr),
 		SubjectTypeExpr:          stringToDSLExpr(subjectTypeExpr),
@@ -1982,8 +1960,8 @@ $$ LANGUAGE plpgsql STABLE;`,
 
 func buildListSubjectsRecursiveUsersetFilterBlocks(a RelationAnalysis, inline InlineSQLData, allSatisfyingRelations []string) ([]string, string, error) {
 	var blocks []string
-	checkExprSQL := sqlgen.CheckPermissionExprDSL("check_permission", "v_filter_type", "t.subject_id", a.Relation, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true).SQL()
-	baseSQL, err := sqlgen.ListSubjectsUsersetFilterQuery(sqlgen.ListSubjectsUsersetFilterInput{
+	checkExprSQL := CheckPermissionExprDSL("check_permission", "v_filter_type", "t.subject_id", a.Relation, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true).SQL()
+	baseSQL, err := ListSubjectsUsersetFilterQuery(ListSubjectsUsersetFilterInput{
 		ObjectType:          a.ObjectType,
 		RelationList:        allSatisfyingRelations,
 		ObjectIDExpr:        "p_object_id",
@@ -2040,7 +2018,7 @@ func buildListSubjectsRecursiveUsersetFilterBlocks(a RelationAnalysis, inline In
 
 	for _, rel := range a.IntersectionClosureRelations {
 		functionName := fmt.Sprintf("list_%s_%s_subjects", a.ObjectType, rel)
-		closureSQL, err := sqlgen.ListSubjectsIntersectionClosureQuery(functionName, "v_filter_type || '#' || v_filter_relation")
+		closureSQL, err := ListSubjectsIntersectionClosureQuery(functionName, "v_filter_type || '#' || v_filter_relation")
 		if err != nil {
 			return nil, "", err
 		}
@@ -2052,7 +2030,7 @@ func buildListSubjectsRecursiveUsersetFilterBlocks(a RelationAnalysis, inline In
 		))
 	}
 
-	selfSQL, err := sqlgen.ListSubjectsSelfCandidateQuery(sqlgen.ListSubjectsSelfCandidateInput{
+	selfSQL, err := ListSubjectsSelfCandidateQuery(ListSubjectsSelfCandidateInput{
 		ObjectType:         a.ObjectType,
 		Relation:           a.Relation,
 		ObjectIDExpr:       "p_object_id",
@@ -2081,7 +2059,7 @@ func buildListSubjectsRecursiveRegularQuery(a RelationAnalysis, inline InlineSQL
 	}
 
 	var baseBlocks []string
-	directSQL, err := sqlgen.ListSubjectsDirectQuery(sqlgen.ListSubjectsDirectInput{
+	directSQL, err := ListSubjectsDirectQuery(ListSubjectsDirectInput{
 		ObjectType:      a.ObjectType,
 		RelationList:    relationList,
 		ObjectIDExpr:    "p_object_id",
@@ -2100,7 +2078,7 @@ func buildListSubjectsRecursiveRegularQuery(a RelationAnalysis, inline InlineSQL
 	))
 
 	for _, rel := range complexClosure {
-		complexSQL, err := sqlgen.ListSubjectsComplexClosureQuery(sqlgen.ListSubjectsComplexClosureInput{
+		complexSQL, err := ListSubjectsComplexClosureQuery(ListSubjectsComplexClosureInput{
 			ObjectType:      a.ObjectType,
 			Relation:        rel,
 			ObjectIDExpr:    "p_object_id",
@@ -2121,7 +2099,7 @@ func buildListSubjectsRecursiveRegularQuery(a RelationAnalysis, inline InlineSQL
 
 	for _, rel := range a.IntersectionClosureRelations {
 		functionName := fmt.Sprintf("list_%s_%s_subjects", a.ObjectType, rel)
-		closureSQL, err := sqlgen.ListSubjectsIntersectionClosureQuery(functionName, "p_subject_type")
+		closureSQL, err := ListSubjectsIntersectionClosureQuery(functionName, "p_subject_type")
 		if err != nil {
 			return "", err
 		}
@@ -2137,7 +2115,7 @@ func buildListSubjectsRecursiveRegularQuery(a RelationAnalysis, inline InlineSQL
 		usersetExclusions := buildExclusionInput(a, "p_object_id", "m.subject_type", "m.subject_id")
 		simpleUsersetExclusions := buildExclusionInput(a, "p_object_id", "s.subject_type", "s.subject_id")
 		if pattern.IsComplex {
-			patternSQL, err := sqlgen.ListSubjectsUsersetPatternRecursiveComplexQuery(sqlgen.ListSubjectsUsersetPatternRecursiveComplexInput{
+			patternSQL, err := ListSubjectsUsersetPatternRecursiveComplexQuery(ListSubjectsUsersetPatternRecursiveComplexInput{
 				ObjectType:          a.ObjectType,
 				SubjectType:         pattern.SubjectType,
 				SubjectRelation:     pattern.SubjectRelation,
@@ -2162,7 +2140,7 @@ func buildListSubjectsRecursiveRegularQuery(a RelationAnalysis, inline InlineSQL
 			continue
 		}
 
-		patternSQL, err := sqlgen.ListSubjectsUsersetPatternSimpleQuery(sqlgen.ListSubjectsUsersetPatternSimpleInput{
+		patternSQL, err := ListSubjectsUsersetPatternSimpleQuery(ListSubjectsUsersetPatternSimpleInput{
 			ObjectType:          a.ObjectType,
 			SubjectType:         pattern.SubjectType,
 			SubjectRelation:     pattern.SubjectRelation,
@@ -2214,132 +2192,132 @@ func buildListSubjectsRecursiveRegularQuery(a RelationAnalysis, inline InlineSQL
 }
 
 func buildSubjectPoolSQL(allowedSubjectTypes []string, excludeWildcard bool) (string, error) {
-	q := sqlgen.Tuples("t").
+	q := Tuples("t").
 		Select("t.subject_id").
-		WhereSubjectType(sqlgen.SubjectType).
-		Where(sqlgen.In{Expr: sqlgen.SubjectType, Values: allowedSubjectTypes}).
+		WhereSubjectType(SubjectType).
+		Where(In{Expr: SubjectType, Values: allowedSubjectTypes}).
 		Distinct()
 
 	if excludeWildcard {
-		q = q.Where(sqlgen.Ne{Left: sqlgen.Col{Table: "t", Column: "subject_id"}, Right: sqlgen.Lit("*")})
+		q = q.Where(Ne{Left: Col{Table: "t", Column: "subject_id"}, Right: Lit("*")})
 	}
 	return q.SQL(), nil
 }
 
 func buildSubjectsTTUPathQuery(a RelationAnalysis, parent ListParentRelationData) (string, error) {
-	conditions := []sqlgen.Expr{
-		sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "object_type"}, Right: sqlgen.Lit(a.ObjectType)},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "object_id"}, Right: sqlgen.ObjectID},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "relation"}, Right: sqlgen.Lit(parent.LinkingRelation)},
-		sqlgen.CheckPermissionInternalExprDSL("p_subject_type", "sp.subject_id", parent.Relation, "link.subject_type", "link.subject_id", true),
+	conditions := []Expr{
+		Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(a.ObjectType)},
+		Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
+		Eq{Left: Col{Table: "link", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
+		CheckPermissionInternalExprDSL("p_subject_type", "sp.subject_id", parent.Relation, "link.subject_type", "link.subject_id", true),
 	}
 	if parent.AllowedLinkingTypes != "" {
-		conditions = append(conditions, sqlgen.Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
+		conditions = append(conditions, Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
 	}
 	exclusions := buildExclusionInput(a, "p_object_id", "p_subject_type", "sp.subject_id")
 	exclusionPreds := exclusions.BuildPredicates()
 	conditions = append(conditions, exclusionPreds...)
 
-	stmt := sqlgen.SelectStmt{
+	stmt := SelectStmt{
 		Distinct: true,
 		Columns:  []string{"sp.subject_id"},
 		From:     "subject_pool",
 		Alias:    "sp",
-		Joins: []sqlgen.JoinClause{{
+		Joins: []JoinClause{{
 			Type:  "CROSS",
 			Table: "melange_tuples",
 			Alias: "link",
-			On:    sqlgen.Bool(true), // CROSS JOIN has ON TRUE (always matches)
+			On:    Bool(true), // CROSS JOIN has ON TRUE (always matches)
 		}},
-		Where: sqlgen.And(conditions...),
+		Where: And(conditions...),
 	}
 	return stmt.SQL(), nil
 }
 
 func buildUsersetFilterTTUQuery(a RelationAnalysis, inline InlineSQLData, parent ListParentRelationData) (string, error) {
-	closureRelStmt := sqlgen.SelectStmt{
+	closureRelStmt := SelectStmt{
 		Columns: []string{"c.satisfying_relation"},
 		From:    fmt.Sprintf("(VALUES %s) AS c(object_type, relation, satisfying_relation)", inline.ClosureValues),
-		Where: sqlgen.And(
-			sqlgen.Eq{Left: sqlgen.Col{Table: "c", Column: "object_type"}, Right: sqlgen.Raw("link.subject_type")},
-			sqlgen.Eq{Left: sqlgen.Col{Table: "c", Column: "relation"}, Right: sqlgen.Lit(parent.Relation)},
+		Where: And(
+			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Raw("link.subject_type")},
+			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(parent.Relation)},
 		),
 	}
 	closureRelSQL := closureRelStmt.SQL()
 
-	closureExistsStmt := sqlgen.SelectStmt{
+	closureExistsStmt := SelectStmt{
 		Columns: []string{"1"},
 		From:    fmt.Sprintf("(VALUES %s) AS subj_c(object_type, relation, satisfying_relation)", inline.ClosureValues),
-		Where: sqlgen.And(
-			sqlgen.Eq{Left: sqlgen.Col{Table: "subj_c", Column: "object_type"}, Right: sqlgen.Raw("v_filter_type")},
-			sqlgen.Eq{Left: sqlgen.Col{Table: "subj_c", Column: "relation"}, Right: sqlgen.Raw("substring(pt.subject_id from position('#' in pt.subject_id) + 1)")},
-			sqlgen.Eq{Left: sqlgen.Col{Table: "subj_c", Column: "satisfying_relation"}, Right: sqlgen.Raw("v_filter_relation")},
+		Where: And(
+			Eq{Left: Col{Table: "subj_c", Column: "object_type"}, Right: Raw("v_filter_type")},
+			Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: Raw("substring(pt.subject_id from position('#' in pt.subject_id) + 1)")},
+			Eq{Left: Col{Table: "subj_c", Column: "satisfying_relation"}, Right: Raw("v_filter_relation")},
 		),
 	}
 
-	conditions := []sqlgen.Expr{
-		sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "object_type"}, Right: sqlgen.Lit(a.ObjectType)},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "object_id"}, Right: sqlgen.ObjectID},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "relation"}, Right: sqlgen.Lit(parent.LinkingRelation)},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "pt", Column: "subject_type"}, Right: sqlgen.Raw("v_filter_type")},
-		sqlgen.Gt{Left: sqlgen.Raw("position('#' in pt.subject_id)"), Right: sqlgen.Int(0)},
-		sqlgen.Or(
-			sqlgen.Eq{Left: sqlgen.Raw("substring(pt.subject_id from position('#' in pt.subject_id) + 1)"), Right: sqlgen.Raw("v_filter_relation")},
-			sqlgen.Exists{Query: closureExistsStmt},
+	conditions := []Expr{
+		Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(a.ObjectType)},
+		Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
+		Eq{Left: Col{Table: "link", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
+		Eq{Left: Col{Table: "pt", Column: "subject_type"}, Right: Raw("v_filter_type")},
+		Gt{Left: Raw("position('#' in pt.subject_id)"), Right: Int(0)},
+		Or(
+			Eq{Left: Raw("substring(pt.subject_id from position('#' in pt.subject_id) + 1)"), Right: Raw("v_filter_relation")},
+			Exists{Query: closureExistsStmt},
 		),
 	}
 	if parent.AllowedLinkingTypes != "" {
-		conditions = append(conditions, sqlgen.Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
+		conditions = append(conditions, Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
 	}
 
-	stmt := sqlgen.SelectStmt{
+	stmt := SelectStmt{
 		Distinct: true,
 		Columns:  []string{"substring(pt.subject_id from 1 for position('#' in pt.subject_id) - 1) || '#' || v_filter_relation AS subject_id"},
 		From:     "melange_tuples",
 		Alias:    "link",
-		Joins: []sqlgen.JoinClause{{
+		Joins: []JoinClause{{
 			Type:  "INNER",
 			Table: "melange_tuples",
 			Alias: "pt",
-			On: sqlgen.And(
-				sqlgen.Eq{Left: sqlgen.Col{Table: "pt", Column: "object_type"}, Right: sqlgen.Raw("link.subject_type")},
-				sqlgen.Eq{Left: sqlgen.Col{Table: "pt", Column: "object_id"}, Right: sqlgen.Raw("link.subject_id")},
-				sqlgen.Raw("pt.relation IN ("+closureRelSQL+")"),
+			On: And(
+				Eq{Left: Col{Table: "pt", Column: "object_type"}, Right: Raw("link.subject_type")},
+				Eq{Left: Col{Table: "pt", Column: "object_id"}, Right: Raw("link.subject_id")},
+				Raw("pt.relation IN ("+closureRelSQL+")"),
 			),
 		}},
-		Where: sqlgen.And(conditions...),
+		Where: And(conditions...),
 	}
 	return stmt.SQL(), nil
 }
 
 func buildUsersetFilterTTUIntermediateQuery(a RelationAnalysis, inline InlineSQLData, parent ListParentRelationData) (string, error) {
-	closureExistsStmt := sqlgen.SelectStmt{
+	closureExistsStmt := SelectStmt{
 		Columns: []string{"1"},
 		From:    fmt.Sprintf("(VALUES %s) AS c(object_type, relation, satisfying_relation)", inline.ClosureValues),
-		Where: sqlgen.And(
-			sqlgen.Eq{Left: sqlgen.Col{Table: "c", Column: "object_type"}, Right: sqlgen.Raw("link.subject_type")},
-			sqlgen.Eq{Left: sqlgen.Col{Table: "c", Column: "relation"}, Right: sqlgen.Lit(parent.Relation)},
-			sqlgen.Eq{Left: sqlgen.Col{Table: "c", Column: "satisfying_relation"}, Right: sqlgen.Raw("v_filter_relation")},
+		Where: And(
+			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Raw("link.subject_type")},
+			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(parent.Relation)},
+			Eq{Left: Col{Table: "c", Column: "satisfying_relation"}, Right: Raw("v_filter_relation")},
 		),
 	}
 
-	conditions := []sqlgen.Expr{
-		sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "object_type"}, Right: sqlgen.Lit(a.ObjectType)},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "object_id"}, Right: sqlgen.ObjectID},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "relation"}, Right: sqlgen.Lit(parent.LinkingRelation)},
-		sqlgen.Eq{Left: sqlgen.Raw("link.subject_type"), Right: sqlgen.Raw("v_filter_type")},
-		sqlgen.Exists{Query: closureExistsStmt},
+	conditions := []Expr{
+		Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(a.ObjectType)},
+		Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
+		Eq{Left: Col{Table: "link", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
+		Eq{Left: Raw("link.subject_type"), Right: Raw("v_filter_type")},
+		Exists{Query: closureExistsStmt},
 	}
 	if parent.AllowedLinkingTypes != "" {
-		conditions = append(conditions, sqlgen.Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
+		conditions = append(conditions, Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
 	}
 
-	stmt := sqlgen.SelectStmt{
+	stmt := SelectStmt{
 		Distinct: true,
 		Columns:  []string{"link.subject_id || '#' || v_filter_relation AS subject_id"},
 		From:     "melange_tuples",
 		Alias:    "link",
-		Where:    sqlgen.And(conditions...),
+		Where:    And(conditions...),
 	}
 	return stmt.SQL(), nil
 }
@@ -2347,25 +2325,25 @@ func buildUsersetFilterTTUIntermediateQuery(a RelationAnalysis, inline InlineSQL
 func buildUsersetFilterTTUNestedQuery(objectType string, parent ListParentRelationData) (string, error) {
 	lateralCall := fmt.Sprintf("LATERAL list_accessible_subjects(link.subject_type, link.subject_id, '%s', p_subject_type)", parent.Relation)
 
-	conditions := []sqlgen.Expr{
-		sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "object_type"}, Right: sqlgen.Lit(objectType)},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "object_id"}, Right: sqlgen.ObjectID},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "relation"}, Right: sqlgen.Lit(parent.LinkingRelation)},
+	conditions := []Expr{
+		Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(objectType)},
+		Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
+		Eq{Left: Col{Table: "link", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
 	}
 	if parent.AllowedLinkingTypes != "" {
-		conditions = append(conditions, sqlgen.Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
+		conditions = append(conditions, Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
 	}
 
-	stmt := sqlgen.SelectStmt{
+	stmt := SelectStmt{
 		Columns: []string{"nested.subject_id"},
 		From:    "melange_tuples",
 		Alias:   "link",
-		Joins: []sqlgen.JoinClause{{
+		Joins: []JoinClause{{
 			Type:  "CROSS",
 			Table: lateralCall,
 			Alias: "nested",
 		}},
-		Where: sqlgen.And(conditions...),
+		Where: And(conditions...),
 	}
 	return stmt.SQL(), nil
 }
@@ -2380,7 +2358,7 @@ func generateListSubjectsIntersectionFunctionBob(a RelationAnalysis, inline Inli
 	if err != nil {
 		return "", err
 	}
-	usersetSelfSQL, err := sqlgen.ListSubjectsSelfCandidateQuery(sqlgen.ListSubjectsSelfCandidateInput{
+	usersetSelfSQL, err := ListSubjectsSelfCandidateQuery(ListSubjectsSelfCandidateInput{
 		ObjectType:         a.ObjectType,
 		Relation:           a.Relation,
 		ObjectIDExpr:       "p_object_id",
@@ -2469,7 +2447,7 @@ $$ LANGUAGE plpgsql STABLE;`,
 
 func buildUsersetIntersectionCandidates(a RelationAnalysis, inline InlineSQLData, allSatisfyingRelations []string) (string, error) {
 	var blocks []string
-	baseSQL, err := sqlgen.ListSubjectsUsersetFilterQuery(sqlgen.ListSubjectsUsersetFilterInput{
+	baseSQL, err := ListSubjectsUsersetFilterQuery(ListSubjectsUsersetFilterInput{
 		ObjectType:         a.ObjectType,
 		RelationList:       allSatisfyingRelations,
 		ObjectIDExpr:       "p_object_id",
@@ -2510,97 +2488,97 @@ func buildUsersetIntersectionCandidates(a RelationAnalysis, inline InlineSQLData
 func buildUsersetIntersectionPartCandidates(a RelationAnalysis, inline InlineSQLData, part IntersectionPart) (string, error) {
 	if part.ParentRelation != nil {
 		relationMatch := buildUsersetFilterRelationMatchExprDSL("pt.subject_id", inline.ClosureValues)
-		conditions := []sqlgen.Expr{
-			sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "object_type"}, Right: sqlgen.Lit(a.ObjectType)},
-			sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "object_id"}, Right: sqlgen.ObjectID},
-			sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "relation"}, Right: sqlgen.Lit(part.ParentRelation.LinkingRelation)},
-			sqlgen.Eq{Left: sqlgen.Col{Table: "pt", Column: "subject_type"}, Right: sqlgen.Raw("v_filter_type")},
-			sqlgen.Gt{Left: sqlgen.Raw("position('#' in pt.subject_id)"), Right: sqlgen.Int(0)},
+		conditions := []Expr{
+			Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(a.ObjectType)},
+			Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
+			Eq{Left: Col{Table: "link", Column: "relation"}, Right: Lit(part.ParentRelation.LinkingRelation)},
+			Eq{Left: Col{Table: "pt", Column: "subject_type"}, Right: Raw("v_filter_type")},
+			Gt{Left: Raw("position('#' in pt.subject_id)"), Right: Int(0)},
 			relationMatch,
 		}
-		stmt := sqlgen.SelectStmt{
+		stmt := SelectStmt{
 			Distinct: true,
 			Columns:  []string{"substring(pt.subject_id from 1 for position('#' in pt.subject_id) - 1) || '#' || v_filter_relation AS subject_id"},
 			From:     "melange_tuples",
 			Alias:    "link",
-			Joins: []sqlgen.JoinClause{{
+			Joins: []JoinClause{{
 				Type:  "INNER",
 				Table: "melange_tuples",
 				Alias: "pt",
-				On: sqlgen.And(
-					sqlgen.Eq{Left: sqlgen.Col{Table: "pt", Column: "object_type"}, Right: sqlgen.Raw("link.subject_type")},
-					sqlgen.Eq{Left: sqlgen.Col{Table: "pt", Column: "object_id"}, Right: sqlgen.Raw("link.subject_id")},
+				On: And(
+					Eq{Left: Col{Table: "pt", Column: "object_type"}, Right: Raw("link.subject_type")},
+					Eq{Left: Col{Table: "pt", Column: "object_id"}, Right: Raw("link.subject_id")},
 				),
 			}},
-			Where: sqlgen.And(conditions...),
+			Where: And(conditions...),
 		}
 		return stmt.SQL(), nil
 	}
 
 	relationMatch := buildUsersetFilterRelationMatchExprDSL("t.subject_id", inline.ClosureValues)
-	conditions := []sqlgen.Expr{
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "object_type"}, Right: sqlgen.Lit(a.ObjectType)},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "object_id"}, Right: sqlgen.ObjectID},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "relation"}, Right: sqlgen.Lit(part.Relation)},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "subject_type"}, Right: sqlgen.Raw("v_filter_type")},
-		sqlgen.Gt{Left: sqlgen.Raw("position('#' in t.subject_id)"), Right: sqlgen.Int(0)},
+	conditions := []Expr{
+		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(a.ObjectType)},
+		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
+		Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(part.Relation)},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Raw("v_filter_type")},
+		Gt{Left: Raw("position('#' in t.subject_id)"), Right: Int(0)},
 		relationMatch,
 	}
-	stmt := sqlgen.SelectStmt{
+	stmt := SelectStmt{
 		Distinct: true,
 		Columns:  []string{"substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) || '#' || v_filter_relation AS subject_id"},
 		From:     "melange_tuples",
 		Alias:    "t",
-		Where:    sqlgen.And(conditions...),
+		Where:    And(conditions...),
 	}
 	return stmt.SQL(), nil
 }
 
 func buildUsersetIntersectionTTUCandidates(a RelationAnalysis, inline InlineSQLData, parent ListParentRelationData) (string, error) {
 	relationMatch := buildUsersetFilterRelationMatchExprDSL("pt.subject_id", inline.ClosureValues)
-	conditions := []sqlgen.Expr{
-		sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "object_type"}, Right: sqlgen.Lit(a.ObjectType)},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "object_id"}, Right: sqlgen.ObjectID},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "relation"}, Right: sqlgen.Lit(parent.LinkingRelation)},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "pt", Column: "subject_type"}, Right: sqlgen.Raw("v_filter_type")},
-		sqlgen.Gt{Left: sqlgen.Raw("position('#' in pt.subject_id)"), Right: sqlgen.Int(0)},
+	conditions := []Expr{
+		Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(a.ObjectType)},
+		Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
+		Eq{Left: Col{Table: "link", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
+		Eq{Left: Col{Table: "pt", Column: "subject_type"}, Right: Raw("v_filter_type")},
+		Gt{Left: Raw("position('#' in pt.subject_id)"), Right: Int(0)},
 		relationMatch,
 	}
 	if parent.AllowedLinkingTypes != "" {
-		conditions = append(conditions, sqlgen.Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
+		conditions = append(conditions, Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
 	}
-	stmt := sqlgen.SelectStmt{
+	stmt := SelectStmt{
 		Distinct: true,
 		Columns:  []string{"substring(pt.subject_id from 1 for position('#' in pt.subject_id) - 1) || '#' || v_filter_relation AS subject_id"},
 		From:     "melange_tuples",
 		Alias:    "link",
-		Joins: []sqlgen.JoinClause{{
+		Joins: []JoinClause{{
 			Type:  "INNER",
 			Table: "melange_tuples",
 			Alias: "pt",
-			On: sqlgen.And(
-				sqlgen.Eq{Left: sqlgen.Col{Table: "pt", Column: "object_type"}, Right: sqlgen.Raw("link.subject_type")},
-				sqlgen.Eq{Left: sqlgen.Col{Table: "pt", Column: "object_id"}, Right: sqlgen.Raw("link.subject_id")},
+			On: And(
+				Eq{Left: Col{Table: "pt", Column: "object_type"}, Right: Raw("link.subject_type")},
+				Eq{Left: Col{Table: "pt", Column: "object_id"}, Right: Raw("link.subject_id")},
 			),
 		}},
-		Where: sqlgen.And(conditions...),
+		Where: And(conditions...),
 	}
 	return stmt.SQL(), nil
 }
 
-func buildUsersetFilterRelationMatchExprDSL(subjectIDExpr, closureValues string) sqlgen.Expr {
-	closureExistsStmt := sqlgen.SelectStmt{
+func buildUsersetFilterRelationMatchExprDSL(subjectIDExpr, closureValues string) Expr {
+	closureExistsStmt := SelectStmt{
 		Columns: []string{"1"},
 		From:    fmt.Sprintf("(VALUES %s) AS subj_c(object_type, relation, satisfying_relation)", closureValues),
-		Where: sqlgen.And(
-			sqlgen.Eq{Left: sqlgen.Col{Table: "subj_c", Column: "object_type"}, Right: sqlgen.Raw("v_filter_type")},
-			sqlgen.Eq{Left: sqlgen.Col{Table: "subj_c", Column: "relation"}, Right: sqlgen.Raw("substring(" + subjectIDExpr + " from position('#' in " + subjectIDExpr + ") + 1)")},
-			sqlgen.Eq{Left: sqlgen.Col{Table: "subj_c", Column: "satisfying_relation"}, Right: sqlgen.Raw("v_filter_relation")},
+		Where: And(
+			Eq{Left: Col{Table: "subj_c", Column: "object_type"}, Right: Raw("v_filter_type")},
+			Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: Raw("substring(" + subjectIDExpr + " from position('#' in " + subjectIDExpr + ") + 1)")},
+			Eq{Left: Col{Table: "subj_c", Column: "satisfying_relation"}, Right: Raw("v_filter_relation")},
 		),
 	}
-	return sqlgen.Or(
-		sqlgen.Eq{Left: sqlgen.Raw("substring(" + subjectIDExpr + " from position('#' in " + subjectIDExpr + ") + 1)"), Right: sqlgen.Raw("v_filter_relation")},
-		sqlgen.Exists{Query: closureExistsStmt},
+	return Or(
+		Eq{Left: Raw("substring(" + subjectIDExpr + " from position('#' in " + subjectIDExpr + ") + 1)"), Right: Raw("v_filter_relation")},
+		Exists{Query: closureExistsStmt},
 	)
 }
 
@@ -2608,21 +2586,21 @@ func buildRegularIntersectionCandidates(a RelationAnalysis, inline InlineSQLData
 	var blocks []string
 
 	// Base query
-	baseConditions := []sqlgen.Expr{
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "object_type"}, Right: sqlgen.Lit(a.ObjectType)},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "object_id"}, Right: sqlgen.ObjectID},
-		sqlgen.In{Expr: sqlgen.Col{Table: "t", Column: "relation"}, Values: allSatisfyingRelations},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "subject_type"}, Right: sqlgen.SubjectType},
+	baseConditions := []Expr{
+		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(a.ObjectType)},
+		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
+		In{Expr: Col{Table: "t", Column: "relation"}, Values: allSatisfyingRelations},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
 	}
 	if excludeWildcard {
-		baseConditions = append(baseConditions, sqlgen.Ne{Left: sqlgen.Col{Table: "t", Column: "subject_id"}, Right: sqlgen.Lit("*")})
+		baseConditions = append(baseConditions, Ne{Left: Col{Table: "t", Column: "subject_id"}, Right: Lit("*")})
 	}
-	baseStmt := sqlgen.SelectStmt{
+	baseStmt := SelectStmt{
 		Distinct: true,
 		Columns:  []string{"t.subject_id"},
 		From:     "melange_tuples",
 		Alias:    "t",
-		Where:    sqlgen.And(baseConditions...),
+		Where:    And(baseConditions...),
 	}
 	blocks = append(blocks, baseStmt.SQL())
 
@@ -2640,7 +2618,7 @@ func buildRegularIntersectionCandidates(a RelationAnalysis, inline InlineSQLData
 	}
 
 	for _, pattern := range buildListUsersetPatternInputs(a) {
-		patternSQL, err := sqlgen.ListSubjectsUsersetPatternSimpleQuery(sqlgen.ListSubjectsUsersetPatternSimpleInput{
+		patternSQL, err := ListSubjectsUsersetPatternSimpleQuery(ListSubjectsUsersetPatternSimpleInput{
 			ObjectType:          a.ObjectType,
 			SubjectType:         pattern.SubjectType,
 			SubjectRelation:     pattern.SubjectRelation,
@@ -2652,7 +2630,7 @@ func buildRegularIntersectionCandidates(a RelationAnalysis, inline InlineSQLData
 			ExcludeWildcard:     excludeWildcard,
 			IsClosurePattern:    pattern.IsClosurePattern,
 			SourceRelation:      pattern.SourceRelation,
-			Exclusions:          sqlgen.ExclusionConfig{},
+			Exclusions:          ExclusionConfig{},
 		})
 		if err != nil {
 			return "", err
@@ -2669,18 +2647,18 @@ func buildRegularIntersectionCandidates(a RelationAnalysis, inline InlineSQLData
 	}
 
 	// Pool query - subject pool for intersection filtering
-	poolConditions := []sqlgen.Expr{
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "subject_type"}, Right: sqlgen.SubjectType},
+	poolConditions := []Expr{
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
 	}
 	if excludeWildcard {
-		poolConditions = append(poolConditions, sqlgen.Ne{Left: sqlgen.Col{Table: "t", Column: "subject_id"}, Right: sqlgen.Lit("*")})
+		poolConditions = append(poolConditions, Ne{Left: Col{Table: "t", Column: "subject_id"}, Right: Lit("*")})
 	}
-	poolStmt := sqlgen.SelectStmt{
+	poolStmt := SelectStmt{
 		Distinct: true,
 		Columns:  []string{"t.subject_id"},
 		From:     "melange_tuples",
 		Alias:    "t",
-		Where:    sqlgen.And(poolConditions...),
+		Where:    And(poolConditions...),
 	}
 	blocks = append(blocks, poolStmt.SQL())
 
@@ -2689,81 +2667,81 @@ func buildRegularIntersectionCandidates(a RelationAnalysis, inline InlineSQLData
 
 func buildRegularIntersectionPartCandidates(a RelationAnalysis, part IntersectionPart, excludeWildcard bool) (string, error) {
 	if part.ParentRelation != nil {
-		conditions := []sqlgen.Expr{
-			sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "object_type"}, Right: sqlgen.Lit(a.ObjectType)},
-			sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "object_id"}, Right: sqlgen.ObjectID},
-			sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "relation"}, Right: sqlgen.Lit(part.ParentRelation.LinkingRelation)},
-			sqlgen.Eq{Left: sqlgen.Col{Table: "pt", Column: "subject_type"}, Right: sqlgen.SubjectType},
+		conditions := []Expr{
+			Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(a.ObjectType)},
+			Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
+			Eq{Left: Col{Table: "link", Column: "relation"}, Right: Lit(part.ParentRelation.LinkingRelation)},
+			Eq{Left: Col{Table: "pt", Column: "subject_type"}, Right: SubjectType},
 		}
 		if excludeWildcard {
-			conditions = append(conditions, sqlgen.Ne{Left: sqlgen.Col{Table: "pt", Column: "subject_id"}, Right: sqlgen.Lit("*")})
+			conditions = append(conditions, Ne{Left: Col{Table: "pt", Column: "subject_id"}, Right: Lit("*")})
 		}
-		stmt := sqlgen.SelectStmt{
+		stmt := SelectStmt{
 			Distinct: true,
 			Columns:  []string{"pt.subject_id"},
 			From:     "melange_tuples",
 			Alias:    "link",
-			Joins: []sqlgen.JoinClause{{
+			Joins: []JoinClause{{
 				Type:  "INNER",
 				Table: "melange_tuples",
 				Alias: "pt",
-				On: sqlgen.And(
-					sqlgen.Eq{Left: sqlgen.Col{Table: "pt", Column: "object_type"}, Right: sqlgen.Raw("link.subject_type")},
-					sqlgen.Eq{Left: sqlgen.Col{Table: "pt", Column: "object_id"}, Right: sqlgen.Raw("link.subject_id")},
+				On: And(
+					Eq{Left: Col{Table: "pt", Column: "object_type"}, Right: Raw("link.subject_type")},
+					Eq{Left: Col{Table: "pt", Column: "object_id"}, Right: Raw("link.subject_id")},
 				),
 			}},
-			Where: sqlgen.And(conditions...),
+			Where: And(conditions...),
 		}
 		return stmt.SQL(), nil
 	}
 
-	conditions := []sqlgen.Expr{
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "object_type"}, Right: sqlgen.Lit(a.ObjectType)},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "object_id"}, Right: sqlgen.ObjectID},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "relation"}, Right: sqlgen.Lit(part.Relation)},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "subject_type"}, Right: sqlgen.SubjectType},
+	conditions := []Expr{
+		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(a.ObjectType)},
+		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
+		Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(part.Relation)},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
 	}
 	if excludeWildcard {
-		conditions = append(conditions, sqlgen.Ne{Left: sqlgen.Col{Table: "t", Column: "subject_id"}, Right: sqlgen.Lit("*")})
+		conditions = append(conditions, Ne{Left: Col{Table: "t", Column: "subject_id"}, Right: Lit("*")})
 	}
-	stmt := sqlgen.SelectStmt{
+	stmt := SelectStmt{
 		Distinct: true,
 		Columns:  []string{"t.subject_id"},
 		From:     "melange_tuples",
 		Alias:    "t",
-		Where:    sqlgen.And(conditions...),
+		Where:    And(conditions...),
 	}
 	return stmt.SQL(), nil
 }
 
 func buildRegularIntersectionTTUCandidates(a RelationAnalysis, parent ListParentRelationData, excludeWildcard bool) (string, error) {
-	conditions := []sqlgen.Expr{
-		sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "object_type"}, Right: sqlgen.Lit(a.ObjectType)},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "object_id"}, Right: sqlgen.ObjectID},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "relation"}, Right: sqlgen.Lit(parent.LinkingRelation)},
+	conditions := []Expr{
+		Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(a.ObjectType)},
+		Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
+		Eq{Left: Col{Table: "link", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
 	}
 	if parent.AllowedLinkingTypes != "" {
-		conditions = append(conditions, sqlgen.Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
+		conditions = append(conditions, Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
 	}
 	if excludeWildcard {
-		conditions = append(conditions, sqlgen.Ne{Left: sqlgen.Col{Table: "pt", Column: "subject_id"}, Right: sqlgen.Lit("*")})
+		conditions = append(conditions, Ne{Left: Col{Table: "pt", Column: "subject_id"}, Right: Lit("*")})
 	}
-	stmt := sqlgen.SelectStmt{
+	stmt := SelectStmt{
 		Distinct: true,
 		Columns:  []string{"pt.subject_id"},
 		From:     "melange_tuples",
 		Alias:    "link",
-		Joins: []sqlgen.JoinClause{{
+		Joins: []JoinClause{{
 			Type:  "INNER",
 			Table: "melange_tuples",
 			Alias: "pt",
-			On: sqlgen.And(
-				sqlgen.Eq{Left: sqlgen.Col{Table: "pt", Column: "object_type"}, Right: sqlgen.Raw("link.subject_type")},
-				sqlgen.Eq{Left: sqlgen.Col{Table: "pt", Column: "object_id"}, Right: sqlgen.Raw("link.subject_id")},
-				sqlgen.Eq{Left: sqlgen.Col{Table: "pt", Column: "subject_type"}, Right: sqlgen.SubjectType},
+			On: And(
+				Eq{Left: Col{Table: "pt", Column: "object_type"}, Right: Raw("link.subject_type")},
+				Eq{Left: Col{Table: "pt", Column: "object_id"}, Right: Raw("link.subject_id")},
+				Eq{Left: Col{Table: "pt", Column: "subject_type"}, Right: SubjectType},
 			),
 		}},
-		Where: sqlgen.And(conditions...),
+		Where: And(conditions...),
 	}
 	return stmt.SQL(), nil
 }
@@ -2881,7 +2859,7 @@ func generateListObjectsSelfRefUsersetFunctionBob(a RelationAnalysis, inline Inl
 		return "", err
 	}
 
-	selfCandidateSQL, err := sqlgen.ListObjectsSelfCandidateQuery(sqlgen.ListObjectsSelfCandidateInput{
+	selfCandidateSQL, err := ListObjectsSelfCandidateQuery(ListObjectsSelfCandidateInput{
 		ObjectType:    a.ObjectType,
 		Relation:      a.Relation,
 		ClosureValues: inline.ClosureValues,
@@ -2920,7 +2898,7 @@ func buildListObjectsSelfRefBaseBlocks(a RelationAnalysis, relationList, allowed
 	var blocks []string
 	baseExclusions := buildExclusionInput(a, "t.object_id", "p_subject_type", "p_subject_id")
 
-	directSQL, err := sqlgen.ListObjectsDirectQuery(sqlgen.ListObjectsDirectInput{
+	directSQL, err := ListObjectsDirectQuery(ListObjectsDirectInput{
 		ObjectType:          a.ObjectType,
 		Relations:           relationList,
 		AllowedSubjectTypes: allowedSubjectTypes,
@@ -2938,7 +2916,7 @@ func buildListObjectsSelfRefBaseBlocks(a RelationAnalysis, relationList, allowed
 	))
 
 	for _, rel := range complexClosure {
-		complexSQL, err := sqlgen.ListObjectsComplexClosureQuery(sqlgen.ListObjectsComplexClosureInput{
+		complexSQL, err := ListObjectsComplexClosureQuery(ListObjectsComplexClosureInput{
 			ObjectType:          a.ObjectType,
 			Relation:            rel,
 			AllowedSubjectTypes: allowedSubjectTypes,
@@ -2958,7 +2936,7 @@ func buildListObjectsSelfRefBaseBlocks(a RelationAnalysis, relationList, allowed
 
 	for _, rel := range a.IntersectionClosureRelations {
 		functionName := fmt.Sprintf("list_%s_%s_objects", a.ObjectType, rel)
-		closureSQL, err := sqlgen.ListObjectsIntersectionClosureQuery(functionName)
+		closureSQL, err := ListObjectsIntersectionClosureQuery(functionName)
 		if err != nil {
 			return nil, err
 		}
@@ -2975,7 +2953,7 @@ func buildListObjectsSelfRefBaseBlocks(a RelationAnalysis, relationList, allowed
 			continue
 		}
 		if pattern.IsComplex {
-			patternSQL, err := sqlgen.ListObjectsUsersetPatternComplexQuery(sqlgen.ListObjectsUsersetPatternComplexInput{
+			patternSQL, err := ListObjectsUsersetPatternComplexQuery(ListObjectsUsersetPatternComplexInput{
 				ObjectType:       a.ObjectType,
 				SubjectType:      pattern.SubjectType,
 				SubjectRelation:  pattern.SubjectRelation,
@@ -2997,7 +2975,7 @@ func buildListObjectsSelfRefBaseBlocks(a RelationAnalysis, relationList, allowed
 			continue
 		}
 
-		patternSQL, err := sqlgen.ListObjectsUsersetPatternSimpleQuery(sqlgen.ListObjectsUsersetPatternSimpleInput{
+		patternSQL, err := ListObjectsUsersetPatternSimpleQuery(ListObjectsUsersetPatternSimpleInput{
 			ObjectType:          a.ObjectType,
 			SubjectType:         pattern.SubjectType,
 			SubjectRelation:     pattern.SubjectRelation,
@@ -3028,28 +3006,28 @@ func buildListObjectsSelfRefRecursiveBlock(a RelationAnalysis, relationList []st
 	baseExclusions := buildExclusionInput(a, "t.object_id", "p_subject_type", "p_subject_id")
 	exclusionPreds := baseExclusions.BuildPredicates()
 
-	conditions := []sqlgen.Expr{
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "object_type"}, Right: sqlgen.Lit(a.ObjectType)},
-		sqlgen.In{Expr: sqlgen.Col{Table: "t", Column: "relation"}, Values: relationList},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "subject_type"}, Right: sqlgen.Lit(a.ObjectType)},
-		sqlgen.HasUserset{Source: sqlgen.Col{Table: "t", Column: "subject_id"}},
-		sqlgen.Eq{Left: sqlgen.UsersetRelation{Source: sqlgen.Col{Table: "t", Column: "subject_id"}}, Right: sqlgen.Lit(a.Relation)},
-		sqlgen.Raw("me.depth < 25"),
+	conditions := []Expr{
+		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(a.ObjectType)},
+		In{Expr: Col{Table: "t", Column: "relation"}, Values: relationList},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(a.ObjectType)},
+		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
+		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(a.Relation)},
+		Raw("me.depth < 25"),
 	}
 	conditions = append(conditions, exclusionPreds...)
 
-	stmt := sqlgen.SelectStmt{
+	stmt := SelectStmt{
 		Distinct: true,
 		Columns:  []string{"t.object_id", "me.depth + 1 AS depth"},
 		From:     "member_expansion",
 		Alias:    "me",
-		Joins: []sqlgen.JoinClause{{
+		Joins: []JoinClause{{
 			Type:  "INNER",
 			Table: "melange_tuples",
 			Alias: "t",
-			On:    sqlgen.Eq{Left: sqlgen.UsersetObjectID{Source: sqlgen.Col{Table: "t", Column: "subject_id"}}, Right: sqlgen.Col{Table: "me", Column: "object_id"}},
+			On:    Eq{Left: UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}}, Right: Col{Table: "me", Column: "object_id"}},
 		}},
-		Where: sqlgen.And(conditions...),
+		Where: And(conditions...),
 	}
 	return stmt.SQL(), nil
 }
@@ -3058,12 +3036,12 @@ func buildListObjectsSelfRefFinalQuery(a RelationAnalysis) (string, error) {
 	finalExclusions := buildExclusionInput(a, "me.object_id", "p_subject_type", "p_subject_id")
 	exclusionPreds := finalExclusions.BuildPredicates()
 
-	var whereExpr sqlgen.Expr
+	var whereExpr Expr
 	if len(exclusionPreds) > 0 {
-		whereExpr = sqlgen.And(exclusionPreds...)
+		whereExpr = And(exclusionPreds...)
 	}
 
-	stmt := sqlgen.SelectStmt{
+	stmt := SelectStmt{
 		Distinct: true,
 		Columns:  []string{"me.object_id"},
 		From:     "member_expansion",
@@ -3129,8 +3107,8 @@ $$ LANGUAGE plpgsql STABLE;`,
 }
 
 func buildListSubjectsSelfRefUsersetFilterQuery(a RelationAnalysis, inline InlineSQLData, allSatisfyingRelations []string) (string, error) {
-	checkExprSQL := sqlgen.CheckPermissionExprDSL("check_permission", "v_filter_type", "t.subject_id", a.Relation, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true).SQL()
-	baseSQL, err := sqlgen.ListSubjectsUsersetFilterQuery(sqlgen.ListSubjectsUsersetFilterInput{
+	checkExprSQL := CheckPermissionExprDSL("check_permission", "v_filter_type", "t.subject_id", a.Relation, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true).SQL()
+	baseSQL, err := ListSubjectsUsersetFilterQuery(ListSubjectsUsersetFilterInput{
 		ObjectType:          a.ObjectType,
 		RelationList:        allSatisfyingRelations,
 		ObjectIDExpr:        "p_object_id",
@@ -3171,7 +3149,7 @@ FROM userset_expansion ue`,
 
 	for _, rel := range a.IntersectionClosureRelations {
 		functionName := fmt.Sprintf("list_%s_%s_subjects", a.ObjectType, rel)
-		closureSQL, err := sqlgen.ListSubjectsIntersectionClosureQuery(functionName, "v_filter_type || '#' || v_filter_relation")
+		closureSQL, err := ListSubjectsIntersectionClosureQuery(functionName, "v_filter_type || '#' || v_filter_relation")
 		if err != nil {
 			return "", err
 		}
@@ -3183,7 +3161,7 @@ FROM userset_expansion ue`,
 		))
 	}
 
-	selfSQL, err := sqlgen.ListSubjectsSelfCandidateQuery(sqlgen.ListSubjectsSelfCandidateInput{
+	selfSQL, err := ListSubjectsSelfCandidateQuery(ListSubjectsSelfCandidateInput{
 		ObjectType:         a.ObjectType,
 		Relation:           a.Relation,
 		ObjectIDExpr:       "p_object_id",
@@ -3206,28 +3184,28 @@ FROM userset_expansion ue`,
 }
 
 func buildListSubjectsSelfRefUsersetRecursiveQuery() (string, error) {
-	conditions := []sqlgen.Expr{
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "object_type"}, Right: sqlgen.Raw("v_filter_type")},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "object_id"}, Right: sqlgen.Col{Table: "ue", Column: "userset_object_id"}},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "relation"}, Right: sqlgen.Raw("v_filter_relation")},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "subject_type"}, Right: sqlgen.Raw("v_filter_type")},
-		sqlgen.HasUserset{Source: sqlgen.Col{Table: "t", Column: "subject_id"}},
-		sqlgen.Eq{Left: sqlgen.UsersetRelation{Source: sqlgen.Col{Table: "t", Column: "subject_id"}}, Right: sqlgen.Raw("v_filter_relation")},
-		sqlgen.Raw("ue.depth < 25"),
+	conditions := []Expr{
+		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Raw("v_filter_type")},
+		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "ue", Column: "userset_object_id"}},
+		Eq{Left: Col{Table: "t", Column: "relation"}, Right: Raw("v_filter_relation")},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Raw("v_filter_type")},
+		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
+		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Raw("v_filter_relation")},
+		Raw("ue.depth < 25"),
 	}
 
-	stmt := sqlgen.SelectStmt{
+	stmt := SelectStmt{
 		Distinct: true,
 		Columns:  []string{"split_part(t.subject_id, '#', 1) AS userset_object_id", "ue.depth + 1 AS depth"},
 		From:     "userset_expansion",
 		Alias:    "ue",
-		Joins: []sqlgen.JoinClause{{
+		Joins: []JoinClause{{
 			Type:  "INNER",
 			Table: "melange_tuples",
 			Alias: "t",
-			On:    sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "object_id"}, Right: sqlgen.Col{Table: "ue", Column: "userset_object_id"}},
+			On:    Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "ue", Column: "userset_object_id"}},
 		}},
-		Where: sqlgen.And(conditions...),
+		Where: And(conditions...),
 	}
 	return stmt.SQL(), nil
 }
@@ -3246,7 +3224,7 @@ func buildListSubjectsSelfRefRegularQuery(a RelationAnalysis, inline InlineSQLDa
 	}
 
 	var baseBlocks []string
-	directSQL, err := sqlgen.ListSubjectsDirectQuery(sqlgen.ListSubjectsDirectInput{
+	directSQL, err := ListSubjectsDirectQuery(ListSubjectsDirectInput{
 		ObjectType:      a.ObjectType,
 		RelationList:    relationList,
 		ObjectIDExpr:    "p_object_id",
@@ -3265,7 +3243,7 @@ func buildListSubjectsSelfRefRegularQuery(a RelationAnalysis, inline InlineSQLDa
 	))
 
 	for _, rel := range complexClosure {
-		complexSQL, err := sqlgen.ListSubjectsComplexClosureQuery(sqlgen.ListSubjectsComplexClosureInput{
+		complexSQL, err := ListSubjectsComplexClosureQuery(ListSubjectsComplexClosureInput{
 			ObjectType:      a.ObjectType,
 			Relation:        rel,
 			ObjectIDExpr:    "p_object_id",
@@ -3286,7 +3264,7 @@ func buildListSubjectsSelfRefRegularQuery(a RelationAnalysis, inline InlineSQLDa
 
 	for _, rel := range a.IntersectionClosureRelations {
 		functionName := fmt.Sprintf("list_%s_%s_subjects", a.ObjectType, rel)
-		closureSQL, err := sqlgen.ListSubjectsIntersectionClosureQuery(functionName, "p_subject_type")
+		closureSQL, err := ListSubjectsIntersectionClosureQuery(functionName, "p_subject_type")
 		if err != nil {
 			return "", err
 		}
@@ -3315,7 +3293,7 @@ func buildListSubjectsSelfRefRegularQuery(a RelationAnalysis, inline InlineSQLDa
 		}
 		patternExclusions := buildSimpleComplexExclusionInput(a, "p_object_id", "p_subject_type", "s.subject_id")
 		if pattern.IsComplex {
-			patternSQL, err := sqlgen.ListSubjectsUsersetPatternComplexQuery(sqlgen.ListSubjectsUsersetPatternComplexInput{
+			patternSQL, err := ListSubjectsUsersetPatternComplexQuery(ListSubjectsUsersetPatternComplexInput{
 				ObjectType:       a.ObjectType,
 				SubjectType:      pattern.SubjectType,
 				SubjectRelation:  pattern.SubjectRelation,
@@ -3339,7 +3317,7 @@ func buildListSubjectsSelfRefRegularQuery(a RelationAnalysis, inline InlineSQLDa
 			continue
 		}
 
-		patternSQL, err := sqlgen.ListSubjectsUsersetPatternSimpleQuery(sqlgen.ListSubjectsUsersetPatternSimpleInput{
+		patternSQL, err := ListSubjectsUsersetPatternSimpleQuery(ListSubjectsUsersetPatternSimpleInput{
 			ObjectType:          a.ObjectType,
 			SubjectType:         pattern.SubjectType,
 			SubjectRelation:     pattern.SubjectRelation,
@@ -3387,12 +3365,12 @@ func buildListSubjectsSelfRefRegularQuery(a RelationAnalysis, inline InlineSQLDa
 }
 
 func buildListSubjectsSelfRefUsersetObjectsBaseQuery(a RelationAnalysis, relationList []string) (string, error) {
-	q := sqlgen.Tuples("t").
+	q := Tuples("t").
 		ObjectType(a.ObjectType).
 		Relations(relationList...).
 		Select("split_part(t.subject_id, '#', 1) AS userset_object_id", "0 AS depth").
-		WhereObjectID(sqlgen.ObjectID).
-		Where(sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "subject_type"}, Right: sqlgen.Lit(a.ObjectType)}).
+		WhereObjectID(ObjectID).
+		Where(Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(a.ObjectType)}).
 		WhereHasUserset().
 		WhereUsersetRelation(a.Relation).
 		Distinct()
@@ -3400,59 +3378,59 @@ func buildListSubjectsSelfRefUsersetObjectsBaseQuery(a RelationAnalysis, relatio
 }
 
 func buildListSubjectsSelfRefUsersetObjectsRecursiveQuery(a RelationAnalysis) (string, error) {
-	conditions := []sqlgen.Expr{
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "object_type"}, Right: sqlgen.Lit(a.ObjectType)},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "object_id"}, Right: sqlgen.Col{Table: "uo", Column: "userset_object_id"}},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "relation"}, Right: sqlgen.Lit(a.Relation)},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "subject_type"}, Right: sqlgen.Lit(a.ObjectType)},
-		sqlgen.HasUserset{Source: sqlgen.Col{Table: "t", Column: "subject_id"}},
-		sqlgen.Eq{Left: sqlgen.UsersetRelation{Source: sqlgen.Col{Table: "t", Column: "subject_id"}}, Right: sqlgen.Lit(a.Relation)},
-		sqlgen.Raw("uo.depth < 25"),
+	conditions := []Expr{
+		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(a.ObjectType)},
+		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "uo", Column: "userset_object_id"}},
+		Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(a.Relation)},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(a.ObjectType)},
+		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
+		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(a.Relation)},
+		Raw("uo.depth < 25"),
 	}
 
-	stmt := sqlgen.SelectStmt{
+	stmt := SelectStmt{
 		Distinct: true,
 		Columns:  []string{"split_part(t.subject_id, '#', 1) AS userset_object_id", "uo.depth + 1 AS depth"},
 		From:     "userset_objects",
 		Alias:    "uo",
-		Joins: []sqlgen.JoinClause{{
+		Joins: []JoinClause{{
 			Type:  "INNER",
 			Table: "melange_tuples",
 			Alias: "t",
-			On:    sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "object_id"}, Right: sqlgen.Col{Table: "uo", Column: "userset_object_id"}},
+			On:    Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "uo", Column: "userset_object_id"}},
 		}},
-		Where: sqlgen.And(conditions...),
+		Where: And(conditions...),
 	}
 	return stmt.SQL(), nil
 }
 
-func buildListSubjectsSelfRefUsersetObjectsExpansionQuery(a RelationAnalysis, relationList, allowedSubjectTypes []string, excludeWildcard bool, exclusions sqlgen.ExclusionConfig) (string, error) {
+func buildListSubjectsSelfRefUsersetObjectsExpansionQuery(a RelationAnalysis, relationList, allowedSubjectTypes []string, excludeWildcard bool, exclusions ExclusionConfig) (string, error) {
 	exclusionPreds := exclusions.BuildPredicates()
 
-	conditions := []sqlgen.Expr{
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "object_type"}, Right: sqlgen.Lit(a.ObjectType)},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "object_id"}, Right: sqlgen.Col{Table: "uo", Column: "userset_object_id"}},
-		sqlgen.In{Expr: sqlgen.Col{Table: "t", Column: "relation"}, Values: relationList},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "subject_type"}, Right: sqlgen.SubjectType},
-		sqlgen.In{Expr: sqlgen.SubjectType, Values: allowedSubjectTypes},
+	conditions := []Expr{
+		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(a.ObjectType)},
+		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "uo", Column: "userset_object_id"}},
+		In{Expr: Col{Table: "t", Column: "relation"}, Values: relationList},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
+		In{Expr: SubjectType, Values: allowedSubjectTypes},
 	}
 	if excludeWildcard {
-		conditions = append(conditions, sqlgen.Ne{Left: sqlgen.Col{Table: "t", Column: "subject_id"}, Right: sqlgen.Lit("*")})
+		conditions = append(conditions, Ne{Left: Col{Table: "t", Column: "subject_id"}, Right: Lit("*")})
 	}
 	conditions = append(conditions, exclusionPreds...)
 
-	stmt := sqlgen.SelectStmt{
+	stmt := SelectStmt{
 		Distinct: true,
 		Columns:  []string{"t.subject_id"},
 		From:     "userset_objects",
 		Alias:    "uo",
-		Joins: []sqlgen.JoinClause{{
+		Joins: []JoinClause{{
 			Type:  "INNER",
 			Table: "melange_tuples",
 			Alias: "t",
-			On:    sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "object_id"}, Right: sqlgen.Col{Table: "uo", Column: "userset_object_id"}},
+			On:    Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "uo", Column: "userset_object_id"}},
 		}},
-		Where: sqlgen.And(conditions...),
+		Where: And(conditions...),
 	}
 	return stmt.SQL(), nil
 }
@@ -3466,7 +3444,7 @@ func generateListObjectsComposedFunctionBob(a RelationAnalysis, inline InlineSQL
 		return "", fmt.Errorf("missing indirect anchor data for %s.%s", a.ObjectType, a.Relation)
 	}
 
-	selfSQL, err := sqlgen.ListObjectsSelfCandidateQuery(sqlgen.ListObjectsSelfCandidateInput{
+	selfSQL, err := ListObjectsSelfCandidateQuery(ListObjectsSelfCandidateInput{
 		ObjectType:    a.ObjectType,
 		Relation:      a.Relation,
 		ClosureValues: inline.ClosureValues,
@@ -3575,60 +3553,60 @@ func buildListObjectsComposedQuery(a RelationAnalysis, anchor *ListIndirectAncho
 	return joinUnionBlocks(blocks), nil
 }
 
-func buildComposedTTUObjectsQuery(a RelationAnalysis, anchor *ListIndirectAnchorData, targetType string, exclusions sqlgen.ExclusionConfig) (string, error) {
+func buildComposedTTUObjectsQuery(a RelationAnalysis, anchor *ListIndirectAnchorData, targetType string, exclusions ExclusionConfig) (string, error) {
 	exclusionPreds := exclusions.BuildPredicates()
 
 	targetFunction := fmt.Sprintf("list_%s_%s_objects", targetType, anchor.Path[0].TargetRelation)
 	subquery := fmt.Sprintf("SELECT obj.object_id FROM %s(p_subject_type, p_subject_id) obj", targetFunction)
 
-	conditions := []sqlgen.Expr{
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "object_type"}, Right: sqlgen.Lit(a.ObjectType)},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "relation"}, Right: sqlgen.Lit(anchor.Path[0].LinkingRelation)},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "subject_type"}, Right: sqlgen.Lit(targetType)},
-		sqlgen.Raw("t.subject_id IN (" + subquery + ")"),
+	conditions := []Expr{
+		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(a.ObjectType)},
+		Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(anchor.Path[0].LinkingRelation)},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(targetType)},
+		Raw("t.subject_id IN (" + subquery + ")"),
 	}
 	conditions = append(conditions, exclusionPreds...)
 
-	q := sqlgen.Tuples("t").
+	q := Tuples("t").
 		Select("t.object_id").
 		Where(conditions...).
 		Distinct()
 	return q.SQL(), nil
 }
 
-func buildComposedRecursiveTTUObjectsQuery(a RelationAnalysis, anchor *ListIndirectAnchorData, recursiveType string, exclusions sqlgen.ExclusionConfig) (string, error) {
+func buildComposedRecursiveTTUObjectsQuery(a RelationAnalysis, anchor *ListIndirectAnchorData, recursiveType string, exclusions ExclusionConfig) (string, error) {
 	exclusionPreds := exclusions.BuildPredicates()
 
-	conditions := []sqlgen.Expr{
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "object_type"}, Right: sqlgen.Lit(a.ObjectType)},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "relation"}, Right: sqlgen.Lit(anchor.Path[0].LinkingRelation)},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "subject_type"}, Right: sqlgen.Lit(recursiveType)},
-		sqlgen.CheckPermissionInternalExprDSL("p_subject_type", "p_subject_id", anchor.Path[0].TargetRelation, fmt.Sprintf("'%s'", recursiveType), "t.subject_id", true),
+	conditions := []Expr{
+		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(a.ObjectType)},
+		Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(anchor.Path[0].LinkingRelation)},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(recursiveType)},
+		CheckPermissionInternalExprDSL("p_subject_type", "p_subject_id", anchor.Path[0].TargetRelation, fmt.Sprintf("'%s'", recursiveType), "t.subject_id", true),
 	}
 	conditions = append(conditions, exclusionPreds...)
 
-	q := sqlgen.Tuples("t").
+	q := Tuples("t").
 		Select("t.object_id").
 		Where(conditions...).
 		Distinct()
 	return q.SQL(), nil
 }
 
-func buildComposedUsersetObjectsQuery(a RelationAnalysis, anchor *ListIndirectAnchorData, firstStep ListAnchorPathStepData, relationList []string, exclusions sqlgen.ExclusionConfig) (string, error) {
+func buildComposedUsersetObjectsQuery(a RelationAnalysis, anchor *ListIndirectAnchorData, firstStep ListAnchorPathStepData, relationList []string, exclusions ExclusionConfig) (string, error) {
 	exclusionPreds := exclusions.BuildPredicates()
 
 	targetFunction := anchor.FirstStepTargetFunctionName
 	subquery := fmt.Sprintf("SELECT obj.object_id FROM %s(p_subject_type, p_subject_id) obj", targetFunction)
 
-	conditions := []sqlgen.Expr{
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "object_type"}, Right: sqlgen.Lit(a.ObjectType)},
-		sqlgen.In{Expr: sqlgen.Col{Table: "t", Column: "relation"}, Values: relationList},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "subject_type"}, Right: sqlgen.Lit(firstStep.SubjectType)},
-		sqlgen.HasUserset{Source: sqlgen.Col{Table: "t", Column: "subject_id"}},
-		sqlgen.Eq{Left: sqlgen.UsersetRelation{Source: sqlgen.Col{Table: "t", Column: "subject_id"}}, Right: sqlgen.Lit(firstStep.SubjectRelation)},
-		sqlgen.Or(
-			sqlgen.Raw("split_part(t.subject_id, '#', 1) IN ("+subquery+")"),
-			sqlgen.CheckPermissionInternalExprDSL(
+	conditions := []Expr{
+		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(a.ObjectType)},
+		In{Expr: Col{Table: "t", Column: "relation"}, Values: relationList},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(firstStep.SubjectType)},
+		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
+		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(firstStep.SubjectRelation)},
+		Or(
+			Raw("split_part(t.subject_id, '#', 1) IN ("+subquery+")"),
+			CheckPermissionInternalExprDSL(
 				"p_subject_type",
 				"p_subject_id",
 				firstStep.SubjectRelation,
@@ -3640,7 +3618,7 @@ func buildComposedUsersetObjectsQuery(a RelationAnalysis, anchor *ListIndirectAn
 	}
 	conditions = append(conditions, exclusionPreds...)
 
-	q := sqlgen.Tuples("t").
+	q := Tuples("t").
 		Select("t.object_id").
 		Where(conditions...).
 		Distinct()
@@ -3655,7 +3633,7 @@ func generateListSubjectsComposedFunctionBob(a RelationAnalysis, inline InlineSQ
 		return "", fmt.Errorf("missing indirect anchor data for %s.%s", a.ObjectType, a.Relation)
 	}
 
-	selfSQL, err := sqlgen.ListSubjectsSelfCandidateQuery(sqlgen.ListSubjectsSelfCandidateInput{
+	selfSQL, err := ListSubjectsSelfCandidateQuery(ListSubjectsSelfCandidateInput{
 		ObjectType:         a.ObjectType,
 		Relation:           a.Relation,
 		ObjectIDExpr:       "p_object_id",
@@ -3765,7 +3743,7 @@ func buildListSubjectsComposedRegularQuery(a RelationAnalysis, anchor *ListIndir
 
 	whereClause := ""
 	if len(exclusionPreds) > 0 {
-		whereClause = "\nWHERE " + sqlgen.And(exclusionPreds...).SQL()
+		whereClause = "\nWHERE " + And(exclusionPreds...).SQL()
 	}
 
 	return fmt.Sprintf(`WITH subject_candidates AS (
@@ -3833,25 +3811,25 @@ func buildComposedSubjectsCandidateBlocks(a RelationAnalysis, anchor *ListIndire
 func buildComposedTTUSubjectsQuery(a RelationAnalysis, anchor *ListIndirectAnchorData, targetType, subjectTypeExpr string) (string, error) {
 	listFunction := fmt.Sprintf("list_%s_%s_subjects(link.subject_id, %s)", targetType, anchor.Path[0].TargetRelation, subjectTypeExpr)
 
-	conditions := []sqlgen.Expr{
-		sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "object_type"}, Right: sqlgen.Lit(a.ObjectType)},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "object_id"}, Right: sqlgen.ObjectID},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "relation"}, Right: sqlgen.Lit(anchor.Path[0].LinkingRelation)},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "link", Column: "subject_type"}, Right: sqlgen.Lit(targetType)},
+	conditions := []Expr{
+		Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(a.ObjectType)},
+		Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
+		Eq{Left: Col{Table: "link", Column: "relation"}, Right: Lit(anchor.Path[0].LinkingRelation)},
+		Eq{Left: Col{Table: "link", Column: "subject_type"}, Right: Lit(targetType)},
 	}
 
-	stmt := sqlgen.SelectStmt{
+	stmt := SelectStmt{
 		Distinct: true,
 		Columns:  []string{"s.subject_id"},
 		From:     "melange_tuples",
 		Alias:    "link",
-		Joins: []sqlgen.JoinClause{{
+		Joins: []JoinClause{{
 			Type:  "CROSS",
 			Table: "LATERAL " + listFunction,
 			Alias: "s",
 			On:    nil, // CROSS JOIN has no ON clause
 		}},
-		Where: sqlgen.And(conditions...),
+		Where: And(conditions...),
 	}
 	return stmt.SQL(), nil
 }
@@ -3860,27 +3838,27 @@ func buildComposedUsersetSubjectsQuery(a RelationAnalysis, firstStep ListAnchorP
 	listFunction := fmt.Sprintf("list_%s_%s_subjects(split_part(t.subject_id, '#', 1), %s)", firstStep.SubjectType, firstStep.SubjectRelation, subjectTypeExpr)
 	relationList := buildTupleLookupRelations(a)
 
-	conditions := []sqlgen.Expr{
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "object_type"}, Right: sqlgen.Lit(a.ObjectType)},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "object_id"}, Right: sqlgen.ObjectID},
-		sqlgen.In{Expr: sqlgen.Col{Table: "t", Column: "relation"}, Values: relationList},
-		sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "subject_type"}, Right: sqlgen.Lit(firstStep.SubjectType)},
-		sqlgen.HasUserset{Source: sqlgen.Col{Table: "t", Column: "subject_id"}},
-		sqlgen.Eq{Left: sqlgen.UsersetRelation{Source: sqlgen.Col{Table: "t", Column: "subject_id"}}, Right: sqlgen.Lit(firstStep.SubjectRelation)},
+	conditions := []Expr{
+		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(a.ObjectType)},
+		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
+		In{Expr: Col{Table: "t", Column: "relation"}, Values: relationList},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(firstStep.SubjectType)},
+		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
+		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(firstStep.SubjectRelation)},
 	}
 
-	stmt := sqlgen.SelectStmt{
+	stmt := SelectStmt{
 		Distinct: true,
 		Columns:  []string{"s.subject_id"},
 		From:     "melange_tuples",
 		Alias:    "t",
-		Joins: []sqlgen.JoinClause{{
+		Joins: []JoinClause{{
 			Type:  "CROSS",
 			Table: "LATERAL " + listFunction,
 			Alias: "s",
 			On:    nil, // CROSS JOIN has no ON clause
 		}},
-		Where: sqlgen.And(conditions...),
+		Where: And(conditions...),
 	}
 	return stmt.SQL(), nil
 }

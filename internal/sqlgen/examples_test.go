@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pthm/melange/tooling/schema/sqlgen"
+	"github.com/pthm/melange/internal/sqlgen"
 )
 
 // This file demonstrates how to migrate queries from Bob to the DSL.

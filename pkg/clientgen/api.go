@@ -1,20 +1,24 @@
-package tooling
+package clientgen
 
 import (
 	"io"
 
-	"github.com/pthm/melange/tooling/schema"
+	gogen "github.com/pthm/melange/pkg/clientgen/go"
+	"github.com/pthm/melange/pkg/schema"
 )
 
-// GenerateConfig is an alias for schema.GenerateConfig.
+// GenerateConfig is an alias for gogen.GenerateConfig.
 // This allows users of the tooling package to configure code generation
-// without importing the schema package separately.
-type GenerateConfig = schema.GenerateConfig
+// without importing the gogen package separately.
+type GenerateConfig = gogen.GenerateConfig
+
+// TypeDefinition is an alias for schema.TypeDefinition.
+type TypeDefinition = schema.TypeDefinition
 
 // DefaultGenerateConfig returns sensible defaults for code generation.
 // Package: "authz", no relation filter (all relations), string IDs.
 func DefaultGenerateConfig() *GenerateConfig {
-	return schema.DefaultGenerateConfig()
+	return gogen.DefaultGenerateConfig()
 }
 
 // GenerateGo writes type-safe Go code from a parsed OpenFGA schema.
@@ -51,6 +55,6 @@ func DefaultGenerateConfig() *GenerateConfig {
 //
 // The generated file should be committed to version control to enable
 // compile-time validation across the team without requiring schema access.
-func GenerateGo(w io.Writer, types []schema.TypeDefinition, cfg *GenerateConfig) error {
-	return schema.GenerateGo(w, types, cfg)
+func GenerateGo(w io.Writer, types []TypeDefinition, cfg *GenerateConfig) error {
+	return gogen.GenerateGo(w, types, cfg)
 }

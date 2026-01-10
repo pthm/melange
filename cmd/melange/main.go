@@ -28,9 +28,10 @@ import (
 
 	_ "github.com/lib/pq"
 
-	"github.com/pthm/melange/doctor"
-	"github.com/pthm/melange/tooling/schema"
-	"github.com/pthm/melange/tooling"
+	"github.com/pthm/melange/pkg/clientgen"
+	"github.com/pthm/melange/internal/doctor"
+	"github.com/pthm/melange/pkg/parser"
+	"github.com/pthm/melange/pkg/migrator"
 )
 
 func main() {
@@ -80,7 +81,7 @@ func main() {
 
 	switch flag.Arg(0) {
 	case "status":
-		migrator := schema.NewMigrator(db, *schemasDir)
+		migrator := migrator.NewMigrator(db, *schemasDir)
 		status(ctx, migrator)
 	case "migrate":
 		migrate(ctx, db, *schemasDir, *dryRun, *force)
@@ -137,7 +138,7 @@ func printUsage() {
 
 // status queries the database for current migration state.
 // Checks filesystem (schema.fga) and melange_tuples availability.
-func status(ctx context.Context, m *schema.Migrator) {
+func status(ctx context.Context, m *migrator.Migrator) {
 	s, err := m.GetStatus(ctx)
 	if err != nil {
 		log.Fatalf("getting status: %v", err)
@@ -165,7 +166,7 @@ func status(ctx context.Context, m *schema.Migrator) {
 // migrate applies the schema to the database.
 // Idempotent - safe to run multiple times.
 func migrate(ctx context.Context, db *sql.DB, schemasDir string, dryRun, force bool) {
-	opts := tooling.MigrateOptions{
+	opts := migrator.MigrateOptions{
 		Force: force,
 	}
 
@@ -177,7 +178,7 @@ func migrate(ctx context.Context, db *sql.DB, schemasDir string, dryRun, force b
 		fmt.Println("Applying authz infrastructure...")
 	}
 
-	skipped, err := tooling.MigrateWithOptions(ctx, db, schemasDir, opts)
+	skipped, err := migrator.MigrateWithOptions(ctx, db, schemasDir, opts)
 	if err != nil {
 		log.Fatalf("migrating: %v", err)
 	}
@@ -195,7 +196,7 @@ func migrate(ctx context.Context, db *sql.DB, schemasDir string, dryRun, force b
 	}
 
 	// Check for melange_tuples and warn if missing
-	migrator := schema.NewMigrator(db, schemasDir)
+	migrator := migrator.NewMigrator(db, schemasDir)
 	status, err := migrator.GetStatus(ctx)
 	if err != nil {
 		log.Printf("Warning: could not check status: %v", err)
@@ -218,7 +219,7 @@ func validate(schemasDir string) {
 	}
 
 	// Parse the schema to check for syntax errors
-	types, err := tooling.ParseSchema(schemaPath)
+	types, err := parser.ParseSchema(schemaPath)
 	if err != nil {
 		fmt.Printf("Parse error: %v\n", err)
 		os.Exit(1)
@@ -245,7 +246,7 @@ func generate(schemasDir, generateDir, generatePkg, idType, relationPrefix strin
 		os.Exit(1)
 	}
 
-	types, err := tooling.ParseSchema(schemaPath)
+	types, err := parser.ParseSchema(schemaPath)
 	if err != nil {
 		fmt.Printf("Parse error: %v\n", err)
 		os.Exit(1)
@@ -266,13 +267,13 @@ func generate(schemasDir, generateDir, generatePkg, idType, relationPrefix strin
 	}
 	defer func() { _ = f.Close() }()
 
-	cfg := &tooling.GenerateConfig{
+	cfg := &clientgen.GenerateConfig{
 		Package:              generatePkg,
 		RelationPrefixFilter: relationPrefix,
 		IDType:               idType,
 	}
 
-	if err := tooling.GenerateGo(f, types, cfg); err != nil {
+	if err := clientgen.GenerateGo(f, types, cfg); err != nil {
 		fmt.Printf("Generating code: %v\n", err)
 		os.Exit(1)
 	}

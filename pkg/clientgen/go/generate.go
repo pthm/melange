@@ -1,11 +1,19 @@
-package schema
+package gogen
 
 import (
 	"fmt"
 	"io"
 	"sort"
 	"strings"
+
+	"github.com/pthm/melange/pkg/schema"
 )
+
+// Type alias for schema.TypeDefinition.
+type TypeDefinition = schema.TypeDefinition
+
+// DetectCycles is a function alias for schema.DetectCycles.
+var DetectCycles = schema.DetectCycles
 
 // GenerateConfig configures code generation.
 // The generator produces Go code with type-safe constants for object types
@@ -112,12 +120,12 @@ func GenerateGo(w io.Writer, types []TypeDefinition, cfg *GenerateConfig) error 
 	ew.writeln("")
 	// Only import fmt if IDType is not string (need fmt.Sprint for conversion)
 	if cfg.IDType == "string" {
-		ew.writeln("import \"github.com/pthm/melange\"")
+		ew.writeln("import \"github.com/pthm/melange/melange\"")
 	} else {
 		ew.writeln("import (")
 		ew.writeln("\t\"fmt\"")
 		ew.writeln("")
-		ew.writeln("\t\"github.com/pthm/melange\"")
+		ew.writeln("\t\"github.com/pthm/melange/melange\"")
 		ew.writeln(")")
 	}
 	ew.writeln("")

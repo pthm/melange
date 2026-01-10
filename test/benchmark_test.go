@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/pthm/melange"
+	"github.com/pthm/melange/melange"
 	"github.com/pthm/melange/test/authz"
 	"github.com/pthm/melange/test/testutil"
 )

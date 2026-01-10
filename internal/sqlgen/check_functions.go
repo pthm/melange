@@ -1,10 +1,8 @@
-package schema
+package sqlgen
 
 import (
 	"fmt"
 	"strings"
-
-	"github.com/pthm/melange/tooling/schema/sqlgen"
 )
 
 func generateCheckFunctionBob(a RelationAnalysis, inline InlineSQLData, noWildcard bool) (string, error) {
@@ -180,7 +178,7 @@ func writeCheckHeader(buf *strings.Builder, data CheckFunctionData) {
 }
 
 func renderCheckUsersetSubjectBlock(data CheckFunctionData) (string, error) {
-	selfQuery, err := sqlgen.UsersetSubjectSelfCheckQuery(sqlgen.UsersetSubjectSelfCheckInput{
+	selfQuery, err := UsersetSubjectSelfCheckQuery(UsersetSubjectSelfCheckInput{
 		ObjectType:    data.ObjectType,
 		Relation:      data.Relation,
 		ClosureValues: data.ClosureValues,
@@ -193,7 +191,7 @@ func renderCheckUsersetSubjectBlock(data CheckFunctionData) (string, error) {
 		return "", err
 	}
 
-	computedQuery, err := sqlgen.UsersetSubjectComputedCheckQuery(sqlgen.UsersetSubjectComputedCheckInput{
+	computedQuery, err := UsersetSubjectComputedCheckQuery(UsersetSubjectComputedCheckInput{
 		ObjectType:    data.ObjectType,
 		Relation:      data.Relation,
 		ClosureValues: data.ClosureValues,
@@ -392,15 +390,15 @@ func selectInto(query, target string) (string, error) {
 
 func buildComplexUsersetCheck(a RelationAnalysis, pattern UsersetPattern, internalCheckFn string) (string, error) {
 	visitedExpr := fmt.Sprintf("p_visited || ARRAY['%s:' || p_object_id || ':%s']", a.ObjectType, a.Relation)
-	q := sqlgen.Tuples("grant_tuple").
+	q := Tuples("grant_tuple").
 		ObjectType(a.ObjectType).
 		Relations(a.Relation).
 		Where(
-			sqlgen.Eq{sqlgen.Col{Table: "grant_tuple", Column: "object_id"}, sqlgen.Raw("p_object_id")},
-			sqlgen.Eq{sqlgen.Col{Table: "grant_tuple", Column: "subject_type"}, sqlgen.Lit(pattern.SubjectType)},
-			sqlgen.HasUserset{sqlgen.Col{Table: "grant_tuple", Column: "subject_id"}},
-			sqlgen.Eq{sqlgen.UsersetRelation{sqlgen.Col{Table: "grant_tuple", Column: "subject_id"}}, sqlgen.Lit(pattern.SubjectRelation)},
-			sqlgen.Raw(fmt.Sprintf(
+			Eq{Col{Table: "grant_tuple", Column: "object_id"}, Raw("p_object_id")},
+			Eq{Col{Table: "grant_tuple", Column: "subject_type"}, Lit(pattern.SubjectType)},
+			HasUserset{Col{Table: "grant_tuple", Column: "subject_id"}},
+			Eq{UsersetRelation{Col{Table: "grant_tuple", Column: "subject_id"}}, Lit(pattern.SubjectRelation)},
+			Raw(fmt.Sprintf(
 				"%s(p_subject_type, p_subject_id, '%s', '%s', split_part(grant_tuple.subject_id, '#', 1), %s) = 1",
 				internalCheckFn,
 				pattern.SubjectRelation,
@@ -422,30 +420,30 @@ func buildComplexExclusionCheck(objectType, excludedRelation, internalCheckFn st
 }
 
 func buildTTUExclusionCheck(objectType string, rel ParentRelationInfo, internalCheckFn string) (string, error) {
-	q := sqlgen.Tuples("link").
+	q := Tuples("link").
 		ObjectType(objectType).
 		Relations(rel.LinkingRelation).
 		Where(
-			sqlgen.Eq{sqlgen.Col{Table: "link", Column: "object_id"}, sqlgen.Raw("p_object_id")},
-			sqlgen.Raw(fmt.Sprintf(
+			Eq{Col{Table: "link", Column: "object_id"}, Raw("p_object_id")},
+			Raw(fmt.Sprintf(
 				"%s(p_subject_type, p_subject_id, '%s', link.subject_type, link.subject_id, p_visited) = 1",
 				internalCheckFn,
 				rel.Relation,
 			)),
 		)
 	if len(rel.AllowedLinkingTypes) > 0 {
-		q.Where(sqlgen.In{Expr: sqlgen.Col{Table: "link", Column: "subject_type"}, Values: rel.AllowedLinkingTypes})
+		q.Where(In{Expr: Col{Table: "link", Column: "subject_type"}, Values: rel.AllowedLinkingTypes})
 	}
 	return q.ExistsSQL(), nil
 }
 
 func buildParentRelationExists(data CheckFunctionData, parent ParentRelationData, visitedExpr string) (string, error) {
-	q := sqlgen.Tuples("link").
+	q := Tuples("link").
 		ObjectType(data.ObjectType).
 		Relations(parent.LinkingRelation).
 		Where(
-			sqlgen.Eq{sqlgen.Col{Table: "link", Column: "object_id"}, sqlgen.Raw("p_object_id")},
-			sqlgen.Raw(fmt.Sprintf(
+			Eq{Col{Table: "link", Column: "object_id"}, Raw("p_object_id")},
+			Raw(fmt.Sprintf(
 				"%s(p_subject_type, p_subject_id, '%s', link.subject_type, link.subject_id, %s) = 1",
 				data.InternalCheckFunctionName,
 				parent.ParentRelation,
@@ -453,43 +451,43 @@ func buildParentRelationExists(data CheckFunctionData, parent ParentRelationData
 			)),
 		)
 	if parent.AllowedLinkingTypes != "" {
-		q.Where(sqlgen.Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
+		q.Where(Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
 	}
 	return q.ExistsSQL(), nil
 }
 
 func buildIntersectionThisExists(data CheckFunctionData, allowWildcard bool) (string, error) {
-	subjectIDCol := sqlgen.Col{Table: "t", Column: "subject_id"}
-	var subjectCheck sqlgen.Expr
+	subjectIDCol := Col{Table: "t", Column: "subject_id"}
+	var subjectCheck Expr
 	if allowWildcard {
-		subjectCheck = sqlgen.Or(
-			sqlgen.Eq{subjectIDCol, sqlgen.Raw("p_subject_id")},
-			sqlgen.Eq{subjectIDCol, sqlgen.Lit("*")},
+		subjectCheck = Or(
+			Eq{subjectIDCol, Raw("p_subject_id")},
+			Eq{subjectIDCol, Lit("*")},
 		)
 	} else {
-		subjectCheck = sqlgen.And(
-			sqlgen.Eq{subjectIDCol, sqlgen.Raw("p_subject_id")},
-			sqlgen.Ne{subjectIDCol, sqlgen.Lit("*")},
+		subjectCheck = And(
+			Eq{subjectIDCol, Raw("p_subject_id")},
+			Ne{subjectIDCol, Lit("*")},
 		)
 	}
-	q := sqlgen.Tuples("t").
+	q := Tuples("t").
 		ObjectType(data.ObjectType).
 		Relations(data.Relation).
 		Where(
-			sqlgen.Eq{sqlgen.Col{Table: "t", Column: "object_id"}, sqlgen.Raw("p_object_id")},
-			sqlgen.Eq{sqlgen.Col{Table: "t", Column: "subject_type"}, sqlgen.Raw("p_subject_type")},
+			Eq{Col{Table: "t", Column: "object_id"}, Raw("p_object_id")},
+			Eq{Col{Table: "t", Column: "subject_type"}, Raw("p_subject_type")},
 			subjectCheck,
 		)
 	return q.ExistsSQL(), nil
 }
 
 func buildIntersectionTTUExists(data CheckFunctionData, part IntersectionPartData, visitedExpr string) (string, error) {
-	q := sqlgen.Tuples("link").
+	q := Tuples("link").
 		ObjectType(data.ObjectType).
 		Relations(part.TTULinkingRelation).
 		Where(
-			sqlgen.Eq{sqlgen.Col{Table: "link", Column: "object_id"}, sqlgen.Raw("p_object_id")},
-			sqlgen.Raw(fmt.Sprintf(
+			Eq{Col{Table: "link", Column: "object_id"}, Raw("p_object_id")},
+			Raw(fmt.Sprintf(
 				"%s(p_subject_type, p_subject_id, '%s', link.subject_type, link.subject_id, %s) = 1",
 				data.InternalCheckFunctionName,
 				part.TTURelation,

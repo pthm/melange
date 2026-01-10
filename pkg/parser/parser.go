@@ -60,7 +60,7 @@
 //	    DryRun: buf,
 //	})
 //	fmt.Println(buf.String()) // Generated SQL
-package tooling
+package parser
 
 import (
 	"fmt"
@@ -70,8 +70,8 @@ import (
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/language/pkg/go/transformer"
 
-	"github.com/pthm/melange"
-	"github.com/pthm/melange/tooling/schema"
+	"github.com/pthm/melange/melange"
+	"github.com/pthm/melange/pkg/schema"
 )
 
 // ParseSchema reads an OpenFGA .fga file and returns type definitions.

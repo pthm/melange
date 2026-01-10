@@ -5,7 +5,7 @@ package authz
 import (
 	"fmt"
 
-	"github.com/pthm/melange"
+	"github.com/pthm/melange/melange"
 )
 
 // ObjectType constants from schema.

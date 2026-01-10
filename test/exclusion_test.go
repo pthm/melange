@@ -4,9 +4,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/pthm/melange/tooling/schema"
+	"github.com/pthm/melange/pkg/migrator"
+	"github.com/pthm/melange/pkg/parser"
+	"github.com/pthm/melange/pkg/schema"
 	"github.com/pthm/melange/test/testutil"
-	"github.com/pthm/melange/tooling"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,7 +26,7 @@ type document
     define viewer: writer but not (editor but not owner)
 `
 
-	types, err := tooling.ParseSchemaString(dsl)
+	types, err := parser.ParseSchemaString(dsl)
 	require.NoError(t, err)
 
 	var viewerRel *schema.RelationDefinition
@@ -65,7 +66,7 @@ type document
 	db := testutil.EmptyDB(t)
 	ctx := context.Background()
 
-	err := tooling.MigrateFromString(ctx, db, dsl)
+	err := migrator.MigrateFromString(ctx, db, dsl)
 	require.NoError(t, err)
 
 	_, err = db.ExecContext(ctx, `

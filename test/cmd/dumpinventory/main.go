@@ -28,8 +28,9 @@ import (
 	"github.com/openfga/openfga/assets"
 	"sigs.k8s.io/yaml"
 
-	"github.com/pthm/melange/tooling/schema"
-	"github.com/pthm/melange/tooling"
+	"github.com/pthm/melange/pkg/compiler"
+	"github.com/pthm/melange/pkg/parser"
+	"github.com/pthm/melange/pkg/schema"
 )
 
 // TestFile represents the structure of the YAML test files.
@@ -100,14 +101,14 @@ func main() {
 
 	for _, tc := range tests {
 		for _, stage := range tc.Stages {
-			types, err := tooling.ParseSchemaString(stage.Model)
+			types, err := parser.ParseSchemaString(stage.Model)
 			if err != nil {
 				continue
 			}
 
 			closureRows := schema.ComputeRelationClosure(types)
-			analyses := schema.AnalyzeRelations(types, closureRows)
-			analyses = schema.ComputeCanGenerate(analyses)
+			analyses := compiler.AnalyzeRelations(types, closureRows)
+			analyses = compiler.ComputeCanGenerate(analyses)
 
 			for _, a := range analyses {
 				totalRelations++
@@ -269,15 +270,15 @@ func dumpTestInventory(tc TestCase, showCheck, showList bool) {
 			fmt.Printf("\n## Stage %d\n", i+1)
 		}
 
-		types, err := tooling.ParseSchemaString(stage.Model)
+		types, err := parser.ParseSchemaString(stage.Model)
 		if err != nil {
 			fmt.Printf("\n⚠️  Parse error: %v\n", err)
 			continue
 		}
 
 		closureRows := schema.ComputeRelationClosure(types)
-		analyses := schema.AnalyzeRelations(types, closureRows)
-		analyses = schema.ComputeCanGenerate(analyses)
+		analyses := compiler.AnalyzeRelations(types, closureRows)
+		analyses = compiler.ComputeCanGenerate(analyses)
 
 		// Sort for consistent output
 		sort.Slice(analyses, func(i, j int) bool {
@@ -288,7 +289,7 @@ func dumpTestInventory(tc TestCase, showCheck, showList bool) {
 		})
 
 		if showCheck {
-			var checkCanGenerate, checkCannotGenerate []schema.RelationAnalysis
+			var checkCanGenerate, checkCannotGenerate []compiler.RelationAnalysis
 			for _, a := range analyses {
 				if a.CanGenerate {
 					checkCanGenerate = append(checkCanGenerate, a)
@@ -316,7 +317,7 @@ func dumpTestInventory(tc TestCase, showCheck, showList bool) {
 		}
 
 		if showList {
-			var listCanGenerate, listCannotGenerate []schema.RelationAnalysis
+			var listCanGenerate, listCannotGenerate []compiler.RelationAnalysis
 			for _, a := range analyses {
 				if a.CanGenerateList() {
 					listCanGenerate = append(listCanGenerate, a)

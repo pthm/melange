@@ -2,16 +2,24 @@ module github.com/pthm/melange
 
 go 1.25.3
 
-// The core melange module has no external dependencies beyond the standard library.
-// This keeps the runtime footprint minimal for applications that only need
-// permission checking.
+// The core melange module provides runtime permission checking and schema parsing.
+// Schema parsing requires the OpenFGA parser dependency.
 //
-// For schema parsing and code generation, use github.com/pthm/melange/tooling
-// which depends on the OpenFGA parser.
+// Public packages:
+//   - pkg/schema: Schema types and transformation
+//   - pkg/parser: OpenFGA DSL parsing
+//   - pkg/migrator: Database migration
+//   - pkg/compiler: SQL code generation
+//   - pkg/clientgen: Go client code generation
 
-require github.com/pthm/melange/tooling v0.3.0
+require (
+	github.com/openfga/api/proto v0.0.0-20251105142303-feed3db3d69d
+	github.com/openfga/language/pkg/go v0.2.0-beta.2
+	github.com/pthm/melange/melange v0.0.0
+)
 
-replace github.com/pthm/melange/tooling => ./tooling
+// Use local melange module during development
+replace github.com/pthm/melange/melange => ./melange
 
 require (
 	4d63.com/gocheckcompilerdirectives v1.3.0 // indirect

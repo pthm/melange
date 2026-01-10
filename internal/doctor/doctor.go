@@ -22,8 +22,10 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/pthm/melange/tooling"
-	"github.com/pthm/melange/tooling/schema"
+	"github.com/pthm/melange/pkg/parser"
+	"github.com/pthm/melange/internal/sqlgen"
+	"github.com/pthm/melange/pkg/migrator"
+	"github.com/pthm/melange/pkg/schema"
 )
 
 // Status represents the result of a health check.
@@ -156,7 +158,7 @@ type Doctor struct {
 	// Cached data from checks (populated during Run)
 	parsedTypes   []schema.TypeDefinition
 	schemaContent string
-	lastMigration *schema.MigrationRecord
+	lastMigration *migrator.MigrationRecord
 	expectedFuncs []string
 	currentFuncs  []string
 	tuplesInfo    *TuplesInfo
@@ -203,11 +205,11 @@ func (d *Doctor) Run(ctx context.Context) (*Report, error) {
 
 // checkSchemaFile validates the schema file exists and is valid.
 func (d *Doctor) checkSchemaFile(report *Report) {
-	migrator := schema.NewMigrator(d.db, d.schemasDir)
-	schemaPath := migrator.SchemaPath()
+	m := migrator.NewMigrator(d.db, d.schemasDir)
+	schemaPath := m.SchemaPath()
 
 	// Check file exists
-	if !migrator.HasSchema() {
+	if !m.HasSchema() {
 		report.AddCheck(CheckResult{
 			Category: "Schema File",
 			Name:     "exists",
@@ -226,7 +228,7 @@ func (d *Doctor) checkSchemaFile(report *Report) {
 	})
 
 	// Try to parse the schema
-	types, err := tooling.ParseSchema(schemaPath)
+	types, err := parser.ParseSchema(schemaPath)
 	if err != nil {
 		report.AddCheck(CheckResult{
 			Category: "Schema File",
@@ -277,7 +279,7 @@ func (d *Doctor) checkSchemaFile(report *Report) {
 
 // checkMigrationState validates the migration tracking table and state.
 func (d *Doctor) checkMigrationState(ctx context.Context, report *Report) error {
-	migrator := schema.NewMigrator(d.db, d.schemasDir)
+	m := migrator.NewMigrator(d.db, d.schemasDir)
 
 	// Check if migrations table exists
 	var tableExists bool
@@ -313,7 +315,7 @@ func (d *Doctor) checkMigrationState(ctx context.Context, report *Report) error 
 	})
 
 	// Get last migration
-	lastMigration, err := migrator.GetLastMigration(ctx)
+	lastMigration, err := m.GetLastMigration(ctx)
 	if err != nil {
 		return fmt.Errorf("getting last migration: %w", err)
 	}
@@ -341,11 +343,11 @@ func (d *Doctor) checkMigrationState(ctx context.Context, report *Report) error 
 	// Check if schema has changed since last migration
 	if d.parsedTypes != nil {
 		// Read schema content for checksum
-		schemaPath := migrator.SchemaPath()
+		schemaPath := m.SchemaPath()
 		content, err := readFileContent(schemaPath)
 		if err == nil {
 			d.schemaContent = content
-			currentChecksum := schema.ComputeSchemaChecksum(content)
+			currentChecksum := migrator.ComputeSchemaChecksum(content)
 
 			switch {
 			case currentChecksum != lastMigration.SchemaChecksum:
@@ -357,13 +359,13 @@ func (d *Doctor) checkMigrationState(ctx context.Context, report *Report) error 
 					Details:  fmt.Sprintf("File checksum: %s...\nDB checksum:   %s...", currentChecksum[:16], lastMigration.SchemaChecksum[:16]),
 					FixHint:  "Run 'melange migrate' to apply changes",
 				})
-			case lastMigration.CodegenVersion != schema.CodegenVersion:
+			case lastMigration.CodegenVersion != migrator.CodegenVersion:
 				report.AddCheck(CheckResult{
 					Category: "Migration State",
 					Name:     "schema_sync",
 					Status:   StatusWarn,
 					Message:  "Codegen version has changed",
-					Details:  fmt.Sprintf("Current: %s, DB: %s", schema.CodegenVersion, lastMigration.CodegenVersion),
+					Details:  fmt.Sprintf("Current: %s, DB: %s", migrator.CodegenVersion, lastMigration.CodegenVersion),
 					FixHint:  "Run 'melange migrate' to regenerate functions",
 				})
 			default:
@@ -431,9 +433,9 @@ func (d *Doctor) checkGeneratedFunctions(ctx context.Context, report *Report) er
 	// If we have parsed types, check for expected functions
 	if d.parsedTypes != nil {
 		closureRows := schema.ComputeRelationClosure(d.parsedTypes)
-		analyses := schema.AnalyzeRelations(d.parsedTypes, closureRows)
-		analyses = schema.ComputeCanGenerate(analyses)
-		expectedFuncs := schema.CollectFunctionNames(analyses)
+		analyses := sqlgen.AnalyzeRelations(d.parsedTypes, closureRows)
+		analyses = sqlgen.ComputeCanGenerate(analyses)
+		expectedFuncs := sqlgen.CollectFunctionNames(analyses)
 		d.expectedFuncs = expectedFuncs
 
 		expectedSet := make(map[string]bool)

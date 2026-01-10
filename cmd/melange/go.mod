@@ -5,7 +5,6 @@ go 1.25.3
 require (
 	github.com/lib/pq v1.10.9
 	github.com/pthm/melange v0.3.0
-	github.com/pthm/melange/tooling v0.3.0
 )
 
 require (
@@ -27,7 +26,5 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-// Use local modules during development
+// Use local module during development
 replace github.com/pthm/melange => ../..
-
-replace github.com/pthm/melange/tooling => ../../tooling

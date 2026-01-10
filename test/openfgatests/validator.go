@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/pthm/melange"
-	"github.com/pthm/melange/tooling/schema"
+	"github.com/pthm/melange/melange"
+	"github.com/pthm/melange/pkg/schema"
 )
 
 type modelValidator struct {

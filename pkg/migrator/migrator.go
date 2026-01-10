@@ -1,4 +1,4 @@
-package schema
+package migrator
 
 import (
 	"context"
@@ -13,6 +13,28 @@ import (
 	"strings"
 
 	"github.com/lib/pq"
+
+	"github.com/pthm/melange/internal/sqlgen"
+	"github.com/pthm/melange/pkg/schema"
+)
+
+// Type aliases for cleaner code.
+type (
+	TypeDefinition   = schema.TypeDefinition
+	GeneratedSQL     = sqlgen.GeneratedSQL
+	ListGeneratedSQL = sqlgen.ListGeneratedSQL
+)
+
+// Function aliases from schema and sqlgen packages.
+var (
+	DetectCycles           = schema.DetectCycles
+	ComputeRelationClosure = schema.ComputeRelationClosure
+	AnalyzeRelations       = sqlgen.AnalyzeRelations
+	ComputeCanGenerate     = sqlgen.ComputeCanGenerate
+	buildInlineSQLData     = sqlgen.BuildInlineSQLData
+	GenerateSQL            = sqlgen.GenerateSQL
+	GenerateListSQL        = sqlgen.GenerateListSQL
+	CollectFunctionNames   = sqlgen.CollectFunctionNames
 )
 
 // CodegenVersion is incremented when SQL generation templates or logic change.
@@ -23,7 +45,7 @@ import (
 //   - New function patterns are added
 const CodegenVersion = "1"
 
-// MigrateOptions controls migration behavior.
+// MigrateOptions controls migration behavior (public API).
 type MigrateOptions struct {
 	// DryRun outputs SQL to the provided writer without applying changes to the database.
 	// If nil, migration proceeds normally. Use for previewing migrations or generating migration scripts.
@@ -31,6 +53,12 @@ type MigrateOptions struct {
 
 	// Force re-runs migration even if schema/codegen unchanged. Use when manually fixing corrupted state or testing.
 	Force bool
+}
+
+// InternalMigrateOptions extends MigrateOptions with internal fields.
+type InternalMigrateOptions struct {
+	DryRun io.Writer
+	Force  bool
 
 	// SchemaContent is the raw schema text used for checksum calculation to detect schema changes.
 	// If empty, skip-if-unchanged optimization is disabled.
@@ -399,7 +427,7 @@ func (m *Migrator) insertMigrationRecord(ctx context.Context, db Execer, schemaC
 // and orphan cleanup.
 //
 // See MigrateWithTypes for basic usage without options.
-func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeDefinition, opts MigrateOptions) error {
+func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeDefinition, opts InternalMigrateOptions) error {
 	// 1. Validate schema before any computation
 	if err := DetectCycles(types); err != nil {
 		return err

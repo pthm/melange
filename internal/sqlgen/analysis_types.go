@@ -1,9 +1,25 @@
-package schema
+package sqlgen
 
 import (
 	"sort"
 	"strings"
+
+	"github.com/pthm/melange/pkg/schema"
 )
+
+// Type aliases for schema types used in analysis.
+// This avoids prefixing every usage with "schema." throughout this file.
+type (
+	TypeDefinition       = schema.TypeDefinition
+	RelationDefinition   = schema.RelationDefinition
+	SubjectTypeRef       = schema.SubjectTypeRef
+	ClosureRow           = schema.ClosureRow
+	IntersectionGroup    = schema.IntersectionGroup
+	ParentRelationCheck  = schema.ParentRelationCheck
+)
+
+// Function alias for schema.ComputeRelationClosure.
+var ComputeRelationClosure = schema.ComputeRelationClosure
 
 // RelationFeatures tracks which features a relation uses.
 // Multiple features can be present and will be composed in generated SQL.

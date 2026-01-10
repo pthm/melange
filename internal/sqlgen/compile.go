@@ -1,11 +1,9 @@
-package schema
+package sqlgen
 
 import (
 	"bytes"
 	"fmt"
 	"strings"
-
-	"github.com/pthm/melange/tooling/schema/sqlgen"
 )
 
 // formatSQLStringList formats a list of strings as a SQL-safe list.
@@ -436,7 +434,7 @@ func buildDirectCheck(a RelationAnalysis, allowWildcard bool) (string, error) {
 		return "FALSE", nil
 	}
 
-	return sqlgen.DirectCheck(sqlgen.DirectCheckInput{
+	return DirectCheck(DirectCheckInput{
 		ObjectType:    a.ObjectType,
 		Relations:     buildTupleLookupRelations(a),
 		SubjectTypes:  subjectTypes,
@@ -502,7 +500,7 @@ func buildUsersetCheck(a RelationAnalysis, allowWildcard bool, internalCheckFn s
 				// Fallback: use just the subject relation itself
 				satisfyingRels = []string{pattern.SubjectRelation}
 			}
-			usersetSQL, err := sqlgen.UsersetCheck(sqlgen.UsersetCheckInput{
+			usersetSQL, err := UsersetCheck(UsersetCheckInput{
 				ObjectType:          a.ObjectType,
 				Relation:            a.Relation,
 				SubjectType:         pattern.SubjectType,
@@ -580,7 +578,7 @@ func buildExclusionCheck(a RelationAnalysis, _ bool, internalCheckFn string) (st
 			// For example: "can_read_safe: can_read but not banned" where "banned: [user:*]"
 			// If there are no wildcard tuples, the check is harmless.
 			// This matches list_objects_exclusion.tpl.sql behavior.
-			exclusionSQL, err := sqlgen.ExclusionCheck(sqlgen.ExclusionCheckInput{
+			exclusionSQL, err := ExclusionCheck(ExclusionCheckInput{
 				ObjectType:       a.ObjectType,
 				ExcludedRelation: excl,
 				AllowWildcard:    true,
@@ -602,7 +600,7 @@ func buildExclusionCheck(a RelationAnalysis, _ bool, internalCheckFn string) (st
 		// For example: "can_read_safe: can_read but not banned" where "banned: [user:*]"
 		// If there are no wildcard tuples, the check is harmless.
 		// This matches list_objects_exclusion.tpl.sql behavior.
-		exclusionSQL, err := sqlgen.ExclusionCheck(sqlgen.ExclusionCheckInput{
+		exclusionSQL, err := ExclusionCheck(ExclusionCheckInput{
 			ObjectType:       a.ObjectType,
 			ExcludedRelation: excl,
 			AllowWildcard:    true,

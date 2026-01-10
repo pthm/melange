@@ -1,4 +1,4 @@
-package schema
+package migrator
 
 import (
 	"context"
