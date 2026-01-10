@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/pthm/melange"
+	"github.com/pthm/melange/melange"
 )
 
 // TestListSubjects_DecisionOverrides tests ListSubjects behavior with decision overrides.

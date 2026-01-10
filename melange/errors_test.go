@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/pthm/melange"
+	"github.com/pthm/melange/melange"
 )
 
 func TestErrorHelpers(t *testing.T) {

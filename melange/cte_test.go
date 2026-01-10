@@ -3,7 +3,7 @@ package melange_test
 import (
 	"testing"
 
-	"github.com/pthm/melange"
+	"github.com/pthm/melange/melange"
 )
 
 func TestListObjects_DecisionDeny(t *testing.T) {
