@@ -53,6 +53,8 @@ params:
 
   page:
     width: normal
+    tabs:
+      sync: true
 
   footer:
     displayCopyright: false

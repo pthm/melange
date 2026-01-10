@@ -208,10 +208,10 @@ go tool trace trace.out
 
 ### Key Areas to Benchmark
 
-- **SQL template changes** (`tooling/schema/templates/*.tpl.sql`): Run full benchmark suite
-- **Parser changes** (`tooling/parser.go`): Run schema load benchmarks
-- **Checker changes** (`checker.go`): Run check operation benchmarks
-- **Cache changes** (`cache.go`): Run cache-specific benchmarks
+- **SQL generation changes** (`internal/sqlgen/*.go`): Run full benchmark suite
+- **Parser changes** (`pkg/parser/parser.go`): Run schema load benchmarks
+- **Runtime changes** (`melange/checker.go`): Run check operation benchmarks
+- **Cache changes** (`melange/cache.go`): Run cache-specific benchmarks
 
 ### Benchmark Commands Reference
 

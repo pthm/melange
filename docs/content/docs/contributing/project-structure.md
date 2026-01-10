@@ -87,7 +87,9 @@ pkg/
 **`pkg/parser`** - Schema parsing:
 - `ParseSchema(path)` - Parse `.fga` file
 - `ParseSchemaString(dsl)` - Parse DSL string
+- Wraps the official OpenFGA language parser
 - Converts OpenFGA AST to `schema.TypeDefinition` slice
+- Only package that imports the OpenFGA parser dependency
 
 **`pkg/migrator`** - Migration:
 - `Migrate(ctx, db, dir)` - One-step migration
@@ -106,7 +108,7 @@ internal/
 │   ├── go/            # Go generator
 │   ├── typescript/    # TypeScript generator (stub)
 │   └── python/        # Python generator (stub)
-├── sqlgen/            # SQL DSL and query builders
+├── sqlgen/            # SQL DSL, query builders, code generation internals
 └── doctor/            # CLI health check logic
 ```
 
@@ -234,7 +236,7 @@ docs/
 3. **SQL generation** changes go in `internal/sqlgen/`
 4. **Tests** go in `test/` or the appropriate `*_test.go` file
 
-### SQL Template Changes
+### SQL Generation Changes
 
 When modifying SQL generation in `internal/sqlgen/`:
 
