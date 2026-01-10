@@ -22,8 +22,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/pthm/melange/tooling/schema"
 	"github.com/pthm/melange/tooling"
+	"github.com/pthm/melange/tooling/schema"
 )
 
 // Status represents the result of a health check.

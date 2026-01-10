@@ -299,8 +299,8 @@ func TestTupleQueryWithSubjectFilters(t *testing.T) {
 
 	checks := []string{
 		"t.subject_type = p_subject_type",
-		"t.subject_id = p_subject_id",    // Or wildcard match
-		"t.subject_id = '*'",             // Wildcard part
+		"t.subject_id = p_subject_id", // Or wildcard match
+		"t.subject_id = '*'",          // Wildcard part
 		"LIMIT 1",
 	}
 	for _, check := range checks {

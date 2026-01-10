@@ -141,3 +141,137 @@ func (s SelectStmt) Exists() string {
 func (s SelectStmt) NotExists() string {
 	return fmt.Sprintf("NOT EXISTS (\n%s\n)", s.SQL())
 }
+
+// =============================================================================
+// Values Tables (Inline Data)
+// =============================================================================
+
+// ValuesTable represents a VALUES clause as a table expression.
+// Used to inline data like closure values without database tables.
+//
+// Example: ValuesTable{Values: "('doc', 'viewer', 'editor')", Alias: "c", Columns: []string{"object_type", "relation", "satisfying_relation"}}
+// Renders: (VALUES ('doc', 'viewer', 'editor')) AS c(object_type, relation, satisfying_relation)
+type ValuesTable struct {
+	Values  string   // The VALUES content (e.g., "('a', 'b'), ('c', 'd')")
+	Alias   string   // Table alias (e.g., "c")
+	Columns []string // Column names (e.g., ["object_type", "relation"])
+}
+
+// SQL renders the VALUES table expression.
+func (v ValuesTable) SQL() string {
+	if len(v.Columns) == 0 {
+		return fmt.Sprintf("(VALUES %s) AS %s", v.Values, v.Alias)
+	}
+	return fmt.Sprintf("(VALUES %s) AS %s(%s)", v.Values, v.Alias, strings.Join(v.Columns, ", "))
+}
+
+// ClosureValuesTable creates a standard closure VALUES table.
+// The table has columns: object_type, relation, satisfying_relation
+func ClosureValuesTable(values, alias string) ValuesTable {
+	return ValuesTable{
+		Values:  values,
+		Alias:   alias,
+		Columns: []string{"object_type", "relation", "satisfying_relation"},
+	}
+}
+
+// UsersetValuesTable creates a standard userset VALUES table.
+// The table has columns: object_type, relation, subject_type, subject_relation
+func UsersetValuesTable(values, alias string) ValuesTable {
+	return ValuesTable{
+		Values:  values,
+		Alias:   alias,
+		Columns: []string{"object_type", "relation", "subject_type", "subject_relation"},
+	}
+}
+
+// =============================================================================
+// SQL Formatting Helpers
+// =============================================================================
+
+// ListLiterals formats a slice of strings as a SQL list of literals.
+// Example: ListLiterals([]string{"a", "b"}) returns "'a', 'b'"
+// Returns empty string for empty slice - callers should handle this case
+// appropriately (e.g., not generating IN clauses for empty lists).
+func ListLiterals(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	parts := make([]string, len(values))
+	for i, v := range values {
+		// Escape single quotes
+		escaped := strings.ReplaceAll(v, "'", "''")
+		parts[i] = "'" + escaped + "'"
+	}
+	return strings.Join(parts, ", ")
+}
+
+// Ident sanitizes an identifier for use in SQL.
+// Replaces non-alphanumeric characters with underscores.
+func Ident(name string) string {
+	var result strings.Builder
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+			result.WriteRune(r)
+		} else {
+			result.WriteRune('_')
+		}
+	}
+	return result.String()
+}
+
+// =============================================================================
+// Function/Table Expressions
+// =============================================================================
+
+// FunctionTable represents a function call used as a table source.
+// Example: FunctionTable{Name: "list_doc_viewer_objects", Args: []Expr{Param("p_subject_type"), Param("p_subject_id")}, Alias: "f"}
+// Renders: list_doc_viewer_objects(p_subject_type, p_subject_id) AS f
+type FunctionTable struct {
+	Name  string
+	Args  []Expr
+	Alias string
+}
+
+// SQL renders the function table expression.
+func (f FunctionTable) SQL() string {
+	args := make([]string, len(f.Args))
+	for i, arg := range f.Args {
+		args[i] = arg.SQL()
+	}
+	call := f.Name + "(" + strings.Join(args, ", ") + ")"
+	if f.Alias != "" {
+		return call + " AS " + f.Alias
+	}
+	return call
+}
+
+// LateralFunction represents a LATERAL function call in a JOIN.
+// Example: LateralFunction{Name: "list_doc_viewer_subjects", Args: []Expr{...}, Alias: "s"}
+// Renders: LATERAL list_doc_viewer_subjects(...) AS s
+type LateralFunction struct {
+	Name  string
+	Args  []Expr
+	Alias string
+}
+
+// SQL renders the LATERAL function expression.
+func (l LateralFunction) SQL() string {
+	args := make([]string, len(l.Args))
+	for i, arg := range l.Args {
+		args[i] = arg.SQL()
+	}
+	call := "LATERAL " + l.Name + "(" + strings.Join(args, ", ") + ")"
+	if l.Alias != "" {
+		return call + " AS " + l.Alias
+	}
+	return call
+}
+
+// CrossJoinLateral creates a JoinClause for CROSS JOIN LATERAL with a function.
+func CrossJoinLateral(funcName string, args []Expr, alias string) JoinClause {
+	return JoinClause{
+		Type:  "CROSS",
+		Table: LateralFunction{Name: funcName, Args: args, Alias: alias}.SQL(),
+	}
+}

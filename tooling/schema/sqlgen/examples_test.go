@@ -300,11 +300,11 @@ func TestListObjectsUsersetPatternSimple(t *testing.T) {
 // TestComplexExclusions shows the ExclusionConfig builder.
 func TestComplexExclusions(t *testing.T) {
 	config := sqlgen.ExclusionConfig{
-		ObjectType:      "document",
-		ObjectIDExpr:    sqlgen.Col{Table: "t", Column: "object_id"},
-		SubjectTypeExpr: sqlgen.SubjectType,
-		SubjectIDExpr:   sqlgen.SubjectID,
-		SimpleExcludedRelations: []string{"blocked"},
+		ObjectType:               "document",
+		ObjectIDExpr:             sqlgen.Col{Table: "t", Column: "object_id"},
+		SubjectTypeExpr:          sqlgen.SubjectType,
+		SubjectIDExpr:            sqlgen.SubjectID,
+		SimpleExcludedRelations:  []string{"blocked"},
 		ComplexExcludedRelations: []string{"banned"},
 	}
 

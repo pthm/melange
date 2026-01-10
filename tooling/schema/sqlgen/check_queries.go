@@ -197,8 +197,8 @@ func UsersetSubjectComputedCheckQuery(input UsersetSubjectComputedCheckInput) (s
 			Ne{Left: Col{Table: "t", Column: "subject_id"}, Right: Lit("*")},
 			HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
 			Eq{
-				Left:  Raw("substring(t.subject_id from 1 for position('#' in t.subject_id) - 1)"),
-				Right: Raw("substring(p_subject_id from 1 for position('#' in p_subject_id) - 1)"),
+				Left:  UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}},
+				Right: UsersetObjectID{Source: SubjectID},
 			},
 		),
 		Limit: 1,
