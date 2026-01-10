@@ -4,47 +4,11 @@ import (
 	"fmt"
 
 	"github.com/pthm/melange/tooling/schema/sqlgen/dsl"
-	"github.com/stephenafamo/bob"
 	"github.com/stephenafamo/bob/dialect/psql"
 )
 
-func rawExpr(expr string) psql.Expression {
-	return psql.Raw(expr)
-}
-
-func existsExpr(q bob.Query) (bob.Expression, error) {
-	sql, err := renderQuery(q)
-	if err != nil {
-		return nil, err
-	}
-	return psql.Raw("EXISTS (\n" + sql + "\n)"), nil
-}
-
-func notExistsExpr(q bob.Query) (bob.Expression, error) {
-	sql, err := renderQuery(q)
-	if err != nil {
-		return nil, err
-	}
-	return psql.Raw("NOT EXISTS (\n" + sql + "\n)"), nil
-}
-
-func CheckPermissionExpr(functionName, subjectTypeExpr, subjectIDExpr, relation, objectTypeExpr, objectIDExpr string, expect bool) psql.Expression {
-	result := "1"
-	if !expect {
-		result = "0"
-	}
-	return psql.Raw(fmt.Sprintf(
-		"%s(%s, %s, '%s', %s, %s) = %s",
-		functionName,
-		subjectTypeExpr,
-		subjectIDExpr,
-		relation,
-		objectTypeExpr,
-		objectIDExpr,
-		result,
-	))
-}
-
+// CheckPermissionInternalExpr returns a Bob expression for a check_permission_internal call.
+// This is used in places where Bob query builders need Bob expressions directly.
 func CheckPermissionInternalExpr(subjectTypeExpr, subjectIDExpr, relation, objectTypeExpr, objectIDExpr string, expect bool) psql.Expression {
 	result := "1"
 	if !expect {
@@ -170,4 +134,15 @@ func CheckPermissionInternalExprDSL(subjectTypeExpr, subjectIDExpr, relation, ob
 func ExclusionPredicatesDSL(input ExclusionInput) []dsl.Expr {
 	config := toDSLExclusionConfig(input)
 	return config.BuildPredicates()
+}
+
+// RenderDSLExprs converts a slice of DSL expressions to SQL strings
+func RenderDSLExprs(exprs []dsl.Expr) []string {
+	result := make([]string, 0, len(exprs))
+	for _, expr := range exprs {
+		if expr != nil {
+			result = append(result, expr.SQL())
+		}
+	}
+	return result
 }

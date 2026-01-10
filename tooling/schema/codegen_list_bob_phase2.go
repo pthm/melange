@@ -240,10 +240,7 @@ func buildAccessibleObjectsCTE(a RelationAnalysis, baseBlocks []string, recursiv
 
 	finalExclusions := buildExclusionInput(a, "acc.object_id", "p_subject_type", "p_subject_id")
 	where := []bob.Expression{}
-	exclusionPreds, err := exclusionPredicates(finalExclusions)
-	if err != nil {
-		return "", err
-	}
+	exclusionPreds := exclusionPredicates(finalExclusions)
 	if len(exclusionPreds) > 0 {
 		where = append(where, psql.Raw("TRUE"))
 		where = append(where, exclusionPreds...)
@@ -539,10 +536,7 @@ func buildObjectsIntersectionGroupSQL(a RelationAnalysis, idx int, group Interse
 	}
 
 	exclusions := buildSimpleComplexExclusionInput(a, fmt.Sprintf("ig_%d.object_id", idx), "p_subject_type", "p_subject_id")
-	exclusionPreds, err := exclusionPredicates(exclusions)
-	if err != nil {
-		return "", err
-	}
+	exclusionPreds := exclusionPredicates(exclusions)
 	if len(exclusionPreds) == 0 {
 		return groupSQL, nil
 	}
@@ -743,10 +737,7 @@ $$ LANGUAGE plpgsql STABLE;`,
 
 func buildListSubjectsRecursiveUsersetFilterBlocks(a RelationAnalysis, inline InlineSQLData, allSatisfyingRelations []string) ([]string, string, error) {
 	var blocks []string
-	checkExprSQL, err := sqlgen.RenderExpr(sqlgen.CheckPermissionExpr("check_permission", "v_filter_type", "t.subject_id", a.Relation, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true))
-	if err != nil {
-		return nil, "", err
-	}
+	checkExprSQL := sqlgen.CheckPermissionExprDSL("check_permission", "v_filter_type", "t.subject_id", a.Relation, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true).SQL()
 	baseSQL, err := sqlgen.ListSubjectsUsersetFilterQuery(sqlgen.ListSubjectsUsersetFilterInput{
 		ObjectType:          a.ObjectType,
 		RelationList:        allSatisfyingRelations,
@@ -1005,10 +996,7 @@ func buildSubjectsTTUPathQuery(a RelationAnalysis, parent ListParentRelationData
 		where = append(where, psql.Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
 	}
 	exclusions := buildExclusionInput(a, "p_object_id", "p_subject_type", "sp.subject_id")
-	exclusionPreds, err := exclusionPredicates(exclusions)
-	if err != nil {
-		return "", err
-	}
+	exclusionPreds := exclusionPredicates(exclusions)
 	where = append(where, exclusionPreds...)
 
 	query := psql.Select(

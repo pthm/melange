@@ -234,10 +234,7 @@ func buildListObjectsSelfRefBaseBlocks(a RelationAnalysis, relationList, allowed
 
 func buildListObjectsSelfRefRecursiveBlock(a RelationAnalysis, relationList []string) (string, error) {
 	baseExclusions := buildExclusionInput(a, "t.object_id", "p_subject_type", "p_subject_id")
-	exclusionPreds, err := exclusionPredicates(baseExclusions)
-	if err != nil {
-		return "", err
-	}
+	exclusionPreds := exclusionPredicates(baseExclusions)
 
 	where := []bob.Expression{
 		psql.Quote("t", "object_type").EQ(psql.S(a.ObjectType)),
@@ -266,10 +263,7 @@ func buildListObjectsSelfRefRecursiveBlock(a RelationAnalysis, relationList []st
 
 func buildListObjectsSelfRefFinalQuery(a RelationAnalysis) (string, error) {
 	finalExclusions := buildExclusionInput(a, "me.object_id", "p_subject_type", "p_subject_id")
-	exclusionPreds, err := exclusionPredicates(finalExclusions)
-	if err != nil {
-		return "", err
-	}
+	exclusionPreds := exclusionPredicates(finalExclusions)
 
 	query := psql.Select(
 		sm.Columns(psql.Raw("me.object_id")),
@@ -343,10 +337,7 @@ $$ LANGUAGE plpgsql STABLE;`,
 }
 
 func buildListSubjectsSelfRefUsersetFilterQuery(a RelationAnalysis, inline InlineSQLData, allSatisfyingRelations []string) (string, error) {
-	checkExprSQL, err := sqlgen.RenderExpr(sqlgen.CheckPermissionExpr("check_permission", "v_filter_type", "t.subject_id", a.Relation, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true))
-	if err != nil {
-		return "", err
-	}
+	checkExprSQL := sqlgen.CheckPermissionExprDSL("check_permission", "v_filter_type", "t.subject_id", a.Relation, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true).SQL()
 	baseSQL, err := sqlgen.ListSubjectsUsersetFilterQuery(sqlgen.ListSubjectsUsersetFilterInput{
 		ObjectType:          a.ObjectType,
 		RelationList:        allSatisfyingRelations,
@@ -651,10 +642,7 @@ func buildListSubjectsSelfRefUsersetObjectsRecursiveQuery(a RelationAnalysis) (s
 }
 
 func buildListSubjectsSelfRefUsersetObjectsExpansionQuery(a RelationAnalysis, relationList, allowedSubjectTypes []string, excludeWildcard bool, exclusions sqlgen.ExclusionInput) (string, error) {
-	exclusionPreds, err := exclusionPredicates(exclusions)
-	if err != nil {
-		return "", err
-	}
+	exclusionPreds := exclusionPredicates(exclusions)
 
 	where := []bob.Expression{
 		psql.Quote("t", "object_type").EQ(psql.S(a.ObjectType)),
@@ -799,10 +787,7 @@ func buildListObjectsComposedQuery(a RelationAnalysis, anchor *ListIndirectAncho
 }
 
 func buildComposedTTUObjectsQuery(a RelationAnalysis, anchor *ListIndirectAnchorData, targetType string, exclusions sqlgen.ExclusionInput) (string, error) {
-	exclusionPreds, err := exclusionPredicates(exclusions)
-	if err != nil {
-		return "", err
-	}
+	exclusionPreds := exclusionPredicates(exclusions)
 
 	targetFunction := fmt.Sprintf("list_%s_%s_objects", targetType, anchor.Path[0].TargetRelation)
 	subquery := fmt.Sprintf("SELECT obj.object_id FROM %s(p_subject_type, p_subject_id) obj", targetFunction)
@@ -825,10 +810,7 @@ func buildComposedTTUObjectsQuery(a RelationAnalysis, anchor *ListIndirectAnchor
 }
 
 func buildComposedRecursiveTTUObjectsQuery(a RelationAnalysis, anchor *ListIndirectAnchorData, recursiveType string, exclusions sqlgen.ExclusionInput) (string, error) {
-	exclusionPreds, err := exclusionPredicates(exclusions)
-	if err != nil {
-		return "", err
-	}
+	exclusionPreds := exclusionPredicates(exclusions)
 
 	where := []bob.Expression{
 		psql.Quote("t", "object_type").EQ(psql.S(a.ObjectType)),
@@ -848,10 +830,7 @@ func buildComposedRecursiveTTUObjectsQuery(a RelationAnalysis, anchor *ListIndir
 }
 
 func buildComposedUsersetObjectsQuery(a RelationAnalysis, anchor *ListIndirectAnchorData, firstStep ListAnchorPathStepData, relationList []string, exclusions sqlgen.ExclusionInput) (string, error) {
-	exclusionPreds, err := exclusionPredicates(exclusions)
-	if err != nil {
-		return "", err
-	}
+	exclusionPreds := exclusionPredicates(exclusions)
 
 	targetFunction := anchor.FirstStepTargetFunctionName
 	subquery := fmt.Sprintf("SELECT obj.object_id FROM %s(p_subject_type, p_subject_id) obj", targetFunction)
@@ -999,10 +978,7 @@ func buildListSubjectsComposedRegularQuery(a RelationAnalysis, anchor *ListIndir
 	candidates := indentLines(joinUnionBlocks(candidateBlocks), "        ")
 
 	exclusions := buildSimpleComplexExclusionInput(a, "p_object_id", "p_subject_type", "sc.subject_id")
-	exclusionPreds, err := exclusionPredicates(exclusions)
-	if err != nil {
-		return "", err
-	}
+	exclusionPreds := exclusionPredicates(exclusions)
 
 	whereClause := ""
 	if len(exclusionPreds) > 0 {

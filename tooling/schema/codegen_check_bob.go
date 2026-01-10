@@ -5,9 +5,7 @@ import (
 	"strings"
 
 	"github.com/pthm/melange/tooling/schema/sqlgen"
-	"github.com/stephenafamo/bob"
-	"github.com/stephenafamo/bob/dialect/psql"
-	"github.com/stephenafamo/bob/dialect/psql/sm"
+	"github.com/pthm/melange/tooling/schema/sqlgen/dsl"
 )
 
 func generateCheckFunctionBob(a RelationAnalysis, inline InlineSQLData, noWildcard bool) (string, error) {
@@ -395,28 +393,24 @@ func selectInto(query, target string) (string, error) {
 
 func buildComplexUsersetCheck(a RelationAnalysis, pattern UsersetPattern, internalCheckFn string) (string, error) {
 	visitedExpr := fmt.Sprintf("p_visited || ARRAY['%s:' || p_object_id || ':%s']", a.ObjectType, a.Relation)
-	where := []bob.Expression{
-		psql.Quote("grant_tuple", "object_type").EQ(psql.S(a.ObjectType)),
-		psql.Quote("grant_tuple", "object_id").EQ(psql.Raw("p_object_id")),
-		psql.Quote("grant_tuple", "relation").EQ(psql.S(a.Relation)),
-		psql.Quote("grant_tuple", "subject_type").EQ(psql.S(pattern.SubjectType)),
-		psql.Raw("position('#' in grant_tuple.subject_id)").GT(psql.Raw("0")),
-		psql.Raw("split_part(grant_tuple.subject_id, '#', 2)").EQ(psql.S(pattern.SubjectRelation)),
-		psql.Raw(fmt.Sprintf(
-			"%s(p_subject_type, p_subject_id, '%s', '%s', split_part(grant_tuple.subject_id, '#', 1), %s) = 1",
-			internalCheckFn,
-			pattern.SubjectRelation,
-			pattern.SubjectType,
-			visitedExpr,
-		)),
-	}
-	query := psql.Select(
-		sm.Columns(psql.Raw("1")),
-		sm.From("melange_tuples").As("grant_tuple"),
-		sm.Where(psql.And(where...)),
-		sm.Limit(1),
-	)
-	return renderExistsQuery(query)
+	q := dsl.Tuples("grant_tuple").
+		ObjectType(a.ObjectType).
+		Relations(a.Relation).
+		Where(
+			dsl.Eq{dsl.Col{Table: "grant_tuple", Column: "object_id"}, dsl.Raw("p_object_id")},
+			dsl.Eq{dsl.Col{Table: "grant_tuple", Column: "subject_type"}, dsl.Lit(pattern.SubjectType)},
+			dsl.HasUserset{dsl.Col{Table: "grant_tuple", Column: "subject_id"}},
+			dsl.Eq{dsl.UsersetRelation{dsl.Col{Table: "grant_tuple", Column: "subject_id"}}, dsl.Lit(pattern.SubjectRelation)},
+			dsl.Raw(fmt.Sprintf(
+				"%s(p_subject_type, p_subject_id, '%s', '%s', split_part(grant_tuple.subject_id, '#', 1), %s) = 1",
+				internalCheckFn,
+				pattern.SubjectRelation,
+				pattern.SubjectType,
+				visitedExpr,
+			)),
+		).
+		Limit(1)
+	return q.ExistsSQL(), nil
 }
 
 func buildComplexExclusionCheck(objectType, excludedRelation, internalCheckFn string) string {
@@ -429,104 +423,81 @@ func buildComplexExclusionCheck(objectType, excludedRelation, internalCheckFn st
 }
 
 func buildTTUExclusionCheck(objectType string, rel ParentRelationInfo, internalCheckFn string) (string, error) {
-	where := []bob.Expression{
-		psql.Quote("link", "object_type").EQ(psql.S(objectType)),
-		psql.Quote("link", "object_id").EQ(psql.Raw("p_object_id")),
-		psql.Quote("link", "relation").EQ(psql.S(rel.LinkingRelation)),
-		psql.Raw(fmt.Sprintf(
-			"%s(p_subject_type, p_subject_id, '%s', link.subject_type, link.subject_id, p_visited) = 1",
-			internalCheckFn,
-			rel.Relation,
-		)),
-	}
+	q := dsl.Tuples("link").
+		ObjectType(objectType).
+		Relations(rel.LinkingRelation).
+		Where(
+			dsl.Eq{dsl.Col{Table: "link", Column: "object_id"}, dsl.Raw("p_object_id")},
+			dsl.Raw(fmt.Sprintf(
+				"%s(p_subject_type, p_subject_id, '%s', link.subject_type, link.subject_id, p_visited) = 1",
+				internalCheckFn,
+				rel.Relation,
+			)),
+		)
 	if len(rel.AllowedLinkingTypes) > 0 {
-		where = append(where, psql.Raw(fmt.Sprintf("link.subject_type IN (%s)", formatSQLStringList(rel.AllowedLinkingTypes))))
+		q.Where(dsl.In{Expr: dsl.Col{Table: "link", Column: "subject_type"}, Values: rel.AllowedLinkingTypes})
 	}
-	query := psql.Select(
-		sm.Columns(psql.Raw("1")),
-		sm.From("melange_tuples").As("link"),
-		sm.Where(psql.And(where...)),
-	)
-	return renderExistsQuery(query)
+	return q.ExistsSQL(), nil
 }
 
 func buildParentRelationExists(data CheckFunctionData, parent ParentRelationData, visitedExpr string) (string, error) {
-	where := []bob.Expression{
-		psql.Quote("link", "object_type").EQ(psql.S(data.ObjectType)),
-		psql.Quote("link", "object_id").EQ(psql.Raw("p_object_id")),
-		psql.Quote("link", "relation").EQ(psql.S(parent.LinkingRelation)),
-		psql.Raw(fmt.Sprintf(
-			"%s(p_subject_type, p_subject_id, '%s', link.subject_type, link.subject_id, %s) = 1",
-			data.InternalCheckFunctionName,
-			parent.ParentRelation,
-			visitedExpr,
-		)),
-	}
+	q := dsl.Tuples("link").
+		ObjectType(data.ObjectType).
+		Relations(parent.LinkingRelation).
+		Where(
+			dsl.Eq{dsl.Col{Table: "link", Column: "object_id"}, dsl.Raw("p_object_id")},
+			dsl.Raw(fmt.Sprintf(
+				"%s(p_subject_type, p_subject_id, '%s', link.subject_type, link.subject_id, %s) = 1",
+				data.InternalCheckFunctionName,
+				parent.ParentRelation,
+				visitedExpr,
+			)),
+		)
 	if parent.AllowedLinkingTypes != "" {
-		where = append(where, psql.Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
+		q.Where(dsl.Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
 	}
-	query := psql.Select(
-		sm.Columns(psql.Raw("1")),
-		sm.From("melange_tuples").As("link"),
-		sm.Where(psql.And(where...)),
-	)
-	return renderExistsQuery(query)
+	return q.ExistsSQL(), nil
 }
 
 func buildIntersectionThisExists(data CheckFunctionData, allowWildcard bool) (string, error) {
-	subjectCheck := bob.Expression(psql.Quote("t", "subject_id").EQ(psql.Raw("p_subject_id")))
+	subjectIDCol := dsl.Col{Table: "t", Column: "subject_id"}
+	var subjectCheck dsl.Expr
 	if allowWildcard {
-		subjectCheck = psql.Or(
-			psql.Quote("t", "subject_id").EQ(psql.Raw("p_subject_id")),
-			psql.Quote("t", "subject_id").EQ(psql.S("*")),
+		subjectCheck = dsl.Or(
+			dsl.Eq{subjectIDCol, dsl.Raw("p_subject_id")},
+			dsl.Eq{subjectIDCol, dsl.Lit("*")},
 		)
 	} else {
-		subjectCheck = psql.And(
-			psql.Quote("t", "subject_id").EQ(psql.Raw("p_subject_id")),
-			psql.Quote("t", "subject_id").NE(psql.S("*")),
+		subjectCheck = dsl.And(
+			dsl.Eq{subjectIDCol, dsl.Raw("p_subject_id")},
+			dsl.Ne{subjectIDCol, dsl.Lit("*")},
 		)
 	}
-	where := []bob.Expression{
-		psql.Quote("t", "object_type").EQ(psql.S(data.ObjectType)),
-		psql.Quote("t", "object_id").EQ(psql.Raw("p_object_id")),
-		psql.Quote("t", "relation").EQ(psql.S(data.Relation)),
-		psql.Quote("t", "subject_type").EQ(psql.Raw("p_subject_type")),
-		subjectCheck,
-	}
-	query := psql.Select(
-		sm.Columns(psql.Raw("1")),
-		sm.From("melange_tuples").As("t"),
-		sm.Where(psql.And(where...)),
-	)
-	return renderExistsQuery(query)
+	q := dsl.Tuples("t").
+		ObjectType(data.ObjectType).
+		Relations(data.Relation).
+		Where(
+			dsl.Eq{dsl.Col{Table: "t", Column: "object_id"}, dsl.Raw("p_object_id")},
+			dsl.Eq{dsl.Col{Table: "t", Column: "subject_type"}, dsl.Raw("p_subject_type")},
+			subjectCheck,
+		)
+	return q.ExistsSQL(), nil
 }
 
 func buildIntersectionTTUExists(data CheckFunctionData, part IntersectionPartData, visitedExpr string) (string, error) {
-	where := []bob.Expression{
-		psql.Quote("link", "object_type").EQ(psql.S(data.ObjectType)),
-		psql.Quote("link", "object_id").EQ(psql.Raw("p_object_id")),
-		psql.Quote("link", "relation").EQ(psql.S(part.TTULinkingRelation)),
-		psql.Raw(fmt.Sprintf(
-			"%s(p_subject_type, p_subject_id, '%s', link.subject_type, link.subject_id, %s) = 1",
-			data.InternalCheckFunctionName,
-			part.TTURelation,
-			visitedExpr,
-		)),
-	}
-	query := psql.Select(
-		sm.Columns(psql.Raw("1")),
-		sm.From("melange_tuples").As("link"),
-		sm.Where(psql.And(where...)),
-	)
-	return renderExistsQuery(query)
-}
-
-func renderExistsQuery(query bob.Query) (string, error) {
-	sql, err := sqlgen.RenderQuery(query)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("EXISTS (\n%s\n)", sql), nil
+	q := dsl.Tuples("link").
+		ObjectType(data.ObjectType).
+		Relations(part.TTULinkingRelation).
+		Where(
+			dsl.Eq{dsl.Col{Table: "link", Column: "object_id"}, dsl.Raw("p_object_id")},
+			dsl.Raw(fmt.Sprintf(
+				"%s(p_subject_type, p_subject_id, '%s', link.subject_type, link.subject_id, %s) = 1",
+				data.InternalCheckFunctionName,
+				part.TTURelation,
+				visitedExpr,
+			)),
+		)
+	return q.ExistsSQL(), nil
 }
 
 func generateDispatcherBob(analyses []RelationAnalysis, noWildcard bool) (string, error) {

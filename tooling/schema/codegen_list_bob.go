@@ -5,7 +5,9 @@ import (
 	"strings"
 
 	"github.com/pthm/melange/tooling/schema/sqlgen"
+	"github.com/pthm/melange/tooling/schema/sqlgen/dsl"
 	"github.com/stephenafamo/bob"
+	"github.com/stephenafamo/bob/dialect/psql"
 )
 
 type listUsersetPatternInput struct {
@@ -371,14 +373,8 @@ func generateListSubjectsFunctionBob(a RelationAnalysis, inline InlineSQLData, t
 		usersetNormalized := "substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) || '#' || v_filter_relation"
 		usersetExclusions := buildExclusionInput(a, "p_object_id", "v_filter_type", usersetNormalized)
 
-		usersetPreds, err := exclusionPredicates(usersetExclusions)
-		if err != nil {
-			return "", err
-		}
-		usersetPredsSQL, err := sqlgen.RenderExprs(usersetPreds)
-		if err != nil {
-			return "", err
-		}
+		usersetPreds := sqlgen.ExclusionPredicatesDSL(usersetExclusions)
+		usersetPredsSQL := sqlgen.RenderDSLExprs(usersetPreds)
 		usersetBaseSQL, err := sqlgen.ListSubjectsUsersetFilterQuery(sqlgen.ListSubjectsUsersetFilterInput{
 			ObjectType:          a.ObjectType,
 			RelationList:        relationList,
@@ -425,14 +421,8 @@ func generateListSubjectsFunctionBob(a RelationAnalysis, inline InlineSQLData, t
 		usersetFilterBlocks = append(usersetFilterBlocks, intersectionBlocks...)
 
 		selfExclusions := buildExclusionInput(a, "p_object_id", fmt.Sprintf("'%s'", a.ObjectType), "p_object_id || '#' || v_filter_relation")
-		selfPreds, err := exclusionPredicates(selfExclusions)
-		if err != nil {
-			return "", err
-		}
-		selfPredsSQL, err := sqlgen.RenderExprs(selfPreds)
-		if err != nil {
-			return "", err
-		}
+		selfPreds := sqlgen.ExclusionPredicatesDSL(selfExclusions)
+		selfPredsSQL := sqlgen.RenderDSLExprs(selfPreds)
 		selfBlock, err := sqlgen.ListSubjectsSelfCandidateQuery(sqlgen.ListSubjectsSelfCandidateInput{
 			ObjectType:         a.ObjectType,
 			Relation:           a.Relation,
@@ -490,10 +480,7 @@ func generateListSubjectsFunctionBob(a RelationAnalysis, inline InlineSQLData, t
 		}
 		regularBlocks = append(regularBlocks, intersectionBlocks...)
 	case "list_subjects_userset.tpl.sql":
-		checkExprSQL, err := sqlgen.RenderExpr(sqlgen.CheckPermissionExpr("check_permission", "v_filter_type", "t.subject_id", a.Relation, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true))
-		if err != nil {
-			return "", err
-		}
+		checkExprSQL := sqlgen.CheckPermissionExprDSL("check_permission", "v_filter_type", "t.subject_id", a.Relation, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true).SQL()
 		usersetBaseSQL, err := sqlgen.ListSubjectsUsersetFilterQuery(sqlgen.ListSubjectsUsersetFilterInput{
 			ObjectType:          a.ObjectType,
 			RelationList:        allSatisfyingRelations,
@@ -706,15 +693,10 @@ func buildListSubjectsComplexClosureFilterBlocks(a RelationAnalysis, relations [
 		if applyExclusions {
 			exclusions = buildExclusionInput(a, "p_object_id", "t.subject_type", normalized)
 		}
-		exclusionPreds, err := exclusionPredicates(exclusions)
-		if err != nil {
-			return nil, err
-		}
-		allPreds := append(exclusionPreds, sqlgen.CheckPermissionInternalExpr("t.subject_type", "t.subject_id", rel, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true))
-		extraPredsSQL, err := sqlgen.RenderExprs(allPreds)
-		if err != nil {
-			return nil, err
-		}
+		exclusionPreds := sqlgen.ExclusionPredicatesDSL(exclusions)
+		checkPred := sqlgen.CheckPermissionInternalExprDSL("t.subject_type", "t.subject_id", rel, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true)
+		allPreds := append(exclusionPreds, checkPred)
+		extraPredsSQL := sqlgen.RenderDSLExprs(allPreds)
 		blockSQL, err := sqlgen.ListSubjectsUsersetFilterQuery(sqlgen.ListSubjectsUsersetFilterInput{
 			ObjectType:          a.ObjectType,
 			RelationList:        []string{rel},
@@ -1037,12 +1019,22 @@ func convertIntersectionGroups(groups []IntersectionGroupInfo) []sqlgen.Excluded
 	return result
 }
 
-func exclusionPredicates(input sqlgen.ExclusionInput) ([]bob.Expression, error) {
-	predicates, err := sqlgen.ExclusionPredicates(input)
-	if err != nil {
-		return nil, err
+// exclusionPredicates returns exclusion predicates as Bob expressions.
+// Uses the DSL-based implementation and converts to Bob for compatibility.
+func exclusionPredicates(input sqlgen.ExclusionInput) []bob.Expression {
+	dslPreds := sqlgen.ExclusionPredicatesDSL(input)
+	return dslExprsToBob(dslPreds)
+}
+
+// dslExprsToBob converts DSL expressions to Bob expressions by wrapping their SQL output.
+func dslExprsToBob(exprs []dsl.Expr) []bob.Expression {
+	result := make([]bob.Expression, 0, len(exprs))
+	for _, expr := range exprs {
+		if expr != nil {
+			result = append(result, psql.Raw(expr.SQL()))
+		}
 	}
-	return predicates, nil
+	return result
 }
 
 func formatQueryBlock(comments []string, sql string) string {
