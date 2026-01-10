@@ -19,619 +19,851 @@ type listUsersetPatternInput struct {
 	IsSelfReferential   bool
 }
 
-func generateListObjectsFunctionBob(a RelationAnalysis, inline InlineSQLData, templateName string) (string, error) {
-	functionName := listObjectsFunctionName(a.ObjectType, a.Relation)
-	relationList := buildTupleLookupRelations(a)
-	allowedSubjectTypes := buildAllowedSubjectTypesList(a)
-	allowWildcard := a.Features.HasWildcard
-	exclusions := buildExclusionInput(a, "t.object_id", "p_subject_type", "p_subject_id")
-	complexClosure := filterComplexClosureRelations(a)
+// =============================================================================
+// ListObjectsBuilder - Feature-driven list_objects function generation
+// =============================================================================
 
-	var blocks []string
-	switch templateName {
-	case "list_objects_direct.tpl.sql":
-		baseSQL, err := sqlgen.ListObjectsDirectQuery(sqlgen.ListObjectsDirectInput{
-			ObjectType:          a.ObjectType,
-			Relations:           relationList,
-			AllowedSubjectTypes: allowedSubjectTypes,
-			AllowWildcard:       allowWildcard,
-			Exclusions:          sqlgen.ExclusionConfig{},
-		})
-		if err != nil {
-			return "", err
-		}
-		blocks = append(blocks, formatQueryBlock(
-			[]string{
-				"-- Direct tuple lookup with simple closure relations",
-				"-- Type guard: only return results if subject type is in allowed subject types",
-			},
-			baseSQL,
-		))
+// ListObjectsBuilder generates list_objects functions using a feature-driven approach
+// rather than template-based switch statements.
+type ListObjectsBuilder struct {
+	analysis RelationAnalysis
+	inline   InlineSQLData
 
-		complexBlocks, err := buildListObjectsComplexClosureBlocks(a, complexClosure, allowedSubjectTypes, allowWildcard, sqlgen.ExclusionConfig{})
-		if err != nil {
-			return "", err
-		}
-		blocks = append(blocks, complexBlocks...)
-		intersectionBlocks, err := buildListObjectsIntersectionBlocks(a, false)
-		if err != nil {
-			return "", err
-		}
-		blocks = append(blocks, intersectionBlocks...)
-		selfSQL, err := sqlgen.ListObjectsSelfCandidateQuery(sqlgen.ListObjectsSelfCandidateInput{
-			ObjectType:    a.ObjectType,
-			Relation:      a.Relation,
-			ClosureValues: inline.ClosureValues,
-		})
-		if err != nil {
-			return "", err
-		}
-		blocks = append(blocks, formatQueryBlock(
-			[]string{
-				"-- Self-candidate: when subject is a userset on the same object type",
-				"-- e.g., subject_id = 'document:1#viewer' querying object_type = 'document'",
-				"-- The object 'document:1' should be considered as a candidate",
-				"-- No type guard here - validity comes from the closure check below",
-			},
-			selfSQL,
-		))
-	case "list_objects_exclusion.tpl.sql":
-		baseSQL, err := sqlgen.ListObjectsDirectQuery(sqlgen.ListObjectsDirectInput{
-			ObjectType:          a.ObjectType,
-			Relations:           relationList,
-			AllowedSubjectTypes: allowedSubjectTypes,
-			AllowWildcard:       allowWildcard,
-			Exclusions:          exclusions,
-		})
-		if err != nil {
-			return "", err
-		}
-		blocks = append(blocks, formatQueryBlock(
-			[]string{
-				"-- Direct tuple lookup with closure-inlined relations",
-				"-- Type guard: only return results if subject type is in allowed subject types",
-			},
-			baseSQL,
-		))
-		complexBlocks, err := buildListObjectsComplexClosureBlocks(a, complexClosure, allowedSubjectTypes, allowWildcard, exclusions)
-		if err != nil {
-			return "", err
-		}
-		blocks = append(blocks, complexBlocks...)
-		intersectionBlocks, err := buildListObjectsIntersectionBlocks(a, true)
-		if err != nil {
-			return "", err
-		}
-		blocks = append(blocks, intersectionBlocks...)
-		selfSQL, err := sqlgen.ListObjectsSelfCandidateQuery(sqlgen.ListObjectsSelfCandidateInput{
-			ObjectType:    a.ObjectType,
-			Relation:      a.Relation,
-			ClosureValues: inline.ClosureValues,
-		})
-		if err != nil {
-			return "", err
-		}
-		blocks = append(blocks, formatQueryBlock(
-			[]string{
-				"-- Self-candidate: when subject is a userset on the same object type",
-				"-- e.g., subject_id = 'document:1#viewer' querying object_type = 'document'",
-				"-- The object 'document:1' should be considered as a candidate",
-				"-- No type guard here - validity comes from the closure check below",
-				"-- No exclusion checks for self-candidate - this is a structural validity check",
-			},
-			selfSQL,
-		))
-	case "list_objects_userset.tpl.sql":
-		baseSQL, err := sqlgen.ListObjectsDirectQuery(sqlgen.ListObjectsDirectInput{
-			ObjectType:          a.ObjectType,
-			Relations:           relationList,
-			AllowedSubjectTypes: allowedSubjectTypes,
-			AllowWildcard:       allowWildcard,
-			Exclusions:          exclusions,
-		})
-		if err != nil {
-			return "", err
-		}
-		blocks = append(blocks, formatQueryBlock(
-			[]string{
-				"-- Path 1: Direct tuple lookup with simple closure relations",
-				"-- Type guard: only return results if subject type is in allowed subject types",
-			},
-			baseSQL,
-		))
+	// Computed data
+	functionName        string
+	relationList        []string
+	allowedSubjectTypes []string
+	complexClosure      []string
 
-		usersetSubjectSQL, err := sqlgen.ListObjectsUsersetSubjectQuery(sqlgen.ListObjectsUsersetSubjectInput{
-			ObjectType:    a.ObjectType,
-			Relations:     relationList,
-			ClosureValues: inline.ClosureValues,
-			Exclusions:    exclusions,
-		})
-		if err != nil {
+	// Configuration based on features
+	exclusions    sqlgen.ExclusionConfig
+	allowWildcard bool
+
+	// Built blocks
+	blocks []string
+}
+
+// NewListObjectsBuilder creates a builder for generating list_objects functions.
+func NewListObjectsBuilder(a RelationAnalysis, inline InlineSQLData) *ListObjectsBuilder {
+	return &ListObjectsBuilder{
+		analysis:            a,
+		inline:              inline,
+		functionName:        listObjectsFunctionName(a.ObjectType, a.Relation),
+		relationList:        buildTupleLookupRelations(a),
+		allowedSubjectTypes: buildAllowedSubjectTypesList(a),
+		complexClosure:      filterComplexClosureRelations(a),
+		allowWildcard:       a.Features.HasWildcard,
+	}
+}
+
+// Build generates the complete list_objects function SQL.
+func (b *ListObjectsBuilder) Build() (string, error) {
+	// Check for special delegated cases first
+	// Order matters! Must match selectListObjectsTemplate priority:
+	// 1. Intersection (most comprehensive, handles all patterns)
+	// 2. Recursive/TTU (handles direct, userset, exclusion, TTU)
+	if b.hasComplexIntersection() {
+		return generateListObjectsIntersectionFunctionBob(b.analysis, b.inline)
+	}
+	if b.hasRecursiveParent() {
+		return generateListObjectsRecursiveFunctionBob(b.analysis, b.inline)
+	}
+
+	// Configure exclusions if the relation has exclusion features
+	if b.analysis.Features.HasExclusion {
+		b.exclusions = buildExclusionInput(b.analysis, "t.object_id", "p_subject_type", "p_subject_id")
+	}
+
+	// Feature-driven block building
+	if err := b.addDirectBlock(); err != nil {
+		return "", err
+	}
+	if b.hasUsersetSubject() {
+		if err := b.addUsersetSubjectBlock(); err != nil {
 			return "", err
 		}
-		blocks = append(blocks, formatQueryBlock(
-			[]string{
-				"-- Direct userset subject matching: when the subject IS a userset (e.g., group:fga#member)",
-				"-- and there's a tuple with that userset (or a satisfying relation) as the subject",
-				"-- This handles cases like: tuple(document:1, viewer, group:fga#member_c4) queried by group:fga#member",
-				"-- where member satisfies member_c4 via the closure (member → member_c1 → ... → member_c4)",
-				"-- No type guard - we're matching userset subjects via closure",
-			},
-			usersetSubjectSQL,
-		))
-
-		complexBlocks, err := buildListObjectsComplexClosureBlocks(a, complexClosure, allowedSubjectTypes, allowWildcard, sqlgen.ExclusionConfig{})
-		if err != nil {
+	}
+	if err := b.addComplexClosureBlocks(); err != nil {
+		return "", err
+	}
+	if err := b.addIntersectionClosureBlocks(); err != nil {
+		return "", err
+	}
+	if b.hasUsersetPatterns() {
+		if err := b.addUsersetPatternBlocks(); err != nil {
 			return "", err
 		}
-		blocks = append(blocks, complexBlocks...)
-		intersectionBlocks, err := buildListObjectsIntersectionBlocks(a, false)
-		if err != nil {
-			return "", err
-		}
-		blocks = append(blocks, intersectionBlocks...)
+	}
+	if err := b.addSelfCandidateBlock(); err != nil {
+		return "", err
+	}
 
-		for _, pattern := range buildListUsersetPatternInputs(a) {
-			if pattern.IsComplex {
-				patternSQL, err := sqlgen.ListObjectsUsersetPatternComplexQuery(sqlgen.ListObjectsUsersetPatternComplexInput{
-					ObjectType:       a.ObjectType,
-					SubjectType:      pattern.SubjectType,
-					SubjectRelation:  pattern.SubjectRelation,
-					SourceRelations:  pattern.SourceRelations,
-					IsClosurePattern: pattern.IsClosurePattern,
-					SourceRelation:   pattern.SourceRelation,
-					Exclusions:       exclusions,
-				})
-				if err != nil {
-					return "", err
-				}
-				blocks = append(blocks, formatQueryBlock(
-					[]string{
-						fmt.Sprintf("-- Path: Via %s#%s membership", pattern.SubjectType, pattern.SubjectRelation),
-						"-- Complex userset: use check_permission_internal for membership verification",
-						"-- Note: No type guard needed here because check_permission_internal handles all validation",
-						"-- including userset self-referential checks (e.g., group:1#member checking member on group:1)",
-					},
-					patternSQL,
-				))
-				continue
-			}
+	return b.renderFunction()
+}
 
-			patternSQL, err := sqlgen.ListObjectsUsersetPatternSimpleQuery(sqlgen.ListObjectsUsersetPatternSimpleInput{
-				ObjectType:          a.ObjectType,
-				SubjectType:         pattern.SubjectType,
-				SubjectRelation:     pattern.SubjectRelation,
-				SourceRelations:     pattern.SourceRelations,
-				SatisfyingRelations: pattern.SatisfyingRelations,
-				AllowedSubjectTypes: allowedSubjectTypes,
-				AllowWildcard:       pattern.HasWildcard,
-				IsClosurePattern:    pattern.IsClosurePattern,
-				SourceRelation:      pattern.SourceRelation,
-				Exclusions:          exclusions,
+// =============================================================================
+// Feature Detection Methods
+// =============================================================================
+
+// hasRecursiveParent returns true if the relation has recursive TTU patterns
+// that require special handling with CTEs.
+func (b *ListObjectsBuilder) hasRecursiveParent() bool {
+	return len(b.analysis.ClosureParentRelations) > 0 || b.analysis.Features.HasRecursive
+}
+
+// hasComplexIntersection returns true if the relation has intersection patterns
+// that require special handling (INTERSECT queries).
+// Note: matches selectListObjectsTemplate which only checks HasIntersection.
+func (b *ListObjectsBuilder) hasComplexIntersection() bool {
+	return b.analysis.Features.HasIntersection
+}
+
+// hasUsersetSubject returns true if the relation supports userset subject matching.
+// This is when a subject like "group:1#member" can match tuples via closure.
+func (b *ListObjectsBuilder) hasUsersetSubject() bool {
+	return b.analysis.Features.HasUserset || len(b.analysis.ClosureUsersetPatterns) > 0
+}
+
+// hasUsersetPatterns returns true if there are userset patterns to expand.
+func (b *ListObjectsBuilder) hasUsersetPatterns() bool {
+	return len(buildListUsersetPatternInputs(b.analysis)) > 0
+}
+
+// =============================================================================
+// Block Building Methods
+// =============================================================================
+
+// addDirectBlock adds the direct tuple lookup block.
+func (b *ListObjectsBuilder) addDirectBlock() error {
+	baseSQL, err := sqlgen.ListObjectsDirectQuery(sqlgen.ListObjectsDirectInput{
+		ObjectType:          b.analysis.ObjectType,
+		Relations:           b.relationList,
+		AllowedSubjectTypes: b.allowedSubjectTypes,
+		AllowWildcard:       b.allowWildcard,
+		Exclusions:          b.exclusions,
+	})
+	if err != nil {
+		return err
+	}
+	b.blocks = append(b.blocks, formatQueryBlock(
+		[]string{
+			"-- Direct tuple lookup with simple closure relations",
+			"-- Type guard: only return results if subject type is in allowed subject types",
+		},
+		baseSQL,
+	))
+	return nil
+}
+
+// addUsersetSubjectBlock adds the userset subject matching block.
+// This handles cases like querying with subject "group:1#member".
+func (b *ListObjectsBuilder) addUsersetSubjectBlock() error {
+	usersetSubjectSQL, err := sqlgen.ListObjectsUsersetSubjectQuery(sqlgen.ListObjectsUsersetSubjectInput{
+		ObjectType:    b.analysis.ObjectType,
+		Relations:     b.relationList,
+		ClosureValues: b.inline.ClosureValues,
+		Exclusions:    b.exclusions,
+	})
+	if err != nil {
+		return err
+	}
+	b.blocks = append(b.blocks, formatQueryBlock(
+		[]string{
+			"-- Direct userset subject matching: when the subject IS a userset (e.g., group:fga#member)",
+			"-- and there's a tuple with that userset (or a satisfying relation) as the subject",
+			"-- This handles cases like: tuple(document:1, viewer, group:fga#member_c4) queried by group:fga#member",
+			"-- where member satisfies member_c4 via the closure (member → member_c1 → ... → member_c4)",
+			"-- No type guard - we're matching userset subjects via closure",
+		},
+		usersetSubjectSQL,
+	))
+	return nil
+}
+
+// addComplexClosureBlocks adds blocks for complex closure relations.
+// These require check_permission_internal for validation.
+func (b *ListObjectsBuilder) addComplexClosureBlocks() error {
+	// For non-exclusion cases, don't apply exclusions to complex closure blocks
+	exclusions := b.exclusions
+	if !b.analysis.Features.HasExclusion {
+		exclusions = sqlgen.ExclusionConfig{}
+	}
+
+	blocks, err := buildListObjectsComplexClosureBlocks(
+		b.analysis,
+		b.complexClosure,
+		b.allowedSubjectTypes,
+		b.allowWildcard,
+		exclusions,
+	)
+	if err != nil {
+		return err
+	}
+	b.blocks = append(b.blocks, blocks...)
+	return nil
+}
+
+// addIntersectionClosureBlocks adds blocks for intersection closure relations.
+func (b *ListObjectsBuilder) addIntersectionClosureBlocks() error {
+	// Validate intersection blocks if we have exclusions
+	validate := b.analysis.Features.HasExclusion
+
+	blocks, err := buildListObjectsIntersectionBlocks(b.analysis, validate)
+	if err != nil {
+		return err
+	}
+	b.blocks = append(b.blocks, blocks...)
+	return nil
+}
+
+// addUsersetPatternBlocks adds blocks for userset pattern expansion.
+func (b *ListObjectsBuilder) addUsersetPatternBlocks() error {
+	for _, pattern := range buildListUsersetPatternInputs(b.analysis) {
+		if pattern.IsComplex {
+			patternSQL, err := sqlgen.ListObjectsUsersetPatternComplexQuery(sqlgen.ListObjectsUsersetPatternComplexInput{
+				ObjectType:       b.analysis.ObjectType,
+				SubjectType:      pattern.SubjectType,
+				SubjectRelation:  pattern.SubjectRelation,
+				SourceRelations:  pattern.SourceRelations,
+				IsClosurePattern: pattern.IsClosurePattern,
+				SourceRelation:   pattern.SourceRelation,
+				Exclusions:       b.exclusions,
 			})
 			if err != nil {
-				return "", err
+				return err
 			}
-			blocks = append(blocks, formatQueryBlock(
+			b.blocks = append(b.blocks, formatQueryBlock(
 				[]string{
 					fmt.Sprintf("-- Path: Via %s#%s membership", pattern.SubjectType, pattern.SubjectRelation),
-					"-- Simple userset: JOIN with membership tuples",
+					"-- Complex userset: use check_permission_internal for membership verification",
+					"-- Note: No type guard needed here because check_permission_internal handles all validation",
+					"-- including userset self-referential checks (e.g., group:1#member checking member on group:1)",
 				},
 				patternSQL,
 			))
+			continue
 		}
 
-		selfSQL, err := sqlgen.ListObjectsSelfCandidateQuery(sqlgen.ListObjectsSelfCandidateInput{
-			ObjectType:    a.ObjectType,
-			Relation:      a.Relation,
-			ClosureValues: inline.ClosureValues,
+		patternSQL, err := sqlgen.ListObjectsUsersetPatternSimpleQuery(sqlgen.ListObjectsUsersetPatternSimpleInput{
+			ObjectType:          b.analysis.ObjectType,
+			SubjectType:         pattern.SubjectType,
+			SubjectRelation:     pattern.SubjectRelation,
+			SourceRelations:     pattern.SourceRelations,
+			SatisfyingRelations: pattern.SatisfyingRelations,
+			AllowedSubjectTypes: b.allowedSubjectTypes,
+			AllowWildcard:       pattern.HasWildcard,
+			IsClosurePattern:    pattern.IsClosurePattern,
+			SourceRelation:      pattern.SourceRelation,
+			Exclusions:          b.exclusions,
 		})
 		if err != nil {
-			return "", err
+			return err
 		}
-		blocks = append(blocks, formatQueryBlock(
+		b.blocks = append(b.blocks, formatQueryBlock(
 			[]string{
-				"-- Self-candidate: when subject is a userset on the same object type",
-				"-- e.g., subject_id = 'document:1#viewer' querying object_type = 'document'",
-				"-- The object 'document:1' should be considered as a candidate",
-				"-- No type guard here - validity comes from the closure check below",
-				"-- No exclusion checks for self-candidate - this is a structural validity check",
+				fmt.Sprintf("-- Path: Via %s#%s membership", pattern.SubjectType, pattern.SubjectRelation),
+				"-- Simple userset: JOIN with membership tuples",
 			},
-			selfSQL,
+			patternSQL,
 		))
-	case "list_objects_recursive.tpl.sql":
-		return generateListObjectsRecursiveFunctionBob(a, inline)
-	case "list_objects_intersection.tpl.sql":
-		return generateListObjectsIntersectionFunctionBob(a, inline)
-	default:
-		return "", fmt.Errorf("unexpected list_objects template %s", templateName)
+	}
+	return nil
+}
+
+// addSelfCandidateBlock adds the self-candidate block for userset self-referencing.
+func (b *ListObjectsBuilder) addSelfCandidateBlock() error {
+	selfSQL, err := sqlgen.ListObjectsSelfCandidateQuery(sqlgen.ListObjectsSelfCandidateInput{
+		ObjectType:    b.analysis.ObjectType,
+		Relation:      b.analysis.Relation,
+		ClosureValues: b.inline.ClosureValues,
+	})
+	if err != nil {
+		return err
+	}
+	b.blocks = append(b.blocks, formatQueryBlock(
+		[]string{
+			"-- Self-candidate: when subject is a userset on the same object type",
+			"-- e.g., subject_id = 'document:1#viewer' querying object_type = 'document'",
+			"-- The object 'document:1' should be considered as a candidate",
+			"-- No type guard here - validity comes from the closure check below",
+			"-- No exclusion checks for self-candidate - this is a structural validity check",
+		},
+		selfSQL,
+	))
+	return nil
+}
+
+// =============================================================================
+// Rendering
+// =============================================================================
+
+// renderFunction renders the final function SQL from the built blocks.
+func (b *ListObjectsBuilder) renderFunction() (string, error) {
+	query := joinUnionBlocks(b.blocks)
+	return buildListObjectsFunctionSQL(b.functionName, b.analysis, query), nil
+}
+
+// =============================================================================
+// ListSubjectsBuilder - Feature-driven list_subjects function generation
+// =============================================================================
+
+// ListSubjectsBuilder generates list_subjects functions using a feature-driven approach.
+// Unlike list_objects, list_subjects has TWO code paths:
+// 1. Userset filter path - when p_subject_type contains '#' (e.g., "group#member")
+// 2. Regular path - when p_subject_type is a simple type (e.g., "user")
+type ListSubjectsBuilder struct {
+	analysis RelationAnalysis
+	inline   InlineSQLData
+
+	// Computed data
+	functionName           string
+	relationList           []string
+	allSatisfyingRelations []string
+	allowedSubjectTypes    []string
+	complexClosure         []string
+	excludeWildcard        bool
+
+	// Built blocks - separate for userset filter and regular paths
+	usersetFilterBlocks    []string
+	usersetFilterSelfBlock string
+	regularBlocks          []string
+}
+
+// NewListSubjectsBuilder creates a builder for generating list_subjects functions.
+func NewListSubjectsBuilder(a RelationAnalysis, inline InlineSQLData) *ListSubjectsBuilder {
+	return &ListSubjectsBuilder{
+		analysis:               a,
+		inline:                 inline,
+		functionName:           listSubjectsFunctionName(a.ObjectType, a.Relation),
+		relationList:           buildTupleLookupRelations(a),
+		allSatisfyingRelations: buildAllSatisfyingRelationsList(a),
+		allowedSubjectTypes:    buildAllowedSubjectTypesList(a),
+		complexClosure:         filterComplexClosureRelations(a),
+		excludeWildcard:        !a.Features.HasWildcard,
+	}
+}
+
+// Build generates the complete list_subjects function SQL.
+func (b *ListSubjectsBuilder) Build() (string, error) {
+	// Check for special delegated cases first
+	// Order matters! Must match selectListSubjectsTemplate priority:
+	// 1. Intersection (most comprehensive, handles all patterns)
+	// 2. Recursive/TTU (handles direct, userset, exclusion, TTU)
+	if b.hasComplexIntersection() {
+		return generateListSubjectsIntersectionFunctionBob(b.analysis, b.inline)
+	}
+	if b.hasRecursiveParent() {
+		return generateListSubjectsRecursiveFunctionBob(b.analysis, b.inline)
 	}
 
-	query := joinUnionBlocks(blocks)
-	return buildListObjectsFunctionSQL(functionName, a, query), nil
+	// Feature-driven block building for userset filter path
+	if err := b.buildUsersetFilterPath(); err != nil {
+		return "", err
+	}
+
+	// Feature-driven block building for regular path
+	if err := b.buildRegularPath(); err != nil {
+		return "", err
+	}
+
+	return b.renderFunction()
+}
+
+// =============================================================================
+// Feature Detection Methods (ListSubjectsBuilder)
+// =============================================================================
+
+// hasRecursiveParent returns true if the relation has recursive TTU patterns.
+func (b *ListSubjectsBuilder) hasRecursiveParent() bool {
+	return len(b.analysis.ClosureParentRelations) > 0 || b.analysis.Features.HasRecursive
+}
+
+// hasComplexIntersection returns true if the relation has intersection patterns.
+func (b *ListSubjectsBuilder) hasComplexIntersection() bool {
+	return b.analysis.Features.HasIntersection
+}
+
+// hasUsersetPatterns returns true if there are userset patterns to expand.
+func (b *ListSubjectsBuilder) hasUsersetPatterns() bool {
+	return b.analysis.Features.HasUserset || len(b.analysis.ClosureUsersetPatterns) > 0
+}
+
+// =============================================================================
+// Userset Filter Path Building (when p_subject_type contains '#')
+// =============================================================================
+
+// buildUsersetFilterPath builds all blocks for the userset filter code path.
+func (b *ListSubjectsBuilder) buildUsersetFilterPath() error {
+	if b.hasUsersetPatterns() {
+		// Userset template: use check_permission for validation
+		return b.buildUsersetFilterPathUserset()
+	}
+	if b.analysis.Features.HasExclusion {
+		return b.buildUsersetFilterPathExclusion()
+	}
+	return b.buildUsersetFilterPathDirect()
+}
+
+// buildUsersetFilterPathDirect builds userset filter blocks for direct template.
+func (b *ListSubjectsBuilder) buildUsersetFilterPathDirect() error {
+	// Direct tuple lookup
+	usersetBaseSQL, err := sqlgen.ListSubjectsUsersetFilterQuery(sqlgen.ListSubjectsUsersetFilterInput{
+		ObjectType:          b.analysis.ObjectType,
+		RelationList:        b.relationList,
+		AllowedSubjectTypes: b.allowedSubjectTypes,
+		ObjectIDExpr:        "p_object_id",
+		FilterTypeExpr:      "v_filter_type",
+		FilterRelationExpr:  "v_filter_relation",
+		ClosureValues:       b.inline.ClosureValues,
+		UseTypeGuard:        true,
+	})
+	if err != nil {
+		return err
+	}
+	b.usersetFilterBlocks = append(b.usersetFilterBlocks, formatQueryBlock(
+		[]string{
+			"-- Direct tuple lookup with simple closure relations",
+			"-- Normalize results to use the filter relation (e.g., group:1#admin -> group:1#member if admin implies member)",
+			"-- Type guard: only return results if filter type is in allowed subject types",
+		},
+		usersetBaseSQL,
+	))
+
+	// Complex closure blocks
+	filterBlocks, err := buildListSubjectsComplexClosureFilterBlocks(
+		b.analysis,
+		b.complexClosure,
+		b.allowedSubjectTypes,
+		b.inline.ClosureValues,
+		false,
+	)
+	if err != nil {
+		return err
+	}
+	b.usersetFilterBlocks = append(b.usersetFilterBlocks, filterBlocks...)
+
+	// Intersection closure blocks
+	intersectionBlocks, err := buildListSubjectsIntersectionBlocks(
+		b.analysis,
+		false,
+		"v_filter_type || '#' || v_filter_relation",
+		"",
+	)
+	if err != nil {
+		return err
+	}
+	b.usersetFilterBlocks = append(b.usersetFilterBlocks, intersectionBlocks...)
+
+	// Self-candidate block
+	selfBlock, err := sqlgen.ListSubjectsSelfCandidateQuery(sqlgen.ListSubjectsSelfCandidateInput{
+		ObjectType:         b.analysis.ObjectType,
+		Relation:           b.analysis.Relation,
+		ObjectIDExpr:       "p_object_id",
+		FilterTypeExpr:     "v_filter_type",
+		FilterRelationExpr: "v_filter_relation",
+		ClosureValues:      b.inline.ClosureValues,
+	})
+	if err != nil {
+		return err
+	}
+	b.usersetFilterSelfBlock = formatQueryBlock(
+		[]string{
+			"-- Self-candidate: when filter type matches object type",
+			"-- e.g., querying document:1.viewer with filter document#writer",
+			"-- should return document:1#writer if writer satisfies the relation",
+			"-- No type guard here - validity comes from the closure check below",
+		},
+		selfBlock,
+	)
+
+	return nil
+}
+
+// buildUsersetFilterPathExclusion builds userset filter blocks for exclusion template.
+func (b *ListSubjectsBuilder) buildUsersetFilterPathExclusion() error {
+	usersetNormalized := "substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) || '#' || v_filter_relation"
+	usersetExclusions := buildExclusionInput(b.analysis, "p_object_id", "v_filter_type", usersetNormalized)
+
+	usersetPreds := usersetExclusions.BuildPredicates()
+	usersetPredsSQL := sqlgen.RenderDSLExprs(usersetPreds)
+	usersetBaseSQL, err := sqlgen.ListSubjectsUsersetFilterQuery(sqlgen.ListSubjectsUsersetFilterInput{
+		ObjectType:          b.analysis.ObjectType,
+		RelationList:        b.relationList,
+		AllowedSubjectTypes: b.allowedSubjectTypes,
+		ObjectIDExpr:        "p_object_id",
+		FilterTypeExpr:      "v_filter_type",
+		FilterRelationExpr:  "v_filter_relation",
+		ClosureValues:       b.inline.ClosureValues,
+		UseTypeGuard:        true,
+		ExtraPredicatesSQL:  usersetPredsSQL,
+	})
+	if err != nil {
+		return err
+	}
+	b.usersetFilterBlocks = append(b.usersetFilterBlocks, formatQueryBlock(
+		[]string{
+			"-- Direct tuple lookup with closure-inlined relations",
+			"-- Normalize results to use the filter relation (e.g., group:1#admin -> group:1#member if admin implies member)",
+			"-- Type guard: only return results if filter type is in allowed subject types",
+		},
+		usersetBaseSQL,
+	))
+
+	// Complex closure blocks with exclusions
+	filterBlocks, err := buildListSubjectsComplexClosureFilterBlocks(
+		b.analysis,
+		b.complexClosure,
+		b.allowedSubjectTypes,
+		b.inline.ClosureValues,
+		true,
+	)
+	if err != nil {
+		return err
+	}
+	b.usersetFilterBlocks = append(b.usersetFilterBlocks, filterBlocks...)
+
+	// Intersection closure blocks with validation
+	intersectionBlocks, err := buildListSubjectsIntersectionBlocks(
+		b.analysis,
+		true,
+		"v_filter_type || '#' || v_filter_relation",
+		"v_filter_type",
+	)
+	if err != nil {
+		return err
+	}
+	b.usersetFilterBlocks = append(b.usersetFilterBlocks, intersectionBlocks...)
+
+	// Self-candidate block with exclusions
+	selfExclusions := buildExclusionInput(b.analysis, "p_object_id", fmt.Sprintf("'%s'", b.analysis.ObjectType), "p_object_id || '#' || v_filter_relation")
+	selfPreds := selfExclusions.BuildPredicates()
+	selfPredsSQL := sqlgen.RenderDSLExprs(selfPreds)
+	selfBlock, err := sqlgen.ListSubjectsSelfCandidateQuery(sqlgen.ListSubjectsSelfCandidateInput{
+		ObjectType:         b.analysis.ObjectType,
+		Relation:           b.analysis.Relation,
+		ObjectIDExpr:       "p_object_id",
+		FilterTypeExpr:     "v_filter_type",
+		FilterRelationExpr: "v_filter_relation",
+		ClosureValues:      b.inline.ClosureValues,
+		ExtraPredicatesSQL: selfPredsSQL,
+	})
+	if err != nil {
+		return err
+	}
+	b.usersetFilterSelfBlock = formatQueryBlock(
+		[]string{
+			"-- Self-candidate: when filter type matches object type",
+			"-- e.g., querying document:1.viewer with filter document#writer",
+			"-- should return document:1#writer if writer satisfies the relation",
+			"-- No type guard here - validity comes from the closure check below",
+		},
+		selfBlock,
+	)
+
+	return nil
+}
+
+// buildUsersetFilterPathUserset builds userset filter blocks for userset template.
+func (b *ListSubjectsBuilder) buildUsersetFilterPathUserset() error {
+	checkExprSQL := sqlgen.CheckPermissionExprDSL("check_permission", "v_filter_type", "t.subject_id", b.analysis.Relation, fmt.Sprintf("'%s'", b.analysis.ObjectType), "p_object_id", true).SQL()
+	usersetBaseSQL, err := sqlgen.ListSubjectsUsersetFilterQuery(sqlgen.ListSubjectsUsersetFilterInput{
+		ObjectType:          b.analysis.ObjectType,
+		RelationList:        b.allSatisfyingRelations,
+		ObjectIDExpr:        "p_object_id",
+		FilterTypeExpr:      "v_filter_type",
+		FilterRelationExpr:  "v_filter_relation",
+		ClosureValues:       b.inline.ClosureValues,
+		UseTypeGuard:        false,
+		ExtraPredicatesSQL:  []string{checkExprSQL},
+	})
+	if err != nil {
+		return err
+	}
+	b.usersetFilterBlocks = append(b.usersetFilterBlocks, formatQueryBlock(
+		[]string{
+			"-- Userset filter: find userset tuples that match and return normalized references",
+		},
+		usersetBaseSQL,
+	))
+
+	// Intersection closure blocks
+	intersectionBlocks, err := buildListSubjectsIntersectionBlocks(
+		b.analysis,
+		false,
+		"v_filter_type || '#' || v_filter_relation",
+		"",
+	)
+	if err != nil {
+		return err
+	}
+	b.usersetFilterBlocks = append(b.usersetFilterBlocks, intersectionBlocks...)
+
+	// Self-candidate block
+	selfBlock, err := sqlgen.ListSubjectsSelfCandidateQuery(sqlgen.ListSubjectsSelfCandidateInput{
+		ObjectType:         b.analysis.ObjectType,
+		Relation:           b.analysis.Relation,
+		ObjectIDExpr:       "p_object_id",
+		FilterTypeExpr:     "v_filter_type",
+		FilterRelationExpr: "v_filter_relation",
+		ClosureValues:      b.inline.ClosureValues,
+	})
+	if err != nil {
+		return err
+	}
+	b.usersetFilterSelfBlock = formatQueryBlock(
+		[]string{
+			"-- Self-referential userset: when object_type matches filter_type and filter_relation",
+			"-- satisfies the requested relation, the userset reference object_id#filter_relation has access",
+			"-- e.g., for group:1.member with filter group#member, return 1#member (= group:1#member)",
+			"-- NOTE: Exclusions don't apply to self-referential userset checks (structural validity)",
+		},
+		selfBlock,
+	)
+
+	return nil
+}
+
+// =============================================================================
+// Regular Path Building (when p_subject_type is a simple type)
+// =============================================================================
+
+// buildRegularPath builds all blocks for the regular code path.
+func (b *ListSubjectsBuilder) buildRegularPath() error {
+	if b.hasUsersetPatterns() {
+		return b.buildRegularPathUserset()
+	}
+	if b.analysis.Features.HasExclusion {
+		return b.buildRegularPathExclusion()
+	}
+	return b.buildRegularPathDirect()
+}
+
+// buildRegularPathDirect builds regular blocks for direct template.
+func (b *ListSubjectsBuilder) buildRegularPathDirect() error {
+	regularBaseSQL, err := sqlgen.ListSubjectsDirectQuery(sqlgen.ListSubjectsDirectInput{
+		ObjectType:      b.analysis.ObjectType,
+		RelationList:    b.relationList,
+		ObjectIDExpr:    "p_object_id",
+		SubjectTypeExpr: "p_subject_type",
+		ExcludeWildcard: b.excludeWildcard,
+		Exclusions:      sqlgen.ExclusionConfig{},
+	})
+	if err != nil {
+		return err
+	}
+	b.regularBlocks = append(b.regularBlocks, formatQueryBlock(nil, regularBaseSQL))
+
+	// Complex closure blocks
+	complexBlocks, err := buildListSubjectsComplexClosureBlocks(
+		b.analysis,
+		b.complexClosure,
+		"p_subject_type",
+		b.excludeWildcard,
+		sqlgen.ExclusionConfig{},
+	)
+	if err != nil {
+		return err
+	}
+	b.regularBlocks = append(b.regularBlocks, complexBlocks...)
+
+	// Intersection closure blocks
+	intersectionBlocks, err := buildListSubjectsIntersectionBlocks(
+		b.analysis,
+		false,
+		"p_subject_type",
+		"",
+	)
+	if err != nil {
+		return err
+	}
+	b.regularBlocks = append(b.regularBlocks, intersectionBlocks...)
+
+	return nil
+}
+
+// buildRegularPathExclusion builds regular blocks for exclusion template.
+func (b *ListSubjectsBuilder) buildRegularPathExclusion() error {
+	regularExclusions := buildExclusionInput(b.analysis, "p_object_id", "p_subject_type", "t.subject_id")
+	regularBaseSQL, err := sqlgen.ListSubjectsDirectQuery(sqlgen.ListSubjectsDirectInput{
+		ObjectType:      b.analysis.ObjectType,
+		RelationList:    b.relationList,
+		ObjectIDExpr:    "p_object_id",
+		SubjectTypeExpr: "p_subject_type",
+		ExcludeWildcard: b.excludeWildcard,
+		Exclusions:      regularExclusions,
+	})
+	if err != nil {
+		return err
+	}
+	b.regularBlocks = append(b.regularBlocks, formatQueryBlock(nil, regularBaseSQL))
+
+	// Complex closure blocks with exclusions
+	complexBlocks, err := buildListSubjectsComplexClosureBlocks(
+		b.analysis,
+		b.complexClosure,
+		"p_subject_type",
+		b.excludeWildcard,
+		regularExclusions,
+	)
+	if err != nil {
+		return err
+	}
+	b.regularBlocks = append(b.regularBlocks, complexBlocks...)
+
+	// Intersection closure blocks with validation
+	intersectionBlocks, err := buildListSubjectsIntersectionBlocks(
+		b.analysis,
+		true,
+		"p_subject_type",
+		"p_subject_type",
+	)
+	if err != nil {
+		return err
+	}
+	b.regularBlocks = append(b.regularBlocks, intersectionBlocks...)
+
+	return nil
+}
+
+// buildRegularPathUserset builds regular blocks for userset template.
+func (b *ListSubjectsBuilder) buildRegularPathUserset() error {
+	baseExclusions := buildExclusionInput(b.analysis, "p_object_id", "p_subject_type", "t.subject_id")
+
+	// Direct tuple lookup
+	regularBaseSQL, err := sqlgen.ListSubjectsDirectQuery(sqlgen.ListSubjectsDirectInput{
+		ObjectType:      b.analysis.ObjectType,
+		RelationList:    b.relationList,
+		ObjectIDExpr:    "p_object_id",
+		SubjectTypeExpr: "p_subject_type",
+		ExcludeWildcard: b.excludeWildcard,
+		Exclusions:      baseExclusions,
+	})
+	if err != nil {
+		return err
+	}
+	b.regularBlocks = append(b.regularBlocks, formatQueryBlock(
+		[]string{
+			"-- Path 1: Direct tuple lookup with simple closure relations",
+		},
+		regularBaseSQL,
+	))
+
+	// Complex closure blocks
+	complexBlocks, err := buildListSubjectsComplexClosureBlocks(
+		b.analysis,
+		b.complexClosure,
+		"p_subject_type",
+		b.excludeWildcard,
+		baseExclusions,
+	)
+	if err != nil {
+		return err
+	}
+	b.regularBlocks = append(b.regularBlocks, complexBlocks...)
+
+	// Intersection closure blocks
+	intersectionBlocks, err := buildListSubjectsIntersectionBlocks(
+		b.analysis,
+		false,
+		"p_subject_type",
+		"",
+	)
+	if err != nil {
+		return err
+	}
+	b.regularBlocks = append(b.regularBlocks, intersectionBlocks...)
+
+	// Userset pattern expansion blocks
+	for _, pattern := range buildListUsersetPatternInputs(b.analysis) {
+		if pattern.IsComplex {
+			patternSQL, err := sqlgen.ListSubjectsUsersetPatternComplexQuery(sqlgen.ListSubjectsUsersetPatternComplexInput{
+				ObjectType:       b.analysis.ObjectType,
+				SubjectType:      pattern.SubjectType,
+				SubjectRelation:  pattern.SubjectRelation,
+				SourceRelations:  pattern.SourceRelations,
+				ObjectIDExpr:     "p_object_id",
+				SubjectTypeExpr:  "p_subject_type",
+				IsClosurePattern: pattern.IsClosurePattern,
+				SourceRelation:   pattern.SourceRelation,
+				Exclusions:       baseExclusions,
+			})
+			if err != nil {
+				return err
+			}
+			b.regularBlocks = append(b.regularBlocks, formatQueryBlock(
+				[]string{
+					fmt.Sprintf("-- Path: Via %s#%s - expand group membership to return individual subjects", pattern.SubjectType, pattern.SubjectRelation),
+					"-- Complex userset: use LATERAL join with userset's list_subjects function",
+					"-- This handles userset-to-userset chains where there are no direct subject tuples",
+				},
+				patternSQL,
+			))
+			continue
+		}
+
+		patternSQL, err := sqlgen.ListSubjectsUsersetPatternSimpleQuery(sqlgen.ListSubjectsUsersetPatternSimpleInput{
+			ObjectType:          b.analysis.ObjectType,
+			SubjectType:         pattern.SubjectType,
+			SubjectRelation:     pattern.SubjectRelation,
+			SourceRelations:     pattern.SourceRelations,
+			SatisfyingRelations: pattern.SatisfyingRelations,
+			ObjectIDExpr:        "p_object_id",
+			SubjectTypeExpr:     "p_subject_type",
+			AllowedSubjectTypes: b.allowedSubjectTypes,
+			ExcludeWildcard:     b.excludeWildcard,
+			IsClosurePattern:    pattern.IsClosurePattern,
+			SourceRelation:      pattern.SourceRelation,
+			Exclusions:          baseExclusions,
+		})
+		if err != nil {
+			return err
+		}
+		b.regularBlocks = append(b.regularBlocks, formatQueryBlock(
+			[]string{
+				fmt.Sprintf("-- Path: Via %s#%s - expand group membership to return individual subjects", pattern.SubjectType, pattern.SubjectRelation),
+				"-- Simple userset: JOIN with membership tuples",
+			},
+			patternSQL,
+		))
+	}
+
+	return nil
+}
+
+// =============================================================================
+// Rendering (ListSubjectsBuilder)
+// =============================================================================
+
+// renderFunction renders the final function SQL from the built blocks.
+func (b *ListSubjectsBuilder) renderFunction() (string, error) {
+	templateName := b.determineTemplateName()
+	return buildListSubjectsFunctionSQL(b.functionName, b.analysis, b.usersetFilterBlocks, b.usersetFilterSelfBlock, b.regularBlocks, templateName), nil
+}
+
+// determineTemplateName returns the template name based on features.
+// This is needed for renderUsersetWildcardTail to know how to render the wildcard handling.
+func (b *ListSubjectsBuilder) determineTemplateName() string {
+	if b.hasUsersetPatterns() {
+		return "list_subjects_userset.tpl.sql"
+	}
+	if b.analysis.Features.HasExclusion {
+		return "list_subjects_exclusion.tpl.sql"
+	}
+	return "list_subjects_direct.tpl.sql"
+}
+
+// =============================================================================
+// Original function - now delegates to builder
+// =============================================================================
+
+func generateListObjectsFunctionBob(a RelationAnalysis, inline InlineSQLData, templateName string) (string, error) {
+	// Use the feature-driven builder instead of template-based switch
+	return NewListObjectsBuilder(a, inline).Build()
 }
 
 func generateListSubjectsFunctionBob(a RelationAnalysis, inline InlineSQLData, templateName string) (string, error) {
-	functionName := listSubjectsFunctionName(a.ObjectType, a.Relation)
-	relationList := buildTupleLookupRelations(a)
-	allSatisfyingRelations := buildAllSatisfyingRelationsList(a)
-	allowedSubjectTypes := buildAllowedSubjectTypesList(a)
-	excludeWildcard := !a.Features.HasWildcard
-	complexClosure := filterComplexClosureRelations(a)
-
-	var usersetFilterBlocks []string
-	var usersetFilterSelfBlock string
-	var regularBlocks []string
-	var filterBlocks []string
-	var complexBlocks []string
-	var intersectionBlocks []string
-
-	switch templateName {
-	case "list_subjects_direct.tpl.sql":
-		usersetBaseSQL, err := sqlgen.ListSubjectsUsersetFilterQuery(sqlgen.ListSubjectsUsersetFilterInput{
-			ObjectType:          a.ObjectType,
-			RelationList:        relationList,
-			AllowedSubjectTypes: allowedSubjectTypes,
-			ObjectIDExpr:        "p_object_id",
-			FilterTypeExpr:      "v_filter_type",
-			FilterRelationExpr:  "v_filter_relation",
-			ClosureValues:       inline.ClosureValues,
-			UseTypeGuard:        true,
-		})
-		if err != nil {
-			return "", err
-		}
-		usersetFilterBlocks = append(usersetFilterBlocks, formatQueryBlock(
-			[]string{
-				"-- Direct tuple lookup with simple closure relations",
-				"-- Normalize results to use the filter relation (e.g., group:1#admin -> group:1#member if admin implies member)",
-				"-- Type guard: only return results if filter type is in allowed subject types",
-			},
-			usersetBaseSQL,
-		))
-
-		filterBlocks, err = buildListSubjectsComplexClosureFilterBlocks(
-			a,
-			complexClosure,
-			allowedSubjectTypes,
-			inline.ClosureValues,
-			false,
-		)
-		if err != nil {
-			return "", err
-		}
-		usersetFilterBlocks = append(usersetFilterBlocks, filterBlocks...)
-		intersectionBlocks, err = buildListSubjectsIntersectionBlocks(
-			a,
-			false,
-			"v_filter_type || '#' || v_filter_relation",
-			"",
-		)
-		if err != nil {
-			return "", err
-		}
-		usersetFilterBlocks = append(usersetFilterBlocks, intersectionBlocks...)
-
-		selfBlock, err := sqlgen.ListSubjectsSelfCandidateQuery(sqlgen.ListSubjectsSelfCandidateInput{
-			ObjectType:         a.ObjectType,
-			Relation:           a.Relation,
-			ObjectIDExpr:       "p_object_id",
-			FilterTypeExpr:     "v_filter_type",
-			FilterRelationExpr: "v_filter_relation",
-			ClosureValues:      inline.ClosureValues,
-		})
-		if err != nil {
-			return "", err
-		}
-		usersetFilterSelfBlock = formatQueryBlock(
-			[]string{
-				"-- Self-candidate: when filter type matches object type",
-				"-- e.g., querying document:1.viewer with filter document#writer",
-				"-- should return document:1#writer if writer satisfies the relation",
-				"-- No type guard here - validity comes from the closure check below",
-			},
-			selfBlock,
-		)
-
-		regularBaseSQL, err := sqlgen.ListSubjectsDirectQuery(sqlgen.ListSubjectsDirectInput{
-			ObjectType:      a.ObjectType,
-			RelationList:    relationList,
-			ObjectIDExpr:    "p_object_id",
-			SubjectTypeExpr: "p_subject_type",
-			ExcludeWildcard: excludeWildcard,
-			Exclusions:      sqlgen.ExclusionConfig{},
-		})
-		if err != nil {
-			return "", err
-		}
-		regularBlocks = append(regularBlocks, formatQueryBlock(nil, regularBaseSQL))
-		complexBlocks, err = buildListSubjectsComplexClosureBlocks(
-			a,
-			complexClosure,
-			"p_subject_type",
-			excludeWildcard,
-			sqlgen.ExclusionConfig{},
-		)
-		if err != nil {
-			return "", err
-		}
-		regularBlocks = append(regularBlocks, complexBlocks...)
-		intersectionBlocks, err = buildListSubjectsIntersectionBlocks(
-			a,
-			false,
-			"p_subject_type",
-			"",
-		)
-		if err != nil {
-			return "", err
-		}
-		regularBlocks = append(regularBlocks, intersectionBlocks...)
-	case "list_subjects_exclusion.tpl.sql":
-		usersetNormalized := "substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) || '#' || v_filter_relation"
-		usersetExclusions := buildExclusionInput(a, "p_object_id", "v_filter_type", usersetNormalized)
-
-		usersetPreds := usersetExclusions.BuildPredicates()
-		usersetPredsSQL := sqlgen.RenderDSLExprs(usersetPreds)
-		usersetBaseSQL, err := sqlgen.ListSubjectsUsersetFilterQuery(sqlgen.ListSubjectsUsersetFilterInput{
-			ObjectType:          a.ObjectType,
-			RelationList:        relationList,
-			AllowedSubjectTypes: allowedSubjectTypes,
-			ObjectIDExpr:        "p_object_id",
-			FilterTypeExpr:      "v_filter_type",
-			FilterRelationExpr:  "v_filter_relation",
-			ClosureValues:       inline.ClosureValues,
-			UseTypeGuard:        true,
-			ExtraPredicatesSQL:  usersetPredsSQL,
-		})
-		if err != nil {
-			return "", err
-		}
-		usersetFilterBlocks = append(usersetFilterBlocks, formatQueryBlock(
-			[]string{
-				"-- Direct tuple lookup with closure-inlined relations",
-				"-- Normalize results to use the filter relation (e.g., group:1#admin -> group:1#member if admin implies member)",
-				"-- Type guard: only return results if filter type is in allowed subject types",
-			},
-			usersetBaseSQL,
-		))
-
-		filterBlocks, err = buildListSubjectsComplexClosureFilterBlocks(
-			a,
-			complexClosure,
-			allowedSubjectTypes,
-			inline.ClosureValues,
-			true,
-		)
-		if err != nil {
-			return "", err
-		}
-		usersetFilterBlocks = append(usersetFilterBlocks, filterBlocks...)
-		intersectionBlocks, err = buildListSubjectsIntersectionBlocks(
-			a,
-			true,
-			"v_filter_type || '#' || v_filter_relation",
-			"v_filter_type",
-		)
-		if err != nil {
-			return "", err
-		}
-		usersetFilterBlocks = append(usersetFilterBlocks, intersectionBlocks...)
-
-		selfExclusions := buildExclusionInput(a, "p_object_id", fmt.Sprintf("'%s'", a.ObjectType), "p_object_id || '#' || v_filter_relation")
-		selfPreds := selfExclusions.BuildPredicates()
-		selfPredsSQL := sqlgen.RenderDSLExprs(selfPreds)
-		selfBlock, err := sqlgen.ListSubjectsSelfCandidateQuery(sqlgen.ListSubjectsSelfCandidateInput{
-			ObjectType:         a.ObjectType,
-			Relation:           a.Relation,
-			ObjectIDExpr:       "p_object_id",
-			FilterTypeExpr:     "v_filter_type",
-			FilterRelationExpr: "v_filter_relation",
-			ClosureValues:      inline.ClosureValues,
-			ExtraPredicatesSQL: selfPredsSQL,
-		})
-		if err != nil {
-			return "", err
-		}
-		usersetFilterSelfBlock = formatQueryBlock(
-			[]string{
-				"-- Self-candidate: when filter type matches object type",
-				"-- e.g., querying document:1.viewer with filter document#writer",
-				"-- should return document:1#writer if writer satisfies the relation",
-				"-- No type guard here - validity comes from the closure check below",
-			},
-			selfBlock,
-		)
-
-		regularExclusions := buildExclusionInput(a, "p_object_id", "p_subject_type", "t.subject_id")
-		regularBaseSQL, err := sqlgen.ListSubjectsDirectQuery(sqlgen.ListSubjectsDirectInput{
-			ObjectType:      a.ObjectType,
-			RelationList:    relationList,
-			ObjectIDExpr:    "p_object_id",
-			SubjectTypeExpr: "p_subject_type",
-			ExcludeWildcard: excludeWildcard,
-			Exclusions:      regularExclusions,
-		})
-		if err != nil {
-			return "", err
-		}
-		regularBlocks = append(regularBlocks, formatQueryBlock(nil, regularBaseSQL))
-		complexBlocks, err = buildListSubjectsComplexClosureBlocks(
-			a,
-			complexClosure,
-			"p_subject_type",
-			excludeWildcard,
-			regularExclusions,
-		)
-		if err != nil {
-			return "", err
-		}
-		regularBlocks = append(regularBlocks, complexBlocks...)
-		intersectionBlocks, err = buildListSubjectsIntersectionBlocks(
-			a,
-			true,
-			"p_subject_type",
-			"p_subject_type",
-		)
-		if err != nil {
-			return "", err
-		}
-		regularBlocks = append(regularBlocks, intersectionBlocks...)
-	case "list_subjects_userset.tpl.sql":
-		checkExprSQL := sqlgen.CheckPermissionExprDSL("check_permission", "v_filter_type", "t.subject_id", a.Relation, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true).SQL()
-		usersetBaseSQL, err := sqlgen.ListSubjectsUsersetFilterQuery(sqlgen.ListSubjectsUsersetFilterInput{
-			ObjectType:          a.ObjectType,
-			RelationList:        allSatisfyingRelations,
-			ObjectIDExpr:        "p_object_id",
-			FilterTypeExpr:      "v_filter_type",
-			FilterRelationExpr:  "v_filter_relation",
-			ClosureValues:       inline.ClosureValues,
-			UseTypeGuard:        false,
-			ExtraPredicatesSQL:  []string{checkExprSQL},
-		})
-		if err != nil {
-			return "", err
-		}
-		usersetFilterBlocks = append(usersetFilterBlocks, formatQueryBlock(
-			[]string{
-				"-- Userset filter: find userset tuples that match and return normalized references",
-			},
-			usersetBaseSQL,
-		))
-
-		intersectionBlocks, err = buildListSubjectsIntersectionBlocks(
-			a,
-			false,
-			"v_filter_type || '#' || v_filter_relation",
-			"",
-		)
-		if err != nil {
-			return "", err
-		}
-		usersetFilterBlocks = append(usersetFilterBlocks, intersectionBlocks...)
-
-		selfBlock, err := sqlgen.ListSubjectsSelfCandidateQuery(sqlgen.ListSubjectsSelfCandidateInput{
-			ObjectType:         a.ObjectType,
-			Relation:           a.Relation,
-			ObjectIDExpr:       "p_object_id",
-			FilterTypeExpr:     "v_filter_type",
-			FilterRelationExpr: "v_filter_relation",
-			ClosureValues:      inline.ClosureValues,
-		})
-		if err != nil {
-			return "", err
-		}
-		usersetFilterSelfBlock = formatQueryBlock(
-			[]string{
-				"-- Self-referential userset: when object_type matches filter_type and filter_relation",
-				"-- satisfies the requested relation, the userset reference object_id#filter_relation has access",
-				"-- e.g., for group:1.member with filter group#member, return 1#member (= group:1#member)",
-				"-- NOTE: Exclusions don't apply to self-referential userset checks (structural validity)",
-			},
-			selfBlock,
-		)
-
-		baseExclusions := buildExclusionInput(a, "p_object_id", "p_subject_type", "t.subject_id")
-		regularBaseSQL, err := sqlgen.ListSubjectsDirectQuery(sqlgen.ListSubjectsDirectInput{
-			ObjectType:      a.ObjectType,
-			RelationList:    relationList,
-			ObjectIDExpr:    "p_object_id",
-			SubjectTypeExpr: "p_subject_type",
-			ExcludeWildcard: excludeWildcard,
-			Exclusions:      baseExclusions,
-		})
-		if err != nil {
-			return "", err
-		}
-		regularBlocks = append(regularBlocks, formatQueryBlock(
-			[]string{
-				"-- Path 1: Direct tuple lookup with simple closure relations",
-			},
-			regularBaseSQL,
-		))
-
-		complexBlocks, err = buildListSubjectsComplexClosureBlocks(
-			a,
-			complexClosure,
-			"p_subject_type",
-			excludeWildcard,
-			baseExclusions,
-		)
-		if err != nil {
-			return "", err
-		}
-		regularBlocks = append(regularBlocks, complexBlocks...)
-		intersectionBlocks, err = buildListSubjectsIntersectionBlocks(
-			a,
-			false,
-			"p_subject_type",
-			"",
-		)
-		if err != nil {
-			return "", err
-		}
-		regularBlocks = append(regularBlocks, intersectionBlocks...)
-
-		for _, pattern := range buildListUsersetPatternInputs(a) {
-			if pattern.IsComplex {
-				patternSQL, err := sqlgen.ListSubjectsUsersetPatternComplexQuery(sqlgen.ListSubjectsUsersetPatternComplexInput{
-					ObjectType:       a.ObjectType,
-					SubjectType:      pattern.SubjectType,
-					SubjectRelation:  pattern.SubjectRelation,
-					SourceRelations:  pattern.SourceRelations,
-					ObjectIDExpr:     "p_object_id",
-					SubjectTypeExpr:  "p_subject_type",
-					IsClosurePattern: pattern.IsClosurePattern,
-					SourceRelation:   pattern.SourceRelation,
-					Exclusions:       baseExclusions,
-				})
-				if err != nil {
-					return "", err
-				}
-				regularBlocks = append(regularBlocks, formatQueryBlock(
-					[]string{
-						fmt.Sprintf("-- Path: Via %s#%s - expand group membership to return individual subjects", pattern.SubjectType, pattern.SubjectRelation),
-						"-- Complex userset: use LATERAL join with userset's list_subjects function",
-						"-- This handles userset-to-userset chains where there are no direct subject tuples",
-					},
-					patternSQL,
-				))
-				continue
-			}
-
-			patternSQL, err := sqlgen.ListSubjectsUsersetPatternSimpleQuery(sqlgen.ListSubjectsUsersetPatternSimpleInput{
-				ObjectType:          a.ObjectType,
-				SubjectType:         pattern.SubjectType,
-				SubjectRelation:     pattern.SubjectRelation,
-				SourceRelations:     pattern.SourceRelations,
-				SatisfyingRelations: pattern.SatisfyingRelations,
-				ObjectIDExpr:        "p_object_id",
-				SubjectTypeExpr:     "p_subject_type",
-				AllowedSubjectTypes: allowedSubjectTypes,
-				ExcludeWildcard:     excludeWildcard,
-				IsClosurePattern:    pattern.IsClosurePattern,
-				SourceRelation:      pattern.SourceRelation,
-				Exclusions:          baseExclusions,
-			})
-			if err != nil {
-				return "", err
-			}
-			regularBlocks = append(regularBlocks, formatQueryBlock(
-				[]string{
-					fmt.Sprintf("-- Path: Via %s#%s - expand group membership to return individual subjects", pattern.SubjectType, pattern.SubjectRelation),
-					"-- Simple userset: JOIN with membership tuples",
-				},
-				patternSQL,
-			))
-		}
-	case "list_subjects_recursive.tpl.sql":
-		return generateListSubjectsRecursiveFunctionBob(a, inline)
-	case "list_subjects_intersection.tpl.sql":
-		return generateListSubjectsIntersectionFunctionBob(a, inline)
-	default:
-		return "", fmt.Errorf("unexpected list_subjects template %s", templateName)
-	}
-
-	return buildListSubjectsFunctionSQL(functionName, a, usersetFilterBlocks, usersetFilterSelfBlock, regularBlocks, templateName), nil
+	// Use the feature-driven builder instead of template-based switch
+	return NewListSubjectsBuilder(a, inline).Build()
 }
 
 func buildListObjectsComplexClosureBlocks(a RelationAnalysis, relations []string, allowedSubjectTypes []string, allowWildcard bool, exclusions sqlgen.ExclusionConfig) ([]string, error) {
