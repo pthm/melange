@@ -5,9 +5,6 @@ import (
 	"strings"
 
 	"github.com/pthm/melange/tooling/schema/sqlgen"
-	"github.com/pthm/melange/tooling/schema/sqlgen/dsl"
-	"github.com/stephenafamo/bob"
-	"github.com/stephenafamo/bob/dialect/psql"
 )
 
 type listUsersetPatternInput struct {
@@ -1015,24 +1012,6 @@ func convertIntersectionGroups(groups []IntersectionGroupInfo) []sqlgen.Excluded
 			})
 		}
 		result = append(result, sqlgen.ExcludedIntersectionGroup{Parts: parts})
-	}
-	return result
-}
-
-// exclusionPredicates returns exclusion predicates as Bob expressions.
-// Uses the DSL-based implementation and converts to Bob for compatibility.
-func exclusionPredicates(input sqlgen.ExclusionInput) []bob.Expression {
-	dslPreds := sqlgen.ExclusionPredicatesDSL(input)
-	return dslExprsToBob(dslPreds)
-}
-
-// dslExprsToBob converts DSL expressions to Bob expressions by wrapping their SQL output.
-func dslExprsToBob(exprs []dsl.Expr) []bob.Expression {
-	result := make([]bob.Expression, 0, len(exprs))
-	for _, expr := range exprs {
-		if expr != nil {
-			result = append(result, psql.Raw(expr.SQL()))
-		}
 	}
 	return result
 }

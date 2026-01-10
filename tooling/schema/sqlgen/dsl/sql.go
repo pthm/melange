@@ -65,6 +65,10 @@ func (j JoinClause) SQL() string {
 	if j.Alias != "" {
 		alias = " AS " + j.Alias
 	}
+	// CROSS JOIN doesn't have an ON clause
+	if j.Type == "CROSS" || j.On == nil {
+		return fmt.Sprintf("%s JOIN %s%s", j.Type, j.Table, alias)
+	}
 	return fmt.Sprintf("%s JOIN %s%s ON %s", j.Type, j.Table, alias, j.On.SQL())
 }
 

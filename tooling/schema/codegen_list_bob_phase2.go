@@ -5,9 +5,7 @@ import (
 	"strings"
 
 	"github.com/pthm/melange/tooling/schema/sqlgen"
-	"github.com/stephenafamo/bob"
-	"github.com/stephenafamo/bob/dialect/psql"
-	"github.com/stephenafamo/bob/dialect/psql/sm"
+	"github.com/pthm/melange/tooling/schema/sqlgen/dsl"
 )
 
 func generateListObjectsRecursiveFunctionBob(a RelationAnalysis, inline InlineSQLData) (string, error) {
@@ -239,30 +237,23 @@ func buildAccessibleObjectsCTE(a RelationAnalysis, baseBlocks []string, recursiv
 	}
 
 	finalExclusions := buildExclusionInput(a, "acc.object_id", "p_subject_type", "p_subject_id")
-	where := []bob.Expression{}
-	exclusionPreds := exclusionPredicates(finalExclusions)
+	exclusionPreds := sqlgen.ExclusionPredicatesDSL(finalExclusions)
+
+	var whereExpr dsl.Expr
 	if len(exclusionPreds) > 0 {
-		where = append(where, psql.Raw("TRUE"))
-		where = append(where, exclusionPreds...)
+		// Prepend TRUE to ensure valid AND expression when there are exclusions
+		allPreds := append([]dsl.Expr{dsl.Bool(true)}, exclusionPreds...)
+		whereExpr = dsl.And(allPreds...)
 	}
 
-	finalQuery := psql.Select(
-		sm.Columns(psql.Raw("acc.object_id")),
-		sm.From("accessible").As("acc"),
-		sm.Distinct(),
-	)
-	if len(where) > 0 {
-		finalQuery = psql.Select(
-			sm.Columns(psql.Raw("acc.object_id")),
-			sm.From("accessible").As("acc"),
-			sm.Where(psql.And(where...)),
-			sm.Distinct(),
-		)
+	finalStmt := dsl.SelectStmt{
+		Distinct: true,
+		Columns:  []string{"acc.object_id"},
+		From:     "accessible",
+		Alias:    "acc",
+		Where:    whereExpr,
 	}
-	finalSQL, err := sqlgen.RenderQuery(finalQuery)
-	if err != nil {
-		return "", err
-	}
+	finalSQL := finalStmt.SQL()
 
 	return fmt.Sprintf(`WITH RECURSIVE accessible(object_id, depth) AS (
 %s
@@ -536,97 +527,67 @@ func buildObjectsIntersectionGroupSQL(a RelationAnalysis, idx int, group Interse
 	}
 
 	exclusions := buildSimpleComplexExclusionInput(a, fmt.Sprintf("ig_%d.object_id", idx), "p_subject_type", "p_subject_id")
-	exclusionPreds := exclusionPredicates(exclusions)
+	exclusionPreds := sqlgen.ExclusionPredicatesDSL(exclusions)
 	if len(exclusionPreds) == 0 {
 		return groupSQL, nil
 	}
 
-	whereClause, err := renderWhereClause(exclusionPreds)
-	if err != nil {
-		return "", err
-	}
-
-	groupSQL = groupSQL + "\n    WHERE " + whereClause
+	groupSQL = groupSQL + "\n    WHERE " + dsl.And(exclusionPreds...).SQL()
 	return groupSQL, nil
 }
 
 func buildObjectsIntersectionPartSQL(a RelationAnalysis, partIdx int, part IntersectionPart) (string, error) {
 	switch {
 	case part.IsThis:
-		subjectIDCheck := "t.subject_id = p_subject_id AND t.subject_id != '*'"
-		if part.HasWildcard {
-			subjectIDCheck = "(t.subject_id = p_subject_id OR t.subject_id = '*')"
-		}
-		where := []bob.Expression{
-			psql.Quote("t", "object_type").EQ(psql.S(a.ObjectType)),
-			psql.Quote("t", "relation").EQ(psql.S(a.Relation)),
-			psql.Quote("t", "subject_type").EQ(psql.Raw("p_subject_type")),
-			psql.Raw(subjectIDCheck),
-		}
+		q := dsl.Tuples("t").
+			ObjectType(a.ObjectType).
+			Relations(a.Relation).
+			Select("t.object_id").
+			WhereSubjectType(dsl.SubjectType).
+			WhereSubjectID(dsl.SubjectID, part.HasWildcard).
+			Distinct()
+
 		if part.ExcludedRelation != "" {
-			where = append(where, sqlgen.CheckPermissionInternalExpr("p_subject_type", "p_subject_id", part.ExcludedRelation, fmt.Sprintf("'%s'", a.ObjectType), "t.object_id", false))
+			q = q.Where(sqlgen.CheckPermissionInternalExprDSL("p_subject_type", "p_subject_id", part.ExcludedRelation, fmt.Sprintf("'%s'", a.ObjectType), "t.object_id", false))
 		}
-		query := psql.Select(
-			sm.Columns(psql.Raw("t.object_id")),
-			sm.From("melange_tuples").As("t"),
-			sm.Where(psql.And(where...)),
-			sm.Distinct(),
-		)
-		return sqlgen.RenderQuery(query)
+		return q.SQL(), nil
 	case part.ParentRelation != nil:
-		where := []bob.Expression{
-			psql.Quote("child", "object_type").EQ(psql.S(a.ObjectType)),
-			psql.Quote("child", "relation").EQ(psql.S(part.ParentRelation.LinkingRelation)),
-			sqlgen.CheckPermissionInternalExpr("p_subject_type", "p_subject_id", part.ParentRelation.Relation, "child.subject_type", "child.subject_id", true),
-		}
+		q := dsl.Tuples("child").
+			ObjectType(a.ObjectType).
+			Relations(part.ParentRelation.LinkingRelation).
+			Select("child.object_id").
+			Where(sqlgen.CheckPermissionInternalExprDSL("p_subject_type", "p_subject_id", part.ParentRelation.Relation, "child.subject_type", "child.subject_id", true)).
+			Distinct()
+
 		if part.ExcludedRelation != "" {
-			where = append(where, sqlgen.CheckPermissionInternalExpr("p_subject_type", "p_subject_id", part.ExcludedRelation, fmt.Sprintf("'%s'", a.ObjectType), "child.object_id", false))
+			q = q.Where(sqlgen.CheckPermissionInternalExprDSL("p_subject_type", "p_subject_id", part.ExcludedRelation, fmt.Sprintf("'%s'", a.ObjectType), "child.object_id", false))
 		}
-		query := psql.Select(
-			sm.Columns(psql.Raw("child.object_id")),
-			sm.From("melange_tuples").As("child"),
-			sm.Where(psql.And(where...)),
-			sm.Distinct(),
-		)
-		return sqlgen.RenderQuery(query)
+		return q.SQL(), nil
 	default:
-		where := []bob.Expression{
-			psql.Quote("t", "object_type").EQ(psql.S(a.ObjectType)),
-			sqlgen.CheckPermissionInternalExpr("p_subject_type", "p_subject_id", part.Relation, fmt.Sprintf("'%s'", a.ObjectType), "t.object_id", true),
-		}
+		q := dsl.Tuples("t").
+			ObjectType(a.ObjectType).
+			Select("t.object_id").
+			Where(sqlgen.CheckPermissionInternalExprDSL("p_subject_type", "p_subject_id", part.Relation, fmt.Sprintf("'%s'", a.ObjectType), "t.object_id", true)).
+			Distinct()
+
 		if part.ExcludedRelation != "" {
-			where = append(where, sqlgen.CheckPermissionInternalExpr("p_subject_type", "p_subject_id", part.ExcludedRelation, fmt.Sprintf("'%s'", a.ObjectType), "t.object_id", false))
+			q = q.Where(sqlgen.CheckPermissionInternalExprDSL("p_subject_type", "p_subject_id", part.ExcludedRelation, fmt.Sprintf("'%s'", a.ObjectType), "t.object_id", false))
 		}
-		query := psql.Select(
-			sm.Columns(psql.Raw("t.object_id")),
-			sm.From("melange_tuples").As("t"),
-			sm.Where(psql.And(where...)),
-			sm.Distinct(),
-		)
-		return sqlgen.RenderQuery(query)
+		return q.SQL(), nil
 	}
 }
 
 func buildObjectsIntersectionRecursiveSQL(a RelationAnalysis, relationList, allowedSubjectTypes, selfRefRelations []string, hasStandalone bool) (string, error) {
 	var seedBlocks []string
 	if hasStandalone && len(relationList) > 0 {
-		where := []bob.Expression{
-			psql.Quote("t", "object_type").EQ(psql.S(a.ObjectType)),
-			psql.Raw(fmt.Sprintf("t.relation IN (%s)", formatSQLStringList(relationList))),
-			psql.Quote("t", "subject_type").EQ(psql.Raw("p_subject_type")),
-			psql.Raw(fmt.Sprintf("p_subject_type IN (%s)", formatSQLStringList(allowedSubjectTypes))),
-			psql.Raw(buildSubjectIDCheck(a.Features.HasWildcard)),
-		}
-		query := psql.Select(
-			sm.Columns(psql.Raw("t.object_id")),
-			sm.From("melange_tuples").As("t"),
-			sm.Where(psql.And(where...)),
-		)
-		sql, err := sqlgen.RenderQuery(query)
-		if err != nil {
-			return "", err
-		}
-		seedBlocks = append(seedBlocks, sql)
+		q := dsl.Tuples("t").
+			ObjectType(a.ObjectType).
+			Relations(relationList...).
+			Select("t.object_id").
+			WhereSubjectType(dsl.SubjectType).
+			Where(dsl.In{Expr: dsl.SubjectType, Values: allowedSubjectTypes}).
+			WhereSubjectID(dsl.SubjectID, a.Features.HasWildcard)
+		seedBlocks = append(seedBlocks, q.SQL())
 	}
 
 	for idx, group := range a.IntersectionGroups {
@@ -969,152 +930,160 @@ func buildListSubjectsRecursiveRegularQuery(a RelationAnalysis, inline InlineSQL
 }
 
 func buildSubjectPoolSQL(allowedSubjectTypes []string, excludeWildcard bool) (string, error) {
-	where := []bob.Expression{
-		psql.Quote("t", "subject_type").EQ(psql.Raw("p_subject_type")),
-		psql.Raw(fmt.Sprintf("p_subject_type IN (%s)", formatSQLStringList(allowedSubjectTypes))),
-	}
+	q := dsl.Tuples("t").
+		Select("t.subject_id").
+		WhereSubjectType(dsl.SubjectType).
+		Where(dsl.In{Expr: dsl.SubjectType, Values: allowedSubjectTypes}).
+		Distinct()
+
 	if excludeWildcard {
-		where = append(where, psql.Quote("t", "subject_id").NE(psql.S("*")))
+		q = q.Where(dsl.Ne{Left: dsl.Col{Table: "t", Column: "subject_id"}, Right: dsl.Lit("*")})
 	}
-	query := psql.Select(
-		sm.Columns(psql.Raw("t.subject_id")),
-		sm.From("melange_tuples").As("t"),
-		sm.Where(psql.And(where...)),
-		sm.Distinct(),
-	)
-	return sqlgen.RenderQuery(query)
+	return q.SQL(), nil
 }
 
 func buildSubjectsTTUPathQuery(a RelationAnalysis, parent ListParentRelationData) (string, error) {
-	where := []bob.Expression{
-		psql.Quote("link", "object_type").EQ(psql.S(a.ObjectType)),
-		psql.Quote("link", "object_id").EQ(psql.Raw("p_object_id")),
-		psql.Quote("link", "relation").EQ(psql.S(parent.LinkingRelation)),
-		sqlgen.CheckPermissionInternalExpr("p_subject_type", "sp.subject_id", parent.Relation, "link.subject_type", "link.subject_id", true),
+	conditions := []dsl.Expr{
+		dsl.Eq{Left: dsl.Col{Table: "link", Column: "object_type"}, Right: dsl.Lit(a.ObjectType)},
+		dsl.Eq{Left: dsl.Col{Table: "link", Column: "object_id"}, Right: dsl.ObjectID},
+		dsl.Eq{Left: dsl.Col{Table: "link", Column: "relation"}, Right: dsl.Lit(parent.LinkingRelation)},
+		sqlgen.CheckPermissionInternalExprDSL("p_subject_type", "sp.subject_id", parent.Relation, "link.subject_type", "link.subject_id", true),
 	}
 	if parent.AllowedLinkingTypes != "" {
-		where = append(where, psql.Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
+		conditions = append(conditions, dsl.Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
 	}
 	exclusions := buildExclusionInput(a, "p_object_id", "p_subject_type", "sp.subject_id")
-	exclusionPreds := exclusionPredicates(exclusions)
-	where = append(where, exclusionPreds...)
+	exclusionPreds := sqlgen.ExclusionPredicatesDSL(exclusions)
+	conditions = append(conditions, exclusionPreds...)
 
-	query := psql.Select(
-		sm.Columns(psql.Raw("sp.subject_id")),
-		sm.From("subject_pool").As("sp"),
-		sm.CrossJoin("melange_tuples").As("link"),
-		sm.Where(psql.And(where...)),
-		sm.Distinct(),
-	)
-	return sqlgen.RenderQuery(query)
+	stmt := dsl.SelectStmt{
+		Distinct: true,
+		Columns:  []string{"sp.subject_id"},
+		From:     "subject_pool",
+		Alias:    "sp",
+		Joins: []dsl.JoinClause{{
+			Type:  "CROSS",
+			Table: "melange_tuples",
+			Alias: "link",
+			On:    dsl.Bool(true), // CROSS JOIN has ON TRUE (always matches)
+		}},
+		Where: dsl.And(conditions...),
+	}
+	return stmt.SQL(), nil
 }
 
 func buildUsersetFilterTTUQuery(a RelationAnalysis, inline InlineSQLData, parent ListParentRelationData) (string, error) {
-	closureTable := psql.Raw(fmt.Sprintf("(VALUES %s) AS c(object_type, relation, satisfying_relation)", inline.ClosureValues))
-	closureRelQuery := psql.Select(
-		sm.Columns(psql.Raw("c.satisfying_relation")),
-		sm.From(closureTable),
-		sm.Where(psql.And(
-			psql.Quote("c", "object_type").EQ(psql.Raw("link.subject_type")),
-			psql.Quote("c", "relation").EQ(psql.S(parent.Relation)),
-		)),
-	)
-	closureRelSQL, err := sqlgen.RenderQuery(closureRelQuery)
-	if err != nil {
-		return "", err
+	closureRelStmt := dsl.SelectStmt{
+		Columns: []string{"c.satisfying_relation"},
+		From:    fmt.Sprintf("(VALUES %s) AS c(object_type, relation, satisfying_relation)", inline.ClosureValues),
+		Where: dsl.And(
+			dsl.Eq{Left: dsl.Col{Table: "c", Column: "object_type"}, Right: dsl.Raw("link.subject_type")},
+			dsl.Eq{Left: dsl.Col{Table: "c", Column: "relation"}, Right: dsl.Lit(parent.Relation)},
+		),
+	}
+	closureRelSQL := closureRelStmt.SQL()
+
+	closureExistsStmt := dsl.SelectStmt{
+		Columns: []string{"1"},
+		From:    fmt.Sprintf("(VALUES %s) AS subj_c(object_type, relation, satisfying_relation)", inline.ClosureValues),
+		Where: dsl.And(
+			dsl.Eq{Left: dsl.Col{Table: "subj_c", Column: "object_type"}, Right: dsl.Raw("v_filter_type")},
+			dsl.Eq{Left: dsl.Col{Table: "subj_c", Column: "relation"}, Right: dsl.Raw("substring(pt.subject_id from position('#' in pt.subject_id) + 1)")},
+			dsl.Eq{Left: dsl.Col{Table: "subj_c", Column: "satisfying_relation"}, Right: dsl.Raw("v_filter_relation")},
+		),
 	}
 
-	closureExists, err := sqlgen.RenderQuery(psql.Select(
-		sm.Columns(psql.Raw("1")),
-		sm.From(psql.Raw(fmt.Sprintf("(VALUES %s) AS subj_c(object_type, relation, satisfying_relation)", inline.ClosureValues))),
-		sm.Where(psql.And(
-			psql.Quote("subj_c", "object_type").EQ(psql.Raw("v_filter_type")),
-			psql.Quote("subj_c", "relation").EQ(psql.Raw("substring(pt.subject_id from position('#' in pt.subject_id) + 1)")),
-			psql.Quote("subj_c", "satisfying_relation").EQ(psql.Raw("v_filter_relation")),
-		)),
-	))
-	if err != nil {
-		return "", err
-	}
-
-	where := []bob.Expression{
-		psql.Quote("link", "object_type").EQ(psql.S(a.ObjectType)),
-		psql.Quote("link", "object_id").EQ(psql.Raw("p_object_id")),
-		psql.Quote("link", "relation").EQ(psql.S(parent.LinkingRelation)),
-		psql.Quote("pt", "subject_type").EQ(psql.Raw("v_filter_type")),
-		psql.Raw("position('#' in pt.subject_id)").GT(psql.Raw("0")),
-		psql.Or(
-			psql.Raw("substring(pt.subject_id from position('#' in pt.subject_id) + 1)").EQ(psql.Raw("v_filter_relation")),
-			psql.Raw("EXISTS ("+closureExists+")"),
+	conditions := []dsl.Expr{
+		dsl.Eq{Left: dsl.Col{Table: "link", Column: "object_type"}, Right: dsl.Lit(a.ObjectType)},
+		dsl.Eq{Left: dsl.Col{Table: "link", Column: "object_id"}, Right: dsl.ObjectID},
+		dsl.Eq{Left: dsl.Col{Table: "link", Column: "relation"}, Right: dsl.Lit(parent.LinkingRelation)},
+		dsl.Eq{Left: dsl.Col{Table: "pt", Column: "subject_type"}, Right: dsl.Raw("v_filter_type")},
+		dsl.Gt{Left: dsl.Raw("position('#' in pt.subject_id)"), Right: dsl.Int(0)},
+		dsl.Or(
+			dsl.Eq{Left: dsl.Raw("substring(pt.subject_id from position('#' in pt.subject_id) + 1)"), Right: dsl.Raw("v_filter_relation")},
+			dsl.Exists{Query: closureExistsStmt},
 		),
 	}
 	if parent.AllowedLinkingTypes != "" {
-		where = append(where, psql.Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
+		conditions = append(conditions, dsl.Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
 	}
 
-	query := psql.Select(
-		sm.Columns(psql.Raw("substring(pt.subject_id from 1 for position('#' in pt.subject_id) - 1) || '#' || v_filter_relation AS subject_id")),
-		sm.From("melange_tuples").As("link"),
-		sm.InnerJoin("melange_tuples").As("pt").On(
-			psql.Quote("pt", "object_type").EQ(psql.Raw("link.subject_type")),
-			psql.Quote("pt", "object_id").EQ(psql.Raw("link.subject_id")),
-			psql.Raw("pt.relation IN ("+closureRelSQL+")"),
-		),
-		sm.Where(psql.And(where...)),
-		sm.Distinct(),
-	)
-	return sqlgen.RenderQuery(query)
+	stmt := dsl.SelectStmt{
+		Distinct: true,
+		Columns:  []string{"substring(pt.subject_id from 1 for position('#' in pt.subject_id) - 1) || '#' || v_filter_relation AS subject_id"},
+		From:     "melange_tuples",
+		Alias:    "link",
+		Joins: []dsl.JoinClause{{
+			Type:  "INNER",
+			Table: "melange_tuples",
+			Alias: "pt",
+			On: dsl.And(
+				dsl.Eq{Left: dsl.Col{Table: "pt", Column: "object_type"}, Right: dsl.Raw("link.subject_type")},
+				dsl.Eq{Left: dsl.Col{Table: "pt", Column: "object_id"}, Right: dsl.Raw("link.subject_id")},
+				dsl.Raw("pt.relation IN ("+closureRelSQL+")"),
+			),
+		}},
+		Where: dsl.And(conditions...),
+	}
+	return stmt.SQL(), nil
 }
 
 func buildUsersetFilterTTUIntermediateQuery(a RelationAnalysis, inline InlineSQLData, parent ListParentRelationData) (string, error) {
-	closureTable := psql.Raw(fmt.Sprintf("(VALUES %s) AS c(object_type, relation, satisfying_relation)", inline.ClosureValues))
-	closureExists, err := sqlgen.RenderQuery(psql.Select(
-		sm.Columns(psql.Raw("1")),
-		sm.From(closureTable),
-		sm.Where(psql.And(
-			psql.Quote("c", "object_type").EQ(psql.Raw("link.subject_type")),
-			psql.Quote("c", "relation").EQ(psql.S(parent.Relation)),
-			psql.Quote("c", "satisfying_relation").EQ(psql.Raw("v_filter_relation")),
-		)),
-	))
-	if err != nil {
-		return "", err
+	closureExistsStmt := dsl.SelectStmt{
+		Columns: []string{"1"},
+		From:    fmt.Sprintf("(VALUES %s) AS c(object_type, relation, satisfying_relation)", inline.ClosureValues),
+		Where: dsl.And(
+			dsl.Eq{Left: dsl.Col{Table: "c", Column: "object_type"}, Right: dsl.Raw("link.subject_type")},
+			dsl.Eq{Left: dsl.Col{Table: "c", Column: "relation"}, Right: dsl.Lit(parent.Relation)},
+			dsl.Eq{Left: dsl.Col{Table: "c", Column: "satisfying_relation"}, Right: dsl.Raw("v_filter_relation")},
+		),
 	}
-	where := []bob.Expression{
-		psql.Quote("link", "object_type").EQ(psql.S(a.ObjectType)),
-		psql.Quote("link", "object_id").EQ(psql.Raw("p_object_id")),
-		psql.Quote("link", "relation").EQ(psql.S(parent.LinkingRelation)),
-		psql.Raw("link.subject_type").EQ(psql.Raw("v_filter_type")),
-		psql.Raw("EXISTS (" + closureExists + ")"),
+
+	conditions := []dsl.Expr{
+		dsl.Eq{Left: dsl.Col{Table: "link", Column: "object_type"}, Right: dsl.Lit(a.ObjectType)},
+		dsl.Eq{Left: dsl.Col{Table: "link", Column: "object_id"}, Right: dsl.ObjectID},
+		dsl.Eq{Left: dsl.Col{Table: "link", Column: "relation"}, Right: dsl.Lit(parent.LinkingRelation)},
+		dsl.Eq{Left: dsl.Raw("link.subject_type"), Right: dsl.Raw("v_filter_type")},
+		dsl.Exists{Query: closureExistsStmt},
 	}
 	if parent.AllowedLinkingTypes != "" {
-		where = append(where, psql.Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
+		conditions = append(conditions, dsl.Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
 	}
-	query := psql.Select(
-		sm.Columns(psql.Raw("link.subject_id || '#' || v_filter_relation AS subject_id")),
-		sm.From("melange_tuples").As("link"),
-		sm.Where(psql.And(where...)),
-		sm.Distinct(),
-	)
-	return sqlgen.RenderQuery(query)
+
+	stmt := dsl.SelectStmt{
+		Distinct: true,
+		Columns:  []string{"link.subject_id || '#' || v_filter_relation AS subject_id"},
+		From:     "melange_tuples",
+		Alias:    "link",
+		Where:    dsl.And(conditions...),
+	}
+	return stmt.SQL(), nil
 }
 
 func buildUsersetFilterTTUNestedQuery(objectType string, parent ListParentRelationData) (string, error) {
-	where := []bob.Expression{
-		psql.Quote("link", "object_type").EQ(psql.S(objectType)),
-		psql.Quote("link", "object_id").EQ(psql.Raw("p_object_id")),
-		psql.Quote("link", "relation").EQ(psql.S(parent.LinkingRelation)),
+	lateralCall := fmt.Sprintf("LATERAL list_accessible_subjects(link.subject_type, link.subject_id, '%s', p_subject_type)", parent.Relation)
+
+	conditions := []dsl.Expr{
+		dsl.Eq{Left: dsl.Col{Table: "link", Column: "object_type"}, Right: dsl.Lit(objectType)},
+		dsl.Eq{Left: dsl.Col{Table: "link", Column: "object_id"}, Right: dsl.ObjectID},
+		dsl.Eq{Left: dsl.Col{Table: "link", Column: "relation"}, Right: dsl.Lit(parent.LinkingRelation)},
 	}
 	if parent.AllowedLinkingTypes != "" {
-		where = append(where, psql.Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
+		conditions = append(conditions, dsl.Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
 	}
-	query := psql.Select(
-		sm.Columns(psql.Raw("nested.subject_id")),
-		sm.From("melange_tuples").As("link"),
-		sm.CrossJoin(psql.Raw("LATERAL list_accessible_subjects(link.subject_type, link.subject_id, '"+parent.Relation+"', p_subject_type)")).As("nested"),
-		sm.Where(psql.And(where...)),
-	)
-	return sqlgen.RenderQuery(query)
+
+	stmt := dsl.SelectStmt{
+		Columns: []string{"nested.subject_id"},
+		From:    "melange_tuples",
+		Alias:   "link",
+		Joins: []dsl.JoinClause{{
+			Type:  "CROSS",
+			Table: lateralCall,
+			Alias: "nested",
+		}},
+		Where: dsl.And(conditions...),
+	}
+	return stmt.SQL(), nil
 }
 
 func generateListSubjectsIntersectionFunctionBob(a RelationAnalysis, inline InlineSQLData) (string, error) {
@@ -1256,123 +1225,122 @@ func buildUsersetIntersectionCandidates(a RelationAnalysis, inline InlineSQLData
 
 func buildUsersetIntersectionPartCandidates(a RelationAnalysis, inline InlineSQLData, part IntersectionPart) (string, error) {
 	if part.ParentRelation != nil {
-		relationMatch, err := buildUsersetFilterRelationMatchExpr("pt.subject_id", inline.ClosureValues)
-		if err != nil {
-			return "", err
-		}
-		where := []bob.Expression{
-			psql.Quote("link", "object_type").EQ(psql.S(a.ObjectType)),
-			psql.Quote("link", "object_id").EQ(psql.Raw("p_object_id")),
-			psql.Quote("link", "relation").EQ(psql.S(part.ParentRelation.LinkingRelation)),
-			psql.Quote("pt", "subject_type").EQ(psql.Raw("v_filter_type")),
-			psql.Raw("position('#' in pt.subject_id)").GT(psql.Raw("0")),
+		relationMatch := buildUsersetFilterRelationMatchExprDSL("pt.subject_id", inline.ClosureValues)
+		conditions := []dsl.Expr{
+			dsl.Eq{Left: dsl.Col{Table: "link", Column: "object_type"}, Right: dsl.Lit(a.ObjectType)},
+			dsl.Eq{Left: dsl.Col{Table: "link", Column: "object_id"}, Right: dsl.ObjectID},
+			dsl.Eq{Left: dsl.Col{Table: "link", Column: "relation"}, Right: dsl.Lit(part.ParentRelation.LinkingRelation)},
+			dsl.Eq{Left: dsl.Col{Table: "pt", Column: "subject_type"}, Right: dsl.Raw("v_filter_type")},
+			dsl.Gt{Left: dsl.Raw("position('#' in pt.subject_id)"), Right: dsl.Int(0)},
 			relationMatch,
 		}
-		query := psql.Select(
-			sm.Columns(psql.Raw("substring(pt.subject_id from 1 for position('#' in pt.subject_id) - 1) || '#' || v_filter_relation AS subject_id")),
-			sm.From("melange_tuples").As("link"),
-			sm.InnerJoin("melange_tuples").As("pt").On(
-				psql.Quote("pt", "object_type").EQ(psql.Raw("link.subject_type")),
-				psql.Quote("pt", "object_id").EQ(psql.Raw("link.subject_id")),
-			),
-			sm.Where(psql.And(where...)),
-			sm.Distinct(),
-		)
-		return sqlgen.RenderQuery(query)
+		stmt := dsl.SelectStmt{
+			Distinct: true,
+			Columns:  []string{"substring(pt.subject_id from 1 for position('#' in pt.subject_id) - 1) || '#' || v_filter_relation AS subject_id"},
+			From:     "melange_tuples",
+			Alias:    "link",
+			Joins: []dsl.JoinClause{{
+				Type:  "INNER",
+				Table: "melange_tuples",
+				Alias: "pt",
+				On: dsl.And(
+					dsl.Eq{Left: dsl.Col{Table: "pt", Column: "object_type"}, Right: dsl.Raw("link.subject_type")},
+					dsl.Eq{Left: dsl.Col{Table: "pt", Column: "object_id"}, Right: dsl.Raw("link.subject_id")},
+				),
+			}},
+			Where: dsl.And(conditions...),
+		}
+		return stmt.SQL(), nil
 	}
 
-	where := []bob.Expression{
-		psql.Quote("t", "object_type").EQ(psql.S(a.ObjectType)),
-		psql.Quote("t", "object_id").EQ(psql.Raw("p_object_id")),
-		psql.Quote("t", "relation").EQ(psql.S(part.Relation)),
-		psql.Quote("t", "subject_type").EQ(psql.Raw("v_filter_type")),
-		psql.Raw("position('#' in t.subject_id)").GT(psql.Raw("0")),
+	relationMatch := buildUsersetFilterRelationMatchExprDSL("t.subject_id", inline.ClosureValues)
+	conditions := []dsl.Expr{
+		dsl.Eq{Left: dsl.Col{Table: "t", Column: "object_type"}, Right: dsl.Lit(a.ObjectType)},
+		dsl.Eq{Left: dsl.Col{Table: "t", Column: "object_id"}, Right: dsl.ObjectID},
+		dsl.Eq{Left: dsl.Col{Table: "t", Column: "relation"}, Right: dsl.Lit(part.Relation)},
+		dsl.Eq{Left: dsl.Col{Table: "t", Column: "subject_type"}, Right: dsl.Raw("v_filter_type")},
+		dsl.Gt{Left: dsl.Raw("position('#' in t.subject_id)"), Right: dsl.Int(0)},
+		relationMatch,
 	}
-	relationMatch, err := buildUsersetFilterRelationMatchExpr("t.subject_id", inline.ClosureValues)
-	if err != nil {
-		return "", err
+	stmt := dsl.SelectStmt{
+		Distinct: true,
+		Columns:  []string{"substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) || '#' || v_filter_relation AS subject_id"},
+		From:     "melange_tuples",
+		Alias:    "t",
+		Where:    dsl.And(conditions...),
 	}
-	where = append(where, relationMatch)
-	query := psql.Select(
-		sm.Columns(psql.Raw("substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) || '#' || v_filter_relation AS subject_id")),
-		sm.From("melange_tuples").As("t"),
-		sm.Where(psql.And(where...)),
-		sm.Distinct(),
-	)
-	return sqlgen.RenderQuery(query)
+	return stmt.SQL(), nil
 }
 
 func buildUsersetIntersectionTTUCandidates(a RelationAnalysis, inline InlineSQLData, parent ListParentRelationData) (string, error) {
-	relationMatch, err := buildUsersetFilterRelationMatchExpr("pt.subject_id", inline.ClosureValues)
-	if err != nil {
-		return "", err
-	}
-	where := []bob.Expression{
-		psql.Quote("link", "object_type").EQ(psql.S(a.ObjectType)),
-		psql.Quote("link", "object_id").EQ(psql.Raw("p_object_id")),
-		psql.Quote("link", "relation").EQ(psql.S(parent.LinkingRelation)),
-		psql.Quote("pt", "subject_type").EQ(psql.Raw("v_filter_type")),
-		psql.Raw("position('#' in pt.subject_id)").GT(psql.Raw("0")),
+	relationMatch := buildUsersetFilterRelationMatchExprDSL("pt.subject_id", inline.ClosureValues)
+	conditions := []dsl.Expr{
+		dsl.Eq{Left: dsl.Col{Table: "link", Column: "object_type"}, Right: dsl.Lit(a.ObjectType)},
+		dsl.Eq{Left: dsl.Col{Table: "link", Column: "object_id"}, Right: dsl.ObjectID},
+		dsl.Eq{Left: dsl.Col{Table: "link", Column: "relation"}, Right: dsl.Lit(parent.LinkingRelation)},
+		dsl.Eq{Left: dsl.Col{Table: "pt", Column: "subject_type"}, Right: dsl.Raw("v_filter_type")},
+		dsl.Gt{Left: dsl.Raw("position('#' in pt.subject_id)"), Right: dsl.Int(0)},
 		relationMatch,
 	}
 	if parent.AllowedLinkingTypes != "" {
-		where = append(where, psql.Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
+		conditions = append(conditions, dsl.Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
 	}
-	query := psql.Select(
-		sm.Columns(psql.Raw("substring(pt.subject_id from 1 for position('#' in pt.subject_id) - 1) || '#' || v_filter_relation AS subject_id")),
-		sm.From("melange_tuples").As("link"),
-		sm.InnerJoin("melange_tuples").As("pt").On(
-			psql.Quote("pt", "object_type").EQ(psql.Raw("link.subject_type")),
-			psql.Quote("pt", "object_id").EQ(psql.Raw("link.subject_id")),
-		),
-		sm.Where(psql.And(where...)),
-		sm.Distinct(),
-	)
-	return sqlgen.RenderQuery(query)
+	stmt := dsl.SelectStmt{
+		Distinct: true,
+		Columns:  []string{"substring(pt.subject_id from 1 for position('#' in pt.subject_id) - 1) || '#' || v_filter_relation AS subject_id"},
+		From:     "melange_tuples",
+		Alias:    "link",
+		Joins: []dsl.JoinClause{{
+			Type:  "INNER",
+			Table: "melange_tuples",
+			Alias: "pt",
+			On: dsl.And(
+				dsl.Eq{Left: dsl.Col{Table: "pt", Column: "object_type"}, Right: dsl.Raw("link.subject_type")},
+				dsl.Eq{Left: dsl.Col{Table: "pt", Column: "object_id"}, Right: dsl.Raw("link.subject_id")},
+			),
+		}},
+		Where: dsl.And(conditions...),
+	}
+	return stmt.SQL(), nil
 }
 
-func buildUsersetFilterRelationMatchExpr(subjectIDExpr, closureValues string) (bob.Expression, error) {
-	closureTable := psql.Raw(fmt.Sprintf("(VALUES %s) AS subj_c(object_type, relation, satisfying_relation)", closureValues))
-	closureExists, err := sqlgen.RenderQuery(psql.Select(
-		sm.Columns(psql.Raw("1")),
-		sm.From(closureTable),
-		sm.Where(psql.And(
-			psql.Quote("subj_c", "object_type").EQ(psql.Raw("v_filter_type")),
-			psql.Quote("subj_c", "relation").EQ(psql.Raw("substring("+subjectIDExpr+" from position('#' in "+subjectIDExpr+") + 1)")),
-			psql.Quote("subj_c", "satisfying_relation").EQ(psql.Raw("v_filter_relation")),
-		)),
-	))
-	if err != nil {
-		return nil, err
+func buildUsersetFilterRelationMatchExprDSL(subjectIDExpr, closureValues string) dsl.Expr {
+	closureExistsStmt := dsl.SelectStmt{
+		Columns: []string{"1"},
+		From:    fmt.Sprintf("(VALUES %s) AS subj_c(object_type, relation, satisfying_relation)", closureValues),
+		Where: dsl.And(
+			dsl.Eq{Left: dsl.Col{Table: "subj_c", Column: "object_type"}, Right: dsl.Raw("v_filter_type")},
+			dsl.Eq{Left: dsl.Col{Table: "subj_c", Column: "relation"}, Right: dsl.Raw("substring(" + subjectIDExpr + " from position('#' in " + subjectIDExpr + ") + 1)")},
+			dsl.Eq{Left: dsl.Col{Table: "subj_c", Column: "satisfying_relation"}, Right: dsl.Raw("v_filter_relation")},
+		),
 	}
-	return psql.Or(
-		psql.Raw("substring("+subjectIDExpr+" from position('#' in "+subjectIDExpr+") + 1)").EQ(psql.Raw("v_filter_relation")),
-		psql.Raw("EXISTS ("+closureExists+")"),
-	), nil
+	return dsl.Or(
+		dsl.Eq{Left: dsl.Raw("substring(" + subjectIDExpr + " from position('#' in " + subjectIDExpr + ") + 1)"), Right: dsl.Raw("v_filter_relation")},
+		dsl.Exists{Query: closureExistsStmt},
+	)
 }
 
 func buildRegularIntersectionCandidates(a RelationAnalysis, inline InlineSQLData, allSatisfyingRelations []string, excludeWildcard bool) (string, error) {
 	var blocks []string
-	where := []bob.Expression{
-		psql.Quote("t", "object_type").EQ(psql.S(a.ObjectType)),
-		psql.Quote("t", "object_id").EQ(psql.Raw("p_object_id")),
-		psql.Raw(fmt.Sprintf("t.relation IN (%s)", formatSQLStringList(allSatisfyingRelations))),
-		psql.Quote("t", "subject_type").EQ(psql.Raw("p_subject_type")),
+
+	// Base query
+	baseConditions := []dsl.Expr{
+		dsl.Eq{Left: dsl.Col{Table: "t", Column: "object_type"}, Right: dsl.Lit(a.ObjectType)},
+		dsl.Eq{Left: dsl.Col{Table: "t", Column: "object_id"}, Right: dsl.ObjectID},
+		dsl.In{Expr: dsl.Col{Table: "t", Column: "relation"}, Values: allSatisfyingRelations},
+		dsl.Eq{Left: dsl.Col{Table: "t", Column: "subject_type"}, Right: dsl.SubjectType},
 	}
 	if excludeWildcard {
-		where = append(where, psql.Quote("t", "subject_id").NE(psql.S("*")))
+		baseConditions = append(baseConditions, dsl.Ne{Left: dsl.Col{Table: "t", Column: "subject_id"}, Right: dsl.Lit("*")})
 	}
-	baseQuery := psql.Select(
-		sm.Columns(psql.Raw("t.subject_id")),
-		sm.From("melange_tuples").As("t"),
-		sm.Where(psql.And(where...)),
-		sm.Distinct(),
-	)
-	baseSQL, err := sqlgen.RenderQuery(baseQuery)
-	if err != nil {
-		return "", err
+	baseStmt := dsl.SelectStmt{
+		Distinct: true,
+		Columns:  []string{"t.subject_id"},
+		From:     "melange_tuples",
+		Alias:    "t",
+		Where:    dsl.And(baseConditions...),
 	}
-	blocks = append(blocks, baseSQL)
+	blocks = append(blocks, baseStmt.SQL())
 
 	for _, group := range a.IntersectionGroups {
 		for _, part := range group.Parts {
@@ -1416,95 +1384,104 @@ func buildRegularIntersectionCandidates(a RelationAnalysis, inline InlineSQLData
 		blocks = append(blocks, ttuSQL)
 	}
 
-	poolQuery := psql.Select(
-		sm.Columns(psql.Raw("t.subject_id")),
-		sm.From("melange_tuples").As("t"),
-		sm.Where(psql.And(
-			psql.Quote("t", "subject_type").EQ(psql.Raw("p_subject_type")),
-			func() bob.Expression {
-				if excludeWildcard {
-					return psql.Quote("t", "subject_id").NE(psql.S("*"))
-				}
-				return psql.Raw("TRUE")
-			}(),
-		)),
-		sm.Distinct(),
-	)
-	poolSQL, err := sqlgen.RenderQuery(poolQuery)
-	if err != nil {
-		return "", err
+	// Pool query - subject pool for intersection filtering
+	poolConditions := []dsl.Expr{
+		dsl.Eq{Left: dsl.Col{Table: "t", Column: "subject_type"}, Right: dsl.SubjectType},
 	}
-	blocks = append(blocks, poolSQL)
+	if excludeWildcard {
+		poolConditions = append(poolConditions, dsl.Ne{Left: dsl.Col{Table: "t", Column: "subject_id"}, Right: dsl.Lit("*")})
+	}
+	poolStmt := dsl.SelectStmt{
+		Distinct: true,
+		Columns:  []string{"t.subject_id"},
+		From:     "melange_tuples",
+		Alias:    "t",
+		Where:    dsl.And(poolConditions...),
+	}
+	blocks = append(blocks, poolStmt.SQL())
 
 	return strings.Join(blocks, "\n            UNION\n"), nil
 }
 
 func buildRegularIntersectionPartCandidates(a RelationAnalysis, part IntersectionPart, excludeWildcard bool) (string, error) {
 	if part.ParentRelation != nil {
-		where := []bob.Expression{
-			psql.Quote("link", "object_type").EQ(psql.S(a.ObjectType)),
-			psql.Quote("link", "object_id").EQ(psql.Raw("p_object_id")),
-			psql.Quote("link", "relation").EQ(psql.S(part.ParentRelation.LinkingRelation)),
-			psql.Quote("pt", "subject_type").EQ(psql.Raw("p_subject_type")),
+		conditions := []dsl.Expr{
+			dsl.Eq{Left: dsl.Col{Table: "link", Column: "object_type"}, Right: dsl.Lit(a.ObjectType)},
+			dsl.Eq{Left: dsl.Col{Table: "link", Column: "object_id"}, Right: dsl.ObjectID},
+			dsl.Eq{Left: dsl.Col{Table: "link", Column: "relation"}, Right: dsl.Lit(part.ParentRelation.LinkingRelation)},
+			dsl.Eq{Left: dsl.Col{Table: "pt", Column: "subject_type"}, Right: dsl.SubjectType},
 		}
 		if excludeWildcard {
-			where = append(where, psql.Quote("pt", "subject_id").NE(psql.S("*")))
+			conditions = append(conditions, dsl.Ne{Left: dsl.Col{Table: "pt", Column: "subject_id"}, Right: dsl.Lit("*")})
 		}
-		query := psql.Select(
-			sm.Columns(psql.Raw("pt.subject_id")),
-			sm.From("melange_tuples").As("link"),
-			sm.InnerJoin("melange_tuples").As("pt").On(
-				psql.Quote("pt", "object_type").EQ(psql.Raw("link.subject_type")),
-				psql.Quote("pt", "object_id").EQ(psql.Raw("link.subject_id")),
-			),
-			sm.Where(psql.And(where...)),
-			sm.Distinct(),
-		)
-		return sqlgen.RenderQuery(query)
+		stmt := dsl.SelectStmt{
+			Distinct: true,
+			Columns:  []string{"pt.subject_id"},
+			From:     "melange_tuples",
+			Alias:    "link",
+			Joins: []dsl.JoinClause{{
+				Type:  "INNER",
+				Table: "melange_tuples",
+				Alias: "pt",
+				On: dsl.And(
+					dsl.Eq{Left: dsl.Col{Table: "pt", Column: "object_type"}, Right: dsl.Raw("link.subject_type")},
+					dsl.Eq{Left: dsl.Col{Table: "pt", Column: "object_id"}, Right: dsl.Raw("link.subject_id")},
+				),
+			}},
+			Where: dsl.And(conditions...),
+		}
+		return stmt.SQL(), nil
 	}
 
-	where := []bob.Expression{
-		psql.Quote("t", "object_type").EQ(psql.S(a.ObjectType)),
-		psql.Quote("t", "object_id").EQ(psql.Raw("p_object_id")),
-		psql.Quote("t", "relation").EQ(psql.S(part.Relation)),
-		psql.Quote("t", "subject_type").EQ(psql.Raw("p_subject_type")),
+	conditions := []dsl.Expr{
+		dsl.Eq{Left: dsl.Col{Table: "t", Column: "object_type"}, Right: dsl.Lit(a.ObjectType)},
+		dsl.Eq{Left: dsl.Col{Table: "t", Column: "object_id"}, Right: dsl.ObjectID},
+		dsl.Eq{Left: dsl.Col{Table: "t", Column: "relation"}, Right: dsl.Lit(part.Relation)},
+		dsl.Eq{Left: dsl.Col{Table: "t", Column: "subject_type"}, Right: dsl.SubjectType},
 	}
 	if excludeWildcard {
-		where = append(where, psql.Quote("t", "subject_id").NE(psql.S("*")))
+		conditions = append(conditions, dsl.Ne{Left: dsl.Col{Table: "t", Column: "subject_id"}, Right: dsl.Lit("*")})
 	}
-	query := psql.Select(
-		sm.Columns(psql.Raw("t.subject_id")),
-		sm.From("melange_tuples").As("t"),
-		sm.Where(psql.And(where...)),
-		sm.Distinct(),
-	)
-	return sqlgen.RenderQuery(query)
+	stmt := dsl.SelectStmt{
+		Distinct: true,
+		Columns:  []string{"t.subject_id"},
+		From:     "melange_tuples",
+		Alias:    "t",
+		Where:    dsl.And(conditions...),
+	}
+	return stmt.SQL(), nil
 }
 
 func buildRegularIntersectionTTUCandidates(a RelationAnalysis, parent ListParentRelationData, excludeWildcard bool) (string, error) {
-	where := []bob.Expression{
-		psql.Quote("link", "object_type").EQ(psql.S(a.ObjectType)),
-		psql.Quote("link", "object_id").EQ(psql.Raw("p_object_id")),
-		psql.Quote("link", "relation").EQ(psql.S(parent.LinkingRelation)),
+	conditions := []dsl.Expr{
+		dsl.Eq{Left: dsl.Col{Table: "link", Column: "object_type"}, Right: dsl.Lit(a.ObjectType)},
+		dsl.Eq{Left: dsl.Col{Table: "link", Column: "object_id"}, Right: dsl.ObjectID},
+		dsl.Eq{Left: dsl.Col{Table: "link", Column: "relation"}, Right: dsl.Lit(parent.LinkingRelation)},
 	}
 	if parent.AllowedLinkingTypes != "" {
-		where = append(where, psql.Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
+		conditions = append(conditions, dsl.Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
 	}
 	if excludeWildcard {
-		where = append(where, psql.Quote("pt", "subject_id").NE(psql.S("*")))
+		conditions = append(conditions, dsl.Ne{Left: dsl.Col{Table: "pt", Column: "subject_id"}, Right: dsl.Lit("*")})
 	}
-	query := psql.Select(
-		sm.Columns(psql.Raw("pt.subject_id")),
-		sm.From("melange_tuples").As("link"),
-		sm.InnerJoin("melange_tuples").As("pt").On(
-			psql.Quote("pt", "object_type").EQ(psql.Raw("link.subject_type")),
-			psql.Quote("pt", "object_id").EQ(psql.Raw("link.subject_id")),
-			psql.Quote("pt", "subject_type").EQ(psql.Raw("p_subject_type")),
-		),
-		sm.Where(psql.And(where...)),
-		sm.Distinct(),
-	)
-	return sqlgen.RenderQuery(query)
+	stmt := dsl.SelectStmt{
+		Distinct: true,
+		Columns:  []string{"pt.subject_id"},
+		From:     "melange_tuples",
+		Alias:    "link",
+		Joins: []dsl.JoinClause{{
+			Type:  "INNER",
+			Table: "melange_tuples",
+			Alias: "pt",
+			On: dsl.And(
+				dsl.Eq{Left: dsl.Col{Table: "pt", Column: "object_type"}, Right: dsl.Raw("link.subject_type")},
+				dsl.Eq{Left: dsl.Col{Table: "pt", Column: "object_id"}, Right: dsl.Raw("link.subject_id")},
+				dsl.Eq{Left: dsl.Col{Table: "pt", Column: "subject_type"}, Right: dsl.SubjectType},
+			),
+		}},
+		Where: dsl.And(conditions...),
+	}
+	return stmt.SQL(), nil
 }
 
 func renderIntersectionWildcardTail(a RelationAnalysis) string {
@@ -1540,19 +1517,3 @@ func trimTrailingSemicolon(input string) string {
 	return trimmed
 }
 
-func renderWhereClause(expressions []bob.Expression) (string, error) {
-	querySQL, err := sqlgen.RenderQuery(psql.Select(
-		sm.Columns(psql.Raw("1")),
-		sm.Where(psql.And(expressions...)),
-	))
-	if err != nil {
-		return "", err
-	}
-	querySQL = trimTrailingSemicolon(strings.TrimSpace(querySQL))
-	upper := strings.ToUpper(querySQL)
-	whereIdx := strings.Index(upper, "WHERE ")
-	if whereIdx == -1 {
-		return "", fmt.Errorf("expected WHERE clause in rendered SQL: %s", querySQL)
-	}
-	return strings.TrimSpace(querySQL[whereIdx+len("WHERE "):]), nil
-}
