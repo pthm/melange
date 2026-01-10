@@ -2,7 +2,6 @@
 # Run `just` to see available commands
 
 ROOT := "."
-TOOLING := "tooling"
 TEST := "test"
 
 GO_TEST := "go test"
@@ -40,15 +39,12 @@ release-prepare VERSION ALLOW_DIRTY="":
     printf "%s\n" "$version" > VERSION; \
     cd cmd/melange; \
     go mod edit -require=github.com/pthm/melange@$version; \
-    go mod edit -require=github.com/pthm/melange/tooling@$version; \
-    go mod tidy; \
-    cd ../../tooling; \
-    go mod edit -require=github.com/pthm/melange@$version; \
+    go mod edit -require=github.com/pthm/melange/melange@$version; \
     go mod tidy
 
 # Tag and push module releases (usage: just release [VERSION=1.2.3] [ALLOW_DIRTY=1])
 [group('Release')]
-[doc('Create and push module tags for melange, cmd/melange, tooling')]
+[doc('Create and push module tags for melange, melange/melange, cmd/melange')]
 release VERSION="" ALLOW_DIRTY="":
     @set -euo pipefail; \
     if [ ! -f VERSION ]; then \
@@ -64,15 +60,14 @@ release VERSION="" ALLOW_DIRTY="":
         version_from_file="v$version_from_file"; \
     fi; \
     cmd_core_version="$(awk '$1 == "github.com/pthm/melange" { print $2; exit }' cmd/melange/go.mod)"; \
-    cmd_tooling_version="$(awk '$1 == "github.com/pthm/melange/tooling" { print $2; exit }' cmd/melange/go.mod)"; \
-    tooling_core_version="$(awk '$1 == "github.com/pthm/melange" { print $2; exit }' tooling/go.mod)"; \
-    if [ -z "$cmd_core_version" ] || [ -z "$cmd_tooling_version" ] || [ -z "$tooling_core_version" ]; then \
+    cmd_melange_version="$(awk '$1 == "github.com/pthm/melange/melange" { print $2; exit }' cmd/melange/go.mod)"; \
+    if [ -z "$cmd_core_version" ] || [ -z "$cmd_melange_version" ]; then \
         echo "Could not read module versions from go.mod files; run release-prepare first."; \
         exit 1; \
     fi; \
-    if [ "$cmd_core_version" != "$cmd_tooling_version" ] || [ "$cmd_core_version" != "$tooling_core_version" ]; then \
+    if [ "$cmd_core_version" != "$cmd_melange_version" ]; then \
         echo "Module versions are out of sync. Run release-prepare to align versions before tagging."; \
-        echo "cmd/melange core: $cmd_core_version, cmd/melange tooling: $cmd_tooling_version, tooling core: $tooling_core_version"; \
+        echo "cmd/melange core: $cmd_core_version, cmd/melange melange: $cmd_melange_version"; \
         exit 1; \
     fi; \
     if [ "$cmd_core_version" != "$version_from_file" ]; then \
@@ -82,16 +77,16 @@ release VERSION="" ALLOW_DIRTY="":
     version="$version_from_file"; \
     just _assert-clean ALLOW_DIRTY={{ALLOW_DIRTY}}; \
     root_tag="$version"; \
+    melange_tag="melange/$version"; \
     cmd_tag="cmd/melange/$version"; \
-    tooling_tag="tooling/$version"; \
-    for tag in "$root_tag" "$cmd_tag" "$tooling_tag"; do \
+    for tag in "$root_tag" "$melange_tag" "$cmd_tag"; do \
         if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then \
             echo "Tag already exists: $tag"; \
             exit 1; \
         fi; \
         git tag -a "$tag" -m "$tag"; \
     done; \
-    git push origin "$root_tag" "$cmd_tag" "$tooling_tag"
+    git push origin "$root_tag" "$melange_tag" "$cmd_tag"
 
 [group('Release')]
 [private]
@@ -134,7 +129,7 @@ test: test-unit test-integration
 # Run unit tests only (no database required)
 [group('Test')]
 test-unit:
-    for dir in {{ROOT}} {{TOOLING}}; do (cd "$dir" && {{GO_TEST}} -short ./...); done
+    {{GO_TEST}} -short ./...
 
 # Run integration tests (requires Docker)
 [group('Test')]
@@ -160,7 +155,7 @@ bench-save FILE="benchmark_results.txt":
 # Run tests with race detection
 [group('Test')]
 test-race:
-    for dir in {{ROOT}} {{TOOLING}}; do (cd "$dir" && {{GO_TEST}} -race -short ./...); done
+    for dir in {{ROOT}}; do (cd "$dir" && {{GO_TEST}} -race -short ./...); done
     cd {{TEST}} && {{GO_TEST}} -race -timeout 5m ./...
 
 # Build the CLI
@@ -184,7 +179,7 @@ fmt: fmt-go fmt-sql
 # Format Go code with gofumpt
 [group('Lint')]
 fmt-go:
-    for dir in {{ROOT}} {{TOOLING}} {{TEST}}; do (cd "$dir" && go tool gofumpt -w .); done
+    for dir in {{ROOT}} {{TEST}}; do (cd "$dir" && go tool gofumpt -w .); done
 
 # Format SQL files with sqruff
 [group('Lint')]
@@ -198,7 +193,7 @@ lint: lint-go lint-sql
 # Lint Go code with golangci-lint
 [group('Lint')]
 lint-go:
-    for dir in {{ROOT}} {{TOOLING}} {{TEST}}; do (cd "$dir" && go tool golangci-lint run ./...); done
+    for dir in {{ROOT}} {{TEST}}; do (cd "$dir" && go tool golangci-lint run ./...); done
 
 # Lint SQL files with sqruff
 [group('Lint')]
@@ -214,12 +209,12 @@ install-tools:
 # Run go vet on all packages (included in lint-go via golangci-lint)
 [group('Lint')]
 vet:
-    for dir in {{ROOT}} {{TOOLING}} {{TEST}}; do (cd "$dir" && go vet ./...); done
+    for dir in {{ROOT}} {{TEST}}; do (cd "$dir" && go vet ./...); done
 
 # Tidy all go.mod files
 [group('Lint')]
 tidy:
-    for dir in {{ROOT}} {{TOOLING}} {{TEST}}; do (cd "$dir" && go mod tidy); done
+    for dir in {{ROOT}} {{TEST}}; do (cd "$dir" && go mod tidy); done
 
 # Generate test authz package from schema
 [group('Generate')]

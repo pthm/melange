@@ -70,6 +70,11 @@ func ListRuntimes() []string {
 	return clientgen.List()
 }
 
+// Registered returns true if a generator exists for the given runtime name.
+func Registered(name string) bool {
+	return clientgen.Registered(name)
+}
+
 // GenerateConfig is provided for backwards compatibility.
 // New code should use Config instead.
 //

@@ -2,7 +2,7 @@
 //
 // The CLI supports:
 //   - validate: Check .fga schema syntax using the OpenFGA parser
-//   - generate: Produce Go code with type-safe constants from schema
+//   - generate client: Produce type-safe client code for Go, TypeScript, or Python
 //   - migrate: Load schema into PostgreSQL (creates tables and functions)
 //   - status: Check current migration state
 //   - doctor: Run health checks on authorization infrastructure
@@ -25,50 +25,273 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
+	"strings"
 
 	_ "github.com/lib/pq"
 
-	"github.com/pthm/melange/pkg/clientgen"
 	"github.com/pthm/melange/internal/doctor"
-	"github.com/pthm/melange/pkg/parser"
+	"github.com/pthm/melange/pkg/clientgen"
 	"github.com/pthm/melange/pkg/migrator"
+	"github.com/pthm/melange/pkg/parser"
 )
 
 func main() {
-	var (
-		dbURL          = flag.String("db", os.Getenv("DATABASE_URL"), "Database URL")
-		schemasDir     = flag.String("schemas-dir", "schemas", "Schemas directory")
-		generateDir    = flag.String("generate-dir", "authz", "Output directory for generated code")
-		generatePkg    = flag.String("generate-pkg", "authz", "Package name for generated code")
-		idType         = flag.String("id-type", "string", "ID type for generated constructors (e.g., string, int64)")
-		relationPrefix = flag.String("relation-prefix", "", "Prefix filter for relation constants (e.g., can_)")
-		configFile     = flag.String("config", "melange.yaml", "Config file (optional)")
-		dryRun         = flag.Bool("dry-run", false, "Output migration SQL without applying (migrate only)")
-		force          = flag.Bool("force", false, "Force migration even if schema unchanged (migrate only)")
-		verbose        = flag.Bool("verbose", false, "Show detailed output (doctor only)")
-	)
-	flag.Parse()
-
-	// Try to load config file if it exists
-	_ = configFile // TODO: implement config file loading with viper
-
-	if flag.NArg() < 1 {
+	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)
 	}
 
-	// Commands that don't need database
-	switch flag.Arg(0) {
+	// Handle subcommands
+	switch os.Args[1] {
 	case "validate":
-		validate(*schemasDir)
-		return
+		runValidate(os.Args[2:])
 	case "generate":
-		generate(*schemasDir, *generateDir, *generatePkg, *idType, *relationPrefix)
-		return
+		if len(os.Args) < 3 {
+			fmt.Fprintln(os.Stderr, "Usage: melange generate client [flags]")
+			os.Exit(1)
+		}
+		switch os.Args[2] {
+		case "client":
+			runGenerateClient(os.Args[3:])
+		default:
+			fmt.Fprintf(os.Stderr, "Unknown generate subcommand: %s\n", os.Args[2])
+			fmt.Fprintln(os.Stderr, "Usage: melange generate client [flags]")
+			os.Exit(1)
+		}
+	case "migrate":
+		runMigrate(os.Args[2:])
+	case "status":
+		runStatus(os.Args[2:])
+	case "doctor":
+		runDoctor(os.Args[2:])
+	case "help", "-h", "--help":
+		printUsage()
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", os.Args[1])
+		printUsage()
+		os.Exit(1)
+	}
+}
+
+func printUsage() {
+	fmt.Println("melange - PostgreSQL Fine-Grained Authorization")
+	fmt.Println()
+	fmt.Println("Usage:")
+	fmt.Println("  melange <command> [flags]")
+	fmt.Println()
+	fmt.Println("Commands:")
+	fmt.Println("  generate client  Generate type-safe client code from schema")
+	fmt.Println("  migrate          Apply schema to database")
+	fmt.Println("  validate         Validate schema syntax")
+	fmt.Println("  status           Show current schema status")
+	fmt.Println("  doctor           Run health checks on authorization infrastructure")
+	fmt.Println()
+	fmt.Println("Run 'melange <command> --help' for more information on a command.")
+	fmt.Println()
+	fmt.Println("Examples:")
+	fmt.Println("  # Validate schema syntax")
+	fmt.Println("  melange validate --schema schemas/schema.fga")
+	fmt.Println()
+	fmt.Println("  # Generate Go client code")
+	fmt.Println("  melange generate client --runtime go --schema schemas/schema.fga --output internal/authz/")
+	fmt.Println()
+	fmt.Println("  # Apply schema to database")
+	fmt.Println("  melange migrate --db postgres://localhost/mydb --schemas-dir schemas")
+	fmt.Println()
+	fmt.Println("  # Check status")
+	fmt.Println("  melange status --db postgres://localhost/mydb")
+	fmt.Println()
+	fmt.Println("  # Run health checks")
+	fmt.Println("  melange doctor --db postgres://localhost/mydb --verbose")
+}
+
+// runValidate checks .fga schema syntax using the OpenFGA parser.
+func runValidate(args []string) {
+	fs := flag.NewFlagSet("validate", flag.ExitOnError)
+	schemaPath := fs.String("schema", "", "Path to schema.fga file (required)")
+	fs.Usage = func() {
+		fmt.Println("Usage: melange validate --schema <path>")
+		fmt.Println()
+		fmt.Println("Validate schema syntax using the OpenFGA parser.")
+		fmt.Println()
+		fmt.Println("Flags:")
+		fs.PrintDefaults()
+	}
+	_ = fs.Parse(args)
+
+	if *schemaPath == "" {
+		// Try legacy schemas-dir pattern
+		if _, err := os.Stat("schemas/schema.fga"); err == nil {
+			*schemaPath = "schemas/schema.fga"
+		} else {
+			fmt.Fprintln(os.Stderr, "Error: --schema is required")
+			fs.Usage()
+			os.Exit(1)
+		}
 	}
 
+	if _, err := os.Stat(*schemaPath); err != nil {
+		fmt.Printf("Schema not found: %s\n", *schemaPath)
+		os.Exit(1)
+	}
+
+	types, err := parser.ParseSchema(*schemaPath)
+	if err != nil {
+		fmt.Printf("Parse error: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Schema is valid. Found %d types:\n", len(types))
+	for _, t := range types {
+		fmt.Printf("  - %s (%d relations)\n", t.Name, len(t.Relations))
+	}
+
+	fmt.Println()
+	fmt.Println("For full validation, install OpenFGA CLI:")
+	fmt.Println("  go install github.com/openfga/cli/cmd/fga@latest")
+	fmt.Printf("  fga model validate --file %s\n", *schemaPath)
+}
+
+// runGenerateClient produces client code from .fga schema.
+func runGenerateClient(args []string) {
+	fs := flag.NewFlagSet("generate client", flag.ExitOnError)
+	runtime := fs.String("runtime", "", "Target runtime: "+strings.Join(clientgen.ListRuntimes(), ", ")+" (required)")
+	schemaPath := fs.String("schema", "", "Path to schema.fga file (required)")
+	output := fs.String("output", "", "Output directory or file path (default: stdout)")
+	pkg := fs.String("package", "authz", "Package/module name for generated code")
+	filter := fs.String("filter", "", "Relation prefix filter (e.g., can_)")
+	idType := fs.String("id-type", "string", "ID type for constructors (Go only: string, int64, etc.)")
+
+	fs.Usage = func() {
+		fmt.Println("Usage: melange generate client --runtime <lang> --schema <path> [flags]")
+		fmt.Println()
+		fmt.Println("Generate type-safe client code from an authorization schema.")
+		fmt.Println()
+		fmt.Println("Supported runtimes:")
+		for _, r := range clientgen.ListRuntimes() {
+			fmt.Printf("  - %s\n", r)
+		}
+		fmt.Println()
+		fmt.Println("Flags:")
+		fs.PrintDefaults()
+		fmt.Println()
+		fmt.Println("Examples:")
+		fmt.Println("  # Generate Go code to a directory")
+		fmt.Println("  melange generate client --runtime go --schema schemas/schema.fga --output internal/authz/")
+		fmt.Println()
+		fmt.Println("  # Generate with custom package name")
+		fmt.Println("  melange generate client --runtime go --schema schemas/schema.fga --output . --package myauthz")
+		fmt.Println()
+		fmt.Println("  # Generate only permission relations (can_*)")
+		fmt.Println("  melange generate client --runtime go --schema schemas/schema.fga --output . --filter can_")
+		fmt.Println()
+		fmt.Println("  # Output to stdout")
+		fmt.Println("  melange generate client --runtime go --schema schemas/schema.fga")
+	}
+	_ = fs.Parse(args)
+
+	// Validate required flags
+	if *runtime == "" {
+		fmt.Fprintln(os.Stderr, "Error: --runtime is required")
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	if *schemaPath == "" {
+		fmt.Fprintln(os.Stderr, "Error: --schema is required")
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	// Check if runtime is supported
+	if !clientgen.Registered(*runtime) {
+		fmt.Fprintf(os.Stderr, "Error: unknown runtime %q\n", *runtime)
+		fmt.Fprintf(os.Stderr, "Supported runtimes: %s\n", strings.Join(clientgen.ListRuntimes(), ", "))
+		os.Exit(1)
+	}
+
+	// Parse schema
+	if _, err := os.Stat(*schemaPath); err != nil {
+		fmt.Printf("Schema not found: %s\n", *schemaPath)
+		os.Exit(1)
+	}
+
+	types, err := parser.ParseSchema(*schemaPath)
+	if err != nil {
+		fmt.Printf("Parse error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Build config
+	cfg := &clientgen.Config{
+		Package:        *pkg,
+		RelationFilter: *filter,
+		IDType:         *idType,
+	}
+
+	// Generate code
+	files, err := clientgen.Generate(*runtime, types, cfg)
+	if err != nil {
+		fmt.Printf("Generation error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Output files
+	if *output == "" {
+		// Write to stdout (only works for single-file outputs)
+		if len(files) > 1 {
+			fmt.Fprintln(os.Stderr, "Error: --output is required for multi-file generation")
+			os.Exit(1)
+		}
+		for _, content := range files {
+			os.Stdout.Write(content)
+		}
+	} else {
+		// Write to output directory
+		if err := os.MkdirAll(*output, 0o755); err != nil {
+			fmt.Printf("Creating output directory: %v\n", err)
+			os.Exit(1)
+		}
+
+		for filename, content := range files {
+			outPath := filepath.Join(*output, filename)
+			if err := os.WriteFile(outPath, content, 0o644); err != nil {
+				fmt.Printf("Writing %s: %v\n", outPath, err)
+				os.Exit(1)
+			}
+			fmt.Printf("Generated %s\n", outPath)
+		}
+	}
+}
+
+// runMigrate applies the schema to the database.
+func runMigrate(args []string) {
+	fs := flag.NewFlagSet("migrate", flag.ExitOnError)
+	dbURL := fs.String("db", os.Getenv("DATABASE_URL"), "Database URL (or set DATABASE_URL)")
+	schemasDir := fs.String("schemas-dir", "schemas", "Directory containing schema.fga")
+	dryRun := fs.Bool("dry-run", false, "Output migration SQL without applying")
+	force := fs.Bool("force", false, "Force migration even if schema unchanged")
+
+	fs.Usage = func() {
+		fmt.Println("Usage: melange migrate --db <url> [flags]")
+		fmt.Println()
+		fmt.Println("Apply authorization schema to PostgreSQL database.")
+		fmt.Println()
+		fmt.Println("Flags:")
+		fs.PrintDefaults()
+		fmt.Println()
+		fmt.Println("Examples:")
+		fmt.Println("  melange migrate --db postgres://localhost/mydb")
+		fmt.Println("  melange migrate --db postgres://localhost/mydb --dry-run")
+		fmt.Println("  melange migrate --db postgres://localhost/mydb --force")
+	}
+	_ = fs.Parse(args)
+
 	if *dbURL == "" {
-		log.Fatal("DATABASE_URL or -db required")
+		fmt.Fprintln(os.Stderr, "Error: --db or DATABASE_URL required")
+		fs.Usage()
+		os.Exit(1)
 	}
 
 	db, err := sql.Open("postgres", *dbURL)
@@ -79,66 +302,79 @@ func main() {
 
 	ctx := context.Background()
 
-	switch flag.Arg(0) {
-	case "status":
-		migrator := migrator.NewMigrator(db, *schemasDir)
-		status(ctx, migrator)
-	case "migrate":
-		migrate(ctx, db, *schemasDir, *dryRun, *force)
-	case "doctor":
-		runDoctor(ctx, db, *schemasDir, *verbose)
-	default:
-		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", flag.Arg(0))
-		printUsage()
-		os.Exit(1)
+	opts := migrator.MigrateOptions{
+		Force: *force,
+	}
+
+	if *dryRun {
+		opts.DryRun = os.Stdout
+		fmt.Fprintln(os.Stderr, "-- Dry-run mode: SQL will be output but not applied")
+		fmt.Fprintln(os.Stderr, "")
+	} else {
+		fmt.Println("Applying authz infrastructure...")
+	}
+
+	skipped, err := migrator.MigrateWithOptions(ctx, db, *schemasDir, opts)
+	if err != nil {
+		log.Fatalf("migrating: %v", err)
+	}
+
+	if *dryRun {
+		return
+	}
+
+	if skipped {
+		fmt.Println("Schema unchanged, migration skipped.")
+		fmt.Println("Use --force to re-apply.")
+	} else {
+		fmt.Println("Authz schema applied successfully.")
+	}
+
+	// Check for melange_tuples and warn if missing
+	m := migrator.NewMigrator(db, *schemasDir)
+	status, err := m.GetStatus(ctx)
+	if err != nil {
+		log.Printf("Warning: could not check status: %v", err)
+		return
+	}
+	if !status.TuplesExists {
+		fmt.Println()
+		fmt.Println("WARNING: melange_tuples view/table does not exist.")
+		fmt.Println("         Permission checks will fail until you create it.")
 	}
 }
 
-func printUsage() {
-	fmt.Println("melange - PostgreSQL Fine-Grained Authorization")
-	fmt.Println()
-	fmt.Println("Usage:")
-	fmt.Println("  melange [flags] <command>")
-	fmt.Println()
-	fmt.Println("Commands:")
-	fmt.Println("  migrate     Apply schema to database")
-	fmt.Println("  generate    Generate Go types from schema")
-	fmt.Println("  validate    Validate schema syntax")
-	fmt.Println("  status      Show current schema status")
-	fmt.Println("  doctor      Run health checks on authorization infrastructure")
-	fmt.Println()
-	fmt.Println("Global Flags:")
-	flag.PrintDefaults()
-	fmt.Println()
-	fmt.Println("Examples:")
-	fmt.Println("  # Validate schema syntax")
-	fmt.Println("  melange validate --schemas-dir internal/authz/schemas")
-	fmt.Println()
-	fmt.Println("  # Generate Go code")
-	fmt.Println("  melange generate --schemas-dir schemas --generate-dir internal/authz --generate-pkg authz")
-	fmt.Println()
-	fmt.Println("  # Apply schema to database")
-	fmt.Println("  melange migrate --db postgres://localhost/mydb --schemas-dir schemas")
-	fmt.Println()
-	fmt.Println("  # Preview migration SQL without applying")
-	fmt.Println("  melange migrate --db postgres://localhost/mydb --dry-run")
-	fmt.Println()
-	fmt.Println("  # Force re-migration even if schema unchanged")
-	fmt.Println("  melange migrate --db postgres://localhost/mydb --force")
-	fmt.Println()
-	fmt.Println("  # Check status")
-	fmt.Println("  melange status --db postgres://localhost/mydb")
-	fmt.Println()
-	fmt.Println("  # Run health checks")
-	fmt.Println("  melange doctor --db postgres://localhost/mydb")
-	fmt.Println()
-	fmt.Println("  # Run health checks with verbose output")
-	fmt.Println("  melange doctor --db postgres://localhost/mydb --verbose")
-}
+// runStatus queries the database for current migration state.
+func runStatus(args []string) {
+	fs := flag.NewFlagSet("status", flag.ExitOnError)
+	dbURL := fs.String("db", os.Getenv("DATABASE_URL"), "Database URL (or set DATABASE_URL)")
+	schemasDir := fs.String("schemas-dir", "schemas", "Directory containing schema.fga")
 
-// status queries the database for current migration state.
-// Checks filesystem (schema.fga) and melange_tuples availability.
-func status(ctx context.Context, m *migrator.Migrator) {
+	fs.Usage = func() {
+		fmt.Println("Usage: melange status --db <url> [flags]")
+		fmt.Println()
+		fmt.Println("Show current schema and migration status.")
+		fmt.Println()
+		fmt.Println("Flags:")
+		fs.PrintDefaults()
+	}
+	_ = fs.Parse(args)
+
+	if *dbURL == "" {
+		fmt.Fprintln(os.Stderr, "Error: --db or DATABASE_URL required")
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	db, err := sql.Open("postgres", *dbURL)
+	if err != nil {
+		log.Fatalf("connecting to database: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ctx := context.Background()
+	m := migrator.NewMigrator(db, *schemasDir)
+
 	s, err := m.GetStatus(ctx)
 	if err != nil {
 		log.Fatalf("getting status: %v", err)
@@ -163,136 +399,46 @@ func status(ctx context.Context, m *migrator.Migrator) {
 	}
 }
 
-// migrate applies the schema to the database.
-// Idempotent - safe to run multiple times.
-func migrate(ctx context.Context, db *sql.DB, schemasDir string, dryRun, force bool) {
-	opts := migrator.MigrateOptions{
-		Force: force,
-	}
-
-	if dryRun {
-		opts.DryRun = os.Stdout
-		fmt.Fprintln(os.Stderr, "-- Dry-run mode: SQL will be output but not applied")
-		fmt.Fprintln(os.Stderr, "")
-	} else {
-		fmt.Println("Applying authz infrastructure...")
-	}
-
-	skipped, err := migrator.MigrateWithOptions(ctx, db, schemasDir, opts)
-	if err != nil {
-		log.Fatalf("migrating: %v", err)
-	}
-
-	if dryRun {
-		// Dry-run output was written to stdout
-		return
-	}
-
-	if skipped {
-		fmt.Println("Schema unchanged, migration skipped.")
-		fmt.Println("Use --force to re-apply.")
-	} else {
-		fmt.Println("Authz schema applied successfully.")
-	}
-
-	// Check for melange_tuples and warn if missing
-	migrator := migrator.NewMigrator(db, schemasDir)
-	status, err := migrator.GetStatus(ctx)
-	if err != nil {
-		log.Printf("Warning: could not check status: %v", err)
-		return
-	}
-	if !status.TuplesExists {
-		fmt.Println()
-		fmt.Println("WARNING: melange_tuples view/table does not exist.")
-		fmt.Println("         Permission checks will fail until you create it.")
-	}
-}
-
-// validate checks .fga schema syntax using the OpenFGA parser.
-// Does not require database connection.
-func validate(schemasDir string) {
-	schemaPath := schemasDir + "/schema.fga"
-	if _, err := os.Stat(schemaPath); err != nil {
-		fmt.Println("No schema found at", schemaPath)
-		os.Exit(1)
-	}
-
-	// Parse the schema to check for syntax errors
-	types, err := parser.ParseSchema(schemaPath)
-	if err != nil {
-		fmt.Printf("Parse error: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("Schema is valid. Found %d types:\n", len(types))
-	for _, t := range types {
-		fmt.Printf("  - %s (%d relations)\n", t.Name, len(t.Relations))
-	}
-
-	fmt.Println()
-	fmt.Println("For full validation, install OpenFGA CLI:")
-	fmt.Println("  go install github.com/openfga/cli/cmd/fga@latest")
-	fmt.Printf("  fga model validate --file %s\n", schemaPath)
-}
-
-// generate produces Go code from .fga schema.
-// Does not require database connection.
-// Outputs to generateDir with package name generatePkg.
-func generate(schemasDir, generateDir, generatePkg, idType, relationPrefix string) {
-	schemaPath := schemasDir + "/schema.fga"
-	if _, err := os.Stat(schemaPath); err != nil {
-		fmt.Println("No schema found at", schemaPath)
-		os.Exit(1)
-	}
-
-	types, err := parser.ParseSchema(schemaPath)
-	if err != nil {
-		fmt.Printf("Parse error: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Create output directory if needed
-	if err := os.MkdirAll(generateDir, 0o755); err != nil {
-		fmt.Printf("Creating output directory: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Generate to schema_gen.go in the output directory
-	outPath := generateDir + "/schema_gen.go"
-	f, err := os.Create(outPath)
-	if err != nil {
-		fmt.Printf("Creating output file: %v\n", err)
-		os.Exit(1)
-	}
-	defer func() { _ = f.Close() }()
-
-	cfg := &clientgen.GenerateConfig{
-		Package:              generatePkg,
-		RelationPrefixFilter: relationPrefix,
-		IDType:               idType,
-	}
-
-	if err := clientgen.GenerateGo(f, types, cfg); err != nil {
-		fmt.Printf("Generating code: %v\n", err)
-		os.Exit(1)
-	}
-
-	fmt.Printf("Generated %s from %s\n", outPath, schemaPath)
-}
-
 // runDoctor performs health checks on the authorization infrastructure.
-// Validates schema files, database state, generated functions, and data health.
-func runDoctor(ctx context.Context, db *sql.DB, schemasDir string, verbose bool) {
+func runDoctor(args []string) {
+	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
+	dbURL := fs.String("db", os.Getenv("DATABASE_URL"), "Database URL (or set DATABASE_URL)")
+	schemasDir := fs.String("schemas-dir", "schemas", "Directory containing schema.fga")
+	verbose := fs.Bool("verbose", false, "Show detailed output")
+
+	fs.Usage = func() {
+		fmt.Println("Usage: melange doctor --db <url> [flags]")
+		fmt.Println()
+		fmt.Println("Run health checks on authorization infrastructure.")
+		fmt.Println()
+		fmt.Println("Flags:")
+		fs.PrintDefaults()
+	}
+	_ = fs.Parse(args)
+
+	if *dbURL == "" {
+		fmt.Fprintln(os.Stderr, "Error: --db or DATABASE_URL required")
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	db, err := sql.Open("postgres", *dbURL)
+	if err != nil {
+		log.Fatalf("connecting to database: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	ctx := context.Background()
+
 	fmt.Println("melange doctor - Health Check")
 
-	d := doctor.New(db, schemasDir)
+	d := doctor.New(db, *schemasDir)
 	report, err := d.Run(ctx)
 	if err != nil {
 		log.Fatalf("running doctor: %v", err)
 	}
 
-	report.Print(os.Stdout, verbose)
+	report.Print(os.Stdout, *verbose)
 
 	if report.HasErrors() {
 		os.Exit(1)
