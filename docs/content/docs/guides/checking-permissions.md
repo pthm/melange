@@ -8,7 +8,7 @@ The `Checker` is the core API for evaluating permissions. It calls PostgreSQL fu
 ## Creating a Checker
 
 ```go
-import "github.com/pthm/melange"
+import "github.com/pthm/melange/melange"
 
 // Basic checker
 checker := melange.NewChecker(db)
@@ -186,7 +186,7 @@ Prefer `Check` for user-facing authorization. Use `Must` when:
 ### Sentinel Errors
 
 ```go
-import "github.com/pthm/melange"
+import "github.com/pthm/melange/melange"
 
 var (
     melange.ErrNoTuplesTable   // melange_tuples view doesn't exist

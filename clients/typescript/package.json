@@ -1,0 +1,37 @@
+{
+  "name": "@pthm/melange",
+  "version": "0.0.0",
+  "description": "TypeScript client for Melange PostgreSQL authorization",
+  "keywords": ["authorization", "fga", "openfga", "postgresql", "melange"],
+  "author": "pthm",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pthm/melange.git",
+    "directory": "clients/typescript"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

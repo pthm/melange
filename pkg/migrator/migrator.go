@@ -79,22 +79,23 @@ type MigrationRecord struct {
 //  1. Creates/replaces check_permission and list_accessible_* functions
 //  2. Loads generated SQL entrypoints into the database
 //
-// # Usage with Tooling Module
+// # Usage
 //
-// For most use cases, use the tooling module's convenience functions which
-// handle parsing and migration in one step:
+// Use the convenience functions in pkg/migrator for most use cases:
 //
-//	import "github.com/pthm/melange/tooling"
-//	err := tooling.Migrate(ctx, db, "schemas")
+//	import "github.com/pthm/melange/pkg/migrator"
+//	err := migrator.Migrate(ctx, db, "schemas")
 //
-// Use the core Migrator directly when you have pre-parsed TypeDefinitions
+// For embedded schemas (no file I/O):
+//
+//	err := migrator.MigrateFromString(ctx, db, schemaContent)
+//
+// Use the Migrator directly when you have pre-parsed TypeDefinitions
 // or need fine-grained control (DDL-only, status checks, etc.):
 //
-//	types, _ := tooling.ParseSchema("schemas/schema.fga")
-//	migrator := schema.NewMigrator(db, "schemas")
-//	err := migrator.MigrateWithTypes(ctx, types)
-//
-// This separation keeps the core melange package free of OpenFGA dependencies.
+//	types, _ := parser.ParseSchema("schemas/schema.fga")
+//	m := migrator.NewMigrator(db, "schemas")
+//	err := m.MigrateWithTypes(ctx, types)
 type Migrator struct {
 	db         Execer
 	schemasDir string

@@ -2,7 +2,7 @@
 //
 // This package contains the core data structures and algorithms for converting
 // OpenFGA authorization models into database-friendly representations. It sits
-// between the tooling package (which parses .fga files) and the runtime checker
+// between the parser package (which parses .fga files) and the runtime checker
 // (which executes permission checks).
 //
 // # Package Responsibilities
@@ -35,23 +35,24 @@
 //
 // The Migrator orchestrates loading schemas into PostgreSQL:
 //
-//  1. Parse schema via tooling package (returns []TypeDefinition)
+//  1. Parse schema via pkg/parser (returns []TypeDefinition)
 //  2. MigrateWithTypes - validates, transforms, and loads generated SQL
 //
 // Typical usage:
 //
-//	import "github.com/pthm/melange/tooling"
-//	types, _ := tooling.ParseSchema("schemas/schema.fga")
-//	migrator := schema.NewMigrator(db, "schemas")
-//	err := migrator.MigrateWithTypes(ctx, types)
+//	import (
+//	    "github.com/pthm/melange/pkg/parser"
+//	    "github.com/pthm/melange/pkg/migrator"
+//	)
+//	types, _ := parser.ParseSchema("schemas/schema.fga")
+//	err := migrator.MigrateWithTypes(ctx, db, types)
 //
 // # Code Generation
 //
-// GenerateGo produces type-safe Go constants from schema types. This enables
-// compile-time checking of permission checks:
+// Use pkg/clientgen to produce type-safe Go constants from schema types:
 //
-//	types, _ := tooling.ParseSchema("schema.fga")
-//	schema.GenerateGo(file, types, schema.DefaultGenerateConfig())
+//	types, _ := parser.ParseSchema("schema.fga")
+//	files, _ := clientgen.Generate("go", types, cfg)
 //
 // Generated code includes ObjectType constants, Relation constants, and
 // constructor functions for creating melange.Object values.
@@ -67,12 +68,13 @@
 //
 // # Relationship to Other Packages
 //
-// The schema package is dependency-free (stdlib only) and imported by both:
-//   - tooling package (adds OpenFGA parser, provides convenience functions)
-//   - root melange package (uses Execer interface but no other types)
+// The schema package is dependency-free (stdlib only) and is imported by:
+//   - pkg/parser (adds OpenFGA DSL parsing)
+//   - pkg/migrator (database migration)
+//   - internal/clientgen (code generation)
 //
-// This layering keeps the core runtime (melange package) lightweight while
-// supporting rich schema manipulation in tooling contexts.
+// The runtime module (github.com/pthm/melange/melange) does not import this
+// package, keeping it stdlib-only.
 package schema
 
 // TypeDefinition represents a parsed type from an .fga file.

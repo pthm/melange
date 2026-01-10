@@ -3,13 +3,12 @@
 //
 // # Module Structure
 //
-// Melange is split into two modules for clean dependency isolation:
+// This is the Go runtime module (github.com/pthm/melange/melange) which has
+// zero external dependencies (stdlib only). It provides the Checker API for
+// permission checks at runtime.
 //
-//   - github.com/pthm/melange (core): Runtime checker, types, errors. Stdlib only.
-//   - github.com/pthm/melange/tooling: Schema parsing, migration helpers. Depends on OpenFGA parser.
-//
-// Most applications import only the core module at runtime. The tooling module
-// is used during development (CLI, code generation) or for programmatic schema parsing.
+// The root module (github.com/pthm/melange) contains the CLI, schema parsing,
+// and migration tools. Applications typically only import this runtime module.
 //
 // # Zero Tuple Sync
 //
@@ -57,12 +56,19 @@
 //
 // # Schema Management
 //
-// For schema parsing and migration, use the tooling module:
+// For schema parsing and migration, use the root module packages:
 //
-//	import "github.com/pthm/melange/tooling"
+//	import (
+//	    "github.com/pthm/melange/pkg/parser"
+//	    "github.com/pthm/melange/pkg/migrator"
+//	)
 //
-//	types, _ := tooling.ParseSchema("schemas/schema.fga")
-//	err := tooling.Migrate(ctx, db, "schemas")
+//	types, _ := parser.ParseSchema("schemas/schema.fga")
+//	err := migrator.Migrate(ctx, db, "schemas")
+//
+// Or use the CLI for migrations:
+//
+//	melange migrate --db postgres://localhost/mydb --schemas-dir schemas
 package melange
 
 import (

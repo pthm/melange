@@ -1,65 +1,30 @@
-// Package tooling provides OpenFGA schema parsing, migration, and code generation
-// for melange authorization systems.
+// Package parser provides OpenFGA schema parsing for melange.
 //
-// # Module Boundary
+// This package wraps the official OpenFGA language parser to convert .fga
+// schema files into melange's internal TypeDefinition format. It isolates
+// the OpenFGA parser dependency from other packages.
 //
-// The tooling package is a separate Go module (github.com/pthm/melange/tooling)
-// that depends on the OpenFGA language parser. This separation keeps the core
-// melange runtime free of external dependencies while providing rich schema
-// manipulation for development and deployment workflows.
+// # Basic Usage
 //
-// Import the core module for runtime permission checks:
+// Parse a schema file:
 //
-//	import "github.com/pthm/melange"
-//	checker := melange.NewChecker(db)
-//	ok, _ := checker.Check(ctx, user, "can_read", repo)
+//	types, err := parser.ParseSchema("schemas/schema.fga")
+//	if err != nil {
+//	    log.Fatal(err)
+//	}
 //
-// Import the tooling module for schema operations:
+// Parse schema from a string:
 //
-//	import "github.com/pthm/melange/tooling"
-//	err := tooling.Migrate(ctx, db, "schemas")
+//	types, err := parser.ParseSchemaString(schemaContent)
 //
-// # Relationship to schema Package
+// # Dependency Isolation
 //
-// The tooling package wraps the schema package, adding OpenFGA DSL parsing.
-// The schema package contains core types (TypeDefinition, AuthzModel) and
-// transformation logic, but cannot parse .fga files because it has no dependencies.
+// The parser package is the only melange package that imports the OpenFGA
+// language parser. This keeps the runtime (github.com/pthm/melange/melange)
+// free of external dependencies.
 //
-// Use tooling when you need:
-//   - Parsing .fga schema files
-//   - Convenience migration functions
-//   - CLI or build-time tooling
-//
-// Use schema directly when you:
-//   - Already have parsed TypeDefinitions
-//   - Need fine-grained migration control
-//   - Want to avoid OpenFGA parser dependency
-//
-// # Common Workflows
-//
-// Application startup (idempotent migration):
-//
-//	err := tooling.Migrate(ctx, db, "schemas")
-//
-// Embedded schema (no file I/O):
-//
-//	//go:embed schema.fga
-//	var schemaContent string
-//	err := tooling.MigrateFromString(ctx, db, schemaContent)
-//
-// Code generation (build-time):
-//
-//	types, _ := tooling.ParseSchema("schemas/schema.fga")
-//	f, _ := os.Create("internal/authz/schema_gen.go")
-//	tooling.GenerateGo(f, types, tooling.DefaultGenerateConfig())
-//
-// Dry-run migration (preview SQL):
-//
-//	buf := &bytes.Buffer{}
-//	_, err := tooling.MigrateWithOptions(ctx, db, "schemas", tooling.MigrateOptions{
-//	    DryRun: buf,
-//	})
-//	fmt.Println(buf.String()) // Generated SQL
+// Consumers of parsed schemas should use pkg/schema types, which have no
+// external dependencies.
 package parser
 
 import (

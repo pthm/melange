@@ -19,10 +19,10 @@ Melange consists of two components:
 Add the core library to your project:
 
 ```bash
-go get github.com/pthm/melange
+go get github.com/pthm/melange/melange
 ```
 
-The core module has zero external dependencies - only Go's standard library.
+The runtime module has zero external dependencies - only Go's standard library.
 
 ### 2. CLI Tool
 
@@ -138,10 +138,11 @@ This installs the generated SQL permission functions.
 Generate Go constants for type-safe permission checks:
 
 ```bash
-melange generate \
-  --schemas-dir schemas \
-  --generate-dir internal/authz \
-  --generate-pkg authz
+melange generate client \
+  --runtime go \
+  --schema schemas/schema.fga \
+  --output internal/authz \
+  --package authz
 ```
 
 This creates constants like `authz.RelCanRead`, `authz.User("123")`, and `authz.Repository("456")`.
@@ -156,7 +157,7 @@ import (
     "database/sql"
     "log"
 
-    "github.com/pthm/melange"
+    "github.com/pthm/melange/melange"
     _ "github.com/lib/pq"
 )
 

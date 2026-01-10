@@ -11,33 +11,36 @@ Melange is organized as multiple Go modules for clean dependency isolation:
 
 ```
 melange/
-├── go.mod                 # Core module (github.com/pthm/melange)
-├── tooling/
-│   └── go.mod             # Tooling module (github.com/pthm/melange/tooling)
-├── cmd/melange/
-│   └── go.mod             # CLI module
-└── test/
-    └── go.mod             # Test module
+├── go.mod                 # Root module (github.com/pthm/melange)
+├── melange/
+│   └── go.mod             # Runtime module (github.com/pthm/melange/melange)
+├── clients/
+│   ├── typescript/        # TypeScript client (future)
+│   └── python/            # Python client (future)
+├── pkg/                   # Public packages
+├── internal/              # Internal packages
+├── cmd/melange/           # CLI (part of root module)
+└── test/                  # Tests (part of root module)
 ```
 
 | Module | Purpose | Dependencies |
 |--------|---------|--------------|
-| Core (`github.com/pthm/melange`) | Runtime checker, types, errors | stdlib only |
-| Tooling (`github.com/pthm/melange/tooling`) | Schema parsing, code generation | OpenFGA parser |
-| CLI (`github.com/pthm/melange/cmd/melange`) | Command-line tool | Tooling, pq driver |
-| Test (`github.com/pthm/melange/test`) | Test suite | All of the above |
+| Root (`github.com/pthm/melange`) | CLI, schema parsing, code generation | OpenFGA parser, pq driver |
+| Runtime (`github.com/pthm/melange/melange`) | Checker, cache, types, errors | stdlib only |
 
-## Core Module
+## Runtime Module (`melange/`)
 
-The core module has zero external dependencies and provides the runtime API:
+The runtime module has zero external dependencies and provides the permission checking API:
 
 ```
-melange.go         # Object, Relation, Querier interfaces
-checker.go         # Checker implementation
-cache.go           # Permission result caching
-decision.go        # Decision overrides for testing
-errors.go          # Sentinel errors and helpers
-schema/            # Schema types, validation, codegen, migration
+melange/
+├── go.mod
+├── melange.go         # Object, Relation, Querier interfaces
+├── checker.go         # Checker implementation
+├── cache.go           # Permission result caching
+├── decision.go        # Decision overrides for testing
+├── errors.go          # Sentinel errors and helpers
+└── validator.go       # Input validation
 ```
 
 ### Key Files
@@ -54,12 +57,6 @@ schema/            # Schema types, validation, codegen, migration
 - `ListObjects()` / `ListSubjects()` - List operations
 - `Must()` - Panic on failure
 
-**`schema/`** - Schema handling:
-- `TypeDefinition` - Object type with relations
-- `RelationDefinition` - Individual relation rules
-- `AuthzModel` - Database row representation
-- Migrator, validation, and codegen helpers
-
 **`cache.go`** - Caching:
 - `Cache` interface
 - `CacheImpl` - In-memory implementation with TTL
@@ -68,37 +65,63 @@ schema/            # Schema types, validation, codegen, migration
 - `Decision` type (Allow/Deny/Unset)
 - Context-based decision propagation
 
-## Tooling Module
+## Root Module Packages
 
-The tooling module has external dependencies (OpenFGA parser) and is used for schema processing:
+### Public Packages (`pkg/`)
 
 ```
-tooling/
-├── go.mod
-├── parser.go      # OpenFGA DSL parsing
-├── migrate.go     # Convenience migration wrappers
-└── generate.go    # Re-exports of generation config
+pkg/
+├── schema/            # Schema types, validation, closure computation
+├── parser/            # OpenFGA DSL parsing
+├── migrator/          # Database migration APIs
+├── compiler/          # SQL code generation APIs
+└── clientgen/         # Client code generation APIs
 ```
 
-### Key Files
+**`pkg/schema`** - Schema handling:
+- `TypeDefinition` - Object type with relations
+- `RelationDefinition` - Individual relation rules
+- `AuthzModel` - Database row representation
+- Validation and cycle detection
 
-**`parser.go`** - Schema parsing:
+**`pkg/parser`** - Schema parsing:
 - `ParseSchema(path)` - Parse `.fga` file
 - `ParseSchemaString(dsl)` - Parse DSL string
 - Converts OpenFGA AST to `schema.TypeDefinition` slice
 
-**`migrate.go`** - Migration helpers:
+**`pkg/migrator`** - Migration:
 - `Migrate(ctx, db, dir)` - One-step migration
 - `MigrateFromString(ctx, db, dsl)` - Migrate from string
 
-## SQL Generation
+**`pkg/clientgen`** - Client code generation:
+- `Generate(runtime, types, cfg)` - Generate client code
+- `ListRuntimes()` - Available generators
 
-SQL is generated from templates and applied by the migrator:
+### Internal Packages (`internal/`)
 
 ```
-schema/
-└── templates/     # check_permission, list_accessible_* and helpers
-    ├── *.tpl.sql
+internal/
+├── clientgen/         # Generator registry and implementations
+│   ├── generator.go   # Generator interface
+│   ├── go/            # Go generator
+│   ├── typescript/    # TypeScript generator (stub)
+│   └── python/        # Python generator (stub)
+├── sqlgen/            # SQL DSL and query builders
+└── doctor/            # CLI health check logic
+```
+
+## SQL Generation
+
+SQL is generated from the internal sqlgen package:
+
+```
+internal/sqlgen/
+├── sql.go             # SQL DSL core
+├── expr.go            # Expression types
+├── query.go           # Query builders
+├── check_queries.go   # Permission check queries
+├── list_queries.go    # List operation queries
+└── *.go               # Additional helpers
 ```
 
 ### Key Functions
@@ -118,39 +141,37 @@ schema/
 
 ## CLI
 
-The CLI provides commands for schema management:
+The CLI is part of the root module:
 
 ```
 cmd/melange/
-├── go.mod
 └── main.go
 ```
 
 Commands:
 - `validate` - Check schema syntax
-- `generate` - Generate Go code
+- `generate client` - Generate type-safe client code
 - `migrate` - Apply schema to database
 - `status` - Check migration status
+- `doctor` - Health check
 
 ## Test Module
 
-The test module contains integration tests and the OpenFGA compatibility suite:
+Tests are part of the root module:
 
 ```
 test/
-├── go.mod
-├── checker_test.go     # Decision override tests
-├── errors_test.go      # Error helper tests
-├── generate_test.go    # Code generation tests
-├── schema_test.go      # Schema helper tests
-├── openfgatests/       # OpenFGA compatibility suite
-│   ├── loader.go       # Test case loader
-│   ├── client.go       # Test client (uses tooling parser)
-│   ├── runner.go       # Test execution
-│   └── *_test.go       # Test files
-├── cmd/dumptest/       # Test case inspector
-└── testutil/           # Test utilities
-    └── testdata/       # Test schemas
+├── benchmark_test.go       # Performance benchmarks
+├── integration_test.go     # Integration tests
+├── openfgatests/           # OpenFGA compatibility suite
+│   ├── loader.go           # Test case loader
+│   ├── client.go           # Test client
+│   ├── runner.go           # Test execution
+│   └── *_test.go           # Test files
+├── cmd/dumptest/           # Test case inspector
+├── cmd/dumpsql/            # SQL dump tool
+└── testutil/               # Test utilities
+    └── testdata/           # Test schemas
 ```
 
 ### OpenFGA Test Suite
@@ -160,7 +181,7 @@ The `openfgatests` package runs OpenFGA's official test suite against Melange:
 **`loader.go`** - Loads test cases from embedded YAML files
 
 **`client.go`** - Test client:
-- Uses `tooling.ConvertProtoModel()` for schema parsing
+- Uses `pkg/parser` for schema parsing
 - Creates database schema
 - Executes assertions
 
@@ -168,6 +189,28 @@ The `openfgatests` package runs OpenFGA's official test suite against Melange:
 - Category-based test runners
 - Pattern matching
 - Benchmark wrappers
+
+## Language Clients
+
+```
+clients/
+├── README.md           # Overview and contribution guide
+├── typescript/         # TypeScript client
+│   ├── package.json
+│   ├── tsconfig.json
+│   └── src/
+└── python/             # Python client
+    ├── pyproject.toml
+    └── melange/
+```
+
+The Go runtime lives at `melange/` for clean imports:
+
+```go
+import "github.com/pthm/melange/melange"
+```
+
+Other language clients live under `clients/` as their package managers don't have Go's path constraints.
 
 ## Documentation
 
@@ -186,18 +229,25 @@ docs/
 
 ### Adding a Feature
 
-1. **Core changes** go in the root module (`*.go`)
-2. **Parser changes** go in `tooling/parser.go`
-3. **SQL changes** go in `tooling/schema/templates/*.tpl.sql`
+1. **Runtime changes** go in `melange/`
+2. **Parser changes** go in `pkg/parser/`
+3. **SQL generation** changes go in `internal/sqlgen/`
 4. **Tests** go in `test/` or the appropriate `*_test.go` file
 
 ### SQL Template Changes
 
-When modifying `tooling/schema/templates/*.tpl.sql`:
+When modifying SQL generation in `internal/sqlgen/`:
 
-1. Update the SQL function
+1. Update the query builder
 2. Run `just test-openfga` to verify compatibility
 3. Run `just bench-openfga` to check performance impact
+
+### Adding a Language Generator
+
+1. Create `internal/clientgen/<language>/generate.go`
+2. Implement the `Generator` interface
+3. Register in `init()` function
+4. Import in `pkg/clientgen/api.go`
 
 ### Adding Tests
 
@@ -208,7 +258,7 @@ func TestCustomScenario(t *testing.T) {
     db := testutil.SetupDB(t)
 
     // Apply schema
-    err := tooling.MigrateFromString(ctx, db, `
+    err := migrator.MigrateFromString(ctx, db, `
 model
   schema 1.1
 type user

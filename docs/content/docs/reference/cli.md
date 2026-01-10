@@ -3,7 +3,7 @@ title: CLI Reference
 weight: 1
 ---
 
-The Melange CLI provides commands for validating schemas, generating Go code, and applying migrations to your database.
+The Melange CLI provides commands for validating schemas, generating client code, and applying migrations to your database.
 
 ## Installation
 
@@ -18,7 +18,7 @@ go install github.com/pthm/melange/cmd/melange@latest
 Check `.fga` schema syntax without database access.
 
 ```bash
-melange validate --schemas-dir schemas
+melange validate --schema schemas/schema.fga
 ```
 
 **Output:**
@@ -31,35 +31,49 @@ Schema is valid. Found 3 types:
 
 This command parses the schema using the OpenFGA parser and reports any syntax errors. It does not require database access.
 
-### generate
+**Flags:**
 
-Generate type-safe Go code from your schema.
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--schema` | - | Path to schema.fga file (required) |
+
+### generate client
+
+Generate type-safe client code from your schema.
 
 ```bash
-melange generate \
-  --schemas-dir schemas \
-  --generate-dir internal/authz \
-  --generate-pkg authz
+melange generate client \
+  --runtime go \
+  --schema schemas/schema.fga \
+  --output internal/authz \
+  --package authz
 ```
 
 **Flags:**
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--schemas-dir` | `schemas` | Directory containing `schema.fga` |
-| `--generate-dir` | `authz` | Output directory for generated code |
-| `--generate-pkg` | `authz` | Package name for generated code |
+| `--runtime` | - | Target runtime: `go`, `typescript`, `python` (required) |
+| `--schema` | - | Path to schema.fga file (required) |
+| `--output` | stdout | Output directory for generated code |
+| `--package` | `authz` | Package name for generated code |
 | `--id-type` | `string` | ID type for constructors (`string`, `int64`, `uuid.UUID`) |
-| `--relation-prefix` | `""` | Only generate relations with this prefix (e.g., `can_`) |
+| `--filter` | `""` | Only generate relations with this prefix (e.g., `can_`) |
 
 **Example with all options:**
 ```bash
-melange generate \
-  --schemas-dir schemas \
-  --generate-dir internal/authz \
-  --generate-pkg authz \
+melange generate client \
+  --runtime go \
+  --schema schemas/schema.fga \
+  --output internal/authz \
+  --package authz \
   --id-type int64 \
-  --relation-prefix can_
+  --filter can_
+```
+
+**Output to stdout:**
+```bash
+melange generate client --runtime go --schema schemas/schema.fga
 ```
 
 **Generated code example:**
@@ -67,20 +81,20 @@ melange generate \
 // schema_gen.go
 package authz
 
-import "github.com/pthm/melange"
+import "github.com/pthm/melange/melange"
 
 // Object types
 const (
-    TypeUser         = "user"
-    TypeOrganization = "organization"
-    TypeRepository   = "repository"
+    TypeUser         melange.ObjectType = "user"
+    TypeOrganization melange.ObjectType = "organization"
+    TypeRepository   melange.ObjectType = "repository"
 )
 
 // Relation constants (filtered by prefix "can_")
 const (
-    RelCanRead   = "can_read"
-    RelCanWrite  = "can_write"
-    RelCanDelete = "can_delete"
+    RelCanRead   melange.Relation = "can_read"
+    RelCanWrite  melange.Relation = "can_write"
+    RelCanDelete melange.Relation = "can_delete"
 )
 
 // Type-safe constructors
@@ -91,7 +105,20 @@ func User(id int64) melange.Object {
 func Repository(id int64) melange.Object {
     return melange.Object{Type: TypeRepository, ID: fmt.Sprint(id)}
 }
+
+// Wildcard constructors
+func AnyUser() melange.Object {
+    return melange.Object{Type: TypeUser, ID: "*"}
+}
 ```
+
+**Supported runtimes:**
+
+| Runtime | Status | Description |
+|---------|--------|-------------|
+| `go` | Implemented | Type-safe Go code with constants and constructors |
+| `typescript` | Planned | TypeScript types and factory functions |
+| `python` | Planned | Python classes and constructors |
 
 ### migrate
 
@@ -289,16 +316,6 @@ This shows:
 | Missing columns | Update melange_tuples to include all required columns |
 | Unknown types in tuples | Update tuples view or schema to match |
 
-## Global Flags
-
-These flags apply to all commands:
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--db` | `$DATABASE_URL` | PostgreSQL connection string |
-| `--schemas-dir` | `schemas` | Directory containing schema files |
-| `--config` | `melange.yaml` | Config file (not yet implemented) |
-
 ## Environment Variables
 
 | Variable | Description |
@@ -311,7 +328,7 @@ These flags apply to all commands:
 
 ```bash
 # 1. Validate schema syntax
-melange validate --schemas-dir schemas
+melange validate --schema schemas/schema.fga
 
 # 2. Apply to local database
 melange migrate \
@@ -319,17 +336,18 @@ melange migrate \
   --schemas-dir schemas
 
 # 3. Generate Go code
-melange generate \
-  --schemas-dir schemas \
-  --generate-dir internal/authz \
-  --generate-pkg authz
+melange generate client \
+  --runtime go \
+  --schema schemas/schema.fga \
+  --output internal/authz \
+  --package authz
 ```
 
 ### CI/CD Pipeline
 
 ```bash
 # Validate schema (fails fast if syntax error)
-melange validate --schemas-dir schemas
+melange validate --schema schemas/schema.fga
 
 # Preview migration (optional, for review)
 melange migrate --db $DATABASE_URL --dry-run
@@ -355,13 +373,14 @@ When you modify your `.fga` schema:
 
 ```bash
 # 1. Validate changes
-melange validate --schemas-dir schemas
+melange validate --schema schemas/schema.fga
 
 # 2. Regenerate Go code
-melange generate \
-  --schemas-dir schemas \
-  --generate-dir internal/authz \
-  --generate-pkg authz
+melange generate client \
+  --runtime go \
+  --schema schemas/schema.fga \
+  --output internal/authz \
+  --package authz
 
 # 3. Apply to database
 melange migrate --db $DATABASE_URL --schemas-dir schemas
@@ -402,17 +421,19 @@ For programmatic schema management without the CLI, use the Go API:
 
 ```go
 import (
-    "github.com/pthm/melange/tooling/schema"
-    "github.com/pthm/melange/tooling"
+    "github.com/pthm/melange/pkg/parser"
+    "github.com/pthm/melange/pkg/migrator"
 )
 
-// Parse and migrate in one step
-err := tooling.Migrate(ctx, db, "schemas")
+// Parse schema
+types, err := parser.ParseSchema("schemas/schema.fga")
+if err != nil {
+    log.Fatal(err)
+}
 
-// Or with more control
-types, err := tooling.ParseSchema("schemas/schema.fga")
-    migrator := schema.NewMigrator(db, "schemas")
-    err = migrator.MigrateWithTypes(ctx, types)
+// Create migrator and apply
+m := migrator.NewMigrator(db, "schemas")
+err = m.MigrateWithTypes(ctx, types)
 ```
 
 **With options (dry-run, force, skip-if-unchanged):**
@@ -420,24 +441,24 @@ types, err := tooling.ParseSchema("schemas/schema.fga")
 ```go
 import (
     "os"
-    "github.com/pthm/melange/tooling"
+    "github.com/pthm/melange/pkg/migrator"
 )
 
 // Dry-run: output SQL to stdout
-opts := tooling.MigrateOptions{
+opts := migrator.MigrateOptions{
     DryRun: os.Stdout,
 }
-skipped, err := tooling.MigrateWithOptions(ctx, db, "schemas", opts)
+skipped, err := migrator.MigrateWithOptions(ctx, db, "schemas", opts)
 
 // Force migration even if unchanged
-opts := tooling.MigrateOptions{
+opts := migrator.MigrateOptions{
     Force: true,
 }
-skipped, err := tooling.MigrateWithOptions(ctx, db, "schemas", opts)
+skipped, err := migrator.MigrateWithOptions(ctx, db, "schemas", opts)
 
 // Normal migration with skip detection
-opts := tooling.MigrateOptions{}
-skipped, err := tooling.MigrateWithOptions(ctx, db, "schemas", opts)
+opts := migrator.MigrateOptions{}
+skipped, err := migrator.MigrateWithOptions(ctx, db, "schemas", opts)
 if skipped {
     log.Println("Schema unchanged, migration skipped")
 }
@@ -448,7 +469,7 @@ if skipped {
 ```go
 import (
     "os"
-    "github.com/pthm/melange/doctor"
+    "github.com/pthm/melange/internal/doctor"
 )
 
 d := doctor.New(db, "schemas")

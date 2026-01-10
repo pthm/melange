@@ -194,8 +194,8 @@ For full integration tests with a real PostgreSQL database:
 
 ```go
 import (
-    "github.com/pthm/melange"
-    "github.com/pthm/melange/tooling"
+    "github.com/pthm/melange/melange"
+    "github.com/pthm/melange/pkg/migrator"
     "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
@@ -223,7 +223,7 @@ func TestPermissions(t *testing.T) {
     db := setupTestDB(t)
 
     // Apply Melange schema
-    err := tooling.MigrateFromString(ctx, db, `
+    err := migrator.MigrateFromString(ctx, db, `
 model
   schema 1.1
 
