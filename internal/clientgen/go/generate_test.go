@@ -1,15 +1,38 @@
 package gogen_test
 
 import (
-	"bytes"
 	"strings"
 	"testing"
 
-	gogen "github.com/pthm/melange/pkg/clientgen/go"
+	"github.com/pthm/melange/internal/clientgen"
+	gogen "github.com/pthm/melange/internal/clientgen/go"
 	"github.com/pthm/melange/pkg/schema"
 )
 
-func TestGenerateGo_Defaults(t *testing.T) {
+func TestGenerator_Interface(t *testing.T) {
+	gen := &gogen.Generator{}
+
+	t.Run("name returns go", func(t *testing.T) {
+		if got := gen.Name(); got != "go" {
+			t.Errorf("Name() = %q, want %q", got, "go")
+		}
+	})
+
+	t.Run("default config has sensible values", func(t *testing.T) {
+		cfg := gen.DefaultConfig()
+		if cfg.Package != "authz" {
+			t.Errorf("Package = %q, want %q", cfg.Package, "authz")
+		}
+		if cfg.IDType != "string" {
+			t.Errorf("IDType = %q, want %q", cfg.IDType, "string")
+		}
+		if cfg.RelationFilter != "" {
+			t.Errorf("RelationFilter = %q, want empty", cfg.RelationFilter)
+		}
+	})
+}
+
+func TestGenerator_Generate(t *testing.T) {
 	types := []schema.TypeDefinition{
 		{
 			Name: "user",
@@ -26,14 +49,30 @@ func TestGenerateGo_Defaults(t *testing.T) {
 		},
 	}
 
-	t.Run("default config uses string ID", func(t *testing.T) {
-		var buf bytes.Buffer
-		err := gogen.GenerateGo(&buf, types, nil)
+	gen := &gogen.Generator{}
+
+	t.Run("returns single file map", func(t *testing.T) {
+		files, err := gen.Generate(types, nil)
 		if err != nil {
-			t.Fatalf("GenerateGo error: %v", err)
+			t.Fatalf("Generate error: %v", err)
 		}
 
-		code := buf.String()
+		if len(files) != 1 {
+			t.Errorf("Generate returned %d files, want 1", len(files))
+		}
+
+		if _, ok := files["schema_gen.go"]; !ok {
+			t.Error("Generate should return schema_gen.go file")
+		}
+	})
+
+	t.Run("default config uses string ID", func(t *testing.T) {
+		files, err := gen.Generate(types, nil)
+		if err != nil {
+			t.Fatalf("Generate error: %v", err)
+		}
+
+		code := string(files["schema_gen.go"])
 
 		// Should have string ID type in constructor
 		if !strings.Contains(code, "func User(id string)") {
@@ -47,36 +86,34 @@ func TestGenerateGo_Defaults(t *testing.T) {
 	})
 
 	t.Run("empty IDType defaults to string", func(t *testing.T) {
-		cfg := &gogen.GenerateConfig{
+		cfg := &clientgen.Config{
 			Package: "authz",
 			IDType:  "", // Empty should default to string
 		}
 
-		var buf bytes.Buffer
-		err := gogen.GenerateGo(&buf, types, cfg)
+		files, err := gen.Generate(types, cfg)
 		if err != nil {
-			t.Fatalf("GenerateGo error: %v", err)
+			t.Fatalf("Generate error: %v", err)
 		}
 
-		code := buf.String()
+		code := string(files["schema_gen.go"])
 		if !strings.Contains(code, "func User(id string)") {
 			t.Error("empty IDType should default to string")
 		}
 	})
 
 	t.Run("int64 IDType uses fmt.Sprint", func(t *testing.T) {
-		cfg := &gogen.GenerateConfig{
+		cfg := &clientgen.Config{
 			Package: "authz",
 			IDType:  "int64",
 		}
 
-		var buf bytes.Buffer
-		err := gogen.GenerateGo(&buf, types, cfg)
+		files, err := gen.Generate(types, cfg)
 		if err != nil {
-			t.Fatalf("GenerateGo error: %v", err)
+			t.Fatalf("Generate error: %v", err)
 		}
 
-		code := buf.String()
+		code := string(files["schema_gen.go"])
 
 		// Should have int64 ID type
 		if !strings.Contains(code, "func User(id int64)") {
@@ -95,18 +132,17 @@ func TestGenerateGo_Defaults(t *testing.T) {
 	})
 
 	t.Run("generates all relations by default", func(t *testing.T) {
-		cfg := &gogen.GenerateConfig{
-			Package:              "authz",
-			RelationPrefixFilter: "", // No filter
+		cfg := &clientgen.Config{
+			Package:        "authz",
+			RelationFilter: "", // No filter
 		}
 
-		var buf bytes.Buffer
-		err := gogen.GenerateGo(&buf, types, cfg)
+		files, err := gen.Generate(types, cfg)
 		if err != nil {
-			t.Fatalf("GenerateGo error: %v", err)
+			t.Fatalf("Generate error: %v", err)
 		}
 
-		code := buf.String()
+		code := string(files["schema_gen.go"])
 
 		// Should have both relations
 		if !strings.Contains(code, "RelOwner") {
@@ -121,18 +157,17 @@ func TestGenerateGo_Defaults(t *testing.T) {
 	})
 
 	t.Run("prefix filter limits relations", func(t *testing.T) {
-		cfg := &gogen.GenerateConfig{
-			Package:              "authz",
-			RelationPrefixFilter: "can_",
+		cfg := &clientgen.Config{
+			Package:        "authz",
+			RelationFilter: "can_",
 		}
 
-		var buf bytes.Buffer
-		err := gogen.GenerateGo(&buf, types, cfg)
+		files, err := gen.Generate(types, cfg)
 		if err != nil {
-			t.Fatalf("GenerateGo error: %v", err)
+			t.Fatalf("Generate error: %v", err)
 		}
 
-		code := buf.String()
+		code := string(files["schema_gen.go"])
 
 		// Should only have can_* relations
 		if !strings.Contains(code, "RelCanRead") {
@@ -147,13 +182,12 @@ func TestGenerateGo_Defaults(t *testing.T) {
 	})
 
 	t.Run("generates wildcard constructors", func(t *testing.T) {
-		var buf bytes.Buffer
-		err := gogen.GenerateGo(&buf, types, nil)
+		files, err := gen.Generate(types, nil)
 		if err != nil {
-			t.Fatalf("GenerateGo error: %v", err)
+			t.Fatalf("Generate error: %v", err)
 		}
 
-		code := buf.String()
+		code := string(files["schema_gen.go"])
 
 		if !strings.Contains(code, "func AnyUser()") {
 			t.Error("should generate AnyUser wildcard constructor")
@@ -165,4 +199,27 @@ func TestGenerateGo_Defaults(t *testing.T) {
 			t.Error("wildcard constructors should use * ID")
 		}
 	})
+
+	t.Run("uses correct melange import path", func(t *testing.T) {
+		files, err := gen.Generate(types, nil)
+		if err != nil {
+			t.Fatalf("Generate error: %v", err)
+		}
+
+		code := string(files["schema_gen.go"])
+		if !strings.Contains(code, "github.com/pthm/melange/melange") {
+			t.Error("should import github.com/pthm/melange/melange")
+		}
+	})
+}
+
+func TestRegistry_GoGeneratorRegistered(t *testing.T) {
+	gen := clientgen.Get("go")
+	if gen == nil {
+		t.Fatal("Go generator should be registered")
+	}
+
+	if gen.Name() != "go" {
+		t.Errorf("Name() = %q, want %q", gen.Name(), "go")
+	}
 }

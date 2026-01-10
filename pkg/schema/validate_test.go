@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	gogen "github.com/pthm/melange/pkg/clientgen/go"
+	"github.com/pthm/melange/pkg/clientgen"
 	"github.com/pthm/melange/pkg/schema"
 )
 
@@ -266,7 +266,7 @@ func TestGenerateGo_RejectsCyclicSchema(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	err := gogen.GenerateGo(&buf, types, nil)
+	err := clientgen.GenerateGo(&buf, types, nil)
 	if err == nil {
 		t.Fatal("expected error for cyclic schema")
 	}
