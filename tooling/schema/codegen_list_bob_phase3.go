@@ -343,17 +343,19 @@ $$ LANGUAGE plpgsql STABLE;`,
 }
 
 func buildListSubjectsSelfRefUsersetFilterQuery(a RelationAnalysis, inline InlineSQLData, allSatisfyingRelations []string) (string, error) {
+	checkExprSQL, err := sqlgen.RenderExpr(sqlgen.CheckPermissionExpr("check_permission", "v_filter_type", "t.subject_id", a.Relation, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true))
+	if err != nil {
+		return "", err
+	}
 	baseSQL, err := sqlgen.ListSubjectsUsersetFilterQuery(sqlgen.ListSubjectsUsersetFilterInput{
-		ObjectType:         a.ObjectType,
-		RelationList:       allSatisfyingRelations,
-		ObjectIDExpr:       "p_object_id",
-		FilterTypeExpr:     "v_filter_type",
-		FilterRelationExpr: "v_filter_relation",
-		ClosureValues:      inline.ClosureValues,
-		UseTypeGuard:       false,
-		ExtraPredicates: []bob.Expression{
-			sqlgen.CheckPermissionExpr("check_permission", "v_filter_type", "t.subject_id", a.Relation, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true),
-		},
+		ObjectType:          a.ObjectType,
+		RelationList:        allSatisfyingRelations,
+		ObjectIDExpr:        "p_object_id",
+		FilterTypeExpr:      "v_filter_type",
+		FilterRelationExpr:  "v_filter_relation",
+		ClosureValues:       inline.ClosureValues,
+		UseTypeGuard:        false,
+		ExtraPredicatesSQL:  []string{checkExprSQL},
 	})
 	if err != nil {
 		return "", err

@@ -3,9 +3,7 @@ package sqlgen
 import (
 	"fmt"
 
-	"github.com/stephenafamo/bob"
-	"github.com/stephenafamo/bob/dialect/psql"
-	"github.com/stephenafamo/bob/dialect/psql/sm"
+	"github.com/pthm/melange/tooling/schema/sqlgen/dsl"
 )
 
 type UsersetCheckInput struct {
@@ -22,32 +20,30 @@ func UsersetCheck(input UsersetCheckInput) (string, error) {
 		return "", fmt.Errorf("userset check requires at least one satisfying relation")
 	}
 
-	relExprs := literalList(input.SatisfyingRelations)
+	q := dsl.Tuples("grant_tuple").
+		ObjectType(input.ObjectType).
+		Relations(input.Relation).
+		Where(
+			dsl.Eq{Left: dsl.Col{Table: "grant_tuple", Column: "object_id"}, Right: dsl.ObjectID},
+			dsl.Eq{Left: dsl.Col{Table: "grant_tuple", Column: "subject_type"}, Right: dsl.Lit(input.SubjectType)},
+			dsl.HasUserset{Source: dsl.Col{Table: "grant_tuple", Column: "subject_id"}},
+			dsl.Eq{
+				Left:  dsl.UsersetRelation{Source: dsl.Col{Table: "grant_tuple", Column: "subject_id"}},
+				Right: dsl.Lit(input.SubjectRelation),
+			},
+		).
+		JoinTuples("membership",
+			dsl.Eq{Left: dsl.Col{Table: "membership", Column: "object_type"}, Right: dsl.Lit(input.SubjectType)},
+			dsl.Eq{
+				Left:  dsl.Col{Table: "membership", Column: "object_id"},
+				Right: dsl.UsersetObjectID{Source: dsl.Col{Table: "grant_tuple", Column: "subject_id"}},
+			},
+			dsl.In{Expr: dsl.Col{Table: "membership", Column: "relation"}, Values: input.SatisfyingRelations},
+			dsl.Eq{Left: dsl.Col{Table: "membership", Column: "subject_type"}, Right: dsl.SubjectType},
+			dsl.SubjectIDMatch(dsl.Col{Table: "membership", Column: "subject_id"}, dsl.SubjectID, input.AllowWildcard),
+		).
+		Select("1").
+		Limit(1)
 
-	joinConditions := []bob.Expression{
-		psql.Quote("membership", "object_type").EQ(psql.S(input.SubjectType)),
-		psql.Quote("membership", "object_id").EQ(psql.Raw("split_part(grant_tuple.subject_id, '#', 1)")),
-		psql.Quote("membership", "relation").In(relExprs...),
-		psql.Quote("membership", "subject_type").EQ(param("p_subject_type")),
-		subjectIDCheckExpr(psql.Quote("membership", "subject_id"), input.AllowWildcard),
-	}
-
-	where := psql.And(
-		psql.Quote("grant_tuple", "object_type").EQ(psql.S(input.ObjectType)),
-		psql.Quote("grant_tuple", "object_id").EQ(param("p_object_id")),
-		psql.Quote("grant_tuple", "relation").EQ(psql.S(input.Relation)),
-		psql.Quote("grant_tuple", "subject_type").EQ(psql.S(input.SubjectType)),
-		psql.Raw("position('#' in grant_tuple.subject_id)").GT(psql.Raw("0")),
-		psql.Raw("split_part(grant_tuple.subject_id, '#', 2)").EQ(psql.S(input.SubjectRelation)),
-	)
-
-	query := psql.Select(
-		sm.Columns(psql.Raw("1")),
-		sm.From("melange_tuples").As("grant_tuple"),
-		sm.InnerJoin("melange_tuples").As("membership").On(joinConditions...),
-		sm.Where(where),
-		sm.Limit(1),
-	)
-
-	return existsSQL(query)
+	return q.ExistsSQL(), nil
 }

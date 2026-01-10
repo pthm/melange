@@ -3,8 +3,7 @@ package sqlgen
 import (
 	"fmt"
 
-	"github.com/stephenafamo/bob/dialect/psql"
-	"github.com/stephenafamo/bob/dialect/psql/sm"
+	"github.com/pthm/melange/tooling/schema/sqlgen/dsl"
 )
 
 type DirectCheckInput struct {
@@ -22,24 +21,17 @@ func DirectCheck(input DirectCheckInput) (string, error) {
 		return "", fmt.Errorf("direct check requires at least one subject type")
 	}
 
-	relationExprs := literalList(input.Relations)
-	subjectTypeExprs := literalList(input.SubjectTypes)
+	q := dsl.Tuples("").
+		ObjectType(input.ObjectType).
+		Relations(input.Relations...).
+		Where(
+			dsl.Eq{Left: dsl.Col{Column: "object_id"}, Right: dsl.ObjectID},
+			dsl.In{Expr: dsl.Col{Column: "subject_type"}, Values: input.SubjectTypes},
+			dsl.Eq{Left: dsl.Col{Column: "subject_type"}, Right: dsl.SubjectType},
+			dsl.SubjectIDMatch(dsl.Col{Column: "subject_id"}, dsl.SubjectID, input.AllowWildcard),
+		).
+		Select("1").
+		Limit(1)
 
-	where := psql.And(
-		psql.Quote("object_type").EQ(psql.S(input.ObjectType)),
-		psql.Quote("object_id").EQ(param("p_object_id")),
-		psql.Quote("relation").In(relationExprs...),
-		psql.Quote("subject_type").In(subjectTypeExprs...),
-		psql.Quote("subject_type").EQ(param("p_subject_type")),
-		subjectIDCheckExpr(psql.Quote("subject_id"), input.AllowWildcard),
-	)
-
-	query := psql.Select(
-		sm.Columns(psql.Raw("1")),
-		sm.From("melange_tuples"),
-		sm.Where(where),
-		sm.Limit(1),
-	)
-
-	return existsSQL(query)
+	return q.ExistsSQL(), nil
 }

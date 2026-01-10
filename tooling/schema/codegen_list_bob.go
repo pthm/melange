@@ -375,6 +375,10 @@ func generateListSubjectsFunctionBob(a RelationAnalysis, inline InlineSQLData, t
 		if err != nil {
 			return "", err
 		}
+		usersetPredsSQL, err := sqlgen.RenderExprs(usersetPreds)
+		if err != nil {
+			return "", err
+		}
 		usersetBaseSQL, err := sqlgen.ListSubjectsUsersetFilterQuery(sqlgen.ListSubjectsUsersetFilterInput{
 			ObjectType:          a.ObjectType,
 			RelationList:        relationList,
@@ -384,7 +388,7 @@ func generateListSubjectsFunctionBob(a RelationAnalysis, inline InlineSQLData, t
 			FilterRelationExpr:  "v_filter_relation",
 			ClosureValues:       inline.ClosureValues,
 			UseTypeGuard:        true,
-			ExtraPredicates:     usersetPreds,
+			ExtraPredicatesSQL:  usersetPredsSQL,
 		})
 		if err != nil {
 			return "", err
@@ -425,6 +429,10 @@ func generateListSubjectsFunctionBob(a RelationAnalysis, inline InlineSQLData, t
 		if err != nil {
 			return "", err
 		}
+		selfPredsSQL, err := sqlgen.RenderExprs(selfPreds)
+		if err != nil {
+			return "", err
+		}
 		selfBlock, err := sqlgen.ListSubjectsSelfCandidateQuery(sqlgen.ListSubjectsSelfCandidateInput{
 			ObjectType:         a.ObjectType,
 			Relation:           a.Relation,
@@ -432,7 +440,7 @@ func generateListSubjectsFunctionBob(a RelationAnalysis, inline InlineSQLData, t
 			FilterTypeExpr:     "v_filter_type",
 			FilterRelationExpr: "v_filter_relation",
 			ClosureValues:      inline.ClosureValues,
-			ExtraPredicates:    selfPreds,
+			ExtraPredicatesSQL: selfPredsSQL,
 		})
 		if err != nil {
 			return "", err
@@ -482,17 +490,19 @@ func generateListSubjectsFunctionBob(a RelationAnalysis, inline InlineSQLData, t
 		}
 		regularBlocks = append(regularBlocks, intersectionBlocks...)
 	case "list_subjects_userset.tpl.sql":
+		checkExprSQL, err := sqlgen.RenderExpr(sqlgen.CheckPermissionExpr("check_permission", "v_filter_type", "t.subject_id", a.Relation, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true))
+		if err != nil {
+			return "", err
+		}
 		usersetBaseSQL, err := sqlgen.ListSubjectsUsersetFilterQuery(sqlgen.ListSubjectsUsersetFilterInput{
-			ObjectType:         a.ObjectType,
-			RelationList:       allSatisfyingRelations,
-			ObjectIDExpr:       "p_object_id",
-			FilterTypeExpr:     "v_filter_type",
-			FilterRelationExpr: "v_filter_relation",
-			ClosureValues:      inline.ClosureValues,
-			UseTypeGuard:       false,
-			ExtraPredicates: []bob.Expression{
-				sqlgen.CheckPermissionExpr("check_permission", "v_filter_type", "t.subject_id", a.Relation, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true),
-			},
+			ObjectType:          a.ObjectType,
+			RelationList:        allSatisfyingRelations,
+			ObjectIDExpr:        "p_object_id",
+			FilterTypeExpr:      "v_filter_type",
+			FilterRelationExpr:  "v_filter_relation",
+			ClosureValues:       inline.ClosureValues,
+			UseTypeGuard:        false,
+			ExtraPredicatesSQL:  []string{checkExprSQL},
 		})
 		if err != nil {
 			return "", err
@@ -700,6 +710,11 @@ func buildListSubjectsComplexClosureFilterBlocks(a RelationAnalysis, relations [
 		if err != nil {
 			return nil, err
 		}
+		allPreds := append(exclusionPreds, sqlgen.CheckPermissionInternalExpr("t.subject_type", "t.subject_id", rel, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true))
+		extraPredsSQL, err := sqlgen.RenderExprs(allPreds)
+		if err != nil {
+			return nil, err
+		}
 		blockSQL, err := sqlgen.ListSubjectsUsersetFilterQuery(sqlgen.ListSubjectsUsersetFilterInput{
 			ObjectType:          a.ObjectType,
 			RelationList:        []string{rel},
@@ -709,10 +724,7 @@ func buildListSubjectsComplexClosureFilterBlocks(a RelationAnalysis, relations [
 			FilterRelationExpr:  "v_filter_relation",
 			ClosureValues:       closureValues,
 			UseTypeGuard:        true,
-			ExtraPredicates: append(
-				exclusionPreds,
-				sqlgen.CheckPermissionInternalExpr("t.subject_type", "t.subject_id", rel, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true),
-			),
+			ExtraPredicatesSQL:  extraPredsSQL,
 		})
 		if err != nil {
 			return nil, err

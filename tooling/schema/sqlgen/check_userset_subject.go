@@ -3,9 +3,7 @@ package sqlgen
 import (
 	"fmt"
 
-	"github.com/stephenafamo/bob"
-	"github.com/stephenafamo/bob/dialect/psql"
-	"github.com/stephenafamo/bob/dialect/psql/sm"
+	"github.com/pthm/melange/tooling/schema/sqlgen/dsl"
 )
 
 type UsersetSubjectSelfCheckInput struct {
@@ -15,19 +13,23 @@ type UsersetSubjectSelfCheckInput struct {
 }
 
 func UsersetSubjectSelfCheckQuery(input UsersetSubjectSelfCheckInput) (string, error) {
-	closureTable := psql.Raw(fmt.Sprintf("(VALUES %s) AS c(object_type, relation, satisfying_relation)", input.ClosureValues))
-	where := []bob.Expression{
-		psql.Quote("c", "object_type").EQ(psql.S(input.ObjectType)),
-		psql.Quote("c", "relation").EQ(psql.S(input.Relation)),
-		psql.Quote("c", "satisfying_relation").EQ(psql.Raw("substring(p_subject_id from position('#' in p_subject_id) + 1)")),
+	closureTable := fmt.Sprintf("(VALUES %s)", input.ClosureValues)
+
+	stmt := dsl.SelectStmt{
+		Columns: []string{"1"},
+		From:    closureTable,
+		Alias:   "c(object_type, relation, satisfying_relation)",
+		Where: dsl.And(
+			dsl.Eq{Left: dsl.Col{Table: "c", Column: "object_type"}, Right: dsl.Lit(input.ObjectType)},
+			dsl.Eq{Left: dsl.Col{Table: "c", Column: "relation"}, Right: dsl.Lit(input.Relation)},
+			dsl.Eq{
+				Left:  dsl.Col{Table: "c", Column: "satisfying_relation"},
+				Right: dsl.SubstringUsersetRelation{Source: dsl.SubjectID},
+			},
+		),
+		Limit: 1,
 	}
-	query := psql.Select(
-		sm.Columns(psql.Raw("1")),
-		sm.From(closureTable),
-		sm.Where(psql.And(where...)),
-		sm.Limit(1),
-	)
-	return renderQuery(query)
+	return stmt.SQL(), nil
 }
 
 type UsersetSubjectComputedCheckInput struct {
@@ -38,44 +40,61 @@ type UsersetSubjectComputedCheckInput struct {
 }
 
 func UsersetSubjectComputedCheckQuery(input UsersetSubjectComputedCheckInput) (string, error) {
-	closureTable := psql.Raw(fmt.Sprintf("(VALUES %s) AS c(object_type, relation, satisfying_relation)", input.ClosureValues))
-	usersetTable := psql.Raw(fmt.Sprintf("(VALUES %s) AS m(object_type, relation, subject_type, subject_relation)", input.UsersetValues))
-	subjClosureTable := psql.Raw(fmt.Sprintf("(VALUES %s) AS subj_c(object_type, relation, satisfying_relation)", input.ClosureValues))
+	closureTable := fmt.Sprintf("(VALUES %s) AS c(object_type, relation, satisfying_relation)", input.ClosureValues)
+	usersetTable := fmt.Sprintf("(VALUES %s) AS m(object_type, relation, subject_type, subject_relation)", input.UsersetValues)
+	subjClosureTable := fmt.Sprintf("(VALUES %s) AS subj_c(object_type, relation, satisfying_relation)", input.ClosureValues)
 
-	joinConditions := []bob.Expression{
-		psql.Quote("c", "object_type").EQ(psql.S(input.ObjectType)),
-		psql.Quote("c", "relation").EQ(psql.S(input.Relation)),
-		psql.Quote("c", "satisfying_relation").EQ(psql.Quote("t", "relation")),
+	stmt := dsl.SelectStmt{
+		Columns: []string{"1"},
+		From:    "melange_tuples",
+		Alias:   "t",
+		Joins: []dsl.JoinClause{
+			{
+				Type:  "INNER",
+				Table: closureTable,
+				On: dsl.And(
+					dsl.Eq{Left: dsl.Col{Table: "c", Column: "object_type"}, Right: dsl.Lit(input.ObjectType)},
+					dsl.Eq{Left: dsl.Col{Table: "c", Column: "relation"}, Right: dsl.Lit(input.Relation)},
+					dsl.Eq{Left: dsl.Col{Table: "c", Column: "satisfying_relation"}, Right: dsl.Col{Table: "t", Column: "relation"}},
+				),
+			},
+			{
+				Type:  "INNER",
+				Table: usersetTable,
+				On: dsl.And(
+					dsl.Eq{Left: dsl.Col{Table: "m", Column: "object_type"}, Right: dsl.Lit(input.ObjectType)},
+					dsl.Eq{Left: dsl.Col{Table: "m", Column: "relation"}, Right: dsl.Col{Table: "c", Column: "satisfying_relation"}},
+					dsl.Eq{Left: dsl.Col{Table: "m", Column: "subject_type"}, Right: dsl.Col{Table: "t", Column: "subject_type"}},
+				),
+			},
+			{
+				Type:  "INNER",
+				Table: subjClosureTable,
+				On: dsl.And(
+					dsl.Eq{Left: dsl.Col{Table: "subj_c", Column: "object_type"}, Right: dsl.Col{Table: "t", Column: "subject_type"}},
+					dsl.Eq{
+						Left:  dsl.Col{Table: "subj_c", Column: "relation"},
+						Right: dsl.SubstringUsersetRelation{Source: dsl.Col{Table: "t", Column: "subject_id"}},
+					},
+					dsl.Eq{
+						Left:  dsl.Col{Table: "subj_c", Column: "satisfying_relation"},
+						Right: dsl.SubstringUsersetRelation{Source: dsl.SubjectID},
+					},
+				),
+			},
+		},
+		Where: dsl.And(
+			dsl.Eq{Left: dsl.Col{Table: "t", Column: "object_type"}, Right: dsl.Lit(input.ObjectType)},
+			dsl.Eq{Left: dsl.Col{Table: "t", Column: "object_id"}, Right: dsl.ObjectID},
+			dsl.Eq{Left: dsl.Col{Table: "t", Column: "subject_type"}, Right: dsl.SubjectType},
+			dsl.Ne{Left: dsl.Col{Table: "t", Column: "subject_id"}, Right: dsl.Lit("*")},
+			dsl.HasUserset{Source: dsl.Col{Table: "t", Column: "subject_id"}},
+			dsl.Eq{
+				Left:  dsl.Raw("substring(t.subject_id from 1 for position('#' in t.subject_id) - 1)"),
+				Right: dsl.Raw("substring(p_subject_id from 1 for position('#' in p_subject_id) - 1)"),
+			},
+		),
+		Limit: 1,
 	}
-	usersetJoinConditions := []bob.Expression{
-		psql.Quote("m", "object_type").EQ(psql.S(input.ObjectType)),
-		psql.Quote("m", "relation").EQ(psql.Quote("c", "satisfying_relation")),
-		psql.Quote("m", "subject_type").EQ(psql.Quote("t", "subject_type")),
-	}
-	subjClosureJoinConditions := []bob.Expression{
-		psql.Quote("subj_c", "object_type").EQ(psql.Quote("t", "subject_type")),
-		psql.Quote("subj_c", "relation").EQ(psql.Raw("substring(t.subject_id from position('#' in t.subject_id) + 1)")),
-		psql.Quote("subj_c", "satisfying_relation").EQ(psql.Raw("substring(p_subject_id from position('#' in p_subject_id) + 1)")),
-	}
-
-	where := []bob.Expression{
-		psql.Quote("t", "object_type").EQ(psql.S(input.ObjectType)),
-		psql.Quote("t", "object_id").EQ(psql.Raw("p_object_id")),
-		psql.Quote("t", "subject_type").EQ(psql.Raw("p_subject_type")),
-		psql.Quote("t", "subject_id").NE(psql.S("*")),
-		psql.Raw("position('#' in t.subject_id)").GT(psql.Raw("0")),
-		psql.Raw("substring(t.subject_id from 1 for position('#' in t.subject_id) - 1)").EQ(
-			psql.Raw("substring(p_subject_id from 1 for position('#' in p_subject_id) - 1)")),
-	}
-
-	query := psql.Select(
-		sm.Columns(psql.Raw("1")),
-		sm.From("melange_tuples").As("t"),
-		sm.InnerJoin(closureTable).On(joinConditions...),
-		sm.InnerJoin(usersetTable).On(usersetJoinConditions...),
-		sm.InnerJoin(subjClosureTable).On(subjClosureJoinConditions...),
-		sm.Where(psql.And(where...)),
-		sm.Limit(1),
-	)
-	return renderQuery(query)
+	return stmt.SQL(), nil
 }

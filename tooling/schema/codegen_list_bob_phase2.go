@@ -743,17 +743,19 @@ $$ LANGUAGE plpgsql STABLE;`,
 
 func buildListSubjectsRecursiveUsersetFilterBlocks(a RelationAnalysis, inline InlineSQLData, allSatisfyingRelations []string) ([]string, string, error) {
 	var blocks []string
+	checkExprSQL, err := sqlgen.RenderExpr(sqlgen.CheckPermissionExpr("check_permission", "v_filter_type", "t.subject_id", a.Relation, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true))
+	if err != nil {
+		return nil, "", err
+	}
 	baseSQL, err := sqlgen.ListSubjectsUsersetFilterQuery(sqlgen.ListSubjectsUsersetFilterInput{
-		ObjectType:         a.ObjectType,
-		RelationList:       allSatisfyingRelations,
-		ObjectIDExpr:       "p_object_id",
-		FilterTypeExpr:     "v_filter_type",
-		FilterRelationExpr: "v_filter_relation",
-		ClosureValues:      inline.ClosureValues,
-		UseTypeGuard:       false,
-		ExtraPredicates: []bob.Expression{
-			sqlgen.CheckPermissionExpr("check_permission", "v_filter_type", "t.subject_id", a.Relation, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true),
-		},
+		ObjectType:          a.ObjectType,
+		RelationList:        allSatisfyingRelations,
+		ObjectIDExpr:        "p_object_id",
+		FilterTypeExpr:      "v_filter_type",
+		FilterRelationExpr:  "v_filter_relation",
+		ClosureValues:       inline.ClosureValues,
+		UseTypeGuard:        false,
+		ExtraPredicatesSQL:  []string{checkExprSQL},
 	})
 	if err != nil {
 		return nil, "", err
