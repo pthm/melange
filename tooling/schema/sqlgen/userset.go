@@ -1,4 +1,4 @@
-package dsl
+package sqlgen
 
 // Userset operations encapsulate the complex string manipulation for userset handling.
 // A userset ID has the format "object_id#relation" (e.g., "group:1#member").

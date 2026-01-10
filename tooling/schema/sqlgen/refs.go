@@ -1,4 +1,4 @@
-package dsl
+package sqlgen
 
 // SubjectRef represents a subject reference (type + id).
 // A subject is always identified by a type and an id.

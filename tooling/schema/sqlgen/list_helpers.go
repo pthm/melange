@@ -2,37 +2,35 @@ package sqlgen
 
 import (
 	"fmt"
-
-	"github.com/pthm/melange/tooling/schema/sqlgen/dsl"
 )
 
-// stringToDSLExpr converts a string expression to dsl.Expr.
+// stringToDSLExpr converts a string expression to Expr.
 // Recognizes common parameter names and converts them to DSL constants.
-func stringToDSLExpr(s string) dsl.Expr {
+func stringToDSLExpr(s string) Expr {
 	if s == "" {
 		return nil
 	}
 	switch s {
 	case "p_subject_type":
-		return dsl.SubjectType
+		return SubjectType
 	case "p_subject_id":
-		return dsl.SubjectID
+		return SubjectID
 	case "p_object_type":
-		return dsl.ObjectType
+		return ObjectType
 	case "p_object_id":
-		return dsl.ObjectID
+		return ObjectID
 	default:
-		return dsl.Raw(s)
+		return Raw(s)
 	}
 }
 
 // CheckPermissionExprDSL returns a DSL expression for a check_permission call.
-func CheckPermissionExprDSL(functionName, subjectTypeExpr, subjectIDExpr, relation, objectTypeExpr, objectIDExpr string, expect bool) dsl.Expr {
+func CheckPermissionExprDSL(functionName, subjectTypeExpr, subjectIDExpr, relation, objectTypeExpr, objectIDExpr string, expect bool) Expr {
 	result := "1"
 	if !expect {
 		result = "0"
 	}
-	return dsl.Raw(fmt.Sprintf(
+	return Raw(fmt.Sprintf(
 		"%s(%s, %s, '%s', %s, %s) = %s",
 		functionName,
 		subjectTypeExpr,
@@ -45,12 +43,12 @@ func CheckPermissionExprDSL(functionName, subjectTypeExpr, subjectIDExpr, relati
 }
 
 // CheckPermissionInternalExprDSL returns a DSL expression for a check_permission_internal call.
-func CheckPermissionInternalExprDSL(subjectTypeExpr, subjectIDExpr, relation, objectTypeExpr, objectIDExpr string, expect bool) dsl.Expr {
+func CheckPermissionInternalExprDSL(subjectTypeExpr, subjectIDExpr, relation, objectTypeExpr, objectIDExpr string, expect bool) Expr {
 	result := "1"
 	if !expect {
 		result = "0"
 	}
-	return dsl.Raw(fmt.Sprintf(
+	return Raw(fmt.Sprintf(
 		"check_permission_internal(%s, %s, '%s', %s, %s, ARRAY[]::TEXT[]) = %s",
 		subjectTypeExpr,
 		subjectIDExpr,
@@ -62,7 +60,7 @@ func CheckPermissionInternalExprDSL(subjectTypeExpr, subjectIDExpr, relation, ob
 }
 
 // RenderDSLExprs converts a slice of DSL expressions to SQL strings.
-func RenderDSLExprs(exprs []dsl.Expr) []string {
+func RenderDSLExprs(exprs []Expr) []string {
 	result := make([]string, 0, len(exprs))
 	for _, expr := range exprs {
 		if expr != nil {

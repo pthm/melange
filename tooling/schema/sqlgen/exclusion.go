@@ -1,4 +1,4 @@
-package dsl
+package sqlgen
 
 // Exclusion builders for handling "but not" patterns in authorization rules.
 

@@ -1,10 +1,10 @@
-package dsl_test
+package sqlgen_test
 
 import (
 	"strings"
 	"testing"
 
-	"github.com/pthm/melange/tooling/schema/sqlgen/dsl"
+	"github.com/pthm/melange/tooling/schema/sqlgen"
 )
 
 // This file demonstrates how to migrate queries from Bob to the DSL.
@@ -30,12 +30,12 @@ import (
 //	)
 func TestListObjectsDirectQuery(t *testing.T) {
 	// DSL version
-	q := dsl.Tuples("t").
+	q := sqlgen.Tuples("t").
 		ObjectType("document").
 		Relations("viewer", "editor").
-		WhereSubjectType(dsl.SubjectType).
-		Where(dsl.In{Expr: dsl.SubjectType, Values: []string{"user", "group"}}).
-		WhereSubjectID(dsl.SubjectID, true). // allowWildcard = true
+		WhereSubjectType(sqlgen.SubjectType).
+		Where(sqlgen.In{Expr: sqlgen.SubjectType, Values: []string{"user", "group"}}).
+		WhereSubjectID(sqlgen.SubjectID, true). // allowWildcard = true
 		Select("t.object_id").
 		Distinct()
 
@@ -70,14 +70,14 @@ func TestListObjectsDirectQuery(t *testing.T) {
 //	return existsSQL(query)
 func TestDirectCheck(t *testing.T) {
 	// DSL version
-	q := dsl.Tuples("").
+	q := sqlgen.Tuples("").
 		ObjectType("document").
 		Relations("viewer", "editor").
 		Where(
-			dsl.Eq{dsl.Col{Column: "object_id"}, dsl.ObjectID},
-			dsl.In{Expr: dsl.Col{Column: "subject_type"}, Values: []string{"user"}},
-			dsl.Eq{dsl.Col{Column: "subject_type"}, dsl.SubjectType},
-			dsl.SubjectIDMatch(dsl.Col{Column: "subject_id"}, dsl.SubjectID, false),
+			sqlgen.Eq{sqlgen.Col{Column: "object_id"}, sqlgen.ObjectID},
+			sqlgen.In{Expr: sqlgen.Col{Column: "subject_type"}, Values: []string{"user"}},
+			sqlgen.Eq{sqlgen.Col{Column: "subject_type"}, sqlgen.SubjectType},
+			sqlgen.SubjectIDMatch(sqlgen.Col{Column: "subject_id"}, sqlgen.SubjectID, false),
 		).
 		Select("1").
 		Limit(1)
@@ -116,27 +116,27 @@ func TestUsersetCheck(t *testing.T) {
 	satisfyingRelations := []string{"member", "admin"}
 
 	// DSL version
-	q := dsl.Tuples("grant_tuple").
+	q := sqlgen.Tuples("grant_tuple").
 		ObjectType("document").
 		Relations("viewer").
 		Where(
-			dsl.Eq{dsl.Col{Table: "grant_tuple", Column: "object_id"}, dsl.ObjectID},
-			dsl.Eq{dsl.Col{Table: "grant_tuple", Column: "subject_type"}, dsl.Lit(subjectType)},
-			dsl.HasUserset{dsl.Col{Table: "grant_tuple", Column: "subject_id"}},
-			dsl.Eq{
-				dsl.UsersetRelation{dsl.Col{Table: "grant_tuple", Column: "subject_id"}},
-				dsl.Lit(subjectRelation),
+			sqlgen.Eq{sqlgen.Col{Table: "grant_tuple", Column: "object_id"}, sqlgen.ObjectID},
+			sqlgen.Eq{sqlgen.Col{Table: "grant_tuple", Column: "subject_type"}, sqlgen.Lit(subjectType)},
+			sqlgen.HasUserset{sqlgen.Col{Table: "grant_tuple", Column: "subject_id"}},
+			sqlgen.Eq{
+				sqlgen.UsersetRelation{sqlgen.Col{Table: "grant_tuple", Column: "subject_id"}},
+				sqlgen.Lit(subjectRelation),
 			},
 		).
 		JoinTuples("membership",
-			dsl.Eq{dsl.Col{Table: "membership", Column: "object_type"}, dsl.Lit(subjectType)},
-			dsl.Eq{
-				dsl.Col{Table: "membership", Column: "object_id"},
-				dsl.UsersetObjectID{dsl.Col{Table: "grant_tuple", Column: "subject_id"}},
+			sqlgen.Eq{sqlgen.Col{Table: "membership", Column: "object_type"}, sqlgen.Lit(subjectType)},
+			sqlgen.Eq{
+				sqlgen.Col{Table: "membership", Column: "object_id"},
+				sqlgen.UsersetObjectID{sqlgen.Col{Table: "grant_tuple", Column: "subject_id"}},
 			},
-			dsl.In{Expr: dsl.Col{Table: "membership", Column: "relation"}, Values: satisfyingRelations},
-			dsl.Eq{dsl.Col{Table: "membership", Column: "subject_type"}, dsl.SubjectType},
-			dsl.SubjectIDMatch(dsl.Col{Table: "membership", Column: "subject_id"}, dsl.SubjectID, true),
+			sqlgen.In{Expr: sqlgen.Col{Table: "membership", Column: "relation"}, Values: satisfyingRelations},
+			sqlgen.Eq{sqlgen.Col{Table: "membership", Column: "subject_type"}, sqlgen.SubjectType},
+			sqlgen.SubjectIDMatch(sqlgen.Col{Table: "membership", Column: "subject_id"}, sqlgen.SubjectID, true),
 		).
 		Select("1").
 		Limit(1)
@@ -179,10 +179,10 @@ func TestUsersetCheck(t *testing.T) {
 //	)
 //	notExists, _ := notExistsExpr(subquery)
 func TestExclusionPattern(t *testing.T) {
-	objectIDExpr := dsl.Col{Table: "t", Column: "object_id"}
+	objectIDExpr := sqlgen.Col{Table: "t", Column: "object_id"}
 
 	// DSL version - using SimpleExclusion helper
-	excl := dsl.SimpleExclusion("document", "blocked", objectIDExpr, dsl.SubjectType, dsl.SubjectID)
+	excl := sqlgen.SimpleExclusion("document", "blocked", objectIDExpr, sqlgen.SubjectType, sqlgen.SubjectID)
 
 	sql := excl.SQL()
 
@@ -214,12 +214,12 @@ func TestExclusionPattern(t *testing.T) {
 //	))
 func TestCheckPermissionInternal(t *testing.T) {
 	// DSL version
-	check := dsl.CheckPermission{
-		Subject:  dsl.SubjectParams(),
+	check := sqlgen.CheckPermission{
+		Subject:  sqlgen.SubjectParams(),
 		Relation: "viewer",
-		Object: dsl.ObjectRef{
-			Type: dsl.Lit("document"),
-			ID:   dsl.Col{Table: "t", Column: "object_id"},
+		Object: sqlgen.ObjectRef{
+			Type: sqlgen.Lit("document"),
+			ID:   sqlgen.Col{Table: "t", Column: "object_id"},
 		},
 		ExpectAllow: true,
 	}
@@ -249,27 +249,27 @@ func TestListObjectsUsersetPatternSimple(t *testing.T) {
 	allowWildcard := true
 
 	// DSL version
-	q := dsl.Tuples("t").
+	q := sqlgen.Tuples("t").
 		ObjectType(objectType).
 		Relations(sourceRelations...).
 		Where(
-			dsl.Eq{dsl.Col{Table: "t", Column: "subject_type"}, dsl.Lit(subjectType)},
-			dsl.HasUserset{dsl.Col{Table: "t", Column: "subject_id"}},
-			dsl.Eq{
-				dsl.UsersetRelation{dsl.Col{Table: "t", Column: "subject_id"}},
-				dsl.Lit(subjectRelation),
+			sqlgen.Eq{sqlgen.Col{Table: "t", Column: "subject_type"}, sqlgen.Lit(subjectType)},
+			sqlgen.HasUserset{sqlgen.Col{Table: "t", Column: "subject_id"}},
+			sqlgen.Eq{
+				sqlgen.UsersetRelation{sqlgen.Col{Table: "t", Column: "subject_id"}},
+				sqlgen.Lit(subjectRelation),
 			},
 		).
 		JoinTuples("m",
-			dsl.Eq{dsl.Col{Table: "m", Column: "object_type"}, dsl.Lit(subjectType)},
-			dsl.Eq{
-				dsl.Col{Table: "m", Column: "object_id"},
-				dsl.UsersetObjectID{dsl.Col{Table: "t", Column: "subject_id"}},
+			sqlgen.Eq{sqlgen.Col{Table: "m", Column: "object_type"}, sqlgen.Lit(subjectType)},
+			sqlgen.Eq{
+				sqlgen.Col{Table: "m", Column: "object_id"},
+				sqlgen.UsersetObjectID{sqlgen.Col{Table: "t", Column: "subject_id"}},
 			},
-			dsl.In{Expr: dsl.Col{Table: "m", Column: "relation"}, Values: satisfyingRelations},
-			dsl.Eq{dsl.Col{Table: "m", Column: "subject_type"}, dsl.SubjectType},
-			dsl.In{Expr: dsl.SubjectType, Values: allowedSubjectTypes},
-			dsl.SubjectIDMatch(dsl.Col{Table: "m", Column: "subject_id"}, dsl.SubjectID, allowWildcard),
+			sqlgen.In{Expr: sqlgen.Col{Table: "m", Column: "relation"}, Values: satisfyingRelations},
+			sqlgen.Eq{sqlgen.Col{Table: "m", Column: "subject_type"}, sqlgen.SubjectType},
+			sqlgen.In{Expr: sqlgen.SubjectType, Values: allowedSubjectTypes},
+			sqlgen.SubjectIDMatch(sqlgen.Col{Table: "m", Column: "subject_id"}, sqlgen.SubjectID, allowWildcard),
 		).
 		Select("t.object_id").
 		Distinct()
@@ -299,11 +299,11 @@ func TestListObjectsUsersetPatternSimple(t *testing.T) {
 
 // TestComplexExclusions shows the ExclusionConfig builder.
 func TestComplexExclusions(t *testing.T) {
-	config := dsl.ExclusionConfig{
+	config := sqlgen.ExclusionConfig{
 		ObjectType:      "document",
-		ObjectIDExpr:    dsl.Col{Table: "t", Column: "object_id"},
-		SubjectTypeExpr: dsl.SubjectType,
-		SubjectIDExpr:   dsl.SubjectID,
+		ObjectIDExpr:    sqlgen.Col{Table: "t", Column: "object_id"},
+		SubjectTypeExpr: sqlgen.SubjectType,
+		SubjectIDExpr:   sqlgen.SubjectID,
 		SimpleExcludedRelations: []string{"blocked"},
 		ComplexExcludedRelations: []string{"banned"},
 	}

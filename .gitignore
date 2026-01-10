@@ -41,6 +41,7 @@ __debug_bin*
 
 # Generated files
 *_gen.go
+!tooling/**/*_gen.go
 
 # Documentation
 specs/

@@ -1,6 +1,6 @@
-// Package dsl provides a domain-specific SQL DSL for generating Melange authorization queries.
+// Package sqlgen provides a domain-specific SQL DSL for generating Melange authorization queries.
 // It models authorization concepts directly rather than generic SQL syntax.
-package dsl
+package sqlgen
 
 import (
 	"fmt"

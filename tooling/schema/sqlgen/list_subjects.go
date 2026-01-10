@@ -2,8 +2,6 @@ package sqlgen
 
 import (
 	"fmt"
-
-	"github.com/pthm/melange/tooling/schema/sqlgen/dsl"
 )
 
 type ListSubjectsUsersetFilterInput struct {
@@ -26,38 +24,38 @@ func ListSubjectsUsersetFilterQuery(input ListSubjectsUsersetFilterInput) (strin
 	objectIDExpr := stringToDSLExpr(input.ObjectIDExpr)
 
 	// Build the closure EXISTS subquery
-	closureExistsStmt := dsl.SelectStmt{
+	closureExistsStmt := SelectStmt{
 		Columns: []string{"1"},
 		From:    closureTable,
-		Where: dsl.And(
-			dsl.Eq{Left: dsl.Col{Table: "subj_c", Column: "object_type"}, Right: filterTypeExpr},
-			dsl.Eq{Left: dsl.Col{Table: "subj_c", Column: "relation"}, Right: dsl.SubstringUsersetRelation{Source: dsl.Col{Table: "t", Column: "subject_id"}}},
-			dsl.Eq{Left: dsl.Col{Table: "subj_c", Column: "satisfying_relation"}, Right: filterRelationExpr},
+		Where: And(
+			Eq{Left: Col{Table: "subj_c", Column: "object_type"}, Right: filterTypeExpr},
+			Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: SubstringUsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}},
+			Eq{Left: Col{Table: "subj_c", Column: "satisfying_relation"}, Right: filterRelationExpr},
 		),
 	}
 
 	// Normalized subject expression
 	normalizedSubject := fmt.Sprintf("substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) || '#' || %s AS subject_id", input.FilterRelationExpr)
 
-	conditions := []dsl.Expr{
-		dsl.Eq{Left: dsl.Col{Table: "t", Column: "object_id"}, Right: objectIDExpr},
-		dsl.Eq{Left: dsl.Col{Table: "t", Column: "subject_type"}, Right: filterTypeExpr},
-		dsl.HasUserset{Source: dsl.Col{Table: "t", Column: "subject_id"}},
-		dsl.Or(
-			dsl.Eq{Left: dsl.SubstringUsersetRelation{Source: dsl.Col{Table: "t", Column: "subject_id"}}, Right: filterRelationExpr},
-			dsl.Raw(closureExistsStmt.Exists()),
+	conditions := []Expr{
+		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: objectIDExpr},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: filterTypeExpr},
+		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
+		Or(
+			Eq{Left: SubstringUsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: filterRelationExpr},
+			Raw(closureExistsStmt.Exists()),
 		),
 	}
 
 	if input.UseTypeGuard {
-		conditions = append(conditions, dsl.In{Expr: filterTypeExpr, Values: input.AllowedSubjectTypes})
+		conditions = append(conditions, In{Expr: filterTypeExpr, Values: input.AllowedSubjectTypes})
 	}
 
 	for _, sql := range input.ExtraPredicatesSQL {
-		conditions = append(conditions, dsl.Raw(sql))
+		conditions = append(conditions, Raw(sql))
 	}
 
-	q := dsl.Tuples("t").
+	q := Tuples("t").
 		ObjectType(input.ObjectType).
 		Relations(input.RelationList...).
 		Where(conditions...).
@@ -84,31 +82,31 @@ func ListSubjectsSelfCandidateQuery(input ListSubjectsSelfCandidateInput) (strin
 	filterRelationExpr := stringToDSLExpr(input.FilterRelationExpr)
 
 	// Build the closure EXISTS subquery
-	closureExistsStmt := dsl.SelectStmt{
+	closureExistsStmt := SelectStmt{
 		Columns: []string{"1"},
 		From:    closureTable,
-		Where: dsl.And(
-			dsl.Eq{Left: dsl.Col{Table: "c", Column: "object_type"}, Right: dsl.Lit(input.ObjectType)},
-			dsl.Eq{Left: dsl.Col{Table: "c", Column: "relation"}, Right: dsl.Lit(input.Relation)},
-			dsl.Eq{Left: dsl.Col{Table: "c", Column: "satisfying_relation"}, Right: filterRelationExpr},
+		Where: And(
+			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(input.ObjectType)},
+			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(input.Relation)},
+			Eq{Left: Col{Table: "c", Column: "satisfying_relation"}, Right: filterRelationExpr},
 		),
 	}
 
-	conditions := []dsl.Expr{
-		dsl.Eq{Left: filterTypeExpr, Right: dsl.Lit(input.ObjectType)},
-		dsl.Raw(closureExistsStmt.Exists()),
+	conditions := []Expr{
+		Eq{Left: filterTypeExpr, Right: Lit(input.ObjectType)},
+		Raw(closureExistsStmt.Exists()),
 	}
 
 	for _, sql := range input.ExtraPredicatesSQL {
-		conditions = append(conditions, dsl.Raw(sql))
+		conditions = append(conditions, Raw(sql))
 	}
 
 	// Subject ID output: object_id + '#' + filter_relation
 	subjectIDExpr := fmt.Sprintf("%s || '#' || %s AS subject_id", input.ObjectIDExpr, input.FilterRelationExpr)
 
-	stmt := dsl.SelectStmt{
+	stmt := SelectStmt{
 		Columns: []string{subjectIDExpr},
-		Where:   dsl.And(conditions...),
+		Where:   And(conditions...),
 	}
 
 	return stmt.SQL(), nil
@@ -120,23 +118,23 @@ type ListSubjectsDirectInput struct {
 	ObjectIDExpr    string
 	SubjectTypeExpr string
 	ExcludeWildcard bool
-	Exclusions      dsl.ExclusionConfig
+	Exclusions      ExclusionConfig
 }
 
 func ListSubjectsDirectQuery(input ListSubjectsDirectInput) (string, error) {
 	objectIDExpr := stringToDSLExpr(input.ObjectIDExpr)
 	subjectTypeExpr := stringToDSLExpr(input.SubjectTypeExpr)
 
-	conditions := []dsl.Expr{
-		dsl.Eq{Left: dsl.Col{Table: "t", Column: "object_id"}, Right: objectIDExpr},
-		dsl.Eq{Left: dsl.Col{Table: "t", Column: "subject_type"}, Right: subjectTypeExpr},
+	conditions := []Expr{
+		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: objectIDExpr},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: subjectTypeExpr},
 	}
 
 	if input.ExcludeWildcard {
-		conditions = append(conditions, dsl.Ne{Left: dsl.Col{Table: "t", Column: "subject_id"}, Right: dsl.Lit("*")})
+		conditions = append(conditions, Ne{Left: Col{Table: "t", Column: "subject_id"}, Right: Lit("*")})
 	}
 
-	q := dsl.Tuples("t").
+	q := Tuples("t").
 		ObjectType(input.ObjectType).
 		Relations(input.RelationList...).
 		Where(conditions...).
@@ -157,32 +155,32 @@ type ListSubjectsComplexClosureInput struct {
 	ObjectIDExpr    string
 	SubjectTypeExpr string
 	ExcludeWildcard bool
-	Exclusions      dsl.ExclusionConfig
+	Exclusions      ExclusionConfig
 }
 
 func ListSubjectsComplexClosureQuery(input ListSubjectsComplexClosureInput) (string, error) {
 	objectIDExpr := stringToDSLExpr(input.ObjectIDExpr)
 	subjectTypeExpr := stringToDSLExpr(input.SubjectTypeExpr)
 
-	conditions := []dsl.Expr{
-		dsl.Eq{Left: dsl.Col{Table: "t", Column: "object_id"}, Right: objectIDExpr},
-		dsl.Eq{Left: dsl.Col{Table: "t", Column: "subject_type"}, Right: subjectTypeExpr},
-		dsl.CheckPermission{
-			Subject: dsl.SubjectRef{
+	conditions := []Expr{
+		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: objectIDExpr},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: subjectTypeExpr},
+		CheckPermission{
+			Subject: SubjectRef{
 				Type: subjectTypeExpr,
-				ID:   dsl.Col{Table: "t", Column: "subject_id"},
+				ID:   Col{Table: "t", Column: "subject_id"},
 			},
 			Relation:    input.Relation,
-			Object:      dsl.LiteralObject(input.ObjectType, objectIDExpr),
+			Object:      LiteralObject(input.ObjectType, objectIDExpr),
 			ExpectAllow: true,
 		},
 	}
 
 	if input.ExcludeWildcard {
-		conditions = append(conditions, dsl.Ne{Left: dsl.Col{Table: "t", Column: "subject_id"}, Right: dsl.Lit("*")})
+		conditions = append(conditions, Ne{Left: Col{Table: "t", Column: "subject_id"}, Right: Lit("*")})
 	}
 
-	q := dsl.Tuples("t").
+	q := Tuples("t").
 		ObjectType(input.ObjectType).
 		Relations(input.Relation).
 		Where(conditions...).
@@ -198,7 +196,7 @@ func ListSubjectsComplexClosureQuery(input ListSubjectsComplexClosureInput) (str
 }
 
 func ListSubjectsIntersectionClosureQuery(functionName, subjectTypeExpr string) (string, error) {
-	stmt := dsl.SelectStmt{
+	stmt := SelectStmt{
 		Columns: []string{"*"},
 		From:    functionName + "(p_object_id, " + subjectTypeExpr + ")",
 	}
@@ -209,19 +207,19 @@ func ListSubjectsIntersectionClosureValidatedQuery(objectType, relation, functio
 	checkSubjectType := stringToDSLExpr(checkSubjectTypeExpr)
 	objectID := stringToDSLExpr(objectIDExpr)
 
-	stmt := dsl.SelectStmt{
+	stmt := SelectStmt{
 		Distinct: true,
 		Columns:  []string{"ics.subject_id"},
 		From:     functionName + "(" + objectIDExpr + ", " + functionSubjectTypeExpr + ")",
 		Alias:    "ics",
-		Where: dsl.CheckPermissionCall{
+		Where: CheckPermissionCall{
 			FunctionName: "check_permission",
-			Subject: dsl.SubjectRef{
+			Subject: SubjectRef{
 				Type: checkSubjectType,
-				ID:   dsl.Col{Table: "ics", Column: "subject_id"},
+				ID:   Col{Table: "ics", Column: "subject_id"},
 			},
 			Relation:    relation,
-			Object:      dsl.LiteralObject(objectType, objectID),
+			Object:      LiteralObject(objectType, objectID),
 			ExpectAllow: true,
 		},
 	}
@@ -240,7 +238,7 @@ type ListSubjectsUsersetPatternSimpleInput struct {
 	ExcludeWildcard     bool
 	IsClosurePattern    bool
 	SourceRelation      string
-	Exclusions          dsl.ExclusionConfig
+	Exclusions          ExclusionConfig
 }
 
 func ListSubjectsUsersetPatternSimpleQuery(input ListSubjectsUsersetPatternSimpleInput) (string, error) {
@@ -248,38 +246,38 @@ func ListSubjectsUsersetPatternSimpleQuery(input ListSubjectsUsersetPatternSimpl
 	subjectTypeExpr := stringToDSLExpr(input.SubjectTypeExpr)
 
 	// Join conditions for the userset membership table
-	joinConditions := []dsl.Expr{
-		dsl.Eq{Left: dsl.Col{Table: "s", Column: "object_type"}, Right: dsl.Lit(input.SubjectType)},
-		dsl.Eq{Left: dsl.Col{Table: "s", Column: "object_id"}, Right: dsl.UsersetObjectID{Source: dsl.Col{Table: "t", Column: "subject_id"}}},
-		dsl.In{Expr: dsl.Col{Table: "s", Column: "relation"}, Values: input.SatisfyingRelations},
-		dsl.Eq{Left: dsl.Col{Table: "s", Column: "subject_type"}, Right: subjectTypeExpr},
-		dsl.In{Expr: subjectTypeExpr, Values: input.AllowedSubjectTypes},
+	joinConditions := []Expr{
+		Eq{Left: Col{Table: "s", Column: "object_type"}, Right: Lit(input.SubjectType)},
+		Eq{Left: Col{Table: "s", Column: "object_id"}, Right: UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}}},
+		In{Expr: Col{Table: "s", Column: "relation"}, Values: input.SatisfyingRelations},
+		Eq{Left: Col{Table: "s", Column: "subject_type"}, Right: subjectTypeExpr},
+		In{Expr: subjectTypeExpr, Values: input.AllowedSubjectTypes},
 	}
 
 	if input.ExcludeWildcard {
-		joinConditions = append(joinConditions, dsl.Ne{Left: dsl.Col{Table: "s", Column: "subject_id"}, Right: dsl.Lit("*")})
+		joinConditions = append(joinConditions, Ne{Left: Col{Table: "s", Column: "subject_id"}, Right: Lit("*")})
 	}
 
-	conditions := []dsl.Expr{
-		dsl.Eq{Left: dsl.Col{Table: "t", Column: "object_id"}, Right: objectIDExpr},
-		dsl.Eq{Left: dsl.Col{Table: "t", Column: "subject_type"}, Right: dsl.Lit(input.SubjectType)},
-		dsl.HasUserset{Source: dsl.Col{Table: "t", Column: "subject_id"}},
-		dsl.Eq{Left: dsl.UsersetRelation{Source: dsl.Col{Table: "t", Column: "subject_id"}}, Right: dsl.Lit(input.SubjectRelation)},
+	conditions := []Expr{
+		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: objectIDExpr},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(input.SubjectType)},
+		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
+		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(input.SubjectRelation)},
 	}
 
 	if input.IsClosurePattern {
-		conditions = append(conditions, dsl.CheckPermission{
-			Subject: dsl.SubjectRef{
+		conditions = append(conditions, CheckPermission{
+			Subject: SubjectRef{
 				Type: subjectTypeExpr,
-				ID:   dsl.Col{Table: "s", Column: "subject_id"},
+				ID:   Col{Table: "s", Column: "subject_id"},
 			},
 			Relation:    input.SourceRelation,
-			Object:      dsl.LiteralObject(input.ObjectType, objectIDExpr),
+			Object:      LiteralObject(input.ObjectType, objectIDExpr),
 			ExpectAllow: true,
 		})
 	}
 
-	q := dsl.Tuples("t").
+	q := Tuples("t").
 		ObjectType(input.ObjectType).
 		Relations(input.SourceRelations...).
 		Where(conditions...).
@@ -304,28 +302,28 @@ type ListSubjectsUsersetPatternComplexInput struct {
 	SubjectTypeExpr  string
 	IsClosurePattern bool
 	SourceRelation   string
-	Exclusions       dsl.ExclusionConfig
+	Exclusions       ExclusionConfig
 }
 
 func ListSubjectsUsersetPatternComplexQuery(input ListSubjectsUsersetPatternComplexInput) (string, error) {
 	objectIDExpr := stringToDSLExpr(input.ObjectIDExpr)
 	subjectTypeExpr := stringToDSLExpr(input.SubjectTypeExpr)
 
-	conditions := []dsl.Expr{
-		dsl.Eq{Left: dsl.Col{Table: "t", Column: "object_id"}, Right: objectIDExpr},
-		dsl.Eq{Left: dsl.Col{Table: "t", Column: "subject_type"}, Right: dsl.Lit(input.SubjectType)},
-		dsl.HasUserset{Source: dsl.Col{Table: "t", Column: "subject_id"}},
-		dsl.Eq{Left: dsl.UsersetRelation{Source: dsl.Col{Table: "t", Column: "subject_id"}}, Right: dsl.Lit(input.SubjectRelation)},
+	conditions := []Expr{
+		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: objectIDExpr},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(input.SubjectType)},
+		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
+		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(input.SubjectRelation)},
 	}
 
 	if input.IsClosurePattern {
-		conditions = append(conditions, dsl.CheckPermission{
-			Subject: dsl.SubjectRef{
+		conditions = append(conditions, CheckPermission{
+			Subject: SubjectRef{
 				Type: subjectTypeExpr,
-				ID:   dsl.Col{Table: "s", Column: "subject_id"},
+				ID:   Col{Table: "s", Column: "subject_id"},
 			},
 			Relation:    input.SourceRelation,
-			Object:      dsl.LiteralObject(input.ObjectType, objectIDExpr),
+			Object:      LiteralObject(input.ObjectType, objectIDExpr),
 			ExpectAllow: true,
 		})
 	}
@@ -333,31 +331,31 @@ func ListSubjectsUsersetPatternComplexQuery(input ListSubjectsUsersetPatternComp
 	// Use lateral join with list function
 	listFunction := fmt.Sprintf("list_%s_%s_subjects(split_part(t.subject_id, '#', 1), %s)", input.SubjectType, input.SubjectRelation, input.SubjectTypeExpr)
 
-	stmt := dsl.SelectStmt{
+	stmt := SelectStmt{
 		Distinct: true,
 		Columns:  []string{"s.subject_id"},
 		From:     "melange_tuples",
 		Alias:    "t",
-		Joins: []dsl.JoinClause{
+		Joins: []JoinClause{
 			{
 				Type:  "CROSS",
 				Table: "LATERAL " + listFunction,
 				Alias: "s",
-				On:    dsl.Raw("TRUE"),
+				On:    Raw("TRUE"),
 			},
 		},
-		Where: dsl.And(
-			dsl.Eq{Left: dsl.Col{Table: "t", Column: "object_type"}, Right: dsl.Lit(input.ObjectType)},
-			dsl.In{Expr: dsl.Col{Table: "t", Column: "relation"}, Values: input.SourceRelations},
-			dsl.And(conditions...),
+		Where: And(
+			Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(input.ObjectType)},
+			In{Expr: Col{Table: "t", Column: "relation"}, Values: input.SourceRelations},
+			And(conditions...),
 		),
 	}
 
 	// Add exclusion predicates to WHERE
 	predicates := input.Exclusions.BuildPredicates()
 	if len(predicates) > 0 {
-		allPredicates := append([]dsl.Expr{stmt.Where}, predicates...)
-		stmt.Where = dsl.And(allPredicates...)
+		allPredicates := append([]Expr{stmt.Where}, predicates...)
+		stmt.Where = And(allPredicates...)
 	}
 
 	return stmt.SQL(), nil
@@ -374,7 +372,7 @@ type ListSubjectsUsersetPatternRecursiveComplexInput struct {
 	ExcludeWildcard     bool
 	IsClosurePattern    bool
 	SourceRelation      string
-	Exclusions          dsl.ExclusionConfig
+	Exclusions          ExclusionConfig
 }
 
 func ListSubjectsUsersetPatternRecursiveComplexQuery(input ListSubjectsUsersetPatternRecursiveComplexInput) (string, error) {
@@ -382,49 +380,49 @@ func ListSubjectsUsersetPatternRecursiveComplexQuery(input ListSubjectsUsersetPa
 	subjectTypeExpr := stringToDSLExpr(input.SubjectTypeExpr)
 
 	// Join conditions for the membership table
-	joinConditions := []dsl.Expr{
-		dsl.Eq{Left: dsl.Col{Table: "m", Column: "object_type"}, Right: dsl.Lit(input.SubjectType)},
-		dsl.Eq{Left: dsl.Col{Table: "m", Column: "object_id"}, Right: dsl.UsersetObjectID{Source: dsl.Col{Table: "t", Column: "subject_id"}}},
-		dsl.Eq{Left: dsl.Col{Table: "m", Column: "subject_type"}, Right: subjectTypeExpr},
-		dsl.In{Expr: subjectTypeExpr, Values: input.AllowedSubjectTypes},
+	joinConditions := []Expr{
+		Eq{Left: Col{Table: "m", Column: "object_type"}, Right: Lit(input.SubjectType)},
+		Eq{Left: Col{Table: "m", Column: "object_id"}, Right: UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}}},
+		Eq{Left: Col{Table: "m", Column: "subject_type"}, Right: subjectTypeExpr},
+		In{Expr: subjectTypeExpr, Values: input.AllowedSubjectTypes},
 	}
 
 	if input.ExcludeWildcard {
-		joinConditions = append(joinConditions, dsl.Ne{Left: dsl.Col{Table: "m", Column: "subject_id"}, Right: dsl.Lit("*")})
+		joinConditions = append(joinConditions, Ne{Left: Col{Table: "m", Column: "subject_id"}, Right: Lit("*")})
 	}
 
-	conditions := []dsl.Expr{
-		dsl.Eq{Left: dsl.Col{Table: "t", Column: "object_id"}, Right: objectIDExpr},
-		dsl.Eq{Left: dsl.Col{Table: "t", Column: "subject_type"}, Right: dsl.Lit(input.SubjectType)},
-		dsl.HasUserset{Source: dsl.Col{Table: "t", Column: "subject_id"}},
-		dsl.Eq{Left: dsl.UsersetRelation{Source: dsl.Col{Table: "t", Column: "subject_id"}}, Right: dsl.Lit(input.SubjectRelation)},
-		dsl.CheckPermission{
-			Subject: dsl.SubjectRef{
+	conditions := []Expr{
+		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: objectIDExpr},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(input.SubjectType)},
+		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
+		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(input.SubjectRelation)},
+		CheckPermission{
+			Subject: SubjectRef{
 				Type: subjectTypeExpr,
-				ID:   dsl.Col{Table: "m", Column: "subject_id"},
+				ID:   Col{Table: "m", Column: "subject_id"},
 			},
 			Relation: input.SubjectRelation,
-			Object: dsl.ObjectRef{
-				Type: dsl.Lit(input.SubjectType),
-				ID:   dsl.UsersetObjectID{Source: dsl.Col{Table: "t", Column: "subject_id"}},
+			Object: ObjectRef{
+				Type: Lit(input.SubjectType),
+				ID:   UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}},
 			},
 			ExpectAllow: true,
 		},
 	}
 
 	if input.IsClosurePattern {
-		conditions = append(conditions, dsl.CheckPermission{
-			Subject: dsl.SubjectRef{
+		conditions = append(conditions, CheckPermission{
+			Subject: SubjectRef{
 				Type: subjectTypeExpr,
-				ID:   dsl.Col{Table: "m", Column: "subject_id"},
+				ID:   Col{Table: "m", Column: "subject_id"},
 			},
 			Relation:    input.SourceRelation,
-			Object:      dsl.LiteralObject(input.ObjectType, objectIDExpr),
+			Object:      LiteralObject(input.ObjectType, objectIDExpr),
 			ExpectAllow: true,
 		})
 	}
 
-	q := dsl.Tuples("t").
+	q := Tuples("t").
 		ObjectType(input.ObjectType).
 		Relations(input.SourceRelations...).
 		Where(conditions...).
