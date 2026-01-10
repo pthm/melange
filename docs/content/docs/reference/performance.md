@@ -1,6 +1,6 @@
 ---
 title: Performance
-weight: 2
+weight: 3
 ---
 
 Melange is designed for high-performance permission checking at scale. This page explains the performance characteristics you can expect and how to optimize your setup.

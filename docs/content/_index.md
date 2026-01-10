@@ -62,7 +62,7 @@ layout: hextra-home
     icon="clock"
   >}}
   {{< hextra/feature-card
-    title="Use From Anywhere"
+    title="Language Agnostic"
     subtitle="Go client library included, or call SQL functions directly from any language. Use in triggers, RLS policies, or application code."
     icon="puzzle"
   >}}

@@ -25,15 +25,18 @@ languages:
 
 menu:
   main:
-    - name: Docs
+    - name: Documentation
       pageRef: /docs
       weight: 1
-    - name: Search
+    - name: Updates
+      pageRef: /blog
       weight: 2
+    - name: Search
+      weight: 3
       params:
         type: search
     - name: GitHub
-      weight: 3
+      weight: 4
       url: "https://github.com/pthm/melange"
       params:
         icon: github

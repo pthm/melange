@@ -3,10 +3,13 @@ title: Listing Objects
 weight: 2
 ---
 
-The `ListObjects` method returns all objects of a given type that a subject has a specific relation on. This answers the question: "What can this user access?"
+The `ListObjects` operation returns all objects of a given type that a subject has a specific relation on. This answers the question: "What can this user access?"
 
 ## Basic Usage
 
+{{< tabs items="Go,TypeScript,SQL" >}}
+
+{{< tab >}}
 ```go
 // Find all repositories user can read
 repoIDs, err := checker.ListObjects(ctx,
@@ -20,27 +23,52 @@ if err != nil {
 
 // repoIDs = ["repo-1", "repo-456", "repo-789"]
 ```
+{{< /tab >}}
+
+{{< tab >}}
+```typescript
+// Find all repositories user can read
+const { rows } = await pool.query(
+  'SELECT * FROM list_accessible_objects($1, $2, $3, $4)',
+  ['user', '123', 'can_read', 'repository']
+);
+const repoIds = rows.map(row => row.object_id);
+
+// repoIds = ["repo-1", "repo-456", "repo-789"]
+```
+{{< /tab >}}
+
+{{< tab >}}
+```sql
+-- Get all documents user 123 can view
+SELECT * FROM list_accessible_objects('user', '123', 'viewer', 'document');
+
+-- Returns a table with object_id column
+```
+{{< /tab >}}
+
+{{< /tabs >}}
 
 ## Parameters
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `ctx` | `context.Context` | Request context |
-| `subject` | `SubjectLike` | The subject (who) |
-| `relation` | `RelationLike` | The relation to check |
-| `objectType` | `ObjectType` | Type of objects to return |
+| `subject_type` | `text` | Type of the subject (e.g., `'user'`) |
+| `subject_id` | `text` | ID of the subject |
+| `relation` | `text` | The relation to check |
+| `object_type` | `text` | Type of objects to return |
 
 ## Return Value
 
-Returns `([]string, error)`:
-- Slice of object IDs that the subject has the relation on
-- Empty slice if no objects found (not an error)
-- Error if database query fails
+Returns a list of object IDs that the subject has the relation on. Empty list if no objects found (not an error).
 
 ## Examples
 
 ### Filter a List of Resources
 
+{{< tabs items="Go,TypeScript,SQL" >}}
+
+{{< tab >}}
 ```go
 // Get all repositories from your data layer
 repos, err := db.GetAllRepositories(ctx)
@@ -68,9 +96,42 @@ for _, repo := range repos {
     }
 }
 ```
+{{< /tab >}}
+
+{{< tab >}}
+```typescript
+// Get all repositories from your data layer
+const repos = await db.getAllRepositories();
+
+// Get IDs the user can access
+const { rows } = await pool.query(
+  'SELECT * FROM list_accessible_objects($1, $2, $3, $4)',
+  ['user', userId, 'can_read', 'repository']
+);
+const accessibleIds = new Set(rows.map(r => r.object_id));
+
+// Filter to only accessible repos
+const visibleRepos = repos.filter(repo => accessibleIds.has(repo.id));
+```
+{{< /tab >}}
+
+{{< tab >}}
+```sql
+-- Join with domain table to get full records
+SELECT d.*
+FROM documents d
+JOIN list_accessible_objects('user', '123', 'viewer', 'document') a
+    ON d.id::text = a.object_id;
+```
+{{< /tab >}}
+
+{{< /tabs >}}
 
 ### Fetch Only Accessible Resources
 
+{{< tabs items="Go,TypeScript,SQL" >}}
+
+{{< tab >}}
 ```go
 // Get accessible IDs first
 ids, err := checker.ListObjects(ctx, user, "can_read", "document")
@@ -86,9 +147,41 @@ if len(ids) == 0 {
 docs, err := db.GetDocumentsByIDs(ctx, ids)
 return docs, err
 ```
+{{< /tab >}}
+
+{{< tab >}}
+```typescript
+// Get accessible IDs first
+const { rows } = await pool.query(
+  'SELECT * FROM list_accessible_objects($1, $2, $3, $4)',
+  ['user', userId, 'can_read', 'document']
+);
+const ids = rows.map(r => r.object_id);
+
+if (ids.length === 0) {
+  return [];
+}
+
+// Query only those documents
+const docs = await db.getDocumentsByIds(ids);
+return docs;
+```
+{{< /tab >}}
+
+{{< tab >}}
+```sql
+-- Count accessible objects
+SELECT COUNT(*) FROM list_accessible_objects('user', '123', 'viewer', 'document');
+```
+{{< /tab >}}
+
+{{< /tabs >}}
 
 ### Check Multiple Permissions
 
+{{< tabs items="Go,TypeScript" >}}
+
+{{< tab >}}
 ```go
 type RepoWithPermissions struct {
     Repository
@@ -138,6 +231,42 @@ for _, repo := range repos {
     })
 }
 ```
+{{< /tab >}}
+
+{{< tab >}}
+```typescript
+interface RepoWithPermissions {
+  id: string;
+  name: string;
+  canRead: boolean;
+  canWrite: boolean;
+  canDelete: boolean;
+}
+
+// Fetch all permission sets in parallel
+const [readRows, writeRows, deleteRows] = await Promise.all([
+  pool.query('SELECT * FROM list_accessible_objects($1, $2, $3, $4)', ['user', userId, 'can_read', 'repository']),
+  pool.query('SELECT * FROM list_accessible_objects($1, $2, $3, $4)', ['user', userId, 'can_write', 'repository']),
+  pool.query('SELECT * FROM list_accessible_objects($1, $2, $3, $4)', ['user', userId, 'can_delete', 'repository']),
+]);
+
+// Build permission sets
+const canRead = new Set(readRows.rows.map(r => r.object_id));
+const canWrite = new Set(writeRows.rows.map(r => r.object_id));
+const canDelete = new Set(deleteRows.rows.map(r => r.object_id));
+
+// Annotate repos with permissions
+const result: RepoWithPermissions[] = repos.map(repo => ({
+  id: repo.id,
+  name: repo.name,
+  canRead: canRead.has(repo.id),
+  canWrite: canWrite.has(repo.id),
+  canDelete: canDelete.has(repo.id),
+}));
+```
+{{< /tab >}}
+
+{{< /tabs >}}
 
 ## Performance Characteristics
 
@@ -158,8 +287,6 @@ Performance scales linearly with the number of tuples. For large datasets:
 
 ## Decision Override Behavior
 
-When using decision overrides:
-
 | Decision | Behavior |
 |----------|----------|
 | `DecisionUnset` | Normal database query |
@@ -170,10 +297,11 @@ Note: `DecisionAllow` cannot enumerate "all" objects, so it performs the normal 
 
 ## Caching
 
-`ListObjects` does **not** use the permission cache (configured via `WithCache`). The cache is designed for single-tuple checks, not list operations.
+`ListObjects` does **not** use the single-tuple permission cache. For caching list results, implement application-level caching:
 
-For caching list results, implement application-level caching:
+{{< tabs items="Go,TypeScript" >}}
 
+{{< tab >}}
 ```go
 type CachedChecker struct {
     *melange.Checker
@@ -201,11 +329,51 @@ func (c *CachedChecker) ListObjects(ctx context.Context, subject SubjectLike, re
     return ids, nil
 }
 ```
+{{< /tab >}}
+
+{{< tab >}}
+```typescript
+import { LRUCache } from 'lru-cache';
+
+const listCache = new LRUCache<string, string[]>({
+  max: 1000,
+  ttl: 60 * 1000, // 1 minute
+});
+
+async function listObjectsCached(
+  subjectType: string,
+  subjectId: string,
+  relation: string,
+  objectType: string
+): Promise<string[]> {
+  const key = `list:${subjectType}:${subjectId}:${relation}:${objectType}`;
+
+  const cached = listCache.get(key);
+  if (cached) {
+    return cached;
+  }
+
+  const { rows } = await pool.query(
+    'SELECT * FROM list_accessible_objects($1, $2, $3, $4)',
+    [subjectType, subjectId, relation, objectType]
+  );
+  const ids = rows.map(r => r.object_id);
+
+  listCache.set(key, ids);
+  return ids;
+}
+```
+{{< /tab >}}
+
+{{< /tabs >}}
 
 ## Common Patterns
 
 ### Paginated Access Control
 
+{{< tabs items="Go,TypeScript" >}}
+
+{{< tab >}}
 ```go
 func GetAccessibleRepos(ctx context.Context, user User, page, pageSize int) ([]Repository, error) {
     // Get all accessible IDs
@@ -229,9 +397,42 @@ func GetAccessibleRepos(ctx context.Context, user User, page, pageSize int) ([]R
     return db.GetRepositoriesByIDs(ctx, pageIDs)
 }
 ```
+{{< /tab >}}
+
+{{< tab >}}
+```typescript
+async function getAccessibleRepos(
+  userId: string,
+  page: number,
+  pageSize: number
+): Promise<Repository[]> {
+  // Get all accessible IDs
+  const { rows } = await pool.query(
+    'SELECT * FROM list_accessible_objects($1, $2, $3, $4)',
+    ['user', userId, 'can_read', 'repository']
+  );
+  const allIds = rows.map(r => r.object_id);
+
+  // Paginate the IDs
+  const start = page * pageSize;
+  if (start >= allIds.length) {
+    return [];
+  }
+  const pageIds = allIds.slice(start, start + pageSize);
+
+  // Fetch only the page of repos
+  return db.getRepositoriesByIds(pageIds);
+}
+```
+{{< /tab >}}
+
+{{< /tabs >}}
 
 ### Admin Override
 
+{{< tabs items="Go,TypeScript" >}}
+
+{{< tab >}}
 ```go
 func GetVisibleRepos(ctx context.Context, user User, isAdmin bool) ([]Repository, error) {
     if isAdmin {
@@ -248,6 +449,29 @@ func GetVisibleRepos(ctx context.Context, user User, isAdmin bool) ([]Repository
     return db.GetRepositoriesByIDs(ctx, ids)
 }
 ```
+{{< /tab >}}
+
+{{< tab >}}
+```typescript
+async function getVisibleRepos(userId: string, isAdmin: boolean): Promise<Repository[]> {
+  if (isAdmin) {
+    // Admins see everything
+    return db.getAllRepositories();
+  }
+
+  // Regular users see only accessible repos
+  const { rows } = await pool.query(
+    'SELECT * FROM list_accessible_objects($1, $2, $3, $4)',
+    ['user', userId, 'can_read', 'repository']
+  );
+  const ids = rows.map(r => r.object_id);
+
+  return db.getRepositoriesByIds(ids);
+}
+```
+{{< /tab >}}
+
+{{< /tabs >}}
 
 ## See Also
 
