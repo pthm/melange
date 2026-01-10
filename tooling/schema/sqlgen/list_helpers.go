@@ -4,26 +4,7 @@ import (
 	"fmt"
 
 	"github.com/pthm/melange/tooling/schema/sqlgen/dsl"
-	"github.com/stephenafamo/bob/dialect/psql"
 )
-
-// CheckPermissionInternalExpr returns a Bob expression for a check_permission_internal call.
-// This is used in places where Bob query builders need Bob expressions directly.
-func CheckPermissionInternalExpr(subjectTypeExpr, subjectIDExpr, relation, objectTypeExpr, objectIDExpr string, expect bool) psql.Expression {
-	result := "1"
-	if !expect {
-		result = "0"
-	}
-	return psql.Raw(fmt.Sprintf(
-		"check_permission_internal(%s, %s, '%s', %s, %s, ARRAY[]::TEXT[]) = %s",
-		subjectTypeExpr,
-		subjectIDExpr,
-		relation,
-		objectTypeExpr,
-		objectIDExpr,
-		result,
-	))
-}
 
 // toDSLExclusionConfig converts ExclusionInput to dsl.ExclusionConfig
 func toDSLExclusionConfig(input ExclusionInput) dsl.ExclusionConfig {

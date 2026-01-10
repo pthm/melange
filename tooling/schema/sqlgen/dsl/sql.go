@@ -87,18 +87,24 @@ type SelectStmt struct {
 func (s SelectStmt) SQL() string {
 	return sqlf(`
 		SELECT %s%s
-		FROM %s%s
+		%s
 		%s
 		%s
 		%s`,
 		optf(s.Distinct, "DISTINCT "),
 		strings.Join(s.Columns, ", "),
-		s.From,
-		optf(s.Alias != "", " AS %s", s.Alias),
+		s.fromSQL(),
 		s.joinsSQL(),
 		s.whereSQL(),
 		s.limitSQL(),
 	)
+}
+
+func (s SelectStmt) fromSQL() string {
+	if s.From == "" {
+		return ""
+	}
+	return fmt.Sprintf("FROM %s%s", s.From, optf(s.Alias != "", " AS %s", s.Alias))
 }
 
 func (s SelectStmt) joinsSQL() string {
