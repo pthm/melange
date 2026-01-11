@@ -29,9 +29,6 @@ require (
 	sigs.k8s.io/yaml v1.6.0
 )
 
-// Use local melange module during development
-replace github.com/pthm/melange/melange => ./melange
-
 require (
 	4d63.com/gocheckcompilerdirectives v1.3.0 // indirect
 	4d63.com/gochecknoglobals v0.2.2 // indirect
