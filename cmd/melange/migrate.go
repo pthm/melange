@@ -15,10 +15,10 @@ import (
 )
 
 var (
-	migrateDB      string
-	migrateSchema  string
-	migrateDryRun  bool
-	migrateForce   bool
+	migrateDB     string
+	migrateSchema string
+	migrateDryRun bool
+	migrateForce  bool
 )
 
 var migrateCmd = &cobra.Command{

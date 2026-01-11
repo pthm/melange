@@ -2,7 +2,6 @@
 package testutil
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -115,13 +114,19 @@ func runCodegen() error {
 	}
 
 	// Generate the code
-	var buf bytes.Buffer
-	cfg := &clientgen.GenerateConfig{
+	cfg := &clientgen.Config{
 		Package: "authz",
 		IDType:  "int64",
 	}
-	if err := clientgen.GenerateGo(&buf, types, cfg); err != nil {
+	files, err := clientgen.Generate("go", types, cfg)
+	if err != nil {
 		return fmt.Errorf("generate code: %w", err)
+	}
+	// Get the generated content (single file for Go)
+	var content []byte
+	for _, c := range files {
+		content = c
+		break
 	}
 
 	// Write to the authz package (test/authz from test/testutil)
@@ -131,7 +136,7 @@ func runCodegen() error {
 	}
 
 	outPath := filepath.Join(authzDir, "schema_gen.go")
-	if err := os.WriteFile(outPath, buf.Bytes(), 0o644); err != nil {
+	if err := os.WriteFile(outPath, content, 0o644); err != nil {
 		return fmt.Errorf("write generated code: %w", err)
 	}
 

@@ -469,10 +469,11 @@ func ListSubjectsSelfCandidateQuery(input ListSubjectsSelfCandidateInput) (strin
 		),
 	}
 
-	conditions := []Expr{
+	conditions := make([]Expr, 0, 2+len(input.ExtraPredicatesSQL))
+	conditions = append(conditions,
 		Eq{Left: filterTypeExpr, Right: Lit(input.ObjectType)},
 		ExistsExpr(closureExistsStmt),
-	}
+	)
 
 	for _, sql := range input.ExtraPredicatesSQL {
 		conditions = append(conditions, Raw(sql))

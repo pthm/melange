@@ -230,7 +230,7 @@ func (s Sub) SQL() string {
 // Takes the object_id from subjectID and combines with the given relation.
 // Example: NormalizedUsersetSubject(Col{Column: "subject_id"}, Raw("v_filter_relation"))
 // SQL: split_part(subject_id, '#', 1) || '#' || v_filter_relation
-func NormalizedUsersetSubject(subjectID Expr, relation Expr) Expr {
+func NormalizedUsersetSubject(subjectID, relation Expr) Expr {
 	return Concat{Parts: []Expr{
 		UsersetObjectID{Source: subjectID},
 		Lit("#"),
@@ -271,6 +271,6 @@ func UsersetRef(objectID, relation Expr) Expr {
 // UsersetRefFromSubject creates a normalized userset from a subject_id column.
 // Extracts the object part from subject_id and combines with the given relation.
 // Equivalent to: split_part(subject_id, '#', 1) || '#' || relation
-func UsersetRefFromSubject(subjectID Expr, relation Expr) Expr {
+func UsersetRefFromSubject(subjectID, relation Expr) Expr {
 	return NormalizedUsersetSubject(subjectID, relation)
 }

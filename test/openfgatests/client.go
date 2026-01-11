@@ -482,8 +482,8 @@ func (c *Client) loadModel(ctx context.Context, db *sql.DB, m *model) error {
 
 	// Use the Migrator to apply generated SQL for this model
 	// The empty string for schemasDir is fine since we're using MigrateWithTypes directly
-	migrator := migrator.NewMigrator(db, "")
-	return migrator.MigrateWithTypes(ctx, m.types)
+	mig := migrator.NewMigrator(db, "")
+	return mig.MigrateWithTypes(ctx, m.types)
 }
 
 // refreshTuples updates the melange_tuples view with the current store tuples.

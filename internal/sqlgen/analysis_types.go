@@ -10,12 +10,12 @@ import (
 // Type aliases for schema types used in analysis.
 // This avoids prefixing every usage with "schema." throughout this file.
 type (
-	TypeDefinition       = schema.TypeDefinition
-	RelationDefinition   = schema.RelationDefinition
-	SubjectTypeRef       = schema.SubjectTypeRef
-	ClosureRow           = schema.ClosureRow
-	IntersectionGroup    = schema.IntersectionGroup
-	ParentRelationCheck  = schema.ParentRelationCheck
+	TypeDefinition      = schema.TypeDefinition
+	RelationDefinition  = schema.RelationDefinition
+	SubjectTypeRef      = schema.SubjectTypeRef
+	ClosureRow          = schema.ClosureRow
+	IntersectionGroup   = schema.IntersectionGroup
+	ParentRelationCheck = schema.ParentRelationCheck
 )
 
 // Function alias for schema.ComputeRelationClosure.

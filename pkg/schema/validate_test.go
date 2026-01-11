@@ -1,7 +1,6 @@
 package schema_test
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"strings"
@@ -265,8 +264,7 @@ func TestGenerateGo_RejectsCyclicSchema(t *testing.T) {
 		},
 	}
 
-	var buf bytes.Buffer
-	err := clientgen.GenerateGo(&buf, types, nil)
+	_, err := clientgen.Generate("go", types, nil)
 	if err == nil {
 		t.Fatal("expected error for cyclic schema")
 	}

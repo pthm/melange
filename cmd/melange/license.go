@@ -21,16 +21,15 @@ var licenseCmd = &cobra.Command{
 }
 
 func printPrimaryLicense(out io.Writer) {
-	fmt.Fprintln(out, "Melange License")
-	fmt.Fprintln(out)
-	fmt.Fprintln(out, licenses.LicenseText())
-	fmt.Fprintln(out)
+	_, _ = fmt.Fprintln(out, "Melange License")
+	_, _ = fmt.Fprintln(out)
+	_, _ = fmt.Fprintln(out, licenses.LicenseText())
+	_, _ = fmt.Fprintln(out)
 }
 
-func printThirdPartyEmbedded(out io.Writer) error {
-	fmt.Fprintln(out, "Third-Party Notices")
-	fmt.Fprintln(out)
-	fmt.Fprintln(out, licenses.ThirdPartyText())
-	fmt.Fprintln(out)
-	return nil
+func printThirdPartyEmbedded(out io.Writer) {
+	_, _ = fmt.Fprintln(out, "Third-Party Notices")
+	_, _ = fmt.Fprintln(out)
+	_, _ = fmt.Fprintln(out, licenses.ThirdPartyText())
+	_, _ = fmt.Fprintln(out)
 }

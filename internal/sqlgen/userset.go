@@ -87,7 +87,7 @@ func (w IsWildcard) SQL() string {
 // SubjectIDMatch creates a condition for matching subject IDs.
 // If allowWildcard is true, matches either exact ID or wildcard.
 // If allowWildcard is false, matches exact ID and excludes wildcards.
-func SubjectIDMatch(column Expr, subjectID Expr, allowWildcard bool) Expr {
+func SubjectIDMatch(column, subjectID Expr, allowWildcard bool) Expr {
 	if allowWildcard {
 		return Or(
 			Eq{Left: column, Right: subjectID},

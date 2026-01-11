@@ -99,8 +99,8 @@ func (b *SQLBuilder) String() string {
 // Joiner accumulates clauses and joins them with a separator,
 // automatically filtering out empty strings.
 type Joiner struct {
-	sep    string
-	parts  []string
+	sep   string
+	parts []string
 }
 
 // NewJoiner creates a Joiner with the given separator.

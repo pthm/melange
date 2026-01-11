@@ -22,9 +22,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/pthm/melange/pkg/parser"
 	"github.com/pthm/melange/internal/sqlgen"
 	"github.com/pthm/melange/pkg/migrator"
+	"github.com/pthm/melange/pkg/parser"
 	"github.com/pthm/melange/pkg/schema"
 )
 

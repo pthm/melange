@@ -35,7 +35,7 @@ func TestListObjectsDirectQuery(t *testing.T) {
 		Relations("viewer", "editor").
 		WhereSubjectType(sqlgen.SubjectType).
 		Where(sqlgen.In{Expr: sqlgen.SubjectType, Values: []string{"user", "group"}}).
-		WhereSubjectID(sqlgen.SubjectID, true). // allowWildcard = true
+		WhereSubjectID(sqlgen.SubjectID, true).
 		Select("t.object_id").
 		Distinct()
 

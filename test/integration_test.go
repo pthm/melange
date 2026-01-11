@@ -69,8 +69,8 @@ func TestMigrator_GetStatus(t *testing.T) {
 	db := testutil.DB(t)
 	ctx := context.Background()
 
-	migrator := migrator.NewMigrator(db, "testdata")
-	status, err := migrator.GetStatus(ctx)
+	m := migrator.NewMigrator(db, "testdata")
+	status, err := m.GetStatus(ctx)
 	require.NoError(t, err)
 
 	// Template database has tuples relation
