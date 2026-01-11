@@ -46,9 +46,10 @@ type ListPlan struct {
 	Strategy     ListStrategy
 
 	// Additional flags for routing
-	HasUsersetSubject  bool // Has userset subject matching capability
-	HasUsersetPatterns bool // Has userset patterns to expand
-	HasComplexUsersets bool // Has userset patterns requiring check_permission calls
+	HasUsersetSubject   bool // Has userset subject matching capability
+	HasUsersetPatterns  bool // Has userset patterns to expand
+	HasComplexUsersets  bool // Has userset patterns requiring check_permission calls
+	HasStandaloneAccess bool // Has standalone access paths (not constrained by intersection)
 }
 
 // BuildListObjectsPlan creates a plan for generating a list_objects function.
@@ -81,9 +82,10 @@ func BuildListObjectsPlan(a RelationAnalysis, inline InlineSQLData) ListPlan {
 		Strategy:     a.ListStrategy,
 
 		// Routing flags
-		HasUsersetSubject:  a.Features.HasUserset || len(a.ClosureUsersetPatterns) > 0,
-		HasUsersetPatterns: len(buildListUsersetPatternInputs(a)) > 0,
-		HasComplexUsersets: a.HasComplexUsersetPatterns,
+		HasUsersetSubject:   a.Features.HasUserset || len(a.ClosureUsersetPatterns) > 0,
+		HasUsersetPatterns:  len(buildListUsersetPatternInputs(a)) > 0,
+		HasComplexUsersets:  a.HasComplexUsersetPatterns,
+		HasStandaloneAccess: computeHasStandaloneAccess(a),
 	}
 
 	// Configure exclusions if the relation has exclusion features
@@ -129,9 +131,10 @@ func BuildListSubjectsPlan(a RelationAnalysis, inline InlineSQLData) ListPlan {
 		Strategy:     a.ListStrategy,
 
 		// Routing flags
-		HasUsersetSubject:  a.Features.HasUserset || len(a.ClosureUsersetPatterns) > 0,
-		HasUsersetPatterns: len(buildListUsersetPatternInputs(a)) > 0,
-		HasComplexUsersets: a.HasComplexUsersetPatterns,
+		HasUsersetSubject:   a.Features.HasUserset || len(a.ClosureUsersetPatterns) > 0,
+		HasUsersetPatterns:  len(buildListUsersetPatternInputs(a)) > 0,
+		HasComplexUsersets:  a.HasComplexUsersetPatterns,
+		HasStandaloneAccess: computeHasStandaloneAccess(a),
 	}
 
 	// Configure exclusions if the relation has exclusion features

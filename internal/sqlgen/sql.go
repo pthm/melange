@@ -72,11 +72,19 @@ func (j JoinClause) SQL() string {
 			tableSQL += " AS " + j.Alias
 		}
 	}
-	// CROSS JOIN doesn't have an ON clause
-	if j.Type == "CROSS" || j.On == nil {
-		return j.Type + " JOIN " + tableSQL
+
+	// Determine join keyword - don't add "JOIN" if Type already contains it
+	// (e.g., "CROSS JOIN LATERAL" should not become "CROSS JOIN LATERAL JOIN")
+	joinKeyword := j.Type + " JOIN"
+	if strings.Contains(j.Type, "JOIN") {
+		joinKeyword = j.Type
 	}
-	return j.Type + " JOIN " + tableSQL + " ON " + j.On.SQL()
+
+	// CROSS JOIN doesn't have an ON clause
+	if j.Type == "CROSS" || strings.HasPrefix(j.Type, "CROSS") || j.On == nil {
+		return joinKeyword + " " + tableSQL
+	}
+	return joinKeyword + " " + tableSQL + " ON " + j.On.SQL()
 }
 
 // SelectStmt represents a SELECT query.
@@ -171,6 +179,41 @@ func (s SelectStmt) Exists() string {
 // NotExists wraps a query in NOT EXISTS(...).
 func (s SelectStmt) NotExists() string {
 	return fmt.Sprintf("NOT EXISTS (\n%s\n)", s.SQL())
+}
+
+// =============================================================================
+// Intersect Subqueries
+// =============================================================================
+
+// IntersectSubquery represents an INTERSECT of multiple queries as a subquery.
+// Used for intersection groups where all parts must be satisfied.
+//
+// Example: IntersectSubquery{Queries: [q1, q2], Alias: "ig"}
+// Renders: (q1 INTERSECT q2) AS ig
+type IntersectSubquery struct {
+	Queries []SelectStmt
+	Alias   string
+}
+
+// TableSQL renders the INTERSECT subquery as a FROM clause table expression.
+func (i IntersectSubquery) TableSQL() string {
+	if len(i.Queries) == 0 {
+		return ""
+	}
+	if len(i.Queries) == 1 {
+		return "(" + i.Queries[0].SQL() + ") AS " + i.Alias
+	}
+
+	var parts []string
+	for _, q := range i.Queries {
+		parts = append(parts, q.SQL())
+	}
+	return "(\n" + strings.Join(parts, "\nINTERSECT\n") + "\n) AS " + i.Alias
+}
+
+// TableAlias implements TableExpr.
+func (i IntersectSubquery) TableAlias() string {
+	return i.Alias
 }
 
 // =============================================================================

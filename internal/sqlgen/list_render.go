@@ -122,6 +122,11 @@ func renderListObjectsFunctionSQL(plan ListPlan, query string) string {
 
 // renderUsersetFilterThenBranch builds the THEN branch statements for userset filter path.
 func renderUsersetFilterThenBranch(usersetFilterPaginatedQuery string) []Stmt {
+	// If there are no userset filter blocks, just return empty results
+	if usersetFilterPaginatedQuery == "" {
+		return []Stmt{Return{}}
+	}
+
 	// v_filter_type := substring(p_subject_type from 1 for position('#' in p_subject_type) - 1)
 	filterTypeAssign := Assign{
 		Name: "v_filter_type",

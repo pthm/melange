@@ -87,8 +87,16 @@ func listSubjectsFunctionName(objectType, relation string) string {
 func generateListObjectsFunction(a RelationAnalysis, inline InlineSQLData) (string, error) {
 	// Route to appropriate generator based on ListStrategy
 	switch a.ListStrategy {
-	case ListStrategyDirect, ListStrategyUserset, ListStrategyRecursive, ListStrategyIntersection:
-		// These strategies all use the unified ListObjectsBuilder
+	case ListStrategyDirect, ListStrategyUserset, ListStrategyIntersection:
+		// Use unified Plan → Blocks → Render architecture
+		plan := BuildListObjectsPlan(a, inline)
+		blocks, err := BuildListObjectsBlocks(plan)
+		if err != nil {
+			return "", err
+		}
+		return RenderListObjectsFunction(plan, blocks)
+	case ListStrategyRecursive:
+		// Use legacy builder for TTU patterns until new implementation adds TTU block support
 		return NewListObjectsBuilder(a, inline).Build()
 	case ListStrategyDepthExceeded:
 		return generateListObjectsDepthExceededFunction(a), nil

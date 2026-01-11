@@ -325,11 +325,6 @@ test-openfga-full-check:
     cd {{TEST}} && {{GO_TEST}} -count=1 -timeout {{OPENFGA_TEST_TIMEOUT_LONG}} \
         -run "TestOpenFGACheckSuite" {{OPENFGA_PKGS}} || true
 
-# Install gotestfmt if not already installed
-[group('OpenFGA Test')]
-install-gotestfmt:
-    go install github.com/gotesttools/gotestfmt/v2/cmd/gotestfmt@latest
-
 # =============================================================================
 # OpenFGA Benchmarks
 # =============================================================================
