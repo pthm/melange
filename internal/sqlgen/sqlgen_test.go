@@ -227,6 +227,103 @@ func TestSubjectIDMatch(t *testing.T) {
 	}
 }
 
+func TestStringFunctions(t *testing.T) {
+	tests := []struct {
+		name   string
+		expr   Expr
+		expect string
+	}{
+		// Concat
+		{
+			name:   "concat two parts",
+			expr:   Concat{Parts: []Expr{Col{Column: "a"}, Lit("b")}},
+			expect: "a || 'b'",
+		},
+		{
+			name:   "concat multiple",
+			expr:   Concat{Parts: []Expr{Col{Column: "a"}, Lit("#"), Col{Column: "b"}}},
+			expect: "a || '#' || b",
+		},
+		{
+			name:   "concat empty",
+			expr:   Concat{Parts: []Expr{}},
+			expect: "''",
+		},
+
+		// Position
+		{
+			name:   "position",
+			expr:   Position{Needle: Lit("#"), Haystack: Col{Table: "t", Column: "subject_id"}},
+			expect: "position('#' in t.subject_id)",
+		},
+		{
+			name:   "position with param",
+			expr:   Position{Needle: Lit("#"), Haystack: SubjectID},
+			expect: "position('#' in p_subject_id)",
+		},
+
+		// Substring without For
+		{
+			name:   "substring from",
+			expr:   Substring{Source: Col{Column: "text"}, From: Int(5)},
+			expect: "substring(text from 5)",
+		},
+		{
+			name:   "substring with position",
+			expr:   Substring{Source: SubjectID, From: Position{Needle: Lit("#"), Haystack: SubjectID}},
+			expect: "substring(p_subject_id from position('#' in p_subject_id))",
+		},
+
+		// Substring with For
+		{
+			name:   "substring from for",
+			expr:   Substring{Source: Col{Column: "text"}, From: Int(1), For: Int(10)},
+			expect: "substring(text from 1 for 10)",
+		},
+
+		// UsersetNormalized
+		{
+			name:   "userset normalized",
+			expr:   UsersetNormalized{Source: Col{Table: "t", Column: "subject_id"}, Relation: Raw("v_filter_relation")},
+			expect: "substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) || '#' || v_filter_relation",
+		},
+		{
+			name:   "userset normalized with literal",
+			expr:   UsersetNormalized{Source: SubjectID, Relation: Lit("member")},
+			expect: "substring(p_subject_id from 1 for position('#' in p_subject_id) - 1) || '#' || 'member'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.expr.SQL()
+			if got != tt.expect {
+				t.Errorf("SQL() = %q, want %q", got, tt.expect)
+			}
+		})
+	}
+}
+
+func TestHelpers(t *testing.T) {
+	// ParamRef
+	p := ParamRef("v_filter_type")
+	if got := p.SQL(); got != "v_filter_type" {
+		t.Errorf("ParamRef.SQL() = %q, want %q", got, "v_filter_type")
+	}
+
+	// LitText
+	l := LitText("document")
+	if got := l.SQL(); got != "'document'" {
+		t.Errorf("LitText.SQL() = %q, want %q", got, "'document'")
+	}
+
+	// LitText with quote
+	l2 := LitText("it's a test")
+	if got := l2.SQL(); got != "'it''s a test'" {
+		t.Errorf("LitText.SQL() = %q, want %q", got, "'it''s a test'")
+	}
+}
+
 func TestCheckPermission(t *testing.T) {
 	check := CheckPermission{
 		Subject:     SubjectParams(),

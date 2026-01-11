@@ -27,6 +27,19 @@ var (
 	Visited     = Param("p_visited")
 )
 
+// ParamRef creates a Param from a variable name.
+// Use this for local PL/pgSQL variables (e.g., "v_filter_type", "v_filter_relation").
+func ParamRef(name string) Param {
+	return Param(name)
+}
+
+// LitText creates a Lit from a string value.
+// This is an explicit alias for Lit, useful when the intent is to create a text literal.
+// Example: LitText("document") renders as 'document'
+func LitText(v string) Lit {
+	return Lit(v)
+}
+
 // Col represents a table column reference (e.g., t.object_id).
 type Col struct {
 	Table  string
@@ -149,6 +162,52 @@ func (c Concat) SQL() string {
 		parts[i] = p.SQL()
 	}
 	return strings.Join(parts, " || ")
+}
+
+// Position represents SQL position(needle in haystack).
+// Returns the position of the first occurrence of needle in haystack.
+type Position struct {
+	Needle   Expr
+	Haystack Expr
+}
+
+// SQL renders the position expression.
+func (p Position) SQL() string {
+	return "position(" + p.Needle.SQL() + " in " + p.Haystack.SQL() + ")"
+}
+
+// Substring represents SQL substring(source from start [for length]).
+// If For is nil, renders substring(source from start).
+// If For is provided, renders substring(source from start for length).
+type Substring struct {
+	Source Expr
+	From   Expr
+	For    Expr // optional
+}
+
+// SQL renders the substring expression.
+func (s Substring) SQL() string {
+	if s.For == nil {
+		return "substring(" + s.Source.SQL() + " from " + s.From.SQL() + ")"
+	}
+	return "substring(" + s.Source.SQL() + " from " + s.From.SQL() + " for " + s.For.SQL() + ")"
+}
+
+// UsersetNormalized extracts the object ID from a userset and combines with a new relation.
+// Renders: substring(source from 1 for position('#' in source) - 1) || '#' || relation
+// Example: "group:1#admin" with relation "member" -> "group:1#member"
+// This is used to normalize userset subjects to a specific relation.
+type UsersetNormalized struct {
+	Source   Expr
+	Relation Expr
+}
+
+// SQL renders the userset normalization expression.
+func (u UsersetNormalized) SQL() string {
+	// substring(source from 1 for position('#' in source) - 1) || '#' || relation
+	posExpr := "position('#' in " + u.Source.SQL() + ")"
+	objectID := "substring(" + u.Source.SQL() + " from 1 for " + posExpr + " - 1)"
+	return objectID + " || '#' || " + u.Relation.SQL()
 }
 
 // =============================================================================
