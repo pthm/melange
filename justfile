@@ -232,8 +232,8 @@ tidy:
 
 # Generate test authz package from schema
 [group('Generate')]
-generate:
-    cd {{TEST}} && {{GO_TEST}} -run TestDB_Integration -timeout 2m -v
+generate: build-dev
+    ./bin/melange generate client --runtime go --schema {{TEST}}/testutil/testdata/schema.fga --output {{TEST}}/authz/ --package authz --id-type int64
 
 # Validate the test schema
 [group('Generate')]
