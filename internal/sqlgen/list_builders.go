@@ -987,25 +987,16 @@ func buildListSubjectsIntersectionBlocks(a RelationAnalysis, validate bool, func
 
 func buildListObjectsFunctionSQL(functionName string, a RelationAnalysis, query string) string {
 	paginatedQuery := wrapWithPagination(query, "object_id")
-	return fmt.Sprintf(`-- Generated list_objects function for %s.%s
--- Features: %s
-CREATE OR REPLACE FUNCTION %s(
-    p_subject_type TEXT,
-    p_subject_id TEXT,
-    p_limit INT DEFAULT NULL,
-    p_after TEXT DEFAULT NULL
-) RETURNS TABLE(object_id TEXT, next_cursor TEXT) AS $$
-BEGIN
-    RETURN QUERY
-    %s;
-END;
-$$ LANGUAGE plpgsql STABLE;`,
-		a.ObjectType,
-		a.Relation,
-		a.Features.String(),
-		functionName,
-		paginatedQuery,
-	)
+	fn := PlpgsqlFunction{
+		Name:    functionName,
+		Args:    ListObjectsArgs(),
+		Returns: ListObjectsReturns(),
+		Header:  ListObjectsFunctionHeader(a.ObjectType, a.Relation, a.Features.String()),
+		Body: []Stmt{
+			ReturnQuery{Query: paginatedQuery},
+		},
+	}
+	return fn.SQL()
 }
 
 func buildListSubjectsFunctionSQL(functionName string, a RelationAnalysis, usersetFilterBlocks []QueryBlock, usersetFilterSelfBlock *QueryBlock, regularBlocks []QueryBlock, templateName string) string {
@@ -2894,53 +2885,41 @@ func trimTrailingSemicolon(input string) string {
 }
 
 func generateListObjectsDepthExceededFunction(a RelationAnalysis) string {
-	return fmt.Sprintf(`-- Generated list_objects function for %s.%s
--- Features: %s
--- DEPTH EXCEEDED: Userset chain depth %d exceeds 25 level limit
-CREATE OR REPLACE FUNCTION %s(
-    p_subject_type TEXT,
-    p_subject_id TEXT,
-    p_limit INT DEFAULT NULL,
-    p_after TEXT DEFAULT NULL
-) RETURNS TABLE(object_id TEXT, next_cursor TEXT) AS $$
-BEGIN
-    -- This relation has userset chain depth %d which exceeds the 25 level limit.
-    -- Raise M2002 immediately without any computation.
-    RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';
-END;
-$$ LANGUAGE plpgsql STABLE;`,
-		a.ObjectType,
-		a.Relation,
-		a.Features.String(),
-		a.MaxUsersetDepth,
-		listObjectsFunctionName(a.ObjectType, a.Relation),
-		a.MaxUsersetDepth,
-	)
+	fn := PlpgsqlFunction{
+		Name:    listObjectsFunctionName(a.ObjectType, a.Relation),
+		Args:    ListObjectsArgs(),
+		Returns: ListObjectsReturns(),
+		Header: []string{
+			fmt.Sprintf("Generated list_objects function for %s.%s", a.ObjectType, a.Relation),
+			fmt.Sprintf("Features: %s", a.Features.String()),
+			fmt.Sprintf("DEPTH EXCEEDED: Userset chain depth %d exceeds 25 level limit", a.MaxUsersetDepth),
+		},
+		Body: []Stmt{
+			Comment{Text: fmt.Sprintf("This relation has userset chain depth %d which exceeds the 25 level limit.", a.MaxUsersetDepth)},
+			Comment{Text: "Raise M2002 immediately without any computation."},
+			Raise{Message: "resolution too complex", ErrCode: "M2002"},
+		},
+	}
+	return fn.SQL()
 }
 
 func generateListSubjectsDepthExceededFunction(a RelationAnalysis) string {
-	return fmt.Sprintf(`-- Generated list_subjects function for %s.%s
--- Features: %s
--- DEPTH EXCEEDED: Userset chain depth %d exceeds 25 level limit
-CREATE OR REPLACE FUNCTION %s(
-    p_object_id TEXT,
-    p_subject_type TEXT,
-    p_limit INT DEFAULT NULL,
-    p_after TEXT DEFAULT NULL
-) RETURNS TABLE(subject_id TEXT, next_cursor TEXT) AS $$
-BEGIN
-    -- This relation has userset chain depth %d which exceeds the 25 level limit.
-    -- Raise M2002 immediately without any computation.
-    RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';
-END;
-$$ LANGUAGE plpgsql STABLE;`,
-		a.ObjectType,
-		a.Relation,
-		a.Features.String(),
-		a.MaxUsersetDepth,
-		listSubjectsFunctionName(a.ObjectType, a.Relation),
-		a.MaxUsersetDepth,
-	)
+	fn := PlpgsqlFunction{
+		Name:    listSubjectsFunctionName(a.ObjectType, a.Relation),
+		Args:    ListSubjectsArgs(),
+		Returns: ListSubjectsReturns(),
+		Header: []string{
+			fmt.Sprintf("Generated list_subjects function for %s.%s", a.ObjectType, a.Relation),
+			fmt.Sprintf("Features: %s", a.Features.String()),
+			fmt.Sprintf("DEPTH EXCEEDED: Userset chain depth %d exceeds 25 level limit", a.MaxUsersetDepth),
+		},
+		Body: []Stmt{
+			Comment{Text: fmt.Sprintf("This relation has userset chain depth %d which exceeds the 25 level limit.", a.MaxUsersetDepth)},
+			Comment{Text: "Raise M2002 immediately without any computation."},
+			Raise{Message: "resolution too complex", ErrCode: "M2002"},
+		},
+	}
+	return fn.SQL()
 }
 
 func generateListObjectsSelfRefUsersetFunction(a RelationAnalysis, inline InlineSQLData) (string, error) {
@@ -2994,25 +2973,19 @@ UNION
 
 	paginatedQuery := wrapWithPagination(query, "object_id")
 
-	return fmt.Sprintf(`-- Generated list_objects function for %s.%s
--- Features: %s (self-referential userset)
-CREATE OR REPLACE FUNCTION %s(
-    p_subject_type TEXT,
-    p_subject_id TEXT,
-    p_limit INT DEFAULT NULL,
-    p_after TEXT DEFAULT NULL
-) RETURNS TABLE(object_id TEXT, next_cursor TEXT) AS $$
-BEGIN
-    RETURN QUERY
-    %s;
-END;
-$$ LANGUAGE plpgsql STABLE;`,
-		a.ObjectType,
-		a.Relation,
-		a.Features.String(),
-		functionName,
-		paginatedQuery,
-	), nil
+	fn := PlpgsqlFunction{
+		Name:    functionName,
+		Args:    ListObjectsArgs(),
+		Returns: ListObjectsReturns(),
+		Header: []string{
+			fmt.Sprintf("Generated list_objects function for %s.%s", a.ObjectType, a.Relation),
+			fmt.Sprintf("Features: %s (self-referential userset)", a.Features.String()),
+		},
+		Body: []Stmt{
+			ReturnQuery{Query: paginatedQuery},
+		},
+	}
+	return fn.SQL(), nil
 }
 
 func buildListObjectsSelfRefBaseBlocks(a RelationAnalysis, relationList, allowedSubjectTypes []string, allowWildcard bool, complexClosure []string) ([]string, error) {
@@ -3195,41 +3168,38 @@ func generateListSubjectsSelfRefUsersetFunction(a RelationAnalysis, inline Inlin
 	usersetFilterPaginatedQuery := wrapWithPaginationWildcardFirst(usersetFilterQuery)
 	regularPaginatedQuery := wrapWithPaginationWildcardFirst(regularQuery)
 
-	return fmt.Sprintf(`-- Generated list_subjects function for %s.%s
--- Features: %s (self-referential userset)
-CREATE OR REPLACE FUNCTION %s(
-    p_object_id TEXT,
-    p_subject_type TEXT,
-    p_limit INT DEFAULT NULL,
-    p_after TEXT DEFAULT NULL
-) RETURNS TABLE(subject_id TEXT, next_cursor TEXT) AS $$
-DECLARE
-    v_filter_type TEXT;
-    v_filter_relation TEXT;
-BEGIN
-    -- Check if p_subject_type is a userset filter (contains '#')
-    IF position('#' in p_subject_type) > 0 THEN
-        v_filter_type := split_part(p_subject_type, '#', 1);
-        v_filter_relation := split_part(p_subject_type, '#', 2);
+	bodySQL := fmt.Sprintf(`-- Check if p_subject_type is a userset filter (contains '#')
+IF position('#' in p_subject_type) > 0 THEN
+    v_filter_type := split_part(p_subject_type, '#', 1);
+    v_filter_relation := split_part(p_subject_type, '#', 2);
 
-        -- Userset filter case: find userset tuples and recursively expand
-        -- Returns normalized references like 'group:1#member'
-        RETURN QUERY
-        %s;
-    ELSE
-        -- Regular subject type: find individual subjects via recursive userset expansion
-        RETURN QUERY
-        %s;
-    END IF;
-END;
-$$ LANGUAGE plpgsql STABLE;`,
-		a.ObjectType,
-		a.Relation,
-		a.Features.String(),
-		functionName,
-		usersetFilterPaginatedQuery,
-		regularPaginatedQuery,
-	), nil
+    -- Userset filter case: find userset tuples and recursively expand
+    -- Returns normalized references like 'group:1#member'
+    RETURN QUERY
+    %s;
+ELSE
+    -- Regular subject type: find individual subjects via recursive userset expansion
+    RETURN QUERY
+    %s;
+END IF;`, usersetFilterPaginatedQuery, regularPaginatedQuery)
+
+	fn := PlpgsqlFunction{
+		Name:    functionName,
+		Args:    ListSubjectsArgs(),
+		Returns: ListSubjectsReturns(),
+		Header: []string{
+			fmt.Sprintf("Generated list_subjects function for %s.%s", a.ObjectType, a.Relation),
+			fmt.Sprintf("Features: %s (self-referential userset)", a.Features.String()),
+		},
+		Decls: []Decl{
+			{Name: "v_filter_type", Type: "TEXT"},
+			{Name: "v_filter_relation", Type: "TEXT"},
+		},
+		Body: []Stmt{
+			RawStmt{SQLText: bodySQL},
+		},
+	}
+	return fn.SQL(), nil
 }
 
 func buildListSubjectsSelfRefUsersetFilterQuery(a RelationAnalysis, inline InlineSQLData, allSatisfyingRelations []string) (string, error) {
@@ -3588,47 +3558,43 @@ func generateListObjectsComposedFunction(a RelationAnalysis, inline InlineSQLDat
 	selfPaginatedSQL := wrapWithPagination(selfSQL, "object_id")
 	queryPaginatedSQL := wrapWithPagination(querySQL, "object_id")
 
-	return fmt.Sprintf(`-- Generated list_objects function for %s.%s
--- Features: %s
--- Indirect anchor: %s.%s via %s
-CREATE OR REPLACE FUNCTION %s(
-    p_subject_type TEXT,
-    p_subject_id TEXT,
-    p_limit INT DEFAULT NULL,
-    p_after TEXT DEFAULT NULL
-) RETURNS TABLE(object_id TEXT, next_cursor TEXT) AS $$
-BEGIN
-    -- Self-candidate check: when subject is a userset on the same object type
-    IF EXISTS (
+	bodySQL := fmt.Sprintf(`-- Self-candidate check: when subject is a userset on the same object type
+IF EXISTS (
 %s
-    ) THEN
-        RETURN QUERY
-        %s;
-        RETURN;
-    END IF;
-
-    -- Type guard: only return results if subject type is allowed
-    -- Skip the guard for userset subjects since composed inner calls handle userset subjects
-    IF position('#' in p_subject_id) = 0 AND p_subject_type NOT IN (%s) THEN
-        RETURN;
-    END IF;
-
+) THEN
     RETURN QUERY
     %s;
-END;
-$$ LANGUAGE plpgsql STABLE;`,
-		a.ObjectType,
-		a.Relation,
-		a.Features.String(),
-		anchor.AnchorType,
-		anchor.AnchorRelation,
-		anchor.Path[0].Type,
-		functionName,
-		indentLines(selfSQL, "        "),
+    RETURN;
+END IF;
+
+-- Type guard: only return results if subject type is allowed
+-- Skip the guard for userset subjects since composed inner calls handle userset subjects
+IF position('#' in p_subject_id) = 0 AND p_subject_type NOT IN (%s) THEN
+    RETURN;
+END IF;
+
+RETURN QUERY
+%s;`,
+		indentLines(selfSQL, "    "),
 		selfPaginatedSQL,
 		formatSQLStringList(allowedSubjectTypes),
 		queryPaginatedSQL,
-	), nil
+	)
+
+	fn := PlpgsqlFunction{
+		Name:    functionName,
+		Args:    ListObjectsArgs(),
+		Returns: ListObjectsReturns(),
+		Header: []string{
+			fmt.Sprintf("Generated list_objects function for %s.%s", a.ObjectType, a.Relation),
+			fmt.Sprintf("Features: %s", a.Features.String()),
+			fmt.Sprintf("Indirect anchor: %s.%s via %s", anchor.AnchorType, anchor.AnchorRelation, anchor.Path[0].Type),
+		},
+		Body: []Stmt{
+			RawStmt{SQLText: bodySQL},
+		},
+	}
+	return fn.SQL(), nil
 }
 
 func buildListObjectsComposedQuery(a RelationAnalysis, anchor *ListIndirectAnchorData, relationList []string) (string, error) {
@@ -3798,64 +3764,61 @@ func generateListSubjectsComposedFunction(a RelationAnalysis, inline InlineSQLDa
 	usersetFilterPaginatedSQL := wrapWithPaginationWildcardFirst(usersetFilterSQL)
 	regularPaginatedSQL := wrapWithPaginationWildcardFirst(regularSQL)
 
-	return fmt.Sprintf(`-- Generated list_subjects function for %s.%s
--- Features: %s
--- Indirect anchor: %s.%s via %s
-CREATE OR REPLACE FUNCTION %s(
-    p_object_id TEXT,
-    p_subject_type TEXT,
-    p_limit INT DEFAULT NULL,
-    p_after TEXT DEFAULT NULL
-) RETURNS TABLE(subject_id TEXT, next_cursor TEXT) AS $$
-DECLARE
-    v_is_userset_filter BOOLEAN;
-    v_filter_type TEXT;
-    v_filter_relation TEXT;
-BEGIN
-    v_is_userset_filter := position('#' in p_subject_type) > 0;
-    IF v_is_userset_filter THEN
-        v_filter_type := split_part(p_subject_type, '#', 1);
-        v_filter_relation := split_part(p_subject_type, '#', 2);
+	bodySQL := fmt.Sprintf(`v_is_userset_filter := position('#' in p_subject_type) > 0;
+IF v_is_userset_filter THEN
+    v_filter_type := split_part(p_subject_type, '#', 1);
+    v_filter_relation := split_part(p_subject_type, '#', 2);
 
-        -- Self-candidate: when filter type matches object type
-        IF v_filter_type = '%s' THEN
-            IF EXISTS (
+    -- Self-candidate: when filter type matches object type
+    IF v_filter_type = '%s' THEN
+        IF EXISTS (
 %s
-            ) THEN
-                RETURN QUERY
-                %s;
-                RETURN;
-            END IF;
-        END IF;
-
-        -- Userset filter case
-        RETURN QUERY
-        %s;
-    ELSE
-        -- Direct subject type case
-        IF p_subject_type NOT IN (%s) THEN
+        ) THEN
+            RETURN QUERY
+            %s;
             RETURN;
         END IF;
-
-        RETURN QUERY
-        %s;
     END IF;
-END;
-$$ LANGUAGE plpgsql STABLE;`,
+
+    -- Userset filter case
+    RETURN QUERY
+    %s;
+ELSE
+    -- Direct subject type case
+    IF p_subject_type NOT IN (%s) THEN
+        RETURN;
+    END IF;
+
+    RETURN QUERY
+    %s;
+END IF;`,
 		a.ObjectType,
-		a.Relation,
-		a.Features.String(),
-		anchor.AnchorType,
-		anchor.AnchorRelation,
-		anchor.Path[0].Type,
-		functionName,
-		a.ObjectType,
-		indentLines(selfSQL, "                "),
+		indentLines(selfSQL, "            "),
 		selfPaginatedSQL,
 		usersetFilterPaginatedSQL,
 		formatSQLStringList(allowedSubjectTypes),
 		regularPaginatedSQL,
-	), nil
+	)
+
+	fn := PlpgsqlFunction{
+		Name:    functionName,
+		Args:    ListSubjectsArgs(),
+		Returns: ListSubjectsReturns(),
+		Header: []string{
+			fmt.Sprintf("Generated list_subjects function for %s.%s", a.ObjectType, a.Relation),
+			fmt.Sprintf("Features: %s", a.Features.String()),
+			fmt.Sprintf("Indirect anchor: %s.%s via %s", anchor.AnchorType, anchor.AnchorRelation, anchor.Path[0].Type),
+		},
+		Decls: []Decl{
+			{Name: "v_is_userset_filter", Type: "BOOLEAN"},
+			{Name: "v_filter_type", Type: "TEXT"},
+			{Name: "v_filter_relation", Type: "TEXT"},
+		},
+		Body: []Stmt{
+			RawStmt{SQLText: bodySQL},
+		},
+	}
+	return fn.SQL(), nil
 }
 
 func buildListSubjectsComposedUsersetFilterQuery(a RelationAnalysis, anchor *ListIndirectAnchorData) (string, error) {
@@ -4021,40 +3984,41 @@ func generateListObjectsDispatcher(analyses []RelationAnalysis) (string, error) 
 		})
 	}
 
-	var buf strings.Builder
-	buf.WriteString("-- Generated dispatcher for list_accessible_objects\n")
-	buf.WriteString("-- Routes to specialized functions for all type/relation pairs\n")
-	buf.WriteString("CREATE OR REPLACE FUNCTION list_accessible_objects(\n")
-	buf.WriteString("    p_subject_type TEXT,\n")
-	buf.WriteString("    p_subject_id TEXT,\n")
-	buf.WriteString("    p_relation TEXT,\n")
-	buf.WriteString("    p_object_type TEXT,\n")
-	buf.WriteString("    p_limit INT DEFAULT NULL,\n")
-	buf.WriteString("    p_after TEXT DEFAULT NULL\n")
-	buf.WriteString(") RETURNS TABLE (object_id TEXT, next_cursor TEXT) AS $$\n")
-	buf.WriteString("BEGIN\n")
+	// Build the body with routing cases
+	var bodyBuf strings.Builder
 	if len(cases) > 0 {
-		buf.WriteString("    -- Route to specialized functions for all type/relation pairs\n")
+		bodyBuf.WriteString("-- Route to specialized functions for all type/relation pairs\n")
 		for _, c := range cases {
-			buf.WriteString("    IF p_object_type = '")
-			buf.WriteString(c.ObjectType)
-			buf.WriteString("' AND p_relation = '")
-			buf.WriteString(c.Relation)
-			buf.WriteString("' THEN\n")
-			buf.WriteString("        RETURN QUERY SELECT * FROM ")
-			buf.WriteString(c.FunctionName)
-			buf.WriteString("(p_subject_type, p_subject_id, p_limit, p_after);\n")
-			buf.WriteString("        RETURN;\n")
-			buf.WriteString("    END IF;\n")
+			bodyBuf.WriteString("IF p_object_type = '")
+			bodyBuf.WriteString(c.ObjectType)
+			bodyBuf.WriteString("' AND p_relation = '")
+			bodyBuf.WriteString(c.Relation)
+			bodyBuf.WriteString("' THEN\n")
+			bodyBuf.WriteString("    RETURN QUERY SELECT * FROM ")
+			bodyBuf.WriteString(c.FunctionName)
+			bodyBuf.WriteString("(p_subject_type, p_subject_id, p_limit, p_after);\n")
+			bodyBuf.WriteString("    RETURN;\n")
+			bodyBuf.WriteString("END IF;\n")
 		}
 	}
-	buf.WriteString("\n")
-	buf.WriteString("    -- Unknown type/relation pair - return empty result (relation not defined in model)\n")
-	buf.WriteString("    -- This matches check_permission behavior for unknown relations (returns 0/denied)\n")
-	buf.WriteString("    RETURN;\n")
-	buf.WriteString("END;\n")
-	buf.WriteString("$$ LANGUAGE plpgsql STABLE;\n")
-	return buf.String(), nil
+	bodyBuf.WriteString("\n")
+	bodyBuf.WriteString("-- Unknown type/relation pair - return empty result (relation not defined in model)\n")
+	bodyBuf.WriteString("-- This matches check_permission behavior for unknown relations (returns 0/denied)\n")
+	bodyBuf.WriteString("RETURN;")
+
+	fn := PlpgsqlFunction{
+		Name:    "list_accessible_objects",
+		Args:    ListObjectsDispatcherArgs(),
+		Returns: "TABLE (object_id TEXT, next_cursor TEXT)",
+		Header: []string{
+			"Generated dispatcher for list_accessible_objects",
+			"Routes to specialized functions for all type/relation pairs",
+		},
+		Body: []Stmt{
+			RawStmt{SQLText: bodyBuf.String()},
+		},
+	}
+	return fn.SQL(), nil
 }
 
 func generateListSubjectsDispatcher(analyses []RelationAnalysis) (string, error) {
@@ -4070,38 +4034,39 @@ func generateListSubjectsDispatcher(analyses []RelationAnalysis) (string, error)
 		})
 	}
 
-	var buf strings.Builder
-	buf.WriteString("-- Generated dispatcher for list_accessible_subjects\n")
-	buf.WriteString("-- Routes to specialized functions for all type/relation pairs\n")
-	buf.WriteString("CREATE OR REPLACE FUNCTION list_accessible_subjects(\n")
-	buf.WriteString("    p_object_type TEXT,\n")
-	buf.WriteString("    p_object_id TEXT,\n")
-	buf.WriteString("    p_relation TEXT,\n")
-	buf.WriteString("    p_subject_type TEXT,\n")
-	buf.WriteString("    p_limit INT DEFAULT NULL,\n")
-	buf.WriteString("    p_after TEXT DEFAULT NULL\n")
-	buf.WriteString(") RETURNS TABLE (subject_id TEXT, next_cursor TEXT) AS $$\n")
-	buf.WriteString("BEGIN\n")
+	// Build the body with routing cases
+	var bodyBuf strings.Builder
 	if len(cases) > 0 {
-		buf.WriteString("    -- Route to specialized functions for all type/relation pairs\n")
+		bodyBuf.WriteString("-- Route to specialized functions for all type/relation pairs\n")
 		for _, c := range cases {
-			buf.WriteString("    IF p_object_type = '")
-			buf.WriteString(c.ObjectType)
-			buf.WriteString("' AND p_relation = '")
-			buf.WriteString(c.Relation)
-			buf.WriteString("' THEN\n")
-			buf.WriteString("        RETURN QUERY SELECT * FROM ")
-			buf.WriteString(c.FunctionName)
-			buf.WriteString("(p_object_id, p_subject_type, p_limit, p_after);\n")
-			buf.WriteString("        RETURN;\n")
-			buf.WriteString("    END IF;\n")
+			bodyBuf.WriteString("IF p_object_type = '")
+			bodyBuf.WriteString(c.ObjectType)
+			bodyBuf.WriteString("' AND p_relation = '")
+			bodyBuf.WriteString(c.Relation)
+			bodyBuf.WriteString("' THEN\n")
+			bodyBuf.WriteString("    RETURN QUERY SELECT * FROM ")
+			bodyBuf.WriteString(c.FunctionName)
+			bodyBuf.WriteString("(p_object_id, p_subject_type, p_limit, p_after);\n")
+			bodyBuf.WriteString("    RETURN;\n")
+			bodyBuf.WriteString("END IF;\n")
 		}
 	}
-	buf.WriteString("\n")
-	buf.WriteString("    -- Unknown type/relation pair - return empty result (relation not defined in model)\n")
-	buf.WriteString("    -- This matches check_permission behavior for unknown relations (returns 0/denied)\n")
-	buf.WriteString("    RETURN;\n")
-	buf.WriteString("END;\n")
-	buf.WriteString("$$ LANGUAGE plpgsql STABLE;\n")
-	return buf.String(), nil
+	bodyBuf.WriteString("\n")
+	bodyBuf.WriteString("-- Unknown type/relation pair - return empty result (relation not defined in model)\n")
+	bodyBuf.WriteString("-- This matches check_permission behavior for unknown relations (returns 0/denied)\n")
+	bodyBuf.WriteString("RETURN;")
+
+	fn := PlpgsqlFunction{
+		Name:    "list_accessible_subjects",
+		Args:    ListSubjectsDispatcherArgs(),
+		Returns: "TABLE (subject_id TEXT, next_cursor TEXT)",
+		Header: []string{
+			"Generated dispatcher for list_accessible_subjects",
+			"Routes to specialized functions for all type/relation pairs",
+		},
+		Body: []Stmt{
+			RawStmt{SQLText: bodyBuf.String()},
+		},
+	}
+	return fn.SQL(), nil
 }

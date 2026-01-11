@@ -1,0 +1,277 @@
+package sqlgen
+
+import (
+	"fmt"
+	"strings"
+)
+
+// =============================================================================
+// PL/pgSQL Function Builder
+// =============================================================================
+//
+// This file provides a typed builder for PL/pgSQL functions, centralizing the
+// formatting and indentation of CREATE FUNCTION statements.
+
+// FuncArg represents a function argument with optional default value.
+type FuncArg struct {
+	Name    string
+	Type    string
+	Default Expr // nil means no default
+}
+
+// Decl represents a DECLARE variable declaration.
+type Decl struct {
+	Name string
+	Type string
+}
+
+// Stmt is a PL/pgSQL statement that can be rendered to SQL.
+type Stmt interface {
+	StmtSQL() string
+}
+
+// ReturnQuery renders RETURN QUERY <query>;
+type ReturnQuery struct {
+	Query string // Already-rendered SQL query
+}
+
+func (r ReturnQuery) StmtSQL() string {
+	return fmt.Sprintf("RETURN QUERY\n    %s;", r.Query)
+}
+
+// Return renders a bare RETURN; statement.
+type Return struct{}
+
+func (Return) StmtSQL() string {
+	return "RETURN;"
+}
+
+// Assign renders name := value;
+type Assign struct {
+	Name  string
+	Value Expr
+}
+
+func (a Assign) StmtSQL() string {
+	return fmt.Sprintf("%s := %s;", a.Name, a.Value.SQL())
+}
+
+// If renders IF cond THEN ... [ELSE ...] END IF;
+type If struct {
+	Cond Expr
+	Then []Stmt
+	Else []Stmt
+}
+
+func (i If) StmtSQL() string {
+	var sb strings.Builder
+	sb.WriteString("IF ")
+	sb.WriteString(i.Cond.SQL())
+	sb.WriteString(" THEN\n")
+
+	for _, stmt := range i.Then {
+		sb.WriteString("    ")
+		sb.WriteString(stmt.StmtSQL())
+		sb.WriteString("\n")
+	}
+
+	if len(i.Else) > 0 {
+		sb.WriteString("ELSE\n")
+		for _, stmt := range i.Else {
+			sb.WriteString("    ")
+			sb.WriteString(stmt.StmtSQL())
+			sb.WriteString("\n")
+		}
+	}
+
+	sb.WriteString("END IF;")
+	return sb.String()
+}
+
+// RawStmt is an escape hatch for SQL that doesn't map cleanly to typed constructs.
+// Use sparingly.
+type RawStmt struct {
+	SQLText string
+}
+
+func (r RawStmt) StmtSQL() string {
+	return r.SQLText
+}
+
+// Raise renders RAISE EXCEPTION 'message' USING ERRCODE = 'code';
+type Raise struct {
+	Message string
+	ErrCode string
+}
+
+func (r Raise) StmtSQL() string {
+	return fmt.Sprintf("RAISE EXCEPTION '%s' USING ERRCODE = '%s';", r.Message, r.ErrCode)
+}
+
+// Comment renders a SQL comment line.
+type Comment struct {
+	Text string
+}
+
+func (c Comment) StmtSQL() string {
+	return "-- " + c.Text
+}
+
+// PlpgsqlFunction represents a complete PL/pgSQL function definition.
+type PlpgsqlFunction struct {
+	Name    string
+	Args    []FuncArg
+	Returns string
+	Decls   []Decl
+	Body    []Stmt
+	Header  []string // Comment lines at the top of the function (without -- prefix)
+}
+
+// SQL renders the complete CREATE OR REPLACE FUNCTION statement.
+func (f PlpgsqlFunction) SQL() string {
+	var sb strings.Builder
+
+	// Header comments
+	for _, comment := range f.Header {
+		sb.WriteString("-- ")
+		sb.WriteString(comment)
+		sb.WriteString("\n")
+	}
+
+	// Function signature
+	sb.WriteString("CREATE OR REPLACE FUNCTION ")
+	sb.WriteString(f.Name)
+	sb.WriteString("(\n")
+
+	// Arguments
+	for i, arg := range f.Args {
+		sb.WriteString("    ")
+		sb.WriteString(arg.Name)
+		sb.WriteString(" ")
+		sb.WriteString(arg.Type)
+		if arg.Default != nil {
+			sb.WriteString(" DEFAULT ")
+			sb.WriteString(arg.Default.SQL())
+		}
+		if i < len(f.Args)-1 {
+			sb.WriteString(",")
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString(") RETURNS ")
+	sb.WriteString(f.Returns)
+	sb.WriteString(" AS $$\n")
+
+	// DECLARE block
+	if len(f.Decls) > 0 {
+		sb.WriteString("DECLARE\n")
+		for _, d := range f.Decls {
+			sb.WriteString("    ")
+			sb.WriteString(d.Name)
+			sb.WriteString(" ")
+			sb.WriteString(d.Type)
+			sb.WriteString(";\n")
+		}
+	}
+
+	// BEGIN block
+	sb.WriteString("BEGIN\n")
+
+	for _, stmt := range f.Body {
+		// Indent each line of the statement
+		lines := strings.Split(stmt.StmtSQL(), "\n")
+		for _, line := range lines {
+			sb.WriteString("    ")
+			sb.WriteString(line)
+			sb.WriteString("\n")
+		}
+	}
+
+	sb.WriteString("END;\n")
+	sb.WriteString("$$ LANGUAGE plpgsql STABLE;")
+
+	return sb.String()
+}
+
+// =============================================================================
+// Convenience Constructors
+// =============================================================================
+
+// ListObjectsArgs returns the standard arguments for a list_objects function.
+func ListObjectsArgs() []FuncArg {
+	return []FuncArg{
+		{Name: "p_subject_type", Type: "TEXT"},
+		{Name: "p_subject_id", Type: "TEXT"},
+		{Name: "p_limit", Type: "INT", Default: Null{}},
+		{Name: "p_after", Type: "TEXT", Default: Null{}},
+	}
+}
+
+// ListSubjectsArgs returns the standard arguments for a list_subjects function.
+func ListSubjectsArgs() []FuncArg {
+	return []FuncArg{
+		{Name: "p_object_id", Type: "TEXT"},
+		{Name: "p_subject_type", Type: "TEXT"},
+		{Name: "p_limit", Type: "INT", Default: Null{}},
+		{Name: "p_after", Type: "TEXT", Default: Null{}},
+	}
+}
+
+// ListObjectsReturns returns the standard RETURNS clause for list_objects.
+func ListObjectsReturns() string {
+	return "TABLE(object_id TEXT, next_cursor TEXT)"
+}
+
+// ListSubjectsReturns returns the standard RETURNS clause for list_subjects.
+func ListSubjectsReturns() string {
+	return "TABLE(subject_id TEXT, next_cursor TEXT)"
+}
+
+// FunctionHeader creates header comments for a generated function.
+func FunctionHeader(objectType, relation, features string) []string {
+	return []string{
+		fmt.Sprintf("Generated list_objects function for %s.%s", objectType, relation),
+		fmt.Sprintf("Features: %s", features),
+	}
+}
+
+// ListObjectsFunctionHeader creates header comments for a list_objects function.
+func ListObjectsFunctionHeader(objectType, relation, features string) []string {
+	return []string{
+		fmt.Sprintf("Generated list_objects function for %s.%s", objectType, relation),
+		fmt.Sprintf("Features: %s", features),
+	}
+}
+
+// ListSubjectsFunctionHeader creates header comments for a list_subjects function.
+func ListSubjectsFunctionHeader(objectType, relation, features string) []string {
+	return []string{
+		fmt.Sprintf("Generated list_subjects function for %s.%s", objectType, relation),
+		fmt.Sprintf("Features: %s", features),
+	}
+}
+
+// ListObjectsDispatcherArgs returns the arguments for the list_accessible_objects dispatcher.
+func ListObjectsDispatcherArgs() []FuncArg {
+	return []FuncArg{
+		{Name: "p_subject_type", Type: "TEXT"},
+		{Name: "p_subject_id", Type: "TEXT"},
+		{Name: "p_relation", Type: "TEXT"},
+		{Name: "p_object_type", Type: "TEXT"},
+		{Name: "p_limit", Type: "INT", Default: Null{}},
+		{Name: "p_after", Type: "TEXT", Default: Null{}},
+	}
+}
+
+// ListSubjectsDispatcherArgs returns the arguments for the list_accessible_subjects dispatcher.
+func ListSubjectsDispatcherArgs() []FuncArg {
+	return []FuncArg{
+		{Name: "p_object_type", Type: "TEXT"},
+		{Name: "p_object_id", Type: "TEXT"},
+		{Name: "p_relation", Type: "TEXT"},
+		{Name: "p_subject_type", Type: "TEXT"},
+		{Name: "p_limit", Type: "INT", Default: Null{}},
+		{Name: "p_after", Type: "TEXT", Default: Null{}},
+	}
+}
