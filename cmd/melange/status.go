@@ -13,8 +13,8 @@ import (
 )
 
 var (
-	statusDB         string
-	statusSchemasDir string
+	statusDB     string
+	statusSchema string
 )
 
 var statusCmd = &cobra.Command{
@@ -24,24 +24,24 @@ var statusCmd = &cobra.Command{
 	Example: `  # Check status
   melange status --db postgres://localhost/mydb`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		schemasDir := resolveString(statusSchemasDir, cfg.Status.SchemasDir, cfg.SchemasDir)
+		schemaPath := resolveString(statusSchema, cfg.Schema)
 
 		dsn, err := resolveDSN(statusDB)
 		if err != nil {
 			return err
 		}
 
-		return runStatus(dsn, schemasDir)
+		return runStatus(dsn, schemaPath)
 	},
 }
 
 func init() {
 	f := statusCmd.Flags()
 	f.StringVar(&statusDB, "db", "", "database URL")
-	f.StringVar(&statusSchemasDir, "schemas-dir", "", "directory containing schema.fga")
+	f.StringVar(&statusSchema, "schema", "", "path to schema.fga file")
 }
 
-func runStatus(dsn, schemasDir string) error {
+func runStatus(dsn, schemaPath string) error {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return cli.DBConnectError("connecting to database", err)
@@ -49,7 +49,7 @@ func runStatus(dsn, schemasDir string) error {
 	defer func() { _ = db.Close() }()
 
 	ctx := context.Background()
-	m := migrator.NewMigrator(db, schemasDir)
+	m := migrator.NewMigrator(db, schemaPath)
 
 	s, err := m.GetStatus(ctx)
 	if err != nil {
@@ -68,7 +68,7 @@ func runStatus(dsn, schemasDir string) error {
 	}
 
 	if !s.SchemaExists {
-		fmt.Println("\nNo schema found. Create schemas/schema.fga to start.")
+		fmt.Printf("\nNo schema found at %s\n", schemaPath)
 	} else if !s.TuplesExists {
 		fmt.Println("\nTuples view not found.")
 		fmt.Println("Create melange_tuples before running checks.")

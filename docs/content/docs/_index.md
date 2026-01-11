@@ -77,7 +77,8 @@ Melange includes client libraries for convenient access to the generated SQL fun
 Technical reference documentation.
 
 {{< cards >}}
-  {{< card link="reference/cli" title="CLI Reference" subtitle="Commands for compilation, code generation, and validation" icon="terminal" >}}
+  {{< card link="reference/cli" title="CLI Reference" subtitle="Commands for migrations, code generation, and validation" icon="terminal" >}}
+  {{< card link="reference/configuration" title="Configuration" subtitle="Config files, environment variables, and precedence" icon="cog" >}}
   {{< card link="reference/sql-api" title="SQL API" subtitle="Generated SQL functions for permission checks" icon="database" >}}
   {{< card link="reference/performance" title="Performance" subtitle="Benchmark results, optimization strategies, and scaling guidance" icon="lightning-bolt" >}}
   {{< card link="reference/openfga-compatibility" title="OpenFGA Compatibility" subtitle="Feature support table and migration guidance" icon="badge-check" >}}

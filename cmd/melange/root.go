@@ -42,20 +42,46 @@ from OpenFGA schemas, enabling single-query permission checks in PostgreSQL.`,
 	SilenceErrors: true, // We handle errors ourselves
 }
 
+// Command group IDs
+const (
+	groupSchema  = "schema"
+	groupClient  = "client"
+	groupUtility = "utility"
+)
+
 func init() {
 	// Persistent flags (available to all commands)
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: auto-discover melange.yaml)")
 	rootCmd.PersistentFlags().CountVarP(&verbose, "verbose", "v", "increase verbosity (can be repeated)")
 	rootCmd.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false, "suppress non-error output")
 
-	// Add subcommands
+	// Define command groups
+	rootCmd.AddGroup(
+		&cobra.Group{ID: groupSchema, Title: "Schema:"},
+		&cobra.Group{ID: groupClient, Title: "Client:"},
+		&cobra.Group{ID: groupUtility, Title: "Utility:"},
+	)
+
+	// Schema commands
+	validateCmd.GroupID = groupSchema
+	migrateCmd.GroupID = groupSchema
+	statusCmd.GroupID = groupSchema
+	doctorCmd.GroupID = groupSchema
 	rootCmd.AddCommand(validateCmd)
-	rootCmd.AddCommand(generateCmd)
 	rootCmd.AddCommand(migrateCmd)
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(doctorCmd)
-	rootCmd.AddCommand(versionCmd)
+
+	// Client commands
+	generateCmd.GroupID = groupClient
+	rootCmd.AddCommand(generateCmd)
+
+	// Utility commands
+	configCmd.GroupID = groupUtility
+	versionCmd.GroupID = groupUtility
+	licenseCmd.GroupID = groupUtility
 	rootCmd.AddCommand(configCmd)
+	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(licenseCmd)
 }
 

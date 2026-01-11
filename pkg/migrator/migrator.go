@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
@@ -84,7 +83,7 @@ type MigrationRecord struct {
 // Use the convenience functions in pkg/migrator for most use cases:
 //
 //	import "github.com/pthm/melange/pkg/migrator"
-//	err := migrator.Migrate(ctx, db, "schemas")
+//	err := migrator.Migrate(ctx, db, "schemas/schema.fga")
 //
 // For embedded schemas (no file I/O):
 //
@@ -94,24 +93,23 @@ type MigrationRecord struct {
 // or need fine-grained control (DDL-only, status checks, etc.):
 //
 //	types, _ := parser.ParseSchema("schemas/schema.fga")
-//	m := migrator.NewMigrator(db, "schemas")
+//	m := migrator.NewMigrator(db, "schemas/schema.fga")
 //	err := m.MigrateWithTypes(ctx, types)
 type Migrator struct {
 	db         Execer
-	schemasDir string
+	schemaPath string
 }
 
 // NewMigrator creates a new schema migrator.
-// The schemasDir should contain a schema.fga file in OpenFGA DSL format.
+// The schemaPath should point to an OpenFGA DSL schema file (e.g., "schemas/schema.fga").
 // The Execer is typically *sql.DB but can be *sql.Tx for testing.
-func NewMigrator(db Execer, schemasDir string) *Migrator {
-	return &Migrator{db: db, schemasDir: schemasDir}
+func NewMigrator(db Execer, schemaPath string) *Migrator {
+	return &Migrator{db: db, schemaPath: schemaPath}
 }
 
-// SchemaPath returns the path to the schema.fga file.
-// Conventionally named schema.fga by OpenFGA tooling.
+// SchemaPath returns the path to the schema file.
 func (m *Migrator) SchemaPath() string {
-	return filepath.Join(m.schemasDir, "schema.fga")
+	return m.schemaPath
 }
 
 // HasSchema returns true if the schema file exists.

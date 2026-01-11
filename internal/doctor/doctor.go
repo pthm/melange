@@ -153,7 +153,7 @@ func (r *Report) HasErrors() bool {
 // Doctor performs health checks on the melange authorization infrastructure.
 type Doctor struct {
 	db         *sql.DB
-	schemasDir string
+	schemaPath string
 
 	// Cached data from checks (populated during Run)
 	parsedTypes   []schema.TypeDefinition
@@ -174,10 +174,10 @@ type TuplesInfo struct {
 }
 
 // New creates a new Doctor instance.
-func New(db *sql.DB, schemasDir string) *Doctor {
+func New(db *sql.DB, schemaPath string) *Doctor {
 	return &Doctor{
 		db:         db,
-		schemasDir: schemasDir,
+		schemaPath: schemaPath,
 	}
 }
 
@@ -205,7 +205,7 @@ func (d *Doctor) Run(ctx context.Context) (*Report, error) {
 
 // checkSchemaFile validates the schema file exists and is valid.
 func (d *Doctor) checkSchemaFile(report *Report) {
-	m := migrator.NewMigrator(d.db, d.schemasDir)
+	m := migrator.NewMigrator(d.db, d.schemaPath)
 	schemaPath := m.SchemaPath()
 
 	// Check file exists
@@ -279,7 +279,7 @@ func (d *Doctor) checkSchemaFile(report *Report) {
 
 // checkMigrationState validates the migration tracking table and state.
 func (d *Doctor) checkMigrationState(ctx context.Context, report *Report) error {
-	m := migrator.NewMigrator(d.db, d.schemasDir)
+	m := migrator.NewMigrator(d.db, d.schemaPath)
 
 	// Check if migrations table exists
 	var tableExists bool

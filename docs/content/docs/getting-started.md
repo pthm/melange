@@ -128,11 +128,40 @@ The view must provide these columns:
 
 Run the Melange CLI to apply the schema to your database:
 
+{{< tabs items="With Config File,With Flags" >}}
+
+{{< tab >}}
+Create a `melange.yaml` in your project root:
+
+```yaml
+schema: schemas/schema.fga
+
+database:
+  url: postgres://localhost/mydb
+
+generate:
+  client:
+    runtime: go
+    output: internal/authz
+    package: authz
+```
+
+Then run:
+
+```bash
+melange migrate
+```
+{{< /tab >}}
+
+{{< tab >}}
 ```bash
 melange migrate \
   --db postgres://localhost/mydb \
-  --schemas-dir schemas
+  --schema schemas/schema.fga
 ```
+{{< /tab >}}
+
+{{< /tabs >}}
 
 This generates and installs specialized SQL permission functions.
 
@@ -143,6 +172,14 @@ Generate constants and helpers for your language of choice:
 {{< tabs items="Go,TypeScript" >}}
 
 {{< tab >}}
+With a config file (from Step 3), simply run:
+
+```bash
+melange generate client
+```
+
+Or with explicit flags:
+
 ```bash
 melange generate client \
   --runtime go \
@@ -453,6 +490,7 @@ async function checkPermissionCached(
 - [How It Works](./concepts/how-it-works.md) - Understand specialized SQL generation and performance
 - [Tuples View](./concepts/tuples-view.md) - Detailed guidance on mapping your domain tables
 - [CLI Reference](./reference/cli.md) - Full CLI command documentation
+- [Configuration](./reference/configuration.md) - Configuration files, environment variables, and precedence
 - [Checking Permissions](./guides/checking-permissions.md) - Complete API reference
 - [SQL API](./reference/sql-api.md) - Direct SQL function documentation for any language
 - [OpenFGA Compatibility](./reference/openfga-compatibility.md) - Supported features and migration path

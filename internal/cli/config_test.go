@@ -144,7 +144,6 @@ func TestLoadConfig_Defaults(t *testing.T) {
 
 	// Check defaults
 	assert.Equal(t, "schemas/schema.fga", cfg.Schema)
-	assert.Equal(t, "schemas", cfg.SchemasDir)
 	assert.Equal(t, 5432, cfg.Database.Port)
 	assert.Equal(t, "prefer", cfg.Database.SSLMode)
 	assert.Equal(t, "authz", cfg.Generate.Client.Package)
@@ -159,7 +158,6 @@ func TestLoadConfig_FromFile(t *testing.T) {
 	configPath := filepath.Join(root, "melange.yaml")
 	err = os.WriteFile(configPath, []byte(`
 schema: custom/schema.fga
-schemas_dir: custom
 database:
   host: localhost
   name: testdb
@@ -186,7 +184,6 @@ generate:
 	assert.Equal(t, expectedPath, actualPath)
 
 	assert.Equal(t, "custom/schema.fga", cfg.Schema)
-	assert.Equal(t, "custom", cfg.SchemasDir)
 	assert.Equal(t, "localhost", cfg.Database.Host)
 	assert.Equal(t, "testdb", cfg.Database.Name)
 	assert.Equal(t, "testuser", cfg.Database.User)
@@ -345,18 +342,6 @@ func TestDSN_MissingUser(t *testing.T) {
 	_, err := cfg.DSN()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "database.user is required")
-}
-
-func TestResolvedSchemasDir(t *testing.T) {
-	cfg := &Config{
-		SchemasDir: "top-level",
-	}
-
-	// Command-specific takes precedence
-	assert.Equal(t, "command-specific", cfg.ResolvedSchemasDir("command-specific"))
-
-	// Falls back to top-level
-	assert.Equal(t, "top-level", cfg.ResolvedSchemasDir(""))
 }
 
 func TestResolvedSchema(t *testing.T) {

@@ -16,20 +16,15 @@ import (
 // atomically within a transaction (when db supports BeginTx).
 //
 // Migration workflow:
-//  1. Reads schemasDir/schema.fga
+//  1. Reads the schema file at schemaPath
 //  2. Parses OpenFGA DSL using the official parser
 //  3. Validates schema (cycle detection, referential integrity)
 //  4. Generates specialized check_permission and list_accessible functions
 //  5. Applies generated SQL atomically via transaction
 //
-// The schemasDir should contain a single schema.fga file in OpenFGA DSL format:
-//
-//	schemas/
-//	  schema.fga
-//
 // Example usage on application startup:
 //
-//	if err := migrator.Migrate(ctx, db, "schemas"); err != nil {
+//	if err := migrator.Migrate(ctx, db, "schemas/schema.fga"); err != nil {
 //	    log.Fatalf("migration failed: %v", err)
 //	}
 //
@@ -38,10 +33,10 @@ import (
 // For programmatic use with pre-parsed types, use Migrator directly:
 //
 //	types, _ := parser.ParseSchema("schemas/schema.fga")
-//	m := migrator.NewMigrator(db, "schemas")
+//	m := migrator.NewMigrator(db, "schemas/schema.fga")
 //	err := m.MigrateWithTypes(ctx, types)
-func Migrate(ctx context.Context, db Execer, schemasDir string) error {
-	m := NewMigrator(db, schemasDir)
+func Migrate(ctx context.Context, db Execer, schemaPath string) error {
+	m := NewMigrator(db, schemaPath)
 
 	if !m.HasSchema() {
 		return fmt.Errorf("no schema found at %s", m.SchemaPath())
@@ -82,7 +77,7 @@ func MigrateFromString(ctx context.Context, db Execer, content string) error {
 // MigrateWithOptions performs migration with control over dry-run and skip behavior.
 // Use this when you need to preview migrations, force re-application, or detect skips.
 //
-// The skip-if-unchanged optimization compares the schema.fga content hash and codegen
+// The skip-if-unchanged optimization compares the schema content hash and codegen
 // version against the last successful migration. If both match and Force is false,
 // the migration is skipped (skipped=true). This avoids redundant function regeneration
 // on every application restart when schemas are stable.
@@ -94,18 +89,18 @@ func MigrateFromString(ctx context.Context, db Execer, content string) error {
 // Example: Generate migration script without applying
 //
 //	var buf bytes.Buffer
-//	_, err := migrator.MigrateWithOptions(ctx, db, "schemas", migrator.MigrateOptions{
+//	_, err := migrator.MigrateWithOptions(ctx, db, "schemas/schema.fga", migrator.MigrateOptions{
 //	    DryRun: &buf,
 //	})
 //	os.WriteFile("migrations/001_authz.sql", buf.Bytes(), 0644)
 //
 // Example: Force re-migration (e.g., after manual schema corruption)
 //
-//	skipped, err := migrator.MigrateWithOptions(ctx, db, "schemas", migrator.MigrateOptions{
+//	skipped, err := migrator.MigrateWithOptions(ctx, db, "schemas/schema.fga", migrator.MigrateOptions{
 //	    Force: true,
 //	})
-func MigrateWithOptions(ctx context.Context, db Execer, schemasDir string, opts MigrateOptions) (skipped bool, err error) {
-	m := NewMigrator(db, schemasDir)
+func MigrateWithOptions(ctx context.Context, db Execer, schemaPath string, opts MigrateOptions) (skipped bool, err error) {
+	m := NewMigrator(db, schemaPath)
 
 	if !m.HasSchema() {
 		return false, fmt.Errorf("no schema found at %s", m.SchemaPath())

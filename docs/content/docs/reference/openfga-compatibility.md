@@ -1,6 +1,6 @@
 ---
 title: OpenFGA Compatibility
-weight: 4
+weight: 5
 ---
 
 Melange provides **full OpenFGA Schema 1.1 compatibility**, running entirely in PostgreSQL. Melange is tested against the official OpenFGA test suite and passes all Schema 1.1 tests.

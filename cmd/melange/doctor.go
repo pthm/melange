@@ -14,9 +14,9 @@ import (
 )
 
 var (
-	doctorDB         string
-	doctorSchemasDir string
-	doctorVerbose    bool
+	doctorDB      string
+	doctorSchema  string
+	doctorVerbose bool
 )
 
 var doctorCmd = &cobra.Command{
@@ -29,7 +29,7 @@ var doctorCmd = &cobra.Command{
   # Run with verbose output
   melange doctor --db postgres://localhost/mydb --verbose`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		schemasDir := resolveString(doctorSchemasDir, cfg.Doctor.SchemasDir, cfg.SchemasDir)
+		schemaPath := resolveString(doctorSchema, cfg.Schema)
 		verboseFlag := resolveBool(doctorVerbose, cfg.Doctor.Verbose)
 
 		dsn, err := resolveDSN(doctorDB)
@@ -37,18 +37,18 @@ var doctorCmd = &cobra.Command{
 			return err
 		}
 
-		return runDoctor(dsn, schemasDir, verboseFlag)
+		return runDoctor(dsn, schemaPath, verboseFlag)
 	},
 }
 
 func init() {
 	f := doctorCmd.Flags()
 	f.StringVar(&doctorDB, "db", "", "database URL")
-	f.StringVar(&doctorSchemasDir, "schemas-dir", "", "directory containing schema.fga")
+	f.StringVar(&doctorSchema, "schema", "", "path to schema.fga file")
 	f.BoolVar(&doctorVerbose, "verbose", false, "show detailed output")
 }
 
-func runDoctor(dsn, schemasDir string, verboseFlag bool) error {
+func runDoctor(dsn, schemaPath string, verboseFlag bool) error {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return cli.DBConnectError("connecting to database", err)
@@ -61,7 +61,7 @@ func runDoctor(dsn, schemasDir string, verboseFlag bool) error {
 		fmt.Println("melange doctor - Health Check")
 	}
 
-	d := doctor.New(db, schemasDir)
+	d := doctor.New(db, schemaPath)
 	report, err := d.Run(ctx)
 	if err != nil {
 		return cli.GeneralError("running doctor", err)

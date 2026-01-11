@@ -49,4 +49,4 @@ specs/
 # CK index
 .ck/
 
-blog/
+./blog/

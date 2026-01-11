@@ -16,9 +16,8 @@ const (
 
 // Config represents the melange configuration from melange.yaml.
 type Config struct {
-	// Top-level convenience fields
-	Schema     string `mapstructure:"schema"`
-	SchemasDir string `mapstructure:"schemas_dir"`
+	// Schema is the path to the OpenFGA schema file (e.g., "schemas/schema.fga")
+	Schema string `mapstructure:"schema"`
 
 	// Database configuration
 	Database DatabaseConfig `mapstructure:"database"`
@@ -26,7 +25,6 @@ type Config struct {
 	// Per-command configuration
 	Generate GenerateConfig `mapstructure:"generate"`
 	Migrate  MigrateConfig  `mapstructure:"migrate"`
-	Status   StatusConfig   `mapstructure:"status"`
 	Doctor   DoctorConfig   `mapstructure:"doctor"`
 }
 
@@ -58,20 +56,13 @@ type ClientConfig struct {
 
 // MigrateConfig holds migration settings.
 type MigrateConfig struct {
-	SchemasDir string `mapstructure:"schemas_dir"`
-	DryRun     bool   `mapstructure:"dry_run"`
-	Force      bool   `mapstructure:"force"`
-}
-
-// StatusConfig holds status command settings.
-type StatusConfig struct {
-	SchemasDir string `mapstructure:"schemas_dir"`
+	DryRun bool `mapstructure:"dry_run"`
+	Force  bool `mapstructure:"force"`
 }
 
 // DoctorConfig holds doctor command settings.
 type DoctorConfig struct {
-	SchemasDir string `mapstructure:"schemas_dir"`
-	Verbose    bool   `mapstructure:"verbose"`
+	Verbose bool `mapstructure:"verbose"`
 }
 
 // LoadConfig discovers and loads configuration with proper precedence:
@@ -115,7 +106,6 @@ func LoadConfig(explicitConfigPath string) (*Config, string, error) {
 func setDefaults(v *viper.Viper) {
 	// Top-level defaults
 	v.SetDefault("schema", "schemas/schema.fga")
-	v.SetDefault("schemas_dir", "schemas")
 
 	// Database defaults
 	v.SetDefault("database.url", "")
@@ -135,15 +125,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("generate.client.id_type", "string")
 
 	// Migrate defaults
-	v.SetDefault("migrate.schemas_dir", "")
 	v.SetDefault("migrate.dry_run", false)
 	v.SetDefault("migrate.force", false)
 
-	// Status defaults
-	v.SetDefault("status.schemas_dir", "")
-
 	// Doctor defaults
-	v.SetDefault("doctor.schemas_dir", "")
 	v.SetDefault("doctor.verbose", false)
 }
 
@@ -235,17 +220,8 @@ func (c *Config) DSN() (string, error) {
 	return u.String(), nil
 }
 
-// ResolvedSchemasDir returns the effective schemas_dir for a command,
-// with command-specific override taking precedence over top-level.
-func (c *Config) ResolvedSchemasDir(commandDir string) string {
-	if commandDir != "" {
-		return commandDir
-	}
-	return c.SchemasDir
-}
-
-// ResolvedSchema returns the effective schema path for generate client,
-// with generate.client.schema taking precedence over top-level schema.
+// ResolvedSchema returns the effective schema path,
+// with generate.client.schema taking precedence over top-level schema (for generate command).
 func (c *Config) ResolvedSchema() string {
 	if c.Generate.Client.Schema != "" {
 		return c.Generate.Client.Schema
