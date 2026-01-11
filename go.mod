@@ -1,6 +1,6 @@
 module github.com/pthm/melange
 
-go 1.25.3
+go 1.24.0
 
 // The core melange module provides runtime permission checking and schema parsing.
 // Schema parsing requires the OpenFGA parser dependency.
