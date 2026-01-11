@@ -1,15 +1,13 @@
-// Package sqlgen provides a domain-specific SQL DSL for generating Melange authorization queries.
-// It models authorization concepts directly rather than generic SQL syntax.
-package sqlgen
+package sqldsl
 
 import (
 	"fmt"
 	"strings"
 )
 
-// sqlf formats SQL with automatic dedenting and blank line removal.
+// Sqlf formats SQL with automatic dedenting and blank line removal.
 // The SQL shape is visible in the format string.
-func sqlf(format string, args ...any) string {
+func Sqlf(format string, args ...any) string {
 	s := fmt.Sprintf(format, args...)
 	lines := strings.Split(s, "\n")
 
@@ -42,9 +40,9 @@ func sqlf(format string, args ...any) string {
 	return strings.Join(result, "\n")
 }
 
-// optf returns formatted string if condition is true, empty string otherwise.
+// Optf returns formatted string if condition is true, empty string otherwise.
 // Useful for optional SQL clauses.
-func optf(cond bool, format string, args ...any) string {
+func Optf(cond bool, format string, args ...any) string {
 	if !cond {
 		return ""
 	}
@@ -102,13 +100,13 @@ type SelectStmt struct {
 
 // SQL renders the SELECT statement.
 func (s SelectStmt) SQL() string {
-	return sqlf(`
+	return Sqlf(`
 		SELECT %s%s
 		%s
 		%s
 		%s
 		%s`,
-		optf(s.Distinct, "DISTINCT "),
+		Optf(s.Distinct, "DISTINCT "),
 		s.columnsSQL(),
 		s.fromSQL(),
 		s.joinsSQL(),
@@ -488,12 +486,12 @@ func renderSingleBlock(block QueryBlock) string {
 	for _, comment := range block.Comments {
 		lines = append(lines, "    "+comment)
 	}
-	lines = append(lines, indentLines(block.Query.SQL(), "    "))
+	lines = append(lines, IndentLines(block.Query.SQL(), "    "))
 	return strings.Join(lines, "\n")
 }
 
-// indentLines adds the given indent prefix to each line of input.
-func indentLines(input, indent string) string {
+// IndentLines adds the given indent prefix to each line of input.
+func IndentLines(input, indent string) string {
 	if input == "" {
 		return ""
 	}
@@ -508,9 +506,9 @@ func indentLines(input, indent string) string {
 // Pagination Helpers
 // =============================================================================
 
-// wrapWithPagination wraps a query with cursor-based pagination.
+// WrapWithPagination wraps a query with cursor-based pagination.
 // The idColumn parameter specifies which column to use for ordering and cursoring.
-func wrapWithPagination(query, idColumn string) string {
+func WrapWithPagination(query, idColumn string) string {
 	return fmt.Sprintf(`WITH base_results AS (
 %s
     ),
@@ -533,14 +531,14 @@ func wrapWithPagination(query, idColumn string) string {
     SELECT r.%s, n.next_cursor
     FROM returned r
     CROSS JOIN next n`,
-		indentLines(query, "        "), idColumn, idColumn, idColumn,
+		IndentLines(query, "        "), idColumn, idColumn, idColumn,
 		idColumn, idColumn, idColumn, idColumn)
 }
 
-// wrapWithPaginationWildcardFirst wraps a query for list_subjects with wildcard-first ordering.
+// WrapWithPaginationWildcardFirst wraps a query for list_subjects with wildcard-first ordering.
 // Wildcards ('*') are sorted before all other subject IDs to ensure consistent pagination.
 // Uses a compound sort key: (is_not_wildcard, subject_id) where is_not_wildcard is 0 for '*', 1 otherwise.
-func wrapWithPaginationWildcardFirst(query string) string {
+func WrapWithPaginationWildcardFirst(query string) string {
 	return fmt.Sprintf(`WITH base_results AS (
 %s
     ),
@@ -572,5 +570,5 @@ func wrapWithPaginationWildcardFirst(query string) string {
     SELECT r.subject_id, n.next_cursor
     FROM returned r
     CROSS JOIN next n`,
-		indentLines(query, "        "))
+		IndentLines(query, "        "))
 }

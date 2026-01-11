@@ -1,4 +1,6 @@
-package sqlgen
+// Package sqldsl provides a domain-specific SQL DSL for generating Melange authorization queries.
+// It models authorization concepts directly rather than generic SQL syntax.
+package sqldsl
 
 import (
 	"fmt"

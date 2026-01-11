@@ -1,4 +1,5 @@
-package sqlgen
+// Package analysis provides relation analysis and strategy selection for SQL code generation.
+package analysis
 
 // GenerationCapabilities represents the unified generation eligibility for a relation.
 // This consolidates the former separate CanGenerate (check) and CanGenerateListValue (list)

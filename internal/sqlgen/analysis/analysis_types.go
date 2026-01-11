@@ -1,4 +1,4 @@
-package sqlgen
+package analysis
 
 import (
 	"sort"
@@ -651,9 +651,9 @@ func collectIntersectionGroups(r RelationDefinition) []IntersectionGroupInfo {
 	return groups
 }
 
-// buildAnalysisLookup creates a nested map for efficient analysis lookups.
+// BuildAnalysisLookup creates a nested map for efficient analysis lookups.
 // Returns map[objectType][relation] -> *RelationAnalysis
-func buildAnalysisLookup(analyses []RelationAnalysis) map[string]map[string]*RelationAnalysis {
+func BuildAnalysisLookup(analyses []RelationAnalysis) map[string]map[string]*RelationAnalysis {
 	lookup := make(map[string]map[string]*RelationAnalysis)
 	for i := range analyses {
 		a := &analyses[i]
@@ -676,7 +676,7 @@ func buildAnalysisLookup(analyses []RelationAnalysis) map[string]map[string]*Rel
 // - ExcludedRelations: relations in "but not" clauses
 func sortByDependency(analyses []RelationAnalysis) []RelationAnalysis {
 	// Build lookup map for finding analyses during dependency tracking
-	lookup := buildAnalysisLookup(analyses)
+	lookup := BuildAnalysisLookup(analyses)
 
 	// Build dependency graph: relation -> relations it depends on
 	deps := make(map[string][]string)        // key: "type.relation"
@@ -913,7 +913,7 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 	sorted := sortByDependency(analyses)
 
 	// Build lookup map on sorted analyses: (objectType, relation) -> *RelationAnalysis
-	lookup := buildAnalysisLookup(sorted)
+	lookup := BuildAnalysisLookup(sorted)
 
 	// For each analysis, check if it can be generated and propagate properties
 	for i := range sorted {

@@ -1,4 +1,4 @@
-package sqlgen
+package sqldsl
 
 // TableExpr is the interface for table expressions in FROM and JOIN clauses.
 // Types that can be used as table sources implement this interface.

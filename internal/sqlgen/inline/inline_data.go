@@ -1,9 +1,13 @@
-package sqlgen
+// Package inline provides inline SQL model data and typed VALUES rows.
+package inline
 
 import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/pthm/melange/internal/sqlgen/analysis"
+	"github.com/pthm/melange/internal/sqlgen/sqldsl"
 )
 
 // InlineSQLData contains SQL VALUES payloads that replace database-backed model tables.
@@ -22,27 +26,28 @@ type InlineSQLData struct {
 
 	// ClosureRows contains typed expression rows for closure data.
 	// Each row has 3 columns: object_type, relation, satisfying_relation.
-	ClosureRows []ValuesRow
+	ClosureRows []sqldsl.ValuesRow
 	// UsersetRows contains typed expression rows for userset data.
 	// Each row has 4 columns: object_type, relation, subject_type, subject_relation.
-	UsersetRows []ValuesRow
+	UsersetRows []sqldsl.ValuesRow
 }
 
-func buildInlineSQLData(closureRows []ClosureRow, analyses []RelationAnalysis) InlineSQLData {
+func buildInlineSQLData(closureRows []analysis.ClosureRow, analyses []analysis.RelationAnalysis) InlineSQLData {
 	return InlineSQLData{
-		ClosureValues: buildClosureValues(closureRows),
+		ClosureValues: BuildClosureValues(closureRows),
 		UsersetValues: buildUsersetValues(analyses),
-		ClosureRows:   buildClosureTypedRows(closureRows),
-		UsersetRows:   buildUsersetTypedRows(analyses),
+		ClosureRows:   BuildClosureTypedRows(closureRows),
+		UsersetRows:   BuildUsersetTypedRows(analyses),
 	}
 }
 
 // BuildInlineSQLData exposes inline SQL generation for tools and tests.
-func BuildInlineSQLData(closureRows []ClosureRow, analyses []RelationAnalysis) InlineSQLData {
+func BuildInlineSQLData(closureRows []analysis.ClosureRow, analyses []analysis.RelationAnalysis) InlineSQLData {
 	return buildInlineSQLData(closureRows, analyses)
 }
 
-func buildClosureValues(closureRows []ClosureRow) string {
+// BuildClosureValues builds string-based closure VALUES content.
+func BuildClosureValues(closureRows []analysis.ClosureRow) string {
 	if len(closureRows) == 0 {
 		return "(NULL::TEXT, NULL::TEXT, NULL::TEXT)"
 	}
@@ -59,15 +64,15 @@ func buildClosureValues(closureRows []ClosureRow) string {
 	return strings.Join(rows, ", ")
 }
 
-func buildUsersetValues(analyses []RelationAnalysis) string {
+func buildUsersetValues(analyses []analysis.RelationAnalysis) string {
 	seen := make(map[string]struct{})
 	var rows []string
 
-	for _, analysis := range analyses {
-		for _, pattern := range analysis.UsersetPatterns {
+	for _, a := range analyses {
+		for _, pattern := range a.UsersetPatterns {
 			key := strings.Join([]string{
-				analysis.ObjectType,
-				analysis.Relation,
+				a.ObjectType,
+				a.Relation,
 				pattern.SubjectType,
 				pattern.SubjectRelation,
 			}, "\x00")
@@ -76,8 +81,8 @@ func buildUsersetValues(analyses []RelationAnalysis) string {
 			}
 			seen[key] = struct{}{}
 			rows = append(rows, fmt.Sprintf("('%s', '%s', '%s', '%s')",
-				escapeSQLLiteral(analysis.ObjectType),
-				escapeSQLLiteral(analysis.Relation),
+				escapeSQLLiteral(a.ObjectType),
+				escapeSQLLiteral(a.Relation),
 				escapeSQLLiteral(pattern.SubjectType),
 				escapeSQLLiteral(pattern.SubjectRelation),
 			))
@@ -100,9 +105,9 @@ func escapeSQLLiteral(value string) string {
 // Typed Row Builders (Phase 5)
 // =============================================================================
 
-// buildClosureTypedRows builds typed ValuesRow slices for closure data.
+// BuildClosureTypedRows builds typed ValuesRow slices for closure data.
 // Returns nil for empty input (TypedValuesTable handles empty case).
-func buildClosureTypedRows(closureRows []ClosureRow) []ValuesRow {
+func BuildClosureTypedRows(closureRows []analysis.ClosureRow) []sqldsl.ValuesRow {
 	if len(closureRows) == 0 {
 		return nil
 	}
@@ -110,13 +115,13 @@ func buildClosureTypedRows(closureRows []ClosureRow) []ValuesRow {
 	// Build rows with sort keys
 	type rowWithKey struct {
 		key string
-		row ValuesRow
+		row sqldsl.ValuesRow
 	}
 	keyed := make([]rowWithKey, 0, len(closureRows))
 	for _, cr := range closureRows {
 		keyed = append(keyed, rowWithKey{
 			key: cr.ObjectType + "\x00" + cr.Relation + "\x00" + cr.SatisfyingRelation,
-			row: ValuesRow{Lit(cr.ObjectType), Lit(cr.Relation), Lit(cr.SatisfyingRelation)},
+			row: sqldsl.ValuesRow{sqldsl.Lit(cr.ObjectType), sqldsl.Lit(cr.Relation), sqldsl.Lit(cr.SatisfyingRelation)},
 		})
 	}
 
@@ -126,28 +131,28 @@ func buildClosureTypedRows(closureRows []ClosureRow) []ValuesRow {
 	})
 
 	// Extract sorted rows
-	result := make([]ValuesRow, len(keyed))
+	result := make([]sqldsl.ValuesRow, len(keyed))
 	for i, k := range keyed {
 		result[i] = k.row
 	}
 	return result
 }
 
-// buildUsersetTypedRows builds typed ValuesRow slices for userset data.
+// BuildUsersetTypedRows builds typed ValuesRow slices for userset data.
 // Returns nil for empty input (TypedValuesTable handles empty case).
-func buildUsersetTypedRows(analyses []RelationAnalysis) []ValuesRow {
+func BuildUsersetTypedRows(analyses []analysis.RelationAnalysis) []sqldsl.ValuesRow {
 	seen := make(map[string]struct{})
 	type rowWithKey struct {
 		key string
-		row ValuesRow
+		row sqldsl.ValuesRow
 	}
 	var keyed []rowWithKey
 
-	for _, analysis := range analyses {
-		for _, pattern := range analysis.UsersetPatterns {
+	for _, a := range analyses {
+		for _, pattern := range a.UsersetPatterns {
 			key := strings.Join([]string{
-				analysis.ObjectType,
-				analysis.Relation,
+				a.ObjectType,
+				a.Relation,
 				pattern.SubjectType,
 				pattern.SubjectRelation,
 			}, "\x00")
@@ -157,11 +162,11 @@ func buildUsersetTypedRows(analyses []RelationAnalysis) []ValuesRow {
 			seen[key] = struct{}{}
 			keyed = append(keyed, rowWithKey{
 				key: key,
-				row: ValuesRow{
-					Lit(analysis.ObjectType),
-					Lit(analysis.Relation),
-					Lit(pattern.SubjectType),
-					Lit(pattern.SubjectRelation),
+				row: sqldsl.ValuesRow{
+					sqldsl.Lit(a.ObjectType),
+					sqldsl.Lit(a.Relation),
+					sqldsl.Lit(pattern.SubjectType),
+					sqldsl.Lit(pattern.SubjectRelation),
 				},
 			})
 		}
@@ -177,7 +182,7 @@ func buildUsersetTypedRows(analyses []RelationAnalysis) []ValuesRow {
 	})
 
 	// Extract sorted rows
-	result := make([]ValuesRow, len(keyed))
+	result := make([]sqldsl.ValuesRow, len(keyed))
 	for i, k := range keyed {
 		result[i] = k.row
 	}

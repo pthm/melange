@@ -1,8 +1,11 @@
-package sqlgen
+// Package plpgsql provides PL/pgSQL function builder types.
+package plpgsql
 
 import (
 	"fmt"
 	"strings"
+
+	"github.com/pthm/melange/internal/sqlgen/sqldsl"
 )
 
 // =============================================================================
@@ -16,7 +19,7 @@ import (
 type FuncArg struct {
 	Name    string
 	Type    string
-	Default Expr // nil means no default
+	Default sqldsl.Expr // nil means no default
 }
 
 // Decl represents a DECLARE variable declaration.
@@ -49,7 +52,7 @@ func (Return) StmtSQL() string {
 // Assign renders name := value;
 type Assign struct {
 	Name  string
-	Value Expr
+	Value sqldsl.Expr
 }
 
 func (a Assign) StmtSQL() string {
@@ -58,7 +61,7 @@ func (a Assign) StmtSQL() string {
 
 // If renders IF cond THEN ... [ELSE ...] END IF;
 type If struct {
-	Cond Expr
+	Cond sqldsl.Expr
 	Then []Stmt
 	Else []Stmt
 }
@@ -203,8 +206,8 @@ func ListObjectsArgs() []FuncArg {
 	return []FuncArg{
 		{Name: "p_subject_type", Type: "TEXT"},
 		{Name: "p_subject_id", Type: "TEXT"},
-		{Name: "p_limit", Type: "INT", Default: Null{}},
-		{Name: "p_after", Type: "TEXT", Default: Null{}},
+		{Name: "p_limit", Type: "INT", Default: sqldsl.Null{}},
+		{Name: "p_after", Type: "TEXT", Default: sqldsl.Null{}},
 	}
 }
 
@@ -213,8 +216,8 @@ func ListSubjectsArgs() []FuncArg {
 	return []FuncArg{
 		{Name: "p_object_id", Type: "TEXT"},
 		{Name: "p_subject_type", Type: "TEXT"},
-		{Name: "p_limit", Type: "INT", Default: Null{}},
-		{Name: "p_after", Type: "TEXT", Default: Null{}},
+		{Name: "p_limit", Type: "INT", Default: sqldsl.Null{}},
+		{Name: "p_after", Type: "TEXT", Default: sqldsl.Null{}},
 	}
 }
 
@@ -259,8 +262,8 @@ func ListObjectsDispatcherArgs() []FuncArg {
 		{Name: "p_subject_id", Type: "TEXT"},
 		{Name: "p_relation", Type: "TEXT"},
 		{Name: "p_object_type", Type: "TEXT"},
-		{Name: "p_limit", Type: "INT", Default: Null{}},
-		{Name: "p_after", Type: "TEXT", Default: Null{}},
+		{Name: "p_limit", Type: "INT", Default: sqldsl.Null{}},
+		{Name: "p_after", Type: "TEXT", Default: sqldsl.Null{}},
 	}
 }
 
@@ -271,7 +274,7 @@ func ListSubjectsDispatcherArgs() []FuncArg {
 		{Name: "p_object_id", Type: "TEXT"},
 		{Name: "p_relation", Type: "TEXT"},
 		{Name: "p_subject_type", Type: "TEXT"},
-		{Name: "p_limit", Type: "INT", Default: Null{}},
-		{Name: "p_after", Type: "TEXT", Default: Null{}},
+		{Name: "p_limit", Type: "INT", Default: sqldsl.Null{}},
+		{Name: "p_after", Type: "TEXT", Default: sqldsl.Null{}},
 	}
 }

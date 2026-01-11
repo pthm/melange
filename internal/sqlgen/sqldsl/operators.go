@@ -1,4 +1,4 @@
-package sqlgen
+package sqldsl
 
 import (
 	"strings"

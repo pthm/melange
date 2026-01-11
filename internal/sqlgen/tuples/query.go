@@ -1,14 +1,19 @@
-package sqlgen
+// Package tuples provides tuple-table specific builders and helpers.
+package tuples
+
+import (
+	"github.com/pthm/melange/internal/sqlgen/sqldsl"
+)
 
 // TupleQuery is a fluent builder for queries against melange_tuples.
 type TupleQuery struct {
 	alias       string
 	objectType  string
 	relations   []string
-	conditions  []Expr
-	columns     []string // Deprecated: use columnExprs
-	columnExprs []Expr   // Preferred: typed column expressions
-	joins       []JoinClause
+	conditions  []sqldsl.Expr
+	columns     []string      // Deprecated: use columnExprs
+	columnExprs []sqldsl.Expr // Preferred: typed column expressions
+	joins       []sqldsl.JoinClause
 	distinct    bool
 	limit       int
 }
@@ -53,7 +58,7 @@ func (q *TupleQuery) SelectCol(columns ...string) *TupleQuery {
 }
 
 // SelectExpr adds typed expressions as columns.
-func (q *TupleQuery) SelectExpr(exprs ...Expr) *TupleQuery {
+func (q *TupleQuery) SelectExpr(exprs ...sqldsl.Expr) *TupleQuery {
 	q.columnExprs = append(q.columnExprs, exprs...)
 	return q
 }
@@ -71,7 +76,7 @@ func (q *TupleQuery) Limit(n int) *TupleQuery {
 }
 
 // Where adds arbitrary WHERE conditions.
-func (q *TupleQuery) Where(exprs ...Expr) *TupleQuery {
+func (q *TupleQuery) Where(exprs ...sqldsl.Expr) *TupleQuery {
 	for _, e := range exprs {
 		if e != nil {
 			q.conditions = append(q.conditions, e)
@@ -81,149 +86,149 @@ func (q *TupleQuery) Where(exprs ...Expr) *TupleQuery {
 }
 
 // WhereSubject adds conditions for matching subject type and ID.
-func (q *TupleQuery) WhereSubject(ref SubjectRef) *TupleQuery {
+func (q *TupleQuery) WhereSubject(ref sqldsl.SubjectRef) *TupleQuery {
 	q.conditions = append(q.conditions,
-		Eq{q.col("subject_type"), ref.Type},
-		Eq{q.col("subject_id"), ref.ID},
+		sqldsl.Eq{Left: q.col("subject_type"), Right: ref.Type},
+		sqldsl.Eq{Left: q.col("subject_id"), Right: ref.ID},
 	)
 	return q
 }
 
 // WhereSubjectType adds a condition for subject_type equals.
-func (q *TupleQuery) WhereSubjectType(t Expr) *TupleQuery {
-	q.conditions = append(q.conditions, Eq{q.col("subject_type"), t})
+func (q *TupleQuery) WhereSubjectType(t sqldsl.Expr) *TupleQuery {
+	q.conditions = append(q.conditions, sqldsl.Eq{Left: q.col("subject_type"), Right: t})
 	return q
 }
 
 // WhereSubjectTypeIn adds a condition for subject_type IN.
 func (q *TupleQuery) WhereSubjectTypeIn(types ...string) *TupleQuery {
-	q.conditions = append(q.conditions, In{Expr: q.col("subject_type"), Values: types})
+	q.conditions = append(q.conditions, sqldsl.In{Expr: q.col("subject_type"), Values: types})
 	return q
 }
 
 // WhereSubjectID adds a condition for subject_id matching.
 // If allowWildcard is true, also matches "*".
-func (q *TupleQuery) WhereSubjectID(id Expr, allowWildcard bool) *TupleQuery {
-	q.conditions = append(q.conditions, SubjectIDMatch(q.col("subject_id"), id, allowWildcard))
+func (q *TupleQuery) WhereSubjectID(id sqldsl.Expr, allowWildcard bool) *TupleQuery {
+	q.conditions = append(q.conditions, sqldsl.SubjectIDMatch(q.col("subject_id"), id, allowWildcard))
 	return q
 }
 
 // WhereObject adds conditions for matching object type and ID.
-func (q *TupleQuery) WhereObject(ref ObjectRef) *TupleQuery {
+func (q *TupleQuery) WhereObject(ref sqldsl.ObjectRef) *TupleQuery {
 	q.conditions = append(q.conditions,
-		Eq{q.col("object_type"), ref.Type},
-		Eq{q.col("object_id"), ref.ID},
+		sqldsl.Eq{Left: q.col("object_type"), Right: ref.Type},
+		sqldsl.Eq{Left: q.col("object_id"), Right: ref.ID},
 	)
 	return q
 }
 
 // WhereObjectID adds a condition for object_id equals.
-func (q *TupleQuery) WhereObjectID(id Expr) *TupleQuery {
-	q.conditions = append(q.conditions, Eq{q.col("object_id"), id})
+func (q *TupleQuery) WhereObjectID(id sqldsl.Expr) *TupleQuery {
+	q.conditions = append(q.conditions, sqldsl.Eq{Left: q.col("object_id"), Right: id})
 	return q
 }
 
 // WhereHasUserset adds a condition requiring subject_id to contain '#'.
 func (q *TupleQuery) WhereHasUserset() *TupleQuery {
-	q.conditions = append(q.conditions, HasUserset{q.col("subject_id")})
+	q.conditions = append(q.conditions, sqldsl.HasUserset{Source: q.col("subject_id")})
 	return q
 }
 
 // WhereNoUserset adds a condition requiring subject_id to NOT contain '#'.
 func (q *TupleQuery) WhereNoUserset() *TupleQuery {
-	q.conditions = append(q.conditions, NoUserset{q.col("subject_id")})
+	q.conditions = append(q.conditions, sqldsl.NoUserset{Source: q.col("subject_id")})
 	return q
 }
 
 // WhereUsersetRelation adds a condition for the userset relation part.
 func (q *TupleQuery) WhereUsersetRelation(rel string) *TupleQuery {
-	q.conditions = append(q.conditions, Eq{
-		UsersetRelation{q.col("subject_id")},
-		Lit(rel),
+	q.conditions = append(q.conditions, sqldsl.Eq{
+		Left:  sqldsl.UsersetRelation{Source: q.col("subject_id")},
+		Right: sqldsl.Lit(rel),
 	})
 	return q
 }
 
 // InnerJoin adds an INNER JOIN clause.
-func (q *TupleQuery) InnerJoin(table, alias string, on ...Expr) *TupleQuery {
-	q.joins = append(q.joins, JoinClause{
+func (q *TupleQuery) InnerJoin(table, alias string, on ...sqldsl.Expr) *TupleQuery {
+	q.joins = append(q.joins, sqldsl.JoinClause{
 		Type:  "INNER",
 		Table: table,
 		Alias: alias,
-		On:    And(on...),
+		On:    sqldsl.And(on...),
 	})
 	return q
 }
 
 // LeftJoin adds a LEFT JOIN clause.
-func (q *TupleQuery) LeftJoin(table, alias string, on ...Expr) *TupleQuery {
-	q.joins = append(q.joins, JoinClause{
+func (q *TupleQuery) LeftJoin(table, alias string, on ...sqldsl.Expr) *TupleQuery {
+	q.joins = append(q.joins, sqldsl.JoinClause{
 		Type:  "LEFT",
 		Table: table,
 		Alias: alias,
-		On:    And(on...),
+		On:    sqldsl.And(on...),
 	})
 	return q
 }
 
 // JoinTuples adds an INNER JOIN to melange_tuples with the given alias.
-func (q *TupleQuery) JoinTuples(alias string, on ...Expr) *TupleQuery {
+func (q *TupleQuery) JoinTuples(alias string, on ...sqldsl.Expr) *TupleQuery {
 	return q.InnerJoin("melange_tuples", alias, on...)
 }
 
 // JoinClosure adds an INNER JOIN to an inline VALUES closure table.
 // closureValues should be in the format "('type1','rel1','sat1'),('type2','rel2','sat2')"
-func (q *TupleQuery) JoinClosure(alias, closureValues string, on ...Expr) *TupleQuery {
-	q.joins = append(q.joins, JoinClause{
+func (q *TupleQuery) JoinClosure(alias, closureValues string, on ...sqldsl.Expr) *TupleQuery {
+	q.joins = append(q.joins, sqldsl.JoinClause{
 		Type:      "INNER",
-		TableExpr: ClosureValuesTable(closureValues, alias),
-		On:        And(on...),
+		TableExpr: sqldsl.ClosureValuesTable(closureValues, alias),
+		On:        sqldsl.And(on...),
 	})
 	return q
 }
 
 // JoinRaw adds a JOIN with a raw table expression.
-func (q *TupleQuery) JoinRaw(joinType, tableExpr string, on ...Expr) *TupleQuery {
-	q.joins = append(q.joins, JoinClause{
+func (q *TupleQuery) JoinRaw(joinType, tableExpr string, on ...sqldsl.Expr) *TupleQuery {
+	q.joins = append(q.joins, sqldsl.JoinClause{
 		Type:  joinType,
 		Table: tableExpr,
 		Alias: "",
-		On:    And(on...),
+		On:    sqldsl.And(on...),
 	})
 	return q
 }
 
 // col returns a column reference for this query's table.
-func (q *TupleQuery) col(name string) Col {
-	return Col{Table: q.alias, Column: name}
+func (q *TupleQuery) col(name string) sqldsl.Col {
+	return sqldsl.Col{Table: q.alias, Column: name}
 }
 
 // Col returns a column reference for this query's table (public API).
-func (q *TupleQuery) Col(name string) Col {
+func (q *TupleQuery) Col(name string) sqldsl.Col {
 	return q.col(name)
 }
 
 // Build returns the declarative SelectStmt for inspection or testing.
-func (q *TupleQuery) Build() SelectStmt {
+func (q *TupleQuery) Build() sqldsl.SelectStmt {
 	// Collect WHERE conditions
-	var where []Expr
+	var where []sqldsl.Expr
 	if q.objectType != "" {
-		where = append(where, Eq{q.col("object_type"), Lit(q.objectType)})
+		where = append(where, sqldsl.Eq{Left: q.col("object_type"), Right: sqldsl.Lit(q.objectType)})
 	}
 	if len(q.relations) > 0 {
-		where = append(where, In{Expr: q.col("relation"), Values: q.relations})
+		where = append(where, sqldsl.In{Expr: q.col("relation"), Values: q.relations})
 	}
 	where = append(where, q.conditions...)
 
 	// Build the WHERE clause
-	var whereExpr Expr
+	var whereExpr sqldsl.Expr
 	if len(where) > 0 {
-		whereExpr = And(where...)
+		whereExpr = sqldsl.And(where...)
 	}
 
-	stmt := SelectStmt{
+	stmt := sqldsl.SelectStmt{
 		Distinct: q.distinct,
-		FromExpr: TableAs("melange_tuples", q.alias),
+		FromExpr: sqldsl.TableAs("melange_tuples", q.alias),
 		Joins:    q.joins,
 		Where:    whereExpr,
 		Limit:    q.limit,
