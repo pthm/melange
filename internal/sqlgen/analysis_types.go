@@ -248,37 +248,12 @@ type RelationAnalysis struct {
 	Features   RelationFeatures // Feature flags determining what SQL to generate
 
 	// Capabilities holds the unified generation eligibility for check and list functions.
-	// This replaces the separate CanGenerate/CanGenerateListValue fields.
 	// Computed by ComputeCanGenerate after all relations are analyzed.
 	Capabilities GenerationCapabilities
 
 	// ListStrategy determines which list generation approach to use.
 	// Computed by ComputeCanGenerate after Capabilities is set.
 	ListStrategy ListStrategy
-
-	// DEPRECATED: Use Capabilities.CheckAllowed instead.
-	// CanGenerate is true if this relation can use generated SQL for check.
-	// This is computed by checking both the relation's own features AND
-	// ensuring all relations in the satisfying closure are simply resolvable.
-	// Set by ComputeCanGenerate after all relations are analyzed.
-	CanGenerate bool
-
-	// DEPRECATED: Use Capabilities.CheckReason instead.
-	// CannotGenerateReason explains why CanGenerate is false.
-	// Empty when CanGenerate is true.
-	CannotGenerateReason string
-
-	// DEPRECATED: Use Capabilities.ListAllowed instead.
-	// CanGenerateListValue is true if this relation can use generated SQL for list functions.
-	// List functions have stricter requirements than check functions because they use
-	// set operations (UNION, EXCEPT) rather than boolean composition.
-	// Set by ComputeCanGenerate after all relations are analyzed.
-	CanGenerateListValue bool
-
-	// DEPRECATED: Use Capabilities.ListReason instead.
-	// CannotGenerateListReason explains why CanGenerateListValue is false.
-	// Empty when CanGenerateListValue is true.
-	CannotGenerateListReason string
 
 	// For Direct/Implied patterns - from closure table
 	SatisfyingRelations []string // Relations that satisfy this one (e.g., ["viewer", "editor", "owner"])
@@ -855,16 +830,12 @@ func sortByDependency(analyses []RelationAnalysis) []RelationAnalysis {
 	return sorted
 }
 
-// CanGenerateList returns true if we can generate specialized list SQL for this relation.
-// This returns the CanGenerateListValue field which is computed by ComputeCanGenerate.
-//
-// List functions have different constraints than check functions because they use set
-// operations (UNION, EXCEPT, INTERSECT) rather than boolean composition.
-//
-// This is progressively relaxed as more list codegen patterns are implemented:
 // canGenerateListFeatures checks if the given features allow list generation.
 // This checks a single relation's features - the full check in ComputeCanGenerate
 // also validates that ALL relations in the closure have compatible features.
+//
+// List functions have different constraints than check functions because they use set
+// operations (UNION, EXCEPT, INTERSECT) rather than boolean composition.
 //
 // The hasIndirectAnchor parameter indicates whether an indirect anchor was found
 // via findIndirectAnchor(). When true, list generation is allowed even without
@@ -920,16 +891,13 @@ func canGenerateListFeatures(f RelationFeatures, hasIndirectAnchor bool) (canGen
 	return true, ""
 }
 
-// ComputeCanGenerate walks the dependency graph and sets CanGenerate on each analysis.
-// A relation can be generated if:
-// 1. Its own features allow generation (CanGenerate() on features returns true)
-// 2. ALL relations in its satisfying closure are either:
-//   - Simply resolvable (can use tuple lookup), OR
-//   - Complex but generatable (have exclusions but can generate their own function)
+// ComputeCanGenerate walks the dependency graph and sets Capabilities on each analysis.
+// It determines generation eligibility and populates derived data used by code generation.
 //
-// 3. If the relation has exclusions, excluded relations are classified as:
-//   - Simple: can use direct tuple lookup (simply resolvable AND no implied closure)
-//   - Complex: use check_permission_internal call (has TTU, userset, intersection, etc.)
+// A relation's CheckAllowed is always true (we generate specialized functions for all relations).
+// A relation's ListAllowed is true if:
+// 1. Its own features allow list generation (at least one access path)
+// 2. ALL relations in its satisfying closure are also list-generatable
 //
 // For relations in the closure that need function calls (have exclusions but are generatable),
 // the generated SQL will call their specialized check function rather than using tuple lookup.
@@ -939,6 +907,7 @@ func canGenerateListFeatures(f RelationFeatures, hasIndirectAnchor bool) (canGen
 // - Collects AllowedSubjectTypes: union of all subject types from satisfying relations
 // - Partitions closure relations into SimpleClosureRelations and ComplexClosureRelations
 // - Partitions excluded relations into SimpleExcludedRelations and ComplexExcludedRelations
+// - Computes ListStrategy for selecting the appropriate list code generation path
 func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 	// Sort by dependency order first - ensures relations are processed after their dependencies
 	sorted := sortByDependency(analyses)
@@ -1178,9 +1147,6 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 
 		// First check: does this relation's features allow generation?
 		if !a.Features.CanGenerate() {
-			a.CanGenerate = false
-			a.CannotGenerateReason = "features do not allow generation (no access paths)"
-			// Also set unified Capabilities
 			a.Capabilities = GenerationCapabilities{
 				CheckAllowed: false,
 				ListAllowed:  false,
@@ -1217,7 +1183,7 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 			case relAnalysis.Features.IsClosureCompatible():
 				// Simple: can use tuple lookup
 				simpleRels = append(simpleRels, rel)
-			case relAnalysis.CanGenerate:
+			case relAnalysis.Capabilities.CheckAllowed:
 				// Complex but generatable: delegate to check_permission_internal
 				complexRels = append(complexRels, rel)
 			default:
@@ -1374,8 +1340,8 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 						break
 					}
 					// The part's relation must be generatable since we call its function
-					// Note: We check CanGenerate on the analysis, which is computed in dependency order
-					if !partAnalysis.CanGenerate {
+					// Note: We check Capabilities.CheckAllowed on the analysis, which is computed in dependency order
+					if !partAnalysis.Capabilities.CheckAllowed {
 						canGenerate = false
 						cannotGenerateReason = "intersection part not generatable: " + part.Relation
 						break
@@ -1445,8 +1411,6 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 			// Note: ClosureExcludedRelations is now collected earlier in the "Second check"
 			// loop, before exclusion classification. This ensures exclusions from closure
 			// relations are properly classified as simple or complex.
-		} else {
-			a.CannotGenerateReason = cannotGenerateReason
 		}
 
 		// Design decision: Always generate specialized functions for all relations.
@@ -1459,9 +1423,8 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		//   3. Potential for future optimizations in generated code
 		//
 		// The checks above still run to populate SimpleClosureRelations, ComplexClosureRelations,
-		// and other classification data used by the code generator. CannotGenerateReason is
-		// preserved for diagnostics but CanGenerate is always true.
-		a.CanGenerate = true
+		// and other classification data used by the code generator. cannotGenerateReason is
+		// preserved for diagnostics but CheckAllowed is always true.
 
 		// Compute maximum userset depth for this relation.
 		// This enables generating functions that immediately raise M2002 for
@@ -1475,19 +1438,17 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		a.SelfReferentialUsersets = detectSelfReferentialUsersets(a)
 		a.HasSelfReferentialUserset = len(a.SelfReferentialUsersets) > 0
 
-		// Compute CanGenerateListValue for list function generation.
+		// Compute list generation eligibility.
 		// List functions have stricter requirements - ALL relations in the closure
 		// must have features compatible with simple tuple lookup.
 		canGenerateList, cannotGenerateListReason := computeCanGenerateList(a, lookup)
-		a.CanGenerateListValue = canGenerateList
-		a.CannotGenerateListReason = cannotGenerateListReason
 
-		// Set unified Capabilities (consolidates CanGenerate + CanGenerateListValue)
+		// Set unified Capabilities
 		a.Capabilities = GenerationCapabilities{
-			CheckAllowed: a.CanGenerate,
-			ListAllowed:  a.CanGenerateListValue,
-			CheckReason:  a.CannotGenerateReason,
-			ListReason:   a.CannotGenerateListReason,
+			CheckAllowed: true, // Always generate check functions for all relations
+			ListAllowed:  canGenerateList,
+			CheckReason:  cannotGenerateReason, // Preserved for diagnostics
+			ListReason:   cannotGenerateListReason,
 		}
 
 		// Compute ListStrategy based on analysis data
@@ -1629,17 +1590,14 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 				}
 			}
 
-			// Skip relations that already can generate
-			if a.CanGenerateListValue {
+			// Skip relations that already can generate list
+			if a.Capabilities.ListAllowed {
 				continue
 			}
 
 			// Re-run the list generation check
 			canGenerateList, cannotGenerateListReason := computeCanGenerateList(a, lookup)
-			if canGenerateList != a.CanGenerateListValue {
-				a.CanGenerateListValue = canGenerateList
-				a.CannotGenerateListReason = cannotGenerateListReason
-				// Update unified Capabilities
+			if canGenerateList != a.Capabilities.ListAllowed {
 				a.Capabilities.ListAllowed = canGenerateList
 				a.Capabilities.ListReason = cannotGenerateListReason
 				// Recompute ListStrategy since analysis data may have changed
@@ -1759,8 +1717,8 @@ func computeCanGenerateList(a *RelationAnalysis, lookup map[string]map[string]*R
 		// If a closure relation is not list-generatable, we can't generate list for this relation either.
 		// This handles cases like "can_view: viewer" where viewer is pure TTU (no direct/implied access).
 		// The closure relation was already computed (dependency order), so check its result.
-		if !relAnalysis.CanGenerateListValue {
-			return false, "closure relation " + rel + " is not list-generatable: " + relAnalysis.CannotGenerateListReason
+		if !relAnalysis.Capabilities.ListAllowed {
+			return false, "closure relation " + rel + " is not list-generatable: " + relAnalysis.Capabilities.ListReason
 		}
 
 		// Phase 9C: Closure relations with intersection are now supported.
