@@ -6,26 +6,13 @@ import (
 )
 
 func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, noWildcard bool) (string, error) {
-	// NOTE: The Plan → Blocks → Render architecture (BuildCheckPlan, BuildCheckBlocks,
-	// RenderCheckFunction) exists but has subtle differences from the legacy approach
-	// that cause test failures. The legacy buildCheckFunctionData path is used until
-	// these differences are resolved.
-	data, err := buildCheckFunctionData(a, inline, noWildcard)
+	// Use Plan → Blocks → Render architecture
+	plan := BuildCheckPlan(a, inline, noWildcard)
+	blocks, err := BuildCheckBlocks(plan)
 	if err != nil {
-		return "", fmt.Errorf("building check function data for %s.%s: %w", a.ObjectType, a.Relation, err)
+		return "", fmt.Errorf("building check blocks for %s.%s: %w", a.ObjectType, a.Relation, err)
 	}
-
-	needsPLpgSQL := a.Features.NeedsPLpgSQL() || a.HasComplexUsersetPatterns
-	switch {
-	case !needsPLpgSQL && !a.Features.HasIntersection:
-		return renderCheckDirectFunction(data)
-	case !needsPLpgSQL && a.Features.HasIntersection:
-		return renderCheckIntersectionFunction(data)
-	case needsPLpgSQL && !a.Features.HasIntersection:
-		return renderCheckRecursiveFunction(data)
-	default:
-		return renderCheckRecursiveIntersectionFunction(data)
-	}
+	return RenderCheckFunction(plan, blocks)
 }
 
 func renderCheckDirectFunction(data CheckFunctionData) (string, error) {

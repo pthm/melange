@@ -687,3 +687,471 @@ func renderListDispatcher(functionName string, args []FuncArg, returns string, c
 
 	return buf.String()
 }
+
+// =============================================================================
+// Depth Exceeded Render Functions
+// =============================================================================
+//
+// These render functions handle relations that exceed the userset depth limit.
+// They generate simple functions that immediately raise M2002 without computation.
+
+// RenderListObjectsDepthExceededFunction renders a list_objects function for a relation
+// that exceeds the userset depth limit. The generated function raises M2002 immediately.
+func RenderListObjectsDepthExceededFunction(plan ListPlan) string {
+	fn := PlpgsqlFunction{
+		Name:    plan.FunctionName,
+		Args:    ListObjectsArgs(),
+		Returns: ListObjectsReturns(),
+		Header: []string{
+			fmt.Sprintf("Generated list_objects function for %s.%s", plan.ObjectType, plan.Relation),
+			fmt.Sprintf("Features: %s", plan.FeaturesString()),
+			fmt.Sprintf("DEPTH EXCEEDED: Userset chain depth %d exceeds 25 level limit", plan.Analysis.MaxUsersetDepth),
+		},
+		Body: []Stmt{
+			Comment{Text: fmt.Sprintf("This relation has userset chain depth %d which exceeds the 25 level limit.", plan.Analysis.MaxUsersetDepth)},
+			Comment{Text: "Raise M2002 immediately without any computation."},
+			Raise{Message: "resolution too complex", ErrCode: "M2002"},
+		},
+	}
+	return fn.SQL()
+}
+
+// RenderListSubjectsDepthExceededFunction renders a list_subjects function for a relation
+// that exceeds the userset depth limit. The generated function raises M2002 immediately.
+func RenderListSubjectsDepthExceededFunction(plan ListPlan) string {
+	fn := PlpgsqlFunction{
+		Name:    plan.FunctionName,
+		Args:    ListSubjectsArgs(),
+		Returns: ListSubjectsReturns(),
+		Header: []string{
+			fmt.Sprintf("Generated list_subjects function for %s.%s", plan.ObjectType, plan.Relation),
+			fmt.Sprintf("Features: %s", plan.FeaturesString()),
+			fmt.Sprintf("DEPTH EXCEEDED: Userset chain depth %d exceeds 25 level limit", plan.Analysis.MaxUsersetDepth),
+		},
+		Body: []Stmt{
+			Comment{Text: fmt.Sprintf("This relation has userset chain depth %d which exceeds the 25 level limit.", plan.Analysis.MaxUsersetDepth)},
+			Comment{Text: "Raise M2002 immediately without any computation."},
+			Raise{Message: "resolution too complex", ErrCode: "M2002"},
+		},
+	}
+	return fn.SQL()
+}
+
+// =============================================================================
+// Self-Referential Userset Render Functions
+// =============================================================================
+//
+// These render functions handle self-referential userset patterns like
+// [group#member] on group.member, which require recursive CTE expansion.
+
+// RenderListObjectsSelfRefUsersetFunction renders a list_objects function for self-referential userset patterns.
+func RenderListObjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUsersetBlockSet) (string, error) {
+	// Build CTE body from base blocks with depth wrapping
+	cteBody := renderSelfRefUsersetCTEBody(blocks)
+
+	// Build final exclusion predicates for the CTE result
+	finalExclusions := buildExclusionInput(
+		plan.Analysis,
+		Col{Table: "me", Column: "object_id"},
+		SubjectType,
+		SubjectID,
+	)
+	exclusionPreds := finalExclusions.BuildPredicates()
+
+	var whereExpr Expr
+	if len(exclusionPreds) > 0 {
+		whereExpr = And(exclusionPreds...)
+	}
+
+	finalStmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "me", Column: "object_id"}},
+		FromExpr:    TableAs("member_expansion", "me"),
+		Where:       whereExpr,
+	}
+
+	// Build the CTE SQL
+	cteSQL := "WITH RECURSIVE member_expansion(object_id, depth) AS (\n" + cteBody + "\n)\n" + finalStmt.SQL()
+
+	// Build self-candidate SQL
+	var selfCandidateSQL string
+	if blocks.SelfCandidateBlock != nil {
+		selfCandidateSQL = renderTypedQueryBlock(*blocks.SelfCandidateBlock).SQL
+	}
+
+	// Combine CTE and self-candidate with UNION
+	var query string
+	if selfCandidateSQL != "" {
+		query = joinUnionBlocksSQL([]string{cteSQL, selfCandidateSQL})
+	} else {
+		query = cteSQL
+	}
+
+	paginatedQuery := wrapWithPagination(query, "object_id")
+
+	fn := PlpgsqlFunction{
+		Name:    plan.FunctionName,
+		Args:    ListObjectsArgs(),
+		Returns: ListObjectsReturns(),
+		Header: []string{
+			fmt.Sprintf("Generated list_objects function for %s.%s", plan.ObjectType, plan.Relation),
+			fmt.Sprintf("Features: %s (self-referential userset)", plan.FeaturesString()),
+		},
+		Body: []Stmt{
+			ReturnQuery{Query: paginatedQuery},
+		},
+	}
+
+	return fn.SQL(), nil
+}
+
+// renderSelfRefUsersetCTEBody renders the CTE body from base and recursive blocks.
+func renderSelfRefUsersetCTEBody(blocks SelfRefUsersetBlockSet) string {
+	// Render base blocks with depth wrapping
+	var baseBlocksSQL []string
+	for _, block := range blocks.BaseBlocks {
+		qb := renderTypedQueryBlock(block)
+		wrappedSQL := wrapQueryWithDepthForRender(qb.SQL, "0", "base")
+		baseBlocksSQL = append(baseBlocksSQL, formatQueryBlockSQL(qb.Comments, wrappedSQL))
+	}
+
+	// Join base blocks with UNION
+	cteBody := strings.Join(baseBlocksSQL, "\n    UNION\n")
+
+	// Add recursive block with UNION ALL if present
+	if blocks.RecursiveBlock != nil {
+		qb := renderTypedQueryBlock(*blocks.RecursiveBlock)
+		recursiveSQL := formatQueryBlockSQL(qb.Comments, qb.SQL)
+		cteBody = cteBody + "\n    UNION ALL\n" + recursiveSQL
+	}
+
+	return cteBody
+}
+
+// RenderListSubjectsSelfRefUsersetFunction renders a list_subjects function for self-referential userset patterns.
+func RenderListSubjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUsersetSubjectsBlockSet) (string, error) {
+	// Build userset filter path query
+	usersetFilterQuery := renderSelfRefUsersetFilterQuery(blocks)
+	usersetFilterQuery = trimTrailingSemicolon(usersetFilterQuery)
+	usersetFilterPaginatedQuery := wrapWithPaginationWildcardFirst(usersetFilterQuery)
+
+	// Build regular path query
+	regularQuery := renderSelfRefUsersetRegularQuery(plan, blocks)
+	regularQuery = trimTrailingSemicolon(regularQuery)
+	regularPaginatedQuery := wrapWithPaginationWildcardFirst(regularQuery)
+
+	// Build the IF/ELSE body
+	bodySQL := fmt.Sprintf(`-- Check if p_subject_type is a userset filter (contains '#')
+IF position('#' in p_subject_type) > 0 THEN
+    v_filter_type := split_part(p_subject_type, '#', 1);
+    v_filter_relation := split_part(p_subject_type, '#', 2);
+
+    -- Userset filter case: find userset tuples and recursively expand
+    -- Returns normalized references like 'group:1#member'
+    RETURN QUERY
+    %s;
+ELSE
+    -- Regular subject type: find individual subjects via recursive userset expansion
+    RETURN QUERY
+    %s;
+END IF;`, usersetFilterPaginatedQuery, regularPaginatedQuery)
+
+	fn := PlpgsqlFunction{
+		Name:    plan.FunctionName,
+		Args:    ListSubjectsArgs(),
+		Returns: ListSubjectsReturns(),
+		Header: []string{
+			fmt.Sprintf("Generated list_subjects function for %s.%s", plan.ObjectType, plan.Relation),
+			fmt.Sprintf("Features: %s (self-referential userset)", plan.FeaturesString()),
+		},
+		Decls: []Decl{
+			{Name: "v_filter_type", Type: "TEXT"},
+			{Name: "v_filter_relation", Type: "TEXT"},
+		},
+		Body: []Stmt{
+			RawStmt{SQLText: bodySQL},
+		},
+	}
+
+	return fn.SQL(), nil
+}
+
+// renderSelfRefUsersetFilterQuery renders the userset filter path query with recursive CTE.
+func renderSelfRefUsersetFilterQuery(blocks SelfRefUsersetSubjectsBlockSet) string {
+	// Render base blocks for userset filter path
+	var baseBlocksSQL []string
+	for _, block := range blocks.UsersetFilterBlocks {
+		qb := renderTypedQueryBlock(block)
+		baseBlocksSQL = append(baseBlocksSQL, formatQueryBlockSQL(qb.Comments, qb.SQL))
+	}
+
+	cteBody := strings.Join(baseBlocksSQL, "\n    UNION\n")
+
+	// Add recursive block
+	if blocks.UsersetFilterRecursiveBlock != nil {
+		qb := renderTypedQueryBlock(*blocks.UsersetFilterRecursiveBlock)
+		recursiveSQL := formatQueryBlockSQL(qb.Comments, qb.SQL)
+		cteBody = cteBody + "\n    UNION ALL\n" + recursiveSQL
+	}
+
+	// Build main CTE query
+	mainCTE := fmt.Sprintf(`WITH RECURSIVE userset_expansion(userset_object_id, depth) AS (
+%s
+)`, indentLines(cteBody, "        "))
+
+	// Build result blocks
+	var resultBlocks []string
+
+	// Userset filter returns normalized references
+	resultBlocks = append(resultBlocks, formatQueryBlockSQL(
+		[]string{"-- Userset filter: return normalized userset references"},
+		`SELECT DISTINCT ue.userset_object_id || '#' || v_filter_relation AS subject_id
+FROM userset_expansion ue`,
+	))
+
+	// Add self-candidate block if present
+	if blocks.UsersetFilterSelfBlock != nil {
+		qb := renderTypedQueryBlock(*blocks.UsersetFilterSelfBlock)
+		resultBlocks = append(resultBlocks, formatQueryBlockSQL(qb.Comments, qb.SQL))
+	}
+
+	return mainCTE + "\n" + strings.Join(resultBlocks, "\nUNION\n")
+}
+
+// renderSelfRefUsersetRegularQuery renders the regular path query with userset_objects CTE.
+func renderSelfRefUsersetRegularQuery(plan ListPlan, blocks SelfRefUsersetSubjectsBlockSet) string {
+	// Build userset_objects CTE
+	var usersetObjectsCTE string
+	if blocks.UsersetObjectsBaseBlock != nil {
+		baseQB := renderTypedQueryBlock(*blocks.UsersetObjectsBaseBlock)
+		baseSQL := formatQueryBlockSQL(baseQB.Comments, baseQB.SQL)
+
+		usersetObjectsCTE = baseSQL
+		if blocks.UsersetObjectsRecursiveBlock != nil {
+			recursiveQB := renderTypedQueryBlock(*blocks.UsersetObjectsRecursiveBlock)
+			recursiveSQL := formatQueryBlockSQL(recursiveQB.Comments, recursiveQB.SQL)
+			usersetObjectsCTE = usersetObjectsCTE + "\n            UNION ALL\n" + recursiveSQL
+		}
+	}
+
+	// Render regular blocks
+	var baseBlocksSQL []string
+	for _, block := range blocks.RegularBlocks {
+		qb := renderTypedQueryBlock(block)
+		baseBlocksSQL = append(baseBlocksSQL, formatQueryBlockSQL(qb.Comments, qb.SQL))
+	}
+
+	baseResultsSQL := strings.Join(baseBlocksSQL, "\n    UNION\n")
+
+	// Build full CTE with has_wildcard
+	wildcardTailSQL := renderUsersetWildcardTail(plan.Analysis)
+
+	return fmt.Sprintf(`WITH RECURSIVE
+        userset_objects(userset_object_id, depth) AS (
+%s
+        ),
+        base_results AS (
+%s
+        ),
+        has_wildcard AS (
+            SELECT EXISTS (SELECT 1 FROM base_results br WHERE br.subject_id = '*') AS has_wildcard
+        )
+%s`,
+		indentLines(usersetObjectsCTE, "            "),
+		indentLines(baseResultsSQL, "        "),
+		wildcardTailSQL,
+	)
+}
+
+// =============================================================================
+// Composed Strategy Render Functions
+// =============================================================================
+
+// RenderListObjectsComposedFunction renders a list_objects function for composed access.
+// Composed functions handle indirect anchor patterns (TTU and userset composition).
+func RenderListObjectsComposedFunction(plan ListPlan, blocks ComposedObjectsBlockSet) (string, error) {
+	// Render self-candidate query
+	var selfSQL string
+	if blocks.SelfBlock != nil {
+		qb := renderTypedQueryBlock(*blocks.SelfBlock)
+		selfSQL = qb.SQL
+	}
+
+	// Render main query blocks
+	var mainBlocksSQL []string
+	for _, block := range blocks.MainBlocks {
+		qb := renderTypedQueryBlock(block)
+		mainBlocksSQL = append(mainBlocksSQL, formatQueryBlockSQL(qb.Comments, qb.SQL))
+	}
+	mainQuery := strings.Join(mainBlocksSQL, "\n    UNION\n")
+
+	// Wrap with pagination
+	selfPaginatedSQL := wrapWithPagination(selfSQL, "object_id")
+	mainPaginatedSQL := wrapWithPagination(mainQuery, "object_id")
+
+	// Build the body
+	bodySQL := fmt.Sprintf(`-- Self-candidate check: when subject is a userset on the same object type
+IF EXISTS (
+%s
+) THEN
+    RETURN QUERY
+    %s;
+    RETURN;
+END IF;
+
+-- Type guard: only return results if subject type is allowed
+-- Skip the guard for userset subjects since composed inner calls handle userset subjects
+IF position('#' in p_subject_id) = 0 AND p_subject_type NOT IN (%s) THEN
+    RETURN;
+END IF;
+
+RETURN QUERY
+%s;`,
+		indentLines(selfSQL, "    "),
+		selfPaginatedSQL,
+		formatSQLStringList(blocks.AllowedSubjectTypes),
+		mainPaginatedSQL,
+	)
+
+	fn := PlpgsqlFunction{
+		Name:    plan.FunctionName,
+		Args:    ListObjectsArgs(),
+		Returns: ListObjectsReturns(),
+		Header: []string{
+			fmt.Sprintf("Generated list_objects function for %s.%s", plan.ObjectType, plan.Relation),
+			fmt.Sprintf("Features: %s", plan.FeaturesString()),
+			fmt.Sprintf("Indirect anchor: %s.%s via %s", blocks.AnchorType, blocks.AnchorRelation, blocks.FirstStepType),
+		},
+		Body: []Stmt{
+			RawStmt{SQLText: bodySQL},
+		},
+	}
+	return fn.SQL(), nil
+}
+
+// RenderListSubjectsComposedFunction renders a list_subjects function for composed access.
+func RenderListSubjectsComposedFunction(plan ListPlan, blocks ComposedSubjectsBlockSet) (string, error) {
+	// Render self-candidate query
+	var selfSQL string
+	if blocks.SelfBlock != nil {
+		qb := renderTypedQueryBlock(*blocks.SelfBlock)
+		selfSQL = qb.SQL
+	}
+
+	// Render userset filter candidate blocks
+	var usersetFilterBlocksSQL []string
+	for _, block := range blocks.UsersetFilterBlocks {
+		qb := renderTypedQueryBlock(block)
+		usersetFilterBlocksSQL = append(usersetFilterBlocksSQL, formatQueryBlockSQL(qb.Comments, qb.SQL))
+	}
+	usersetFilterCandidates := strings.Join(usersetFilterBlocksSQL, "\n    UNION\n")
+
+	// Render regular candidate blocks
+	var regularBlocksSQL []string
+	for _, block := range blocks.RegularBlocks {
+		qb := renderTypedQueryBlock(block)
+		regularBlocksSQL = append(regularBlocksSQL, formatQueryBlockSQL(qb.Comments, qb.SQL))
+	}
+	regularCandidates := strings.Join(regularBlocksSQL, "\n    UNION\n")
+
+	// Build userset filter query
+	usersetFilterQuery := fmt.Sprintf(`WITH subject_candidates AS (
+%s
+)
+SELECT DISTINCT sc.subject_id
+FROM subject_candidates sc
+WHERE check_permission_internal(v_filter_type, sc.subject_id, '%s', '%s', p_object_id, ARRAY[]::TEXT[]) = 1`,
+		indentLines(usersetFilterCandidates, "        "),
+		plan.Relation,
+		plan.ObjectType,
+	)
+
+	// Build regular query (with exclusions if needed)
+	var regularQuery string
+	if blocks.HasExclusions {
+		exclusions := buildSimpleComplexExclusionInput(plan.Analysis, ObjectID, SubjectType, Col{Table: "sc", Column: "subject_id"})
+		exclusionPreds := exclusions.BuildPredicates()
+		whereClause := ""
+		if len(exclusionPreds) > 0 {
+			whereClause = "\nWHERE " + And(exclusionPreds...).SQL()
+		}
+		regularQuery = fmt.Sprintf(`WITH subject_candidates AS (
+%s
+)
+SELECT DISTINCT sc.subject_id
+FROM subject_candidates sc%s`,
+			indentLines(regularCandidates, "        "),
+			whereClause,
+		)
+	} else {
+		regularQuery = fmt.Sprintf(`WITH subject_candidates AS (
+%s
+)
+SELECT DISTINCT sc.subject_id
+FROM subject_candidates sc`,
+			indentLines(regularCandidates, "        "),
+		)
+	}
+
+	// Wrap queries with pagination
+	selfPaginatedSQL := wrapWithPaginationWildcardFirst(selfSQL)
+	usersetFilterPaginatedSQL := wrapWithPaginationWildcardFirst(usersetFilterQuery)
+	regularPaginatedSQL := wrapWithPaginationWildcardFirst(regularQuery)
+
+	// Build the body
+	bodySQL := fmt.Sprintf(`v_is_userset_filter := position('#' in p_subject_type) > 0;
+IF v_is_userset_filter THEN
+    v_filter_type := split_part(p_subject_type, '#', 1);
+    v_filter_relation := split_part(p_subject_type, '#', 2);
+
+    -- Self-candidate: when filter type matches object type
+    IF v_filter_type = '%s' THEN
+        IF EXISTS (
+%s
+        ) THEN
+            RETURN QUERY
+            %s;
+            RETURN;
+        END IF;
+    END IF;
+
+    -- Userset filter case
+    RETURN QUERY
+    %s;
+ELSE
+    -- Direct subject type case
+    IF p_subject_type NOT IN (%s) THEN
+        RETURN;
+    END IF;
+
+    RETURN QUERY
+    %s;
+END IF;`,
+		plan.ObjectType,
+		indentLines(selfSQL, "            "),
+		selfPaginatedSQL,
+		usersetFilterPaginatedSQL,
+		formatSQLStringList(blocks.AllowedSubjectTypes),
+		regularPaginatedSQL,
+	)
+
+	fn := PlpgsqlFunction{
+		Name:    plan.FunctionName,
+		Args:    ListSubjectsArgs(),
+		Returns: ListSubjectsReturns(),
+		Header: []string{
+			fmt.Sprintf("Generated list_subjects function for %s.%s", plan.ObjectType, plan.Relation),
+			fmt.Sprintf("Features: %s", plan.FeaturesString()),
+			fmt.Sprintf("Indirect anchor: %s.%s via %s", blocks.AnchorType, blocks.AnchorRelation, blocks.FirstStepType),
+		},
+		Decls: []Decl{
+			{Name: "v_is_userset_filter", Type: "BOOLEAN"},
+			{Name: "v_filter_type", Type: "TEXT"},
+			{Name: "v_filter_relation", Type: "TEXT"},
+		},
+		Body: []Stmt{
+			RawStmt{SQLText: bodySQL},
+		},
+	}
+	return fn.SQL(), nil
+}

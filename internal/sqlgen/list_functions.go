@@ -104,10 +104,19 @@ func generateListObjectsFunction(a RelationAnalysis, inline InlineSQLData) (stri
 		}
 		return RenderListObjectsRecursiveFunction(plan, blocks)
 	case ListStrategyDepthExceeded:
-		return generateListObjectsDepthExceededFunction(a), nil
+		// Use Plan → Render (no blocks needed - just raises error)
+		plan := BuildListObjectsPlan(a, inline)
+		return RenderListObjectsDepthExceededFunction(plan), nil
 	case ListStrategySelfRefUserset:
-		return generateListObjectsSelfRefUsersetFunction(a, inline)
+		// Use Plan → Blocks → Render for self-referential userset patterns
+		plan := BuildListObjectsPlan(a, inline)
+		blocks, err := BuildListObjectsSelfRefUsersetBlocks(plan)
+		if err != nil {
+			return "", err
+		}
+		return RenderListObjectsSelfRefUsersetFunction(plan, blocks)
 	case ListStrategyComposed:
+		// Keep using legacy generation for Composed strategy (complex indirect anchor patterns)
 		return generateListObjectsComposedFunction(a, inline)
 	default:
 		return "", fmt.Errorf("unknown list strategy %v for %s.%s", a.ListStrategy, a.ObjectType, a.Relation)
@@ -143,10 +152,19 @@ func generateListSubjectsFunction(a RelationAnalysis, inline InlineSQLData) (str
 		}
 		return RenderListSubjectsIntersectionFunction(plan, blocks)
 	case ListStrategyDepthExceeded:
-		return generateListSubjectsDepthExceededFunction(a), nil
+		// Use Plan → Render (no blocks needed - just raises error)
+		plan := BuildListSubjectsPlan(a, inline)
+		return RenderListSubjectsDepthExceededFunction(plan), nil
 	case ListStrategySelfRefUserset:
-		return generateListSubjectsSelfRefUsersetFunction(a, inline)
+		// Use Plan → Blocks → Render for self-referential userset patterns
+		plan := BuildListSubjectsPlan(a, inline)
+		blocks, err := BuildListSubjectsSelfRefUsersetBlocks(plan)
+		if err != nil {
+			return "", err
+		}
+		return RenderListSubjectsSelfRefUsersetFunction(plan, blocks)
 	case ListStrategyComposed:
+		// Keep using legacy generation for Composed strategy (complex indirect anchor patterns)
 		return generateListSubjectsComposedFunction(a, inline)
 	default:
 		return "", fmt.Errorf("unknown list strategy %v for %s.%s", a.ListStrategy, a.ObjectType, a.Relation)

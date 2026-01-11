@@ -1,5 +1,7 @@
 package sqlgen
 
+import "fmt"
+
 // =============================================================================
 // Check Blocks Layer
 // =============================================================================
@@ -186,33 +188,70 @@ func buildTypedUsersetCheck(plan CheckPlan) (Expr, error) {
 	}
 
 	var checks []Expr
-	for _, pattern := range patterns {
-		q := Tuples("grant_tuple").
-			ObjectType(plan.ObjectType).
-			Relations(pattern.SourceRelation).
-			Where(
-				Eq{Left: Col{Table: "grant_tuple", Column: "object_id"}, Right: ObjectID},
-				Eq{Left: Col{Table: "grant_tuple", Column: "subject_type"}, Right: Lit(pattern.SubjectType)},
-				HasUserset{Source: Col{Table: "grant_tuple", Column: "subject_id"}},
-				Eq{
-					Left:  UsersetRelation{Source: Col{Table: "grant_tuple", Column: "subject_id"}},
-					Right: Lit(pattern.SubjectRelation),
-				},
-			).
-			JoinTuples("membership",
-				Eq{Left: Col{Table: "membership", Column: "object_type"}, Right: Lit(pattern.SubjectType)},
-				Eq{
-					Left:  Col{Table: "membership", Column: "object_id"},
-					Right: UsersetObjectID{Source: Col{Table: "grant_tuple", Column: "subject_id"}},
-				},
-				In{Expr: Col{Table: "membership", Column: "relation"}, Values: pattern.SatisfyingRelations},
-				Eq{Left: Col{Table: "membership", Column: "subject_type"}, Right: SubjectType},
-				SubjectIDMatch(Col{Table: "membership", Column: "subject_id"}, SubjectID, plan.AllowWildcard),
-			).
-			Select("1").
-			Limit(1)
+	// Build visited expression that appends the current key: p_visited || ARRAY['type:' || p_object_id || ':relation']
+	visitedWithKey := Param(fmt.Sprintf("p_visited || ARRAY['%s:' || p_object_id || ':%s']", plan.ObjectType, plan.Relation))
 
-		checks = append(checks, Exists{q})
+	for _, pattern := range patterns {
+		if pattern.IsComplex {
+			// Complex pattern: use check_permission_internal to verify membership.
+			// This handles cases where the userset closure contains relations with
+			// exclusions, usersets, TTU, or intersections.
+			q := Tuples("grant_tuple").
+				ObjectType(plan.ObjectType).
+				Relations(plan.Relation).
+				Where(
+					Eq{Left: Col{Table: "grant_tuple", Column: "object_id"}, Right: ObjectID},
+					Eq{Left: Col{Table: "grant_tuple", Column: "subject_type"}, Right: Lit(pattern.SubjectType)},
+					HasUserset{Source: Col{Table: "grant_tuple", Column: "subject_id"}},
+					Eq{
+						Left:  UsersetRelation{Source: Col{Table: "grant_tuple", Column: "subject_id"}},
+						Right: Lit(pattern.SubjectRelation),
+					},
+					// Use check_permission_internal to recursively verify membership
+					CheckPermission{
+						Subject:  SubjectParams(),
+						Relation: pattern.SubjectRelation,
+						Object: ObjectRef{
+							Type: Lit(pattern.SubjectType),
+							ID:   UsersetObjectID{Source: Col{Table: "grant_tuple", Column: "subject_id"}},
+						},
+						Visited:     visitedWithKey, // Include visited key for cycle detection
+						ExpectAllow: true,
+					},
+				).
+				Select("1").
+				Limit(1)
+			checks = append(checks, Exists{q})
+		} else {
+			// Simple pattern: use tuple JOIN for membership lookup.
+			// Use the plan's relation for searching grant tuples, not pattern.SourceRelation.
+			// For check functions, we search tuples like (object:id, relation, subject_type:id#subject_relation).
+			q := Tuples("grant_tuple").
+				ObjectType(plan.ObjectType).
+				Relations(plan.Relation).
+				Where(
+					Eq{Left: Col{Table: "grant_tuple", Column: "object_id"}, Right: ObjectID},
+					Eq{Left: Col{Table: "grant_tuple", Column: "subject_type"}, Right: Lit(pattern.SubjectType)},
+					HasUserset{Source: Col{Table: "grant_tuple", Column: "subject_id"}},
+					Eq{
+						Left:  UsersetRelation{Source: Col{Table: "grant_tuple", Column: "subject_id"}},
+						Right: Lit(pattern.SubjectRelation),
+					},
+				).
+				JoinTuples("membership",
+					Eq{Left: Col{Table: "membership", Column: "object_type"}, Right: Lit(pattern.SubjectType)},
+					Eq{
+						Left:  Col{Table: "membership", Column: "object_id"},
+						Right: UsersetObjectID{Source: Col{Table: "grant_tuple", Column: "subject_id"}},
+					},
+					In{Expr: Col{Table: "membership", Column: "relation"}, Values: pattern.SatisfyingRelations},
+					Eq{Left: Col{Table: "membership", Column: "subject_type"}, Right: SubjectType},
+					SubjectIDMatch(Col{Table: "membership", Column: "subject_id"}, SubjectID, plan.AllowWildcard),
+				).
+				Select("1").
+				Limit(1)
+			checks = append(checks, Exists{q})
+		}
 	}
 
 	if len(checks) == 1 {
@@ -222,15 +261,15 @@ func buildTypedUsersetCheck(plan CheckPlan) (Expr, error) {
 }
 
 // buildTypedExclusionCheck builds the exclusion check as a DSL expression.
+// Returns an expression that evaluates to TRUE when the subject is excluded.
 func buildTypedExclusionCheck(plan CheckPlan) (Expr, error) {
-	predicates := plan.Exclusions.BuildPredicates()
-	if len(predicates) == 0 {
+	if !plan.Exclusions.HasExclusions() {
 		return nil, nil
 	}
 
-	// For exclusion, we need to check if ANY exclusion rule matches (denied)
-	// So we invert the predicates (they are NOT EXISTS, we want EXISTS)
 	var exclusionChecks []Expr
+
+	// Simple exclusions: EXISTS (excluded tuple)
 	for _, rel := range plan.Exclusions.SimpleExcludedRelations {
 		q := Tuples("excl").
 			ObjectType(plan.ObjectType).
@@ -248,14 +287,102 @@ func buildTypedExclusionCheck(plan CheckPlan) (Expr, error) {
 		exclusionChecks = append(exclusionChecks, Exists{q})
 	}
 
-	// Complex exclusions use check_permission_internal
+	// Complex exclusions: check_permission_internal(...) = 1 with p_visited for cycle detection
 	for _, rel := range plan.Exclusions.ComplexExcludedRelations {
 		exclusionChecks = append(exclusionChecks, CheckPermission{
 			Subject:     SubjectParams(),
 			Relation:    rel,
 			Object:      LiteralObject(plan.ObjectType, ObjectID),
+			Visited:     Visited, // Use p_visited parameter for cycle detection
 			ExpectAllow: true,
 		})
+	}
+
+	// TTU exclusions: EXISTS (link tuple where check_permission on linked object returns 1)
+	for _, rel := range plan.Exclusions.ExcludedParentRelations {
+		linkQuery := Tuples("link").
+			ObjectType(plan.ObjectType).
+			Relations(rel.LinkingRelation).
+			Where(
+				Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
+				CheckPermission{
+					Subject:  SubjectParams(),
+					Relation: rel.Relation,
+					Object: ObjectRef{
+						Type: Col{Table: "link", Column: "subject_type"},
+						ID:   Col{Table: "link", Column: "subject_id"},
+					},
+					Visited:     Visited,
+					ExpectAllow: true,
+				},
+			).
+			Select("1").
+			Limit(1)
+		if len(rel.AllowedLinkingTypes) > 0 {
+			linkQuery.WhereSubjectTypeIn(rel.AllowedLinkingTypes...)
+		}
+		exclusionChecks = append(exclusionChecks, Exists{linkQuery})
+	}
+
+	// Intersection exclusions: (part1 AND part2 AND ...) - all parts must match
+	for _, group := range plan.Exclusions.ExcludedIntersection {
+		var parts []Expr
+		for _, part := range group.Parts {
+			if part.ParentRelation != nil {
+				// TTU part: EXISTS (link tuple where check_permission returns 1)
+				linkQuery := Tuples("link").
+					ObjectType(plan.ObjectType).
+					Relations(part.ParentRelation.LinkingRelation).
+					Where(
+						Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
+						CheckPermission{
+							Subject:  SubjectParams(),
+							Relation: part.ParentRelation.Relation,
+							Object: ObjectRef{
+								Type: Col{Table: "link", Column: "subject_type"},
+								ID:   Col{Table: "link", Column: "subject_id"},
+							},
+							Visited:     Visited,
+							ExpectAllow: true,
+						},
+					).
+					Select("1").
+					Limit(1)
+				if len(part.ParentRelation.AllowedLinkingTypes) > 0 {
+					linkQuery.WhereSubjectTypeIn(part.ParentRelation.AllowedLinkingTypes...)
+				}
+				parts = append(parts, Exists{linkQuery})
+			} else if part.ExcludedRelation != "" {
+				// Nested exclusion: (relation AND NOT excluded_relation)
+				mainCheck := CheckPermission{
+					Subject:     SubjectParams(),
+					Relation:    part.Relation,
+					Object:      LiteralObject(plan.ObjectType, ObjectID),
+					Visited:     Visited,
+					ExpectAllow: true,
+				}
+				excludeCheck := CheckPermission{
+					Subject:     SubjectParams(),
+					Relation:    part.ExcludedRelation,
+					Object:      LiteralObject(plan.ObjectType, ObjectID),
+					Visited:     Visited,
+					ExpectAllow: false,
+				}
+				parts = append(parts, And(mainCheck, excludeCheck))
+			} else {
+				// Direct check part
+				parts = append(parts, CheckPermission{
+					Subject:     SubjectParams(),
+					Relation:    part.Relation,
+					Object:      LiteralObject(plan.ObjectType, ObjectID),
+					Visited:     Visited,
+					ExpectAllow: true,
+				})
+			}
+		}
+		if len(parts) > 0 {
+			exclusionChecks = append(exclusionChecks, And(parts...))
+		}
 	}
 
 	if len(exclusionChecks) == 0 {
@@ -401,6 +528,9 @@ func buildTypedImpliedFunctionCalls(plan CheckPlan) ([]ImpliedFunctionCheck, err
 func buildTypedIntersectionGroups(plan CheckPlan) ([]IntersectionGroupCheck, error) {
 	var groups []IntersectionGroupCheck
 
+	// Build visited expression that appends the current key for recursive patterns
+	visitedWithKey := Param(fmt.Sprintf("p_visited || ARRAY['%s:' || p_object_id || ':%s']", plan.ObjectType, plan.Relation))
+
 	for _, group := range plan.Analysis.IntersectionGroups {
 		var parts []IntersectionPartCheck
 
@@ -429,6 +559,7 @@ func buildTypedIntersectionGroups(plan CheckPlan) ([]IntersectionGroupCheck, err
 								Type: Col{Table: "link", Column: "subject_type"},
 								ID:   Col{Table: "link", Column: "subject_id"},
 							},
+							Visited:     visitedWithKey, // Include visited key for cycle detection
 							ExpectAllow: true,
 						},
 					).
@@ -441,19 +572,42 @@ func buildTypedIntersectionGroups(plan CheckPlan) ([]IntersectionGroupCheck, err
 
 				partCheck.Check = Exists{q}
 			} else if part.IsThis {
-				// "This" pattern - direct access
-				partCheck.Check = CheckPermission{
-					Subject:     SubjectParams(),
-					Relation:    part.Relation,
-					Object:      LiteralObject(plan.ObjectType, ObjectID),
-					ExpectAllow: true,
+				// "This" pattern - direct tuple lookup for the current relation.
+				// Do NOT use check_permission_internal as it would cause infinite recursion.
+				// Handle wildcards based on the part's HasWildcard flag.
+				thisHasWildcard := part.HasWildcard && plan.AllowWildcard
+				var subjectCheck Expr
+				if thisHasWildcard {
+					// Allow wildcard: match subject_id = p_subject_id OR subject_id = '*'
+					subjectCheck = Or(
+						Eq{Left: Col{Table: "t", Column: "subject_id"}, Right: SubjectID},
+						IsWildcard{Col{Table: "t", Column: "subject_id"}},
+					)
+				} else {
+					// No wildcard: match subject_id = p_subject_id and NOT wildcard
+					subjectCheck = And(
+						Eq{Left: Col{Table: "t", Column: "subject_id"}, Right: SubjectID},
+						NotExpr{Expr: IsWildcard{Col{Table: "t", Column: "subject_id"}}},
+					)
 				}
+				q := Tuples("t").
+					ObjectType(plan.ObjectType).
+					Relations(part.Relation).
+					Where(
+						Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
+						Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
+						subjectCheck,
+					).
+					Select("1").
+					Limit(1)
+				partCheck.Check = Exists{q}
 			} else {
 				// Regular computed userset part
 				partCheck.Check = CheckPermission{
 					Subject:     SubjectParams(),
 					Relation:    part.Relation,
 					Object:      LiteralObject(plan.ObjectType, ObjectID),
+					Visited:     visitedWithKey, // Include visited key for cycle detection
 					ExpectAllow: true,
 				}
 			}
@@ -464,6 +618,7 @@ func buildTypedIntersectionGroups(plan CheckPlan) ([]IntersectionGroupCheck, err
 					Subject:     SubjectParams(),
 					Relation:    part.ExcludedRelation,
 					Object:      LiteralObject(plan.ObjectType, ObjectID),
+					Visited:     visitedWithKey, // Include visited key for cycle detection
 					ExpectAllow: false,
 				}
 				partCheck.Check = And(partCheck.Check, exclusionCheck)

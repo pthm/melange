@@ -2727,3 +2727,1414 @@ func buildListSubjectsIntersectionUsersetFilterTTUBlock(plan ListPlan, parent Li
 		Query: stmt,
 	}, nil
 }
+
+// =============================================================================
+// Self-Referential Userset Block Builders
+// =============================================================================
+//
+// These builders handle patterns like [group#member] on group.member,
+// which require recursive CTE expansion to find all objects reachable
+// through self-referential userset chains.
+
+// SelfRefUsersetBlockSet contains blocks for a self-referential userset list function.
+// These blocks are wrapped in a recursive CTE for member expansion.
+type SelfRefUsersetBlockSet struct {
+	// BaseBlocks are the base case blocks (depth=0) in the CTE
+	BaseBlocks []TypedQueryBlock
+
+	// RecursiveBlock is the recursive term block that expands self-referential usersets
+	RecursiveBlock *TypedQueryBlock
+
+	// SelfCandidateBlock is added outside the CTE (UNION with CTE result)
+	SelfCandidateBlock *TypedQueryBlock
+}
+
+// HasRecursive returns true if there is a recursive block.
+func (s SelfRefUsersetBlockSet) HasRecursive() bool {
+	return s.RecursiveBlock != nil
+}
+
+// BuildListObjectsSelfRefUsersetBlocks builds blocks for a self-referential userset list_objects function.
+func BuildListObjectsSelfRefUsersetBlocks(plan ListPlan) (SelfRefUsersetBlockSet, error) {
+	var result SelfRefUsersetBlockSet
+
+	// Build base blocks
+	baseBlocks, err := buildSelfRefUsersetBaseBlocks(plan)
+	if err != nil {
+		return SelfRefUsersetBlockSet{}, err
+	}
+	result.BaseBlocks = baseBlocks
+
+	// Build recursive block for self-referential userset expansion
+	recursiveBlock, err := buildSelfRefUsersetRecursiveBlock(plan)
+	if err != nil {
+		return SelfRefUsersetBlockSet{}, err
+	}
+	result.RecursiveBlock = recursiveBlock
+
+	// Build self-candidate block
+	selfBlock, err := buildListObjectsSelfCandidateBlock(plan)
+	if err != nil {
+		return SelfRefUsersetBlockSet{}, err
+	}
+	result.SelfCandidateBlock = selfBlock
+
+	return result, nil
+}
+
+// buildSelfRefUsersetBaseBlocks builds the base case blocks for self-referential userset CTE.
+func buildSelfRefUsersetBaseBlocks(plan ListPlan) ([]TypedQueryBlock, error) {
+	var blocks []TypedQueryBlock
+
+	// Direct tuple lookup block
+	directBlock, err := buildSelfRefUsersetDirectBlock(plan)
+	if err != nil {
+		return nil, err
+	}
+	blocks = append(blocks, directBlock)
+
+	// Complex closure blocks
+	complexBlocks, err := buildSelfRefUsersetComplexClosureBlocks(plan)
+	if err != nil {
+		return nil, err
+	}
+	blocks = append(blocks, complexBlocks...)
+
+	// Intersection closure blocks
+	intersectionBlocks, err := buildSelfRefUsersetIntersectionClosureBlocks(plan)
+	if err != nil {
+		return nil, err
+	}
+	blocks = append(blocks, intersectionBlocks...)
+
+	// Userset pattern blocks (excluding self-referential ones)
+	usersetBlocks, err := buildSelfRefUsersetPatternBlocks(plan)
+	if err != nil {
+		return nil, err
+	}
+	blocks = append(blocks, usersetBlocks...)
+
+	return blocks, nil
+}
+
+// buildSelfRefUsersetDirectBlock builds the direct tuple lookup block for self-ref userset CTE.
+func buildSelfRefUsersetDirectBlock(plan ListPlan) (TypedQueryBlock, error) {
+	q := Tuples("t").
+		ObjectType(plan.ObjectType).
+		Relations(plan.RelationList...).
+		Where(
+			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
+			In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
+			SubjectIDMatch(Col{Table: "t", Column: "subject_id"}, SubjectID, plan.AllowWildcard),
+		).
+		SelectCol("object_id").
+		Distinct()
+
+	// Add exclusion predicates
+	for _, pred := range plan.Exclusions.BuildPredicates() {
+		q.Where(pred)
+	}
+
+	return TypedQueryBlock{
+		Comments: []string{
+			"-- Path 1: Direct tuple lookup with simple closure relations",
+		},
+		Query: q.Build(),
+	}, nil
+}
+
+// buildSelfRefUsersetComplexClosureBlocks builds blocks for complex closure relations.
+func buildSelfRefUsersetComplexClosureBlocks(plan ListPlan) ([]TypedQueryBlock, error) {
+	if len(plan.ComplexClosure) == 0 {
+		return nil, nil
+	}
+
+	var blocks []TypedQueryBlock
+	for _, rel := range plan.ComplexClosure {
+		q := Tuples("t").
+			ObjectType(plan.ObjectType).
+			Relations(rel).
+			Where(
+				Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
+				In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
+				SubjectIDMatch(Col{Table: "t", Column: "subject_id"}, SubjectID, plan.AllowWildcard),
+				CheckPermission{
+					Subject:     SubjectParams(),
+					Relation:    rel,
+					Object:      LiteralObject(plan.ObjectType, Col{Table: "t", Column: "object_id"}),
+					ExpectAllow: true,
+				},
+			).
+			SelectCol("object_id").
+			Distinct()
+
+		// Add exclusion predicates
+		for _, pred := range plan.Exclusions.BuildPredicates() {
+			q.Where(pred)
+		}
+
+		blocks = append(blocks, TypedQueryBlock{
+			Comments: []string{
+				fmt.Sprintf("-- Complex closure relation: %s", rel),
+			},
+			Query: q.Build(),
+		})
+	}
+
+	return blocks, nil
+}
+
+// buildSelfRefUsersetIntersectionClosureBlocks builds blocks for intersection closure relations.
+func buildSelfRefUsersetIntersectionClosureBlocks(plan ListPlan) ([]TypedQueryBlock, error) {
+	intersectionRels := plan.Analysis.IntersectionClosureRelations
+	if len(intersectionRels) == 0 {
+		return nil, nil
+	}
+
+	var blocks []TypedQueryBlock
+	for _, rel := range intersectionRels {
+		funcName := listObjectsFunctionName(plan.ObjectType, rel)
+
+		// Build the subquery that calls the intersection function
+		stmt := SelectStmt{
+			Columns: []string{"icr.object_id"},
+			From:    funcName + "(p_subject_type, p_subject_id, NULL, NULL)",
+			Alias:   "icr",
+		}
+
+		blocks = append(blocks, TypedQueryBlock{
+			Comments: []string{
+				fmt.Sprintf("-- Compose with intersection closure relation: %s", rel),
+			},
+			Query: stmt,
+		})
+	}
+
+	return blocks, nil
+}
+
+// buildSelfRefUsersetPatternBlocks builds blocks for userset patterns (excluding self-referential).
+func buildSelfRefUsersetPatternBlocks(plan ListPlan) ([]TypedQueryBlock, error) {
+	patterns := buildListUsersetPatternInputs(plan.Analysis)
+	if len(patterns) == 0 {
+		return nil, nil
+	}
+
+	var blocks []TypedQueryBlock
+	for _, pattern := range patterns {
+		// Skip self-referential patterns - they're handled by the recursive block
+		if pattern.IsSelfReferential {
+			continue
+		}
+
+		if pattern.IsComplex {
+			block, err := buildSelfRefUsersetComplexPatternBlock(plan, pattern)
+			if err != nil {
+				return nil, err
+			}
+			blocks = append(blocks, block)
+		} else {
+			block, err := buildSelfRefUsersetSimplePatternBlock(plan, pattern)
+			if err != nil {
+				return nil, err
+			}
+			blocks = append(blocks, block)
+		}
+	}
+
+	return blocks, nil
+}
+
+// buildSelfRefUsersetComplexPatternBlock builds a block for a complex userset pattern.
+func buildSelfRefUsersetComplexPatternBlock(plan ListPlan, pattern listUsersetPatternInput) (TypedQueryBlock, error) {
+	// For complex patterns, use check_permission_internal to verify membership
+	checkExpr := CheckPermissionInternalExpr(
+		SubjectParams(),
+		pattern.SubjectRelation,
+		ObjectRef{
+			Type: Lit(pattern.SubjectType),
+			ID:   UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}},
+		},
+		true,
+	)
+
+	q := Tuples("t").
+		ObjectType(plan.ObjectType).
+		Relations(pattern.SourceRelations...).
+		Where(
+			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(pattern.SubjectType)},
+			HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
+			Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(pattern.SubjectRelation)},
+			checkExpr,
+		).
+		SelectCol("object_id").
+		Distinct()
+
+	// Add exclusion predicates
+	for _, pred := range plan.Exclusions.BuildPredicates() {
+		q.Where(pred)
+	}
+
+	return TypedQueryBlock{
+		Comments: []string{
+			fmt.Sprintf("-- Userset path: Via %s#%s membership", pattern.SubjectType, pattern.SubjectRelation),
+			"-- Complex userset: use check_permission_internal for membership",
+		},
+		Query: q.Build(),
+	}, nil
+}
+
+// buildSelfRefUsersetSimplePatternBlock builds a block for a simple userset pattern.
+func buildSelfRefUsersetSimplePatternBlock(plan ListPlan, pattern listUsersetPatternInput) (TypedQueryBlock, error) {
+	// For simple patterns, use a JOIN with membership tuples
+	membershipConditions := []Expr{
+		Eq{Left: Col{Table: "m", Column: "object_type"}, Right: Lit(pattern.SubjectType)},
+		Eq{Left: Col{Table: "m", Column: "object_id"}, Right: UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}}},
+		In{Expr: Col{Table: "m", Column: "relation"}, Values: pattern.SatisfyingRelations},
+		Eq{Left: Col{Table: "m", Column: "subject_type"}, Right: SubjectType},
+		In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
+	}
+
+	// Subject ID matching for membership
+	if plan.AllowWildcard {
+		membershipConditions = append(membershipConditions,
+			Or(
+				Eq{Left: Col{Table: "m", Column: "subject_id"}, Right: SubjectID},
+				IsWildcard{Col{Table: "m", Column: "subject_id"}},
+			),
+		)
+	} else {
+		membershipConditions = append(membershipConditions,
+			Eq{Left: Col{Table: "m", Column: "subject_id"}, Right: SubjectID},
+			NotExpr{Expr: IsWildcard{Col{Table: "m", Column: "subject_id"}}},
+		)
+	}
+
+	grantConditions := []Expr{
+		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+		In{Expr: Col{Table: "t", Column: "relation"}, Values: pattern.SourceRelations},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(pattern.SubjectType)},
+		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
+		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(pattern.SubjectRelation)},
+	}
+
+	// Add exclusion predicates
+	for _, pred := range plan.Exclusions.BuildPredicates() {
+		grantConditions = append(grantConditions, pred)
+	}
+
+	// For closure patterns, add check_permission validation
+	if pattern.IsClosurePattern {
+		grantConditions = append(grantConditions,
+			CheckPermission{
+				Subject:     SubjectParams(),
+				Relation:    pattern.SourceRelation,
+				Object:      LiteralObject(plan.ObjectType, Col{Table: "t", Column: "object_id"}),
+				ExpectAllow: true,
+			},
+		)
+	}
+
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}},
+		FromExpr:    TableAs("melange_tuples", "t"),
+		Joins: []JoinClause{{
+			Type:  "INNER",
+			Table: "melange_tuples",
+			Alias: "m",
+			On:    And(membershipConditions...),
+		}},
+		Where: And(grantConditions...),
+	}
+
+	return TypedQueryBlock{
+		Comments: []string{
+			fmt.Sprintf("-- Userset path: Via %s#%s membership", pattern.SubjectType, pattern.SubjectRelation),
+			"-- Simple userset: JOIN with membership tuples",
+		},
+		Query: stmt,
+	}, nil
+}
+
+// buildSelfRefUsersetRecursiveBlock builds the recursive block for self-referential userset expansion.
+func buildSelfRefUsersetRecursiveBlock(plan ListPlan) (*TypedQueryBlock, error) {
+	// The recursive block expands userset chains like:
+	// group:A#member -> group:B (where B has tuple group:B#member -> group:C#member)
+	// This finds new objects reachable through self-referential userset references.
+
+	exclusionPreds := plan.Exclusions.BuildPredicates()
+
+	conditions := make([]Expr, 0, 6+len(exclusionPreds))
+	conditions = append(conditions,
+		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+		In{Expr: Col{Table: "t", Column: "relation"}, Values: plan.RelationList},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(plan.ObjectType)},
+		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
+		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(plan.Relation)},
+		Raw("me.depth < 25"),
+	)
+	conditions = append(conditions, exclusionPreds...)
+
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}, Raw("me.depth + 1 AS depth")},
+		FromExpr:    TableAs("member_expansion", "me"),
+		Joins: []JoinClause{{
+			Type:  "INNER",
+			Table: "melange_tuples",
+			Alias: "t",
+			On:    Eq{Left: UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}}, Right: Col{Table: "me", Column: "object_id"}},
+		}},
+		Where: And(conditions...),
+	}
+
+	return &TypedQueryBlock{
+		Comments: []string{
+			"-- Self-referential userset expansion",
+			fmt.Sprintf("-- For patterns like [%s#%s] on %s.%s", plan.ObjectType, plan.Relation, plan.ObjectType, plan.Relation),
+		},
+		Query: stmt,
+	}, nil
+}
+
+// =============================================================================
+// Self-Referential Userset List Subjects Block Builders
+// =============================================================================
+
+// SelfRefUsersetSubjectsBlockSet contains blocks for a self-referential userset list_subjects function.
+// This includes separate blocks for userset filter path and regular path.
+type SelfRefUsersetSubjectsBlockSet struct {
+	// UsersetFilterBlocks are blocks for the userset filter path (when p_subject_type contains '#')
+	UsersetFilterBlocks []TypedQueryBlock
+
+	// UsersetFilterSelfBlock is the self-candidate block for userset filter path
+	UsersetFilterSelfBlock *TypedQueryBlock
+
+	// UsersetFilterRecursiveBlock is the recursive block for userset filter expansion
+	UsersetFilterRecursiveBlock *TypedQueryBlock
+
+	// RegularBlocks are blocks for the regular path (individual subjects)
+	RegularBlocks []TypedQueryBlock
+
+	// UsersetObjectsBaseBlock is the base block for userset objects CTE
+	UsersetObjectsBaseBlock *TypedQueryBlock
+
+	// UsersetObjectsRecursiveBlock is the recursive block for userset objects CTE
+	UsersetObjectsRecursiveBlock *TypedQueryBlock
+}
+
+// BuildListSubjectsSelfRefUsersetBlocks builds blocks for a self-referential userset list_subjects function.
+func BuildListSubjectsSelfRefUsersetBlocks(plan ListPlan) (SelfRefUsersetSubjectsBlockSet, error) {
+	var result SelfRefUsersetSubjectsBlockSet
+
+	// Build userset filter path blocks
+	filterBlocks, filterSelf, filterRecursive, err := buildSelfRefUsersetFilterBlocks(plan)
+	if err != nil {
+		return SelfRefUsersetSubjectsBlockSet{}, err
+	}
+	result.UsersetFilterBlocks = filterBlocks
+	result.UsersetFilterSelfBlock = filterSelf
+	result.UsersetFilterRecursiveBlock = filterRecursive
+
+	// Build regular path blocks
+	regularBlocks, usersetBase, usersetRecursive, err := buildSelfRefUsersetRegularBlocks(plan)
+	if err != nil {
+		return SelfRefUsersetSubjectsBlockSet{}, err
+	}
+	result.RegularBlocks = regularBlocks
+	result.UsersetObjectsBaseBlock = usersetBase
+	result.UsersetObjectsRecursiveBlock = usersetRecursive
+
+	return result, nil
+}
+
+// buildSelfRefUsersetFilterBlocks builds blocks for the userset filter path.
+func buildSelfRefUsersetFilterBlocks(plan ListPlan) ([]TypedQueryBlock, *TypedQueryBlock, *TypedQueryBlock, error) {
+	var blocks []TypedQueryBlock
+
+	// Build the base block for userset filter - finds userset tuples that match
+	baseBlock, err := buildSelfRefUsersetFilterBaseBlock(plan)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	blocks = append(blocks, baseBlock)
+
+	// Build intersection closure blocks for userset filter path
+	intersectionBlocks, err := buildSelfRefUsersetFilterIntersectionBlocks(plan)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	blocks = append(blocks, intersectionBlocks...)
+
+	// Build self-candidate block
+	selfBlock, err := buildSelfRefUsersetFilterSelfBlock(plan)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	// Build recursive block for userset expansion
+	recursiveBlock, err := buildSelfRefUsersetFilterRecursiveBlock(plan)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	return blocks, selfBlock, recursiveBlock, nil
+}
+
+// buildSelfRefUsersetFilterBaseBlock builds the base block for userset filter path.
+func buildSelfRefUsersetFilterBaseBlock(plan ListPlan) (TypedQueryBlock, error) {
+	// Build closure EXISTS subquery to check if userset relation satisfies filter relation
+	closureExistsStmt := SelectStmt{
+		ColumnExprs: []Expr{Int(1)},
+		FromExpr:    ClosureTable(plan.Inline.ClosureRows, plan.Inline.ClosureValues, "subj_c"),
+		Where: And(
+			Eq{Left: Col{Table: "subj_c", Column: "object_type"}, Right: Param("v_filter_type")},
+			Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: SubstringUsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}},
+			Eq{Left: Col{Table: "subj_c", Column: "satisfying_relation"}, Right: Param("v_filter_relation")},
+		),
+	}
+
+	// Validate with check_permission
+	checkExpr := CheckPermissionExpr(
+		"check_permission",
+		SubjectRef{Type: Param("v_filter_type"), ID: Col{Table: "t", Column: "subject_id"}},
+		plan.Relation,
+		ObjectRef{Type: Lit(plan.ObjectType), ID: ObjectID},
+		true,
+	)
+
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Raw("split_part(t.subject_id, '#', 1) AS userset_object_id"), Raw("0 AS depth")},
+		FromExpr:    TableAs("melange_tuples", "t"),
+		Where: And(
+			Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+			In{Expr: Col{Table: "t", Column: "relation"}, Values: plan.AllSatisfyingRelations},
+			Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
+			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Param("v_filter_type")},
+			HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
+			Or(
+				Eq{Left: SubstringUsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Param("v_filter_relation")},
+				ExistsExpr(closureExistsStmt),
+			),
+			checkExpr,
+		),
+	}
+
+	return TypedQueryBlock{
+		Comments: []string{
+			"-- Userset filter: find userset tuples that match filter type/relation",
+		},
+		Query: stmt,
+	}, nil
+}
+
+// buildSelfRefUsersetFilterIntersectionBlocks builds intersection closure blocks for userset filter path.
+func buildSelfRefUsersetFilterIntersectionBlocks(plan ListPlan) ([]TypedQueryBlock, error) {
+	intersectionRels := plan.Analysis.IntersectionClosureRelations
+	if len(intersectionRels) == 0 {
+		return nil, nil
+	}
+
+	var blocks []TypedQueryBlock
+	for _, rel := range intersectionRels {
+		funcName := listSubjectsFunctionName(plan.ObjectType, rel)
+		// Call list_subjects for the intersection closure relation with userset filter
+		fromClause := fmt.Sprintf("%s(p_object_id, v_filter_type || '#' || v_filter_relation)", funcName)
+
+		stmt := SelectStmt{
+			Distinct:    true,
+			ColumnExprs: []Expr{Raw("split_part(icr.subject_id, '#', 1) AS userset_object_id"), Raw("0 AS depth")},
+			From:        fromClause,
+			Alias:       "icr",
+		}
+
+		blocks = append(blocks, TypedQueryBlock{
+			Comments: []string{
+				fmt.Sprintf("-- Compose with intersection closure relation: %s", rel),
+			},
+			Query: stmt,
+		})
+	}
+
+	return blocks, nil
+}
+
+// buildSelfRefUsersetFilterSelfBlock builds the self-candidate block for userset filter path.
+func buildSelfRefUsersetFilterSelfBlock(plan ListPlan) (*TypedQueryBlock, error) {
+	// Check if filter type matches object type and relation satisfies
+	closureStmt := SelectStmt{
+		ColumnExprs: []Expr{Int(1)},
+		FromExpr:    ClosureTable(plan.Inline.ClosureRows, plan.Inline.ClosureValues, "c"),
+		Where: And(
+			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(plan.Relation)},
+			Eq{Left: Col{Table: "c", Column: "satisfying_relation"}, Right: Param("v_filter_relation")},
+		),
+	}
+
+	subjectExpr := Alias{
+		Expr: Concat{Parts: []Expr{
+			ObjectID,
+			Lit("#"),
+			Param("v_filter_relation"),
+		}},
+		Name: "subject_id",
+	}
+
+	stmt := SelectStmt{
+		ColumnExprs: []Expr{subjectExpr},
+		Where: And(
+			Eq{Left: Param("v_filter_type"), Right: Lit(plan.ObjectType)},
+			Raw(closureStmt.Exists()),
+		),
+	}
+
+	return &TypedQueryBlock{
+		Comments: []string{
+			"-- Self-candidate: when filter type matches object type",
+		},
+		Query: stmt,
+	}, nil
+}
+
+// buildSelfRefUsersetFilterRecursiveBlock builds the recursive block for userset filter expansion.
+func buildSelfRefUsersetFilterRecursiveBlock(_ ListPlan) (*TypedQueryBlock, error) {
+	conditions := []Expr{
+		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Raw("v_filter_type")},
+		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "ue", Column: "userset_object_id"}},
+		Eq{Left: Col{Table: "t", Column: "relation"}, Right: Raw("v_filter_relation")},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Raw("v_filter_type")},
+		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
+		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Raw("v_filter_relation")},
+		Raw("ue.depth < 25"),
+	}
+
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Raw("split_part(t.subject_id, '#', 1) AS userset_object_id"), Raw("ue.depth + 1 AS depth")},
+		FromExpr:    TableAs("userset_expansion", "ue"),
+		Joins: []JoinClause{{
+			Type:  "INNER",
+			Table: "melange_tuples",
+			Alias: "t",
+			On:    Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "ue", Column: "userset_object_id"}},
+		}},
+		Where: And(conditions...),
+	}
+
+	return &TypedQueryBlock{
+		Comments: []string{
+			"-- Recursive userset expansion for filter path",
+		},
+		Query: stmt,
+	}, nil
+}
+
+// buildSelfRefUsersetRegularBlocks builds blocks for the regular path (individual subjects).
+func buildSelfRefUsersetRegularBlocks(plan ListPlan) ([]TypedQueryBlock, *TypedQueryBlock, *TypedQueryBlock, error) {
+	var blocks []TypedQueryBlock
+
+	// Configure exclusions for regular path
+	exclusions := buildExclusionInput(
+		plan.Analysis,
+		ObjectID,
+		SubjectType,
+		Col{Table: "t", Column: "subject_id"},
+	)
+
+	// Build direct tuple lookup block
+	directBlock, err := buildSelfRefUsersetRegularDirectBlock(plan, exclusions)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	blocks = append(blocks, directBlock)
+
+	// Build complex closure blocks
+	complexBlocks, err := buildSelfRefUsersetRegularComplexClosureBlocks(plan, exclusions)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	blocks = append(blocks, complexBlocks...)
+
+	// Build intersection closure blocks
+	intersectionBlocks, err := buildSelfRefUsersetRegularIntersectionClosureBlocks(plan)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	blocks = append(blocks, intersectionBlocks...)
+
+	// Build userset expansion block - subjects from recursively expanded userset objects
+	usersetExpansionBlock, err := buildSelfRefUsersetRegularExpansionBlock(plan, exclusions)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	blocks = append(blocks, usersetExpansionBlock)
+
+	// Build userset pattern blocks (non-self-referential)
+	usersetPatternBlocks, err := buildSelfRefUsersetRegularPatternBlocks(plan, exclusions)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	blocks = append(blocks, usersetPatternBlocks...)
+
+	// Build userset objects base block
+	usersetBase, err := buildSelfRefUsersetObjectsBaseBlock(plan)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	// Build userset objects recursive block
+	usersetRecursive, err := buildSelfRefUsersetObjectsRecursiveBlock(plan)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	return blocks, usersetBase, usersetRecursive, nil
+}
+
+// buildSelfRefUsersetRegularDirectBlock builds the direct tuple lookup block for regular path.
+func buildSelfRefUsersetRegularDirectBlock(plan ListPlan, exclusions ExclusionConfig) (TypedQueryBlock, error) {
+	excludeWildcard := plan.ExcludeWildcard()
+
+	q := Tuples("t").
+		ObjectType(plan.ObjectType).
+		Relations(plan.RelationList...).
+		WhereObjectID(ObjectID).
+		WhereSubjectType(SubjectType).
+		Where(In{Expr: SubjectType, Values: plan.AllowedSubjectTypes}).
+		SelectCol("subject_id").
+		Distinct()
+
+	if excludeWildcard {
+		q = q.Where(Ne{Left: Col{Table: "t", Column: "subject_id"}, Right: Lit("*")})
+	}
+
+	// Add exclusion predicates
+	for _, pred := range exclusions.BuildPredicates() {
+		q.Where(pred)
+	}
+
+	return TypedQueryBlock{
+		Comments: []string{
+			"-- Path 1: Direct tuple lookup on the object itself",
+		},
+		Query: q.Build(),
+	}, nil
+}
+
+// buildSelfRefUsersetRegularComplexClosureBlocks builds complex closure blocks for regular path.
+func buildSelfRefUsersetRegularComplexClosureBlocks(plan ListPlan, exclusions ExclusionConfig) ([]TypedQueryBlock, error) {
+	if len(plan.ComplexClosure) == 0 {
+		return nil, nil
+	}
+
+	excludeWildcard := plan.ExcludeWildcard()
+	var blocks []TypedQueryBlock
+
+	for _, rel := range plan.ComplexClosure {
+		checkExpr := CheckPermissionInternalExpr(
+			SubjectRef{Type: SubjectType, ID: Col{Table: "t", Column: "subject_id"}},
+			rel,
+			ObjectRef{Type: Lit(plan.ObjectType), ID: ObjectID},
+			true,
+		)
+
+		q := Tuples("t").
+			ObjectType(plan.ObjectType).
+			Relations(rel).
+			WhereObjectID(ObjectID).
+			WhereSubjectType(SubjectType).
+			Where(
+				In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
+				checkExpr,
+			).
+			SelectCol("subject_id").
+			Distinct()
+
+		if excludeWildcard {
+			q = q.Where(Ne{Left: Col{Table: "t", Column: "subject_id"}, Right: Lit("*")})
+		}
+
+		for _, pred := range exclusions.BuildPredicates() {
+			q.Where(pred)
+		}
+
+		blocks = append(blocks, TypedQueryBlock{
+			Comments: []string{
+				fmt.Sprintf("-- Complex closure relation: %s", rel),
+			},
+			Query: q.Build(),
+		})
+	}
+
+	return blocks, nil
+}
+
+// buildSelfRefUsersetRegularIntersectionClosureBlocks builds intersection closure blocks for regular path.
+func buildSelfRefUsersetRegularIntersectionClosureBlocks(plan ListPlan) ([]TypedQueryBlock, error) {
+	intersectionRels := plan.Analysis.IntersectionClosureRelations
+	if len(intersectionRels) == 0 {
+		return nil, nil
+	}
+
+	var blocks []TypedQueryBlock
+	for _, rel := range intersectionRels {
+		funcName := listSubjectsFunctionName(plan.ObjectType, rel)
+		fromClause := fmt.Sprintf("%s(p_object_id, p_subject_type)", funcName)
+
+		stmt := SelectStmt{
+			Columns: []string{"icr.subject_id"},
+			From:    fromClause,
+			Alias:   "icr",
+		}
+
+		blocks = append(blocks, TypedQueryBlock{
+			Comments: []string{
+				fmt.Sprintf("-- Compose with intersection closure relation: %s", rel),
+			},
+			Query: stmt,
+		})
+	}
+
+	return blocks, nil
+}
+
+// buildSelfRefUsersetRegularExpansionBlock builds the userset expansion block for regular path.
+func buildSelfRefUsersetRegularExpansionBlock(plan ListPlan, exclusions ExclusionConfig) (TypedQueryBlock, error) {
+	excludeWildcard := plan.ExcludeWildcard()
+	exclusionPreds := exclusions.BuildPredicates()
+
+	conditions := []Expr{
+		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "uo", Column: "userset_object_id"}},
+		In{Expr: Col{Table: "t", Column: "relation"}, Values: plan.RelationList},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
+		In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
+	}
+
+	if excludeWildcard {
+		conditions = append(conditions, Ne{Left: Col{Table: "t", Column: "subject_id"}, Right: Lit("*")})
+	}
+	conditions = append(conditions, exclusionPreds...)
+
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "t", Column: "subject_id"}},
+		FromExpr:    TableAs("userset_objects", "uo"),
+		Joins: []JoinClause{{
+			Type:  "INNER",
+			Table: "melange_tuples",
+			Alias: "t",
+			On:    Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "uo", Column: "userset_object_id"}},
+		}},
+		Where: And(conditions...),
+	}
+
+	return TypedQueryBlock{
+		Comments: []string{
+			"-- Path 2: Expand userset subjects from all reachable userset objects",
+		},
+		Query: stmt,
+	}, nil
+}
+
+// buildSelfRefUsersetRegularPatternBlocks builds userset pattern blocks for regular path.
+func buildSelfRefUsersetRegularPatternBlocks(plan ListPlan, exclusions ExclusionConfig) ([]TypedQueryBlock, error) {
+	patterns := buildListUsersetPatternInputs(plan.Analysis)
+	if len(patterns) == 0 {
+		return nil, nil
+	}
+
+	excludeWildcard := plan.ExcludeWildcard()
+	var blocks []TypedQueryBlock
+
+	for _, pattern := range patterns {
+		// Skip self-referential patterns - handled by userset_objects CTE
+		if pattern.IsSelfReferential {
+			continue
+		}
+
+		if pattern.IsComplex {
+			block, err := buildSelfRefUsersetRegularComplexPatternBlock(plan, pattern, exclusions, excludeWildcard)
+			if err != nil {
+				return nil, err
+			}
+			blocks = append(blocks, block)
+		} else {
+			block, err := buildSelfRefUsersetRegularSimplePatternBlock(plan, pattern, exclusions, excludeWildcard)
+			if err != nil {
+				return nil, err
+			}
+			blocks = append(blocks, block)
+		}
+	}
+
+	return blocks, nil
+}
+
+// buildSelfRefUsersetRegularComplexPatternBlock builds a complex userset pattern block for regular path.
+func buildSelfRefUsersetRegularComplexPatternBlock(plan ListPlan, pattern listUsersetPatternInput, _ ExclusionConfig, _ bool) (TypedQueryBlock, error) {
+	// Use LATERAL list function for complex patterns
+	funcName := listSubjectsFunctionName(pattern.SubjectType, pattern.SubjectRelation)
+
+	// Find grant tuples, then LATERAL join to list function
+	grantConditions := []Expr{
+		Eq{Left: Col{Table: "g", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+		In{Expr: Col{Table: "g", Column: "relation"}, Values: pattern.SourceRelations},
+		Eq{Left: Col{Table: "g", Column: "object_id"}, Right: ObjectID},
+		Eq{Left: Col{Table: "g", Column: "subject_type"}, Right: Lit(pattern.SubjectType)},
+		HasUserset{Source: Col{Table: "g", Column: "subject_id"}},
+		Eq{Left: UsersetRelation{Source: Col{Table: "g", Column: "subject_id"}}, Right: Lit(pattern.SubjectRelation)},
+	}
+
+	// Build LATERAL subquery for subjects from userset object
+	lateralSubquery := fmt.Sprintf("LATERAL %s(split_part(g.subject_id, '#', 1), p_subject_type, NULL, NULL) AS s", funcName)
+
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "s", Column: "subject_id"}},
+		FromExpr:    TableAs("melange_tuples", "g"),
+		Joins: []JoinClause{{
+			Type:  "CROSS",
+			Table: lateralSubquery,
+		}},
+		Where: And(grantConditions...),
+	}
+
+	// Add exclusion predicates on subject
+	subjectExclusions := buildExclusionInput(
+		plan.Analysis,
+		ObjectID,
+		SubjectType,
+		Col{Table: "s", Column: "subject_id"},
+	)
+	for _, pred := range subjectExclusions.BuildPredicates() {
+		stmt.Where = And(stmt.Where, pred)
+	}
+
+	return TypedQueryBlock{
+		Comments: []string{
+			fmt.Sprintf("-- Non-self userset expansion: %s#%s", pattern.SubjectType, pattern.SubjectRelation),
+			"-- Complex userset: use LATERAL list function",
+		},
+		Query: stmt,
+	}, nil
+}
+
+// buildSelfRefUsersetRegularSimplePatternBlock builds a simple userset pattern block for regular path.
+func buildSelfRefUsersetRegularSimplePatternBlock(plan ListPlan, pattern listUsersetPatternInput, _ ExclusionConfig, excludeWildcard bool) (TypedQueryBlock, error) {
+	// For simple patterns, use a JOIN with membership tuples
+	subjectExclusions := buildExclusionInput(
+		plan.Analysis,
+		ObjectID,
+		SubjectType,
+		Col{Table: "s", Column: "subject_id"},
+	)
+
+	membershipConditions := []Expr{
+		Eq{Left: Col{Table: "s", Column: "object_type"}, Right: Lit(pattern.SubjectType)},
+		Eq{Left: Col{Table: "s", Column: "object_id"}, Right: UsersetObjectID{Source: Col{Table: "g", Column: "subject_id"}}},
+		In{Expr: Col{Table: "s", Column: "relation"}, Values: pattern.SatisfyingRelations},
+		Eq{Left: Col{Table: "s", Column: "subject_type"}, Right: SubjectType},
+		In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
+	}
+
+	if excludeWildcard {
+		membershipConditions = append(membershipConditions, Ne{Left: Col{Table: "s", Column: "subject_id"}, Right: Lit("*")})
+	}
+
+	grantConditions := []Expr{
+		Eq{Left: Col{Table: "g", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+		In{Expr: Col{Table: "g", Column: "relation"}, Values: pattern.SourceRelations},
+		Eq{Left: Col{Table: "g", Column: "object_id"}, Right: ObjectID},
+		Eq{Left: Col{Table: "g", Column: "subject_type"}, Right: Lit(pattern.SubjectType)},
+		HasUserset{Source: Col{Table: "g", Column: "subject_id"}},
+		Eq{Left: UsersetRelation{Source: Col{Table: "g", Column: "subject_id"}}, Right: Lit(pattern.SubjectRelation)},
+	}
+
+	// For closure patterns, add check_permission validation
+	if pattern.IsClosurePattern {
+		checkExpr := CheckPermissionExpr(
+			"check_permission",
+			SubjectRef{Type: SubjectType, ID: Col{Table: "s", Column: "subject_id"}},
+			pattern.SourceRelation,
+			ObjectRef{Type: Lit(plan.ObjectType), ID: ObjectID},
+			true,
+		)
+		grantConditions = append(grantConditions, checkExpr)
+	}
+
+	// Add exclusion predicates
+	grantConditions = append(grantConditions, subjectExclusions.BuildPredicates()...)
+
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "s", Column: "subject_id"}},
+		FromExpr:    TableAs("melange_tuples", "g"),
+		Joins: []JoinClause{{
+			Type:  "INNER",
+			Table: "melange_tuples",
+			Alias: "s",
+			On:    And(membershipConditions...),
+		}},
+		Where: And(grantConditions...),
+	}
+
+	return TypedQueryBlock{
+		Comments: []string{
+			fmt.Sprintf("-- Non-self userset expansion: %s#%s", pattern.SubjectType, pattern.SubjectRelation),
+			"-- Simple userset: JOIN with membership tuples",
+		},
+		Query: stmt,
+	}, nil
+}
+
+// buildSelfRefUsersetObjectsBaseBlock builds the base block for userset_objects CTE.
+func buildSelfRefUsersetObjectsBaseBlock(plan ListPlan) (*TypedQueryBlock, error) {
+	q := Tuples("t").
+		ObjectType(plan.ObjectType).
+		Relations(plan.RelationList...).
+		Select("split_part(t.subject_id, '#', 1) AS userset_object_id", "0 AS depth").
+		WhereObjectID(ObjectID).
+		Where(Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(plan.ObjectType)}).
+		WhereHasUserset().
+		WhereUsersetRelation(plan.Relation).
+		Distinct()
+
+	return &TypedQueryBlock{
+		Comments: []string{
+			"-- Base case: find initial userset references",
+		},
+		Query: q.Build(),
+	}, nil
+}
+
+// buildSelfRefUsersetObjectsRecursiveBlock builds the recursive block for userset_objects CTE.
+func buildSelfRefUsersetObjectsRecursiveBlock(plan ListPlan) (*TypedQueryBlock, error) {
+	conditions := []Expr{
+		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "uo", Column: "userset_object_id"}},
+		Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(plan.Relation)},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(plan.ObjectType)},
+		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
+		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(plan.Relation)},
+		Raw("uo.depth < 25"),
+	}
+
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Raw("split_part(t.subject_id, '#', 1) AS userset_object_id"), Raw("uo.depth + 1 AS depth")},
+		FromExpr:    TableAs("userset_objects", "uo"),
+		Joins: []JoinClause{{
+			Type:  "INNER",
+			Table: "melange_tuples",
+			Alias: "t",
+			On:    Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "uo", Column: "userset_object_id"}},
+		}},
+		Where: And(conditions...),
+	}
+
+	return &TypedQueryBlock{
+		Comments: []string{
+			"-- Recursive case: expand self-referential userset references",
+		},
+		Query: stmt,
+	}, nil
+}
+
+// =============================================================================
+// Composed Strategy Blocks
+// =============================================================================
+
+// ComposedObjectsBlockSet contains blocks for a composed list_objects function.
+// Composed functions handle indirect anchor patterns (TTU and userset composition).
+type ComposedObjectsBlockSet struct {
+	// SelfBlock is the self-candidate check block
+	SelfBlock *TypedQueryBlock
+
+	// MainBlocks are the composed query blocks (TTU and/or userset paths)
+	MainBlocks []TypedQueryBlock
+
+	// AllowedSubjectTypes for the type guard
+	AllowedSubjectTypes []string
+
+	// Anchor metadata for comments
+	AnchorType     string
+	AnchorRelation string
+	FirstStepType  string
+}
+
+// ComposedSubjectsBlockSet contains blocks for a composed list_subjects function.
+type ComposedSubjectsBlockSet struct {
+	// SelfBlock is the self-candidate check block (for userset filter)
+	SelfBlock *TypedQueryBlock
+
+	// UsersetFilterBlocks are candidate blocks for userset filter path
+	UsersetFilterBlocks []TypedQueryBlock
+
+	// RegularBlocks are candidate blocks for regular path
+	RegularBlocks []TypedQueryBlock
+
+	// AllowedSubjectTypes for the type guard
+	AllowedSubjectTypes []string
+
+	// HasExclusions indicates if exclusion predicates are needed
+	HasExclusions bool
+
+	// Anchor metadata for comments
+	AnchorType     string
+	AnchorRelation string
+	FirstStepType  string
+}
+
+// BuildListObjectsComposedBlocks builds block set for composed list_objects function.
+func BuildListObjectsComposedBlocks(plan ListPlan) (ComposedObjectsBlockSet, error) {
+	anchor := plan.Analysis.IndirectAnchor
+	if anchor == nil || len(anchor.Path) == 0 {
+		return ComposedObjectsBlockSet{}, fmt.Errorf("missing indirect anchor data for %s.%s", plan.ObjectType, plan.Relation)
+	}
+
+	var result ComposedObjectsBlockSet
+	result.AllowedSubjectTypes = plan.AllowedSubjectTypes
+	result.AnchorType = anchor.AnchorType
+	result.AnchorRelation = anchor.AnchorRelation
+	result.FirstStepType = anchor.Path[0].Type
+
+	// Build self-candidate block
+	selfBlock, err := buildComposedObjectsSelfBlock(plan)
+	if err != nil {
+		return ComposedObjectsBlockSet{}, err
+	}
+	result.SelfBlock = selfBlock
+
+	// Build main composed query blocks
+	firstStep := anchor.Path[0]
+	exclusions := buildSimpleComplexExclusionInput(plan.Analysis, Col{Table: "t", Column: "object_id"}, SubjectType, SubjectID)
+
+	switch firstStep.Type {
+	case "ttu":
+		// Build TTU blocks for each target type
+		for _, targetType := range firstStep.AllTargetTypes {
+			block, err := buildComposedTTUObjectsBlock(plan, anchor, targetType, exclusions)
+			if err != nil {
+				return ComposedObjectsBlockSet{}, err
+			}
+			result.MainBlocks = append(result.MainBlocks, *block)
+		}
+
+		// Build recursive TTU blocks
+		for _, recursiveType := range firstStep.RecursiveTypes {
+			block, err := buildComposedRecursiveTTUObjectsBlock(plan, anchor, recursiveType, exclusions)
+			if err != nil {
+				return ComposedObjectsBlockSet{}, err
+			}
+			result.MainBlocks = append(result.MainBlocks, *block)
+		}
+
+	case "userset":
+		block, err := buildComposedUsersetObjectsBlock(plan, anchor, firstStep, exclusions)
+		if err != nil {
+			return ComposedObjectsBlockSet{}, err
+		}
+		result.MainBlocks = append(result.MainBlocks, *block)
+	}
+
+	return result, nil
+}
+
+// buildComposedObjectsSelfBlock builds the self-candidate check block.
+func buildComposedObjectsSelfBlock(plan ListPlan) (*TypedQueryBlock, error) {
+	closureStmt := SelectStmt{
+		ColumnExprs: []Expr{Int(1)},
+		FromExpr:    ClosureTable(plan.Inline.ClosureRows, plan.Inline.ClosureValues, "c"),
+		Where: And(
+			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(plan.Relation)},
+			Eq{Left: Col{Table: "c", Column: "satisfying_relation"}, Right: UsersetRelation{Source: SubjectID}},
+		),
+	}
+
+	stmt := SelectStmt{
+		ColumnExprs: []Expr{UsersetObjectID{Source: SubjectID}},
+		Alias:       "object_id",
+		Where: And(
+			Eq{Left: SubjectType, Right: Lit(plan.ObjectType)},
+			HasUserset{Source: SubjectID},
+			Raw(closureStmt.Exists()),
+		),
+	}
+
+	return &TypedQueryBlock{
+		Comments: []string{
+			"-- Self-candidate: when subject is a userset on the same object type",
+		},
+		Query: stmt,
+	}, nil
+}
+
+// buildComposedTTUObjectsBlock builds a TTU composition block.
+func buildComposedTTUObjectsBlock(plan ListPlan, anchor *IndirectAnchorInfo, targetType string, exclusions ExclusionConfig) (*TypedQueryBlock, error) {
+	exclusionPreds := exclusions.BuildPredicates()
+
+	// Build subquery for list function call
+	targetFunction := fmt.Sprintf("list_%s_%s_objects", targetType, anchor.Path[0].TargetRelation)
+	subquery := fmt.Sprintf("SELECT obj.object_id FROM %s(p_subject_type, p_subject_id, NULL, NULL) obj", targetFunction)
+
+	conditions := make([]Expr, 0, 4+len(exclusionPreds))
+	conditions = append(conditions,
+		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+		Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(anchor.Path[0].LinkingRelation)},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(targetType)},
+		Raw("t.subject_id IN ("+subquery+")"),
+	)
+	conditions = append(conditions, exclusionPreds...)
+
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}},
+		FromExpr:    TableAs("melange_tuples", "t"),
+		Where:       And(conditions...),
+	}
+
+	return &TypedQueryBlock{
+		Comments: []string{
+			fmt.Sprintf("-- TTU composition: %s -> %s", anchor.Path[0].LinkingRelation, targetType),
+		},
+		Query: stmt,
+	}, nil
+}
+
+// buildComposedRecursiveTTUObjectsBlock builds a recursive TTU composition block.
+func buildComposedRecursiveTTUObjectsBlock(plan ListPlan, anchor *IndirectAnchorInfo, recursiveType string, exclusions ExclusionConfig) (*TypedQueryBlock, error) {
+	exclusionPreds := exclusions.BuildPredicates()
+
+	conditions := make([]Expr, 0, 4+len(exclusionPreds))
+	conditions = append(conditions,
+		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+		Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(anchor.Path[0].LinkingRelation)},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(recursiveType)},
+		CheckPermissionInternalExpr(SubjectParams(), anchor.Path[0].TargetRelation, ObjectRef{Type: Lit(recursiveType), ID: Col{Table: "t", Column: "subject_id"}}, true),
+	)
+	conditions = append(conditions, exclusionPreds...)
+
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}},
+		FromExpr:    TableAs("melange_tuples", "t"),
+		Where:       And(conditions...),
+	}
+
+	return &TypedQueryBlock{
+		Comments: []string{
+			fmt.Sprintf("-- Recursive TTU: %s -> %s", anchor.Path[0].LinkingRelation, recursiveType),
+		},
+		Query: stmt,
+	}, nil
+}
+
+// buildComposedUsersetObjectsBlock builds a userset composition block.
+func buildComposedUsersetObjectsBlock(plan ListPlan, _ *IndirectAnchorInfo, firstStep AnchorPathStep, exclusions ExclusionConfig) (*TypedQueryBlock, error) {
+	exclusionPreds := exclusions.BuildPredicates()
+
+	// Build subquery for list function call
+	targetFunction := fmt.Sprintf("list_%s_%s_objects", firstStep.SubjectType, firstStep.SubjectRelation)
+	subquery := fmt.Sprintf("SELECT obj.object_id FROM %s(p_subject_type, p_subject_id, NULL, NULL) obj", targetFunction)
+
+	conditions := make([]Expr, 0, 6+len(exclusionPreds))
+	conditions = append(conditions,
+		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+		In{Expr: Col{Table: "t", Column: "relation"}, Values: plan.RelationList},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(firstStep.SubjectType)},
+		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
+		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(firstStep.SubjectRelation)},
+		Or(
+			Raw("split_part(t.subject_id, '#', 1) IN ("+subquery+")"),
+			CheckPermissionInternalExpr(SubjectParams(), firstStep.SubjectRelation, ObjectRef{Type: Lit(firstStep.SubjectType), ID: Raw("split_part(t.subject_id, '#', 1)")}, true),
+		),
+	)
+	conditions = append(conditions, exclusionPreds...)
+
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}},
+		FromExpr:    TableAs("melange_tuples", "t"),
+		Where:       And(conditions...),
+	}
+
+	return &TypedQueryBlock{
+		Comments: []string{
+			fmt.Sprintf("-- Userset composition: %s#%s", firstStep.SubjectType, firstStep.SubjectRelation),
+		},
+		Query: stmt,
+	}, nil
+}
+
+// BuildListSubjectsComposedBlocks builds block set for composed list_subjects function.
+func BuildListSubjectsComposedBlocks(plan ListPlan) (ComposedSubjectsBlockSet, error) {
+	anchor := plan.Analysis.IndirectAnchor
+	if anchor == nil || len(anchor.Path) == 0 {
+		return ComposedSubjectsBlockSet{}, fmt.Errorf("missing indirect anchor data for %s.%s", plan.ObjectType, plan.Relation)
+	}
+
+	var result ComposedSubjectsBlockSet
+	result.AllowedSubjectTypes = plan.AllowedSubjectTypes
+	result.AnchorType = anchor.AnchorType
+	result.AnchorRelation = anchor.AnchorRelation
+	result.FirstStepType = anchor.Path[0].Type
+
+	// Build self-candidate block
+	selfBlock, err := buildComposedSubjectsSelfBlock(plan)
+	if err != nil {
+		return ComposedSubjectsBlockSet{}, err
+	}
+	result.SelfBlock = selfBlock
+
+	// Build candidate blocks for both userset filter and regular paths
+	candidateBlocks, err := buildTypedComposedSubjectsCandidateBlocks(plan, anchor)
+	if err != nil {
+		return ComposedSubjectsBlockSet{}, err
+	}
+	result.UsersetFilterBlocks = candidateBlocks
+	result.RegularBlocks = candidateBlocks
+
+	// Check for exclusions
+	exclusions := buildSimpleComplexExclusionInput(plan.Analysis, ObjectID, SubjectType, Col{Table: "sc", Column: "subject_id"})
+	result.HasExclusions = len(exclusions.BuildPredicates()) > 0
+
+	return result, nil
+}
+
+// buildComposedSubjectsSelfBlock builds the self-candidate block for list_subjects.
+func buildComposedSubjectsSelfBlock(plan ListPlan) (*TypedQueryBlock, error) {
+	closureStmt := SelectStmt{
+		ColumnExprs: []Expr{Int(1)},
+		FromExpr:    ClosureTable(plan.Inline.ClosureRows, plan.Inline.ClosureValues, "c"),
+		Where: And(
+			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(plan.Relation)},
+			Eq{Left: Col{Table: "c", Column: "satisfying_relation"}, Right: Param("v_filter_relation")},
+		),
+	}
+
+	stmt := SelectStmt{
+		ColumnExprs: []Expr{Int(1)},
+		Where: And(
+			Eq{Left: Param("v_filter_type"), Right: Lit(plan.ObjectType)},
+			Raw(closureStmt.Exists()),
+		),
+	}
+
+	return &TypedQueryBlock{
+		Comments: []string{
+			"-- Self-candidate check: filter type matches object type with satisfying relation",
+		},
+		Query: stmt,
+	}, nil
+}
+
+// buildTypedComposedSubjectsCandidateBlocks builds candidate blocks for composed subjects.
+// This is the typed version using TypedQueryBlock instead of string.
+func buildTypedComposedSubjectsCandidateBlocks(plan ListPlan, anchor *IndirectAnchorInfo) ([]TypedQueryBlock, error) {
+	if anchor == nil || len(anchor.Path) == 0 {
+		return nil, nil
+	}
+
+	firstStep := anchor.Path[0]
+	var blocks []TypedQueryBlock
+
+	switch firstStep.Type {
+	case "ttu":
+		for _, targetType := range firstStep.AllTargetTypes {
+			block, err := buildComposedTTUSubjectsBlock(plan, anchor, targetType)
+			if err != nil {
+				return nil, err
+			}
+			blocks = append(blocks, *block)
+		}
+
+		for _, recursiveType := range firstStep.RecursiveTypes {
+			block, err := buildComposedTTUSubjectsBlock(plan, anchor, recursiveType)
+			if err != nil {
+				return nil, err
+			}
+			blocks = append(blocks, *block)
+		}
+
+	case "userset":
+		block, err := buildComposedUsersetSubjectsBlock(plan, firstStep)
+		if err != nil {
+			return nil, err
+		}
+		blocks = append(blocks, *block)
+	}
+
+	return blocks, nil
+}
+
+// buildComposedTTUSubjectsBlock builds a TTU subjects candidate block.
+func buildComposedTTUSubjectsBlock(plan ListPlan, anchor *IndirectAnchorInfo, targetType string) (*TypedQueryBlock, error) {
+	listFunction := fmt.Sprintf("list_%s_%s_subjects(link.subject_id, p_subject_type)", targetType, anchor.Path[0].TargetRelation)
+
+	conditions := []Expr{
+		Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+		Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
+		Eq{Left: Col{Table: "link", Column: "relation"}, Right: Lit(anchor.Path[0].LinkingRelation)},
+		Eq{Left: Col{Table: "link", Column: "subject_type"}, Right: Lit(targetType)},
+	}
+
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "s", Column: "subject_id"}},
+		FromExpr:    TableAs("melange_tuples", "link"),
+		Joins: []JoinClause{{
+			Type:  "CROSS",
+			Table: "LATERAL " + listFunction,
+			Alias: "s",
+			On:    nil, // CROSS JOIN has no ON clause
+		}},
+		Where: And(conditions...),
+	}
+
+	return &TypedQueryBlock{
+		Comments: []string{
+			fmt.Sprintf("-- From %s parents", targetType),
+		},
+		Query: stmt,
+	}, nil
+}
+
+// buildComposedUsersetSubjectsBlock builds a userset subjects candidate block.
+func buildComposedUsersetSubjectsBlock(plan ListPlan, firstStep AnchorPathStep) (*TypedQueryBlock, error) {
+	listFunction := fmt.Sprintf("list_%s_%s_subjects(split_part(t.subject_id, '#', 1), p_subject_type)", firstStep.SubjectType, firstStep.SubjectRelation)
+
+	conditions := []Expr{
+		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
+		In{Expr: Col{Table: "t", Column: "relation"}, Values: plan.RelationList},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(firstStep.SubjectType)},
+		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
+		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(firstStep.SubjectRelation)},
+	}
+
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "s", Column: "subject_id"}},
+		FromExpr:    TableAs("melange_tuples", "t"),
+		Joins: []JoinClause{{
+			Type:  "CROSS",
+			Table: "LATERAL " + listFunction,
+			Alias: "s",
+			On:    nil,
+		}},
+		Where: And(conditions...),
+	}
+
+	return &TypedQueryBlock{
+		Comments: []string{
+			fmt.Sprintf("-- Userset: %s#%s grants", firstStep.SubjectType, firstStep.SubjectRelation),
+		},
+		Query: stmt,
+	}, nil
+}
