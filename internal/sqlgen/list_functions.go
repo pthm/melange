@@ -96,8 +96,13 @@ func generateListObjectsFunction(a RelationAnalysis, inline InlineSQLData) (stri
 		}
 		return RenderListObjectsFunction(plan, blocks)
 	case ListStrategyRecursive:
-		// Use legacy builder for TTU patterns until new implementation adds TTU block support
-		return NewListObjectsBuilder(a, inline).Build()
+		// Use Plan → Blocks → Render for TTU patterns
+		plan := BuildListObjectsPlan(a, inline)
+		blocks, err := BuildListObjectsRecursiveBlocks(plan)
+		if err != nil {
+			return "", err
+		}
+		return RenderListObjectsRecursiveFunction(plan, blocks)
 	case ListStrategyDepthExceeded:
 		return generateListObjectsDepthExceededFunction(a), nil
 	case ListStrategySelfRefUserset:
@@ -114,7 +119,7 @@ func generateListSubjectsFunction(a RelationAnalysis, inline InlineSQLData) (str
 	// Route to appropriate generator based on ListStrategy
 	switch a.ListStrategy {
 	case ListStrategyDirect, ListStrategyUserset, ListStrategyRecursive, ListStrategyIntersection:
-		// These strategies all use the unified ListSubjectsBuilder
+		// TODO: Wire to Plan → Blocks → Render after fixing userset filter path
 		return NewListSubjectsBuilder(a, inline).Build()
 	case ListStrategyDepthExceeded:
 		return generateListSubjectsDepthExceededFunction(a), nil

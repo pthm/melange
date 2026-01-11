@@ -120,6 +120,147 @@ func renderListObjectsFunctionSQL(plan ListPlan, query string) string {
 	return fn.SQL()
 }
 
+// RenderListObjectsRecursiveFunction renders a recursive list_objects function from plan and blocks.
+// This handles TTU patterns with depth tracking and recursive CTEs.
+func RenderListObjectsRecursiveFunction(plan ListPlan, blocks RecursiveBlockSet) (string, error) {
+	// Build CTE body from base blocks
+	cteBody := renderRecursiveCTEBody(blocks)
+
+	// Build final exclusion predicates for the CTE result
+	finalExclusions := buildExclusionInput(
+		plan.Analysis,
+		Col{Table: "acc", Column: "object_id"},
+		SubjectType,
+		SubjectID,
+	)
+	exclusionPreds := finalExclusions.BuildPredicates()
+
+	var whereExpr Expr
+	if len(exclusionPreds) > 0 {
+		allPreds := append([]Expr{Bool(true)}, exclusionPreds...)
+		whereExpr = And(allPreds...)
+	}
+
+	finalStmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "acc", Column: "object_id"}},
+		FromExpr:    TableAs("accessible", "acc"),
+		Where:       whereExpr,
+	}
+
+	// Build the CTE SQL
+	cteSQL := "WITH RECURSIVE accessible(object_id, depth) AS (\n" + cteBody + "\n)\n" + finalStmt.SQL()
+
+	// Build self-candidate SQL
+	var selfCandidateSQL string
+	if blocks.SelfCandidateBlock != nil {
+		selfCandidateSQL = renderTypedQueryBlock(*blocks.SelfCandidateBlock).SQL
+	}
+
+	// Combine CTE and self-candidate with UNION
+	var query string
+	if selfCandidateSQL != "" {
+		query = joinUnionBlocksSQL([]string{cteSQL, selfCandidateSQL})
+	} else {
+		query = cteSQL
+	}
+
+	// Build depth check SQL
+	depthCheck := buildDepthCheckSQLForRender(plan.ObjectType, blocks.SelfRefLinkingRelations)
+	paginatedQuery := wrapWithPagination(query, "object_id")
+
+	fn := PlpgsqlFunction{
+		Name:    plan.FunctionName,
+		Args:    ListObjectsArgs(),
+		Returns: ListObjectsReturns(),
+		Header:  ListObjectsFunctionHeader(plan.ObjectType, plan.Relation, plan.FeaturesString()),
+		Decls: []Decl{
+			{Name: "v_max_depth", Type: "INTEGER"},
+		},
+		Body: []Stmt{
+			RawStmt{SQLText: strings.TrimSpace(depthCheck)},
+			If{
+				Cond: Raw("v_max_depth >= 25"),
+				Then: []Stmt{
+					Raise{Message: "resolution too complex", ErrCode: "M2002"},
+				},
+			},
+			ReturnQuery{Query: paginatedQuery},
+		},
+	}
+
+	return fn.SQL(), nil
+}
+
+// renderRecursiveCTEBody renders the CTE body from base and recursive blocks.
+func renderRecursiveCTEBody(blocks RecursiveBlockSet) string {
+	// Render base blocks with depth wrapping
+	var baseBlocksSQL []string
+	for _, block := range blocks.BaseBlocks {
+		qb := renderTypedQueryBlock(block)
+		wrappedSQL := wrapQueryWithDepthForRender(qb.SQL, "0", "base")
+		baseBlocksSQL = append(baseBlocksSQL, formatQueryBlockSQL(qb.Comments, wrappedSQL))
+	}
+
+	// Join base blocks with UNION
+	cteBody := strings.Join(baseBlocksSQL, "\n    UNION\n")
+
+	// Add recursive block with UNION ALL if present
+	if blocks.RecursiveBlock != nil {
+		qb := renderTypedQueryBlock(*blocks.RecursiveBlock)
+		recursiveSQL := formatQueryBlockSQL(qb.Comments, qb.SQL)
+		cteBody = cteBody + "\n    UNION ALL\n" + recursiveSQL
+	}
+
+	return cteBody
+}
+
+// wrapQueryWithDepthForRender wraps a query to include depth column.
+func wrapQueryWithDepthForRender(sql, depthExpr, alias string) string {
+	return "SELECT DISTINCT " + alias + ".object_id, " + depthExpr + " AS depth\nFROM (\n" + sql + "\n) AS " + alias
+}
+
+// formatQueryBlockSQL formats a query block with comments.
+func formatQueryBlockSQL(comments []string, sql string) string {
+	var lines []string
+	for _, comment := range comments {
+		lines = append(lines, "    "+comment)
+	}
+	lines = append(lines, indentLines(sql, "    "))
+	return strings.Join(lines, "\n")
+}
+
+// joinUnionBlocksSQL joins multiple SQL blocks with UNION.
+func joinUnionBlocksSQL(blocks []string) string {
+	return strings.Join(blocks, "\n    UNION\n")
+}
+
+// buildDepthCheckSQLForRender builds the depth check SQL for recursive functions.
+func buildDepthCheckSQLForRender(objectType string, linkingRelations []string) string {
+	if len(linkingRelations) == 0 {
+		return "    v_max_depth := 0;\n"
+	}
+	return "    -- Check for excessive recursion depth before running the query\n" +
+		"    -- This matches check_permission behavior with M2002 error\n" +
+		"    -- Only self-referential TTUs contribute to recursion depth (cross-type are one-hop)\n" +
+		"    WITH RECURSIVE depth_check(object_id, depth) AS (\n" +
+		"        -- Base case: seed with empty set (we just need depth tracking)\n" +
+		"        SELECT NULL::TEXT, 0\n" +
+		"        WHERE FALSE\n" +
+		"\n" +
+		"        UNION ALL\n" +
+		"        -- Track depth through all self-referential linking relations\n" +
+		"        SELECT t.object_id, d.depth + 1\n" +
+		"        FROM depth_check d\n" +
+		"        JOIN melange_tuples t\n" +
+		"          ON t.object_type = '" + objectType + "'\n" +
+		"          AND t.relation IN (" + formatSQLStringList(linkingRelations) + ")\n" +
+		"          AND t.subject_type = '" + objectType + "'\n" +
+		"        WHERE d.depth < 26  -- Allow one extra to detect overflow\n" +
+		"    )\n" +
+		"    SELECT MAX(depth) INTO v_max_depth FROM depth_check;\n"
+}
+
 // renderUsersetFilterThenBranch builds the THEN branch statements for userset filter path.
 func renderUsersetFilterThenBranch(usersetFilterPaginatedQuery string) []Stmt {
 	// If there are no userset filter blocks, just return empty results
@@ -180,7 +321,7 @@ func renderRegularSubjectElseBranch(plan ListPlan, regularPaginatedQuery string)
 	return stmts
 }
 
-// Pagination helpers are defined in list_builders.go:
+// Pagination helpers are defined in sql.go:
 // - wrapWithPagination(query, orderColumn string) string
 // - wrapWithPaginationWildcardFirst(query string) string
 

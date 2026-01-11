@@ -1333,75 +1333,9 @@ func joinUnionBlocks(blocks []string) string {
 // Pagination Helpers
 // =============================================================================
 
-// wrapWithPagination wraps a query in pagination CTEs for list_objects functions.
-// Returns a complete SQL query that implements cursor-based pagination with:
-// - p_limit: maximum number of results to return (NULL = no limit)
-// - p_after: cursor from previous page (NULL = start from beginning)
-// - next_cursor: returned with each row, NULL when no more pages
-func wrapWithPagination(query, idColumn string) string {
-	return fmt.Sprintf(`WITH base_results AS (
-%s
-    ),
-    paged AS (
-        SELECT br.%s
-        FROM base_results br
-        WHERE (p_after IS NULL OR br.%s > p_after)
-        ORDER BY br.%s
-        LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
-    ),
-    returned AS (
-        SELECT p.%s FROM paged p ORDER BY p.%s LIMIT p_limit
-    ),
-    next AS (
-        SELECT CASE
-            WHEN p_limit IS NOT NULL AND (SELECT count(*) FROM paged) > p_limit
-            THEN (SELECT max(r.%s) FROM returned r)
-        END AS next_cursor
-    )
-    SELECT r.%s, n.next_cursor
-    FROM returned r
-    CROSS JOIN next n`,
-		indentLines(query, "        "), idColumn, idColumn, idColumn,
-		idColumn, idColumn, idColumn, idColumn)
-}
-
-// wrapWithPaginationWildcardFirst wraps a query for list_subjects with wildcard-first ordering.
-// Wildcards ('*') are sorted before all other subject IDs to ensure consistent pagination.
-// Uses a compound sort key: (is_not_wildcard, subject_id) where is_not_wildcard is 0 for '*', 1 otherwise.
-func wrapWithPaginationWildcardFirst(query string) string {
-	return fmt.Sprintf(`WITH base_results AS (
-%s
-    ),
-    paged AS (
-        SELECT br.subject_id
-        FROM base_results br
-        WHERE p_after IS NULL OR (
-            -- Compound comparison for wildcard-first ordering:
-            -- (is_not_wildcard, subject_id) > (cursor_is_not_wildcard, cursor)
-            (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END, br.subject_id) >
-            (CASE WHEN p_after = '*' THEN 0 ELSE 1 END, p_after)
-        )
-        ORDER BY (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END), br.subject_id
-        LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
-    ),
-    returned AS (
-        SELECT p.subject_id FROM paged p
-        ORDER BY (CASE WHEN p.subject_id = '*' THEN 0 ELSE 1 END), p.subject_id
-        LIMIT p_limit
-    ),
-    next AS (
-        SELECT CASE
-            WHEN p_limit IS NOT NULL AND (SELECT count(*) FROM paged) > p_limit
-            THEN (SELECT r.subject_id FROM returned r
-                  ORDER BY (CASE WHEN r.subject_id = '*' THEN 0 ELSE 1 END) DESC, r.subject_id DESC
-                  LIMIT 1)
-        END AS next_cursor
-    )
-    SELECT r.subject_id, n.next_cursor
-    FROM returned r
-    CROSS JOIN next n`,
-		indentLines(query, "        "))
-}
+// Pagination helpers are now in sql.go:
+// - wrapWithPagination(query, idColumn string) string
+// - wrapWithPaginationWildcardFirst(query string) string
 
 func generateListObjectsRecursiveFunction(a RelationAnalysis, inline InlineSQLData) (string, error) {
 	functionName := listObjectsFunctionName(a.ObjectType, a.Relation)
