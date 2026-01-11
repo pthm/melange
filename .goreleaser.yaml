@@ -76,5 +76,3 @@ publishers:
     ids:
       - default
     cmd: sh -c 'cd clients/typescript && npm run build && npm publish --access public'
-    env:
-      - NPM_TOKEN={{ .Env.NPM_TOKEN }}

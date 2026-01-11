@@ -52,3 +52,7 @@ specs/
 # Blog
 blog/
 !docs/content/blog/
+
+dist/
+**/dist/
+**/node_modules/
