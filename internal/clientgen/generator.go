@@ -58,6 +58,16 @@ type Config struct {
 	// Other languages may ignore this or use their own type mappings.
 	IDType string
 
+	// Version is the melange version used for generation.
+	// Included in the generated file header for traceability.
+	// Example: "v0.4.3"
+	Version string
+
+	// SourcePath is the path to the source schema file.
+	// Included in the generated file header for traceability.
+	// Example: "schemas/schema.fga"
+	SourcePath string
+
 	// Options holds language-specific configuration.
 	// Each generator documents its supported options.
 	Options map[string]any

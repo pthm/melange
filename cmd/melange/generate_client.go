@@ -79,6 +79,8 @@ Supported runtimes: ` + strings.Join(clientgen.ListRuntimes(), ", "),
 			Package:        pkg,
 			RelationFilter: filter,
 			IDType:         idType,
+			Version:        version,
+			SourcePath:     schema,
 		}
 		files, err := clientgen.Generate(runtime, types, genCfg)
 		if err != nil {

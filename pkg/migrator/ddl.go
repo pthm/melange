@@ -5,6 +5,7 @@ const migrationsDDL = `-- Melange migrations tracking table
 -- Stores migration history for change detection and orphan cleanup.
 --
 -- Each row represents a completed migration:
+-- - melange_version: Version of the melange CLI/library (e.g., "v0.4.3")
 -- - schema_checksum: SHA256 of the schema.fga content
 -- - codegen_version: Version of the SQL generation logic
 -- - function_names: All generated function names (for orphan detection)
@@ -16,6 +17,7 @@ const migrationsDDL = `-- Melange migrations tracking table
 CREATE TABLE IF NOT EXISTS melange_migrations (
     id SERIAL PRIMARY KEY,
     migrated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    melange_version VARCHAR(64) NOT NULL DEFAULT '',
     schema_checksum VARCHAR(64) NOT NULL,
     codegen_version VARCHAR(32) NOT NULL,
     function_names TEXT[] NOT NULL
@@ -24,4 +26,10 @@ CREATE TABLE IF NOT EXISTS melange_migrations (
 -- Lookup by checksum for change detection
 CREATE INDEX IF NOT EXISTS idx_melange_migrations_checksum
 ON melange_migrations (schema_checksum, codegen_version);
+`
+
+// addMelangeVersionColumn is a migration to add the melange_version column to existing tables.
+const addMelangeVersionColumn = `
+ALTER TABLE melange_migrations
+ADD COLUMN IF NOT EXISTS melange_version VARCHAR(64) NOT NULL DEFAULT '';
 `

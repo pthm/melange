@@ -83,7 +83,8 @@ func runMigrate(dsn, schemaPath string, dryRun, force bool) error {
 	ctx := context.Background()
 
 	opts := migrator.MigrateOptions{
-		Force: force,
+		Force:   force,
+		Version: version,
 	}
 
 	if dryRun {

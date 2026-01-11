@@ -52,12 +52,20 @@ type MigrateOptions struct {
 
 	// Force re-runs migration even if schema/codegen unchanged. Use when manually fixing corrupted state or testing.
 	Force bool
+
+	// Version is the melange CLI/library version (e.g., "v0.4.3").
+	// Recorded in melange_migrations for traceability.
+	Version string
 }
 
 // InternalMigrateOptions extends MigrateOptions with internal fields.
 type InternalMigrateOptions struct {
 	DryRun io.Writer
 	Force  bool
+
+	// Version is the melange CLI/library version (e.g., "v0.4.3").
+	// Recorded in melange_migrations for traceability.
+	Version string
 
 	// SchemaContent is the raw schema text used for checksum calculation to detect schema changes.
 	// If empty, skip-if-unchanged optimization is disabled.
@@ -66,6 +74,7 @@ type InternalMigrateOptions struct {
 
 // MigrationRecord represents a row in the melange_migrations table.
 type MigrationRecord struct {
+	MelangeVersion string
 	SchemaChecksum string
 	CodegenVersion string
 	FunctionNames  []string
@@ -331,11 +340,11 @@ func (m *Migrator) getLastMigration(ctx context.Context, db Execer) (*MigrationR
 
 	var rec MigrationRecord
 	err = db.QueryRowContext(ctx, `
-		SELECT schema_checksum, codegen_version, function_names
+		SELECT melange_version, schema_checksum, codegen_version, function_names
 		FROM melange_migrations
 		ORDER BY id DESC
 		LIMIT 1
-	`).Scan(&rec.SchemaChecksum, &rec.CodegenVersion, pq.Array(&rec.FunctionNames))
+	`).Scan(&rec.MelangeVersion, &rec.SchemaChecksum, &rec.CodegenVersion, pq.Array(&rec.FunctionNames))
 	if err == sql.ErrNoRows {
 		return nil, nil // No previous migration
 	}
@@ -402,19 +411,24 @@ func (m *Migrator) dropOrphanedFunctions(ctx context.Context, db Execer, current
 }
 
 // applyMigrationsDDL creates the melange_migrations table if it doesn't exist.
+// Also applies any necessary column migrations for existing tables.
 func (m *Migrator) applyMigrationsDDL(ctx context.Context, db Execer) error {
 	if _, err := db.ExecContext(ctx, migrationsDDL); err != nil {
 		return fmt.Errorf("applying migrations DDL: %w", err)
+	}
+	// Add melange_version column if it doesn't exist (for existing tables)
+	if _, err := db.ExecContext(ctx, addMelangeVersionColumn); err != nil {
+		return fmt.Errorf("adding melange_version column: %w", err)
 	}
 	return nil
 }
 
 // insertMigrationRecord records the migration in melange_migrations.
-func (m *Migrator) insertMigrationRecord(ctx context.Context, db Execer, schemaChecksum string, functionNames []string) error {
+func (m *Migrator) insertMigrationRecord(ctx context.Context, db Execer, melangeVersion, schemaChecksum string, functionNames []string) error {
 	_, err := db.ExecContext(ctx, `
-		INSERT INTO melange_migrations (schema_checksum, codegen_version, function_names)
-		VALUES ($1, $2, $3)
-	`, schemaChecksum, CodegenVersion, pq.Array(functionNames))
+		INSERT INTO melange_migrations (melange_version, schema_checksum, codegen_version, function_names)
+		VALUES ($1, $2, $3, $4)
+	`, melangeVersion, schemaChecksum, CodegenVersion, pq.Array(functionNames))
 	if err != nil {
 		return fmt.Errorf("inserting migration record: %w", err)
 	}
@@ -472,7 +486,7 @@ func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeD
 
 	// 8. Handle dry-run mode
 	if opts.DryRun != nil {
-		m.outputDryRun(opts.DryRun, schemaChecksum, generatedSQL, listSQL, expectedFunctions)
+		m.outputDryRun(opts.DryRun, opts.Version, schemaChecksum, generatedSQL, listSQL, expectedFunctions)
 		return nil
 	}
 
@@ -514,7 +528,7 @@ func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeD
 
 		// Record migration
 		if schemaChecksum != "" {
-			if err := m.insertMigrationRecord(ctx, tx, schemaChecksum, expectedFunctions); err != nil {
+			if err := m.insertMigrationRecord(ctx, tx, opts.Version, schemaChecksum, expectedFunctions); err != nil {
 				return err
 			}
 		}
@@ -540,7 +554,7 @@ func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeD
 		return err
 	}
 	if schemaChecksum != "" {
-		if err := m.insertMigrationRecord(ctx, m.db, schemaChecksum, expectedFunctions); err != nil {
+		if err := m.insertMigrationRecord(ctx, m.db, opts.Version, schemaChecksum, expectedFunctions); err != nil {
 			return err
 		}
 	}
@@ -548,9 +562,12 @@ func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeD
 }
 
 // outputDryRun writes the migration SQL to the provided writer.
-func (m *Migrator) outputDryRun(w io.Writer, schemaChecksum string, generatedSQL GeneratedSQL, listSQL ListGeneratedSQL, expectedFunctions []string) {
+func (m *Migrator) outputDryRun(w io.Writer, melangeVersion, schemaChecksum string, generatedSQL GeneratedSQL, listSQL ListGeneratedSQL, expectedFunctions []string) {
 	// Header
 	_, _ = fmt.Fprintf(w, "-- Melange Migration (dry-run)\n")
+	if melangeVersion != "" {
+		_, _ = fmt.Fprintf(w, "-- Melange version: %s\n", melangeVersion)
+	}
 	_, _ = fmt.Fprintf(w, "-- Schema checksum: %s\n", schemaChecksum)
 	_, _ = fmt.Fprintf(w, "-- Codegen version: %s\n", CodegenVersion)
 	_, _ = fmt.Fprintf(w, "\n")
@@ -630,6 +647,6 @@ func (m *Migrator) outputDryRun(w io.Writer, schemaChecksum string, generatedSQL
 	for i, fn := range sortedFunctions {
 		quotedFunctions[i] = fmt.Sprintf("'%s'", fn)
 	}
-	_, _ = fmt.Fprintf(w, "INSERT INTO melange_migrations (schema_checksum, codegen_version, function_names)\n")
-	_, _ = fmt.Fprintf(w, "VALUES ('%s', '%s', ARRAY[%s]);\n", schemaChecksum, CodegenVersion, strings.Join(quotedFunctions, ", "))
+	_, _ = fmt.Fprintf(w, "INSERT INTO melange_migrations (melange_version, schema_checksum, codegen_version, function_names)\n")
+	_, _ = fmt.Fprintf(w, "VALUES ('%s', '%s', '%s', ARRAY[%s]);\n", melangeVersion, schemaChecksum, CodegenVersion, strings.Join(quotedFunctions, ", "))
 }
