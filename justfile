@@ -161,44 +161,56 @@ test-race:
 # Build the CLI
 [group('Build')]
 build:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version=$(cat VERSION 2>/dev/null || echo "dev")
+    commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    go build -ldflags "-X main.version=$version -X main.commit=$commit -X main.date=$date" -o bin/melange ./cmd/melange
+
+# Build the CLI without version info (faster for development)
+[group('Build')]
+build-dev:
     go build -o bin/melange ./cmd/melange
+
+# Generate root THIRD_PARTY_NOTICES from go-licenses output
+[group('Release')]
+[doc('Generate THIRD_PARTY_NOTICES from go-licenses data')]
+licenses:
+    go generate ./internal/licenses
 
 # Install the CLI locally
 [group('Build')]
 install:
-    go install ./cmd/melange
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version=$(cat VERSION 2>/dev/null || echo "dev")
+    commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    go install -ldflags "-X main.version=$version -X main.commit=$commit -X main.date=$date" ./cmd/melange
 
 # =============================================================================
 # Linting and Formatting
 # =============================================================================
 
-# Format all code (Go + SQL)
+# Format all code (Go)
 [group('Lint')]
-fmt: fmt-go fmt-sql
+fmt: fmt-go
 
 # Format Go code with gofumpt
 [group('Lint')]
 fmt-go:
     for dir in {{ROOT}} {{TEST}}; do (cd "$dir" && go tool gofumpt -w .); done
 
-# Format SQL files with sqruff
-[group('Lint')]
-fmt-sql:
-    mise exec -- sqruff fix test/testutil/testdata/
 
-# Lint all code (Go + SQL)
+# Lint all code (Go)
 [group('Lint')]
-lint: lint-go lint-sql
+lint: lint-go
 
 # Lint Go code with golangci-lint
 [group('Lint')]
 lint-go:
     for dir in {{ROOT}} {{TEST}}; do (cd "$dir" && go tool golangci-lint run ./...); done
-
-# Lint SQL files with sqruff
-[group('Lint')]
-lint-sql:
-    mise exec -- sqruff lint test/testutil/testdata/
 
 # Install linting and formatting tools
 [group('Lint')]
