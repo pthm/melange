@@ -69,7 +69,7 @@ func (b *ListObjectsBuilder) Build() (string, error) {
 
 	// Configure exclusions if the relation has exclusion features
 	if b.analysis.Features.HasExclusion {
-		b.exclusions = buildExclusionInput(b.analysis, "t.object_id", "p_subject_type", "p_subject_id")
+		b.exclusions = buildExclusionInput(b.analysis, Col{Table: "t", Column: "object_id"}, SubjectType, SubjectID)
 	}
 
 	// Feature-driven block building
@@ -409,9 +409,9 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathDirect() error {
 		ObjectType:          b.analysis.ObjectType,
 		RelationList:        b.relationList,
 		AllowedSubjectTypes: b.allowedSubjectTypes,
-		ObjectIDExpr:        "p_object_id",
-		FilterTypeExpr:      "v_filter_type",
-		FilterRelationExpr:  "v_filter_relation",
+		ObjectIDExpr:        ObjectID,
+		FilterTypeExpr:      ParamRef("v_filter_type"),
+		FilterRelationExpr:  ParamRef("v_filter_relation"),
 		ClosureValues:       b.inline.ClosureValues,
 		UseTypeGuard:        true,
 	})
@@ -441,11 +441,12 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathDirect() error {
 	b.usersetFilterBlocks = append(b.usersetFilterBlocks, filterBlocks...)
 
 	// Intersection closure blocks
+	filterUsersetExpr := Concat{Parts: []Expr{ParamRef("v_filter_type"), Lit("#"), ParamRef("v_filter_relation")}}
 	intersectionBlocks, err := buildListSubjectsIntersectionBlocks(
 		b.analysis,
 		false,
-		"v_filter_type || '#' || v_filter_relation",
-		"",
+		filterUsersetExpr,
+		nil,
 	)
 	if err != nil {
 		return err
@@ -456,9 +457,9 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathDirect() error {
 	selfBlock, err := ListSubjectsSelfCandidateQuery(ListSubjectsSelfCandidateInput{
 		ObjectType:         b.analysis.ObjectType,
 		Relation:           b.analysis.Relation,
-		ObjectIDExpr:       "p_object_id",
-		FilterTypeExpr:     "v_filter_type",
-		FilterRelationExpr: "v_filter_relation",
+		ObjectIDExpr:       ObjectID,
+		FilterTypeExpr:     ParamRef("v_filter_type"),
+		FilterRelationExpr: ParamRef("v_filter_relation"),
 		ClosureValues:      b.inline.ClosureValues,
 	})
 	if err != nil {
@@ -479,8 +480,8 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathDirect() error {
 
 // buildUsersetFilterPathExclusion builds userset filter blocks for exclusion template.
 func (b *ListSubjectsBuilder) buildUsersetFilterPathExclusion() error {
-	usersetNormalized := "substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) || '#' || v_filter_relation"
-	usersetExclusions := buildExclusionInput(b.analysis, "p_object_id", "v_filter_type", usersetNormalized)
+	usersetNormalized := UsersetNormalized{Source: Col{Table: "t", Column: "subject_id"}, Relation: ParamRef("v_filter_relation")}
+	usersetExclusions := buildExclusionInput(b.analysis, ObjectID, ParamRef("v_filter_type"), usersetNormalized)
 
 	usersetPreds := usersetExclusions.BuildPredicates()
 	usersetPredsSQL := RenderDSLExprs(usersetPreds)
@@ -488,9 +489,9 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathExclusion() error {
 		ObjectType:          b.analysis.ObjectType,
 		RelationList:        b.relationList,
 		AllowedSubjectTypes: b.allowedSubjectTypes,
-		ObjectIDExpr:        "p_object_id",
-		FilterTypeExpr:      "v_filter_type",
-		FilterRelationExpr:  "v_filter_relation",
+		ObjectIDExpr:        ObjectID,
+		FilterTypeExpr:      ParamRef("v_filter_type"),
+		FilterRelationExpr:  ParamRef("v_filter_relation"),
 		ClosureValues:       b.inline.ClosureValues,
 		UseTypeGuard:        true,
 		ExtraPredicatesSQL:  usersetPredsSQL,
@@ -521,11 +522,12 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathExclusion() error {
 	b.usersetFilterBlocks = append(b.usersetFilterBlocks, filterBlocks...)
 
 	// Intersection closure blocks with validation
+	filterUsersetExpr := Concat{Parts: []Expr{ParamRef("v_filter_type"), Lit("#"), ParamRef("v_filter_relation")}}
 	intersectionBlocks, err := buildListSubjectsIntersectionBlocks(
 		b.analysis,
 		true,
-		"v_filter_type || '#' || v_filter_relation",
-		"v_filter_type",
+		filterUsersetExpr,
+		ParamRef("v_filter_type"),
 	)
 	if err != nil {
 		return err
@@ -533,15 +535,15 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathExclusion() error {
 	b.usersetFilterBlocks = append(b.usersetFilterBlocks, intersectionBlocks...)
 
 	// Self-candidate block with exclusions
-	selfExclusions := buildExclusionInput(b.analysis, "p_object_id", fmt.Sprintf("'%s'", b.analysis.ObjectType), "p_object_id || '#' || v_filter_relation")
+	selfExclusions := buildExclusionInput(b.analysis, ObjectID, Lit(b.analysis.ObjectType), Concat{Parts: []Expr{ObjectID, Lit("#"), ParamRef("v_filter_relation")}})
 	selfPreds := selfExclusions.BuildPredicates()
 	selfPredsSQL := RenderDSLExprs(selfPreds)
 	selfBlock, err := ListSubjectsSelfCandidateQuery(ListSubjectsSelfCandidateInput{
 		ObjectType:         b.analysis.ObjectType,
 		Relation:           b.analysis.Relation,
-		ObjectIDExpr:       "p_object_id",
-		FilterTypeExpr:     "v_filter_type",
-		FilterRelationExpr: "v_filter_relation",
+		ObjectIDExpr:       ObjectID,
+		FilterTypeExpr:     ParamRef("v_filter_type"),
+		FilterRelationExpr: ParamRef("v_filter_relation"),
 		ClosureValues:      b.inline.ClosureValues,
 		ExtraPredicatesSQL: selfPredsSQL,
 	})
@@ -567,9 +569,9 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathUserset() error {
 	usersetBaseSQL, err := ListSubjectsUsersetFilterQuery(ListSubjectsUsersetFilterInput{
 		ObjectType:         b.analysis.ObjectType,
 		RelationList:       b.allSatisfyingRelations,
-		ObjectIDExpr:       "p_object_id",
-		FilterTypeExpr:     "v_filter_type",
-		FilterRelationExpr: "v_filter_relation",
+		ObjectIDExpr:       ObjectID,
+		FilterTypeExpr:     ParamRef("v_filter_type"),
+		FilterRelationExpr: ParamRef("v_filter_relation"),
 		ClosureValues:      b.inline.ClosureValues,
 		UseTypeGuard:       false,
 		ExtraPredicatesSQL: []string{checkExprSQL},
@@ -585,11 +587,12 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathUserset() error {
 	))
 
 	// Intersection closure blocks
+	filterUsersetExpr := Concat{Parts: []Expr{ParamRef("v_filter_type"), Lit("#"), ParamRef("v_filter_relation")}}
 	intersectionBlocks, err := buildListSubjectsIntersectionBlocks(
 		b.analysis,
 		false,
-		"v_filter_type || '#' || v_filter_relation",
-		"",
+		filterUsersetExpr,
+		nil,
 	)
 	if err != nil {
 		return err
@@ -600,9 +603,9 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathUserset() error {
 	selfBlock, err := ListSubjectsSelfCandidateQuery(ListSubjectsSelfCandidateInput{
 		ObjectType:         b.analysis.ObjectType,
 		Relation:           b.analysis.Relation,
-		ObjectIDExpr:       "p_object_id",
-		FilterTypeExpr:     "v_filter_type",
-		FilterRelationExpr: "v_filter_relation",
+		ObjectIDExpr:       ObjectID,
+		FilterTypeExpr:     ParamRef("v_filter_type"),
+		FilterRelationExpr: ParamRef("v_filter_relation"),
 		ClosureValues:      b.inline.ClosureValues,
 	})
 	if err != nil {
@@ -641,8 +644,8 @@ func (b *ListSubjectsBuilder) buildRegularPathDirect() error {
 	regularBaseSQL, err := ListSubjectsDirectQuery(ListSubjectsDirectInput{
 		ObjectType:      b.analysis.ObjectType,
 		RelationList:    b.relationList,
-		ObjectIDExpr:    "p_object_id",
-		SubjectTypeExpr: "p_subject_type",
+		ObjectIDExpr:    ObjectID,
+		SubjectTypeExpr: SubjectType,
 		ExcludeWildcard: b.excludeWildcard,
 		Exclusions:      ExclusionConfig{},
 	})
@@ -655,7 +658,7 @@ func (b *ListSubjectsBuilder) buildRegularPathDirect() error {
 	complexBlocks, err := buildListSubjectsComplexClosureBlocks(
 		b.analysis,
 		b.complexClosure,
-		"p_subject_type",
+		SubjectType,
 		b.excludeWildcard,
 		ExclusionConfig{},
 	)
@@ -668,8 +671,8 @@ func (b *ListSubjectsBuilder) buildRegularPathDirect() error {
 	intersectionBlocks, err := buildListSubjectsIntersectionBlocks(
 		b.analysis,
 		false,
-		"p_subject_type",
-		"",
+		SubjectType,
+		nil,
 	)
 	if err != nil {
 		return err
@@ -681,12 +684,12 @@ func (b *ListSubjectsBuilder) buildRegularPathDirect() error {
 
 // buildRegularPathExclusion builds regular blocks for exclusion template.
 func (b *ListSubjectsBuilder) buildRegularPathExclusion() error {
-	regularExclusions := buildExclusionInput(b.analysis, "p_object_id", "p_subject_type", "t.subject_id")
+	regularExclusions := buildExclusionInput(b.analysis, ObjectID, SubjectType, Col{Table: "t", Column: "subject_id"})
 	regularBaseSQL, err := ListSubjectsDirectQuery(ListSubjectsDirectInput{
 		ObjectType:      b.analysis.ObjectType,
 		RelationList:    b.relationList,
-		ObjectIDExpr:    "p_object_id",
-		SubjectTypeExpr: "p_subject_type",
+		ObjectIDExpr:    ObjectID,
+		SubjectTypeExpr: SubjectType,
 		ExcludeWildcard: b.excludeWildcard,
 		Exclusions:      regularExclusions,
 	})
@@ -699,7 +702,7 @@ func (b *ListSubjectsBuilder) buildRegularPathExclusion() error {
 	complexBlocks, err := buildListSubjectsComplexClosureBlocks(
 		b.analysis,
 		b.complexClosure,
-		"p_subject_type",
+		SubjectType,
 		b.excludeWildcard,
 		regularExclusions,
 	)
@@ -712,8 +715,8 @@ func (b *ListSubjectsBuilder) buildRegularPathExclusion() error {
 	intersectionBlocks, err := buildListSubjectsIntersectionBlocks(
 		b.analysis,
 		true,
-		"p_subject_type",
-		"p_subject_type",
+		SubjectType,
+		SubjectType,
 	)
 	if err != nil {
 		return err
@@ -725,14 +728,14 @@ func (b *ListSubjectsBuilder) buildRegularPathExclusion() error {
 
 // buildRegularPathUserset builds regular blocks for userset template.
 func (b *ListSubjectsBuilder) buildRegularPathUserset() error {
-	baseExclusions := buildExclusionInput(b.analysis, "p_object_id", "p_subject_type", "t.subject_id")
+	baseExclusions := buildExclusionInput(b.analysis, ObjectID, SubjectType, Col{Table: "t", Column: "subject_id"})
 
 	// Direct tuple lookup
 	regularBaseSQL, err := ListSubjectsDirectQuery(ListSubjectsDirectInput{
 		ObjectType:      b.analysis.ObjectType,
 		RelationList:    b.relationList,
-		ObjectIDExpr:    "p_object_id",
-		SubjectTypeExpr: "p_subject_type",
+		ObjectIDExpr:    ObjectID,
+		SubjectTypeExpr: SubjectType,
 		ExcludeWildcard: b.excludeWildcard,
 		Exclusions:      baseExclusions,
 	})
@@ -750,7 +753,7 @@ func (b *ListSubjectsBuilder) buildRegularPathUserset() error {
 	complexBlocks, err := buildListSubjectsComplexClosureBlocks(
 		b.analysis,
 		b.complexClosure,
-		"p_subject_type",
+		SubjectType,
 		b.excludeWildcard,
 		baseExclusions,
 	)
@@ -763,8 +766,8 @@ func (b *ListSubjectsBuilder) buildRegularPathUserset() error {
 	intersectionBlocks, err := buildListSubjectsIntersectionBlocks(
 		b.analysis,
 		false,
-		"p_subject_type",
-		"",
+		SubjectType,
+		nil,
 	)
 	if err != nil {
 		return err
@@ -779,8 +782,8 @@ func (b *ListSubjectsBuilder) buildRegularPathUserset() error {
 				SubjectType:      pattern.SubjectType,
 				SubjectRelation:  pattern.SubjectRelation,
 				SourceRelations:  pattern.SourceRelations,
-				ObjectIDExpr:     "p_object_id",
-				SubjectTypeExpr:  "p_subject_type",
+				ObjectIDExpr:     ObjectID,
+				SubjectTypeExpr:  SubjectType,
 				IsClosurePattern: pattern.IsClosurePattern,
 				SourceRelation:   pattern.SourceRelation,
 				Exclusions:       baseExclusions,
@@ -805,8 +808,8 @@ func (b *ListSubjectsBuilder) buildRegularPathUserset() error {
 			SubjectRelation:     pattern.SubjectRelation,
 			SourceRelations:     pattern.SourceRelations,
 			SatisfyingRelations: pattern.SatisfyingRelations,
-			ObjectIDExpr:        "p_object_id",
-			SubjectTypeExpr:     "p_subject_type",
+			ObjectIDExpr:        ObjectID,
+			SubjectTypeExpr:     SubjectType,
 			AllowedSubjectTypes: b.allowedSubjectTypes,
 			ExcludeWildcard:     b.excludeWildcard,
 			IsClosurePattern:    pattern.IsClosurePattern,
@@ -900,11 +903,11 @@ func buildListObjectsIntersectionBlocks(a RelationAnalysis, validate bool) ([]st
 
 func buildListSubjectsComplexClosureFilterBlocks(a RelationAnalysis, relations, allowedSubjectTypes []string, closureValues string, applyExclusions bool) ([]string, error) {
 	var blocks []string
-	normalized := "substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) || '#' || v_filter_relation"
+	normalizedExpr := UsersetNormalized{Source: Col{Table: "t", Column: "subject_id"}, Relation: ParamRef("v_filter_relation")}
 	for _, rel := range relations {
 		exclusions := ExclusionConfig{}
 		if applyExclusions {
-			exclusions = buildExclusionInput(a, "p_object_id", "t.subject_type", normalized)
+			exclusions = buildExclusionInput(a, ObjectID, Col{Table: "t", Column: "subject_type"}, normalizedExpr)
 		}
 		exclusionPreds := exclusions.BuildPredicates()
 		checkPred := CheckPermissionInternalExprDSL("t.subject_type", "t.subject_id", rel, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true)
@@ -914,9 +917,9 @@ func buildListSubjectsComplexClosureFilterBlocks(a RelationAnalysis, relations, 
 			ObjectType:          a.ObjectType,
 			RelationList:        []string{rel},
 			AllowedSubjectTypes: allowedSubjectTypes,
-			ObjectIDExpr:        "p_object_id",
-			FilterTypeExpr:      "v_filter_type",
-			FilterRelationExpr:  "v_filter_relation",
+			ObjectIDExpr:        ObjectID,
+			FilterTypeExpr:      ParamRef("v_filter_type"),
+			FilterRelationExpr:  ParamRef("v_filter_relation"),
 			ClosureValues:       closureValues,
 			UseTypeGuard:        true,
 			ExtraPredicatesSQL:  extraPredsSQL,
@@ -934,13 +937,13 @@ func buildListSubjectsComplexClosureFilterBlocks(a RelationAnalysis, relations, 
 	return blocks, nil
 }
 
-func buildListSubjectsComplexClosureBlocks(a RelationAnalysis, relations []string, subjectTypeExpr string, excludeWildcard bool, exclusions ExclusionConfig) ([]string, error) {
+func buildListSubjectsComplexClosureBlocks(a RelationAnalysis, relations []string, subjectTypeExpr Expr, excludeWildcard bool, exclusions ExclusionConfig) ([]string, error) {
 	var blocks []string
 	for _, rel := range relations {
 		blockSQL, err := ListSubjectsComplexClosureQuery(ListSubjectsComplexClosureInput{
 			ObjectType:      a.ObjectType,
 			Relation:        rel,
-			ObjectIDExpr:    "p_object_id",
+			ObjectIDExpr:    ObjectID,
 			SubjectTypeExpr: subjectTypeExpr,
 			ExcludeWildcard: excludeWildcard,
 			Exclusions:      exclusions,
@@ -958,14 +961,14 @@ func buildListSubjectsComplexClosureBlocks(a RelationAnalysis, relations []strin
 	return blocks, nil
 }
 
-func buildListSubjectsIntersectionBlocks(a RelationAnalysis, validate bool, functionSubjectTypeExpr, checkSubjectTypeExpr string) ([]string, error) {
+func buildListSubjectsIntersectionBlocks(a RelationAnalysis, validate bool, functionSubjectTypeExpr, checkSubjectTypeExpr Expr) ([]string, error) {
 	var blocks []string
 	for _, rel := range a.IntersectionClosureRelations {
 		functionName := fmt.Sprintf("list_%s_%s_subjects", a.ObjectType, rel)
 		var blockSQL string
 		var err error
 		if validate {
-			blockSQL, err = ListSubjectsIntersectionClosureValidatedQuery(a.ObjectType, a.Relation, functionName, functionSubjectTypeExpr, checkSubjectTypeExpr, "p_object_id")
+			blockSQL, err = ListSubjectsIntersectionClosureValidatedQuery(a.ObjectType, a.Relation, functionName, functionSubjectTypeExpr, checkSubjectTypeExpr, ObjectID)
 		} else {
 			blockSQL, err = ListSubjectsIntersectionClosureQuery(functionName, functionSubjectTypeExpr)
 		}
@@ -1218,12 +1221,12 @@ func buildListUsersetPatternInputs(a RelationAnalysis) []listUsersetPatternInput
 	return patterns
 }
 
-func buildExclusionInput(a RelationAnalysis, objectIDExpr, subjectTypeExpr, subjectIDExpr string) ExclusionConfig {
+func buildExclusionInput(a RelationAnalysis, objectIDExpr, subjectTypeExpr, subjectIDExpr Expr) ExclusionConfig {
 	return ExclusionConfig{
 		ObjectType:               a.ObjectType,
-		ObjectIDExpr:             stringToDSLExpr(objectIDExpr),
-		SubjectTypeExpr:          stringToDSLExpr(subjectTypeExpr),
-		SubjectIDExpr:            stringToDSLExpr(subjectIDExpr),
+		ObjectIDExpr:             objectIDExpr,
+		SubjectTypeExpr:          subjectTypeExpr,
+		SubjectIDExpr:            subjectIDExpr,
 		SimpleExcludedRelations:  a.SimpleExcludedRelations,
 		ComplexExcludedRelations: a.ComplexExcludedRelations,
 		ExcludedParentRelations:  convertParentRelations(a.ExcludedParentRelations),
@@ -1385,7 +1388,7 @@ func generateListObjectsRecursiveFunction(a RelationAnalysis, inline InlineSQLDa
 
 	var recursiveBlock string
 	if len(selfRefRelations) > 0 {
-		recursiveExclusions := buildExclusionInput(a, "child.object_id", "p_subject_type", "p_subject_id")
+		recursiveExclusions := buildExclusionInput(a, Col{Table: "child", Column: "object_id"}, SubjectType, SubjectID)
 		recursiveSQL, err := ListObjectsRecursiveTTUQuery(ListObjectsRecursiveTTUInput{
 			ObjectType:       a.ObjectType,
 			LinkingRelations: selfRefRelations,
@@ -1465,7 +1468,7 @@ $$ LANGUAGE plpgsql STABLE;`,
 
 func buildListObjectsRecursiveBaseBlocks(a RelationAnalysis, inline InlineSQLData, relationList, allowedSubjectTypes []string, allowWildcard bool, complexClosure []string) ([]string, error) {
 	var blocks []string
-	baseExclusions := buildExclusionInput(a, "t.object_id", "p_subject_type", "p_subject_id")
+	baseExclusions := buildExclusionInput(a, Col{Table: "t", Column: "object_id"}, SubjectType, SubjectID)
 
 	directSQL, err := ListObjectsDirectQuery(ListObjectsDirectInput{
 		ObjectType:          a.ObjectType,
@@ -1569,7 +1572,7 @@ func buildListObjectsRecursiveBaseBlocks(a RelationAnalysis, inline InlineSQLDat
 		if !parent.HasCrossTypeLinks {
 			continue
 		}
-		crossExclusions := buildExclusionInput(a, "child.object_id", "p_subject_type", "p_subject_id")
+		crossExclusions := buildExclusionInput(a, Col{Table: "child", Column: "object_id"}, SubjectType, SubjectID)
 		crossSQL, err := ListObjectsCrossTypeTTUQuery(ListObjectsCrossTypeTTUInput{
 			ObjectType:      a.ObjectType,
 			LinkingRelation: parent.LinkingRelation,
@@ -1599,7 +1602,7 @@ func buildAccessibleObjectsCTE(a RelationAnalysis, baseBlocks []string, recursiv
 		cteBody = cteBody + "\n    UNION ALL\n" + recursiveBlock
 	}
 
-	finalExclusions := buildExclusionInput(a, "acc.object_id", "p_subject_type", "p_subject_id")
+	finalExclusions := buildExclusionInput(a, Col{Table: "acc", Column: "object_id"}, SubjectType, SubjectID)
 	exclusionPreds := finalExclusions.BuildPredicates()
 
 	var whereExpr Expr
@@ -1682,7 +1685,7 @@ func generateListObjectsIntersectionFunction(a RelationAnalysis, inline InlineSQ
 
 	var blocks []string
 	if hasStandalone {
-		standaloneExclusions := buildSimpleComplexExclusionInput(a, "t.object_id", "p_subject_type", "p_subject_id")
+		standaloneExclusions := buildSimpleComplexExclusionInput(a, Col{Table: "t", Column: "object_id"}, SubjectType, SubjectID)
 		directSQL, err := ListObjectsDirectQuery(ListObjectsDirectInput{
 			ObjectType:          a.ObjectType,
 			Relations:           relationList,
@@ -1783,7 +1786,7 @@ func generateListObjectsIntersectionFunction(a RelationAnalysis, inline InlineSQ
 			if !parent.HasCrossTypeLinks {
 				continue
 			}
-			crossExclusions := buildSimpleComplexExclusionInput(a, "child.object_id", "p_subject_type", "p_subject_id")
+			crossExclusions := buildSimpleComplexExclusionInput(a, Col{Table: "child", Column: "object_id"}, SubjectType, SubjectID)
 			crossSQL, err := ListObjectsCrossTypeTTUQuery(ListObjectsCrossTypeTTUInput{
 				ObjectType:      a.ObjectType,
 				LinkingRelation: parent.LinkingRelation,
@@ -1892,7 +1895,7 @@ func buildObjectsIntersectionGroupSQL(a RelationAnalysis, idx int, group Interse
 		return groupSQL, nil
 	}
 
-	exclusions := buildSimpleComplexExclusionInput(a, fmt.Sprintf("ig_%d.object_id", idx), "p_subject_type", "p_subject_id")
+	exclusions := buildSimpleComplexExclusionInput(a, Raw(fmt.Sprintf("ig_%d.object_id", idx)), SubjectType, SubjectID)
 	exclusionPreds := exclusions.BuildPredicates()
 	if len(exclusionPreds) == 0 {
 		return groupSQL, nil
@@ -1997,12 +2000,12 @@ func buildObjectsIntersectionRecursiveSQL(a RelationAnalysis, relationList, allo
 	return recursiveSQL, nil
 }
 
-func buildSimpleComplexExclusionInput(a RelationAnalysis, objectIDExpr, subjectTypeExpr, subjectIDExpr string) ExclusionConfig {
+func buildSimpleComplexExclusionInput(a RelationAnalysis, objectIDExpr, subjectTypeExpr, subjectIDExpr Expr) ExclusionConfig {
 	return ExclusionConfig{
 		ObjectType:               a.ObjectType,
-		ObjectIDExpr:             stringToDSLExpr(objectIDExpr),
-		SubjectTypeExpr:          stringToDSLExpr(subjectTypeExpr),
-		SubjectIDExpr:            stringToDSLExpr(subjectIDExpr),
+		ObjectIDExpr:             objectIDExpr,
+		SubjectTypeExpr:          subjectTypeExpr,
+		SubjectIDExpr:            subjectIDExpr,
 		SimpleExcludedRelations:  a.SimpleExcludedRelations,
 		ComplexExcludedRelations: a.ComplexExcludedRelations,
 	}
@@ -2073,9 +2076,9 @@ func buildListSubjectsRecursiveUsersetFilterBlocks(a RelationAnalysis, inline In
 	baseSQL, err := ListSubjectsUsersetFilterQuery(ListSubjectsUsersetFilterInput{
 		ObjectType:         a.ObjectType,
 		RelationList:       allSatisfyingRelations,
-		ObjectIDExpr:       "p_object_id",
-		FilterTypeExpr:     "v_filter_type",
-		FilterRelationExpr: "v_filter_relation",
+		ObjectIDExpr:       ObjectID,
+		FilterTypeExpr:     ParamRef("v_filter_type"),
+		FilterRelationExpr: ParamRef("v_filter_relation"),
 		ClosureValues:      inline.ClosureValues,
 		UseTypeGuard:       false,
 		ExtraPredicatesSQL: []string{checkExprSQL},
@@ -2125,9 +2128,10 @@ func buildListSubjectsRecursiveUsersetFilterBlocks(a RelationAnalysis, inline In
 		))
 	}
 
+	filterUsersetExpr := Concat{Parts: []Expr{ParamRef("v_filter_type"), Lit("#"), ParamRef("v_filter_relation")}}
 	for _, rel := range a.IntersectionClosureRelations {
 		functionName := fmt.Sprintf("list_%s_%s_subjects", a.ObjectType, rel)
-		closureSQL, err := ListSubjectsIntersectionClosureQuery(functionName, "v_filter_type || '#' || v_filter_relation")
+		closureSQL, err := ListSubjectsIntersectionClosureQuery(functionName, filterUsersetExpr)
 		if err != nil {
 			return nil, "", err
 		}
@@ -2142,9 +2146,9 @@ func buildListSubjectsRecursiveUsersetFilterBlocks(a RelationAnalysis, inline In
 	selfSQL, err := ListSubjectsSelfCandidateQuery(ListSubjectsSelfCandidateInput{
 		ObjectType:         a.ObjectType,
 		Relation:           a.Relation,
-		ObjectIDExpr:       "p_object_id",
-		FilterTypeExpr:     "v_filter_type",
-		FilterRelationExpr: "v_filter_relation",
+		ObjectIDExpr:       ObjectID,
+		FilterTypeExpr:     ParamRef("v_filter_type"),
+		FilterRelationExpr: ParamRef("v_filter_relation"),
 		ClosureValues:      inline.ClosureValues,
 	})
 	if err != nil {
@@ -2160,7 +2164,7 @@ func buildListSubjectsRecursiveUsersetFilterBlocks(a RelationAnalysis, inline In
 }
 
 func buildListSubjectsRecursiveRegularQuery(a RelationAnalysis, inline InlineSQLData, relationList, complexClosure, allowedSubjectTypes []string, excludeWildcard bool) (string, error) {
-	baseExclusions := buildExclusionInput(a, "p_object_id", "p_subject_type", "t.subject_id")
+	baseExclusions := buildExclusionInput(a, ObjectID, SubjectType, Col{Table: "t", Column: "subject_id"})
 
 	subjectPoolSQL, err := buildSubjectPoolSQL(allowedSubjectTypes, excludeWildcard)
 	if err != nil {
@@ -2171,8 +2175,8 @@ func buildListSubjectsRecursiveRegularQuery(a RelationAnalysis, inline InlineSQL
 	directSQL, err := ListSubjectsDirectQuery(ListSubjectsDirectInput{
 		ObjectType:      a.ObjectType,
 		RelationList:    relationList,
-		ObjectIDExpr:    "p_object_id",
-		SubjectTypeExpr: "p_subject_type",
+		ObjectIDExpr:    ObjectID,
+		SubjectTypeExpr: SubjectType,
 		ExcludeWildcard: excludeWildcard,
 		Exclusions:      baseExclusions,
 	})
@@ -2190,8 +2194,8 @@ func buildListSubjectsRecursiveRegularQuery(a RelationAnalysis, inline InlineSQL
 		complexSQL, err := ListSubjectsComplexClosureQuery(ListSubjectsComplexClosureInput{
 			ObjectType:      a.ObjectType,
 			Relation:        rel,
-			ObjectIDExpr:    "p_object_id",
-			SubjectTypeExpr: "p_subject_type",
+			ObjectIDExpr:    ObjectID,
+			SubjectTypeExpr: SubjectType,
 			ExcludeWildcard: excludeWildcard,
 			Exclusions:      baseExclusions,
 		})
@@ -2208,7 +2212,7 @@ func buildListSubjectsRecursiveRegularQuery(a RelationAnalysis, inline InlineSQL
 
 	for _, rel := range a.IntersectionClosureRelations {
 		functionName := fmt.Sprintf("list_%s_%s_subjects", a.ObjectType, rel)
-		closureSQL, err := ListSubjectsIntersectionClosureQuery(functionName, "p_subject_type")
+		closureSQL, err := ListSubjectsIntersectionClosureQuery(functionName, SubjectType)
 		if err != nil {
 			return "", err
 		}
@@ -2221,16 +2225,16 @@ func buildListSubjectsRecursiveRegularQuery(a RelationAnalysis, inline InlineSQL
 	}
 
 	for _, pattern := range buildListUsersetPatternInputs(a) {
-		usersetExclusions := buildExclusionInput(a, "p_object_id", "m.subject_type", "m.subject_id")
-		simpleUsersetExclusions := buildExclusionInput(a, "p_object_id", "s.subject_type", "s.subject_id")
+		usersetExclusions := buildExclusionInput(a, ObjectID, Col{Table: "m", Column: "subject_type"}, Col{Table: "m", Column: "subject_id"})
+		simpleUsersetExclusions := buildExclusionInput(a, ObjectID, Col{Table: "s", Column: "subject_type"}, Col{Table: "s", Column: "subject_id"})
 		if pattern.IsComplex {
 			patternSQL, err := ListSubjectsUsersetPatternRecursiveComplexQuery(ListSubjectsUsersetPatternRecursiveComplexInput{
 				ObjectType:          a.ObjectType,
 				SubjectType:         pattern.SubjectType,
 				SubjectRelation:     pattern.SubjectRelation,
 				SourceRelations:     pattern.SourceRelations,
-				ObjectIDExpr:        "p_object_id",
-				SubjectTypeExpr:     "p_subject_type",
+				ObjectIDExpr:        ObjectID,
+				SubjectTypeExpr:     SubjectType,
 				AllowedSubjectTypes: allowedSubjectTypes,
 				ExcludeWildcard:     excludeWildcard,
 				IsClosurePattern:    pattern.IsClosurePattern,
@@ -2255,8 +2259,8 @@ func buildListSubjectsRecursiveRegularQuery(a RelationAnalysis, inline InlineSQL
 			SubjectRelation:     pattern.SubjectRelation,
 			SourceRelations:     pattern.SourceRelations,
 			SatisfyingRelations: pattern.SatisfyingRelations,
-			ObjectIDExpr:        "p_object_id",
-			SubjectTypeExpr:     "p_subject_type",
+			ObjectIDExpr:        ObjectID,
+			SubjectTypeExpr:     SubjectType,
 			AllowedSubjectTypes: allowedSubjectTypes,
 			ExcludeWildcard:     excludeWildcard,
 			IsClosurePattern:    pattern.IsClosurePattern,
@@ -2323,7 +2327,7 @@ func buildSubjectsTTUPathQuery(a RelationAnalysis, parent ListParentRelationData
 	if parent.AllowedLinkingTypes != "" {
 		conditions = append(conditions, Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
 	}
-	exclusions := buildExclusionInput(a, "p_object_id", "p_subject_type", "sp.subject_id")
+	exclusions := buildExclusionInput(a, ObjectID, SubjectType, Col{Table: "sp", Column: "subject_id"})
 	exclusionPreds := exclusions.BuildPredicates()
 	conditions = append(conditions, exclusionPreds...)
 
@@ -2470,9 +2474,9 @@ func generateListSubjectsIntersectionFunction(a RelationAnalysis, inline InlineS
 	usersetSelfSQL, err := ListSubjectsSelfCandidateQuery(ListSubjectsSelfCandidateInput{
 		ObjectType:         a.ObjectType,
 		Relation:           a.Relation,
-		ObjectIDExpr:       "p_object_id",
-		FilterTypeExpr:     "v_filter_type",
-		FilterRelationExpr: "v_filter_relation",
+		ObjectIDExpr:       ObjectID,
+		FilterTypeExpr:     ParamRef("v_filter_type"),
+		FilterRelationExpr: ParamRef("v_filter_relation"),
 		ClosureValues:      inline.ClosureValues,
 	})
 	if err != nil {
@@ -2568,9 +2572,9 @@ func buildUsersetIntersectionCandidates(a RelationAnalysis, inline InlineSQLData
 	baseSQL, err := ListSubjectsUsersetFilterQuery(ListSubjectsUsersetFilterInput{
 		ObjectType:         a.ObjectType,
 		RelationList:       allSatisfyingRelations,
-		ObjectIDExpr:       "p_object_id",
-		FilterTypeExpr:     "v_filter_type",
-		FilterRelationExpr: "v_filter_relation",
+		ObjectIDExpr:       ObjectID,
+		FilterTypeExpr:     ParamRef("v_filter_type"),
+		FilterRelationExpr: ParamRef("v_filter_relation"),
 		ClosureValues:      inline.ClosureValues,
 		UseTypeGuard:       false,
 	})
@@ -2742,8 +2746,8 @@ func buildRegularIntersectionCandidates(a RelationAnalysis, inline InlineSQLData
 			SubjectRelation:     pattern.SubjectRelation,
 			SourceRelations:     pattern.SourceRelations,
 			SatisfyingRelations: pattern.SatisfyingRelations,
-			ObjectIDExpr:        "p_object_id",
-			SubjectTypeExpr:     "p_subject_type",
+			ObjectIDExpr:        ObjectID,
+			SubjectTypeExpr:     SubjectType,
 			AllowedSubjectTypes: buildAllowedSubjectTypesList(a),
 			ExcludeWildcard:     excludeWildcard,
 			IsClosurePattern:    pattern.IsClosurePattern,
@@ -3018,7 +3022,7 @@ $$ LANGUAGE plpgsql STABLE;`,
 
 func buildListObjectsSelfRefBaseBlocks(a RelationAnalysis, relationList, allowedSubjectTypes []string, allowWildcard bool, complexClosure []string) ([]string, error) {
 	var blocks []string
-	baseExclusions := buildExclusionInput(a, "t.object_id", "p_subject_type", "p_subject_id")
+	baseExclusions := buildExclusionInput(a, Col{Table: "t", Column: "object_id"}, SubjectType, SubjectID)
 
 	directSQL, err := ListObjectsDirectQuery(ListObjectsDirectInput{
 		ObjectType:          a.ObjectType,
@@ -3125,7 +3129,7 @@ func buildListObjectsSelfRefBaseBlocks(a RelationAnalysis, relationList, allowed
 }
 
 func buildListObjectsSelfRefRecursiveBlock(a RelationAnalysis, relationList []string) (string, error) {
-	baseExclusions := buildExclusionInput(a, "t.object_id", "p_subject_type", "p_subject_id")
+	baseExclusions := buildExclusionInput(a, Col{Table: "t", Column: "object_id"}, SubjectType, SubjectID)
 	exclusionPreds := baseExclusions.BuildPredicates()
 
 	conditions := make([]Expr, 0, 6+len(exclusionPreds))
@@ -3156,7 +3160,7 @@ func buildListObjectsSelfRefRecursiveBlock(a RelationAnalysis, relationList []st
 }
 
 func buildListObjectsSelfRefFinalQuery(a RelationAnalysis) (string, error) {
-	finalExclusions := buildExclusionInput(a, "me.object_id", "p_subject_type", "p_subject_id")
+	finalExclusions := buildExclusionInput(a, Col{Table: "me", Column: "object_id"}, SubjectType, SubjectID)
 	exclusionPreds := finalExclusions.BuildPredicates()
 
 	var whereExpr Expr
@@ -3238,9 +3242,9 @@ func buildListSubjectsSelfRefUsersetFilterQuery(a RelationAnalysis, inline Inlin
 	baseSQL, err := ListSubjectsUsersetFilterQuery(ListSubjectsUsersetFilterInput{
 		ObjectType:         a.ObjectType,
 		RelationList:       allSatisfyingRelations,
-		ObjectIDExpr:       "p_object_id",
-		FilterTypeExpr:     "v_filter_type",
-		FilterRelationExpr: "v_filter_relation",
+		ObjectIDExpr:       ObjectID,
+		FilterTypeExpr:     ParamRef("v_filter_type"),
+		FilterRelationExpr: ParamRef("v_filter_relation"),
 		ClosureValues:      inline.ClosureValues,
 		UseTypeGuard:       false,
 		ExtraPredicatesSQL: []string{checkExprSQL},
@@ -3274,9 +3278,10 @@ FROM (
 FROM userset_expansion ue`,
 	))
 
+	filterUsersetExpr := Concat{Parts: []Expr{ParamRef("v_filter_type"), Lit("#"), ParamRef("v_filter_relation")}}
 	for _, rel := range a.IntersectionClosureRelations {
 		functionName := fmt.Sprintf("list_%s_%s_subjects", a.ObjectType, rel)
-		closureSQL, err := ListSubjectsIntersectionClosureQuery(functionName, "v_filter_type || '#' || v_filter_relation")
+		closureSQL, err := ListSubjectsIntersectionClosureQuery(functionName, filterUsersetExpr)
 		if err != nil {
 			return "", err
 		}
@@ -3291,9 +3296,9 @@ FROM userset_expansion ue`,
 	selfSQL, err := ListSubjectsSelfCandidateQuery(ListSubjectsSelfCandidateInput{
 		ObjectType:         a.ObjectType,
 		Relation:           a.Relation,
-		ObjectIDExpr:       "p_object_id",
-		FilterTypeExpr:     "v_filter_type",
-		FilterRelationExpr: "v_filter_relation",
+		ObjectIDExpr:       ObjectID,
+		FilterTypeExpr:     ParamRef("v_filter_type"),
+		FilterRelationExpr: ParamRef("v_filter_relation"),
 		ClosureValues:      inline.ClosureValues,
 	})
 	if err != nil {
@@ -3338,7 +3343,7 @@ func buildListSubjectsSelfRefUsersetRecursiveQuery() (string, error) {
 }
 
 func buildListSubjectsSelfRefRegularQuery(a RelationAnalysis, inline InlineSQLData, relationList, complexClosure, allowedSubjectTypes []string, excludeWildcard bool) (string, error) {
-	baseExclusions := buildSimpleComplexExclusionInput(a, "p_object_id", "p_subject_type", "t.subject_id")
+	baseExclusions := buildSimpleComplexExclusionInput(a, ObjectID, SubjectType, Col{Table: "t", Column: "subject_id"})
 
 	usersetObjectsBaseSQL, err := buildListSubjectsSelfRefUsersetObjectsBaseQuery(a, relationList)
 	if err != nil {
@@ -3354,8 +3359,8 @@ func buildListSubjectsSelfRefRegularQuery(a RelationAnalysis, inline InlineSQLDa
 	directSQL, err := ListSubjectsDirectQuery(ListSubjectsDirectInput{
 		ObjectType:      a.ObjectType,
 		RelationList:    relationList,
-		ObjectIDExpr:    "p_object_id",
-		SubjectTypeExpr: "p_subject_type",
+		ObjectIDExpr:    ObjectID,
+		SubjectTypeExpr: SubjectType,
 		ExcludeWildcard: excludeWildcard,
 		Exclusions:      baseExclusions,
 	})
@@ -3373,8 +3378,8 @@ func buildListSubjectsSelfRefRegularQuery(a RelationAnalysis, inline InlineSQLDa
 		complexSQL, err := ListSubjectsComplexClosureQuery(ListSubjectsComplexClosureInput{
 			ObjectType:      a.ObjectType,
 			Relation:        rel,
-			ObjectIDExpr:    "p_object_id",
-			SubjectTypeExpr: "p_subject_type",
+			ObjectIDExpr:    ObjectID,
+			SubjectTypeExpr: SubjectType,
 			ExcludeWildcard: excludeWildcard,
 			Exclusions:      baseExclusions,
 		})
@@ -3391,7 +3396,7 @@ func buildListSubjectsSelfRefRegularQuery(a RelationAnalysis, inline InlineSQLDa
 
 	for _, rel := range a.IntersectionClosureRelations {
 		functionName := fmt.Sprintf("list_%s_%s_subjects", a.ObjectType, rel)
-		closureSQL, err := ListSubjectsIntersectionClosureQuery(functionName, "p_subject_type")
+		closureSQL, err := ListSubjectsIntersectionClosureQuery(functionName, SubjectType)
 		if err != nil {
 			return "", err
 		}
@@ -3418,15 +3423,15 @@ func buildListSubjectsSelfRefRegularQuery(a RelationAnalysis, inline InlineSQLDa
 		if pattern.IsSelfReferential {
 			continue
 		}
-		patternExclusions := buildSimpleComplexExclusionInput(a, "p_object_id", "p_subject_type", "s.subject_id")
+		patternExclusions := buildSimpleComplexExclusionInput(a, ObjectID, SubjectType, Col{Table: "s", Column: "subject_id"})
 		if pattern.IsComplex {
 			patternSQL, err := ListSubjectsUsersetPatternComplexQuery(ListSubjectsUsersetPatternComplexInput{
 				ObjectType:       a.ObjectType,
 				SubjectType:      pattern.SubjectType,
 				SubjectRelation:  pattern.SubjectRelation,
 				SourceRelations:  pattern.SourceRelations,
-				ObjectIDExpr:     "p_object_id",
-				SubjectTypeExpr:  "p_subject_type",
+				ObjectIDExpr:     ObjectID,
+				SubjectTypeExpr:  SubjectType,
 				IsClosurePattern: pattern.IsClosurePattern,
 				SourceRelation:   pattern.SourceRelation,
 				Exclusions:       patternExclusions,
@@ -3450,8 +3455,8 @@ func buildListSubjectsSelfRefRegularQuery(a RelationAnalysis, inline InlineSQLDa
 			SubjectRelation:     pattern.SubjectRelation,
 			SourceRelations:     pattern.SourceRelations,
 			SatisfyingRelations: pattern.SatisfyingRelations,
-			ObjectIDExpr:        "p_object_id",
-			SubjectTypeExpr:     "p_subject_type",
+			ObjectIDExpr:        ObjectID,
+			SubjectTypeExpr:     SubjectType,
 			AllowedSubjectTypes: allowedSubjectTypes,
 			ExcludeWildcard:     excludeWildcard,
 			IsClosurePattern:    pattern.IsClosurePattern,
@@ -3637,7 +3642,7 @@ func buildListObjectsComposedQuery(a RelationAnalysis, anchor *ListIndirectAncho
 	}
 
 	firstStep := anchor.Path[0]
-	exclusions := buildSimpleComplexExclusionInput(a, "t.object_id", "p_subject_type", "p_subject_id")
+	exclusions := buildSimpleComplexExclusionInput(a, Col{Table: "t", Column: "object_id"}, SubjectType, SubjectID)
 
 	var blocks []string
 	switch firstStep.Type {
@@ -3775,9 +3780,9 @@ func generateListSubjectsComposedFunction(a RelationAnalysis, inline InlineSQLDa
 	selfSQL, err := ListSubjectsSelfCandidateQuery(ListSubjectsSelfCandidateInput{
 		ObjectType:         a.ObjectType,
 		Relation:           a.Relation,
-		ObjectIDExpr:       "p_object_id",
-		FilterTypeExpr:     "v_filter_type",
-		FilterRelationExpr: "v_filter_relation",
+		ObjectIDExpr:       ObjectID,
+		FilterTypeExpr:     ParamRef("v_filter_type"),
+		FilterRelationExpr: ParamRef("v_filter_relation"),
 		ClosureValues:      inline.ClosureValues,
 	})
 	if err != nil {
@@ -3883,7 +3888,7 @@ func buildListSubjectsComposedRegularQuery(a RelationAnalysis, anchor *ListIndir
 	}
 	candidates := indentLines(joinUnionBlocks(candidateBlocks), "        ")
 
-	exclusions := buildSimpleComplexExclusionInput(a, "p_object_id", "p_subject_type", "sc.subject_id")
+	exclusions := buildSimpleComplexExclusionInput(a, ObjectID, SubjectType, Col{Table: "sc", Column: "subject_id"})
 	exclusionPreds := exclusions.BuildPredicates()
 
 	whereClause := ""
