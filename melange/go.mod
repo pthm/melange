@@ -1,5 +1,5 @@
 module github.com/pthm/melange/melange
 
-go 1.25.3
+go 1.18
 
 // No external dependencies - stdlib only

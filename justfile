@@ -22,13 +22,6 @@ OPENFGA_BENCH_TIMEOUT_TINY := "5m"
 default:
     @just --list
 
-# Restore local development mode after a release
-[group('Development')]
-[doc('Restore local replace directive for development')]
-dev-setup:
-    go mod edit -replace=github.com/pthm/melange/melange=./melange
-    go mod tidy
-
 # Sync internal module versions (usage: just release-prepare VERSION=1.2.3 [ALLOW_DIRTY=1])
 [group('Release')]
 [doc('Sync internal module versions and tidy go.mod files')]
@@ -45,8 +38,14 @@ release-prepare VERSION ALLOW_DIRTY="":
     fi
     just _assert-clean ALLOW_DIRTY={{ALLOW_DIRTY}}
     printf "%s\n" "$version" > VERSION
-    # Remove local replace directive and use the published version
-    go mod edit -dropreplace=github.com/pthm/melange/melange
+    # Tag and push melange submodule first so go mod tidy can resolve it
+    melange_tag="melange/$version"
+    if git rev-parse -q --verify "refs/tags/$melange_tag" >/dev/null; then
+        echo "Tag already exists: $melange_tag"
+        exit 1
+    fi
+    git tag -a "$melange_tag" -m "$melange_tag"
+    git push origin "$melange_tag"
     go mod edit -require=github.com/pthm/melange/melange@"$version"
     go mod tidy
     npm_version="${version#v}"
@@ -91,15 +90,12 @@ release VERSION="" ALLOW_DIRTY="":
     git add VERSION go.mod go.sum clients/typescript/package.json
     git commit -m "chore(release): $version_from_file"
     root_tag="$version_from_file"
-    melange_tag="melange/$version_from_file"
-    for tag in "$root_tag" "$melange_tag"; do
-        if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-            echo "Tag already exists: $tag"
-            exit 1
-        fi
-        git tag -a "$tag" -m "$tag"
-    done
-    git push origin "$root_tag" "$melange_tag"
+    if git rev-parse -q --verify "refs/tags/$root_tag" >/dev/null; then
+        echo "Tag already exists: $root_tag"
+        exit 1
+    fi
+    git tag -a "$root_tag" -m "$root_tag"
+    git push origin "$root_tag"
     if ! command -v goreleaser >/dev/null 2>&1; then
         echo "goreleaser is required (https://goreleaser.com/install/)"
         exit 1
