@@ -126,10 +126,22 @@ func generateListSubjectsFunction(a RelationAnalysis, inline InlineSQLData) (str
 			return "", err
 		}
 		return RenderListSubjectsFunction(plan, blocks)
-	case ListStrategyRecursive, ListStrategyIntersection:
-		// TODO: Wire to Plan → Blocks → Render once recursive/intersection handling is complete.
-		// Direct and Userset are wired; recursive and intersection still use legacy.
-		return NewListSubjectsBuilder(a, inline).Build()
+	case ListStrategyRecursive:
+		// Wire to Plan → Blocks → Render for TTU patterns
+		plan := BuildListSubjectsPlan(a, inline)
+		blocks, err := BuildListSubjectsRecursiveBlocks(plan)
+		if err != nil {
+			return "", err
+		}
+		return RenderListSubjectsRecursiveFunction(plan, blocks)
+	case ListStrategyIntersection:
+		// Wire to Plan → Blocks → Render for intersection patterns
+		plan := BuildListSubjectsPlan(a, inline)
+		blocks, err := BuildListSubjectsIntersectionBlocks(plan)
+		if err != nil {
+			return "", err
+		}
+		return RenderListSubjectsIntersectionFunction(plan, blocks)
 	case ListStrategyDepthExceeded:
 		return generateListSubjectsDepthExceededFunction(a), nil
 	case ListStrategySelfRefUserset:

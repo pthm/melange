@@ -6,6 +6,10 @@ import (
 )
 
 func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, noWildcard bool) (string, error) {
+	// NOTE: The Plan → Blocks → Render architecture (BuildCheckPlan, BuildCheckBlocks,
+	// RenderCheckFunction) exists but has subtle differences from the legacy approach
+	// that cause test failures. The legacy buildCheckFunctionData path is used until
+	// these differences are resolved.
 	data, err := buildCheckFunctionData(a, inline, noWildcard)
 	if err != nil {
 		return "", fmt.Errorf("building check function data for %s.%s: %w", a.ObjectType, a.Relation, err)
