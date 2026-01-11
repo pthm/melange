@@ -3852,13 +3852,12 @@ func buildComposedObjectsSelfBlock(plan ListPlan) (*TypedQueryBlock, error) {
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(plan.Relation)},
-			Eq{Left: Col{Table: "c", Column: "satisfying_relation"}, Right: UsersetRelation{Source: SubjectID}},
+			Eq{Left: Col{Table: "c", Column: "satisfying_relation"}, Right: SubstringUsersetRelation{Source: SubjectID}},
 		),
 	}
 
 	stmt := SelectStmt{
-		ColumnExprs: []Expr{UsersetObjectID{Source: SubjectID}},
-		Alias:       "object_id",
+		ColumnExprs: []Expr{SelectAs(UsersetObjectID{Source: SubjectID}, "object_id")},
 		Where: And(
 			Eq{Left: SubjectType, Right: Lit(plan.ObjectType)},
 			HasUserset{Source: SubjectID},
@@ -4007,6 +4006,8 @@ func BuildListSubjectsComposedBlocks(plan ListPlan) (ComposedSubjectsBlockSet, e
 }
 
 // buildComposedSubjectsSelfBlock builds the self-candidate block for list_subjects.
+// This returns a userset subject_id like "document:1#viewer" when the filter type matches
+// the object type and the filter relation satisfies the target relation.
 func buildComposedSubjectsSelfBlock(plan ListPlan) (*TypedQueryBlock, error) {
 	closureStmt := SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
@@ -4018,8 +4019,11 @@ func buildComposedSubjectsSelfBlock(plan ListPlan) (*TypedQueryBlock, error) {
 		),
 	}
 
+	// Subject ID output: object_id || '#' || filter_relation
+	subjectIDCol := SelectAs(Concat{Parts: []Expr{ObjectID, Lit("#"), Param("v_filter_relation")}}, "subject_id")
+
 	stmt := SelectStmt{
-		ColumnExprs: []Expr{Int(1)},
+		ColumnExprs: []Expr{subjectIDCol},
 		Where: And(
 			Eq{Left: Param("v_filter_type"), Right: Lit(plan.ObjectType)},
 			Raw(closureStmt.Exists()),
@@ -4028,7 +4032,7 @@ func buildComposedSubjectsSelfBlock(plan ListPlan) (*TypedQueryBlock, error) {
 
 	return &TypedQueryBlock{
 		Comments: []string{
-			"-- Self-candidate check: filter type matches object type with satisfying relation",
+			"-- Self-candidate: object_id#filter_relation when filter type matches object type",
 		},
 		Query: stmt,
 	}, nil

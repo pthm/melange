@@ -116,8 +116,13 @@ func generateListObjectsFunction(a RelationAnalysis, inline InlineSQLData) (stri
 		}
 		return RenderListObjectsSelfRefUsersetFunction(plan, blocks)
 	case ListStrategyComposed:
-		// Keep using legacy generation for Composed strategy (complex indirect anchor patterns)
-		return generateListObjectsComposedFunction(a, inline)
+		// Use Plan → Blocks → Render for indirect anchor composition
+		plan := BuildListObjectsPlan(a, inline)
+		blocks, err := BuildListObjectsComposedBlocks(plan)
+		if err != nil {
+			return "", err
+		}
+		return RenderListObjectsComposedFunction(plan, blocks)
 	default:
 		return "", fmt.Errorf("unknown list strategy %v for %s.%s", a.ListStrategy, a.ObjectType, a.Relation)
 	}
@@ -164,8 +169,13 @@ func generateListSubjectsFunction(a RelationAnalysis, inline InlineSQLData) (str
 		}
 		return RenderListSubjectsSelfRefUsersetFunction(plan, blocks)
 	case ListStrategyComposed:
-		// Keep using legacy generation for Composed strategy (complex indirect anchor patterns)
-		return generateListSubjectsComposedFunction(a, inline)
+		// Use Plan → Blocks → Render for indirect anchor composition
+		plan := BuildListSubjectsPlan(a, inline)
+		blocks, err := BuildListSubjectsComposedBlocks(plan)
+		if err != nil {
+			return "", err
+		}
+		return RenderListSubjectsComposedFunction(plan, blocks)
 	default:
 		return "", fmt.Errorf("unknown list strategy %v for %s.%s", a.ListStrategy, a.ObjectType, a.Relation)
 	}
