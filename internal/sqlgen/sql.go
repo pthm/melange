@@ -227,6 +227,104 @@ func UsersetValuesTable(values, alias string) ValuesTable {
 }
 
 // =============================================================================
+// Typed Values Tables (Phase 5 - Expr-based inline data)
+// =============================================================================
+
+// ValuesRow represents a single row in a VALUES clause as typed expressions.
+// Each element in the slice corresponds to a column value.
+type ValuesRow []Expr
+
+// SQL renders the row as (expr1, expr2, ...).
+func (r ValuesRow) SQL() string {
+	if len(r) == 0 {
+		return "()"
+	}
+	parts := make([]string, len(r))
+	for i, expr := range r {
+		parts[i] = expr.SQL()
+	}
+	return "(" + strings.Join(parts, ", ") + ")"
+}
+
+// TypedValuesTable represents a VALUES clause with typed expression rows.
+// Unlike ValuesTable which uses a pre-formatted string, TypedValuesTable
+// uses structured ValuesRow elements that render via the Expr DSL.
+//
+// Example:
+//
+//	TypedValuesTable{
+//	    Rows: []ValuesRow{{Lit("doc"), Lit("viewer"), Lit("editor")}},
+//	    Alias: "c",
+//	    Columns: []string{"object_type", "relation", "satisfying_relation"},
+//	}
+//
+// Renders: (VALUES ('doc', 'viewer', 'editor')) AS c(object_type, relation, satisfying_relation)
+type TypedValuesTable struct {
+	Rows    []ValuesRow // Typed expression rows
+	Alias   string      // Table alias
+	Columns []string    // Column names
+}
+
+// SQL renders the typed VALUES table expression.
+func (v TypedValuesTable) SQL() string {
+	values := v.valuesSQL()
+	if len(v.Columns) == 0 {
+		return "(VALUES " + values + ") AS " + v.Alias
+	}
+	return "(VALUES " + values + ") AS " + v.Alias + "(" + strings.Join(v.Columns, ", ") + ")"
+}
+
+// valuesSQL renders the rows portion of the VALUES clause.
+func (v TypedValuesTable) valuesSQL() string {
+	if len(v.Rows) == 0 {
+		// Return a NULL row with correct column count based on Columns
+		if len(v.Columns) > 0 {
+			nulls := make([]string, len(v.Columns))
+			for i := range nulls {
+				nulls[i] = "NULL::TEXT"
+			}
+			return "(" + strings.Join(nulls, ", ") + ")"
+		}
+		return "(NULL::TEXT)"
+	}
+	parts := make([]string, len(v.Rows))
+	for i, row := range v.Rows {
+		parts[i] = row.SQL()
+	}
+	return strings.Join(parts, ", ")
+}
+
+// TableSQL implements TableExpr.
+func (v TypedValuesTable) TableSQL() string {
+	return v.SQL()
+}
+
+// TableAlias implements TableExpr.
+func (v TypedValuesTable) TableAlias() string {
+	return v.Alias
+}
+
+// TypedClosureValuesTable creates a typed closure VALUES table.
+// The table has columns: object_type, relation, satisfying_relation
+func TypedClosureValuesTable(rows []ValuesRow, alias string) TypedValuesTable {
+	return TypedValuesTable{
+		Rows:    rows,
+		Alias:   alias,
+		Columns: []string{"object_type", "relation", "satisfying_relation"},
+	}
+}
+
+// TypedUsersetValuesTable creates a typed userset VALUES table.
+// The table has columns: object_type, relation, subject_type, subject_relation
+func TypedUsersetValuesTable(rows []ValuesRow, alias string) TypedValuesTable {
+	return TypedValuesTable{
+		Rows:    rows,
+		Alias:   alias,
+		Columns: []string{"object_type", "relation", "subject_type", "subject_relation"},
+	}
+}
+
+// =============================================================================
 // SQL Formatting Helpers
 // =============================================================================
 

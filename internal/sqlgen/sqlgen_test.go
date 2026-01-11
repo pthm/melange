@@ -634,3 +634,321 @@ func TestIndentLines(t *testing.T) {
 		})
 	}
 }
+
+// =============================================================================
+// Phase 5: Typed Values Tables Tests
+// =============================================================================
+
+func TestValuesRow(t *testing.T) {
+	tests := []struct {
+		name   string
+		row    ValuesRow
+		expect string
+	}{
+		{
+			name:   "single value",
+			row:    ValuesRow{Lit("hello")},
+			expect: "('hello')",
+		},
+		{
+			name:   "multiple values",
+			row:    ValuesRow{Lit("doc"), Lit("viewer"), Lit("editor")},
+			expect: "('doc', 'viewer', 'editor')",
+		},
+		{
+			name:   "empty row",
+			row:    ValuesRow{},
+			expect: "()",
+		},
+		{
+			name:   "with quote escaping",
+			row:    ValuesRow{Lit("it's"), Lit("fine")},
+			expect: "('it''s', 'fine')",
+		},
+		{
+			name:   "mixed expressions",
+			row:    ValuesRow{Lit("doc"), Col{Column: "id"}, Int(42)},
+			expect: "('doc', id, 42)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.row.SQL()
+			if got != tt.expect {
+				t.Errorf("ValuesRow.SQL() = %q, want %q", got, tt.expect)
+			}
+		})
+	}
+}
+
+func TestTypedValuesTable(t *testing.T) {
+	t.Run("with rows", func(t *testing.T) {
+		table := TypedValuesTable{
+			Rows: []ValuesRow{
+				{Lit("doc"), Lit("viewer"), Lit("editor")},
+				{Lit("doc"), Lit("owner"), Lit("owner")},
+			},
+			Alias:   "c",
+			Columns: []string{"object_type", "relation", "satisfying_relation"},
+		}
+		got := table.SQL()
+		expect := "(VALUES ('doc', 'viewer', 'editor'), ('doc', 'owner', 'owner')) AS c(object_type, relation, satisfying_relation)"
+		if got != expect {
+			t.Errorf("TypedValuesTable.SQL() =\n%q\nwant:\n%q", got, expect)
+		}
+	})
+
+	t.Run("empty rows with columns", func(t *testing.T) {
+		table := TypedValuesTable{
+			Rows:    nil,
+			Alias:   "c",
+			Columns: []string{"object_type", "relation", "satisfying_relation"},
+		}
+		got := table.SQL()
+		expect := "(VALUES (NULL::TEXT, NULL::TEXT, NULL::TEXT)) AS c(object_type, relation, satisfying_relation)"
+		if got != expect {
+			t.Errorf("TypedValuesTable.SQL() with empty rows =\n%q\nwant:\n%q", got, expect)
+		}
+	})
+
+	t.Run("empty rows no columns", func(t *testing.T) {
+		table := TypedValuesTable{
+			Rows:  nil,
+			Alias: "x",
+		}
+		got := table.SQL()
+		expect := "(VALUES (NULL::TEXT)) AS x"
+		if got != expect {
+			t.Errorf("TypedValuesTable.SQL() with no columns =\n%q\nwant:\n%q", got, expect)
+		}
+	})
+
+	t.Run("without column names", func(t *testing.T) {
+		table := TypedValuesTable{
+			Rows:  []ValuesRow{{Lit("a"), Lit("b")}},
+			Alias: "t",
+		}
+		got := table.SQL()
+		expect := "(VALUES ('a', 'b')) AS t"
+		if got != expect {
+			t.Errorf("TypedValuesTable.SQL() without columns = %q, want %q", got, expect)
+		}
+	})
+
+	t.Run("implements TableExpr", func(t *testing.T) {
+		var table TableExpr = TypedValuesTable{
+			Rows:    []ValuesRow{{Lit("test")}},
+			Alias:   "t",
+			Columns: []string{"col"},
+		}
+		if table.TableAlias() != "t" {
+			t.Errorf("TableAlias() = %q, want %q", table.TableAlias(), "t")
+		}
+		if !strings.Contains(table.TableSQL(), "VALUES") {
+			t.Errorf("TableSQL() should contain VALUES: %s", table.TableSQL())
+		}
+	})
+}
+
+func TestTypedClosureValuesTable(t *testing.T) {
+	rows := []ValuesRow{
+		{Lit("doc"), Lit("viewer"), Lit("editor")},
+		{Lit("doc"), Lit("viewer"), Lit("viewer")},
+	}
+	table := TypedClosureValuesTable(rows, "c")
+
+	if table.Alias != "c" {
+		t.Errorf("Alias = %q, want %q", table.Alias, "c")
+	}
+	expectedCols := []string{"object_type", "relation", "satisfying_relation"}
+	for i, col := range expectedCols {
+		if i >= len(table.Columns) || table.Columns[i] != col {
+			t.Errorf("Columns[%d] = %q, want %q", i, table.Columns[i], col)
+		}
+	}
+	if len(table.Rows) != 2 {
+		t.Errorf("Rows length = %d, want 2", len(table.Rows))
+	}
+}
+
+func TestTypedUsersetValuesTable(t *testing.T) {
+	rows := []ValuesRow{
+		{Lit("doc"), Lit("viewer"), Lit("group"), Lit("member")},
+	}
+	table := TypedUsersetValuesTable(rows, "m")
+
+	if table.Alias != "m" {
+		t.Errorf("Alias = %q, want %q", table.Alias, "m")
+	}
+	expectedCols := []string{"object_type", "relation", "subject_type", "subject_relation"}
+	for i, col := range expectedCols {
+		if i >= len(table.Columns) || table.Columns[i] != col {
+			t.Errorf("Columns[%d] = %q, want %q", i, table.Columns[i], col)
+		}
+	}
+}
+
+func TestBuildClosureTypedRows(t *testing.T) {
+	t.Run("empty input", func(t *testing.T) {
+		rows := buildClosureTypedRows(nil)
+		if rows != nil {
+			t.Errorf("buildClosureTypedRows(nil) = %v, want nil", rows)
+		}
+	})
+
+	t.Run("single row", func(t *testing.T) {
+		input := []ClosureRow{
+			{ObjectType: "doc", Relation: "viewer", SatisfyingRelation: "editor"},
+		}
+		rows := buildClosureTypedRows(input)
+		if len(rows) != 1 {
+			t.Fatalf("len(rows) = %d, want 1", len(rows))
+		}
+		got := rows[0].SQL()
+		expect := "('doc', 'viewer', 'editor')"
+		if got != expect {
+			t.Errorf("rows[0].SQL() = %q, want %q", got, expect)
+		}
+	})
+
+	t.Run("multiple rows sorted", func(t *testing.T) {
+		input := []ClosureRow{
+			{ObjectType: "doc", Relation: "viewer", SatisfyingRelation: "viewer"},
+			{ObjectType: "doc", Relation: "editor", SatisfyingRelation: "editor"},
+			{ObjectType: "doc", Relation: "viewer", SatisfyingRelation: "editor"},
+		}
+		rows := buildClosureTypedRows(input)
+		if len(rows) != 3 {
+			t.Fatalf("len(rows) = %d, want 3", len(rows))
+		}
+		// Verify sorted order: doc/editor/editor, doc/viewer/editor, doc/viewer/viewer
+		expects := []string{
+			"('doc', 'editor', 'editor')",
+			"('doc', 'viewer', 'editor')",
+			"('doc', 'viewer', 'viewer')",
+		}
+		for i, expect := range expects {
+			got := rows[i].SQL()
+			if got != expect {
+				t.Errorf("rows[%d].SQL() = %q, want %q", i, got, expect)
+			}
+		}
+	})
+
+	t.Run("with special characters", func(t *testing.T) {
+		input := []ClosureRow{
+			{ObjectType: "it's", Relation: "a'test", SatisfyingRelation: "value"},
+		}
+		rows := buildClosureTypedRows(input)
+		got := rows[0].SQL()
+		if !strings.Contains(got, "''") {
+			t.Errorf("Expected escaped quotes in %q", got)
+		}
+	})
+}
+
+func TestBuildUsersetTypedRows(t *testing.T) {
+	t.Run("empty input", func(t *testing.T) {
+		rows := buildUsersetTypedRows(nil)
+		if rows != nil {
+			t.Errorf("buildUsersetTypedRows(nil) = %v, want nil", rows)
+		}
+	})
+
+	t.Run("no userset patterns", func(t *testing.T) {
+		input := []RelationAnalysis{
+			{ObjectType: "doc", Relation: "viewer", UsersetPatterns: nil},
+		}
+		rows := buildUsersetTypedRows(input)
+		if rows != nil {
+			t.Errorf("buildUsersetTypedRows(empty patterns) = %v, want nil", rows)
+		}
+	})
+
+	t.Run("single pattern", func(t *testing.T) {
+		input := []RelationAnalysis{
+			{
+				ObjectType: "doc",
+				Relation:   "viewer",
+				UsersetPatterns: []UsersetPattern{
+					{SubjectType: "group", SubjectRelation: "member"},
+				},
+			},
+		}
+		rows := buildUsersetTypedRows(input)
+		if len(rows) != 1 {
+			t.Fatalf("len(rows) = %d, want 1", len(rows))
+		}
+		got := rows[0].SQL()
+		expect := "('doc', 'viewer', 'group', 'member')"
+		if got != expect {
+			t.Errorf("rows[0].SQL() = %q, want %q", got, expect)
+		}
+	})
+
+	t.Run("deduplication", func(t *testing.T) {
+		input := []RelationAnalysis{
+			{
+				ObjectType: "doc",
+				Relation:   "viewer",
+				UsersetPatterns: []UsersetPattern{
+					{SubjectType: "group", SubjectRelation: "member"},
+					{SubjectType: "group", SubjectRelation: "member"}, // duplicate
+				},
+			},
+		}
+		rows := buildUsersetTypedRows(input)
+		if len(rows) != 1 {
+			t.Errorf("len(rows) = %d, want 1 (deduped)", len(rows))
+		}
+	})
+
+	t.Run("multiple patterns sorted", func(t *testing.T) {
+		input := []RelationAnalysis{
+			{
+				ObjectType: "doc",
+				Relation:   "viewer",
+				UsersetPatterns: []UsersetPattern{
+					{SubjectType: "team", SubjectRelation: "member"},
+					{SubjectType: "group", SubjectRelation: "member"},
+				},
+			},
+		}
+		rows := buildUsersetTypedRows(input)
+		if len(rows) != 2 {
+			t.Fatalf("len(rows) = %d, want 2", len(rows))
+		}
+		// Should be sorted: group before team
+		if !strings.Contains(rows[0].SQL(), "group") {
+			t.Errorf("First row should contain 'group': %s", rows[0].SQL())
+		}
+		if !strings.Contains(rows[1].SQL(), "team") {
+			t.Errorf("Second row should contain 'team': %s", rows[1].SQL())
+		}
+	})
+}
+
+func TestTypedValuesTableConsistencyWithStringBased(t *testing.T) {
+	// Verify that typed and string-based VALUES produce equivalent SQL
+	closureRows := []ClosureRow{
+		{ObjectType: "doc", Relation: "viewer", SatisfyingRelation: "editor"},
+		{ObjectType: "doc", Relation: "viewer", SatisfyingRelation: "viewer"},
+	}
+
+	// String-based (existing)
+	stringValues := buildClosureValues(closureRows)
+	stringTable := ClosureValuesTable(stringValues, "c")
+
+	// Typed (new)
+	typedRows := buildClosureTypedRows(closureRows)
+	typedTable := TypedClosureValuesTable(typedRows, "c")
+
+	// Both should produce the same SQL
+	stringSQL := stringTable.SQL()
+	typedSQL := typedTable.SQL()
+
+	if stringSQL != typedSQL {
+		t.Errorf("String-based and typed VALUES tables differ:\nString: %s\nTyped:  %s", stringSQL, typedSQL)
+	}
+}

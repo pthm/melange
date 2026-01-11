@@ -14,15 +14,26 @@ import (
 // trades function size for runtime simplicity and removes a JOIN from every check.
 type InlineSQLData struct {
 	// ClosureValues contains tuples of (object_type, relation, satisfying_relation).
+	// Deprecated: Use ClosureRows for new code.
 	ClosureValues string
 	// UsersetValues contains tuples of (object_type, relation, subject_type, subject_relation).
+	// Deprecated: Use UsersetRows for new code.
 	UsersetValues string
+
+	// ClosureRows contains typed expression rows for closure data.
+	// Each row has 3 columns: object_type, relation, satisfying_relation.
+	ClosureRows []ValuesRow
+	// UsersetRows contains typed expression rows for userset data.
+	// Each row has 4 columns: object_type, relation, subject_type, subject_relation.
+	UsersetRows []ValuesRow
 }
 
 func buildInlineSQLData(closureRows []ClosureRow, analyses []RelationAnalysis) InlineSQLData {
 	return InlineSQLData{
 		ClosureValues: buildClosureValues(closureRows),
 		UsersetValues: buildUsersetValues(analyses),
+		ClosureRows:   buildClosureTypedRows(closureRows),
+		UsersetRows:   buildUsersetTypedRows(analyses),
 	}
 }
 
@@ -83,4 +94,92 @@ func buildUsersetValues(analyses []RelationAnalysis) string {
 
 func escapeSQLLiteral(value string) string {
 	return strings.ReplaceAll(value, "'", "''")
+}
+
+// =============================================================================
+// Typed Row Builders (Phase 5)
+// =============================================================================
+
+// buildClosureTypedRows builds typed ValuesRow slices for closure data.
+// Returns nil for empty input (TypedValuesTable handles empty case).
+func buildClosureTypedRows(closureRows []ClosureRow) []ValuesRow {
+	if len(closureRows) == 0 {
+		return nil
+	}
+
+	// Build rows with sort keys
+	type rowWithKey struct {
+		key string
+		row ValuesRow
+	}
+	keyed := make([]rowWithKey, 0, len(closureRows))
+	for _, cr := range closureRows {
+		keyed = append(keyed, rowWithKey{
+			key: cr.ObjectType + "\x00" + cr.Relation + "\x00" + cr.SatisfyingRelation,
+			row: ValuesRow{Lit(cr.ObjectType), Lit(cr.Relation), Lit(cr.SatisfyingRelation)},
+		})
+	}
+
+	// Sort by key for deterministic output
+	sort.Slice(keyed, func(i, j int) bool {
+		return keyed[i].key < keyed[j].key
+	})
+
+	// Extract sorted rows
+	result := make([]ValuesRow, len(keyed))
+	for i, k := range keyed {
+		result[i] = k.row
+	}
+	return result
+}
+
+// buildUsersetTypedRows builds typed ValuesRow slices for userset data.
+// Returns nil for empty input (TypedValuesTable handles empty case).
+func buildUsersetTypedRows(analyses []RelationAnalysis) []ValuesRow {
+	seen := make(map[string]struct{})
+	type rowWithKey struct {
+		key string
+		row ValuesRow
+	}
+	var keyed []rowWithKey
+
+	for _, analysis := range analyses {
+		for _, pattern := range analysis.UsersetPatterns {
+			key := strings.Join([]string{
+				analysis.ObjectType,
+				analysis.Relation,
+				pattern.SubjectType,
+				pattern.SubjectRelation,
+			}, "\x00")
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			keyed = append(keyed, rowWithKey{
+				key: key,
+				row: ValuesRow{
+					Lit(analysis.ObjectType),
+					Lit(analysis.Relation),
+					Lit(pattern.SubjectType),
+					Lit(pattern.SubjectRelation),
+				},
+			})
+		}
+	}
+
+	if len(keyed) == 0 {
+		return nil
+	}
+
+	// Sort by key for deterministic output
+	sort.Slice(keyed, func(i, j int) bool {
+		return keyed[i].key < keyed[j].key
+	})
+
+	// Extract sorted rows
+	result := make([]ValuesRow, len(keyed))
+	for i, k := range keyed {
+		result[i] = k.row
+	}
+	return result
 }
