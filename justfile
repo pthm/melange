@@ -47,7 +47,10 @@ release-prepare VERSION ALLOW_DIRTY="":
     git tag -a "$melange_tag" -m "$melange_tag"
     git push origin "$melange_tag"
     go mod edit -require=github.com/pthm/melange/melange@"$version"
-    go mod tidy
+    # Wait for GitHub to serve the new tag, then bypass proxy cache
+    echo "Waiting for tag to propagate..."
+    sleep 5
+    GOPROXY=direct GONOSUMDB=github.com/pthm/melange go mod tidy
     npm_version="${version#v}"
     NPM_VERSION="$npm_version" node -e "
       const fs = require('fs');
