@@ -159,7 +159,7 @@ func (b *ListObjectsBuilder) addUsersetSubjectBlock() error {
 	usersetSubjectSQL, err := ListObjectsUsersetSubjectQuery(ListObjectsUsersetSubjectInput{
 		ObjectType:    b.analysis.ObjectType,
 		Relations:     b.relationList,
-		ClosureValues: b.inline.ClosureValues,
+		ClosureRows: b.inline.ClosureRows,
 		Exclusions:    b.exclusions,
 	})
 	if err != nil {
@@ -273,7 +273,7 @@ func (b *ListObjectsBuilder) addSelfCandidateBlock() error {
 	selfSQL, err := ListObjectsSelfCandidateQuery(ListObjectsSelfCandidateInput{
 		ObjectType:    b.analysis.ObjectType,
 		Relation:      b.analysis.Relation,
-		ClosureValues: b.inline.ClosureValues,
+		ClosureRows: b.inline.ClosureRows,
 	})
 	if err != nil {
 		return err
@@ -412,7 +412,7 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathDirect() error {
 		ObjectIDExpr:        ObjectID,
 		FilterTypeExpr:      ParamRef("v_filter_type"),
 		FilterRelationExpr:  ParamRef("v_filter_relation"),
-		ClosureValues:       b.inline.ClosureValues,
+		ClosureRows:         b.inline.ClosureRows,
 		UseTypeGuard:        true,
 	})
 	if err != nil {
@@ -432,7 +432,7 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathDirect() error {
 		b.analysis,
 		b.complexClosure,
 		b.allowedSubjectTypes,
-		b.inline.ClosureValues,
+		b.inline.ClosureRows,
 		false,
 	)
 	if err != nil {
@@ -460,7 +460,7 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathDirect() error {
 		ObjectIDExpr:       ObjectID,
 		FilterTypeExpr:     ParamRef("v_filter_type"),
 		FilterRelationExpr: ParamRef("v_filter_relation"),
-		ClosureValues:      b.inline.ClosureValues,
+		ClosureRows:        b.inline.ClosureRows,
 	})
 	if err != nil {
 		return err
@@ -492,7 +492,7 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathExclusion() error {
 		ObjectIDExpr:        ObjectID,
 		FilterTypeExpr:      ParamRef("v_filter_type"),
 		FilterRelationExpr:  ParamRef("v_filter_relation"),
-		ClosureValues:       b.inline.ClosureValues,
+		ClosureRows:         b.inline.ClosureRows,
 		UseTypeGuard:        true,
 		ExtraPredicatesSQL:  usersetPredsSQL,
 	})
@@ -513,7 +513,7 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathExclusion() error {
 		b.analysis,
 		b.complexClosure,
 		b.allowedSubjectTypes,
-		b.inline.ClosureValues,
+		b.inline.ClosureRows,
 		true,
 	)
 	if err != nil {
@@ -544,7 +544,7 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathExclusion() error {
 		ObjectIDExpr:       ObjectID,
 		FilterTypeExpr:     ParamRef("v_filter_type"),
 		FilterRelationExpr: ParamRef("v_filter_relation"),
-		ClosureValues:      b.inline.ClosureValues,
+		ClosureRows:        b.inline.ClosureRows,
 		ExtraPredicatesSQL: selfPredsSQL,
 	})
 	if err != nil {
@@ -565,14 +565,14 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathExclusion() error {
 
 // buildUsersetFilterPathUserset builds userset filter blocks for userset template.
 func (b *ListSubjectsBuilder) buildUsersetFilterPathUserset() error {
-	checkExprSQL := CheckPermissionExprDSL("check_permission", "v_filter_type", "t.subject_id", b.analysis.Relation, fmt.Sprintf("'%s'", b.analysis.ObjectType), "p_object_id", true).SQL()
+	checkExprSQL := CheckPermissionExpr("check_permission", SubjectRef{Type: ParamRef("v_filter_type"), ID: Col{Table: "t", Column: "subject_id"}}, b.analysis.Relation, ObjectRef{Type: Lit(b.analysis.ObjectType), ID: Param("p_object_id")}, true).SQL()
 	usersetBaseSQL, err := ListSubjectsUsersetFilterQuery(ListSubjectsUsersetFilterInput{
 		ObjectType:         b.analysis.ObjectType,
 		RelationList:       b.allSatisfyingRelations,
 		ObjectIDExpr:       ObjectID,
 		FilterTypeExpr:     ParamRef("v_filter_type"),
 		FilterRelationExpr: ParamRef("v_filter_relation"),
-		ClosureValues:      b.inline.ClosureValues,
+		ClosureRows:        b.inline.ClosureRows,
 		UseTypeGuard:       false,
 		ExtraPredicatesSQL: []string{checkExprSQL},
 	})
@@ -606,7 +606,7 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathUserset() error {
 		ObjectIDExpr:       ObjectID,
 		FilterTypeExpr:     ParamRef("v_filter_type"),
 		FilterRelationExpr: ParamRef("v_filter_relation"),
-		ClosureValues:      b.inline.ClosureValues,
+		ClosureRows:        b.inline.ClosureRows,
 	})
 	if err != nil {
 		return err
@@ -901,7 +901,7 @@ func buildListObjectsIntersectionBlocks(a RelationAnalysis, validate bool) ([]Qu
 	return blocks, nil
 }
 
-func buildListSubjectsComplexClosureFilterBlocks(a RelationAnalysis, relations, allowedSubjectTypes []string, closureValues string, applyExclusions bool) ([]QueryBlock, error) {
+func buildListSubjectsComplexClosureFilterBlocks(a RelationAnalysis, relations, allowedSubjectTypes []string, closureRows []ValuesRow, applyExclusions bool) ([]QueryBlock, error) {
 	var blocks []QueryBlock
 	normalizedExpr := UsersetNormalized{Source: Col{Table: "t", Column: "subject_id"}, Relation: ParamRef("v_filter_relation")}
 	for _, rel := range relations {
@@ -910,7 +910,7 @@ func buildListSubjectsComplexClosureFilterBlocks(a RelationAnalysis, relations, 
 			exclusions = buildExclusionInput(a, ObjectID, Col{Table: "t", Column: "subject_type"}, normalizedExpr)
 		}
 		exclusionPreds := exclusions.BuildPredicates()
-		checkPred := CheckPermissionInternalExprDSL("t.subject_type", "t.subject_id", rel, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true)
+		checkPred := CheckPermissionInternalExpr(SubjectRef{Type: Col{Table: "t", Column: "subject_type"}, ID: Col{Table: "t", Column: "subject_id"}}, rel, ObjectRef{Type: Lit(a.ObjectType), ID: Param("p_object_id")}, true)
 		allPreds := append(exclusionPreds, checkPred) //nolint:gocritic // intentionally creating new slice
 		extraPredsSQL := RenderDSLExprs(allPreds)
 		blockSQL, err := ListSubjectsUsersetFilterQuery(ListSubjectsUsersetFilterInput{
@@ -920,7 +920,7 @@ func buildListSubjectsComplexClosureFilterBlocks(a RelationAnalysis, relations, 
 			ObjectIDExpr:        ObjectID,
 			FilterTypeExpr:      ParamRef("v_filter_type"),
 			FilterRelationExpr:  ParamRef("v_filter_relation"),
-			ClosureValues:       closureValues,
+			ClosureRows:         closureRows,
 			UseTypeGuard:        true,
 			ExtraPredicatesSQL:  extraPredsSQL,
 		})
@@ -1446,7 +1446,7 @@ func generateListObjectsRecursiveFunction(a RelationAnalysis, inline InlineSQLDa
 	selfCandidateSQL, err := ListObjectsSelfCandidateQuery(ListObjectsSelfCandidateInput{
 		ObjectType:    a.ObjectType,
 		Relation:      a.Relation,
-		ClosureValues: inline.ClosureValues,
+		ClosureRows: inline.ClosureRows,
 	})
 	if err != nil {
 		return "", err
@@ -1467,35 +1467,28 @@ func generateListObjectsRecursiveFunction(a RelationAnalysis, inline InlineSQLDa
 
 	depthCheck := buildDepthCheckSQL(a.ObjectType, selfRefRelations)
 	paginatedQuery := wrapWithPagination(query, "object_id")
-	functionSQL := fmt.Sprintf(`-- Generated list_objects function for %s.%s
--- Features: %s
-CREATE OR REPLACE FUNCTION %s(
-    p_subject_type TEXT,
-    p_subject_id TEXT,
-    p_limit INT DEFAULT NULL,
-    p_after TEXT DEFAULT NULL
-) RETURNS TABLE(object_id TEXT, next_cursor TEXT) AS $$
-DECLARE
-    v_max_depth INTEGER;
-BEGIN
-%s
-    IF v_max_depth >= 25 THEN
-        RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';
-    END IF;
 
-    RETURN QUERY
-    %s;
-END;
-$$ LANGUAGE plpgsql STABLE;`,
-		a.ObjectType,
-		a.Relation,
-		a.Features.String(),
-		functionName,
-		depthCheck,
-		paginatedQuery,
-	)
+	fn := PlpgsqlFunction{
+		Name:    functionName,
+		Args:    ListObjectsArgs(),
+		Returns: ListObjectsReturns(),
+		Header:  ListObjectsFunctionHeader(a.ObjectType, a.Relation, a.Features.String()),
+		Decls: []Decl{
+			{Name: "v_max_depth", Type: "INTEGER"},
+		},
+		Body: []Stmt{
+			RawStmt{SQLText: strings.TrimSpace(depthCheck)},
+			If{
+				Cond: Raw("v_max_depth >= 25"),
+				Then: []Stmt{
+					Raise{Message: "resolution too complex", ErrCode: "M2002"},
+				},
+			},
+			ReturnQuery{Query: paginatedQuery},
+		},
+	}
 
-	return functionSQL, nil
+	return fn.SQL(), nil
 }
 
 func buildListObjectsRecursiveBaseBlocks(a RelationAnalysis, inline InlineSQLData, relationList, allowedSubjectTypes []string, allowWildcard bool, complexClosure []string) ([]string, error) {
@@ -1858,7 +1851,7 @@ func generateListObjectsIntersectionFunction(a RelationAnalysis, inline InlineSQ
 	selfCandidateSQL, err := ListObjectsSelfCandidateQuery(ListObjectsSelfCandidateInput{
 		ObjectType:    a.ObjectType,
 		Relation:      a.Relation,
-		ClosureValues: inline.ClosureValues,
+		ClosureRows: inline.ClosureRows,
 	})
 	if err != nil {
 		return "", err
@@ -1877,33 +1870,28 @@ func generateListObjectsIntersectionFunction(a RelationAnalysis, inline InlineSQ
 
 	depthCheck := buildDepthCheckSQL(a.ObjectType, selfRefRelations)
 	paginatedQuery := wrapWithPagination(query, "object_id")
-	return fmt.Sprintf(`-- Generated list_objects function for %s.%s
--- Features: %s
-CREATE OR REPLACE FUNCTION %s(
-    p_subject_type TEXT,
-    p_subject_id TEXT,
-    p_limit INT DEFAULT NULL,
-    p_after TEXT DEFAULT NULL
-) RETURNS TABLE(object_id TEXT, next_cursor TEXT) AS $$
-DECLARE
-    v_max_depth INTEGER;
-BEGIN
-%s
-    IF v_max_depth >= 25 THEN
-        RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';
-    END IF;
 
-    RETURN QUERY
-    %s;
-END;
-$$ LANGUAGE plpgsql STABLE;`,
-		a.ObjectType,
-		a.Relation,
-		a.Features.String(),
-		functionName,
-		depthCheck,
-		paginatedQuery,
-	), nil
+	fn := PlpgsqlFunction{
+		Name:    functionName,
+		Args:    ListObjectsArgs(),
+		Returns: ListObjectsReturns(),
+		Header:  ListObjectsFunctionHeader(a.ObjectType, a.Relation, a.Features.String()),
+		Decls: []Decl{
+			{Name: "v_max_depth", Type: "INTEGER"},
+		},
+		Body: []Stmt{
+			RawStmt{SQLText: strings.TrimSpace(depthCheck)},
+			If{
+				Cond: Raw("v_max_depth >= 25"),
+				Then: []Stmt{
+					Raise{Message: "resolution too complex", ErrCode: "M2002"},
+				},
+			},
+			ReturnQuery{Query: paginatedQuery},
+		},
+	}
+
+	return fn.SQL(), nil
 }
 
 func buildObjectsIntersectionGroupSQL(a RelationAnalysis, idx int, group IntersectionGroupInfo, applyExclusions bool) (string, error) {
@@ -1949,7 +1937,7 @@ func buildObjectsIntersectionPartSQL(a RelationAnalysis, partIdx int, part Inter
 			Distinct()
 
 		if part.ExcludedRelation != "" {
-			q = q.Where(CheckPermissionInternalExprDSL("p_subject_type", "p_subject_id", part.ExcludedRelation, fmt.Sprintf("'%s'", a.ObjectType), "t.object_id", false))
+			q = q.Where(CheckPermissionInternalExpr(SubjectParams(), part.ExcludedRelation, ObjectRef{Type: Lit(a.ObjectType), ID: Col{Table: "t", Column: "object_id"}}, false))
 		}
 		return q.SQL(), nil
 	case part.ParentRelation != nil:
@@ -1957,22 +1945,22 @@ func buildObjectsIntersectionPartSQL(a RelationAnalysis, partIdx int, part Inter
 			ObjectType(a.ObjectType).
 			Relations(part.ParentRelation.LinkingRelation).
 			Select("child.object_id").
-			Where(CheckPermissionInternalExprDSL("p_subject_type", "p_subject_id", part.ParentRelation.Relation, "child.subject_type", "child.subject_id", true)).
+			Where(CheckPermissionInternalExpr(SubjectParams(), part.ParentRelation.Relation, ObjectRef{Type: Col{Table: "child", Column: "subject_type"}, ID: Col{Table: "child", Column: "subject_id"}}, true)).
 			Distinct()
 
 		if part.ExcludedRelation != "" {
-			q = q.Where(CheckPermissionInternalExprDSL("p_subject_type", "p_subject_id", part.ExcludedRelation, fmt.Sprintf("'%s'", a.ObjectType), "child.object_id", false))
+			q = q.Where(CheckPermissionInternalExpr(SubjectParams(), part.ExcludedRelation, ObjectRef{Type: Lit(a.ObjectType), ID: Col{Table: "child", Column: "object_id"}}, false))
 		}
 		return q.SQL(), nil
 	default:
 		q := Tuples("t").
 			ObjectType(a.ObjectType).
 			Select("t.object_id").
-			Where(CheckPermissionInternalExprDSL("p_subject_type", "p_subject_id", part.Relation, fmt.Sprintf("'%s'", a.ObjectType), "t.object_id", true)).
+			Where(CheckPermissionInternalExpr(SubjectParams(), part.Relation, ObjectRef{Type: Lit(a.ObjectType), ID: Col{Table: "t", Column: "object_id"}}, true)).
 			Distinct()
 
 		if part.ExcludedRelation != "" {
-			q = q.Where(CheckPermissionInternalExprDSL("p_subject_type", "p_subject_id", part.ExcludedRelation, fmt.Sprintf("'%s'", a.ObjectType), "t.object_id", false))
+			q = q.Where(CheckPermissionInternalExpr(SubjectParams(), part.ExcludedRelation, ObjectRef{Type: Lit(a.ObjectType), ID: Col{Table: "t", Column: "object_id"}}, false))
 		}
 		return q.SQL(), nil
 	}
@@ -2065,53 +2053,48 @@ func generateListSubjectsRecursiveFunction(a RelationAnalysis, inline InlineSQLD
 	usersetFilterQuery := joinUnionBlocks(append(usersetFilterBlocks, usersetSelfBlock))
 	usersetFilterPaginatedQuery := wrapWithPaginationWildcardFirst(usersetFilterQuery)
 	regularPaginatedQuery := wrapWithPaginationWildcardFirst(regularQuery)
-	return fmt.Sprintf(`-- Generated list_subjects function for %s.%s
--- Features: %s
-CREATE OR REPLACE FUNCTION %s(
-    p_object_id TEXT,
-    p_subject_type TEXT,
-    p_limit INT DEFAULT NULL,
-    p_after TEXT DEFAULT NULL
-) RETURNS TABLE(subject_id TEXT, next_cursor TEXT) AS $$
-DECLARE
-    v_filter_type TEXT;
-    v_filter_relation TEXT;
-BEGIN
-    -- Check if p_subject_type is a userset filter (contains '#')
-    IF position('#' in p_subject_type) > 0 THEN
-        -- Parse userset filter
-        v_filter_type := substring(p_subject_type from 1 for position('#' in p_subject_type) - 1);
-        v_filter_relation := substring(p_subject_type from position('#' in p_subject_type) + 1);
 
-        -- Userset filter: find userset tuples that match and return normalized references
-        RETURN QUERY
-        %s;
-    ELSE
-        -- Regular subject type: find direct subjects and expand usersets
-        RETURN QUERY
-        %s;
-    END IF;
-END;
-$$ LANGUAGE plpgsql STABLE;`,
-		a.ObjectType,
-		a.Relation,
-		a.Features.String(),
-		functionName,
-		usersetFilterPaginatedQuery,
-		regularPaginatedQuery,
-	), nil
+	fn := PlpgsqlFunction{
+		Name:    functionName,
+		Args:    ListSubjectsArgs(),
+		Returns: ListSubjectsReturns(),
+		Header:  ListSubjectsFunctionHeader(a.ObjectType, a.Relation, a.Features.String()),
+		Decls: []Decl{
+			{Name: "v_filter_type", Type: "TEXT"},
+			{Name: "v_filter_relation", Type: "TEXT"},
+		},
+		Body: []Stmt{
+			Comment{Text: "Check if p_subject_type is a userset filter (contains '#')"},
+			If{
+				Cond: Raw("position('#' in p_subject_type) > 0"),
+				Then: []Stmt{
+					Comment{Text: "Parse userset filter"},
+					Assign{Name: "v_filter_type", Value: Raw("substring(p_subject_type from 1 for position('#' in p_subject_type) - 1)")},
+					Assign{Name: "v_filter_relation", Value: Raw("substring(p_subject_type from position('#' in p_subject_type) + 1)")},
+					Comment{Text: "Userset filter: find userset tuples that match and return normalized references"},
+					ReturnQuery{Query: usersetFilterPaginatedQuery},
+				},
+				Else: []Stmt{
+					Comment{Text: "Regular subject type: find direct subjects and expand usersets"},
+					ReturnQuery{Query: regularPaginatedQuery},
+				},
+			},
+		},
+	}
+
+	return fn.SQL(), nil
 }
 
 func buildListSubjectsRecursiveUsersetFilterBlocks(a RelationAnalysis, inline InlineSQLData, allSatisfyingRelations []string) (filterBlocks []string, selfBlock string, err error) {
 	var blocks []string
-	checkExprSQL := CheckPermissionExprDSL("check_permission", "v_filter_type", "t.subject_id", a.Relation, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true).SQL()
+	checkExprSQL := CheckPermissionExpr("check_permission", SubjectRef{Type: ParamRef("v_filter_type"), ID: Col{Table: "t", Column: "subject_id"}}, a.Relation, ObjectRef{Type: Lit(a.ObjectType), ID: Param("p_object_id")}, true).SQL()
 	baseSQL, err := ListSubjectsUsersetFilterQuery(ListSubjectsUsersetFilterInput{
 		ObjectType:         a.ObjectType,
 		RelationList:       allSatisfyingRelations,
 		ObjectIDExpr:       ObjectID,
 		FilterTypeExpr:     ParamRef("v_filter_type"),
 		FilterRelationExpr: ParamRef("v_filter_relation"),
-		ClosureValues:      inline.ClosureValues,
+		ClosureRows:        inline.ClosureRows,
 		UseTypeGuard:       false,
 		ExtraPredicatesSQL: []string{checkExprSQL},
 	})
@@ -2181,7 +2164,7 @@ func buildListSubjectsRecursiveUsersetFilterBlocks(a RelationAnalysis, inline In
 		ObjectIDExpr:       ObjectID,
 		FilterTypeExpr:     ParamRef("v_filter_type"),
 		FilterRelationExpr: ParamRef("v_filter_relation"),
-		ClosureValues:      inline.ClosureValues,
+		ClosureRows:        inline.ClosureRows,
 	})
 	if err != nil {
 		return nil, "", err
@@ -2354,7 +2337,7 @@ func buildSubjectsTTUPathQuery(a RelationAnalysis, parent ListParentRelationData
 		Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(a.ObjectType)},
 		Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
 		Eq{Left: Col{Table: "link", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
-		CheckPermissionInternalExprDSL("p_subject_type", "sp.subject_id", parent.Relation, "link.subject_type", "link.subject_id", true),
+		CheckPermissionInternalExpr(SubjectRef{Type: SubjectType, ID: Col{Table: "sp", Column: "subject_id"}}, parent.Relation, ObjectRef{Type: Col{Table: "link", Column: "subject_type"}, ID: Col{Table: "link", Column: "subject_id"}}, true),
 	}
 	if parent.AllowedLinkingTypes != "" {
 		conditions = append(conditions, Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
@@ -2381,8 +2364,8 @@ func buildSubjectsTTUPathQuery(a RelationAnalysis, parent ListParentRelationData
 
 func buildUsersetFilterTTUQuery(a RelationAnalysis, inline InlineSQLData, parent ListParentRelationData) (string, error) {
 	closureRelStmt := SelectStmt{
-		Columns: []string{"c.satisfying_relation"},
-		From:    fmt.Sprintf("(VALUES %s) AS c(object_type, relation, satisfying_relation)", inline.ClosureValues),
+		Columns:  []string{"c.satisfying_relation"},
+		FromExpr: TypedClosureValuesTable(inline.ClosureRows, "c"),
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Raw("link.subject_type")},
 			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(parent.Relation)},
@@ -2391,8 +2374,8 @@ func buildUsersetFilterTTUQuery(a RelationAnalysis, inline InlineSQLData, parent
 	closureRelSQL := closureRelStmt.SQL()
 
 	closureExistsStmt := SelectStmt{
-		Columns: []string{"1"},
-		From:    fmt.Sprintf("(VALUES %s) AS subj_c(object_type, relation, satisfying_relation)", inline.ClosureValues),
+		Columns:  []string{"1"},
+		FromExpr: TypedClosureValuesTable(inline.ClosureRows, "subj_c"),
 		Where: And(
 			Eq{Left: Col{Table: "subj_c", Column: "object_type"}, Right: Raw("v_filter_type")},
 			Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: Raw("substring(pt.subject_id from position('#' in pt.subject_id) + 1)")},
@@ -2437,8 +2420,8 @@ func buildUsersetFilterTTUQuery(a RelationAnalysis, inline InlineSQLData, parent
 
 func buildUsersetFilterTTUIntermediateQuery(a RelationAnalysis, inline InlineSQLData, parent ListParentRelationData) (string, error) {
 	closureExistsStmt := SelectStmt{
-		Columns: []string{"1"},
-		From:    fmt.Sprintf("(VALUES %s) AS c(object_type, relation, satisfying_relation)", inline.ClosureValues),
+		Columns:  []string{"1"},
+		FromExpr: TypedClosureValuesTable(inline.ClosureRows, "c"),
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Raw("link.subject_type")},
 			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(parent.Relation)},
@@ -2509,7 +2492,7 @@ func generateListSubjectsIntersectionFunction(a RelationAnalysis, inline InlineS
 		ObjectIDExpr:       ObjectID,
 		FilterTypeExpr:     ParamRef("v_filter_type"),
 		FilterRelationExpr: ParamRef("v_filter_relation"),
-		ClosureValues:      inline.ClosureValues,
+		ClosureRows:        inline.ClosureRows,
 	})
 	if err != nil {
 		return "", err
@@ -2556,47 +2539,44 @@ func generateListSubjectsIntersectionFunction(a RelationAnalysis, inline InlineS
 	regularQuery = trimTrailingSemicolon(regularQuery)
 	usersetFilterPaginatedQuery := wrapWithPaginationWildcardFirst(usersetFilterQuery)
 	regularPaginatedQuery := wrapWithPaginationWildcardFirst(regularQuery)
-	return fmt.Sprintf(`-- Generated list_subjects function for %s.%s
--- Features: %s
-CREATE OR REPLACE FUNCTION %s(
-    p_object_id TEXT,
-    p_subject_type TEXT,
-    p_limit INT DEFAULT NULL,
-    p_after TEXT DEFAULT NULL
-) RETURNS TABLE(subject_id TEXT, next_cursor TEXT) AS $$
-DECLARE
-    v_filter_type TEXT;
-    v_filter_relation TEXT;
-BEGIN
-    -- Check if p_subject_type is a userset filter (contains '#')
-    IF position('#' in p_subject_type) > 0 THEN
-        -- Parse userset filter
-        v_filter_type := substring(p_subject_type from 1 for position('#' in p_subject_type) - 1);
-        v_filter_relation := substring(p_subject_type from position('#' in p_subject_type) + 1);
 
-        -- Userset filter: find userset tuples and filter with check_permission
-        RETURN QUERY
-        %s;
-    ELSE
-        -- Regular subject type: gather candidates and filter with check_permission
-        -- Guard: return empty if subject type is not allowed by the model
-        IF p_subject_type NOT IN (%s) THEN
-            RETURN;
-        END IF;
+	allowedTypesSQL := formatSQLStringList(allowedSubjectTypes)
+	fn := PlpgsqlFunction{
+		Name:    functionName,
+		Args:    ListSubjectsArgs(),
+		Returns: ListSubjectsReturns(),
+		Header:  ListSubjectsFunctionHeader(a.ObjectType, a.Relation, a.Features.String()),
+		Decls: []Decl{
+			{Name: "v_filter_type", Type: "TEXT"},
+			{Name: "v_filter_relation", Type: "TEXT"},
+		},
+		Body: []Stmt{
+			Comment{Text: "Check if p_subject_type is a userset filter (contains '#')"},
+			If{
+				Cond: Raw("position('#' in p_subject_type) > 0"),
+				Then: []Stmt{
+					Comment{Text: "Parse userset filter"},
+					Assign{Name: "v_filter_type", Value: Raw("substring(p_subject_type from 1 for position('#' in p_subject_type) - 1)")},
+					Assign{Name: "v_filter_relation", Value: Raw("substring(p_subject_type from position('#' in p_subject_type) + 1)")},
+					Comment{Text: "Userset filter: find userset tuples and filter with check_permission"},
+					ReturnQuery{Query: usersetFilterPaginatedQuery},
+				},
+				Else: []Stmt{
+					Comment{Text: "Regular subject type: gather candidates and filter with check_permission"},
+					Comment{Text: "Guard: return empty if subject type is not allowed by the model"},
+					If{
+						Cond: Raw("p_subject_type NOT IN (" + allowedTypesSQL + ")"),
+						Then: []Stmt{
+							Return{},
+						},
+					},
+					ReturnQuery{Query: regularPaginatedQuery},
+				},
+			},
+		},
+	}
 
-        RETURN QUERY
-        %s;
-    END IF;
-END;
-$$ LANGUAGE plpgsql STABLE;`,
-		a.ObjectType,
-		a.Relation,
-		a.Features.String(),
-		functionName,
-		usersetFilterPaginatedQuery,
-		formatSQLStringList(allowedSubjectTypes),
-		regularPaginatedQuery,
-	), nil
+	return fn.SQL(), nil
 }
 
 func buildUsersetIntersectionCandidates(a RelationAnalysis, inline InlineSQLData, allSatisfyingRelations []string) (string, error) {
@@ -2607,7 +2587,7 @@ func buildUsersetIntersectionCandidates(a RelationAnalysis, inline InlineSQLData
 		ObjectIDExpr:       ObjectID,
 		FilterTypeExpr:     ParamRef("v_filter_type"),
 		FilterRelationExpr: ParamRef("v_filter_relation"),
-		ClosureValues:      inline.ClosureValues,
+		ClosureRows:        inline.ClosureRows,
 		UseTypeGuard:       false,
 	})
 	if err != nil {
@@ -2641,7 +2621,7 @@ func buildUsersetIntersectionCandidates(a RelationAnalysis, inline InlineSQLData
 
 func buildUsersetIntersectionPartCandidates(a RelationAnalysis, inline InlineSQLData, part IntersectionPart) (string, error) {
 	if part.ParentRelation != nil {
-		relationMatch := buildUsersetFilterRelationMatchExprDSL("pt.subject_id", inline.ClosureValues)
+		relationMatch := buildUsersetFilterRelationMatchExprDSL("pt.subject_id", inline.ClosureRows)
 		conditions := []Expr{
 			Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(a.ObjectType)},
 			Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
@@ -2669,7 +2649,7 @@ func buildUsersetIntersectionPartCandidates(a RelationAnalysis, inline InlineSQL
 		return stmt.SQL(), nil
 	}
 
-	relationMatch := buildUsersetFilterRelationMatchExprDSL("t.subject_id", inline.ClosureValues)
+	relationMatch := buildUsersetFilterRelationMatchExprDSL("t.subject_id", inline.ClosureRows)
 	conditions := []Expr{
 		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(a.ObjectType)},
 		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
@@ -2689,7 +2669,7 @@ func buildUsersetIntersectionPartCandidates(a RelationAnalysis, inline InlineSQL
 }
 
 func buildUsersetIntersectionTTUCandidates(a RelationAnalysis, inline InlineSQLData, parent ListParentRelationData) (string, error) {
-	relationMatch := buildUsersetFilterRelationMatchExprDSL("pt.subject_id", inline.ClosureValues)
+	relationMatch := buildUsersetFilterRelationMatchExprDSL("pt.subject_id", inline.ClosureRows)
 	conditions := []Expr{
 		Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(a.ObjectType)},
 		Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
@@ -2720,10 +2700,10 @@ func buildUsersetIntersectionTTUCandidates(a RelationAnalysis, inline InlineSQLD
 	return stmt.SQL(), nil
 }
 
-func buildUsersetFilterRelationMatchExprDSL(subjectIDExpr, closureValues string) Expr {
+func buildUsersetFilterRelationMatchExprDSL(subjectIDExpr string, closureRows []ValuesRow) Expr {
 	closureExistsStmt := SelectStmt{
-		Columns: []string{"1"},
-		From:    fmt.Sprintf("(VALUES %s) AS subj_c(object_type, relation, satisfying_relation)", closureValues),
+		Columns:  []string{"1"},
+		FromExpr: TypedClosureValuesTable(closureRows, "subj_c"),
 		Where: And(
 			Eq{Left: Col{Table: "subj_c", Column: "object_type"}, Right: Raw("v_filter_type")},
 			Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: Raw("substring(" + subjectIDExpr + " from position('#' in " + subjectIDExpr + ") + 1)")},
@@ -3004,7 +2984,7 @@ func generateListObjectsSelfRefUsersetFunction(a RelationAnalysis, inline Inline
 	selfCandidateSQL, err := ListObjectsSelfCandidateQuery(ListObjectsSelfCandidateInput{
 		ObjectType:    a.ObjectType,
 		Relation:      a.Relation,
-		ClosureValues: inline.ClosureValues,
+		ClosureRows: inline.ClosureRows,
 	})
 	if err != nil {
 		return "", err
@@ -3249,14 +3229,14 @@ END IF;`, usersetFilterPaginatedQuery, regularPaginatedQuery)
 }
 
 func buildListSubjectsSelfRefUsersetFilterQuery(a RelationAnalysis, inline InlineSQLData, allSatisfyingRelations []string) (string, error) {
-	checkExprSQL := CheckPermissionExprDSL("check_permission", "v_filter_type", "t.subject_id", a.Relation, fmt.Sprintf("'%s'", a.ObjectType), "p_object_id", true).SQL()
+	checkExprSQL := CheckPermissionExpr("check_permission", SubjectRef{Type: ParamRef("v_filter_type"), ID: Col{Table: "t", Column: "subject_id"}}, a.Relation, ObjectRef{Type: Lit(a.ObjectType), ID: Param("p_object_id")}, true).SQL()
 	baseSQL, err := ListSubjectsUsersetFilterQuery(ListSubjectsUsersetFilterInput{
 		ObjectType:         a.ObjectType,
 		RelationList:       allSatisfyingRelations,
 		ObjectIDExpr:       ObjectID,
 		FilterTypeExpr:     ParamRef("v_filter_type"),
 		FilterRelationExpr: ParamRef("v_filter_relation"),
-		ClosureValues:      inline.ClosureValues,
+		ClosureRows:        inline.ClosureRows,
 		UseTypeGuard:       false,
 		ExtraPredicatesSQL: []string{checkExprSQL},
 	})
@@ -3310,7 +3290,7 @@ FROM userset_expansion ue`,
 		ObjectIDExpr:       ObjectID,
 		FilterTypeExpr:     ParamRef("v_filter_type"),
 		FilterRelationExpr: ParamRef("v_filter_relation"),
-		ClosureValues:      inline.ClosureValues,
+		ClosureRows:        inline.ClosureRows,
 	})
 	if err != nil {
 		return "", err
@@ -3590,7 +3570,7 @@ func generateListObjectsComposedFunction(a RelationAnalysis, inline InlineSQLDat
 	selfSQL, err := ListObjectsSelfCandidateQuery(ListObjectsSelfCandidateInput{
 		ObjectType:    a.ObjectType,
 		Relation:      a.Relation,
-		ClosureValues: inline.ClosureValues,
+		ClosureRows: inline.ClosureRows,
 	})
 	if err != nil {
 		return "", err
@@ -3729,7 +3709,7 @@ func buildComposedRecursiveTTUObjectsQuery(a RelationAnalysis, anchor *ListIndir
 		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(a.ObjectType)},
 		Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(anchor.Path[0].LinkingRelation)},
 		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(recursiveType)},
-		CheckPermissionInternalExprDSL("p_subject_type", "p_subject_id", anchor.Path[0].TargetRelation, fmt.Sprintf("'%s'", recursiveType), "t.subject_id", true),
+		CheckPermissionInternalExpr(SubjectParams(), anchor.Path[0].TargetRelation, ObjectRef{Type: Lit(recursiveType), ID: Col{Table: "t", Column: "subject_id"}}, true),
 	)
 	conditions = append(conditions, exclusionPreds...)
 
@@ -3757,14 +3737,7 @@ func buildComposedUsersetObjectsQuery(a RelationAnalysis, anchor *ListIndirectAn
 		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(firstStep.SubjectRelation)},
 		Or(
 			Raw("split_part(t.subject_id, '#', 1) IN ("+subquery+")"),
-			CheckPermissionInternalExprDSL(
-				"p_subject_type",
-				"p_subject_id",
-				firstStep.SubjectRelation,
-				fmt.Sprintf("'%s'", firstStep.SubjectType),
-				"split_part(t.subject_id, '#', 1)",
-				true,
-			),
+			CheckPermissionInternalExpr(SubjectParams(), firstStep.SubjectRelation, ObjectRef{Type: Lit(firstStep.SubjectType), ID: Raw("split_part(t.subject_id, '#', 1)")}, true),
 		),
 	)
 	conditions = append(conditions, exclusionPreds...)
@@ -3790,7 +3763,7 @@ func generateListSubjectsComposedFunction(a RelationAnalysis, inline InlineSQLDa
 		ObjectIDExpr:       ObjectID,
 		FilterTypeExpr:     ParamRef("v_filter_type"),
 		FilterRelationExpr: ParamRef("v_filter_relation"),
-		ClosureValues:      inline.ClosureValues,
+		ClosureRows:        inline.ClosureRows,
 	})
 	if err != nil {
 		return "", err

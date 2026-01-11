@@ -325,6 +325,28 @@ func TypedUsersetValuesTable(rows []ValuesRow, alias string) TypedValuesTable {
 }
 
 // =============================================================================
+// Transitional Factory Functions
+// =============================================================================
+// These helpers support gradual migration from string-based VALUES to typed rows.
+// They prefer typed rows when available, falling back to string-based values.
+
+// ClosureTable returns a closure VALUES table, preferring typed rows when available.
+func ClosureTable(rows []ValuesRow, values string, alias string) TableExpr {
+	if len(rows) > 0 {
+		return TypedClosureValuesTable(rows, alias)
+	}
+	return ClosureValuesTable(values, alias)
+}
+
+// UsersetTable returns a userset VALUES table, preferring typed rows when available.
+func UsersetTable(rows []ValuesRow, values string, alias string) TableExpr {
+	if len(rows) > 0 {
+		return TypedUsersetValuesTable(rows, alias)
+	}
+	return UsersetValuesTable(values, alias)
+}
+
+// =============================================================================
 // SQL Formatting Helpers
 // =============================================================================
 

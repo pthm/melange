@@ -116,13 +116,14 @@ func UsersetCheck(input UsersetCheckInput) (string, error) {
 type UsersetSubjectSelfCheckInput struct {
 	ObjectType    string
 	Relation      string
-	ClosureValues string
+	ClosureValues string      // Deprecated: use ClosureRows
+	ClosureRows   []ValuesRow // Typed closure rows (preferred)
 }
 
 func UsersetSubjectSelfCheckQuery(input UsersetSubjectSelfCheckInput) (string, error) {
 	stmt := SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
-		FromExpr:    ClosureValuesTable(input.ClosureValues, "c"),
+		FromExpr:    ClosureTable(input.ClosureRows, input.ClosureValues, "c"),
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(input.ObjectType)},
 			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(input.Relation)},
@@ -139,8 +140,10 @@ func UsersetSubjectSelfCheckQuery(input UsersetSubjectSelfCheckInput) (string, e
 type UsersetSubjectComputedCheckInput struct {
 	ObjectType    string
 	Relation      string
-	ClosureValues string
-	UsersetValues string
+	ClosureValues string      // Deprecated: use ClosureRows
+	ClosureRows   []ValuesRow // Typed closure rows (preferred)
+	UsersetValues string      // Deprecated: use UsersetRows
+	UsersetRows   []ValuesRow // Typed userset rows (preferred)
 }
 
 func UsersetSubjectComputedCheckQuery(input UsersetSubjectComputedCheckInput) (string, error) {
@@ -150,7 +153,7 @@ func UsersetSubjectComputedCheckQuery(input UsersetSubjectComputedCheckInput) (s
 		Joins: []JoinClause{
 			{
 				Type:      "INNER",
-				TableExpr: ClosureValuesTable(input.ClosureValues, "c"),
+				TableExpr: ClosureTable(input.ClosureRows, input.ClosureValues, "c"),
 				On: And(
 					Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(input.ObjectType)},
 					Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(input.Relation)},
@@ -159,7 +162,7 @@ func UsersetSubjectComputedCheckQuery(input UsersetSubjectComputedCheckInput) (s
 			},
 			{
 				Type:      "INNER",
-				TableExpr: UsersetValuesTable(input.UsersetValues, "m"),
+				TableExpr: UsersetTable(input.UsersetRows, input.UsersetValues, "m"),
 				On: And(
 					Eq{Left: Col{Table: "m", Column: "object_type"}, Right: Lit(input.ObjectType)},
 					Eq{Left: Col{Table: "m", Column: "relation"}, Right: Col{Table: "c", Column: "satisfying_relation"}},
@@ -168,7 +171,7 @@ func UsersetSubjectComputedCheckQuery(input UsersetSubjectComputedCheckInput) (s
 			},
 			{
 				Type:      "INNER",
-				TableExpr: ClosureValuesTable(input.ClosureValues, "subj_c"),
+				TableExpr: ClosureTable(input.ClosureRows, input.ClosureValues, "subj_c"),
 				On: And(
 					Eq{Left: Col{Table: "subj_c", Column: "object_type"}, Right: Col{Table: "t", Column: "subject_type"}},
 					Eq{
@@ -202,39 +205,27 @@ func UsersetSubjectComputedCheckQuery(input UsersetSubjectComputedCheckInput) (s
 // Check Permission Expression Helpers
 // =============================================================================
 
-// CheckPermissionExprDSL returns a DSL expression for a check_permission call.
-func CheckPermissionExprDSL(functionName, subjectTypeExpr, subjectIDExpr, relation, objectTypeExpr, objectIDExpr string, expect bool) Expr {
-	result := "1"
-	if !expect {
-		result = "0"
+// CheckPermissionExpr returns a typed expression for a check_permission call.
+// Uses CheckPermissionCall with the existing typed Subject/Object refs.
+func CheckPermissionExpr(functionName string, subject SubjectRef, relation string, object ObjectRef, expect bool) Expr {
+	return CheckPermissionCall{
+		FunctionName: functionName,
+		Subject:      subject,
+		Relation:     relation,
+		Object:       object,
+		ExpectAllow:  expect,
 	}
-	return Raw(fmt.Sprintf(
-		"%s(%s, %s, '%s', %s, %s) = %s",
-		functionName,
-		subjectTypeExpr,
-		subjectIDExpr,
-		relation,
-		objectTypeExpr,
-		objectIDExpr,
-		result,
-	))
 }
 
-// CheckPermissionInternalExprDSL returns a DSL expression for a check_permission_internal call.
-func CheckPermissionInternalExprDSL(subjectTypeExpr, subjectIDExpr, relation, objectTypeExpr, objectIDExpr string, expect bool) Expr {
-	result := "1"
-	if !expect {
-		result = "0"
+// CheckPermissionInternalExpr returns a typed expression for check_permission_internal.
+// Uses CheckPermission with the existing typed Subject/Object refs.
+func CheckPermissionInternalExpr(subject SubjectRef, relation string, object ObjectRef, expect bool) Expr {
+	return CheckPermission{
+		Subject:     subject,
+		Relation:    relation,
+		Object:      object,
+		ExpectAllow: expect,
 	}
-	return Raw(fmt.Sprintf(
-		"check_permission_internal(%s, %s, '%s', %s, %s, ARRAY[]::TEXT[]) = %s",
-		subjectTypeExpr,
-		subjectIDExpr,
-		relation,
-		objectTypeExpr,
-		objectIDExpr,
-		result,
-	))
 }
 
 // RenderDSLExprs converts a slice of DSL expressions to SQL strings.

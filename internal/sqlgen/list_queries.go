@@ -35,7 +35,8 @@ func ListObjectsDirectQuery(input ListObjectsDirectInput) (string, error) {
 type ListObjectsUsersetSubjectInput struct {
 	ObjectType    string
 	Relations     []string
-	ClosureValues string
+	ClosureValues string      // Deprecated: use ClosureRows
+	ClosureRows   []ValuesRow // Typed closure rows (preferred)
 	Exclusions    ExclusionConfig
 }
 
@@ -43,7 +44,7 @@ func ListObjectsUsersetSubjectQuery(input ListObjectsUsersetSubjectInput) (strin
 	// Build the closure EXISTS subquery
 	closureExistsStmt := SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
-		FromExpr:    ClosureValuesTable(input.ClosureValues, "c"),
+		FromExpr:    ClosureTable(input.ClosureRows, input.ClosureValues, "c"),
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: SubjectType},
 			Eq{Left: Col{Table: "c", Column: "relation"}, Right: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}},
@@ -261,14 +262,15 @@ func ListObjectsUsersetPatternComplexQuery(input ListObjectsUsersetPatternComple
 type ListObjectsSelfCandidateInput struct {
 	ObjectType    string
 	Relation      string
-	ClosureValues string
+	ClosureValues string      // Deprecated: use ClosureRows
+	ClosureRows   []ValuesRow // Typed closure rows (preferred)
 }
 
 func ListObjectsSelfCandidateQuery(input ListObjectsSelfCandidateInput) (string, error) {
 	// Build the closure EXISTS subquery
 	closureExistsStmt := SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
-		FromExpr:    ClosureValuesTable(input.ClosureValues, "c"),
+		FromExpr:    ClosureTable(input.ClosureRows, input.ClosureValues, "c"),
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(input.ObjectType)},
 			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(input.Relation)},
@@ -373,7 +375,8 @@ type ListSubjectsUsersetFilterInput struct {
 	ObjectIDExpr        Expr
 	FilterTypeExpr      Expr
 	FilterRelationExpr  Expr
-	ClosureValues       string
+	ClosureValues       string      // Deprecated: use ClosureRows
+	ClosureRows         []ValuesRow // Typed closure rows (preferred)
 	UseTypeGuard        bool
 	ExtraPredicatesSQL  []string // Raw SQL predicate strings
 }
@@ -382,7 +385,7 @@ func ListSubjectsUsersetFilterQuery(input ListSubjectsUsersetFilterInput) (strin
 	// Build the closure EXISTS subquery
 	closureExistsStmt := SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
-		FromExpr:    ClosureValuesTable(input.ClosureValues, "subj_c"),
+		FromExpr:    ClosureTable(input.ClosureRows, input.ClosureValues, "subj_c"),
 		Where: And(
 			Eq{Left: Col{Table: "subj_c", Column: "object_type"}, Right: input.FilterTypeExpr},
 			Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: SubstringUsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}},
@@ -427,15 +430,16 @@ type ListSubjectsSelfCandidateInput struct {
 	ObjectIDExpr       Expr
 	FilterTypeExpr     Expr
 	FilterRelationExpr Expr
-	ClosureValues      string
-	ExtraPredicatesSQL []string // Raw SQL predicate strings
+	ClosureValues      string      // Deprecated: use ClosureRows
+	ClosureRows        []ValuesRow // Typed closure rows (preferred)
+	ExtraPredicatesSQL []string    // Raw SQL predicate strings
 }
 
 func ListSubjectsSelfCandidateQuery(input ListSubjectsSelfCandidateInput) (string, error) {
 	// Build the closure EXISTS subquery
 	closureExistsStmt := SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
-		FromExpr:    ClosureValuesTable(input.ClosureValues, "c"),
+		FromExpr:    ClosureTable(input.ClosureRows, input.ClosureValues, "c"),
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(input.ObjectType)},
 			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(input.Relation)},
