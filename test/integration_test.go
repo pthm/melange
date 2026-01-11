@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pthm/melange"
-	"github.com/pthm/melange/schema"
+	"github.com/pthm/melange/tooling/schema"
 	"github.com/pthm/melange/test/authz"
 	"github.com/pthm/melange/test/testutil"
 )

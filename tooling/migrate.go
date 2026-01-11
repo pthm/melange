@@ -6,39 +6,55 @@ import (
 	"io"
 	"os"
 
-	"github.com/pthm/melange/schema"
+	"github.com/pthm/melange/tooling/schema"
 )
 
 // MigrateOptions controls migration behavior.
 type MigrateOptions struct {
-	// DryRun outputs SQL to the provided writer without applying changes.
-	// If nil, migration proceeds normally.
+	// DryRun outputs SQL to the provided writer without applying changes to the database.
+	// Use this to preview migrations, generate migration scripts, or validate schema changes.
+	// If nil, migration proceeds normally and executes against the database.
 	DryRun io.Writer
 
-	// Force re-runs migration even if schema/codegen unchanged.
+	// Force re-runs migration even if schema checksum and codegen version are unchanged.
+	// By default, migrations are skipped when the schema.fga content and CodegenVersion
+	// match the last successful migration. Set Force to true when manually fixing
+	// corrupted state or testing migration logic.
 	Force bool
 }
 
-// Migrate is a convenience function that parses a schema file and applies it
-// to the database. This combines ParseSchema + schema.ToAuthzModels +
-// schema.MigrateWithTypes into a single operation.
+// Migrate parses an OpenFGA schema file and applies it to the database in one operation.
+// This is the recommended high-level API for most applications.
 //
-// The migration process:
+// The function is idempotent - safe to call on every application startup. It validates
+// the schema, generates specialized SQL functions per relation, and applies everything
+// atomically within a transaction (when db supports BeginTx).
+//
+// Migration workflow:
 //  1. Reads schemasDir/schema.fga
 //  2. Parses OpenFGA DSL using the official parser
-//  3. Validates schema (detects cycles)
-//  4. Applies DDL (creates tables and functions)
-//  5. Converts to authorization models and loads into PostgreSQL
+//  3. Validates schema (cycle detection, referential integrity)
+//  4. Generates specialized check_permission and list_accessible functions
+//  5. Applies generated SQL atomically via transaction
 //
-// For more control over the migration process, use the individual functions:
+// The schemasDir should contain a single schema.fga file in OpenFGA DSL format:
 //
-//	types, err := tooling.ParseSchema(path)
-//	models := schema.ToAuthzModels(types)
-//	migrator := schema.NewMigrator(db, schemasDir)
-//	err = migrator.MigrateWithTypes(ctx, types)
+//	schemas/
+//	  schema.fga
 //
-// The migration is idempotent and transactional (when using *sql.DB).
-// Safe to run on application startup.
+// Example usage on application startup:
+//
+//	if err := tooling.Migrate(ctx, db, "schemas"); err != nil {
+//	    log.Fatalf("migration failed: %v", err)
+//	}
+//
+// For embedded schemas (no file I/O), use MigrateFromString.
+// For fine-grained control (dry-run, skip optimization), use MigrateWithOptions.
+// For programmatic use with pre-parsed types, use schema.Migrator directly:
+//
+//	types, _ := tooling.ParseSchema("schemas/schema.fga")
+//	migrator := schema.NewMigrator(db, "schemas")
+//	err := migrator.MigrateWithTypes(ctx, types)
 func Migrate(ctx context.Context, db schema.Execer, schemasDir string) error {
 	migrator := schema.NewMigrator(db, schemasDir)
 
@@ -78,11 +94,31 @@ func MigrateFromString(ctx context.Context, db schema.Execer, content string) er
 	return migrator.MigrateWithTypes(ctx, types)
 }
 
-// MigrateWithOptions is like Migrate but with additional options for dry-run,
-// force, and skip-if-unchanged behavior.
+// MigrateWithOptions performs migration with control over dry-run and skip behavior.
+// Use this when you need to preview migrations, force re-application, or detect skips.
 //
-// Returns (skipped, error) where skipped is true if migration was skipped
-// because the schema is unchanged (and Force is false).
+// The skip-if-unchanged optimization compares the schema.fga content hash and codegen
+// version against the last successful migration. If both match and Force is false,
+// the migration is skipped (skipped=true). This avoids redundant function regeneration
+// on every application restart when schemas are stable.
+//
+// Returns (skipped, error):
+//   - skipped=true if migration was skipped due to unchanged schema (only when Force=false and DryRun=nil)
+//   - error is non-nil if migration failed (parse error, validation error, DB error)
+//
+// Example: Generate migration script without applying
+//
+//	var buf bytes.Buffer
+//	_, err := tooling.MigrateWithOptions(ctx, db, "schemas", tooling.MigrateOptions{
+//	    DryRun: &buf,
+//	})
+//	os.WriteFile("migrations/001_authz.sql", buf.Bytes(), 0644)
+//
+// Example: Force re-migration (e.g., after manual schema corruption)
+//
+//	skipped, err := tooling.MigrateWithOptions(ctx, db, "schemas", tooling.MigrateOptions{
+//	    Force: true,
+//	})
 func MigrateWithOptions(ctx context.Context, db schema.Execer, schemasDir string, opts MigrateOptions) (skipped bool, err error) {
 	migrator := schema.NewMigrator(db, schemasDir)
 

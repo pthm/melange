@@ -29,7 +29,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/pthm/melange"
-	"github.com/pthm/melange/schema"
+	"github.com/pthm/melange/tooling/schema"
 	"github.com/pthm/melange/test/testutil"
 	"github.com/pthm/melange/tooling"
 )

@@ -2,25 +2,11 @@ package schema
 
 import (
 	"bytes"
-	"embed"
 	"fmt"
 	"strings"
-	"text/template"
+
+	"github.com/pthm/melange/tooling/schema/sqlgen"
 )
-
-//go:embed templates/*.tpl.sql
-var templatesFS embed.FS
-
-// templates holds the parsed SQL templates.
-var templates *template.Template
-
-func init() {
-	var err error
-	templates, err = template.ParseFS(templatesFS, "templates/*.tpl.sql")
-	if err != nil {
-		panic(fmt.Sprintf("failed to parse SQL templates: %v", err))
-	}
-}
 
 // formatSQLStringList formats a list of strings as a SQL-safe list.
 // For example, ["user", "org"] becomes "'user', 'org'".
@@ -34,6 +20,48 @@ func formatSQLStringList(items []string) string {
 		quoted[i] = fmt.Sprintf("'%s'", item)
 	}
 	return strings.Join(quoted, ", ")
+}
+
+func buildAllowedSubjectTypeList(a RelationAnalysis, emptyValue string) string {
+	subjectTypes := a.AllowedSubjectTypes
+	if len(subjectTypes) == 0 {
+		// Fallback to direct subject types if allowed types not computed.
+		subjectTypes = a.DirectSubjectTypes
+	}
+	if len(subjectTypes) == 0 {
+		return emptyValue
+	}
+	return formatSQLStringList(subjectTypes)
+}
+
+func allowedSubjectTypesForCheck(a RelationAnalysis) []string {
+	subjectTypes := a.AllowedSubjectTypes
+	if len(subjectTypes) == 0 {
+		subjectTypes = a.DirectSubjectTypes
+	}
+	return subjectTypes
+}
+
+// buildTupleLookupRelationList builds a SQL list of relations that can be resolved
+// via tuple lookup for the current relation.
+func buildTupleLookupRelationList(a RelationAnalysis) string {
+	return formatSQLStringList(buildTupleLookupRelations(a))
+}
+
+func buildTupleLookupRelations(a RelationAnalysis) []string {
+	// Build relation list from self + simple closure relations.
+	relations := []string{a.Relation}
+	relations = append(relations, a.SimpleClosureRelations...)
+
+	// Fallback to satisfying relations only if no partition was computed at all
+	// (for backwards compatibility when closure relations not yet partitioned).
+	// If ComplexClosureRelations is non-empty, the partition was computed and
+	// we should use only the simple relations (even if that's just self).
+	if len(a.SimpleClosureRelations) == 0 && len(a.ComplexClosureRelations) == 0 && len(a.SatisfyingRelations) > 0 {
+		relations = a.SatisfyingRelations
+	}
+
+	return relations
 }
 
 // GeneratedSQL contains all SQL generated for a schema.
@@ -210,25 +238,7 @@ type ParentRelationData struct {
 
 // generateCheckFunction generates a specialized check function for a relation.
 func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, noWildcard bool) (string, error) {
-	data, err := buildCheckFunctionData(a, inline, noWildcard)
-	if err != nil {
-		return "", fmt.Errorf("building template data for %s.%s: %w", a.ObjectType, a.Relation, err)
-	}
-
-	// Choose template based on whether we need PL/pgSQL.
-	// PL/pgSQL is required for:
-	// - Recursive patterns (TTU) that need cycle detection
-	// - Complex userset patterns that call check_permission_internal and may create cycles
-	templateName := "check_sql.tpl.sql"
-	if a.Features.NeedsPLpgSQL() || a.HasComplexUsersetPatterns {
-		templateName = "check_plpgsql.tpl.sql"
-	}
-
-	var buf bytes.Buffer
-	if err := templates.ExecuteTemplate(&buf, templateName, data); err != nil {
-		return "", fmt.Errorf("executing template %s for %s.%s: %w", templateName, a.ObjectType, a.Relation, err)
-	}
-	return buf.String(), nil
+	return generateCheckFunctionBob(a, inline, noWildcard)
 }
 
 // buildCheckFunctionData constructs template data from RelationAnalysis.
@@ -288,11 +298,7 @@ func buildCheckFunctionData(a RelationAnalysis, inline InlineSQLData, noWildcard
 		// Format allowed linking types as SQL list (e.g., "'group1', 'group2'")
 		var allowedTypes string
 		if len(parent.AllowedLinkingTypes) > 0 {
-			quoted := make([]string, len(parent.AllowedLinkingTypes))
-			for i, t := range parent.AllowedLinkingTypes {
-				quoted[i] = fmt.Sprintf("'%s'", t)
-			}
-			allowedTypes = strings.Join(quoted, ", ")
+			allowedTypes = formatSQLStringList(parent.AllowedLinkingTypes)
 		}
 		data.ParentRelations = append(data.ParentRelations, ParentRelationData{
 			LinkingRelation:     parent.LinkingRelation,
@@ -311,13 +317,13 @@ func buildCheckFunctionData(a RelationAnalysis, inline InlineSQLData, noWildcard
 	// When an intersection contains a "This" pattern (e.g., "viewer: [user] and writer"),
 	// the direct types are constrained by the intersection and should NOT be treated as
 	// standalone access paths.
-	data.HasStandaloneAccess = computeHasStandaloneAccess(a, data.IntersectionGroups)
+	data.HasStandaloneAccess = computeHasStandaloneAccess(a)
 
 	return data, nil
 }
 
 // computeHasStandaloneAccess determines if the relation has access paths outside of intersections.
-func computeHasStandaloneAccess(a RelationAnalysis, intersectionGroups []IntersectionGroupData) bool {
+func computeHasStandaloneAccess(a RelationAnalysis) bool {
 	// If no intersection, all access paths are standalone
 	if !a.Features.HasIntersection {
 		return a.Features.HasDirect || a.Features.HasImplied || a.Features.HasUserset || a.Features.HasRecursive
@@ -326,7 +332,7 @@ func computeHasStandaloneAccess(a RelationAnalysis, intersectionGroups []Interse
 	// Check if any intersection group has a "This" part, meaning direct access is
 	// constrained by the intersection rather than being standalone.
 	hasIntersectionWithThis := false
-	for _, group := range intersectionGroups {
+	for _, group := range a.IntersectionGroups {
 		for _, part := range group.Parts {
 			if part.IsThis {
 				hasIntersectionWithThis = true
@@ -425,63 +431,17 @@ type DirectCheckData struct {
 func buildDirectCheck(a RelationAnalysis, allowWildcard bool) (string, error) {
 	// If there are no allowed subject types, the direct check can never match.
 	// Return FALSE to avoid generating invalid SQL like "subject_type IN ()".
-	if len(a.AllowedSubjectTypes) == 0 && len(a.DirectSubjectTypes) == 0 {
+	subjectTypes := allowedSubjectTypesForCheck(a)
+	if len(subjectTypes) == 0 {
 		return "FALSE", nil
 	}
 
-	// Build relation list from self + simple closure relations
-	// Complex closure relations are handled via function calls, not tuple lookup
-	relations := []string{a.Relation}
-	relations = append(relations, a.SimpleClosureRelations...)
-
-	// Fallback to satisfying relations only if no partition was computed at all
-	// (for backwards compatibility when closure relations not yet partitioned).
-	// If ComplexClosureRelations is non-empty, the partition was computed and
-	// we should use only the simple relations (even if that's just self).
-	if len(a.SimpleClosureRelations) == 0 && len(a.ComplexClosureRelations) == 0 && len(a.SatisfyingRelations) > 0 {
-		relations = a.SatisfyingRelations
-	}
-
-	relationList := make([]string, len(relations))
-	for i, r := range relations {
-		relationList[i] = fmt.Sprintf("'%s'", r)
-	}
-
-	// Build subject type filter from allowed types
-	// This ensures type restrictions from the model are enforced
-	subjectTypes := a.AllowedSubjectTypes
-	if len(subjectTypes) == 0 {
-		// Fallback to direct subject types if allowed types not computed
-		subjectTypes = a.DirectSubjectTypes
-	}
-	subjectTypeList := make([]string, len(subjectTypes))
-	for i, t := range subjectTypes {
-		subjectTypeList[i] = fmt.Sprintf("'%s'", t)
-	}
-
-	// Build subject_id check (with or without wildcard)
-	// When HasWildcard is true: allow wildcard tuples to grant access to any subject
-	// When HasWildcard is false: don't match wildcard tuples (they're invalid per the model)
-	var subjectIDCheck string
-	if allowWildcard {
-		subjectIDCheck = "(subject_id = p_subject_id OR subject_id = '*')"
-	} else {
-		// Exclude wildcard tuples - they shouldn't grant access when model doesn't allow wildcards
-		subjectIDCheck = "subject_id = p_subject_id AND subject_id != '*'"
-	}
-
-	data := DirectCheckData{
-		ObjectType:        a.ObjectType,
-		RelationList:      strings.Join(relationList, ", "),
-		SubjectTypeFilter: strings.Join(subjectTypeList, ", "),
-		SubjectIDCheck:    subjectIDCheck,
-	}
-
-	var buf bytes.Buffer
-	if err := templates.ExecuteTemplate(&buf, "direct_check.tpl.sql", data); err != nil {
-		return "", fmt.Errorf("executing direct_check template: %w", err)
-	}
-	return strings.TrimSpace(buf.String()), nil
+	return sqlgen.DirectCheck(sqlgen.DirectCheckInput{
+		ObjectType:    a.ObjectType,
+		Relations:     buildTupleLookupRelations(a),
+		SubjectTypes:  subjectTypes,
+		AllowWildcard: allowWildcard,
+	})
 }
 
 // UsersetCheckData contains data for rendering userset check template.
@@ -527,16 +487,11 @@ func buildUsersetCheck(a RelationAnalysis, allowWildcard bool, internalCheckFn s
 			// Complex pattern: use check_permission_internal to verify membership.
 			// This handles cases where the userset closure contains relations with
 			// exclusions, usersets, TTU, or intersections.
-			data := ComplexUsersetCheckData{
-				ObjectType:                a.ObjectType,
-				Relation:                  a.Relation,
-				SubjectType:               pattern.SubjectType,
-				SubjectRelation:           pattern.SubjectRelation,
-				InternalCheckFunctionName: internalCheckFn,
+			usersetSQL, err := buildComplexUsersetCheck(a, pattern, internalCheckFn)
+			if err != nil {
+				return "", fmt.Errorf("building complex userset check for %s#%s: %w", pattern.SubjectType, pattern.SubjectRelation, err)
 			}
-			if err := templates.ExecuteTemplate(&buf, "complex_userset_check.tpl.sql", data); err != nil {
-				return "", fmt.Errorf("executing complex_userset_check template for %s#%s: %w", pattern.SubjectType, pattern.SubjectRelation, err)
-			}
+			buf.WriteString(usersetSQL)
 		} else {
 			// Simple pattern: use tuple JOIN for membership lookup.
 			// Build SQL-formatted list of satisfying relations for the subject relation.
@@ -547,23 +502,18 @@ func buildUsersetCheck(a RelationAnalysis, allowWildcard bool, internalCheckFn s
 				// Fallback: use just the subject relation itself
 				satisfyingRels = []string{pattern.SubjectRelation}
 			}
-			quotedRels := make([]string, len(satisfyingRels))
-			for i, rel := range satisfyingRels {
-				quotedRels[i] = fmt.Sprintf("'%s'", rel)
+			usersetSQL, err := sqlgen.UsersetCheck(sqlgen.UsersetCheckInput{
+				ObjectType:          a.ObjectType,
+				Relation:            a.Relation,
+				SubjectType:         pattern.SubjectType,
+				SubjectRelation:     pattern.SubjectRelation,
+				SatisfyingRelations: satisfyingRels,
+				AllowWildcard:       pattern.HasWildcard && allowWildcard,
+			})
+			if err != nil {
+				return "", fmt.Errorf("building userset_check query for %s#%s: %w", pattern.SubjectType, pattern.SubjectRelation, err)
 			}
-
-			data := UsersetCheckData{
-				ObjectType:                a.ObjectType,
-				Relation:                  a.Relation,
-				SubjectType:               pattern.SubjectType,
-				SubjectRelation:           pattern.SubjectRelation,
-				SatisfyingRelationsList:   strings.Join(quotedRels, ", "),
-				HasWildcard:               pattern.HasWildcard && allowWildcard,
-				InternalCheckFunctionName: internalCheckFn,
-			}
-			if err := templates.ExecuteTemplate(&buf, "userset_check.tpl.sql", data); err != nil {
-				return "", fmt.Errorf("executing userset_check template for %s#%s: %w", pattern.SubjectType, pattern.SubjectRelation, err)
-			}
+			buf.WriteString(usersetSQL)
 		}
 		checks = append(checks, strings.TrimSpace(buf.String()))
 	}
@@ -630,17 +580,15 @@ func buildExclusionCheck(a RelationAnalysis, _ bool, internalCheckFn string) (st
 			// For example: "can_read_safe: can_read but not banned" where "banned: [user:*]"
 			// If there are no wildcard tuples, the check is harmless.
 			// This matches list_objects_exclusion.tpl.sql behavior.
-			subjectIDCheck := "(subject_id = p_subject_id OR subject_id = '*')"
-			data := ExclusionCheckData{
+			exclusionSQL, err := sqlgen.ExclusionCheck(sqlgen.ExclusionCheckInput{
 				ObjectType:       a.ObjectType,
 				ExcludedRelation: excl,
-				SubjectIDCheck:   subjectIDCheck,
+				AllowWildcard:    true,
+			})
+			if err != nil {
+				return "", fmt.Errorf("building exclusion_check query for %s: %w", excl, err)
 			}
-			var buf bytes.Buffer
-			if err := templates.ExecuteTemplate(&buf, "exclusion_check.tpl.sql", data); err != nil {
-				return "", fmt.Errorf("executing exclusion_check template for %s: %w", excl, err)
-			}
-			checks = append(checks, strings.TrimSpace(buf.String()))
+			checks = append(checks, strings.TrimSpace(exclusionSQL))
 		}
 		return strings.Join(checks, " OR "), nil
 	}
@@ -654,47 +602,29 @@ func buildExclusionCheck(a RelationAnalysis, _ bool, internalCheckFn string) (st
 		// For example: "can_read_safe: can_read but not banned" where "banned: [user:*]"
 		// If there are no wildcard tuples, the check is harmless.
 		// This matches list_objects_exclusion.tpl.sql behavior.
-		subjectIDCheck := "(subject_id = p_subject_id OR subject_id = '*')"
-		data := ExclusionCheckData{
+		exclusionSQL, err := sqlgen.ExclusionCheck(sqlgen.ExclusionCheckInput{
 			ObjectType:       a.ObjectType,
 			ExcludedRelation: excl,
-			SubjectIDCheck:   subjectIDCheck,
+			AllowWildcard:    true,
+		})
+		if err != nil {
+			return "", fmt.Errorf("building exclusion_check query for %s: %w", excl, err)
 		}
-		var buf bytes.Buffer
-		if err := templates.ExecuteTemplate(&buf, "exclusion_check.tpl.sql", data); err != nil {
-			return "", fmt.Errorf("executing exclusion_check template for %s: %w", excl, err)
-		}
-		checks = append(checks, strings.TrimSpace(buf.String()))
+		checks = append(checks, strings.TrimSpace(exclusionSQL))
 	}
 
 	// Complex exclusions: use check_permission_internal
 	for _, excl := range a.ComplexExcludedRelations {
-		data := ComplexExclusionCheckData{
-			ObjectType:                a.ObjectType,
-			ExcludedRelation:          excl,
-			InternalCheckFunctionName: internalCheckFn,
-		}
-		var buf bytes.Buffer
-		if err := templates.ExecuteTemplate(&buf, "complex_exclusion_check.tpl.sql", data); err != nil {
-			return "", fmt.Errorf("executing complex_exclusion_check template for %s: %w", excl, err)
-		}
-		checks = append(checks, strings.TrimSpace(buf.String()))
+		checks = append(checks, buildComplexExclusionCheck(a.ObjectType, excl, internalCheckFn))
 	}
 
 	// TTU exclusions: "but not X from Y" patterns
 	for _, excl := range a.ExcludedParentRelations {
-		data := TTUExclusionCheckData{
-			ObjectType:                a.ObjectType,
-			ExcludedRelation:          excl.Relation,
-			LinkingRelation:           excl.LinkingRelation,
-			AllowedLinkingTypes:       formatSQLStringList(excl.AllowedLinkingTypes),
-			InternalCheckFunctionName: internalCheckFn,
+		exclusionSQL, err := buildTTUExclusionCheck(a.ObjectType, excl, internalCheckFn)
+		if err != nil {
+			return "", fmt.Errorf("building TTU exclusion check for %s from %s: %w", excl.Relation, excl.LinkingRelation, err)
 		}
-		var buf bytes.Buffer
-		if err := templates.ExecuteTemplate(&buf, "ttu_exclusion_check.tpl.sql", data); err != nil {
-			return "", fmt.Errorf("executing ttu_exclusion_check template for %s from %s: %w", excl.Relation, excl.LinkingRelation, err)
-		}
-		checks = append(checks, strings.TrimSpace(buf.String()))
+		checks = append(checks, strings.TrimSpace(exclusionSQL))
 	}
 
 	// Intersection exclusions: "but not (A and B)" or "but not (A but not B)" patterns
@@ -704,18 +634,15 @@ func buildExclusionCheck(a RelationAnalysis, _ bool, internalCheckFn string) (st
 			switch {
 			case part.ParentRelation != nil:
 				// TTU part within intersection exclusion
-				data := TTUExclusionCheckData{
-					ObjectType:                a.ObjectType,
-					ExcludedRelation:          part.ParentRelation.Relation,
-					LinkingRelation:           part.ParentRelation.LinkingRelation,
-					AllowedLinkingTypes:       formatSQLStringList(part.ParentRelation.AllowedLinkingTypes),
-					InternalCheckFunctionName: internalCheckFn,
+				exclusionSQL, err := buildTTUExclusionCheck(a.ObjectType, ParentRelationInfo{
+					Relation:            part.ParentRelation.Relation,
+					LinkingRelation:     part.ParentRelation.LinkingRelation,
+					AllowedLinkingTypes: part.ParentRelation.AllowedLinkingTypes,
+				}, internalCheckFn)
+				if err != nil {
+					return "", fmt.Errorf("building ttu exclusion check for intersection: %w", err)
 				}
-				var buf bytes.Buffer
-				if err := templates.ExecuteTemplate(&buf, "ttu_exclusion_check.tpl.sql", data); err != nil {
-					return "", fmt.Errorf("executing ttu_exclusion_check template for intersection: %w", err)
-				}
-				parts = append(parts, strings.TrimSpace(buf.String()))
+				parts = append(parts, strings.TrimSpace(exclusionSQL))
 			case part.ExcludedRelation != "":
 				// Nested exclusion: "editor but not owner" in the exclusion
 				// The exclusion applies when: part.Relation AND NOT part.ExcludedRelation
@@ -729,16 +656,7 @@ func buildExclusionCheck(a RelationAnalysis, _ bool, internalCheckFn string) (st
 				parts = append(parts, "("+mainCheck+" AND "+excludeCheck+")")
 			default:
 				// Regular relation part
-				data := ComplexExclusionCheckData{
-					ObjectType:                a.ObjectType,
-					ExcludedRelation:          part.Relation,
-					InternalCheckFunctionName: internalCheckFn,
-				}
-				var buf bytes.Buffer
-				if err := templates.ExecuteTemplate(&buf, "complex_exclusion_check.tpl.sql", data); err != nil {
-					return "", fmt.Errorf("executing complex_exclusion_check template for intersection part %s: %w", part.Relation, err)
-				}
-				parts = append(parts, strings.TrimSpace(buf.String()))
+				parts = append(parts, buildComplexExclusionCheck(a.ObjectType, part.Relation, internalCheckFn))
 			}
 		}
 		if len(parts) > 0 {
@@ -769,36 +687,7 @@ type DispatcherCase struct {
 
 // generateDispatcher generates the check_permission dispatcher function.
 func generateDispatcher(analyses []RelationAnalysis, noWildcard bool) (string, error) {
-	data := DispatcherData{
-		FunctionName: "check_permission",
-	}
-	if noWildcard {
-		data.FunctionName = "check_permission_no_wildcard"
-	}
-
-	// Build CASE branches for dispatchers.
-	for _, a := range analyses {
-		if !a.CanGenerate {
-			continue
-		}
-		checkFn := functionName(a.ObjectType, a.Relation)
-		if noWildcard {
-			checkFn = functionNameNoWildcard(a.ObjectType, a.Relation)
-		}
-		data.Cases = append(data.Cases, DispatcherCase{
-			ObjectType:        a.ObjectType,
-			Relation:          a.Relation,
-			CheckFunctionName: checkFn,
-		})
-	}
-
-	data.HasSpecializedFunctions = len(data.Cases) > 0
-
-	var buf bytes.Buffer
-	if err := templates.ExecuteTemplate(&buf, "dispatcher.tpl.sql", data); err != nil {
-		return "", fmt.Errorf("executing dispatcher template: %w", err)
-	}
-	return buf.String(), nil
+	return generateDispatcherBob(analyses, noWildcard)
 }
 
 // CollectFunctionNames returns all function names that will be generated for the given analyses.

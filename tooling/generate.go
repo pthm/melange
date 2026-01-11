@@ -3,7 +3,7 @@ package tooling
 import (
 	"io"
 
-	"github.com/pthm/melange/schema"
+	"github.com/pthm/melange/tooling/schema"
 )
 
 // GenerateConfig is an alias for schema.GenerateConfig.
@@ -17,23 +17,40 @@ func DefaultGenerateConfig() *GenerateConfig {
 	return schema.DefaultGenerateConfig()
 }
 
-// GenerateGo writes Go code for the types and relations from a parsed schema.
-// This is a convenience re-export of schema.GenerateGo.
+// GenerateGo writes type-safe Go code from a parsed OpenFGA schema.
+// This is a convenience re-export of schema.GenerateGo for use in build tooling.
 //
-// The generated code includes:
+// Code generation enables compile-time checking of authorization logic by
+// generating constants for object types and relations. Instead of error-prone
+// string literals, use generated types:
+//
+//	// Before: fragile, typos caught at runtime
+//	checker.Check(ctx, user, "can_raed", repo) // typo!
+//
+//	// After: type-safe, typos caught at compile time
+//	checker.Check(ctx, user, authz.RelCanRead, repo)
+//
+// Generated code includes:
 //   - ObjectType constants (TypeUser, TypeRepository, etc.)
 //   - Relation constants (RelCanRead, RelOwner, etc.)
 //   - Constructor functions (User(id), Repository(id), etc.)
 //   - Wildcard constructors (AnyUser(), AnyRepository(), etc.)
 //
-// Example:
+// Typical workflow (run via go:generate or build script):
+//
+//	//go:generate go run scripts/generate-authz.go
 //
 //	types, _ := tooling.ParseSchema("schemas/schema.fga")
 //	f, _ := os.Create("internal/authz/schema_gen.go")
+//	defer f.Close()
+//
 //	tooling.GenerateGo(f, types, &tooling.GenerateConfig{
 //	    Package: "authz",
-//	    IDType:  "int64",
+//	    IDType:  "string", // or "int64" if using integer IDs
 //	})
+//
+// The generated file should be committed to version control to enable
+// compile-time validation across the team without requiring schema access.
 func GenerateGo(w io.Writer, types []schema.TypeDefinition, cfg *GenerateConfig) error {
 	return schema.GenerateGo(w, types, cfg)
 }

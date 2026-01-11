@@ -1,10 +1,6 @@
 package schema
 
-import (
-	"bytes"
-	"fmt"
-	"strings"
-)
+import "fmt"
 
 // ListGeneratedSQL contains all SQL generated for list functions.
 // This is separate from check function generation to keep concerns isolated.
@@ -153,11 +149,22 @@ func generateListObjectsFunction(a RelationAnalysis, inline InlineSQLData) (stri
 	// Select appropriate template based on features
 	templateName := selectListObjectsTemplate(a)
 
-	var buf bytes.Buffer
-	if err := templates.ExecuteTemplate(&buf, templateName, data); err != nil {
-		return "", fmt.Errorf("executing list_objects template %s: %w", templateName, err)
+	switch templateName {
+	case "list_objects_direct.tpl.sql",
+		"list_objects_exclusion.tpl.sql",
+		"list_objects_userset.tpl.sql",
+		"list_objects_recursive.tpl.sql",
+		"list_objects_intersection.tpl.sql":
+		return generateListObjectsFunctionBob(a, inline, templateName)
+	case "list_objects_depth_exceeded.tpl.sql":
+		return generateListObjectsDepthExceededFunctionBob(a), nil
+	case "list_objects_self_ref_userset.tpl.sql":
+		return generateListObjectsSelfRefUsersetFunctionBob(a, inline)
+	case "list_objects_composed.tpl.sql":
+		return generateListObjectsComposedFunctionBob(a, inline)
+	default:
+		return "", fmt.Errorf("unknown list_objects template %s", templateName)
 	}
-	return buf.String(), nil
 }
 
 // selectListObjectsTemplate selects the appropriate list_objects template based on features.
@@ -271,11 +278,22 @@ func generateListSubjectsFunction(a RelationAnalysis, inline InlineSQLData) (str
 	// Select appropriate template based on features
 	templateName := selectListSubjectsTemplate(a)
 
-	var buf bytes.Buffer
-	if err := templates.ExecuteTemplate(&buf, templateName, data); err != nil {
-		return "", fmt.Errorf("executing list_subjects template %s: %w", templateName, err)
+	switch templateName {
+	case "list_subjects_direct.tpl.sql",
+		"list_subjects_exclusion.tpl.sql",
+		"list_subjects_userset.tpl.sql",
+		"list_subjects_recursive.tpl.sql",
+		"list_subjects_intersection.tpl.sql":
+		return generateListSubjectsFunctionBob(a, inline, templateName)
+	case "list_subjects_depth_exceeded.tpl.sql":
+		return generateListSubjectsDepthExceededFunctionBob(a), nil
+	case "list_subjects_self_ref_userset.tpl.sql":
+		return generateListSubjectsSelfRefUsersetFunctionBob(a, inline)
+	case "list_subjects_composed.tpl.sql":
+		return generateListSubjectsComposedFunctionBob(a, inline)
+	default:
+		return "", fmt.Errorf("unknown list_subjects template %s", templateName)
 	}
-	return buf.String(), nil
 }
 
 // selectListSubjectsTemplate selects the appropriate list_subjects template based on features.
@@ -593,57 +611,13 @@ type ListDispatcherCase struct {
 // generateListObjectsDispatcher generates the list_accessible_objects dispatcher.
 // For Phase 1, this always falls through to the generic implementation.
 func generateListObjectsDispatcher(analyses []RelationAnalysis) (string, error) {
-	data := ListDispatcherData{
-		HasSpecializedFunctions: false,
-		Cases:                   nil,
-	}
-
-	// Build cases for relations that can be generated
-	for _, a := range analyses {
-		if !a.CanGenerateList() {
-			continue
-		}
-		data.Cases = append(data.Cases, ListDispatcherCase{
-			ObjectType:   a.ObjectType,
-			Relation:     a.Relation,
-			FunctionName: listObjectsFunctionName(a.ObjectType, a.Relation),
-		})
-	}
-	data.HasSpecializedFunctions = len(data.Cases) > 0
-
-	var buf bytes.Buffer
-	if err := templates.ExecuteTemplate(&buf, "list_objects_dispatcher.tpl.sql", data); err != nil {
-		return "", fmt.Errorf("executing list_objects_dispatcher template: %w", err)
-	}
-	return buf.String(), nil
+	return generateListObjectsDispatcherBob(analyses)
 }
 
 // generateListSubjectsDispatcher generates the list_accessible_subjects dispatcher.
 // For Phase 1, this always falls through to the generic implementation.
 func generateListSubjectsDispatcher(analyses []RelationAnalysis) (string, error) {
-	data := ListDispatcherData{
-		HasSpecializedFunctions: false,
-		Cases:                   nil,
-	}
-
-	// Build cases for relations that can be generated
-	for _, a := range analyses {
-		if !a.CanGenerateList() {
-			continue
-		}
-		data.Cases = append(data.Cases, ListDispatcherCase{
-			ObjectType:   a.ObjectType,
-			Relation:     a.Relation,
-			FunctionName: listSubjectsFunctionName(a.ObjectType, a.Relation),
-		})
-	}
-	data.HasSpecializedFunctions = len(data.Cases) > 0
-
-	var buf bytes.Buffer
-	if err := templates.ExecuteTemplate(&buf, "list_subjects_dispatcher.tpl.sql", data); err != nil {
-		return "", fmt.Errorf("executing list_subjects_dispatcher template: %w", err)
-	}
-	return buf.String(), nil
+	return generateListSubjectsDispatcherBob(analyses)
 }
 
 // buildRelationList builds a SQL-formatted list of simple relations from the closure.
@@ -651,24 +625,7 @@ func generateListSubjectsDispatcher(analyses []RelationAnalysis) (string, error)
 // Only includes relations that can be resolved via tuple lookup (SimpleClosureRelations).
 // Complex closure relations (with exclusions, etc.) are handled separately via check_permission_internal.
 func buildRelationList(a RelationAnalysis) string {
-	// Build relation list from self + simple closure relations
-	// Complex closure relations are handled via function calls, not tuple lookup
-	relations := []string{a.Relation}
-	relations = append(relations, a.SimpleClosureRelations...)
-
-	// Fallback to satisfying relations only if no partition was computed at all
-	// (for backwards compatibility when closure relations not yet partitioned).
-	// If ComplexClosureRelations is non-empty, the partition was computed and
-	// we should use only the simple relations (even if that's just self).
-	if len(a.SimpleClosureRelations) == 0 && len(a.ComplexClosureRelations) == 0 && len(a.SatisfyingRelations) > 0 {
-		relations = a.SatisfyingRelations
-	}
-
-	quoted := make([]string, len(relations))
-	for i, r := range relations {
-		quoted[i] = fmt.Sprintf("'%s'", r)
-	}
-	return strings.Join(quoted, ", ")
+	return buildTupleLookupRelationList(a)
 }
 
 // buildSubjectIDCheck builds the SQL fragment for checking subject_id.
@@ -684,22 +641,7 @@ func buildSubjectIDCheck(hasWildcard bool) string {
 // buildAllowedSubjectTypes builds a SQL-formatted list of allowed subject types.
 // This enforces model type restrictions in list queries.
 func buildAllowedSubjectTypes(a RelationAnalysis) string {
-	// Use AllowedSubjectTypes if available (computed from closure)
-	types := a.AllowedSubjectTypes
-	if len(types) == 0 {
-		// Fallback to DirectSubjectTypes
-		types = a.DirectSubjectTypes
-	}
-	if len(types) == 0 {
-		// No types - return empty which will cause no matches
-		return "''"
-	}
-
-	quoted := make([]string, len(types))
-	for i, t := range types {
-		quoted[i] = fmt.Sprintf("'%s'", t)
-	}
-	return strings.Join(quoted, ", ")
+	return buildAllowedSubjectTypeList(a, "''")
 }
 
 // buildAllSatisfyingRelations builds a SQL-formatted list of ALL relations that satisfy this relation.
@@ -712,11 +654,7 @@ func buildAllSatisfyingRelations(a RelationAnalysis) string {
 		relations = []string{a.Relation}
 	}
 
-	quoted := make([]string, len(relations))
-	for i, r := range relations {
-		quoted[i] = fmt.Sprintf("'%s'", r)
-	}
-	return strings.Join(quoted, ", ")
+	return formatSQLStringList(relations)
 }
 
 // buildListUsersetPatterns builds template data for userset pattern expansion.
@@ -755,11 +693,7 @@ func buildListUsersetPatterns(a RelationAnalysis) []ListUsersetPatternData {
 			satisfying = []string{p.SubjectRelation}
 		}
 
-		quoted := make([]string, len(satisfying))
-		for i, r := range satisfying {
-			quoted[i] = fmt.Sprintf("'%s'", r)
-		}
-		pattern.SatisfyingRelationsList = strings.Join(quoted, ", ")
+		pattern.SatisfyingRelationsList = formatSQLStringList(satisfying)
 
 		patterns = append(patterns, pattern)
 	}
@@ -771,7 +705,7 @@ func buildListUsersetPatterns(a RelationAnalysis) []ListUsersetPatternData {
 			SubjectRelation:    p.SubjectRelation,
 			HasWildcard:        p.HasWildcard,
 			IsComplex:          p.IsComplex,
-			SourceRelationList: fmt.Sprintf("'%s'", p.SourceRelation), // Use source relation for closure patterns
+			SourceRelationList: formatSQLStringList([]string{p.SourceRelation}), // Use source relation for closure patterns
 			SourceRelation:     p.SourceRelation,
 			IsClosurePattern:   true, // Closure patterns need source relation verification
 			// Closure patterns are self-referential if they reference the same type and relation
@@ -785,11 +719,7 @@ func buildListUsersetPatterns(a RelationAnalysis) []ListUsersetPatternData {
 			satisfying = []string{p.SubjectRelation}
 		}
 
-		quoted := make([]string, len(satisfying))
-		for i, r := range satisfying {
-			quoted[i] = fmt.Sprintf("'%s'", r)
-		}
-		pattern.SatisfyingRelationsList = strings.Join(quoted, ", ")
+		pattern.SatisfyingRelationsList = formatSQLStringList(satisfying)
 
 		patterns = append(patterns, pattern)
 	}
@@ -833,27 +763,26 @@ func buildListParentRelations(a RelationAnalysis) []ListParentRelationData {
 		// Build SQL-formatted list of allowed linking types
 		// Also track cross-type (non-self-referential) types separately
 		if len(p.AllowedLinkingTypes) > 0 {
-			var allQuoted []string
-			var crossTypeQuoted []string
+			var allTypes []string
+			var crossTypes []string
 
 			for _, t := range p.AllowedLinkingTypes {
-				quoted := fmt.Sprintf("'%s'", t)
-				allQuoted = append(allQuoted, quoted)
+				allTypes = append(allTypes, t)
 
 				if t == a.ObjectType {
 					data.IsSelfReferential = true
 				} else {
-					crossTypeQuoted = append(crossTypeQuoted, quoted)
+					crossTypes = append(crossTypes, t)
 				}
 			}
 
-			data.AllowedLinkingTypes = strings.Join(allQuoted, ", ")
+			data.AllowedLinkingTypes = formatSQLStringList(allTypes)
 			data.ParentType = p.AllowedLinkingTypes[0]
 
 			// Set cross-type fields for generating check_permission_internal calls
 			// even when the relation has self-referential links
-			if len(crossTypeQuoted) > 0 {
-				data.CrossTypeLinkingTypes = strings.Join(crossTypeQuoted, ", ")
+			if len(crossTypes) > 0 {
+				data.CrossTypeLinkingTypes = formatSQLStringList(crossTypes)
 				data.HasCrossTypeLinks = true
 			}
 		}
@@ -874,7 +803,7 @@ func buildSelfReferentialLinkingRelations(parentRelations []ListParentRelationDa
 	for _, p := range parentRelations {
 		if p.IsSelfReferential && !seen[p.LinkingRelation] {
 			seen[p.LinkingRelation] = true
-			linkingRelations = append(linkingRelations, fmt.Sprintf("'%s'", p.LinkingRelation))
+			linkingRelations = append(linkingRelations, p.LinkingRelation)
 		}
 	}
 
@@ -882,7 +811,7 @@ func buildSelfReferentialLinkingRelations(parentRelations []ListParentRelationDa
 		return ""
 	}
 
-	return strings.Join(linkingRelations, ", ")
+	return formatSQLStringList(linkingRelations)
 }
 
 // buildListIndirectAnchorData builds template data for indirect anchor composed access.
@@ -931,11 +860,7 @@ func buildListIndirectAnchorData(a RelationAnalysis) *ListIndirectAnchorData {
 
 	// Build AllowedSubjectTypes from the relation's propagated types
 	if len(a.AllowedSubjectTypes) > 0 {
-		quoted := make([]string, len(a.AllowedSubjectTypes))
-		for i, t := range a.AllowedSubjectTypes {
-			quoted[i] = fmt.Sprintf("'%s'", t)
-		}
-		data.AnchorSubjectTypes = strings.Join(quoted, ", ")
+		data.AnchorSubjectTypes = formatSQLStringList(a.AllowedSubjectTypes)
 	} else {
 		data.AnchorSubjectTypes = "''"
 	}
@@ -949,34 +874,5 @@ func buildListIndirectAnchorData(a RelationAnalysis) *ListIndirectAnchorData {
 // This is similar to computeHasStandaloneAccess in codegen.go but adapted for list functions.
 // When false and HasIntersection is true, the only access is through intersection groups.
 func computeListHasStandaloneAccess(a RelationAnalysis) bool {
-	// If no intersection, all access paths are standalone
-	if !a.Features.HasIntersection {
-		return a.Features.HasDirect || a.Features.HasImplied || a.Features.HasUserset || a.Features.HasRecursive
-	}
-
-	// Check if any intersection group has a "This" part, meaning direct access is
-	// constrained by the intersection rather than being standalone.
-	hasIntersectionWithThis := false
-	for _, group := range a.IntersectionGroups {
-		for _, part := range group.Parts {
-			if part.IsThis {
-				hasIntersectionWithThis = true
-				break
-			}
-		}
-		if hasIntersectionWithThis {
-			break
-		}
-	}
-
-	// If direct types are inside an intersection (This pattern), don't count them as standalone.
-	// Userset patterns from subject type restrictions (e.g., [group#member]) are also part of
-	// the "This" pattern, so they shouldn't be standalone either.
-	// Check for other standalone access paths (implied, recursive).
-	hasStandaloneDirect := a.Features.HasDirect && !hasIntersectionWithThis
-	hasStandaloneImplied := a.Features.HasImplied
-	hasStandaloneUserset := a.Features.HasUserset && !hasIntersectionWithThis
-	hasStandaloneRecursive := a.Features.HasRecursive
-
-	return hasStandaloneDirect || hasStandaloneImplied || hasStandaloneUserset || hasStandaloneRecursive
+	return computeHasStandaloneAccess(a)
 }

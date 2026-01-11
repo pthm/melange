@@ -28,7 +28,7 @@ import (
 	"github.com/openfga/openfga/assets"
 	"sigs.k8s.io/yaml"
 
-	"github.com/pthm/melange/schema"
+	"github.com/pthm/melange/tooling/schema"
 	"github.com/pthm/melange/tooling"
 )
 

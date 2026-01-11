@@ -1,11 +1,65 @@
-// Package tooling provides schema parsing, code generation, and migration
-// utilities for melange authorization. This package depends on OpenFGA
-// for schema parsing, so it's separated from the core melange package
-// to keep runtime dependencies minimal.
+// Package tooling provides OpenFGA schema parsing, migration, and code generation
+// for melange authorization systems.
 //
-// Users who only need runtime permission checking should import
-// "github.com/pthm/melange" directly. Users who need programmatic
-// schema parsing or migration should import this package.
+// # Module Boundary
+//
+// The tooling package is a separate Go module (github.com/pthm/melange/tooling)
+// that depends on the OpenFGA language parser. This separation keeps the core
+// melange runtime free of external dependencies while providing rich schema
+// manipulation for development and deployment workflows.
+//
+// Import the core module for runtime permission checks:
+//
+//	import "github.com/pthm/melange"
+//	checker := melange.NewChecker(db)
+//	ok, _ := checker.Check(ctx, user, "can_read", repo)
+//
+// Import the tooling module for schema operations:
+//
+//	import "github.com/pthm/melange/tooling"
+//	err := tooling.Migrate(ctx, db, "schemas")
+//
+// # Relationship to schema Package
+//
+// The tooling package wraps the schema package, adding OpenFGA DSL parsing.
+// The schema package contains core types (TypeDefinition, AuthzModel) and
+// transformation logic, but cannot parse .fga files because it has no dependencies.
+//
+// Use tooling when you need:
+//   - Parsing .fga schema files
+//   - Convenience migration functions
+//   - CLI or build-time tooling
+//
+// Use schema directly when you:
+//   - Already have parsed TypeDefinitions
+//   - Need fine-grained migration control
+//   - Want to avoid OpenFGA parser dependency
+//
+// # Common Workflows
+//
+// Application startup (idempotent migration):
+//
+//	err := tooling.Migrate(ctx, db, "schemas")
+//
+// Embedded schema (no file I/O):
+//
+//	//go:embed schema.fga
+//	var schemaContent string
+//	err := tooling.MigrateFromString(ctx, db, schemaContent)
+//
+// Code generation (build-time):
+//
+//	types, _ := tooling.ParseSchema("schemas/schema.fga")
+//	f, _ := os.Create("internal/authz/schema_gen.go")
+//	tooling.GenerateGo(f, types, tooling.DefaultGenerateConfig())
+//
+// Dry-run migration (preview SQL):
+//
+//	buf := &bytes.Buffer{}
+//	_, err := tooling.MigrateWithOptions(ctx, db, "schemas", tooling.MigrateOptions{
+//	    DryRun: buf,
+//	})
+//	fmt.Println(buf.String()) // Generated SQL
 package tooling
 
 import (
@@ -17,7 +71,7 @@ import (
 	"github.com/openfga/language/pkg/go/transformer"
 
 	"github.com/pthm/melange"
-	"github.com/pthm/melange/schema"
+	"github.com/pthm/melange/tooling/schema"
 )
 
 // ParseSchema reads an OpenFGA .fga file and returns type definitions.
