@@ -22,6 +22,13 @@ OPENFGA_BENCH_TIMEOUT_TINY := "5m"
 default:
     @just --list
 
+# Restore local development mode after a release
+[group('Development')]
+[doc('Restore local replace directive for development')]
+dev-setup:
+    go mod edit -replace=github.com/pthm/melange/melange=./melange
+    go mod tidy
+
 # Sync internal module versions (usage: just release-prepare VERSION=1.2.3 [ALLOW_DIRTY=1])
 [group('Release')]
 [doc('Sync internal module versions and tidy go.mod files')]
@@ -38,6 +45,8 @@ release-prepare VERSION ALLOW_DIRTY="":
     fi
     just _assert-clean ALLOW_DIRTY={{ALLOW_DIRTY}}
     printf "%s\n" "$version" > VERSION
+    # Remove local replace directive and use the published version
+    go mod edit -dropreplace=github.com/pthm/melange/melange
     go mod edit -require=github.com/pthm/melange/melange@"$version"
     go mod tidy
     npm_version="${version#v}"
