@@ -12,7 +12,6 @@
 //
 // Registered but not yet implemented:
 //   - "typescript" - TypeScript types and factory functions (stub)
-//   - "python" - Python classes and constructors (stub)
 //
 // # Example Usage
 //
@@ -32,7 +31,6 @@ import (
 
 	"github.com/pthm/melange/internal/clientgen"
 	_ "github.com/pthm/melange/internal/clientgen/go"         // Register Go generator
-	_ "github.com/pthm/melange/internal/clientgen/python"     // Register Python generator (stub)
 	_ "github.com/pthm/melange/internal/clientgen/typescript" // Register TypeScript generator (stub)
 	"github.com/pthm/melange/pkg/schema"
 )

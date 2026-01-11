@@ -137,7 +137,7 @@ melange generate client --runtime go --schema schema.fga --output ./authz/ --id-
 melange generate client --runtime go --schema schema.fga --output ./authz/ --filter can_
 ```
 
-Supported runtimes: `go` (TypeScript and Python coming soon)
+Supported runtimes: `go` (TypeScript coming soon)
 
 ### Apply Schema to Database
 
@@ -180,7 +180,6 @@ Melange supports generating client code for multiple languages:
 |------------|----------------------------------------|-----------------------|-------------|
 | Go         | `github.com/pthm/melange/melange`      | `--runtime go`        | Implemented |
 | TypeScript | `@pthm/melange`                        | `--runtime typescript`| Planned     |
-| Python     | `melange`                              | `--runtime python`    | Planned     |
 
 See [`clients/`](clients/) for language-specific runtime implementations.
 

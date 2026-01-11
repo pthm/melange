@@ -278,7 +278,7 @@ melange generate client \
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--runtime` | (required) | Target runtime: `go`, `typescript`, `python` |
+| `--runtime` | (required) | Target runtime: `go`, `typescript` |
 | `--schema` | `schemas/schema.fga` | Path to schema.fga file |
 | `--output` | stdout | Output directory for generated code |
 | `--package` | `authz` | Package name for generated code |
@@ -343,7 +343,6 @@ func AnyUser() melange.Object {
 |---------|--------|-------------|
 | `go` | Implemented | Type-safe Go code with constants and constructors |
 | `typescript` | Planned | TypeScript types and factory functions |
-| `python` | Planned | Python classes and constructors |
 
 ---
 

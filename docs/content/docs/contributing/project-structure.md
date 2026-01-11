@@ -15,8 +15,7 @@ melange/
 ├── melange/
 │   └── go.mod             # Runtime module (github.com/pthm/melange/melange)
 ├── clients/
-│   ├── typescript/        # TypeScript client (future)
-│   └── python/            # Python client (future)
+│   └── typescript/        # TypeScript client (future)
 ├── pkg/                   # Public packages
 ├── internal/              # Internal packages
 ├── cmd/melange/           # CLI (part of root module)
@@ -106,8 +105,7 @@ internal/
 ├── clientgen/         # Generator registry and implementations
 │   ├── generator.go   # Generator interface
 │   ├── go/            # Go generator
-│   ├── typescript/    # TypeScript generator (stub)
-│   └── python/        # Python generator (stub)
+│   └── typescript/    # TypeScript generator (stub)
 ├── sqlgen/            # SQL DSL, query builders, code generation internals
 └── doctor/            # CLI health check logic
 ```
@@ -197,13 +195,10 @@ The `openfgatests` package runs OpenFGA's official test suite against Melange:
 ```
 clients/
 ├── README.md           # Overview and contribution guide
-├── typescript/         # TypeScript client
-│   ├── package.json
-│   ├── tsconfig.json
-│   └── src/
-└── python/             # Python client
-    ├── pyproject.toml
-    └── melange/
+└── typescript/         # TypeScript client
+    ├── package.json
+    ├── tsconfig.json
+    └── src/
 ```
 
 The Go runtime lives at `melange/` for clean imports:

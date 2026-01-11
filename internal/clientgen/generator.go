@@ -20,7 +20,7 @@ import (
 // Implementations should be registered via Register() in their init() function.
 // The CLI uses the registry to dispatch generation based on the --runtime flag.
 type Generator interface {
-	// Name returns the runtime identifier ("go", "typescript", "python").
+	// Name returns the runtime identifier ("go", "typescript").
 	// This is used as the value for --runtime in the CLI.
 	Name() string
 
@@ -46,7 +46,6 @@ type Config struct {
 	// Package is the package/module name for generated code.
 	// For Go: package name (e.g., "authz")
 	// For TypeScript: not typically used (uses exports)
-	// For Python: module name
 	Package string
 
 	// RelationFilter limits which relations get constants generated.

@@ -2,7 +2,7 @@
 //
 // The CLI supports:
 //   - validate: Check .fga schema syntax using the OpenFGA parser
-//   - generate client: Produce type-safe client code for Go, TypeScript, or Python
+//   - generate client: Produce type-safe client code for Go or TypeScript
 //   - migrate: Load schema into PostgreSQL (creates tables and functions)
 //   - status: Check current migration state
 //   - doctor: Run health checks on authorization infrastructure

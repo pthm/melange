@@ -8,7 +8,6 @@ This directory contains language-specific runtime clients for Melange.
 |------------|---------------|------------------|------------------|
 | Go         | `../melange/` | `melange`        | Implemented      |
 | TypeScript | `typescript/` | `@pthm/melange`  | Placeholder      |
-| Python     | `python/`     | `melange`        | Placeholder      |
 
 ## Go Client
 
@@ -41,23 +40,6 @@ const checker = new Checker(pool);
 const decision = await checker.check(user('123'), 'can_read', repository('456'));
 ```
 
-### Python
-
-The Python client will provide:
-- Async support with asyncpg and psycopg
-- Type hints throughout
-- Generated dataclasses from schemas
-
-```python
-from melange import Checker
-import asyncpg
-
-pool = await asyncpg.create_pool(dsn="postgresql://...")
-checker = Checker(pool)
-
-decision = await checker.check(user("123"), "can_read", repository("456"))
-```
-
 ## Generated Client Code
 
 All languages support generating type-safe client code from schemas:
@@ -68,9 +50,6 @@ melange generate client --runtime go --schema schema.fga --output ./authz/
 
 # TypeScript (when implemented)
 melange generate client --runtime typescript --schema schema.fga --output ./src/authz/
-
-# Python (when implemented)
-melange generate client --runtime python --schema schema.fga --output ./authz/
 ```
 
 Generated code includes:

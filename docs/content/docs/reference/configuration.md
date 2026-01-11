@@ -130,7 +130,7 @@ Configure under `generate.client:`:
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `runtime` | string | - | Target runtime: `go`, `typescript`, `python` |
+| `runtime` | string | - | Target runtime: `go`, `typescript` |
 | `schema` | string | (top-level `schema`) | Path to schema file |
 | `output` | string | - | Output directory for generated code |
 | `package` | string | `authz` | Package/module name |

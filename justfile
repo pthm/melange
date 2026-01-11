@@ -26,67 +26,69 @@ default:
 [group('Release')]
 [doc('Sync internal module versions and tidy go.mod files')]
 release-prepare VERSION ALLOW_DIRTY="":
-    @set -euo pipefail; \
-    if [ -z "{{VERSION}}" ]; then \
-        echo "VERSION is required (e.g. just release-prepare VERSION=1.2.3)"; \
-        exit 1; \
-    fi; \
-    version="{{VERSION}}"; \
-    if [ "${version#v}" = "$version" ]; then \
-        version="v$version"; \
-    fi; \
-    just _assert-clean ALLOW_DIRTY={{ALLOW_DIRTY}}; \
-    printf "%s\n" "$version" > VERSION; \
-    cd cmd/melange; \
-    go mod edit -require=github.com/pthm/melange@$version; \
-    go mod edit -require=github.com/pthm/melange/melange@$version; \
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "{{VERSION}}" ]; then
+        echo "VERSION is required (e.g. just release-prepare VERSION=1.2.3)"
+        exit 1
+    fi
+    version="{{VERSION}}"
+    if [ "${version#v}" = "$version" ]; then
+        version="v$version"
+    fi
+    just _assert-clean ALLOW_DIRTY={{ALLOW_DIRTY}}
+    printf "%s\n" "$version" > VERSION
+    go mod edit -require=github.com/pthm/melange/melange@"$version"
     go mod tidy
+    npm_version="${version#v}"
+    NPM_VERSION="$npm_version" python3 -c 'import json, os, pathlib, sys; path = pathlib.Path("clients/typescript/package.json"); if not path.exists(): print("clients/typescript/package.json not found"); sys.exit(1); data = json.loads(path.read_text()); data["version"] = os.environ["NPM_VERSION"]; path.write_text(json.dumps(data, indent=2) + "\n")'
 
-# Tag and push module releases (usage: just release [VERSION=1.2.3] [ALLOW_DIRTY=1])
+# Tag and push module releases (usage: just release VERSION=1.2.3 [ALLOW_DIRTY=1])
 [group('Release')]
-[doc('Create and push module tags for melange, melange/melange, cmd/melange')]
+[doc('Run full release: prepare, test, commit, tag, push, and goreleaser publish')]
 release VERSION="" ALLOW_DIRTY="":
-    @set -euo pipefail; \
-    if [ ! -f VERSION ]; then \
-        echo "VERSION file not found; run release-prepare first."; \
-        exit 1; \
-    fi; \
-    version_from_file="$(tr -d '[:space:]' < VERSION)"; \
-    if [ -z "$version_from_file" ]; then \
-        echo "VERSION file is empty; run release-prepare first."; \
-        exit 1; \
-    fi; \
-    if [ "${version_from_file#v}" = "$version_from_file" ]; then \
-        version_from_file="v$version_from_file"; \
-    fi; \
-    cmd_core_version="$(awk '$1 == "github.com/pthm/melange" { print $2; exit }' cmd/melange/go.mod)"; \
-    cmd_melange_version="$(awk '$1 == "github.com/pthm/melange/melange" { print $2; exit }' cmd/melange/go.mod)"; \
-    if [ -z "$cmd_core_version" ] || [ -z "$cmd_melange_version" ]; then \
-        echo "Could not read module versions from go.mod files; run release-prepare first."; \
-        exit 1; \
-    fi; \
-    if [ "$cmd_core_version" != "$cmd_melange_version" ]; then \
-        echo "Module versions are out of sync. Run release-prepare to align versions before tagging."; \
-        echo "cmd/melange core: $cmd_core_version, cmd/melange melange: $cmd_melange_version"; \
-        exit 1; \
-    fi; \
-    if [ "$cmd_core_version" != "$version_from_file" ]; then \
-        echo "VERSION file $version_from_file does not match go.mod $cmd_core_version; run release-prepare first."; \
-        exit 1; \
-    fi; \
-    version="$version_from_file"; \
-    just _assert-clean ALLOW_DIRTY={{ALLOW_DIRTY}}; \
-    root_tag="$version"; \
-    melange_tag="melange/$version"; \
-    cmd_tag="cmd/melange/$version"; \
-    for tag in "$root_tag" "$melange_tag" "$cmd_tag"; do \
-        if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then \
-            echo "Tag already exists: $tag"; \
-            exit 1; \
-        fi; \
-        git tag -a "$tag" -m "$tag"; \
-    done; \
-    git push origin "$root_tag" "$melange_tag" "$cmd_tag"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "{{VERSION}}" ]; then
+        echo "VERSION is required (e.g. just release VERSION=1.2.3)"
+        exit 1
+    fi
+    just release-prepare VERSION={{VERSION}} ALLOW_DIRTY={{ALLOW_DIRTY}}
+    just test-openfga
+    version_from_file="$(tr -d '[:space:]' < VERSION)"
+    if [ -z "$version_from_file" ]; then
+        echo "VERSION file is empty; run release-prepare first."
+        exit 1
+    fi
+    if [ "${version_from_file#v}" = "$version_from_file" ]; then
+        version_from_file="v$version_from_file"
+    fi
+    melange_version="$(awk '$1 == "github.com/pthm/melange/melange" { print $2; exit }' go.mod)"
+    if [ -z "$melange_version" ]; then
+        echo "Could not read melange module version from go.mod; run release-prepare first."
+        exit 1
+    fi
+    if [ "$melange_version" != "$version_from_file" ]; then
+        echo "VERSION file $version_from_file does not match go.mod $melange_version; run release-prepare first."
+        exit 1
+    fi
+    git add VERSION go.mod go.sum clients/typescript/package.json
+    git commit -m "chore(release): $version_from_file"
+    root_tag="$version_from_file"
+    melange_tag="melange/$version_from_file"
+    for tag in "$root_tag" "$melange_tag"; do
+        if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "Tag already exists: $tag"
+            exit 1
+        fi
+        git tag -a "$tag" -m "$tag"
+    done
+    git push origin "$root_tag" "$melange_tag"
+    if ! command -v goreleaser >/dev/null 2>&1; then
+        echo "goreleaser is required (https://goreleaser.com/install/)"
+        exit 1
+    fi
+    goreleaser release --clean
 
 [group('Release')]
 [private]
