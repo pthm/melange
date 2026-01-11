@@ -1012,73 +1012,119 @@ func buildListSubjectsFunctionSQL(functionName string, a RelationAnalysis, users
 	}
 
 	regularQuery := RenderUnionBlocks(regularBlocks)
-	regularTypeGuard := ""
-	if templateName != "list_subjects_userset.tpl.sql" {
-		regularTypeGuard = fmt.Sprintf(`
-        -- Guard: return empty if subject type is not allowed by the model
-        IF p_subject_type NOT IN (%s) THEN
-            RETURN;
-        END IF;
-`, formatSQLStringList(buildAllowedSubjectTypesList(a)))
-	}
 
 	// Build regular path query with pagination
-	var regularReturn string
+	var regularPaginatedQuery string
 	if templateName == "list_subjects_userset.tpl.sql" {
 		// For userset template, wrap the entire CTE construct as a subquery
 		// to avoid CTE name collision with pagination wrapper
-		innerQuery := fmt.Sprintf(`SELECT iq.subject_id FROM (
-            WITH inner_base AS (
-%s
-            ),
-            has_wildcard AS (
-                SELECT EXISTS (SELECT 1 FROM inner_base ib WHERE ib.subject_id = '*') AS has_wildcard
-            )
-%s
-        ) AS iq`, indentLines(regularQuery, "            "), renderUsersetWildcardTailRenamed(a))
-		paginatedQuery := wrapWithPaginationWildcardFirst(innerQuery)
-		regularReturn = fmt.Sprintf(`
-        RETURN QUERY
-        %s;`, paginatedQuery)
+		innerQuery := buildUsersetCTESubquery(regularQuery, a)
+		regularPaginatedQuery = wrapWithPaginationWildcardFirst(innerQuery)
 	} else {
-		paginatedQuery := wrapWithPaginationWildcardFirst(regularQuery)
-		regularReturn = fmt.Sprintf(`
-        -- Regular subject type (no userset filter)
-        RETURN QUERY
-        %s;`, paginatedQuery)
+		regularPaginatedQuery = wrapWithPaginationWildcardFirst(regularQuery)
 	}
 
-	return fmt.Sprintf(`-- Generated list_subjects function for %s.%s
--- Features: %s
-CREATE OR REPLACE FUNCTION %s(
-    p_object_id TEXT,
-    p_subject_type TEXT,
-    p_limit INT DEFAULT NULL,
-    p_after TEXT DEFAULT NULL
-) RETURNS TABLE(subject_id TEXT, next_cursor TEXT) AS $$
-DECLARE
-    v_filter_type TEXT;
-    v_filter_relation TEXT;
-BEGIN
-    -- Check if subject_type is a userset filter (e.g., "document#viewer")
-    IF position('#' in p_subject_type) > 0 THEN
-        v_filter_type := substring(p_subject_type from 1 for position('#' in p_subject_type) - 1);
-        v_filter_relation := substring(p_subject_type from position('#' in p_subject_type) + 1);
+	// Build the THEN branch (userset filter path)
+	thenBranch := buildUsersetFilterThenBranch(usersetFilterPaginatedQuery)
 
-        RETURN QUERY
-        %s;
-    ELSE%s%s
-    END IF;
-END;
-$$ LANGUAGE plpgsql STABLE;`,
-		a.ObjectType,
-		a.Relation,
-		a.Features.String(),
-		functionName,
-		usersetFilterPaginatedQuery,
-		regularTypeGuard,
-		regularReturn,
-	)
+	// Build the ELSE branch (regular subject type path)
+	elseBranch := buildRegularSubjectElseBranch(a, regularPaginatedQuery, templateName)
+
+	// Build main IF statement: check if subject_type is a userset filter
+	mainIf := If{
+		Cond: Gt{
+			Left:  Position{Needle: Lit("#"), Haystack: SubjectType},
+			Right: Int(0),
+		},
+		Then: thenBranch,
+		Else: elseBranch,
+	}
+
+	fn := PlpgsqlFunction{
+		Name:    functionName,
+		Args:    ListSubjectsArgs(),
+		Returns: ListSubjectsReturns(),
+		Header:  ListSubjectsFunctionHeader(a.ObjectType, a.Relation, a.Features.String()),
+		Decls: []Decl{
+			{Name: "v_filter_type", Type: "TEXT"},
+			{Name: "v_filter_relation", Type: "TEXT"},
+		},
+		Body: []Stmt{
+			Comment{Text: "Check if subject_type is a userset filter (e.g., \"document#viewer\")"},
+			mainIf,
+		},
+	}
+
+	return fn.SQL()
+}
+
+// buildUsersetCTESubquery creates the CTE subquery for userset templates.
+func buildUsersetCTESubquery(regularQuery string, a RelationAnalysis) string {
+	return fmt.Sprintf(`SELECT iq.subject_id FROM (
+    WITH inner_base AS (
+%s
+    ),
+    has_wildcard AS (
+        SELECT EXISTS (SELECT 1 FROM inner_base ib WHERE ib.subject_id = '*') AS has_wildcard
+    )
+%s
+) AS iq`, indentLines(regularQuery, "    "), renderUsersetWildcardTailRenamed(a))
+}
+
+// buildUsersetFilterThenBranch builds the THEN branch statements for userset filter path.
+func buildUsersetFilterThenBranch(usersetFilterPaginatedQuery string) []Stmt {
+	// v_filter_type := substring(p_subject_type from 1 for position('#' in p_subject_type) - 1)
+	filterTypeAssign := Assign{
+		Name: "v_filter_type",
+		Value: Substring{
+			Source: SubjectType,
+			From:   Int(1),
+			For: Sub{
+				Left:  Position{Needle: Lit("#"), Haystack: SubjectType},
+				Right: Int(1),
+			},
+		},
+	}
+
+	// v_filter_relation := substring(p_subject_type from position('#' in p_subject_type) + 1)
+	filterRelationAssign := Assign{
+		Name: "v_filter_relation",
+		Value: Substring{
+			Source: SubjectType,
+			From: Add{
+				Left:  Position{Needle: Lit("#"), Haystack: SubjectType},
+				Right: Int(1),
+			},
+		},
+	}
+
+	return []Stmt{
+		filterTypeAssign,
+		filterRelationAssign,
+		ReturnQuery{Query: usersetFilterPaginatedQuery},
+	}
+}
+
+// buildRegularSubjectElseBranch builds the ELSE branch statements for regular subject type path.
+func buildRegularSubjectElseBranch(a RelationAnalysis, regularPaginatedQuery string, templateName string) []Stmt {
+	var stmts []Stmt
+
+	// Add type guard for non-userset templates
+	if templateName != "list_subjects_userset.tpl.sql" {
+		allowedTypes := buildAllowedSubjectTypesList(a)
+		typeGuard := If{
+			Cond: NotIn{Expr: SubjectType, Values: allowedTypes},
+			Then: []Stmt{Return{}},
+		}
+		stmts = append(stmts,
+			Comment{Text: "Guard: return empty if subject type is not allowed by the model"},
+			typeGuard,
+			Comment{Text: "Regular subject type (no userset filter)"},
+		)
+	}
+
+	stmts = append(stmts, ReturnQuery{Query: regularPaginatedQuery})
+	return stmts
 }
 
 // renderUsersetWildcardTailRenamed is like renderUsersetWildcardTail but uses inner_base instead of base_results

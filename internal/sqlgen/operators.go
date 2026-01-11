@@ -72,6 +72,30 @@ func (g Gte) SQL() string {
 	return g.Left.SQL() + " >= " + g.Right.SQL()
 }
 
+// Arithmetic operators
+
+// Add represents addition (+).
+type Add struct {
+	Left  Expr
+	Right Expr
+}
+
+// SQL renders the addition.
+func (a Add) SQL() string {
+	return a.Left.SQL() + " + " + a.Right.SQL()
+}
+
+// Sub represents subtraction (-).
+type Sub struct {
+	Left  Expr
+	Right Expr
+}
+
+// SQL renders the subtraction.
+func (s Sub) SQL() string {
+	return s.Left.SQL() + " - " + s.Right.SQL()
+}
+
 // In represents an IN clause for string values.
 type In struct {
 	Expr   Expr
@@ -88,6 +112,24 @@ func (i In) SQL() string {
 		quoted[j] = Lit(v).SQL()
 	}
 	return i.Expr.SQL() + " IN (" + strings.Join(quoted, ", ") + ")"
+}
+
+// NotIn represents a NOT IN clause for string values.
+type NotIn struct {
+	Expr   Expr
+	Values []string
+}
+
+// SQL renders the NOT IN clause.
+func (n NotIn) SQL() string {
+	if len(n.Values) == 0 {
+		return "TRUE"
+	}
+	quoted := make([]string, len(n.Values))
+	for j, v := range n.Values {
+		quoted[j] = Lit(v).SQL()
+	}
+	return n.Expr.SQL() + " NOT IN (" + strings.Join(quoted, ", ") + ")"
 }
 
 // Logical operators
