@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-func generateCheckFunctionBob(a RelationAnalysis, inline InlineSQLData, noWildcard bool) (string, error) {
+func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, noWildcard bool) (string, error) {
 	data, err := buildCheckFunctionData(a, inline, noWildcard)
 	if err != nil {
 		return "", fmt.Errorf("building check function data for %s.%s: %w", a.ObjectType, a.Relation, err)
@@ -497,7 +497,7 @@ func buildIntersectionTTUExists(data CheckFunctionData, part IntersectionPartDat
 	return q.ExistsSQL(), nil
 }
 
-func generateDispatcherBob(analyses []RelationAnalysis, noWildcard bool) (string, error) {
+func generateDispatcher(analyses []RelationAnalysis, noWildcard bool) (string, error) {
 	functionName := "check_permission"
 	if noWildcard {
 		functionName = "check_permission_no_wildcard"

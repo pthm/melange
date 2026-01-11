@@ -234,11 +234,6 @@ type ParentRelationData struct {
 	AllowedLinkingTypes string // SQL-formatted list of allowed parent types (e.g., "'folder', 'org'")
 }
 
-// generateCheckFunction generates a specialized check function for a relation.
-func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, noWildcard bool) (string, error) {
-	return generateCheckFunctionBob(a, inline, noWildcard)
-}
-
 // buildCheckFunctionData constructs template data from RelationAnalysis.
 func buildCheckFunctionData(a RelationAnalysis, inline InlineSQLData, noWildcard bool) (CheckFunctionData, error) {
 	hasWildcard := a.Features.HasWildcard && !noWildcard
@@ -681,11 +676,6 @@ type DispatcherCase struct {
 	ObjectType        string
 	Relation          string
 	CheckFunctionName string
-}
-
-// generateDispatcher generates the check_permission dispatcher function.
-func generateDispatcher(analyses []RelationAnalysis, noWildcard bool) (string, error) {
-	return generateDispatcherBob(analyses, noWildcard)
 }
 
 // CollectFunctionNames returns all function names that will be generated for the given analyses.

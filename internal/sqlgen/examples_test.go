@@ -7,13 +7,13 @@ import (
 	"github.com/pthm/melange/internal/sqlgen"
 )
 
-// This file demonstrates how to migrate queries from Bob to the DSL.
-// Each test shows the DSL equivalent of existing Bob-based queries.
+// This file demonstrates the DSL query patterns.
+// Each test shows how to construct SQL queries using the DSL types.
 
 // TestListObjectsDirectQuery shows the DSL equivalent of ListObjectsDirectQuery.
 // This is the simplest query pattern - direct tuple lookup.
 //
-// Original Bob implementation:
+// Previous implementation (for reference):
 //
 //	where := []bob.Expression{
 //	    psql.Quote("t", "object_type").EQ(psql.S(input.ObjectType)),
@@ -59,7 +59,7 @@ func TestListObjectsDirectQuery(t *testing.T) {
 
 // TestDirectCheck shows the DSL equivalent of DirectCheck (EXISTS pattern).
 //
-// Original Bob implementation:
+// Previous implementation (for reference):
 //
 //	query := psql.Select(
 //	    sm.Columns(psql.Raw("1")),
@@ -94,7 +94,7 @@ func TestDirectCheck(t *testing.T) {
 
 // TestUsersetCheck shows the DSL equivalent of UsersetCheck (JOIN pattern).
 //
-// Original Bob implementation:
+// Previous implementation (for reference):
 //
 //	joinConditions := []bob.Expression{
 //	    psql.Quote("membership", "object_type").EQ(psql.S(input.SubjectType)),
@@ -161,7 +161,7 @@ func TestUsersetCheck(t *testing.T) {
 
 // TestExclusionPattern shows the DSL equivalent of simple exclusion.
 //
-// Original Bob implementation:
+// Previous implementation (for reference):
 //
 //	subquery := psql.Select(
 //	    sm.Columns(psql.Raw("1")),
@@ -206,7 +206,7 @@ func TestExclusionPattern(t *testing.T) {
 
 // TestCheckPermissionInternal shows the DSL equivalent of CheckPermissionInternalExpr.
 //
-// Original Bob implementation:
+// Previous implementation (for reference):
 //
 //	psql.Raw(fmt.Sprintf(
 //	    "check_permission_internal(%s, %s, '%s', %s, %s, ARRAY[]::TEXT[]) = %s",

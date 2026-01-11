@@ -61,10 +61,10 @@ func (b *ListObjectsBuilder) Build() (string, error) {
 	// 1. Intersection (most comprehensive, handles all patterns)
 	// 2. Recursive/TTU (handles direct, userset, exclusion, TTU)
 	if b.hasComplexIntersection() {
-		return generateListObjectsIntersectionFunctionBob(b.analysis, b.inline)
+		return generateListObjectsIntersectionFunction(b.analysis, b.inline)
 	}
 	if b.hasRecursiveParent() {
-		return generateListObjectsRecursiveFunctionBob(b.analysis, b.inline)
+		return generateListObjectsRecursiveFunction(b.analysis, b.inline)
 	}
 
 	// Configure exclusions if the relation has exclusion features
@@ -348,10 +348,10 @@ func (b *ListSubjectsBuilder) Build() (string, error) {
 	// 1. Intersection (most comprehensive, handles all patterns)
 	// 2. Recursive/TTU (handles direct, userset, exclusion, TTU)
 	if b.hasComplexIntersection() {
-		return generateListSubjectsIntersectionFunctionBob(b.analysis, b.inline)
+		return generateListSubjectsIntersectionFunction(b.analysis, b.inline)
 	}
 	if b.hasRecursiveParent() {
-		return generateListSubjectsRecursiveFunctionBob(b.analysis, b.inline)
+		return generateListSubjectsRecursiveFunction(b.analysis, b.inline)
 	}
 
 	// Feature-driven block building for userset filter path
@@ -848,20 +848,6 @@ func (b *ListSubjectsBuilder) determineTemplateName() string {
 		return "list_subjects_exclusion.tpl.sql"
 	}
 	return "list_subjects_direct.tpl.sql"
-}
-
-// =============================================================================
-// Original function - now delegates to builder
-// =============================================================================
-
-func generateListObjectsFunctionBob(a RelationAnalysis, inline InlineSQLData, templateName string) (string, error) {
-	// Use the feature-driven builder instead of template-based switch
-	return NewListObjectsBuilder(a, inline).Build()
-}
-
-func generateListSubjectsFunctionBob(a RelationAnalysis, inline InlineSQLData, templateName string) (string, error) {
-	// Use the feature-driven builder instead of template-based switch
-	return NewListSubjectsBuilder(a, inline).Build()
 }
 
 func buildListObjectsComplexClosureBlocks(a RelationAnalysis, relations, allowedSubjectTypes []string, allowWildcard bool, exclusions ExclusionConfig) ([]string, error) {
@@ -1382,7 +1368,7 @@ func wrapWithPaginationWildcardFirst(query string) string {
 		indentLines(query, "        "))
 }
 
-func generateListObjectsRecursiveFunctionBob(a RelationAnalysis, inline InlineSQLData) (string, error) {
+func generateListObjectsRecursiveFunction(a RelationAnalysis, inline InlineSQLData) (string, error) {
 	functionName := listObjectsFunctionName(a.ObjectType, a.Relation)
 	relationList := buildTupleLookupRelations(a)
 	allowedSubjectTypes := buildAllowedSubjectTypesList(a)
@@ -1683,7 +1669,7 @@ func dequoteList(sqlList string) []string {
 	return result
 }
 
-func generateListObjectsIntersectionFunctionBob(a RelationAnalysis, inline InlineSQLData) (string, error) {
+func generateListObjectsIntersectionFunction(a RelationAnalysis, inline InlineSQLData) (string, error) {
 	functionName := listObjectsFunctionName(a.ObjectType, a.Relation)
 	relationList := buildTupleLookupRelations(a)
 	allowedSubjectTypes := buildAllowedSubjectTypesList(a)
@@ -2022,7 +2008,7 @@ func buildSimpleComplexExclusionInput(a RelationAnalysis, objectIDExpr, subjectT
 	}
 }
 
-func generateListSubjectsRecursiveFunctionBob(a RelationAnalysis, inline InlineSQLData) (string, error) {
+func generateListSubjectsRecursiveFunction(a RelationAnalysis, inline InlineSQLData) (string, error) {
 	functionName := listSubjectsFunctionName(a.ObjectType, a.Relation)
 	relationList := buildTupleLookupRelations(a)
 	allSatisfyingRelations := buildAllSatisfyingRelationsList(a)
@@ -2471,7 +2457,7 @@ func buildUsersetFilterTTUNestedQuery(objectType string, parent ListParentRelati
 	return stmt.SQL(), nil
 }
 
-func generateListSubjectsIntersectionFunctionBob(a RelationAnalysis, inline InlineSQLData) (string, error) {
+func generateListSubjectsIntersectionFunction(a RelationAnalysis, inline InlineSQLData) (string, error) {
 	functionName := listSubjectsFunctionName(a.ObjectType, a.Relation)
 	allSatisfyingRelations := buildAllSatisfyingRelationsList(a)
 	allowedSubjectTypes := buildAllowedSubjectTypesList(a)
@@ -2908,7 +2894,7 @@ func trimTrailingSemicolon(input string) string {
 	return strings.TrimSuffix(trimmed, ";")
 }
 
-func generateListObjectsDepthExceededFunctionBob(a RelationAnalysis) string {
+func generateListObjectsDepthExceededFunction(a RelationAnalysis) string {
 	return fmt.Sprintf(`-- Generated list_objects function for %s.%s
 -- Features: %s
 -- DEPTH EXCEEDED: Userset chain depth %d exceeds 25 level limit
@@ -2933,7 +2919,7 @@ $$ LANGUAGE plpgsql STABLE;`,
 	)
 }
 
-func generateListSubjectsDepthExceededFunctionBob(a RelationAnalysis) string {
+func generateListSubjectsDepthExceededFunction(a RelationAnalysis) string {
 	return fmt.Sprintf(`-- Generated list_subjects function for %s.%s
 -- Features: %s
 -- DEPTH EXCEEDED: Userset chain depth %d exceeds 25 level limit
@@ -2958,7 +2944,7 @@ $$ LANGUAGE plpgsql STABLE;`,
 	)
 }
 
-func generateListObjectsSelfRefUsersetFunctionBob(a RelationAnalysis, inline InlineSQLData) (string, error) {
+func generateListObjectsSelfRefUsersetFunction(a RelationAnalysis, inline InlineSQLData) (string, error) {
 	functionName := listObjectsFunctionName(a.ObjectType, a.Relation)
 	relationList := buildTupleLookupRelations(a)
 	allowedSubjectTypes := buildAllowedSubjectTypesList(a)
@@ -3188,7 +3174,7 @@ func buildListObjectsSelfRefFinalQuery(a RelationAnalysis) (string, error) {
 	return stmt.SQL(), nil
 }
 
-func generateListSubjectsSelfRefUsersetFunctionBob(a RelationAnalysis, inline InlineSQLData) (string, error) {
+func generateListSubjectsSelfRefUsersetFunction(a RelationAnalysis, inline InlineSQLData) (string, error) {
 	functionName := listSubjectsFunctionName(a.ObjectType, a.Relation)
 	relationList := buildTupleLookupRelations(a)
 	allSatisfyingRelations := buildAllSatisfyingRelationsList(a)
@@ -3576,7 +3562,7 @@ func buildListSubjectsSelfRefUsersetObjectsExpansionQuery(a RelationAnalysis, re
 	return stmt.SQL(), nil
 }
 
-func generateListObjectsComposedFunctionBob(a RelationAnalysis, inline InlineSQLData) (string, error) {
+func generateListObjectsComposedFunction(a RelationAnalysis, inline InlineSQLData) (string, error) {
 	functionName := listObjectsFunctionName(a.ObjectType, a.Relation)
 	relationList := buildTupleLookupRelations(a)
 	allowedSubjectTypes := buildAllowedSubjectTypesList(a)
@@ -3778,7 +3764,7 @@ func buildComposedUsersetObjectsQuery(a RelationAnalysis, anchor *ListIndirectAn
 	return q.SQL(), nil
 }
 
-func generateListSubjectsComposedFunctionBob(a RelationAnalysis, inline InlineSQLData) (string, error) {
+func generateListSubjectsComposedFunction(a RelationAnalysis, inline InlineSQLData) (string, error) {
 	functionName := listSubjectsFunctionName(a.ObjectType, a.Relation)
 	allowedSubjectTypes := buildAllowedSubjectTypesList(a)
 	anchor := buildListIndirectAnchorData(a)
@@ -4022,7 +4008,7 @@ func buildComposedUsersetSubjectsQuery(a RelationAnalysis, firstStep ListAnchorP
 	return stmt.SQL(), nil
 }
 
-func generateListObjectsDispatcherBob(analyses []RelationAnalysis) (string, error) {
+func generateListObjectsDispatcher(analyses []RelationAnalysis) (string, error) {
 	var cases []ListDispatcherCase
 	for _, a := range analyses {
 		if !a.CanGenerateList() {
@@ -4071,7 +4057,7 @@ func generateListObjectsDispatcherBob(analyses []RelationAnalysis) (string, erro
 	return buf.String(), nil
 }
 
-func generateListSubjectsDispatcherBob(analyses []RelationAnalysis) (string, error) {
+func generateListSubjectsDispatcher(analyses []RelationAnalysis) (string, error) {
 	var cases []ListDispatcherCase
 	for _, a := range analyses {
 		if !a.CanGenerateList() {
