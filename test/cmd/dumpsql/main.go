@@ -286,20 +286,20 @@ func printAnalysis(analyses []compiler.RelationAnalysis) {
 
 	for _, a := range analyses {
 		canGen := "✓"
-		if !a.CanGenerate {
+		if !a.Capabilities.CheckAllowed {
 			canGen = "✗"
 		}
 		canGenList := "✓"
-		if !a.CanGenerateList() {
+		if !a.Capabilities.ListAllowed {
 			canGenList = "✗"
 		}
-		fmt.Printf("\n%s.%s [%s] CanGenerate=%s CanGenerateList=%s\n",
-			a.ObjectType, a.Relation, a.Features.String(), canGen, canGenList)
-		if !a.CanGenerate && a.CannotGenerateReason != "" {
-			fmt.Printf("  ⚠️  Reason: %s\n", a.CannotGenerateReason)
+		fmt.Printf("\n%s.%s [%s] Check=%s List=%s Strategy=%s\n",
+			a.ObjectType, a.Relation, a.Features.String(), canGen, canGenList, a.ListStrategy)
+		if !a.Capabilities.CheckAllowed && a.Capabilities.CheckReason != "" {
+			fmt.Printf("  ⚠️  Check reason: %s\n", a.Capabilities.CheckReason)
 		}
-		if !a.CanGenerateList() && a.CannotGenerateListReason != "" {
-			fmt.Printf("  ⚠️  List reason: %s\n", a.CannotGenerateListReason)
+		if !a.Capabilities.ListAllowed && a.Capabilities.ListReason != "" {
+			fmt.Printf("  ⚠️  List reason: %s\n", a.Capabilities.ListReason)
 		}
 
 		if len(a.SatisfyingRelations) > 0 {

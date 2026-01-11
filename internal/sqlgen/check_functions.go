@@ -505,7 +505,7 @@ func generateDispatcher(analyses []RelationAnalysis, noWildcard bool) (string, e
 
 	var cases []DispatcherCase
 	for _, a := range analyses {
-		if !a.CanGenerate {
+		if !a.Capabilities.CheckAllowed {
 			continue
 		}
 		checkFn := functionNameForDispatcher(a, noWildcard)

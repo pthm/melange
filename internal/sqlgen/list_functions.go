@@ -37,7 +37,7 @@ func GenerateListSQL(analyses []RelationAnalysis, inline InlineSQLData) (ListGen
 
 	// Generate specialized functions for each relation that can be generated
 	for _, a := range analyses {
-		if !a.CanGenerateList() {
+		if !a.Capabilities.ListAllowed {
 			continue
 		}
 
@@ -85,140 +85,38 @@ func listSubjectsFunctionName(objectType, relation string) string {
 
 // generateListObjectsFunction generates a specialized list_objects function for a relation.
 func generateListObjectsFunction(a RelationAnalysis, inline InlineSQLData) (string, error) {
-	// Route to appropriate generator based on features
-	templateName := selectListObjectsTemplate(a)
-
-	switch templateName {
-	case "list_objects_direct.tpl.sql",
-		"list_objects_exclusion.tpl.sql",
-		"list_objects_userset.tpl.sql",
-		"list_objects_recursive.tpl.sql",
-		"list_objects_intersection.tpl.sql":
+	// Route to appropriate generator based on ListStrategy
+	switch a.ListStrategy {
+	case ListStrategyDirect, ListStrategyUserset, ListStrategyRecursive, ListStrategyIntersection:
+		// These strategies all use the unified ListObjectsBuilder
 		return NewListObjectsBuilder(a, inline).Build()
-	case "list_objects_depth_exceeded.tpl.sql":
+	case ListStrategyDepthExceeded:
 		return generateListObjectsDepthExceededFunction(a), nil
-	case "list_objects_self_ref_userset.tpl.sql":
+	case ListStrategySelfRefUserset:
 		return generateListObjectsSelfRefUsersetFunction(a, inline)
-	case "list_objects_composed.tpl.sql":
+	case ListStrategyComposed:
 		return generateListObjectsComposedFunction(a, inline)
 	default:
-		return "", fmt.Errorf("unknown list_objects template %s", templateName)
+		return "", fmt.Errorf("unknown list strategy %v for %s.%s", a.ListStrategy, a.ObjectType, a.Relation)
 	}
-}
-
-// selectListObjectsTemplate selects the appropriate list_objects template based on features.
-func selectListObjectsTemplate(a RelationAnalysis) string {
-	// Phase 9A: Use depth-exceeded template for relations with userset chains >= 25 levels.
-	// These immediately raise M2002 without any computation.
-	if a.ExceedsDepthLimit {
-		return "list_objects_depth_exceeded.tpl.sql"
-	}
-	// Phase 9B: Use self-referential userset template for patterns like group.member: [group#member].
-	// These require recursive CTEs to expand nested userset membership.
-	if a.HasSelfReferentialUserset {
-		return "list_objects_self_ref_userset.tpl.sql"
-	}
-	// Phase 8: Use composed template for indirect anchor patterns.
-	// These are relations with no direct/implied access but reach subjects through
-	// TTU or userset patterns to an anchor relation.
-	if a.IndirectAnchor != nil {
-		return "list_objects_composed.tpl.sql"
-	}
-	// Phase 6: Use intersection template if relation has intersection patterns.
-	// The intersection template is the most comprehensive and handles all pattern
-	// combinations (direct, userset, exclusion, TTU, intersection).
-	if a.Features.HasIntersection {
-		return "list_objects_intersection.tpl.sql"
-	}
-	// Phase 5: Use recursive template if relation has TTU patterns.
-	// The recursive template is comprehensive and handles all pattern combinations
-	// (direct, userset, exclusion, TTU) since TTU is the most complex pattern.
-	// Also use recursive template if any closure relation has TTU (inherited TTU).
-	if a.Features.HasRecursive || len(a.ClosureParentRelations) > 0 {
-		return "list_objects_recursive.tpl.sql"
-	}
-	// Phase 4: Use userset template if relation has userset patterns.
-	// This includes both direct patterns (UsersetPatterns) and patterns inherited
-	// from closure relations (ClosureUsersetPatterns).
-	// The userset template also handles exclusions if present.
-	if a.Features.HasUserset || len(a.ClosureUsersetPatterns) > 0 {
-		return "list_objects_userset.tpl.sql"
-	}
-	// Phase 3: Use exclusion template if relation has any exclusion patterns
-	if a.Features.HasExclusion {
-		return "list_objects_exclusion.tpl.sql"
-	}
-	// Phase 2: Direct/implied patterns use the direct template
-	return "list_objects_direct.tpl.sql"
 }
 
 // generateListSubjectsFunction generates a specialized list_subjects function for a relation.
 func generateListSubjectsFunction(a RelationAnalysis, inline InlineSQLData) (string, error) {
-	// Route to appropriate generator based on features
-	templateName := selectListSubjectsTemplate(a)
-
-	switch templateName {
-	case "list_subjects_direct.tpl.sql",
-		"list_subjects_exclusion.tpl.sql",
-		"list_subjects_userset.tpl.sql",
-		"list_subjects_recursive.tpl.sql",
-		"list_subjects_intersection.tpl.sql":
+	// Route to appropriate generator based on ListStrategy
+	switch a.ListStrategy {
+	case ListStrategyDirect, ListStrategyUserset, ListStrategyRecursive, ListStrategyIntersection:
+		// These strategies all use the unified ListSubjectsBuilder
 		return NewListSubjectsBuilder(a, inline).Build()
-	case "list_subjects_depth_exceeded.tpl.sql":
+	case ListStrategyDepthExceeded:
 		return generateListSubjectsDepthExceededFunction(a), nil
-	case "list_subjects_self_ref_userset.tpl.sql":
+	case ListStrategySelfRefUserset:
 		return generateListSubjectsSelfRefUsersetFunction(a, inline)
-	case "list_subjects_composed.tpl.sql":
+	case ListStrategyComposed:
 		return generateListSubjectsComposedFunction(a, inline)
 	default:
-		return "", fmt.Errorf("unknown list_subjects template %s", templateName)
+		return "", fmt.Errorf("unknown list strategy %v for %s.%s", a.ListStrategy, a.ObjectType, a.Relation)
 	}
-}
-
-// selectListSubjectsTemplate selects the appropriate list_subjects template based on features.
-func selectListSubjectsTemplate(a RelationAnalysis) string {
-	// Phase 9A: Use depth-exceeded template for relations with userset chains >= 25 levels.
-	// These immediately raise M2002 without any computation.
-	if a.ExceedsDepthLimit {
-		return "list_subjects_depth_exceeded.tpl.sql"
-	}
-	// Phase 9B: Use self-referential userset template for patterns like group.member: [group#member].
-	// These require recursive CTEs to expand nested userset membership.
-	if a.HasSelfReferentialUserset {
-		return "list_subjects_self_ref_userset.tpl.sql"
-	}
-	// Phase 8: Use composed template for indirect anchor patterns.
-	// These are relations with no direct/implied access but reach subjects through
-	// TTU or userset patterns to an anchor relation.
-	if a.IndirectAnchor != nil {
-		return "list_subjects_composed.tpl.sql"
-	}
-	// Phase 6: Use intersection template if relation has intersection patterns.
-	// The intersection template is the most comprehensive and handles all pattern
-	// combinations (direct, userset, exclusion, TTU, intersection).
-	if a.Features.HasIntersection {
-		return "list_subjects_intersection.tpl.sql"
-	}
-	// Phase 5: Use recursive template if relation has TTU patterns.
-	// The recursive template is comprehensive and handles all pattern combinations
-	// (direct, userset, exclusion, TTU) since TTU is the most complex pattern.
-	// Also use recursive template if any closure relation has TTU (inherited TTU).
-	if a.Features.HasRecursive || len(a.ClosureParentRelations) > 0 {
-		return "list_subjects_recursive.tpl.sql"
-	}
-	// Phase 4: Use userset template if relation has userset patterns.
-	// This includes both direct patterns (UsersetPatterns) and patterns inherited
-	// from closure relations (ClosureUsersetPatterns).
-	// The userset template also handles exclusions if present.
-	if a.Features.HasUserset || len(a.ClosureUsersetPatterns) > 0 {
-		return "list_subjects_userset.tpl.sql"
-	}
-	// Phase 3: Use exclusion template if relation has any exclusion patterns
-	if a.Features.HasExclusion {
-		return "list_subjects_exclusion.tpl.sql"
-	}
-	// Phase 2: Direct/implied patterns use the direct template
-	return "list_subjects_direct.tpl.sql"
 }
 
 // ListParentRelationData contains data for rendering TTU pattern expansion in list templates.

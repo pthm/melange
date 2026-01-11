@@ -89,7 +89,7 @@ func GenerateSQL(analyses []RelationAnalysis, inline InlineSQLData) (GeneratedSQ
 
 	// Generate specialized function for each relation
 	for _, a := range analyses {
-		if !a.CanGenerate {
+		if !a.Capabilities.CheckAllowed {
 			continue
 		}
 		fn, err := generateCheckFunction(a, inline, false)
@@ -690,13 +690,13 @@ func CollectFunctionNames(analyses []RelationAnalysis) []string {
 	var names []string
 
 	for _, a := range analyses {
-		if a.CanGenerate {
+		if a.Capabilities.CheckAllowed {
 			names = append(names,
 				functionName(a.ObjectType, a.Relation),
 				functionNameNoWildcard(a.ObjectType, a.Relation),
 			)
 		}
-		if a.CanGenerateList() {
+		if a.Capabilities.ListAllowed {
 			names = append(names,
 				listObjectsFunctionName(a.ObjectType, a.Relation),
 				listSubjectsFunctionName(a.ObjectType, a.Relation),

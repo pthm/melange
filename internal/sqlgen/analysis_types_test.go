@@ -761,8 +761,8 @@ func TestAnalyzeRelations_ComplexComposite(t *testing.T) {
 	if !f.CanGenerate() {
 		t.Error("expected Features.CanGenerate() = true - userset/recursive/exclusion are all supported")
 	}
-	if !viewerAnalysis.CanGenerate {
-		t.Error("expected CanGenerate = true - group.member is closure-compatible and blocked is simply resolvable")
+	if !viewerAnalysis.Capabilities.CheckAllowed {
+		t.Error("expected Capabilities.CheckAllowed = true - group.member is closure-compatible and blocked is simply resolvable")
 	}
 
 	// Check collected data
@@ -845,8 +845,8 @@ func TestComputeCanGenerate_SimpleOrgModel(t *testing.T) {
 			t.Errorf("relation %q not found in analysis", rel)
 			continue
 		}
-		if !a.CanGenerate {
-			t.Errorf("organization.%s: expected CanGenerate = true, got false (features: %s)", rel, a.Features.String())
+		if !a.Capabilities.CheckAllowed {
+			t.Errorf("organization.%s: expected Capabilities.CheckAllowed = true, got false (features: %s)", rel, a.Features.String())
 		}
 	}
 }
@@ -902,8 +902,8 @@ func TestComputeCanGenerate_ImpliedWithUserset(t *testing.T) {
 	if viewer == nil {
 		t.Fatal("viewer not found")
 	}
-	if !viewer.CanGenerate {
-		t.Error("document.viewer: expected CanGenerate = true (userset is now supported)")
+	if !viewer.Capabilities.CheckAllowed {
+		t.Error("document.viewer: expected Capabilities.CheckAllowed = true (userset is now supported)")
 	}
 	// The userset pattern references group#member which is a simple relation,
 	// so HasComplexUsersetPatterns should be false (simple patterns use JOIN-based lookup)
@@ -916,8 +916,8 @@ func TestComputeCanGenerate_ImpliedWithUserset(t *testing.T) {
 	if canView == nil {
 		t.Fatal("can_view not found")
 	}
-	if !canView.CanGenerate {
-		t.Error("document.can_view: expected CanGenerate = true (viewer is generatable)")
+	if !canView.Capabilities.CheckAllowed {
+		t.Error("document.can_view: expected Capabilities.CheckAllowed = true (viewer is generatable)")
 	}
 }
 
@@ -980,22 +980,22 @@ func TestComputeCanGenerate_MixedModel(t *testing.T) {
 	}
 
 	// owner is simple direct - generatable
-	if !lookup["owner"].CanGenerate {
+	if !lookup["owner"].Capabilities.CheckAllowed {
 		t.Error("document.owner should be generatable")
 	}
 
 	// editor has userset - IS generatable (userset is now supported)
-	if !lookup["editor"].CanGenerate {
+	if !lookup["editor"].Capabilities.CheckAllowed {
 		t.Error("document.editor should be generatable (userset is supported)")
 	}
 
 	// can_delete implied from owner (which is simple) - generatable
-	if !lookup["can_delete"].CanGenerate {
+	if !lookup["can_delete"].Capabilities.CheckAllowed {
 		t.Error("document.can_delete should be generatable (owner is simple)")
 	}
 
 	// can_edit implied from editor (which has userset) - now generatable since editor is generatable
-	if !lookup["can_edit"].CanGenerate {
+	if !lookup["can_edit"].Capabilities.CheckAllowed {
 		t.Error("document.can_edit should be generatable (editor is generatable via complex userset)")
 	}
 }

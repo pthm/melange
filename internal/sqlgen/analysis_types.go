@@ -247,22 +247,35 @@ type RelationAnalysis struct {
 	Relation   string           // The relation name (e.g., "viewer")
 	Features   RelationFeatures // Feature flags determining what SQL to generate
 
+	// Capabilities holds the unified generation eligibility for check and list functions.
+	// This replaces the separate CanGenerate/CanGenerateListValue fields.
+	// Computed by ComputeCanGenerate after all relations are analyzed.
+	Capabilities GenerationCapabilities
+
+	// ListStrategy determines which list generation approach to use.
+	// Computed by ComputeCanGenerate after Capabilities is set.
+	ListStrategy ListStrategy
+
+	// DEPRECATED: Use Capabilities.CheckAllowed instead.
 	// CanGenerate is true if this relation can use generated SQL for check.
 	// This is computed by checking both the relation's own features AND
 	// ensuring all relations in the satisfying closure are simply resolvable.
 	// Set by ComputeCanGenerate after all relations are analyzed.
 	CanGenerate bool
 
+	// DEPRECATED: Use Capabilities.CheckReason instead.
 	// CannotGenerateReason explains why CanGenerate is false.
 	// Empty when CanGenerate is true.
 	CannotGenerateReason string
 
+	// DEPRECATED: Use Capabilities.ListAllowed instead.
 	// CanGenerateListValue is true if this relation can use generated SQL for list functions.
 	// List functions have stricter requirements than check functions because they use
 	// set operations (UNION, EXCEPT) rather than boolean composition.
 	// Set by ComputeCanGenerate after all relations are analyzed.
 	CanGenerateListValue bool
 
+	// DEPRECATED: Use Capabilities.ListReason instead.
 	// CannotGenerateListReason explains why CanGenerateListValue is false.
 	// Empty when CanGenerateListValue is true.
 	CannotGenerateListReason string
@@ -849,17 +862,6 @@ func sortByDependency(analyses []RelationAnalysis) []RelationAnalysis {
 // operations (UNION, EXCEPT, INTERSECT) rather than boolean composition.
 //
 // This is progressively relaxed as more list codegen patterns are implemented:
-// - Phase 2: Direct/Implied patterns (simple tuple lookup with closure)
-// - Phase 3+: Will add Exclusion support
-// - Phase 4+: Will add Userset support
-// - Phase 5+: Will add Recursive/TTU support
-//
-// When CanGenerateList returns false, the list dispatcher falls through to the
-// generic list functions (list_accessible_objects, list_accessible_subjects).
-func (a *RelationAnalysis) CanGenerateList() bool {
-	return a.CanGenerateListValue
-}
-
 // canGenerateListFeatures checks if the given features allow list generation.
 // This checks a single relation's features - the full check in ComputeCanGenerate
 // also validates that ALL relations in the closure have compatible features.
@@ -1178,6 +1180,14 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		if !a.Features.CanGenerate() {
 			a.CanGenerate = false
 			a.CannotGenerateReason = "features do not allow generation (no access paths)"
+			// Also set unified Capabilities
+			a.Capabilities = GenerationCapabilities{
+				CheckAllowed: false,
+				ListAllowed:  false,
+				CheckReason:  "features do not allow generation (no access paths)",
+				ListReason:   "features do not allow generation (no access paths)",
+			}
+			a.ListStrategy = ListStrategyDirect // Default, though it won't be used
 			continue
 		}
 
@@ -1471,6 +1481,17 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		canGenerateList, cannotGenerateListReason := computeCanGenerateList(a, lookup)
 		a.CanGenerateListValue = canGenerateList
 		a.CannotGenerateListReason = cannotGenerateListReason
+
+		// Set unified Capabilities (consolidates CanGenerate + CanGenerateListValue)
+		a.Capabilities = GenerationCapabilities{
+			CheckAllowed: a.CanGenerate,
+			ListAllowed:  a.CanGenerateListValue,
+			CheckReason:  a.CannotGenerateReason,
+			ListReason:   a.CannotGenerateListReason,
+		}
+
+		// Compute ListStrategy based on analysis data
+		a.ListStrategy = DetermineListStrategy(*a)
 	}
 
 	// Second pass: propagate AllowedSubjectTypes through cross-type userset patterns.
@@ -1618,6 +1639,11 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 			if canGenerateList != a.CanGenerateListValue {
 				a.CanGenerateListValue = canGenerateList
 				a.CannotGenerateListReason = cannotGenerateListReason
+				// Update unified Capabilities
+				a.Capabilities.ListAllowed = canGenerateList
+				a.Capabilities.ListReason = cannotGenerateListReason
+				// Recompute ListStrategy since analysis data may have changed
+				a.ListStrategy = DetermineListStrategy(*a)
 				changed = true
 			}
 		}

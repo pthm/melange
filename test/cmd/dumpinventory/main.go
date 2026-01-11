@@ -114,11 +114,11 @@ func main() {
 				totalRelations++
 
 				// Check codegen stats
-				if a.CanGenerate {
+				if a.Capabilities.CheckAllowed {
 					checkCanGenerate++
 				} else {
 					checkCannotGenerate++
-					reason := a.CannotGenerateReason
+					reason := a.Capabilities.CheckReason
 					if reason == "" {
 						reason = "(no reason recorded)"
 					}
@@ -133,11 +133,11 @@ func main() {
 				}
 
 				// List codegen stats
-				if a.CanGenerateList() {
+				if a.Capabilities.ListAllowed {
 					listCanGenerate++
 				} else {
 					listCannotGenerate++
-					reason := a.CannotGenerateListReason
+					reason := a.Capabilities.ListReason
 					if reason == "" {
 						reason = "(no reason recorded)"
 					}
@@ -291,7 +291,7 @@ func dumpTestInventory(tc TestCase, showCheck, showList bool) {
 		if showCheck {
 			var checkCanGenerate, checkCannotGenerate []compiler.RelationAnalysis
 			for _, a := range analyses {
-				if a.CanGenerate {
+				if a.Capabilities.CheckAllowed {
 					checkCanGenerate = append(checkCanGenerate, a)
 				} else {
 					checkCannotGenerate = append(checkCannotGenerate, a)
@@ -310,8 +310,8 @@ func dumpTestInventory(tc TestCase, showCheck, showList bool) {
 			fmt.Printf("**Cannot Generate (%d):**\n", len(checkCannotGenerate))
 			for _, a := range checkCannotGenerate {
 				fmt.Printf("  ✗ %s.%s [%s]\n", a.ObjectType, a.Relation, a.Features.String())
-				if a.CannotGenerateReason != "" {
-					fmt.Printf("    Reason: %s\n", a.CannotGenerateReason)
+				if a.Capabilities.CheckReason != "" {
+					fmt.Printf("    Reason: %s\n", a.Capabilities.CheckReason)
 				}
 			}
 		}
@@ -319,7 +319,7 @@ func dumpTestInventory(tc TestCase, showCheck, showList bool) {
 		if showList {
 			var listCanGenerate, listCannotGenerate []compiler.RelationAnalysis
 			for _, a := range analyses {
-				if a.CanGenerateList() {
+				if a.Capabilities.ListAllowed {
 					listCanGenerate = append(listCanGenerate, a)
 				} else {
 					listCannotGenerate = append(listCannotGenerate, a)
@@ -331,15 +331,15 @@ func dumpTestInventory(tc TestCase, showCheck, showList bool) {
 			fmt.Println()
 			fmt.Printf("**Can Generate (%d):**\n", len(listCanGenerate))
 			for _, a := range listCanGenerate {
-				fmt.Printf("  ✓ %s.%s [%s]\n", a.ObjectType, a.Relation, a.Features.String())
+				fmt.Printf("  ✓ %s.%s [%s] Strategy=%s\n", a.ObjectType, a.Relation, a.Features.String(), a.ListStrategy)
 			}
 
 			fmt.Println()
 			fmt.Printf("**Cannot Generate (%d):**\n", len(listCannotGenerate))
 			for _, a := range listCannotGenerate {
 				fmt.Printf("  ✗ %s.%s [%s]\n", a.ObjectType, a.Relation, a.Features.String())
-				if a.CannotGenerateListReason != "" {
-					fmt.Printf("    Reason: %s\n", a.CannotGenerateListReason)
+				if a.Capabilities.ListReason != "" {
+					fmt.Printf("    Reason: %s\n", a.Capabilities.ListReason)
 				}
 			}
 		}

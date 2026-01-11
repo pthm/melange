@@ -57,7 +57,7 @@ func NewListObjectsBuilder(a RelationAnalysis, inline InlineSQLData) *ListObject
 // Build generates the complete list_objects function SQL.
 func (b *ListObjectsBuilder) Build() (string, error) {
 	// Check for special delegated cases first
-	// Order matters! Must match selectListObjectsTemplate priority:
+	// Order matters! Must match DetermineListStrategy priority:
 	// 1. Intersection (most comprehensive, handles all patterns)
 	// 2. Recursive/TTU (handles direct, userset, exclusion, TTU)
 	if b.hasComplexIntersection() {
@@ -111,7 +111,7 @@ func (b *ListObjectsBuilder) hasRecursiveParent() bool {
 
 // hasComplexIntersection returns true if the relation has intersection patterns
 // that require special handling (INTERSECT queries).
-// Note: matches selectListObjectsTemplate which only checks HasIntersection.
+// Note: matches DetermineListStrategy which returns ListStrategyIntersection for HasIntersection.
 func (b *ListObjectsBuilder) hasComplexIntersection() bool {
 	return b.analysis.Features.HasIntersection
 }
@@ -344,7 +344,7 @@ func NewListSubjectsBuilder(a RelationAnalysis, inline InlineSQLData) *ListSubje
 // Build generates the complete list_subjects function SQL.
 func (b *ListSubjectsBuilder) Build() (string, error) {
 	// Check for special delegated cases first
-	// Order matters! Must match selectListSubjectsTemplate priority:
+	// Order matters! Must match DetermineListStrategy priority:
 	// 1. Intersection (most comprehensive, handles all patterns)
 	// 2. Recursive/TTU (handles direct, userset, exclusion, TTU)
 	if b.hasComplexIntersection() {
@@ -3993,7 +3993,7 @@ func buildComposedUsersetSubjectsQuery(a RelationAnalysis, firstStep ListAnchorP
 func generateListObjectsDispatcher(analyses []RelationAnalysis) (string, error) {
 	var cases []ListDispatcherCase
 	for _, a := range analyses {
-		if !a.CanGenerateList() {
+		if !a.Capabilities.ListAllowed {
 			continue
 		}
 		cases = append(cases, ListDispatcherCase{
@@ -4043,7 +4043,7 @@ func generateListObjectsDispatcher(analyses []RelationAnalysis) (string, error) 
 func generateListSubjectsDispatcher(analyses []RelationAnalysis) (string, error) {
 	var cases []ListDispatcherCase
 	for _, a := range analyses {
-		if !a.CanGenerateList() {
+		if !a.Capabilities.ListAllowed {
 			continue
 		}
 		cases = append(cases, ListDispatcherCase{
