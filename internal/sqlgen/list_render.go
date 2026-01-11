@@ -100,11 +100,12 @@ func renderTypedQueryBlocks(blocks []TypedQueryBlock) []QueryBlock {
 	return result
 }
 
-// renderTypedQueryBlock converts a single TypedQueryBlock to QueryBlock with rendered SQL.
+// renderTypedQueryBlock converts a TypedQueryBlock to QueryBlock.
+// Since both now use SelectStmt, this is a direct copy.
 func renderTypedQueryBlock(block TypedQueryBlock) QueryBlock {
 	return QueryBlock{
 		Comments: block.Comments,
-		SQL:      block.Query.SQL(),
+		Query:    block.Query,
 	}
 }
 
@@ -157,7 +158,7 @@ func RenderListObjectsRecursiveFunction(plan ListPlan, blocks RecursiveBlockSet)
 	// Build self-candidate SQL
 	var selfCandidateSQL string
 	if blocks.SelfCandidateBlock != nil {
-		selfCandidateSQL = renderTypedQueryBlock(*blocks.SelfCandidateBlock).SQL
+		selfCandidateSQL = renderTypedQueryBlock(*blocks.SelfCandidateBlock).Query.SQL()
 	}
 
 	// Combine CTE and self-candidate with UNION
@@ -201,7 +202,7 @@ func renderRecursiveCTEBody(blocks RecursiveBlockSet) string {
 	var baseBlocksSQL []string
 	for _, block := range blocks.BaseBlocks {
 		qb := renderTypedQueryBlock(block)
-		wrappedSQL := wrapQueryWithDepthForRender(qb.SQL, "0", "base")
+		wrappedSQL := wrapQueryWithDepthForRender(qb.Query.SQL(), "0", "base")
 		baseBlocksSQL = append(baseBlocksSQL, formatQueryBlockSQL(qb.Comments, wrappedSQL))
 	}
 
@@ -211,7 +212,7 @@ func renderRecursiveCTEBody(blocks RecursiveBlockSet) string {
 	// Add recursive block with UNION ALL if present
 	if blocks.RecursiveBlock != nil {
 		qb := renderTypedQueryBlock(*blocks.RecursiveBlock)
-		recursiveSQL := formatQueryBlockSQL(qb.Comments, qb.SQL)
+		recursiveSQL := formatQueryBlockSQL(qb.Comments, qb.Query.SQL())
 		cteBody = cteBody + "\n    UNION ALL\n" + recursiveSQL
 	}
 
@@ -549,7 +550,7 @@ func buildIntersectionUsersetFilterQuery(plan ListPlan, candidatesSQL string, se
         UNION
 
 %s`,
-			formatQueryBlock(rendered.Comments, rendered.SQL))
+			formatQueryBlock(rendered.Comments, rendered.Query.SQL()))
 	}
 
 	return fmt.Sprintf(`WITH userset_candidates AS (
@@ -776,7 +777,7 @@ func RenderListObjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUserse
 	// Build self-candidate SQL
 	var selfCandidateSQL string
 	if blocks.SelfCandidateBlock != nil {
-		selfCandidateSQL = renderTypedQueryBlock(*blocks.SelfCandidateBlock).SQL
+		selfCandidateSQL = renderTypedQueryBlock(*blocks.SelfCandidateBlock).Query.SQL()
 	}
 
 	// Combine CTE and self-candidate with UNION
@@ -811,7 +812,7 @@ func renderSelfRefUsersetCTEBody(blocks SelfRefUsersetBlockSet) string {
 	var baseBlocksSQL []string
 	for _, block := range blocks.BaseBlocks {
 		qb := renderTypedQueryBlock(block)
-		wrappedSQL := wrapQueryWithDepthForRender(qb.SQL, "0", "base")
+		wrappedSQL := wrapQueryWithDepthForRender(qb.Query.SQL(), "0", "base")
 		baseBlocksSQL = append(baseBlocksSQL, formatQueryBlockSQL(qb.Comments, wrappedSQL))
 	}
 
@@ -821,7 +822,7 @@ func renderSelfRefUsersetCTEBody(blocks SelfRefUsersetBlockSet) string {
 	// Add recursive block with UNION ALL if present
 	if blocks.RecursiveBlock != nil {
 		qb := renderTypedQueryBlock(*blocks.RecursiveBlock)
-		recursiveSQL := formatQueryBlockSQL(qb.Comments, qb.SQL)
+		recursiveSQL := formatQueryBlockSQL(qb.Comments, qb.Query.SQL())
 		cteBody = cteBody + "\n    UNION ALL\n" + recursiveSQL
 	}
 
@@ -882,7 +883,7 @@ func renderSelfRefUsersetFilterQuery(blocks SelfRefUsersetSubjectsBlockSet) stri
 	var baseBlocksSQL []string
 	for _, block := range blocks.UsersetFilterBlocks {
 		qb := renderTypedQueryBlock(block)
-		baseBlocksSQL = append(baseBlocksSQL, formatQueryBlockSQL(qb.Comments, qb.SQL))
+		baseBlocksSQL = append(baseBlocksSQL, formatQueryBlockSQL(qb.Comments, qb.Query.SQL()))
 	}
 
 	cteBody := strings.Join(baseBlocksSQL, "\n    UNION\n")
@@ -890,7 +891,7 @@ func renderSelfRefUsersetFilterQuery(blocks SelfRefUsersetSubjectsBlockSet) stri
 	// Add recursive block
 	if blocks.UsersetFilterRecursiveBlock != nil {
 		qb := renderTypedQueryBlock(*blocks.UsersetFilterRecursiveBlock)
-		recursiveSQL := formatQueryBlockSQL(qb.Comments, qb.SQL)
+		recursiveSQL := formatQueryBlockSQL(qb.Comments, qb.Query.SQL())
 		cteBody = cteBody + "\n    UNION ALL\n" + recursiveSQL
 	}
 
@@ -912,7 +913,7 @@ FROM userset_expansion ue`,
 	// Add self-candidate block if present
 	if blocks.UsersetFilterSelfBlock != nil {
 		qb := renderTypedQueryBlock(*blocks.UsersetFilterSelfBlock)
-		resultBlocks = append(resultBlocks, formatQueryBlockSQL(qb.Comments, qb.SQL))
+		resultBlocks = append(resultBlocks, formatQueryBlockSQL(qb.Comments, qb.Query.SQL()))
 	}
 
 	return mainCTE + "\n" + strings.Join(resultBlocks, "\nUNION\n")
@@ -924,12 +925,12 @@ func renderSelfRefUsersetRegularQuery(plan ListPlan, blocks SelfRefUsersetSubjec
 	var usersetObjectsCTE string
 	if blocks.UsersetObjectsBaseBlock != nil {
 		baseQB := renderTypedQueryBlock(*blocks.UsersetObjectsBaseBlock)
-		baseSQL := formatQueryBlockSQL(baseQB.Comments, baseQB.SQL)
+		baseSQL := formatQueryBlockSQL(baseQB.Comments, baseQB.Query.SQL())
 
 		usersetObjectsCTE = baseSQL
 		if blocks.UsersetObjectsRecursiveBlock != nil {
 			recursiveQB := renderTypedQueryBlock(*blocks.UsersetObjectsRecursiveBlock)
-			recursiveSQL := formatQueryBlockSQL(recursiveQB.Comments, recursiveQB.SQL)
+			recursiveSQL := formatQueryBlockSQL(recursiveQB.Comments, recursiveQB.Query.SQL())
 			usersetObjectsCTE = usersetObjectsCTE + "\n            UNION ALL\n" + recursiveSQL
 		}
 	}
@@ -938,7 +939,7 @@ func renderSelfRefUsersetRegularQuery(plan ListPlan, blocks SelfRefUsersetSubjec
 	var baseBlocksSQL []string
 	for _, block := range blocks.RegularBlocks {
 		qb := renderTypedQueryBlock(block)
-		baseBlocksSQL = append(baseBlocksSQL, formatQueryBlockSQL(qb.Comments, qb.SQL))
+		baseBlocksSQL = append(baseBlocksSQL, formatQueryBlockSQL(qb.Comments, qb.Query.SQL()))
 	}
 
 	baseResultsSQL := strings.Join(baseBlocksSQL, "\n    UNION\n")
@@ -974,14 +975,14 @@ func RenderListObjectsComposedFunction(plan ListPlan, blocks ComposedObjectsBloc
 	var selfSQL string
 	if blocks.SelfBlock != nil {
 		qb := renderTypedQueryBlock(*blocks.SelfBlock)
-		selfSQL = qb.SQL
+		selfSQL = qb.Query.SQL()
 	}
 
 	// Render main query blocks
 	var mainBlocksSQL []string
 	for _, block := range blocks.MainBlocks {
 		qb := renderTypedQueryBlock(block)
-		mainBlocksSQL = append(mainBlocksSQL, formatQueryBlockSQL(qb.Comments, qb.SQL))
+		mainBlocksSQL = append(mainBlocksSQL, formatQueryBlockSQL(qb.Comments, qb.Query.SQL()))
 	}
 	mainQuery := strings.Join(mainBlocksSQL, "\n    UNION\n")
 
@@ -1035,14 +1036,14 @@ func RenderListSubjectsComposedFunction(plan ListPlan, blocks ComposedSubjectsBl
 	var selfSQL string
 	if blocks.SelfBlock != nil {
 		qb := renderTypedQueryBlock(*blocks.SelfBlock)
-		selfSQL = qb.SQL
+		selfSQL = qb.Query.SQL()
 	}
 
 	// Render userset filter candidate blocks
 	var usersetFilterBlocksSQL []string
 	for _, block := range blocks.UsersetFilterBlocks {
 		qb := renderTypedQueryBlock(block)
-		usersetFilterBlocksSQL = append(usersetFilterBlocksSQL, formatQueryBlockSQL(qb.Comments, qb.SQL))
+		usersetFilterBlocksSQL = append(usersetFilterBlocksSQL, formatQueryBlockSQL(qb.Comments, qb.Query.SQL()))
 	}
 	usersetFilterCandidates := strings.Join(usersetFilterBlocksSQL, "\n    UNION\n")
 
@@ -1050,7 +1051,7 @@ func RenderListSubjectsComposedFunction(plan ListPlan, blocks ComposedSubjectsBl
 	var regularBlocksSQL []string
 	for _, block := range blocks.RegularBlocks {
 		qb := renderTypedQueryBlock(block)
-		regularBlocksSQL = append(regularBlocksSQL, formatQueryBlockSQL(qb.Comments, qb.SQL))
+		regularBlocksSQL = append(regularBlocksSQL, formatQueryBlockSQL(qb.Comments, qb.Query.SQL()))
 	}
 	regularCandidates := strings.Join(regularBlocksSQL, "\n    UNION\n")
 

@@ -13,8 +13,7 @@ package sqlgen
 // - Blocks: build QueryBlock/SelectStmt values using DSL only
 // - Render: produce SQL/PLpgSQL strings
 //
-// Note: This coexists with the existing CheckFunctionData during migration.
-// CheckFunctionData contains pre-rendered SQL; CheckPlan is pure data.
+// CheckPlan contains pure data (no pre-rendered SQL fragments).
 
 // CheckPlan contains all computed data needed to generate a check function.
 // This separates plan computation from block building and rendering.

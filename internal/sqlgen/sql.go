@@ -443,11 +443,17 @@ func (l LateralFunction) TableAlias() string {
 // Query Blocks (for UNION queries)
 // =============================================================================
 
+// SQLer is an interface for types that can render SQL.
+// Both SelectStmt and RawSelectStmt implement this interface.
+type SQLer interface {
+	SQL() string
+}
+
 // QueryBlock represents a query with optional comments.
 // Used to build UNION queries with descriptive comments for each branch.
 type QueryBlock struct {
 	Comments []string // Comment lines (without -- prefix)
-	SQL      string   // The query SQL
+	Query    SQLer    // The query as typed DSL (SelectStmt, RawSelectStmt, etc.)
 }
 
 // RenderBlocks renders multiple query blocks sequentially.
@@ -482,7 +488,7 @@ func renderSingleBlock(block QueryBlock) string {
 	for _, comment := range block.Comments {
 		lines = append(lines, "    "+comment)
 	}
-	lines = append(lines, indentLines(block.SQL, "    "))
+	lines = append(lines, indentLines(block.Query.SQL(), "    "))
 	return strings.Join(lines, "\n")
 }
 

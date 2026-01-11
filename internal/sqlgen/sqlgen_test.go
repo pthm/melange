@@ -512,7 +512,7 @@ func TestQueryBlock(t *testing.T) {
 	t.Run("single block with comments", func(t *testing.T) {
 		block := QueryBlock{
 			Comments: []string{"-- First comment", "-- Second comment"},
-			SQL:      "SELECT 1 FROM users",
+			Query:    Raw("SELECT 1 FROM users"),
 		}
 		blocks := []QueryBlock{block}
 		got := RenderBlocks(blocks)
@@ -531,7 +531,7 @@ func TestQueryBlock(t *testing.T) {
 
 	t.Run("single block without comments", func(t *testing.T) {
 		block := QueryBlock{
-			SQL: "SELECT id FROM documents",
+			Query: Raw("SELECT id FROM documents"),
 		}
 		got := RenderBlocks([]QueryBlock{block})
 		expect := "    SELECT id FROM documents"
@@ -551,8 +551,8 @@ func TestQueryBlock(t *testing.T) {
 func TestRenderUnionBlocks(t *testing.T) {
 	t.Run("multiple blocks", func(t *testing.T) {
 		blocks := []QueryBlock{
-			{Comments: []string{"-- Block 1"}, SQL: "SELECT 1"},
-			{Comments: []string{"-- Block 2"}, SQL: "SELECT 2"},
+			{Comments: []string{"-- Block 1"}, Query: Raw("SELECT 1")},
+			{Comments: []string{"-- Block 2"}, Query: Raw("SELECT 2")},
 		}
 		got := RenderUnionBlocks(blocks)
 
@@ -576,7 +576,7 @@ func TestRenderUnionBlocks(t *testing.T) {
 
 	t.Run("single block no union", func(t *testing.T) {
 		blocks := []QueryBlock{
-			{SQL: "SELECT 1"},
+			{Query: Raw("SELECT 1")},
 		}
 		got := RenderUnionBlocks(blocks)
 		if strings.Contains(got, "UNION") {
