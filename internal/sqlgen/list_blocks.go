@@ -620,6 +620,15 @@ func buildListSubjectsUsersetFilterBlocks(plan ListPlan) ([]TypedQueryBlock, *Ty
 	}
 	blocks = append(blocks, directBlock)
 
+	// Build intersection closure blocks for userset filter path
+	// The subject type for userset filter is: v_filter_type || '#' || v_filter_relation
+	// Validate with check_permission when exclusion is present to apply exclusion rules
+	intersectionBlocks, err := buildListSubjectsIntersectionClosureBlocks(plan, "v_filter_type || '#' || v_filter_relation", "v_filter_type", plan.HasExclusion)
+	if err != nil {
+		return nil, nil, err
+	}
+	blocks = append(blocks, intersectionBlocks...)
+
 	// Build self-referential userset filter block
 	selfBlock, err = buildListSubjectsUsersetFilterSelfBlock(plan)
 	if err != nil {
@@ -629,51 +638,68 @@ func buildListSubjectsUsersetFilterBlocks(plan ListPlan) ([]TypedQueryBlock, *Ty
 	return blocks, selfBlock, nil
 }
 
-// buildListSubjectsUsersetFilterDirectBlock builds the direct userset filter block.
+// buildListSubjectsUsersetFilterDirectBlock builds the userset filter block for list_subjects.
+// This handles queries like "list_subjects for folder:1.viewer with filter group#member".
+// It finds tuples where the subject is a userset (e.g., group:fga#member_c4) and checks
+// if the userset relation satisfies the filter relation via closure.
 func buildListSubjectsUsersetFilterDirectBlock(plan ListPlan) (TypedQueryBlock, error) {
-	// Query with closure join to find satisfying relations
-	closureJoin := JoinClause{
-		Type:      "INNER",
-		TableExpr: ClosureTable(plan.Inline.ClosureRows, plan.Inline.ClosureValues, "c"),
-		On: And(
-			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(plan.ObjectType)},
-			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(plan.Relation)},
-			Eq{Left: Col{Table: "c", Column: "satisfying_relation"}, Right: Col{Table: "t", Column: "relation"}},
+	// Build closure EXISTS subquery to check if userset relation satisfies filter relation
+	// e.g., check if member_c4 satisfies member via closure (group, member_c4, member)
+	closureExistsStmt := SelectStmt{
+		ColumnExprs: []Expr{Int(1)},
+		FromExpr:    ClosureTable(plan.Inline.ClosureRows, plan.Inline.ClosureValues, "subj_c"),
+		Where: And(
+			Eq{Left: Col{Table: "subj_c", Column: "object_type"}, Right: Param("v_filter_type")},
+			Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: SubstringUsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}},
+			Eq{Left: Col{Table: "subj_c", Column: "satisfying_relation"}, Right: Param("v_filter_relation")},
 		),
 	}
 
-	// Column must be aliased as subject_id for pagination wrapper
+	// Normalized subject expression: split_part(subject_id, '#', 1) || '#' || filter_relation
+	// e.g., 'fga#member_c4' becomes 'fga#member'
 	subjectExpr := Alias{
-		Expr: Concat{Parts: []Expr{
-			Col{Table: "t", Column: "subject_type"},
-			Lit(":"),
-			Col{Table: "t", Column: "subject_id"},
-			Lit("#"),
-			Param("v_filter_relation"),
-		}},
+		Expr: NormalizedUsersetSubject(Col{Table: "t", Column: "subject_id"}, Param("v_filter_relation")),
 		Name: "subject_id",
 	}
 
+	// Build the query:
+	// - Find tuples on the object where subject_type matches filter_type
+	// - Subject must have userset marker (position('#') > 0)
+	// - Either userset relation matches filter relation exactly, or closure says it satisfies
+	// - Validate with check_permission call
+	//
+	// Use AllSatisfyingRelations (not RelationList) because:
+	// 1. We're validating with check_permission anyway, which handles complex relations
+	// 2. We need to find tuples for all satisfying relations, not just simple ones
+	// 3. Example: for can_view: viewer, we need to find tuples with relation='viewer'
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{subjectExpr},
 		FromExpr:    TableAs("melange_tuples", "t"),
-		Joins:       []JoinClause{closureJoin},
 		Where: And(
 			Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+			In{Expr: Col{Table: "t", Column: "relation"}, Values: plan.AllSatisfyingRelations},
 			Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
 			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Param("v_filter_type")},
-			In{Expr: Param("v_filter_type"), Values: plan.AllowedSubjectTypes},
-			NoUserset{Source: Col{Table: "t", Column: "subject_id"}},
-			Ne{Left: Col{Table: "t", Column: "subject_id"}, Right: Lit("*")},
+			HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
+			Or(
+				Eq{Left: SubstringUsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Param("v_filter_relation")},
+				ExistsExpr(closureExistsStmt),
+			),
+			// Validate that the userset subject actually has permission
+			CheckPermissionCall{
+				FunctionName: "check_permission",
+				Subject:      SubjectRef{Type: Param("v_filter_type"), ID: Col{Table: "t", Column: "subject_id"}},
+				Relation:     plan.Relation,
+				Object:       LiteralObject(plan.ObjectType, ObjectID),
+				ExpectAllow:  true,
+			},
 		),
 	}
 
 	return TypedQueryBlock{
 		Comments: []string{
-			"-- Direct tuple lookup with simple closure relations",
-			"-- Normalize results to use the filter relation (e.g., group:1#admin -> group:1#member if admin implies member)",
-			"-- Type guard: only return results if filter type is in allowed subject types",
+			"-- Userset filter: find userset tuples that match and return normalized references",
 		},
 		Query: stmt,
 	}, nil
@@ -738,6 +764,15 @@ func buildListSubjectsRegularBlocks(plan ListPlan) ([]TypedQueryBlock, error) {
 		return nil, err
 	}
 	blocks = append(blocks, complexBlocks...)
+
+	// Build intersection closure blocks
+	// These compose with relations that have intersection patterns (e.g., can_read implied from reader)
+	// Validate with check_permission when exclusion is present to apply exclusion rules
+	intersectionBlocks, err := buildListSubjectsIntersectionClosureBlocks(plan, "p_subject_type", "p_subject_type", plan.HasExclusion)
+	if err != nil {
+		return nil, err
+	}
+	blocks = append(blocks, intersectionBlocks...)
 
 	// Build userset pattern blocks if needed
 	if plan.HasUsersetPatterns {
@@ -824,6 +859,62 @@ func buildTypedListSubjectsComplexClosureBlocks(plan ListPlan) ([]TypedQueryBloc
 				"-- Complex closure relations: find candidates via tuples, validate via check_permission_internal",
 			},
 			Query: q.Build(),
+		})
+	}
+
+	return blocks, nil
+}
+
+// buildListSubjectsIntersectionClosureBlocks builds blocks for intersection closure relations.
+// For implied relations like can_read (implied from reader which has intersection), this
+// calls the list_subjects function for the intersection relation to get candidates.
+//
+// Parameters:
+// - subjectTypeExpr: expression for function call (e.g., "p_subject_type" or "v_filter_type || '#' || v_filter_relation")
+// - checkSubjectTypeExpr: expression for validation (e.g., "p_subject_type" or "v_filter_type"), empty to skip validation
+// - validate: if true, wrap results with check_permission validation for exclusion
+func buildListSubjectsIntersectionClosureBlocks(plan ListPlan, subjectTypeExpr, checkSubjectTypeExpr string, validate bool) ([]TypedQueryBlock, error) {
+	if len(plan.Analysis.IntersectionClosureRelations) == 0 {
+		return nil, nil
+	}
+
+	var blocks []TypedQueryBlock
+	for _, rel := range plan.Analysis.IntersectionClosureRelations {
+		funcName := listSubjectsFunctionName(plan.ObjectType, rel)
+		// Call list_subjects for the intersection closure relation
+		// e.g., list_folder_reader_subjects(p_object_id, p_subject_type)
+		fromClause := fmt.Sprintf("%s(p_object_id, %s)", funcName, subjectTypeExpr)
+
+		var stmt SelectStmt
+		if validate && checkSubjectTypeExpr != "" {
+			// Validated path: wrap with check_permission to apply exclusion
+			stmt = SelectStmt{
+				Distinct: true,
+				Columns:  []string{"ics.subject_id"},
+				From:     fromClause,
+				Alias:    "ics",
+				Where: CheckPermissionCall{
+					FunctionName: "check_permission",
+					Subject:      SubjectRef{Type: Raw(checkSubjectTypeExpr), ID: Col{Table: "ics", Column: "subject_id"}},
+					Relation:     plan.Relation,
+					Object:       LiteralObject(plan.ObjectType, ObjectID),
+					ExpectAllow:  true,
+				},
+			}
+		} else {
+			// Non-validated path: just return the results
+			stmt = SelectStmt{
+				Columns: []string{"ics.subject_id"},
+				From:    fromClause,
+				Alias:   "ics",
+			}
+		}
+
+		blocks = append(blocks, TypedQueryBlock{
+			Comments: []string{
+				fmt.Sprintf("-- Compose with intersection closure relation: %s", rel),
+			},
+			Query: stmt,
 		})
 	}
 
@@ -940,6 +1031,26 @@ func buildListSubjectsSimpleUsersetBlock(plan ListPlan, pattern listUsersetPatte
 	// Exclude wildcards if needed
 	if excludeWildcard {
 		q.Where(Ne{Left: Col{Table: "m", Column: "subject_id"}, Right: Lit("*")})
+	}
+
+	// Add check_permission validation for closure patterns
+	// This is needed for exclusion to work correctly - validates that the subject
+	// actually has permission via the closure relation
+	if pattern.IsClosurePattern && pattern.SourceRelation != "" {
+		q.Where(CheckPermission{
+			Subject: SubjectRef{
+				Type: Param("p_subject_type"),
+				ID:   Col{Table: "m", Column: "subject_id"},
+			},
+			Relation:    pattern.SourceRelation,
+			Object:      LiteralObject(plan.ObjectType, ObjectID),
+			ExpectAllow: true,
+		})
+	}
+
+	// Add exclusion predicates
+	for _, pred := range plan.Exclusions.BuildPredicates() {
+		q.Where(pred)
 	}
 
 	return TypedQueryBlock{

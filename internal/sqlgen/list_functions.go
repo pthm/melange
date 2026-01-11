@@ -118,8 +118,17 @@ func generateListObjectsFunction(a RelationAnalysis, inline InlineSQLData) (stri
 func generateListSubjectsFunction(a RelationAnalysis, inline InlineSQLData) (string, error) {
 	// Route to appropriate generator based on ListStrategy
 	switch a.ListStrategy {
-	case ListStrategyDirect, ListStrategyUserset, ListStrategyRecursive, ListStrategyIntersection:
-		// TODO: Wire to Plan → Blocks → Render after fixing userset filter path
+	case ListStrategyDirect, ListStrategyUserset:
+		// Wire to Plan → Blocks → Render
+		plan := BuildListSubjectsPlan(a, inline)
+		blocks, err := BuildListSubjectsBlocks(plan)
+		if err != nil {
+			return "", err
+		}
+		return RenderListSubjectsFunction(plan, blocks)
+	case ListStrategyRecursive, ListStrategyIntersection:
+		// TODO: Wire to Plan → Blocks → Render once recursive/intersection handling is complete.
+		// Direct and Userset are wired; recursive and intersection still use legacy.
 		return NewListSubjectsBuilder(a, inline).Build()
 	case ListStrategyDepthExceeded:
 		return generateListSubjectsDepthExceededFunction(a), nil
