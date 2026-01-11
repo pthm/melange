@@ -8,6 +8,7 @@ experimental = true
 [tools]
 # Release automation
 goreleaser = "latest"
+node = "lts"
 
 # Code search tool with semantic search (from crates.io)
 "cargo:ck-search" = "latest"

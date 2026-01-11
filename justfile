@@ -41,7 +41,14 @@ release-prepare VERSION ALLOW_DIRTY="":
     go mod edit -require=github.com/pthm/melange/melange@"$version"
     go mod tidy
     npm_version="${version#v}"
-    NPM_VERSION="$npm_version" python3 -c 'import json, os, pathlib, sys; path = pathlib.Path("clients/typescript/package.json"); if not path.exists(): print("clients/typescript/package.json not found"); sys.exit(1); data = json.loads(path.read_text()); data["version"] = os.environ["NPM_VERSION"]; path.write_text(json.dumps(data, indent=2) + "\n")'
+    NPM_VERSION="$npm_version" node -e "
+      const fs = require('fs');
+      const path = 'clients/typescript/package.json';
+      if (!fs.existsSync(path)) { console.error(path + ' not found'); process.exit(1); }
+      const pkg = JSON.parse(fs.readFileSync(path, 'utf8'));
+      pkg.version = process.env.NPM_VERSION;
+      fs.writeFileSync(path, JSON.stringify(pkg, null, 2) + '\n');
+    "
 
 # Tag and push module releases (usage: just release VERSION=1.2.3 [ALLOW_DIRTY=1])
 [group('Release')]
@@ -53,7 +60,7 @@ release VERSION="" ALLOW_DIRTY="":
         echo "VERSION is required (e.g. just release VERSION=1.2.3)"
         exit 1
     fi
-    just release-prepare VERSION={{VERSION}} ALLOW_DIRTY={{ALLOW_DIRTY}}
+    just release-prepare {{VERSION}} {{ALLOW_DIRTY}}
     just test-openfga
     version_from_file="$(tr -d '[:space:]' < VERSION)"
     if [ -z "$version_from_file" ]; then
@@ -87,6 +94,14 @@ release VERSION="" ALLOW_DIRTY="":
     if ! command -v goreleaser >/dev/null 2>&1; then
         echo "goreleaser is required (https://goreleaser.com/install/)"
         exit 1
+    fi
+    if [ -z "${GITHUB_TOKEN:-}" ]; then
+        if command -v gh >/dev/null 2>&1; then
+            export GITHUB_TOKEN="$(gh auth token)"
+        else
+            echo "GITHUB_TOKEN not set and gh cli not found"
+            exit 1
+        fi
     fi
     goreleaser release --clean
 
