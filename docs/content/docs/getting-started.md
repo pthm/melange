@@ -7,30 +7,33 @@ This guide walks you through installing Melange, defining an authorization model
 
 ## Prerequisites
 
-- Go 1.21 or later
 - PostgreSQL 14 or later
 
 ## Installation
 
-Melange consists of two components:
+### CLI Tool
 
-### 1. Go Runtime Library
+Install the Melange CLI for migrations and code generation:
 
-Add the core library to your project:
+{{< tabs items="Homebrew,Go,Binary" >}}
 
+{{< tab >}}
 ```bash
-go get github.com/pthm/melange
+brew install pthm/tap/melange
 ```
+{{< /tab >}}
 
-The core module has zero external dependencies - only Go's standard library.
-
-### 2. CLI Tool
-
-Install the CLI for migrations and code generation:
-
+{{< tab >}}
 ```bash
 go install github.com/pthm/melange/cmd/melange@latest
 ```
+{{< /tab >}}
+
+{{< tab >}}
+Download pre-built binaries from the [GitHub releases page](https://github.com/pthm/melange/releases).
+{{< /tab >}}
+
+{{< /tabs >}}
 
 Verify the installation:
 
@@ -125,29 +128,89 @@ The view must provide these columns:
 
 Run the Melange CLI to apply the schema to your database:
 
+{{< tabs items="With Config File,With Flags" >}}
+
+{{< tab >}}
+Create a `melange.yaml` in your project root:
+
+```yaml
+schema: schemas/schema.fga
+
+database:
+  url: postgres://localhost/mydb
+
+generate:
+  client:
+    runtime: go
+    output: internal/authz
+    package: authz
+```
+
+Then run:
+
+```bash
+melange migrate
+```
+{{< /tab >}}
+
+{{< tab >}}
 ```bash
 melange migrate \
   --db postgres://localhost/mydb \
-  --schemas-dir schemas
+  --schema schemas/schema.fga
 ```
+{{< /tab >}}
 
-This installs the generated SQL permission functions.
+{{< /tabs >}}
 
-### Step 4: Generate Type-Safe Go Code (Optional)
+This generates and installs specialized SQL permission functions.
 
-Generate Go constants for type-safe permission checks:
+### Step 4: Generate Type-Safe Client Code (Optional)
+
+Generate constants and helpers for your language of choice:
+
+{{< tabs items="Go,TypeScript" >}}
+
+{{< tab >}}
+With a config file (from Step 3), simply run:
 
 ```bash
-melange generate \
-  --schemas-dir schemas \
-  --generate-dir internal/authz \
-  --generate-pkg authz
+melange generate client
+```
+
+Or with explicit flags:
+
+```bash
+melange generate client \
+  --runtime go \
+  --schema schemas/schema.fga \
+  --output internal/authz \
+  --package authz
 ```
 
 This creates constants like `authz.RelCanRead`, `authz.User("123")`, and `authz.Repository("456")`.
+{{< /tab >}}
 
-### Step 5: Check Permissions in Go
+{{< tab >}}
+```bash
+melange generate client \
+  --runtime typescript \
+  --schema schemas/schema.fga \
+  --output src/authz
+```
 
+This creates TypeScript types and factory functions for type-safe permission checks.
+{{< /tab >}}
+
+{{< /tabs >}}
+
+### Step 5: Check Permissions
+
+With migrations applied, you can check permissions using the generated SQL functions from any language, or use a client library for convenience.
+
+{{< tabs items="Go,TypeScript,SQL" >}}
+
+{{< tab >}}
 ```go
 package main
 
@@ -156,7 +219,7 @@ import (
     "database/sql"
     "log"
 
-    "github.com/pthm/melange"
+    "github.com/pthm/melange/melange"
     _ "github.com/lib/pq"
 )
 
@@ -202,10 +265,90 @@ allowed, err := checker.Check(ctx,
 )
 ```
 
+Install the Go runtime library:
+
+```bash
+go get github.com/pthm/melange/melange
+```
+
+The runtime module has zero external dependencies - only Go's standard library.
+{{< /tab >}}
+
+{{< tab >}}
+```typescript
+import { Pool } from 'pg';
+
+const pool = new Pool({ connectionString: 'postgresql://localhost/mydb' });
+
+async function checkPermission(
+  subjectType: string,
+  subjectId: string,
+  relation: string,
+  objectType: string,
+  objectId: string
+): Promise<boolean> {
+  const { rows } = await pool.query(
+    'SELECT check_permission($1, $2, $3, $4, $5)',
+    [subjectType, subjectId, relation, objectType, objectId]
+  );
+  return rows[0].check_permission === 1;
+}
+
+// Check if user can read the repository
+const allowed = await checkPermission('user', 'alice', 'can_read', 'repository', '123');
+
+if (allowed) {
+  console.log('Access granted');
+} else {
+  console.log('Access denied');
+}
+```
+
+With generated code:
+
+```typescript
+import { User, Repository, RelCanRead } from './authz';
+
+// Using generated helpers
+const allowed = await checkPermission(
+  User('alice').type,
+  User('alice').id,
+  RelCanRead,
+  Repository('123').type,
+  Repository('123').id
+);
+```
+
+Install the npm package:
+
+```bash
+npm install @pthm/melange
+```
+{{< /tab >}}
+
+{{< tab >}}
+```sql
+-- Check permission directly in SQL
+SELECT check_permission('user', 'alice', 'can_read', 'repository', '123');
+
+-- Returns 1 for allowed, 0 for denied
+
+-- Use in a WHERE clause
+SELECT r.*
+FROM repositories r
+WHERE check_permission('user', 'alice', 'can_read', 'repository', r.id::text) = 1;
+```
+{{< /tab >}}
+
+{{< /tabs >}}
+
 ## Working with Transactions
 
-Melange permission checks see uncommitted changes within the same transaction:
+Permission checks see uncommitted changes within the same transaction:
 
+{{< tabs items="Go,TypeScript,SQL" >}}
+
+{{< tab >}}
 ```go
 tx, err := db.BeginTx(ctx, nil)
 if err != nil {
@@ -231,11 +374,67 @@ if err := tx.Commit(); err != nil {
     return err
 }
 ```
+{{< /tab >}}
 
-## Enabling Caching
+{{< tab >}}
+```typescript
+const client = await pool.connect();
 
-For high-throughput applications, enable in-memory caching:
+try {
+  await client.query('BEGIN');
 
+  // Add user to organization within transaction
+  await client.query(
+    'INSERT INTO organization_members (user_id, organization_id, role) VALUES ($1, $2, $3)',
+    [userId, orgId, 'member']
+  );
+
+  // Permission check sees the uncommitted row
+  const { rows } = await client.query(
+    'SELECT check_permission($1, $2, $3, $4, $5)',
+    ['user', userId, 'member', 'organization', orgId]
+  );
+  const allowed = rows[0].check_permission === 1;
+  // allowed == true, even though transaction isn't committed
+
+  await client.query('COMMIT');
+} catch (e) {
+  await client.query('ROLLBACK');
+  throw e;
+} finally {
+  client.release();
+}
+```
+{{< /tab >}}
+
+{{< tab >}}
+```sql
+BEGIN;
+
+-- Insert new tuple (via domain table that feeds the view)
+INSERT INTO organization_members (user_id, organization_id, role)
+VALUES ('123', '456', 'member');
+
+-- Permission check sees the uncommitted row
+SELECT check_permission('user', '123', 'member', 'organization', '456');
+-- Returns 1
+
+ROLLBACK;
+
+-- Now returns 0
+SELECT check_permission('user', '123', 'member', 'organization', '456');
+```
+{{< /tab >}}
+
+{{< /tabs >}}
+
+## Caching
+
+For high-throughput applications, enable caching to reduce database load:
+
+{{< tabs items="Go,TypeScript" >}}
+
+{{< tab >}}
 ```go
 cache := melange.NewCache(melange.WithTTL(time.Minute))
 checker := melange.NewChecker(db, melange.WithCache(cache))
@@ -246,11 +445,52 @@ allowed, _ := checker.Check(ctx, user, "can_read", repo)
 // Subsequent checks for same tuple are served from cache
 allowed, _ = checker.Check(ctx, user, "can_read", repo) // ~79ns vs ~980us
 ```
+{{< /tab >}}
+
+{{< tab >}}
+```typescript
+import { LRUCache } from 'lru-cache';
+
+// Simple in-memory cache
+const cache = new LRUCache<string, boolean>({
+  max: 10000,
+  ttl: 60 * 1000, // 1 minute
+});
+
+async function checkPermissionCached(
+  subjectType: string,
+  subjectId: string,
+  relation: string,
+  objectType: string,
+  objectId: string
+): Promise<boolean> {
+  const key = `${subjectType}:${subjectId}:${relation}:${objectType}:${objectId}`;
+
+  const cached = cache.get(key);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const { rows } = await pool.query(
+    'SELECT check_permission($1, $2, $3, $4, $5)',
+    [subjectType, subjectId, relation, objectType, objectId]
+  );
+  const allowed = rows[0].check_permission === 1;
+
+  cache.set(key, allowed);
+  return allowed;
+}
+```
+{{< /tab >}}
+
+{{< /tabs >}}
 
 ## Next Steps
 
 - [How It Works](./concepts/how-it-works.md) - Understand specialized SQL generation and performance
 - [Tuples View](./concepts/tuples-view.md) - Detailed guidance on mapping your domain tables
 - [CLI Reference](./reference/cli.md) - Full CLI command documentation
-- [Checking Permissions](./guides/checking-permissions.md) - Complete Checker API reference
+- [Configuration](./reference/configuration.md) - Configuration files, environment variables, and precedence
+- [Checking Permissions](./guides/checking-permissions.md) - Complete API reference
+- [SQL API](./reference/sql-api.md) - Direct SQL function documentation for any language
 - [OpenFGA Compatibility](./reference/openfga-compatibility.md) - Supported features and migration path

@@ -1,0 +1,80 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# vim: set ts=2 sw=2 tw=0 fo=cnqoj
+
+version: 2
+
+project_name: melange
+
+before:
+  hooks:
+    - ./scripts/verify-release.sh
+    - go mod tidy
+
+builds:
+  - id: melange
+    main: ./cmd/melange
+    binary: melange
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+    files:
+      - LICENSE
+      - README.md
+      - THIRD_PARTY_NOTICES
+
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256
+
+release:
+  github:
+    owner: pthm
+    name: melange
+  draft: false
+  prerelease: auto
+  mode: replace
+  name_template: "{{.ProjectName}} v{{.Version}}"
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - Merge pull request
+      - Merge branch
+
+publishers:
+  - name: npm
+    ids:
+      - default
+    cmd: sh -c 'cd clients/typescript && npm run build && npm publish --access public'
+    env:
+      - NPM_TOKEN={{ .Env.NPM_TOKEN }}

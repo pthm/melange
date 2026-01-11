@@ -60,7 +60,7 @@ go test -v ./test/...
 
 ```bash
 # Validate your schema changes
-melange validate --schemas-dir schemas
+melange validate --schema schemas/schema.fga
 
 # Run OpenFGA compatibility tests
 just test-openfga

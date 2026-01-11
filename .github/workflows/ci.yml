@@ -23,22 +23,18 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Tidy modules
-        run: |
-          go mod tidy
-          cd tooling && go mod tidy
-          cd ../test && go mod tidy
-
       - name: Install tools
         run: go install tool
+
+      - name: Generate test authz package
+        run: go run ./cmd/melange generate client --runtime go --schema test/testutil/testdata/schema.fga --output test/authz/ --package authz --id-type int64
 
       - name: Lint all modules
         run: |
           # Uses golangci-lint version pinned in go.mod via tool directive
           # After `go install tool`, binary is in $GOPATH/bin which is in PATH
           golangci-lint run ./...
-          cd tooling && golangci-lint run ./...
-          cd ../test && golangci-lint run ./...
+          cd melange && golangci-lint run ./...
 
   unit-tests:
     name: Unit Tests
@@ -52,16 +48,14 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Tidy modules
-        run: |
-          go mod tidy
-          cd tooling && go mod tidy
+      - name: Generate test authz package
+        run: go run ./cmd/melange generate client --runtime go --schema test/testutil/testdata/schema.fga --output test/authz/ --package authz --id-type int64
 
       - name: Run unit tests (root module)
         run: go test -short -race ./...
 
-      - name: Run unit tests (tooling module)
-        working-directory: tooling
+      - name: Run unit tests (melange core module)
+        working-directory: melange
         run: go test -short -race ./...
 
   integration-tests:
@@ -76,11 +70,8 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Tidy modules
-        run: |
-          go mod tidy
-          cd tooling && go mod tidy
-          cd ../test && go mod tidy
+      - name: Generate test authz package
+        run: go run ./cmd/melange generate client --runtime go --schema test/testutil/testdata/schema.fga --output test/authz/ --package authz --id-type int64
 
       - name: Run integration tests
         working-directory: test

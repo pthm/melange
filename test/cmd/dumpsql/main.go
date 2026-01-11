@@ -29,8 +29,9 @@ import (
 	"github.com/openfga/openfga/assets"
 	"sigs.k8s.io/yaml"
 
-	"github.com/pthm/melange/tooling/schema"
-	"github.com/pthm/melange/tooling"
+	"github.com/pthm/melange/pkg/compiler"
+	"github.com/pthm/melange/pkg/parser"
+	"github.com/pthm/melange/pkg/schema"
 )
 
 // TestFile represents the structure of the YAML test files.
@@ -150,7 +151,7 @@ func dumpSQL(tc TestCase, opts dumpOptions) {
 		fmt.Println("```")
 
 		// Parse the model
-		types, err := tooling.ParseSchemaString(stage.Model)
+		types, err := parser.ParseSchemaString(stage.Model)
 		if err != nil {
 			fmt.Printf("\n⚠️  Parse error: %v\n", err)
 			continue
@@ -159,9 +160,9 @@ func dumpSQL(tc TestCase, opts dumpOptions) {
 		// Compute derived data
 		closureRows := schema.ComputeRelationClosure(types)
 		// Analyze relations
-		analyses := schema.AnalyzeRelations(types, closureRows)
-		analyses = schema.ComputeCanGenerate(analyses)
-		inline := schema.BuildInlineSQLData(closureRows, analyses)
+		analyses := compiler.AnalyzeRelations(types, closureRows)
+		analyses = compiler.ComputeCanGenerate(analyses)
+		inline := compiler.BuildInlineSQLData(closureRows, analyses)
 
 		// Show analysis
 		fmt.Println("\n## RELATION ANALYSIS")
@@ -172,7 +173,7 @@ func dumpSQL(tc TestCase, opts dumpOptions) {
 		}
 
 		// Generate SQL
-		generatedSQL, err := schema.GenerateSQL(analyses, inline)
+		generatedSQL, err := compiler.GenerateSQL(analyses, inline)
 		if err != nil {
 			fmt.Printf("\n⚠️  SQL generation error: %v\n", err)
 			continue
@@ -223,7 +224,7 @@ func dumpSQL(tc TestCase, opts dumpOptions) {
 		}
 
 		// Generate list functions
-		listSQL, err := schema.GenerateListSQL(analyses, inline)
+		listSQL, err := compiler.GenerateListSQL(analyses, inline)
 		if err != nil {
 			fmt.Printf("\n⚠️  List SQL generation error: %v\n", err)
 			continue
@@ -269,7 +270,7 @@ func dumpSQL(tc TestCase, opts dumpOptions) {
 	}
 }
 
-func printAnalysis(analyses []schema.RelationAnalysis) {
+func printAnalysis(analyses []compiler.RelationAnalysis) {
 	if len(analyses) == 0 {
 		fmt.Println("(no relations)")
 		return

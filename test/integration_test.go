@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pthm/melange"
-	"github.com/pthm/melange/tooling/schema"
+	"github.com/pthm/melange/melange"
+	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/test/authz"
 	"github.com/pthm/melange/test/testutil"
 )
@@ -69,8 +69,8 @@ func TestMigrator_GetStatus(t *testing.T) {
 	db := testutil.DB(t)
 	ctx := context.Background()
 
-	migrator := schema.NewMigrator(db, "testdata")
-	status, err := migrator.GetStatus(ctx)
+	m := migrator.NewMigrator(db, "testdata")
+	status, err := m.GetStatus(ctx)
 	require.NoError(t, err)
 
 	// Template database has tuples relation

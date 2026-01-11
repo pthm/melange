@@ -4,10 +4,11 @@ import (
 	"context"
 	"testing"
 
-	"github.com/pthm/melange"
-	"github.com/pthm/melange/tooling/schema"
+	"github.com/pthm/melange/melange"
+	"github.com/pthm/melange/pkg/migrator"
+	"github.com/pthm/melange/pkg/parser"
+	"github.com/pthm/melange/pkg/schema"
 	"github.com/pthm/melange/test/testutil"
-	"github.com/pthm/melange/tooling"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,7 +26,7 @@ type document
     define viewer: writer and editor
 `
 
-	types, err := tooling.ParseSchemaString(dsl)
+	types, err := parser.ParseSchemaString(dsl)
 	require.NoError(t, err)
 	require.Len(t, types, 2) // user, document
 
@@ -102,7 +103,7 @@ type document
 	ctx := context.Background()
 
 	// Migrate schema
-	err := tooling.MigrateFromString(ctx, db, dsl)
+	err := migrator.MigrateFromString(ctx, db, dsl)
 	require.NoError(t, err)
 
 	// Create tuples view
@@ -164,7 +165,7 @@ type document
     define viewer: writer but not (editor and owner)
 `
 
-	types, err := tooling.ParseSchemaString(dsl)
+	types, err := parser.ParseSchemaString(dsl)
 	require.NoError(t, err)
 
 	var viewerRel *schema.RelationDefinition
@@ -202,7 +203,7 @@ type document
 	db := testutil.EmptyDB(t)
 	ctx := context.Background()
 
-	err := tooling.MigrateFromString(ctx, db, dsl)
+	err := migrator.MigrateFromString(ctx, db, dsl)
 	require.NoError(t, err)
 
 	_, err = db.ExecContext(ctx, `
@@ -252,7 +253,7 @@ type document
 	db := testutil.EmptyDB(t)
 	ctx := context.Background()
 
-	err := tooling.MigrateFromString(ctx, db, dsl)
+	err := migrator.MigrateFromString(ctx, db, dsl)
 	require.NoError(t, err)
 
 	_, err = db.ExecContext(ctx, `
@@ -313,7 +314,7 @@ type document
 	ctx := context.Background()
 
 	// Migrate schema
-	err := tooling.MigrateFromString(ctx, db, dsl)
+	err := migrator.MigrateFromString(ctx, db, dsl)
 	require.NoError(t, err)
 
 	// Create tuples view

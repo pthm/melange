@@ -23,12 +23,6 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Tidy modules
-        run: |
-          go mod tidy
-          cd tooling && go mod tidy
-          cd ../test && go mod tidy
-
       - name: Run OpenFGA feature tests
         working-directory: test
         run: |

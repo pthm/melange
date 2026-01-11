@@ -3,7 +3,7 @@ title: CLI Reference
 weight: 1
 ---
 
-The Melange CLI provides commands for validating schemas, generating Go code, and applying migrations to your database.
+The Melange CLI provides commands for validating schemas, generating client code, and applying migrations to your database. Built on Cobra/Viper, it supports [configuration files](configuration.md), environment variables, and command-line flags with consistent precedence.
 
 ## Installation
 
@@ -11,14 +11,34 @@ The Melange CLI provides commands for validating schemas, generating Go code, an
 go install github.com/pthm/melange/cmd/melange@latest
 ```
 
-## Commands
+## Global Flags
+
+These flags are available on all commands:
+
+| Flag | Description |
+|------|-------------|
+| `--config` | Path to config file (default: auto-discover `melange.yaml`). See [Configuration](configuration.md). |
+| `-v`, `--verbose` | Increase verbosity (can be repeated: `-vv`, `-vvv`) |
+| `-q`, `--quiet` | Suppress non-error output |
+
+## Command Groups
+
+Commands are organized into logical groups:
+
+**Schema Commands:** `validate`, `migrate`, `status`, `doctor`
+**Client Commands:** `generate`
+**Utility Commands:** `config`, `version`, `license`
+
+---
+
+## Schema Commands
 
 ### validate
 
 Check `.fga` schema syntax without database access.
 
 ```bash
-melange validate --schemas-dir schemas
+melange validate --schema schemas/schema.fga
 ```
 
 **Output:**
@@ -31,67 +51,13 @@ Schema is valid. Found 3 types:
 
 This command parses the schema using the OpenFGA parser and reports any syntax errors. It does not require database access.
 
-### generate
-
-Generate type-safe Go code from your schema.
-
-```bash
-melange generate \
-  --schemas-dir schemas \
-  --generate-dir internal/authz \
-  --generate-pkg authz
-```
-
 **Flags:**
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--schemas-dir` | `schemas` | Directory containing `schema.fga` |
-| `--generate-dir` | `authz` | Output directory for generated code |
-| `--generate-pkg` | `authz` | Package name for generated code |
-| `--id-type` | `string` | ID type for constructors (`string`, `int64`, `uuid.UUID`) |
-| `--relation-prefix` | `""` | Only generate relations with this prefix (e.g., `can_`) |
+| `--schema` | `schemas/schema.fga` | Path to schema.fga file |
 
-**Example with all options:**
-```bash
-melange generate \
-  --schemas-dir schemas \
-  --generate-dir internal/authz \
-  --generate-pkg authz \
-  --id-type int64 \
-  --relation-prefix can_
-```
-
-**Generated code example:**
-```go
-// schema_gen.go
-package authz
-
-import "github.com/pthm/melange"
-
-// Object types
-const (
-    TypeUser         = "user"
-    TypeOrganization = "organization"
-    TypeRepository   = "repository"
-)
-
-// Relation constants (filtered by prefix "can_")
-const (
-    RelCanRead   = "can_read"
-    RelCanWrite  = "can_write"
-    RelCanDelete = "can_delete"
-)
-
-// Type-safe constructors
-func User(id int64) melange.Object {
-    return melange.Object{Type: TypeUser, ID: fmt.Sprint(id)}
-}
-
-func Repository(id int64) melange.Object {
-    return melange.Object{Type: TypeRepository, ID: fmt.Sprint(id)}
-}
-```
+The schema path can also be set via configuration file or environment variable. See [Configuration](#configuration).
 
 ### migrate
 
@@ -100,15 +66,15 @@ Apply the schema to your PostgreSQL database.
 ```bash
 melange migrate \
   --db postgres://localhost/mydb \
-  --schemas-dir schemas
+  --schema schemas/schema.fga
 ```
 
 **Flags:**
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--db` | `$DATABASE_URL` | PostgreSQL connection string |
-| `--schemas-dir` | `schemas` | Directory containing `schema.fga` |
+| `--db` | (from config) | PostgreSQL connection string |
+| `--schema` | `schemas/schema.fga` | Path to schema.fga file |
 | `--dry-run` | `false` | Output SQL to stdout without applying changes |
 | `--force` | `false` | Force migration even if schema is unchanged |
 
@@ -172,8 +138,15 @@ Check the current migration status.
 ```bash
 melange status \
   --db postgres://localhost/mydb \
-  --schemas-dir schemas
+  --schema schemas/schema.fga
 ```
+
+**Flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--db` | (from config) | PostgreSQL connection string |
+| `--schema` | `schemas/schema.fga` | Path to schema.fga file |
 
 **Output:**
 ```
@@ -192,15 +165,15 @@ Run comprehensive health checks on your authorization infrastructure.
 ```bash
 melange doctor \
   --db postgres://localhost/mydb \
-  --schemas-dir schemas
+  --schema schemas/schema.fga
 ```
 
 **Flags:**
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--db` | `$DATABASE_URL` | PostgreSQL connection string |
-| `--schemas-dir` | `schemas` | Directory containing `schema.fga` |
+| `--db` | (from config) | PostgreSQL connection string |
+| `--schema` | `schemas/schema.fga` | Path to schema.fga file |
 | `--verbose` | `false` | Show detailed output with additional context |
 
 **Output:**
@@ -259,10 +232,6 @@ The doctor command performs the following checks:
 - Reports tuple count
 - Validates that tuples reference valid types and relations defined in the schema
 
-**Exit codes:**
-- Returns `0` if all checks pass (warnings are allowed)
-- Returns `1` if any check fails
-
 **Verbose mode:**
 
 Use `--verbose` to see additional details for each check:
@@ -289,64 +258,240 @@ This shows:
 | Missing columns | Update melange_tuples to include all required columns |
 | Unknown types in tuples | Update tuples view or schema to match |
 
-## Global Flags
+---
 
-These flags apply to all commands:
+## Client Commands
+
+### generate client
+
+Generate type-safe client code from your schema.
+
+```bash
+melange generate client \
+  --runtime go \
+  --schema schemas/schema.fga \
+  --output internal/authz \
+  --package authz
+```
+
+**Flags:**
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--db` | `$DATABASE_URL` | PostgreSQL connection string |
-| `--schemas-dir` | `schemas` | Directory containing schema files |
-| `--config` | `melange.yaml` | Config file (not yet implemented) |
+| `--runtime` | (required) | Target runtime: `go`, `typescript` |
+| `--schema` | `schemas/schema.fga` | Path to schema.fga file |
+| `--output` | stdout | Output directory for generated code |
+| `--package` | `authz` | Package name for generated code |
+| `--id-type` | `string` | ID type for constructors (`string`, `int64`, `uuid.UUID`) |
+| `--filter` | `""` | Only generate relations with this prefix (e.g., `can_`) |
 
-## Environment Variables
+**Example with all options:**
+```bash
+melange generate client \
+  --runtime go \
+  --schema schemas/schema.fga \
+  --output internal/authz \
+  --package authz \
+  --id-type int64 \
+  --filter can_
+```
 
-| Variable | Description |
-|----------|-------------|
-| `DATABASE_URL` | Default database connection string (used if `--db` not provided) |
+**Output to stdout:**
+```bash
+melange generate client --runtime go --schema schemas/schema.fga
+```
+
+**Generated code example:**
+```go
+// schema_gen.go
+package authz
+
+import "github.com/pthm/melange/melange"
+
+// Object types
+const (
+    TypeUser         melange.ObjectType = "user"
+    TypeOrganization melange.ObjectType = "organization"
+    TypeRepository   melange.ObjectType = "repository"
+)
+
+// Relation constants (filtered by prefix "can_")
+const (
+    RelCanRead   melange.Relation = "can_read"
+    RelCanWrite  melange.Relation = "can_write"
+    RelCanDelete melange.Relation = "can_delete"
+)
+
+// Type-safe constructors
+func User(id int64) melange.Object {
+    return melange.Object{Type: TypeUser, ID: fmt.Sprint(id)}
+}
+
+func Repository(id int64) melange.Object {
+    return melange.Object{Type: TypeRepository, ID: fmt.Sprint(id)}
+}
+
+// Wildcard constructors
+func AnyUser() melange.Object {
+    return melange.Object{Type: TypeUser, ID: "*"}
+}
+```
+
+**Supported runtimes:**
+
+| Runtime | Status | Description |
+|---------|--------|-------------|
+| `go` | Implemented | Type-safe Go code with constants and constructors |
+| `typescript` | Planned | TypeScript types and factory functions |
+
+---
+
+## Utility Commands
+
+### config show
+
+Display the effective configuration after merging defaults, config file, and environment variables.
+
+```bash
+melange config show
+```
+
+**Flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--source` | `false` | Show the config file path being used |
+
+**Example with source:**
+```bash
+melange config show --source
+```
+
+**Output:**
+```
+Config file: /path/to/project/melange.yaml
+
+schema: schemas/schema.fga
+database:
+  url: postgres://localhost/mydb
+  host: ""
+  port: 5432
+  ...
+```
+
+This is useful for debugging configuration issues and understanding which values are in effect.
+
+### version
+
+Print version information.
+
+```bash
+melange version
+```
+
+**Output:**
+```
+melange v1.0.0 (commit: abc1234, built: 2024-01-15)
+```
+
+### license
+
+Print license and third-party notices.
+
+```bash
+melange license
+```
+
+This displays the Melange license and attribution for all embedded third-party dependencies.
+
+---
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | General error (validation, runtime, IO) |
+| 2 | Configuration error (invalid config file, missing required settings) |
+| 3 | Schema parse error |
+| 4 | Database connection error |
 
 ## Common Workflows
 
 ### Development Setup
 
+**With configuration file (recommended):**
+
+Create a `melange.yaml`:
+```yaml
+schema: schemas/schema.fga
+
+database:
+  url: postgres://localhost/myapp_dev
+
+generate:
+  client:
+    runtime: go
+    output: internal/authz
+    package: authz
+```
+
+Then run commands without flags:
+```bash
+# Validate schema
+melange validate
+
+# Apply to database
+melange migrate
+
+# Generate Go code
+melange generate client
+```
+
+**Without configuration file:**
+
 ```bash
 # 1. Validate schema syntax
-melange validate --schemas-dir schemas
+melange validate --schema schemas/schema.fga
 
 # 2. Apply to local database
 melange migrate \
   --db postgres://localhost/myapp_dev \
-  --schemas-dir schemas
+  --schema schemas/schema.fga
 
 # 3. Generate Go code
-melange generate \
-  --schemas-dir schemas \
-  --generate-dir internal/authz \
-  --generate-pkg authz
+melange generate client \
+  --runtime go \
+  --schema schemas/schema.fga \
+  --output internal/authz \
+  --package authz
 ```
 
 ### CI/CD Pipeline
 
+Use environment variables for credentials:
+
 ```bash
+# Set database URL from CI secrets
+export MELANGE_DATABASE_URL="$DATABASE_URL"
+
 # Validate schema (fails fast if syntax error)
-melange validate --schemas-dir schemas
+melange validate
 
 # Preview migration (optional, for review)
-melange migrate --db $DATABASE_URL --dry-run
+melange migrate --dry-run
 
-# Apply migrations to staging/production
-melange migrate \
-  --db $DATABASE_URL \
-  --schemas-dir schemas
+# Apply migrations
+melange migrate
 
-# Run health checks to verify everything is working
-melange doctor --db $DATABASE_URL
+# Run health checks
+melange doctor
 ```
 
 For pipelines where you want to ensure migrations are always applied (e.g., after a Melange version update):
 
 ```bash
-melange migrate --db $DATABASE_URL --force
+melange migrate --force
 ```
 
 ### Schema Updates
@@ -355,16 +500,21 @@ When you modify your `.fga` schema:
 
 ```bash
 # 1. Validate changes
-melange validate --schemas-dir schemas
+melange validate
 
-# 2. Regenerate Go code
-melange generate \
-  --schemas-dir schemas \
-  --generate-dir internal/authz \
-  --generate-pkg authz
+# 2. Regenerate client code
+melange generate client
 
 # 3. Apply to database
-melange migrate --db $DATABASE_URL --schemas-dir schemas
+melange migrate
+```
+
+Or as a single workflow with explicit flags:
+
+```bash
+melange validate --schema schemas/schema.fga && \
+  melange generate client --runtime go --output internal/authz && \
+  melange migrate --db "$DATABASE_URL"
 ```
 
 ### Troubleshooting
@@ -373,10 +523,13 @@ When permission checks aren't working as expected, use `doctor` to diagnose issu
 
 ```bash
 # Run comprehensive health checks
-melange doctor --db $DATABASE_URL --schemas-dir schemas
+melange doctor
 
 # With verbose output for more details
-melange doctor --db $DATABASE_URL --verbose
+melange doctor --verbose
+
+# Check effective configuration
+melange config show --source
 ```
 
 Common scenarios where `doctor` helps:
@@ -389,12 +542,7 @@ Common scenarios where `doctor` helps:
 
 4. **Data migration issues** - Doctor samples tuples and validates they reference valid types and relations.
 
-## Exit Codes
-
-| Code | Meaning |
-|------|---------|
-| 0 | Success |
-| 1 | Error (schema parse error, database connection failure, etc.) |
+---
 
 ## Programmatic Alternative
 
@@ -402,17 +550,19 @@ For programmatic schema management without the CLI, use the Go API:
 
 ```go
 import (
-    "github.com/pthm/melange/tooling/schema"
-    "github.com/pthm/melange/tooling"
+    "github.com/pthm/melange/pkg/parser"
+    "github.com/pthm/melange/pkg/migrator"
 )
 
-// Parse and migrate in one step
-err := tooling.Migrate(ctx, db, "schemas")
+// Parse schema
+types, err := parser.ParseSchema("schemas/schema.fga")
+if err != nil {
+    log.Fatal(err)
+}
 
-// Or with more control
-types, err := tooling.ParseSchema("schemas/schema.fga")
-    migrator := schema.NewMigrator(db, "schemas")
-    err = migrator.MigrateWithTypes(ctx, types)
+// Create migrator and apply
+m := migrator.NewMigrator(db, "schemas/schema.fga")
+err = m.MigrateWithTypes(ctx, types)
 ```
 
 **With options (dry-run, force, skip-if-unchanged):**
@@ -420,24 +570,24 @@ types, err := tooling.ParseSchema("schemas/schema.fga")
 ```go
 import (
     "os"
-    "github.com/pthm/melange/tooling"
+    "github.com/pthm/melange/pkg/migrator"
 )
 
 // Dry-run: output SQL to stdout
-opts := tooling.MigrateOptions{
+opts := migrator.MigrateOptions{
     DryRun: os.Stdout,
 }
-skipped, err := tooling.MigrateWithOptions(ctx, db, "schemas", opts)
+skipped, err := migrator.MigrateWithOptions(ctx, db, "schemas/schema.fga", opts)
 
 // Force migration even if unchanged
-opts := tooling.MigrateOptions{
+opts := migrator.MigrateOptions{
     Force: true,
 }
-skipped, err := tooling.MigrateWithOptions(ctx, db, "schemas", opts)
+skipped, err := migrator.MigrateWithOptions(ctx, db, "schemas/schema.fga", opts)
 
 // Normal migration with skip detection
-opts := tooling.MigrateOptions{}
-skipped, err := tooling.MigrateWithOptions(ctx, db, "schemas", opts)
+opts := migrator.MigrateOptions{}
+skipped, err := migrator.MigrateWithOptions(ctx, db, "schemas/schema.fga", opts)
 if skipped {
     log.Println("Schema unchanged, migration skipped")
 }
@@ -448,10 +598,10 @@ if skipped {
 ```go
 import (
     "os"
-    "github.com/pthm/melange/doctor"
+    "github.com/pthm/melange/internal/doctor"
 )
 
-d := doctor.New(db, "schemas")
+d := doctor.New(db, "schemas/schema.fga")
 report, err := d.Run(ctx)
 if err != nil {
     log.Fatal(err)

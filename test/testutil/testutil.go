@@ -2,7 +2,6 @@
 package testutil
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -22,8 +21,10 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/pthm/melange"
-	"github.com/pthm/melange/tooling"
+	"github.com/pthm/melange/melange"
+	"github.com/pthm/melange/pkg/clientgen"
+	"github.com/pthm/melange/pkg/migrator"
+	"github.com/pthm/melange/pkg/parser"
 )
 
 // Embedded test fixtures
@@ -107,19 +108,25 @@ func ensureCodegen() error {
 // runCodegen generates the authz package from the schema.
 func runCodegen() error {
 	// Parse the schema
-	types, err := tooling.ParseSchemaString(schemaFGA)
+	types, err := parser.ParseSchemaString(schemaFGA)
 	if err != nil {
 		return fmt.Errorf("parse schema: %w", err)
 	}
 
 	// Generate the code
-	var buf bytes.Buffer
-	cfg := &tooling.GenerateConfig{
+	cfg := &clientgen.Config{
 		Package: "authz",
 		IDType:  "int64",
 	}
-	if err := tooling.GenerateGo(&buf, types, cfg); err != nil {
+	files, err := clientgen.Generate("go", types, cfg)
+	if err != nil {
 		return fmt.Errorf("generate code: %w", err)
+	}
+	// Get the generated content (single file for Go)
+	var content []byte
+	for _, c := range files {
+		content = c
+		break
 	}
 
 	// Write to the authz package (test/authz from test/testutil)
@@ -129,7 +136,7 @@ func runCodegen() error {
 	}
 
 	outPath := filepath.Join(authzDir, "schema_gen.go")
-	if err := os.WriteFile(outPath, buf.Bytes(), 0o644); err != nil {
+	if err := os.WriteFile(outPath, content, 0o644); err != nil {
 		return fmt.Errorf("write generated code: %w", err)
 	}
 
@@ -352,7 +359,7 @@ func applyMelangeMigrations(dsn string) error {
 	defer func() { _ = db.Close() }()
 
 	// Apply melange DDL and schema from embedded file
-	err = tooling.MigrateFromString(ctx, db, schemaFGA)
+	err = migrator.MigrateFromString(ctx, db, schemaFGA)
 	if err != nil {
 		return fmt.Errorf("apply melange migration: %w", err)
 	}

@@ -28,10 +28,11 @@ import (
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"google.golang.org/grpc"
 
-	"github.com/pthm/melange"
-	"github.com/pthm/melange/tooling/schema"
+	"github.com/pthm/melange/melange"
+	"github.com/pthm/melange/pkg/migrator"
+	"github.com/pthm/melange/pkg/parser"
+	"github.com/pthm/melange/pkg/schema"
 	"github.com/pthm/melange/test/testutil"
-	"github.com/pthm/melange/tooling"
 )
 
 // Client implements the OpenFGA ClientInterface for running tests against melange.
@@ -138,7 +139,7 @@ func (c *Client) debugUserset(
 func initializeMelangeSchema(db *sql.DB) error {
 	ctx := context.Background()
 
-	// Use tooling.MigrateFromString with a minimal schema to set up infrastructure
+	// Use migrator.MigrateFromString with a minimal schema to set up infrastructure
 	// We use a minimal schema because OpenFGA tests provide their own models
 	minimalSchema := `
 model
@@ -146,7 +147,7 @@ model
 
 type user
 `
-	if err := tooling.MigrateFromString(ctx, db, minimalSchema); err != nil {
+	if err := migrator.MigrateFromString(ctx, db, minimalSchema); err != nil {
 		return fmt.Errorf("apply melange migration: %w", err)
 	}
 
@@ -481,8 +482,8 @@ func (c *Client) loadModel(ctx context.Context, db *sql.DB, m *model) error {
 
 	// Use the Migrator to apply generated SQL for this model
 	// The empty string for schemasDir is fine since we're using MigrateWithTypes directly
-	migrator := schema.NewMigrator(db, "")
-	return migrator.MigrateWithTypes(ctx, m.types)
+	mig := migrator.NewMigrator(db, "")
+	return mig.MigrateWithTypes(ctx, m.types)
 }
 
 // refreshTuples updates the melange_tuples view with the current store tuples.
@@ -541,7 +542,7 @@ func (c *Client) refreshTuples(ctx context.Context, db *sql.DB, s *store) error 
 }
 
 // convertProtoModel converts a WriteAuthorizationModelRequest to schema TypeDefinitions.
-// Uses tooling.ConvertProtoModel to ensure test parsing matches production parsing.
+// Uses parser.ConvertProtoModel to ensure test parsing matches production parsing.
 func convertProtoModel(req *openfgav1.WriteAuthorizationModelRequest) []schema.TypeDefinition {
 	model := &openfgav1.AuthorizationModel{
 		SchemaVersion:   req.GetSchemaVersion(),
@@ -549,7 +550,7 @@ func convertProtoModel(req *openfgav1.WriteAuthorizationModelRequest) []schema.T
 		Conditions:      req.GetConditions(),
 	}
 
-	return tooling.ConvertProtoModel(model)
+	return parser.ConvertProtoModel(model)
 }
 
 // parseSubject parses an OpenFGA user string (e.g., "user:123" or "team:456#member").

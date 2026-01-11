@@ -198,7 +198,7 @@ type project
 Validate your schema syntax:
 
 ```bash
-melange validate --schemas-dir schemas
+melange validate --schema schemas/schema.fga
 ```
 
 For full validation including semantic checks, use the OpenFGA CLI:

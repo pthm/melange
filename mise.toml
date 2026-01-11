@@ -6,8 +6,8 @@ auto_install = true
 experimental = true
 
 [tools]
-# SQL linter/formatter (from GitHub releases via ubi)
-"ubi:quarylabs/sqruff" = "latest"
+# Release automation
+goreleaser = "latest"
 
 # Code search tool with semantic search (from crates.io)
 "cargo:ck-search" = "latest"

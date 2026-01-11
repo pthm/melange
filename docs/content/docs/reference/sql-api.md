@@ -1,6 +1,6 @@
 ---
 title: SQL API
-weight: 2
+weight: 3
 ---
 
 Melange generates SQL functions that can be called directly from any PostgreSQL client. This allows you to use Melange's authorization system from any language or framework without requiring the Go library.

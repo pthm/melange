@@ -3,37 +3,65 @@ title: How It Works
 weight: 1
 ---
 
-Melange is an **OpenFGA-compatible authorization library** that runs entirely in **PostgreSQL**. Unlike traditional FGA implementations that perform graph traversal in application code, Melange generates specialized SQL functions that execute permission checks directly in the database.
+Melange is an **OpenFGA-to-PostgreSQL compiler**. It reads your authorization model and compiles it into specialized SQL functions that execute permission checks directly in your database — no external service, no network hops, no tuple synchronization.
 
-## Architecture Overview
+## The Compiler Model
 
-Melange operates in two distinct phases:
+Like [Protocol Buffers](https://protobuf.dev/) compiles `.proto` files into language-specific serialization code, Melange compiles `.fga` files into PostgreSQL functions. The key difference from traditional FGA implementations is **when** the schema is processed:
 
-1. **Build Time (Migration)**: Parses your OpenFGA schema and generates optimized SQL functions
-2. **Runtime**: Permission checks execute as single SQL queries against your existing data
+| Approach | Schema Processing | Runtime Behavior |
+|----------|-------------------|------------------|
+| **Traditional FGA** | Interpreted at query time | Generic graph traversal |
+| **Melange** | Compiled at migration time | Purpose-built SQL functions |
 
-### Build Time
+This compilation step is what enables Melange's performance — each relation in your schema gets its own optimized function, not a generic interpreter.
+
+## Compilation Pipeline
 
 ```mermaid
 flowchart LR
-    schema[schema.fga] --> migrate[melange migrate] --> funcs[Generated SQL Functions]
+    subgraph Input
+        schema["schema.fga<br/>(OpenFGA DSL)"]
+    end
+
+    subgraph Compiler
+        melange["melange migrate"]
+    end
+
+    subgraph Output["PostgreSQL Database"]
+        funcs["Specialized check functions"]
+        closure["Precomputed closure tables"]
+        dispatch["Dispatcher function"]
+    end
+
+    schema --> melange
+    melange --> funcs
+    melange --> closure
+    melange --> dispatch
 ```
+
+### Compile Time
+
+When you run `melange migrate`, the compiler:
+
+1. **Parses** your OpenFGA schema
+2. **Analyzes** relation patterns (direct, implied, union, intersection, etc.)
+3. **Computes** the transitive closure of role hierarchies
+4. **Generates** specialized SQL functions for each relation
+5. **Installs** the functions into your PostgreSQL database
 
 ### Runtime
 
-```mermaid
-flowchart LR
-    app[Your Application] -- SQL Query --> pg[check_permission]
-    pg -- 1 or 0 --> app
-    pg --> tuples[melange_tuples view]
-    tuples --> tables[Your Domain Tables]
+Permission checks are just SQL queries:
+
+```sql
+SELECT check_permission('user', 'alice', 'can_read', 'document', '123');
+-- Returns 1 (allowed) or 0 (denied)
 ```
 
-## Specialized SQL Function Generation
+The generated functions query a `melange_tuples` view that you define over your existing domain tables — no separate tuple storage required.
 
-The key insight behind Melange's performance is **specialization**. Instead of a single generic permission-checking function that must handle all possible schema patterns, Melange generates purpose-built functions for each relation in your schema.
-
-### What Gets Generated
+## What the Compiler Generates
 
 For a schema like:
 
@@ -56,9 +84,9 @@ type document
     define viewer: [user] or editor or viewer from parent
 ```
 
-Melange generates:
+Melange compiles this into:
 
-| Function                  | Purpose                                                           |
+| Generated Function        | Purpose                                                           |
 | ------------------------- | ----------------------------------------------------------------- |
 | `check_folder_owner()`    | Direct tuple lookup for folder owners                             |
 | `check_folder_viewer()`   | Union check: direct assignment OR implied by owner                |
@@ -67,20 +95,22 @@ Melange generates:
 | `check_document_viewer()` | Complex check: direct, editor hierarchy, AND parent folder access |
 | `check_permission()`      | Dispatcher that routes to specialized functions                   |
 
-### Template-Based Generation
+### Pattern-Specific Code Generation
 
-Each function is generated from templates optimized for specific authorization patterns:
+The compiler recognizes authorization patterns and generates optimized code for each:
 
-- **Direct assignment** (`[user]`): Simple `EXISTS` check against tuples
-- **Role hierarchy** (`viewer: owner`): Precomputed closure lookup
-- **Union** (`[user] or owner`): OR'd `EXISTS` clauses
-- **Tuple-to-userset** (`viewer from parent`): Recursive lookup via parent objects
-- **Exclusion** (`but not blocked`): Access check with exclusion condition
-- **Intersection** (`writer and editor`): All conditions must be satisfied
+| Pattern | Schema Syntax | Generated Code |
+|---------|--------------|----------------|
+| Direct assignment | `[user]` | Simple `EXISTS` check |
+| Role hierarchy | `viewer: owner` | Precomputed closure lookup |
+| Union | `[user] or owner` | OR'd `EXISTS` clauses |
+| Tuple-to-userset | `viewer from parent` | Recursive lookup via parent |
+| Exclusion | `but not blocked` | Access check with exclusion |
+| Intersection | `writer and editor` | All conditions must match |
 
-### Example Generated Function
+### Example: Compiled Function
 
-For `document.viewer: [user] or editor or viewer from parent`, Melange generates:
+For `document.viewer: [user] or editor or viewer from parent`, the compiler generates:
 
 ```sql
 CREATE OR REPLACE FUNCTION check_document_viewer(
@@ -129,9 +159,14 @@ END;
 $$ LANGUAGE plpgsql STABLE;
 ```
 
-## The Dispatcher Pattern
+Notice how the compiler has:
+- Inlined the closure (`'viewer', 'editor', 'owner'`) rather than computing it at runtime
+- Generated pattern-specific code for tuple-to-userset traversal
+- Added cycle detection for recursive patterns
 
-The `check_permission()` function acts as a router, dispatching to specialized functions based on the object type and relation:
+## The Dispatcher
+
+The `check_permission()` function acts as a router, dispatching to the appropriate specialized function:
 
 ```sql
 CREATE OR REPLACE FUNCTION check_permission(
@@ -154,13 +189,11 @@ CREATE OR REPLACE FUNCTION check_permission(
 $$ LANGUAGE sql STABLE;
 ```
 
-This eliminates runtime interpretation of the schema and allows PostgreSQL's query planner to optimize each specialized function independently.
+This eliminates runtime schema interpretation and allows PostgreSQL's query planner to optimize each specialized function independently.
 
 ## Precomputed Relation Closure
 
-Role hierarchies like `owner -> admin -> member` are resolved at migration time, not runtime. Melange computes the transitive closure of implied-by relationships:
-
-For a schema with:
+Role hierarchies are resolved at compile time, not runtime. For a schema with:
 
 ```fga
 define owner: [user]
@@ -168,7 +201,7 @@ define admin: [user] or owner
 define member: [user] or admin
 ```
 
-Melange precomputes:
+The compiler precomputes the transitive closure:
 
 | relation | satisfying_relation |
 | -------- | ------------------- |
@@ -179,11 +212,11 @@ Melange precomputes:
 | admin    | owner               |
 | owner    | owner               |
 
-This closure is inlined directly into the generated SQL functions, so checking "does user have member?" becomes a simple `IN ('member', 'admin', 'owner')` clause rather than recursive function calls.
+This closure is inlined directly into the generated SQL. Checking "does user have member?" becomes a simple `IN ('member', 'admin', 'owner')` clause rather than recursive function calls.
 
 ## The melange_tuples View
 
-Melange reads authorization data from a view called `melange_tuples` that you define over your existing domain tables:
+Melange reads authorization data from a view you define over your existing tables:
 
 ```sql
 CREATE VIEW melange_tuples AS
@@ -210,9 +243,11 @@ This approach means:
 
 - **Zero tuple sync**: No separate tuple storage to maintain
 - **Transaction awareness**: Permission checks see uncommitted changes
-- **Real-time consistency**: Tuples reflect current database state
+- **Real-time consistency**: Tuples always reflect current database state
 
-## OpenFGA Schema Compatibility
+See [Tuples View](./tuples-view.md) for detailed guidance on mapping your domain tables.
+
+## OpenFGA Compatibility
 
 Melange provides **full OpenFGA Schema 1.1 compatibility** (excluding conditions). The same `.fga` schema files work with both Melange and OpenFGA, continuously validated against the official OpenFGA test suite.
 
@@ -222,7 +257,7 @@ Melange provides **full OpenFGA Schema 1.1 compatibility** (excluding conditions
 
 ## Performance
 
-Melange delivers sub-millisecond permission checks with **O(1) constant time scaling** — specialized SQL functions, precomputed closures, and in-database execution eliminate runtime overhead.
+Compiled SQL functions deliver sub-millisecond permission checks with **O(1) constant time scaling** — specialization, precomputed closures, and in-database execution eliminate runtime overhead.
 
 {{< cards cols="1" >}}
 {{< card link="../reference/performance" title="Performance Guide" subtitle="Detailed benchmarks, optimization strategies, and caching configuration" icon="chart-bar" >}}
@@ -230,11 +265,11 @@ Melange delivers sub-millisecond permission checks with **O(1) constant time sca
 
 ## Summary
 
-Melange achieves its performance through:
+Melange's compiler architecture delivers performance through:
 
-1. **Build-time specialization**: Generating purpose-built SQL functions for each relation
-2. **Precomputed closure**: Resolving role hierarchies before runtime
-3. **View-based tuples**: Reading directly from your domain tables
-4. **Pure SQL execution**: Leveraging PostgreSQL's query optimizer
+1. **Compile-time specialization**: Purpose-built SQL functions for each relation
+2. **Precomputed closure**: Role hierarchies resolved before runtime
+3. **View-based tuples**: Direct queries against your existing tables
+4. **Native SQL execution**: Leveraging PostgreSQL's query optimizer
 
-This architecture delivers sub-millisecond permission checks while maintaining full OpenFGA Schema 1.1 compatibility, making it ideal for applications that need fine-grained authorization without the operational complexity of a separate authorization service.
+The result: sub-millisecond permission checks with full OpenFGA Schema 1.1 compatibility, without the operational complexity of a separate authorization service.

@@ -43,6 +43,11 @@ linters:
       - path: test/
         linters:
           - unparam
+      # SQL generator has many builder functions with consistent signatures
+      # Parameters are kept for API consistency even when not all are used
+      - path: internal/sqlgen/
+        linters:
+          - unparam
 
 formatters:
   enable:
