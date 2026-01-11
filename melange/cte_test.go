@@ -12,7 +12,7 @@ func TestListObjects_DecisionDeny(t *testing.T) {
 
 	ctx := t.Context()
 
-	ids, err := checker.ListObjects(ctx, testSubject{}, testRelation{}, "test")
+	ids, err := checker.ListObjectsAll(ctx, testSubject{}, testRelation{}, "test")
 	if err != nil {
 		t.Errorf("ListObjects error: %v", err)
 	}
@@ -27,7 +27,7 @@ func TestListSubjects_DecisionDeny(t *testing.T) {
 
 	ctx := t.Context()
 
-	ids, err := checker.ListSubjects(ctx, testObject{}, testRelation{}, "user")
+	ids, err := checker.ListSubjectsAll(ctx, testObject{}, testRelation{}, "user")
 	if err != nil {
 		t.Errorf("ListSubjects error: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestListOperations_ContextDecision(t *testing.T) {
 
 	ctx := melange.WithDecisionContext(t.Context(), melange.DecisionDeny)
 
-	ids, err := checker.ListObjects(ctx, testSubject{}, testRelation{}, "test")
+	ids, err := checker.ListObjectsAll(ctx, testSubject{}, testRelation{}, "test")
 	if err != nil {
 		t.Errorf("ListObjects error: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestListOperations_ContextDecision(t *testing.T) {
 		t.Errorf("ListObjects should return nil for context DecisionDeny, got %v", ids)
 	}
 
-	ids, err = checker.ListSubjects(ctx, testObject{}, testRelation{}, "user")
+	ids, err = checker.ListSubjectsAll(ctx, testObject{}, testRelation{}, "user")
 	if err != nil {
 		t.Errorf("ListSubjects error: %v", err)
 	}

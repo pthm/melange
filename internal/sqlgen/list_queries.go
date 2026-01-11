@@ -142,18 +142,24 @@ func ListObjectsComplexClosureQuery(input ListObjectsComplexClosureInput) (strin
 }
 
 func ListObjectsIntersectionClosureQuery(functionName string) (string, error) {
+	// Pass NULL for pagination params - inner function should return all results,
+	// outer pagination wrapper handles limiting
+	// Use alias to avoid column ambiguity with pagination-returning functions
 	stmt := SelectStmt{
-		Columns: []string{"*"},
-		From:    functionName + "(p_subject_type, p_subject_id)",
+		Columns: []string{"icr.object_id"},
+		From:    functionName + "(p_subject_type, p_subject_id, NULL, NULL)",
+		Alias:   "icr",
 	}
 	return stmt.SQL(), nil
 }
 
 func ListObjectsIntersectionClosureValidatedQuery(objectType, relation, functionName string) (string, error) {
+	// Pass NULL for pagination params - inner function should return all results,
+	// outer pagination wrapper handles limiting
 	stmt := SelectStmt{
 		Distinct: true,
 		Columns:  []string{"icr.object_id"},
-		From:     functionName + "(p_subject_type, p_subject_id)",
+		From:     functionName + "(p_subject_type, p_subject_id, NULL, NULL)",
 		Alias:    "icr",
 		Where: CheckPermission{
 			Subject:     SubjectParams(),
@@ -574,21 +580,27 @@ func ListSubjectsComplexClosureQuery(input ListSubjectsComplexClosureInput) (str
 }
 
 func ListSubjectsIntersectionClosureQuery(functionName, subjectTypeExpr string) (string, error) {
+	// Pass NULL for pagination params - inner function should return all results,
+	// outer pagination wrapper handles limiting
+	// Use alias to avoid column ambiguity with pagination-returning functions
 	stmt := SelectStmt{
-		Columns: []string{"*"},
-		From:    functionName + "(p_object_id, " + subjectTypeExpr + ")",
+		Columns: []string{"ics.subject_id"},
+		From:    functionName + "(p_object_id, " + subjectTypeExpr + ", NULL, NULL)",
+		Alias:   "ics",
 	}
 	return stmt.SQL(), nil
 }
 
 func ListSubjectsIntersectionClosureValidatedQuery(objectType, relation, functionName, functionSubjectTypeExpr, checkSubjectTypeExpr, objectIDExpr string) (string, error) {
+	// Pass NULL for pagination params - inner function should return all results,
+	// outer pagination wrapper handles limiting
 	checkSubjectType := stringToDSLExpr(checkSubjectTypeExpr)
 	objectID := stringToDSLExpr(objectIDExpr)
 
 	stmt := SelectStmt{
 		Distinct: true,
 		Columns:  []string{"ics.subject_id"},
-		From:     functionName + "(" + objectIDExpr + ", " + functionSubjectTypeExpr + ")",
+		From:     functionName + "(" + objectIDExpr + ", " + functionSubjectTypeExpr + ", NULL, NULL)",
 		Alias:    "ics",
 		Where: CheckPermissionCall{
 			FunctionName: "check_permission",

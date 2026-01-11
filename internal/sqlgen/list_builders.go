@@ -997,33 +997,38 @@ func buildListSubjectsIntersectionBlocks(a RelationAnalysis, validate bool, func
 }
 
 func buildListObjectsFunctionSQL(functionName string, a RelationAnalysis, query string) string {
+	paginatedQuery := wrapWithPagination(query, "object_id")
 	return fmt.Sprintf(`-- Generated list_objects function for %s.%s
 -- Features: %s
 CREATE OR REPLACE FUNCTION %s(
     p_subject_type TEXT,
-    p_subject_id TEXT
-) RETURNS TABLE(object_id TEXT) AS $$
+    p_subject_id TEXT,
+    p_limit INT DEFAULT NULL,
+    p_after TEXT DEFAULT NULL
+) RETURNS TABLE(object_id TEXT, next_cursor TEXT) AS $$
 BEGIN
     RETURN QUERY
-%s;
+    %s;
 END;
 $$ LANGUAGE plpgsql STABLE;`,
 		a.ObjectType,
 		a.Relation,
 		a.Features.String(),
 		functionName,
-		query,
+		paginatedQuery,
 	)
 }
 
 func buildListSubjectsFunctionSQL(functionName string, a RelationAnalysis, usersetFilterBlocks []string, usersetFilterSelfBlock string, regularBlocks []string, templateName string) string {
-	var usersetFilterQuery string
+	// Build userset filter path query (when p_subject_type contains '#')
+	var usersetFilterPaginatedQuery string
 	if len(usersetFilterBlocks) > 0 {
 		parts := append([]string{}, usersetFilterBlocks...)
 		if usersetFilterSelfBlock != "" {
 			parts = append(parts, usersetFilterSelfBlock)
 		}
-		usersetFilterQuery = joinUnionBlocks(parts)
+		usersetFilterQuery := joinUnionBlocks(parts)
+		usersetFilterPaginatedQuery = wrapWithPaginationWildcardFirst(usersetFilterQuery)
 	}
 
 	regularQuery := joinUnionBlocks(regularBlocks)
@@ -1037,30 +1042,40 @@ func buildListSubjectsFunctionSQL(functionName string, a RelationAnalysis, users
 `, formatSQLStringList(buildAllowedSubjectTypesList(a)))
 	}
 
+	// Build regular path query with pagination
 	var regularReturn string
 	if templateName == "list_subjects_userset.tpl.sql" {
+		// For userset template, wrap the entire CTE construct as a subquery
+		// to avoid CTE name collision with pagination wrapper
+		innerQuery := fmt.Sprintf(`SELECT iq.subject_id FROM (
+            WITH inner_base AS (
+%s
+            ),
+            has_wildcard AS (
+                SELECT EXISTS (SELECT 1 FROM inner_base ib WHERE ib.subject_id = '*') AS has_wildcard
+            )
+%s
+        ) AS iq`, indentLines(regularQuery, "            "), renderUsersetWildcardTailRenamed(a))
+		paginatedQuery := wrapWithPaginationWildcardFirst(innerQuery)
 		regularReturn = fmt.Sprintf(`
         RETURN QUERY
-        WITH base_results AS (
-%s
-        ),
-        has_wildcard AS (
-            SELECT EXISTS (SELECT 1 FROM base_results br WHERE br.subject_id = '*') AS has_wildcard
-        )
-%s`, indentLines(regularQuery, "        "), renderUsersetWildcardTail(a))
+        %s;`, paginatedQuery)
 	} else {
+		paginatedQuery := wrapWithPaginationWildcardFirst(regularQuery)
 		regularReturn = fmt.Sprintf(`
         -- Regular subject type (no userset filter)
         RETURN QUERY
-%s;`, regularQuery)
+        %s;`, paginatedQuery)
 	}
 
 	return fmt.Sprintf(`-- Generated list_subjects function for %s.%s
 -- Features: %s
 CREATE OR REPLACE FUNCTION %s(
     p_object_id TEXT,
-    p_subject_type TEXT
-) RETURNS TABLE(subject_id TEXT) AS $$
+    p_subject_type TEXT,
+    p_limit INT DEFAULT NULL,
+    p_after TEXT DEFAULT NULL
+) RETURNS TABLE(subject_id TEXT, next_cursor TEXT) AS $$
 DECLARE
     v_filter_type TEXT;
     v_filter_relation TEXT;
@@ -1071,7 +1086,7 @@ BEGIN
         v_filter_relation := substring(p_subject_type from position('#' in p_subject_type) + 1);
 
         RETURN QUERY
-%s;
+        %s;
     ELSE%s%s
     END IF;
 END;
@@ -1080,10 +1095,37 @@ $$ LANGUAGE plpgsql STABLE;`,
 		a.Relation,
 		a.Features.String(),
 		functionName,
-		usersetFilterQuery,
+		usersetFilterPaginatedQuery,
 		regularTypeGuard,
 		regularReturn,
 	)
+}
+
+// renderUsersetWildcardTailRenamed is like renderUsersetWildcardTail but uses inner_base instead of base_results
+// to avoid CTE name collision when wrapping with pagination.
+func renderUsersetWildcardTailRenamed(a RelationAnalysis) string {
+	if a.Features.HasWildcard {
+		return fmt.Sprintf(`
+            -- Wildcard handling: when wildcard exists, filter non-wildcard subjects
+            -- to only those with explicit (non-wildcard-derived) access
+            SELECT ib.subject_id
+            FROM inner_base ib
+            CROSS JOIN has_wildcard hw
+            WHERE (NOT hw.has_wildcard)
+               OR (ib.subject_id = '*')
+               OR (
+                   ib.subject_id != '*'
+                   AND check_permission_no_wildcard(
+                       p_subject_type,
+                       ib.subject_id,
+                       '%s',
+                       '%s',
+                       p_object_id
+                   ) = 1
+               )`, a.Relation, a.ObjectType)
+	}
+
+	return "            SELECT ib.subject_id FROM inner_base ib"
 }
 
 func renderUsersetWildcardTail(a RelationAnalysis) string {
@@ -1266,6 +1308,80 @@ func indentLines(input, indent string) string {
 	return strings.Join(lines, "\n")
 }
 
+// =============================================================================
+// Pagination Helpers
+// =============================================================================
+
+// wrapWithPagination wraps a query in pagination CTEs for list_objects functions.
+// Returns a complete SQL query that implements cursor-based pagination with:
+// - p_limit: maximum number of results to return (NULL = no limit)
+// - p_after: cursor from previous page (NULL = start from beginning)
+// - next_cursor: returned with each row, NULL when no more pages
+func wrapWithPagination(query, idColumn string) string {
+	return fmt.Sprintf(`WITH base_results AS (
+%s
+    ),
+    paged AS (
+        SELECT br.%s
+        FROM base_results br
+        WHERE (p_after IS NULL OR br.%s > p_after)
+        ORDER BY br.%s
+        LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
+    ),
+    returned AS (
+        SELECT p.%s FROM paged p ORDER BY p.%s LIMIT p_limit
+    ),
+    next AS (
+        SELECT CASE
+            WHEN p_limit IS NOT NULL AND (SELECT count(*) FROM paged) > p_limit
+            THEN (SELECT max(r.%s) FROM returned r)
+        END AS next_cursor
+    )
+    SELECT r.%s, n.next_cursor
+    FROM returned r
+    CROSS JOIN next n`,
+		indentLines(query, "        "), idColumn, idColumn, idColumn,
+		idColumn, idColumn, idColumn, idColumn)
+}
+
+// wrapWithPaginationWildcardFirst wraps a query for list_subjects with wildcard-first ordering.
+// Wildcards ('*') are sorted before all other subject IDs to ensure consistent pagination.
+// Uses a compound sort key: (is_not_wildcard, subject_id) where is_not_wildcard is 0 for '*', 1 otherwise.
+func wrapWithPaginationWildcardFirst(query string) string {
+	return fmt.Sprintf(`WITH base_results AS (
+%s
+    ),
+    paged AS (
+        SELECT br.subject_id
+        FROM base_results br
+        WHERE p_after IS NULL OR (
+            -- Compound comparison for wildcard-first ordering:
+            -- (is_not_wildcard, subject_id) > (cursor_is_not_wildcard, cursor)
+            (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END, br.subject_id) >
+            (CASE WHEN p_after = '*' THEN 0 ELSE 1 END, p_after)
+        )
+        ORDER BY (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END), br.subject_id
+        LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
+    ),
+    returned AS (
+        SELECT p.subject_id FROM paged p
+        ORDER BY (CASE WHEN p.subject_id = '*' THEN 0 ELSE 1 END), p.subject_id
+        LIMIT p_limit
+    ),
+    next AS (
+        SELECT CASE
+            WHEN p_limit IS NOT NULL AND (SELECT count(*) FROM paged) > p_limit
+            THEN (SELECT r.subject_id FROM returned r
+                  ORDER BY (CASE WHEN r.subject_id = '*' THEN 0 ELSE 1 END) DESC, r.subject_id DESC
+                  LIMIT 1)
+        END AS next_cursor
+    )
+    SELECT r.subject_id, n.next_cursor
+    FROM returned r
+    CROSS JOIN next n`,
+		indentLines(query, "        "))
+}
+
 func generateListObjectsRecursiveFunctionBob(a RelationAnalysis, inline InlineSQLData) (string, error) {
 	functionName := listObjectsFunctionName(a.ObjectType, a.Relation)
 	relationList := buildTupleLookupRelations(a)
@@ -1329,12 +1445,15 @@ func generateListObjectsRecursiveFunctionBob(a RelationAnalysis, inline InlineSQ
 	})
 
 	depthCheck := buildDepthCheckSQL(a.ObjectType, selfRefRelations)
+	paginatedQuery := wrapWithPagination(query, "object_id")
 	functionSQL := fmt.Sprintf(`-- Generated list_objects function for %s.%s
 -- Features: %s
 CREATE OR REPLACE FUNCTION %s(
     p_subject_type TEXT,
-    p_subject_id TEXT
-) RETURNS TABLE(object_id TEXT) AS $$
+    p_subject_id TEXT,
+    p_limit INT DEFAULT NULL,
+    p_after TEXT DEFAULT NULL
+) RETURNS TABLE(object_id TEXT, next_cursor TEXT) AS $$
 DECLARE
     v_max_depth INTEGER;
 BEGIN
@@ -1344,7 +1463,7 @@ BEGIN
     END IF;
 
     RETURN QUERY
-%s;
+    %s;
 END;
 $$ LANGUAGE plpgsql STABLE;`,
 		a.ObjectType,
@@ -1352,7 +1471,7 @@ $$ LANGUAGE plpgsql STABLE;`,
 		a.Features.String(),
 		functionName,
 		depthCheck,
-		query,
+		paginatedQuery,
 	)
 
 	return functionSQL, nil
@@ -1736,12 +1855,15 @@ func generateListObjectsIntersectionFunctionBob(a RelationAnalysis, inline Inlin
 	)
 
 	depthCheck := buildDepthCheckSQL(a.ObjectType, selfRefRelations)
+	paginatedQuery := wrapWithPagination(query, "object_id")
 	return fmt.Sprintf(`-- Generated list_objects function for %s.%s
 -- Features: %s
 CREATE OR REPLACE FUNCTION %s(
     p_subject_type TEXT,
-    p_subject_id TEXT
-) RETURNS TABLE(object_id TEXT) AS $$
+    p_subject_id TEXT,
+    p_limit INT DEFAULT NULL,
+    p_after TEXT DEFAULT NULL
+) RETURNS TABLE(object_id TEXT, next_cursor TEXT) AS $$
 DECLARE
     v_max_depth INTEGER;
 BEGIN
@@ -1751,7 +1873,7 @@ BEGIN
     END IF;
 
     RETURN QUERY
-%s;
+    %s;
 END;
 $$ LANGUAGE plpgsql STABLE;`,
 		a.ObjectType,
@@ -1759,7 +1881,7 @@ $$ LANGUAGE plpgsql STABLE;`,
 		a.Features.String(),
 		functionName,
 		depthCheck,
-		query,
+		paginatedQuery,
 	), nil
 }
 
@@ -1919,12 +2041,17 @@ func generateListSubjectsRecursiveFunctionBob(a RelationAnalysis, inline InlineS
 	}
 
 	regularQuery = trimTrailingSemicolon(regularQuery)
+	usersetFilterQuery := joinUnionBlocks(append(usersetFilterBlocks, usersetSelfBlock))
+	usersetFilterPaginatedQuery := wrapWithPaginationWildcardFirst(usersetFilterQuery)
+	regularPaginatedQuery := wrapWithPaginationWildcardFirst(regularQuery)
 	return fmt.Sprintf(`-- Generated list_subjects function for %s.%s
 -- Features: %s
 CREATE OR REPLACE FUNCTION %s(
     p_object_id TEXT,
-    p_subject_type TEXT
-) RETURNS TABLE(subject_id TEXT) AS $$
+    p_subject_type TEXT,
+    p_limit INT DEFAULT NULL,
+    p_after TEXT DEFAULT NULL
+) RETURNS TABLE(subject_id TEXT, next_cursor TEXT) AS $$
 DECLARE
     v_filter_type TEXT;
     v_filter_relation TEXT;
@@ -1937,11 +2064,11 @@ BEGIN
 
         -- Userset filter: find userset tuples that match and return normalized references
         RETURN QUERY
-%s;
+        %s;
     ELSE
         -- Regular subject type: find direct subjects and expand usersets
         RETURN QUERY
-%s;
+        %s;
     END IF;
 END;
 $$ LANGUAGE plpgsql STABLE;`,
@@ -1949,8 +2076,8 @@ $$ LANGUAGE plpgsql STABLE;`,
 		a.Relation,
 		a.Features.String(),
 		functionName,
-		joinUnionBlocks(append(usersetFilterBlocks, usersetSelfBlock)),
-		regularQuery,
+		usersetFilterPaginatedQuery,
+		regularPaginatedQuery,
 	), nil
 }
 
@@ -2384,13 +2511,37 @@ func generateListSubjectsIntersectionFunctionBob(a RelationAnalysis, inline Inli
 		renderIntersectionWildcardTail(a),
 	)
 
+	// Build userset filter query
+	usersetFilterQuery := fmt.Sprintf(`WITH userset_candidates AS (
+%s
+        )
+        SELECT DISTINCT c.subject_id
+        FROM userset_candidates c
+        WHERE check_permission(v_filter_type, c.subject_id, '%s', '%s', p_object_id) = 1
+
+        UNION
+
+%s`,
+		usersetCandidatesSQL,
+		a.Relation,
+		a.ObjectType,
+		formatQueryBlock(
+			[]string{"-- Self-referential userset"},
+			usersetSelfSQL,
+		),
+	)
+
 	regularQuery = trimTrailingSemicolon(regularQuery)
+	usersetFilterPaginatedQuery := wrapWithPaginationWildcardFirst(usersetFilterQuery)
+	regularPaginatedQuery := wrapWithPaginationWildcardFirst(regularQuery)
 	return fmt.Sprintf(`-- Generated list_subjects function for %s.%s
 -- Features: %s
 CREATE OR REPLACE FUNCTION %s(
     p_object_id TEXT,
-    p_subject_type TEXT
-) RETURNS TABLE(subject_id TEXT) AS $$
+    p_subject_type TEXT,
+    p_limit INT DEFAULT NULL,
+    p_after TEXT DEFAULT NULL
+) RETURNS TABLE(subject_id TEXT, next_cursor TEXT) AS $$
 DECLARE
     v_filter_type TEXT;
     v_filter_relation TEXT;
@@ -2403,16 +2554,7 @@ BEGIN
 
         -- Userset filter: find userset tuples and filter with check_permission
         RETURN QUERY
-        WITH userset_candidates AS (
-%s
-        )
-        SELECT DISTINCT c.subject_id
-        FROM userset_candidates c
-        WHERE check_permission(v_filter_type, c.subject_id, '%s', '%s', p_object_id) = 1
-
-        UNION
-
-%s;
+        %s;
     ELSE
         -- Regular subject type: gather candidates and filter with check_permission
         -- Guard: return empty if subject type is not allowed by the model
@@ -2421,7 +2563,7 @@ BEGIN
         END IF;
 
         RETURN QUERY
-%s;
+        %s;
     END IF;
 END;
 $$ LANGUAGE plpgsql STABLE;`,
@@ -2429,15 +2571,9 @@ $$ LANGUAGE plpgsql STABLE;`,
 		a.Relation,
 		a.Features.String(),
 		functionName,
-		usersetCandidatesSQL,
-		a.Relation,
-		a.ObjectType,
-		formatQueryBlock(
-			[]string{"-- Self-referential userset"},
-			usersetSelfSQL,
-		),
+		usersetFilterPaginatedQuery,
 		formatSQLStringList(allowedSubjectTypes),
-		regularQuery,
+		regularPaginatedQuery,
 	), nil
 }
 
@@ -2778,8 +2914,10 @@ func generateListObjectsDepthExceededFunctionBob(a RelationAnalysis) string {
 -- DEPTH EXCEEDED: Userset chain depth %d exceeds 25 level limit
 CREATE OR REPLACE FUNCTION %s(
     p_subject_type TEXT,
-    p_subject_id TEXT
-) RETURNS TABLE(object_id TEXT) AS $$
+    p_subject_id TEXT,
+    p_limit INT DEFAULT NULL,
+    p_after TEXT DEFAULT NULL
+) RETURNS TABLE(object_id TEXT, next_cursor TEXT) AS $$
 BEGIN
     -- This relation has userset chain depth %d which exceeds the 25 level limit.
     -- Raise M2002 immediately without any computation.
@@ -2801,8 +2939,10 @@ func generateListSubjectsDepthExceededFunctionBob(a RelationAnalysis) string {
 -- DEPTH EXCEEDED: Userset chain depth %d exceeds 25 level limit
 CREATE OR REPLACE FUNCTION %s(
     p_object_id TEXT,
-    p_subject_type TEXT
-) RETURNS TABLE(subject_id TEXT) AS $$
+    p_subject_type TEXT,
+    p_limit INT DEFAULT NULL,
+    p_after TEXT DEFAULT NULL
+) RETURNS TABLE(subject_id TEXT, next_cursor TEXT) AS $$
 BEGIN
     -- This relation has userset chain depth %d which exceeds the 25 level limit.
     -- Raise M2002 immediately without any computation.
@@ -2867,22 +3007,26 @@ func generateListObjectsSelfRefUsersetFunctionBob(a RelationAnalysis, inline Inl
 UNION
 %s`, cteBody, finalSQL, selfCandidateSQL)
 
+	paginatedQuery := wrapWithPagination(query, "object_id")
+
 	return fmt.Sprintf(`-- Generated list_objects function for %s.%s
 -- Features: %s (self-referential userset)
 CREATE OR REPLACE FUNCTION %s(
     p_subject_type TEXT,
-    p_subject_id TEXT
-) RETURNS TABLE(object_id TEXT) AS $$
+    p_subject_id TEXT,
+    p_limit INT DEFAULT NULL,
+    p_after TEXT DEFAULT NULL
+) RETURNS TABLE(object_id TEXT, next_cursor TEXT) AS $$
 BEGIN
     RETURN QUERY
-%s;
+    %s;
 END;
 $$ LANGUAGE plpgsql STABLE;`,
 		a.ObjectType,
 		a.Relation,
 		a.Features.String(),
 		functionName,
-		indentLines(query, "    "),
+		paginatedQuery,
 	), nil
 }
 
@@ -3063,13 +3207,17 @@ func generateListSubjectsSelfRefUsersetFunctionBob(a RelationAnalysis, inline In
 	}
 	usersetFilterQuery = trimTrailingSemicolon(usersetFilterQuery)
 	regularQuery = trimTrailingSemicolon(regularQuery)
+	usersetFilterPaginatedQuery := wrapWithPaginationWildcardFirst(usersetFilterQuery)
+	regularPaginatedQuery := wrapWithPaginationWildcardFirst(regularQuery)
 
 	return fmt.Sprintf(`-- Generated list_subjects function for %s.%s
 -- Features: %s (self-referential userset)
 CREATE OR REPLACE FUNCTION %s(
     p_object_id TEXT,
-    p_subject_type TEXT
-) RETURNS TABLE(subject_id TEXT) AS $$
+    p_subject_type TEXT,
+    p_limit INT DEFAULT NULL,
+    p_after TEXT DEFAULT NULL
+) RETURNS TABLE(subject_id TEXT, next_cursor TEXT) AS $$
 DECLARE
     v_filter_type TEXT;
     v_filter_relation TEXT;
@@ -3082,11 +3230,11 @@ BEGIN
         -- Userset filter case: find userset tuples and recursively expand
         -- Returns normalized references like 'group:1#member'
         RETURN QUERY
-%s;
+        %s;
     ELSE
         -- Regular subject type: find individual subjects via recursive userset expansion
         RETURN QUERY
-%s;
+        %s;
     END IF;
 END;
 $$ LANGUAGE plpgsql STABLE;`,
@@ -3094,8 +3242,8 @@ $$ LANGUAGE plpgsql STABLE;`,
 		a.Relation,
 		a.Features.String(),
 		functionName,
-		indentLines(usersetFilterQuery, "        "),
-		indentLines(regularQuery, "        "),
+		usersetFilterPaginatedQuery,
+		regularPaginatedQuery,
 	), nil
 }
 
@@ -3451,20 +3599,25 @@ func generateListObjectsComposedFunctionBob(a RelationAnalysis, inline InlineSQL
 		return "", err
 	}
 
+	selfPaginatedSQL := wrapWithPagination(selfSQL, "object_id")
+	queryPaginatedSQL := wrapWithPagination(querySQL, "object_id")
+
 	return fmt.Sprintf(`-- Generated list_objects function for %s.%s
 -- Features: %s
 -- Indirect anchor: %s.%s via %s
 CREATE OR REPLACE FUNCTION %s(
     p_subject_type TEXT,
-    p_subject_id TEXT
-) RETURNS TABLE(object_id TEXT) AS $$
+    p_subject_id TEXT,
+    p_limit INT DEFAULT NULL,
+    p_after TEXT DEFAULT NULL
+) RETURNS TABLE(object_id TEXT, next_cursor TEXT) AS $$
 BEGIN
     -- Self-candidate check: when subject is a userset on the same object type
     IF EXISTS (
 %s
     ) THEN
         RETURN QUERY
-%s;
+        %s;
         RETURN;
     END IF;
 
@@ -3475,7 +3628,7 @@ BEGIN
     END IF;
 
     RETURN QUERY
-%s;
+    %s;
 END;
 $$ LANGUAGE plpgsql STABLE;`,
 		a.ObjectType,
@@ -3486,9 +3639,9 @@ $$ LANGUAGE plpgsql STABLE;`,
 		anchor.Path[0].Type,
 		functionName,
 		indentLines(selfSQL, "        "),
-		indentLines(selfSQL, "        "),
+		selfPaginatedSQL,
 		formatSQLStringList(allowedSubjectTypes),
-		indentLines(querySQL, "    "),
+		queryPaginatedSQL,
 	), nil
 }
 
@@ -3549,8 +3702,10 @@ func buildListObjectsComposedQuery(a RelationAnalysis, anchor *ListIndirectAncho
 func buildComposedTTUObjectsQuery(a RelationAnalysis, anchor *ListIndirectAnchorData, targetType string, exclusions ExclusionConfig) (string, error) {
 	exclusionPreds := exclusions.BuildPredicates()
 
+	// Pass NULL for pagination params - inner function should return all results,
+	// outer pagination wrapper handles limiting
 	targetFunction := fmt.Sprintf("list_%s_%s_objects", targetType, anchor.Path[0].TargetRelation)
-	subquery := fmt.Sprintf("SELECT obj.object_id FROM %s(p_subject_type, p_subject_id) obj", targetFunction)
+	subquery := fmt.Sprintf("SELECT obj.object_id FROM %s(p_subject_type, p_subject_id, NULL, NULL) obj", targetFunction)
 
 	conditions := make([]Expr, 0, 4+len(exclusionPreds))
 	conditions = append(conditions,
@@ -3590,8 +3745,10 @@ func buildComposedRecursiveTTUObjectsQuery(a RelationAnalysis, anchor *ListIndir
 func buildComposedUsersetObjectsQuery(a RelationAnalysis, anchor *ListIndirectAnchorData, firstStep ListAnchorPathStepData, relationList []string, exclusions ExclusionConfig) (string, error) {
 	exclusionPreds := exclusions.BuildPredicates()
 
+	// Pass NULL for pagination params - inner function should return all results,
+	// outer pagination wrapper handles limiting
 	targetFunction := anchor.FirstStepTargetFunctionName
-	subquery := fmt.Sprintf("SELECT obj.object_id FROM %s(p_subject_type, p_subject_id) obj", targetFunction)
+	subquery := fmt.Sprintf("SELECT obj.object_id FROM %s(p_subject_type, p_subject_id, NULL, NULL) obj", targetFunction)
 
 	conditions := make([]Expr, 0, 6+len(exclusionPreds))
 	conditions = append(conditions,
@@ -3651,13 +3808,19 @@ func generateListSubjectsComposedFunctionBob(a RelationAnalysis, inline InlineSQ
 		return "", err
 	}
 
+	selfPaginatedSQL := wrapWithPaginationWildcardFirst(selfSQL)
+	usersetFilterPaginatedSQL := wrapWithPaginationWildcardFirst(usersetFilterSQL)
+	regularPaginatedSQL := wrapWithPaginationWildcardFirst(regularSQL)
+
 	return fmt.Sprintf(`-- Generated list_subjects function for %s.%s
 -- Features: %s
 -- Indirect anchor: %s.%s via %s
 CREATE OR REPLACE FUNCTION %s(
     p_object_id TEXT,
-    p_subject_type TEXT
-) RETURNS TABLE(subject_id TEXT) AS $$
+    p_subject_type TEXT,
+    p_limit INT DEFAULT NULL,
+    p_after TEXT DEFAULT NULL
+) RETURNS TABLE(subject_id TEXT, next_cursor TEXT) AS $$
 DECLARE
     v_is_userset_filter BOOLEAN;
     v_filter_type TEXT;
@@ -3674,14 +3837,14 @@ BEGIN
 %s
             ) THEN
                 RETURN QUERY
-%s;
+                %s;
                 RETURN;
             END IF;
         END IF;
 
         -- Userset filter case
         RETURN QUERY
-%s;
+        %s;
     ELSE
         -- Direct subject type case
         IF p_subject_type NOT IN (%s) THEN
@@ -3689,7 +3852,7 @@ BEGIN
         END IF;
 
         RETURN QUERY
-%s;
+        %s;
     END IF;
 END;
 $$ LANGUAGE plpgsql STABLE;`,
@@ -3702,10 +3865,10 @@ $$ LANGUAGE plpgsql STABLE;`,
 		functionName,
 		a.ObjectType,
 		indentLines(selfSQL, "                "),
-		indentLines(selfSQL, "                "),
-		indentLines(usersetFilterSQL, "        "),
+		selfPaginatedSQL,
+		usersetFilterPaginatedSQL,
 		formatSQLStringList(allowedSubjectTypes),
-		indentLines(regularSQL, "        "),
+		regularPaginatedSQL,
 	), nil
 }
 
@@ -3879,8 +4042,10 @@ func generateListObjectsDispatcherBob(analyses []RelationAnalysis) (string, erro
 	buf.WriteString("    p_subject_type TEXT,\n")
 	buf.WriteString("    p_subject_id TEXT,\n")
 	buf.WriteString("    p_relation TEXT,\n")
-	buf.WriteString("    p_object_type TEXT\n")
-	buf.WriteString(") RETURNS TABLE (object_id TEXT) AS $$\n")
+	buf.WriteString("    p_object_type TEXT,\n")
+	buf.WriteString("    p_limit INT DEFAULT NULL,\n")
+	buf.WriteString("    p_after TEXT DEFAULT NULL\n")
+	buf.WriteString(") RETURNS TABLE (object_id TEXT, next_cursor TEXT) AS $$\n")
 	buf.WriteString("BEGIN\n")
 	if len(cases) > 0 {
 		buf.WriteString("    -- Route to specialized functions for all type/relation pairs\n")
@@ -3892,7 +4057,7 @@ func generateListObjectsDispatcherBob(analyses []RelationAnalysis) (string, erro
 			buf.WriteString("' THEN\n")
 			buf.WriteString("        RETURN QUERY SELECT * FROM ")
 			buf.WriteString(c.FunctionName)
-			buf.WriteString("(p_subject_type, p_subject_id);\n")
+			buf.WriteString("(p_subject_type, p_subject_id, p_limit, p_after);\n")
 			buf.WriteString("        RETURN;\n")
 			buf.WriteString("    END IF;\n")
 		}
@@ -3926,8 +4091,10 @@ func generateListSubjectsDispatcherBob(analyses []RelationAnalysis) (string, err
 	buf.WriteString("    p_object_type TEXT,\n")
 	buf.WriteString("    p_object_id TEXT,\n")
 	buf.WriteString("    p_relation TEXT,\n")
-	buf.WriteString("    p_subject_type TEXT\n")
-	buf.WriteString(") RETURNS TABLE (subject_id TEXT) AS $$\n")
+	buf.WriteString("    p_subject_type TEXT,\n")
+	buf.WriteString("    p_limit INT DEFAULT NULL,\n")
+	buf.WriteString("    p_after TEXT DEFAULT NULL\n")
+	buf.WriteString(") RETURNS TABLE (subject_id TEXT, next_cursor TEXT) AS $$\n")
 	buf.WriteString("BEGIN\n")
 	if len(cases) > 0 {
 		buf.WriteString("    -- Route to specialized functions for all type/relation pairs\n")
@@ -3939,7 +4106,7 @@ func generateListSubjectsDispatcherBob(analyses []RelationAnalysis) (string, err
 			buf.WriteString("' THEN\n")
 			buf.WriteString("        RETURN QUERY SELECT * FROM ")
 			buf.WriteString(c.FunctionName)
-			buf.WriteString("(p_object_id, p_subject_type);\n")
+			buf.WriteString("(p_object_id, p_subject_type, p_limit, p_after);\n")
 			buf.WriteString("        RETURN;\n")
 			buf.WriteString("    END IF;\n")
 		}

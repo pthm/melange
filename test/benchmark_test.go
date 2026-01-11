@@ -217,7 +217,7 @@ func BenchmarkListObjects(b *testing.B) {
 
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					ids, err := data.checker.ListObjects(ctx, user, authz.RelCanRead, authz.TypeRepository)
+					ids, err := data.checker.ListObjectsAll(ctx, user, authz.RelCanRead, authz.TypeRepository)
 					if err != nil {
 						b.Fatal(err)
 					}
@@ -231,7 +231,7 @@ func BenchmarkListObjects(b *testing.B) {
 
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					ids, err := data.checker.ListObjects(ctx, user, authz.RelCanRead, authz.TypeOrganization)
+					ids, err := data.checker.ListObjectsAll(ctx, user, authz.RelCanRead, authz.TypeOrganization)
 					if err != nil {
 						b.Fatal(err)
 					}
@@ -249,7 +249,7 @@ func BenchmarkListObjects(b *testing.B) {
 
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					ids, err := data.checker.ListObjects(ctx, user, authz.RelCanRead, authz.TypePullRequest)
+					ids, err := data.checker.ListObjectsAll(ctx, user, authz.RelCanRead, authz.TypePullRequest)
 					if err != nil {
 						b.Fatal(err)
 					}
@@ -279,7 +279,7 @@ func BenchmarkListSubjects(b *testing.B) {
 
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					ids, err := data.checker.ListSubjects(ctx, org, authz.RelCanRead, authz.TypeUser)
+					ids, err := data.checker.ListSubjectsAll(ctx, org, authz.RelCanRead, authz.TypeUser)
 					if err != nil {
 						b.Fatal(err)
 					}
@@ -293,7 +293,7 @@ func BenchmarkListSubjects(b *testing.B) {
 
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					ids, err := data.checker.ListSubjects(ctx, repo, authz.RelCanRead, authz.TypeUser)
+					ids, err := data.checker.ListSubjectsAll(ctx, repo, authz.RelCanRead, authz.TypeUser)
 					if err != nil {
 						b.Fatal(err)
 					}
@@ -307,7 +307,7 @@ func BenchmarkListSubjects(b *testing.B) {
 
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					ids, err := data.checker.ListSubjects(ctx, repo, authz.RelCanWrite, authz.TypeUser)
+					ids, err := data.checker.ListSubjectsAll(ctx, repo, authz.RelCanWrite, authz.TypeUser)
 					if err != nil {
 						b.Fatal(err)
 					}
