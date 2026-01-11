@@ -507,3 +507,130 @@ func TestJoinClause(t *testing.T) {
 		t.Errorf("JoinClause.SQL() = %q, want %q", sql, expect)
 	}
 }
+
+func TestQueryBlock(t *testing.T) {
+	t.Run("single block with comments", func(t *testing.T) {
+		block := QueryBlock{
+			Comments: []string{"-- First comment", "-- Second comment"},
+			SQL:      "SELECT 1 FROM users",
+		}
+		blocks := []QueryBlock{block}
+		got := RenderBlocks(blocks)
+
+		checks := []string{
+			"    -- First comment",
+			"    -- Second comment",
+			"    SELECT 1 FROM users",
+		}
+		for _, check := range checks {
+			if !strings.Contains(got, check) {
+				t.Errorf("RenderBlocks missing %q:\n%s", check, got)
+			}
+		}
+	})
+
+	t.Run("single block without comments", func(t *testing.T) {
+		block := QueryBlock{
+			SQL: "SELECT id FROM documents",
+		}
+		got := RenderBlocks([]QueryBlock{block})
+		expect := "    SELECT id FROM documents"
+		if got != expect {
+			t.Errorf("RenderBlocks() =\n%q\nwant:\n%q", got, expect)
+		}
+	})
+
+	t.Run("empty blocks", func(t *testing.T) {
+		got := RenderBlocks(nil)
+		if got != "" {
+			t.Errorf("RenderBlocks(nil) = %q, want empty", got)
+		}
+	})
+}
+
+func TestRenderUnionBlocks(t *testing.T) {
+	t.Run("multiple blocks", func(t *testing.T) {
+		blocks := []QueryBlock{
+			{Comments: []string{"-- Block 1"}, SQL: "SELECT 1"},
+			{Comments: []string{"-- Block 2"}, SQL: "SELECT 2"},
+		}
+		got := RenderUnionBlocks(blocks)
+
+		// Check structure
+		if !strings.Contains(got, "    UNION\n") {
+			t.Errorf("RenderUnionBlocks missing UNION:\n%s", got)
+		}
+		if !strings.Contains(got, "-- Block 1") {
+			t.Errorf("RenderUnionBlocks missing Block 1 comment:\n%s", got)
+		}
+		if !strings.Contains(got, "-- Block 2") {
+			t.Errorf("RenderUnionBlocks missing Block 2 comment:\n%s", got)
+		}
+		if !strings.Contains(got, "SELECT 1") {
+			t.Errorf("RenderUnionBlocks missing SELECT 1:\n%s", got)
+		}
+		if !strings.Contains(got, "SELECT 2") {
+			t.Errorf("RenderUnionBlocks missing SELECT 2:\n%s", got)
+		}
+	})
+
+	t.Run("single block no union", func(t *testing.T) {
+		blocks := []QueryBlock{
+			{SQL: "SELECT 1"},
+		}
+		got := RenderUnionBlocks(blocks)
+		if strings.Contains(got, "UNION") {
+			t.Errorf("RenderUnionBlocks with single block should not have UNION:\n%s", got)
+		}
+	})
+
+	t.Run("empty blocks", func(t *testing.T) {
+		got := RenderUnionBlocks(nil)
+		if got != "" {
+			t.Errorf("RenderUnionBlocks(nil) = %q, want empty", got)
+		}
+	})
+}
+
+func TestIndentLines(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		indent string
+		expect string
+	}{
+		{
+			name:   "single line",
+			input:  "SELECT 1",
+			indent: "  ",
+			expect: "  SELECT 1",
+		},
+		{
+			name:   "multiline",
+			input:  "SELECT 1\nFROM users",
+			indent: "    ",
+			expect: "    SELECT 1\n    FROM users",
+		},
+		{
+			name:   "empty input",
+			input:  "",
+			indent: "  ",
+			expect: "",
+		},
+		{
+			name:   "with leading/trailing whitespace",
+			input:  "  \n  SELECT 1\n  ",
+			indent: "--",
+			expect: "--SELECT 1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := indentLines(tt.input, tt.indent)
+			if got != tt.expect {
+				t.Errorf("indentLines() =\n%q\nwant:\n%q", got, tt.expect)
+			}
+		})
+	}
+}

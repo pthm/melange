@@ -38,7 +38,7 @@ type ListObjectsBuilder struct {
 	allowWildcard bool
 
 	// Built blocks
-	blocks []string
+	blocks []QueryBlock
 }
 
 // NewListObjectsBuilder creates a builder for generating list_objects functions.
@@ -143,13 +143,13 @@ func (b *ListObjectsBuilder) addDirectBlock() error {
 	if err != nil {
 		return err
 	}
-	b.blocks = append(b.blocks, formatQueryBlock(
-		[]string{
+	b.blocks = append(b.blocks, QueryBlock{
+		Comments: []string{
 			"-- Direct tuple lookup with simple closure relations",
 			"-- Type guard: only return results if subject type is in allowed subject types",
 		},
-		baseSQL,
-	))
+		SQL: baseSQL,
+	})
 	return nil
 }
 
@@ -165,16 +165,16 @@ func (b *ListObjectsBuilder) addUsersetSubjectBlock() error {
 	if err != nil {
 		return err
 	}
-	b.blocks = append(b.blocks, formatQueryBlock(
-		[]string{
+	b.blocks = append(b.blocks, QueryBlock{
+		Comments: []string{
 			"-- Direct userset subject matching: when the subject IS a userset (e.g., group:fga#member)",
 			"-- and there's a tuple with that userset (or a satisfying relation) as the subject",
 			"-- This handles cases like: tuple(document:1, viewer, group:fga#member_c4) queried by group:fga#member",
 			"-- where member satisfies member_c4 via the closure (member → member_c1 → ... → member_c4)",
 			"-- No type guard - we're matching userset subjects via closure",
 		},
-		usersetSubjectSQL,
-	))
+		SQL: usersetSubjectSQL,
+	})
 	return nil
 }
 
@@ -230,15 +230,15 @@ func (b *ListObjectsBuilder) addUsersetPatternBlocks() error {
 			if err != nil {
 				return err
 			}
-			b.blocks = append(b.blocks, formatQueryBlock(
-				[]string{
+			b.blocks = append(b.blocks, QueryBlock{
+				Comments: []string{
 					fmt.Sprintf("-- Path: Via %s#%s membership", pattern.SubjectType, pattern.SubjectRelation),
 					"-- Complex userset: use check_permission_internal for membership verification",
 					"-- Note: No type guard needed here because check_permission_internal handles all validation",
 					"-- including userset self-referential checks (e.g., group:1#member checking member on group:1)",
 				},
-				patternSQL,
-			))
+				SQL: patternSQL,
+			})
 			continue
 		}
 
@@ -257,13 +257,13 @@ func (b *ListObjectsBuilder) addUsersetPatternBlocks() error {
 		if err != nil {
 			return err
 		}
-		b.blocks = append(b.blocks, formatQueryBlock(
-			[]string{
+		b.blocks = append(b.blocks, QueryBlock{
+			Comments: []string{
 				fmt.Sprintf("-- Path: Via %s#%s membership", pattern.SubjectType, pattern.SubjectRelation),
 				"-- Simple userset: JOIN with membership tuples",
 			},
-			patternSQL,
-		))
+			SQL: patternSQL,
+		})
 	}
 	return nil
 }
@@ -278,16 +278,16 @@ func (b *ListObjectsBuilder) addSelfCandidateBlock() error {
 	if err != nil {
 		return err
 	}
-	b.blocks = append(b.blocks, formatQueryBlock(
-		[]string{
+	b.blocks = append(b.blocks, QueryBlock{
+		Comments: []string{
 			"-- Self-candidate: when subject is a userset on the same object type",
 			"-- e.g., subject_id = 'document:1#viewer' querying object_type = 'document'",
 			"-- The object 'document:1' should be considered as a candidate",
 			"-- No type guard here - validity comes from the closure check below",
 			"-- No exclusion checks for self-candidate - this is a structural validity check",
 		},
-		selfSQL,
-	))
+		SQL: selfSQL,
+	})
 	return nil
 }
 
@@ -297,7 +297,7 @@ func (b *ListObjectsBuilder) addSelfCandidateBlock() error {
 
 // renderFunction renders the final function SQL from the built blocks.
 func (b *ListObjectsBuilder) renderFunction() (string, error) {
-	query := joinUnionBlocks(b.blocks)
+	query := RenderUnionBlocks(b.blocks)
 	return buildListObjectsFunctionSQL(b.functionName, b.analysis, query), nil
 }
 
@@ -322,9 +322,9 @@ type ListSubjectsBuilder struct {
 	excludeWildcard        bool
 
 	// Built blocks - separate for userset filter and regular paths
-	usersetFilterBlocks    []string
-	usersetFilterSelfBlock string
-	regularBlocks          []string
+	usersetFilterBlocks    []QueryBlock
+	usersetFilterSelfBlock *QueryBlock
+	regularBlocks          []QueryBlock
 }
 
 // NewListSubjectsBuilder creates a builder for generating list_subjects functions.
@@ -418,14 +418,14 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathDirect() error {
 	if err != nil {
 		return err
 	}
-	b.usersetFilterBlocks = append(b.usersetFilterBlocks, formatQueryBlock(
-		[]string{
+	b.usersetFilterBlocks = append(b.usersetFilterBlocks, QueryBlock{
+		Comments: []string{
 			"-- Direct tuple lookup with simple closure relations",
 			"-- Normalize results to use the filter relation (e.g., group:1#admin -> group:1#member if admin implies member)",
 			"-- Type guard: only return results if filter type is in allowed subject types",
 		},
-		usersetBaseSQL,
-	))
+		SQL: usersetBaseSQL,
+	})
 
 	// Complex closure blocks
 	filterBlocks, err := buildListSubjectsComplexClosureFilterBlocks(
@@ -465,15 +465,15 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathDirect() error {
 	if err != nil {
 		return err
 	}
-	b.usersetFilterSelfBlock = formatQueryBlock(
-		[]string{
+	b.usersetFilterSelfBlock = &QueryBlock{
+		Comments: []string{
 			"-- Self-candidate: when filter type matches object type",
 			"-- e.g., querying document:1.viewer with filter document#writer",
 			"-- should return document:1#writer if writer satisfies the relation",
 			"-- No type guard here - validity comes from the closure check below",
 		},
-		selfBlock,
-	)
+		SQL: selfBlock,
+	}
 
 	return nil
 }
@@ -499,14 +499,14 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathExclusion() error {
 	if err != nil {
 		return err
 	}
-	b.usersetFilterBlocks = append(b.usersetFilterBlocks, formatQueryBlock(
-		[]string{
+	b.usersetFilterBlocks = append(b.usersetFilterBlocks, QueryBlock{
+		Comments: []string{
 			"-- Direct tuple lookup with closure-inlined relations",
 			"-- Normalize results to use the filter relation (e.g., group:1#admin -> group:1#member if admin implies member)",
 			"-- Type guard: only return results if filter type is in allowed subject types",
 		},
-		usersetBaseSQL,
-	))
+		SQL: usersetBaseSQL,
+	})
 
 	// Complex closure blocks with exclusions
 	filterBlocks, err := buildListSubjectsComplexClosureFilterBlocks(
@@ -550,15 +550,15 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathExclusion() error {
 	if err != nil {
 		return err
 	}
-	b.usersetFilterSelfBlock = formatQueryBlock(
-		[]string{
+	b.usersetFilterSelfBlock = &QueryBlock{
+		Comments: []string{
 			"-- Self-candidate: when filter type matches object type",
 			"-- e.g., querying document:1.viewer with filter document#writer",
 			"-- should return document:1#writer if writer satisfies the relation",
 			"-- No type guard here - validity comes from the closure check below",
 		},
-		selfBlock,
-	)
+		SQL: selfBlock,
+	}
 
 	return nil
 }
@@ -579,12 +579,12 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathUserset() error {
 	if err != nil {
 		return err
 	}
-	b.usersetFilterBlocks = append(b.usersetFilterBlocks, formatQueryBlock(
-		[]string{
+	b.usersetFilterBlocks = append(b.usersetFilterBlocks, QueryBlock{
+		Comments: []string{
 			"-- Userset filter: find userset tuples that match and return normalized references",
 		},
-		usersetBaseSQL,
-	))
+		SQL: usersetBaseSQL,
+	})
 
 	// Intersection closure blocks
 	filterUsersetExpr := Concat{Parts: []Expr{ParamRef("v_filter_type"), Lit("#"), ParamRef("v_filter_relation")}}
@@ -611,15 +611,15 @@ func (b *ListSubjectsBuilder) buildUsersetFilterPathUserset() error {
 	if err != nil {
 		return err
 	}
-	b.usersetFilterSelfBlock = formatQueryBlock(
-		[]string{
+	b.usersetFilterSelfBlock = &QueryBlock{
+		Comments: []string{
 			"-- Self-referential userset: when object_type matches filter_type and filter_relation",
 			"-- satisfies the requested relation, the userset reference object_id#filter_relation has access",
 			"-- e.g., for group:1.member with filter group#member, return 1#member (= group:1#member)",
 			"-- NOTE: Exclusions don't apply to self-referential userset checks (structural validity)",
 		},
-		selfBlock,
-	)
+		SQL: selfBlock,
+	}
 
 	return nil
 }
@@ -652,7 +652,7 @@ func (b *ListSubjectsBuilder) buildRegularPathDirect() error {
 	if err != nil {
 		return err
 	}
-	b.regularBlocks = append(b.regularBlocks, formatQueryBlock(nil, regularBaseSQL))
+	b.regularBlocks = append(b.regularBlocks, QueryBlock{SQL: regularBaseSQL})
 
 	// Complex closure blocks
 	complexBlocks, err := buildListSubjectsComplexClosureBlocks(
@@ -696,7 +696,7 @@ func (b *ListSubjectsBuilder) buildRegularPathExclusion() error {
 	if err != nil {
 		return err
 	}
-	b.regularBlocks = append(b.regularBlocks, formatQueryBlock(nil, regularBaseSQL))
+	b.regularBlocks = append(b.regularBlocks, QueryBlock{SQL: regularBaseSQL})
 
 	// Complex closure blocks with exclusions
 	complexBlocks, err := buildListSubjectsComplexClosureBlocks(
@@ -742,12 +742,12 @@ func (b *ListSubjectsBuilder) buildRegularPathUserset() error {
 	if err != nil {
 		return err
 	}
-	b.regularBlocks = append(b.regularBlocks, formatQueryBlock(
-		[]string{
+	b.regularBlocks = append(b.regularBlocks, QueryBlock{
+		Comments: []string{
 			"-- Path 1: Direct tuple lookup with simple closure relations",
 		},
-		regularBaseSQL,
-	))
+		SQL: regularBaseSQL,
+	})
 
 	// Complex closure blocks
 	complexBlocks, err := buildListSubjectsComplexClosureBlocks(
@@ -791,14 +791,14 @@ func (b *ListSubjectsBuilder) buildRegularPathUserset() error {
 			if err != nil {
 				return err
 			}
-			b.regularBlocks = append(b.regularBlocks, formatQueryBlock(
-				[]string{
+			b.regularBlocks = append(b.regularBlocks, QueryBlock{
+				Comments: []string{
 					fmt.Sprintf("-- Path: Via %s#%s - expand group membership to return individual subjects", pattern.SubjectType, pattern.SubjectRelation),
 					"-- Complex userset: use LATERAL join with userset's list_subjects function",
 					"-- This handles userset-to-userset chains where there are no direct subject tuples",
 				},
-				patternSQL,
-			))
+				SQL: patternSQL,
+			})
 			continue
 		}
 
@@ -819,13 +819,13 @@ func (b *ListSubjectsBuilder) buildRegularPathUserset() error {
 		if err != nil {
 			return err
 		}
-		b.regularBlocks = append(b.regularBlocks, formatQueryBlock(
-			[]string{
+		b.regularBlocks = append(b.regularBlocks, QueryBlock{
+			Comments: []string{
 				fmt.Sprintf("-- Path: Via %s#%s - expand group membership to return individual subjects", pattern.SubjectType, pattern.SubjectRelation),
 				"-- Simple userset: JOIN with membership tuples",
 			},
-			patternSQL,
-		))
+			SQL: patternSQL,
+		})
 	}
 
 	return nil
@@ -853,8 +853,8 @@ func (b *ListSubjectsBuilder) determineTemplateName() string {
 	return "list_subjects_direct.tpl.sql"
 }
 
-func buildListObjectsComplexClosureBlocks(a RelationAnalysis, relations, allowedSubjectTypes []string, allowWildcard bool, exclusions ExclusionConfig) ([]string, error) {
-	var blocks []string
+func buildListObjectsComplexClosureBlocks(a RelationAnalysis, relations, allowedSubjectTypes []string, allowWildcard bool, exclusions ExclusionConfig) ([]QueryBlock, error) {
+	var blocks []QueryBlock
 	for _, rel := range relations {
 		blockSQL, err := ListObjectsComplexClosureQuery(ListObjectsComplexClosureInput{
 			ObjectType:          a.ObjectType,
@@ -866,19 +866,19 @@ func buildListObjectsComplexClosureBlocks(a RelationAnalysis, relations, allowed
 		if err != nil {
 			return nil, err
 		}
-		blocks = append(blocks, formatQueryBlock(
-			[]string{
+		blocks = append(blocks, QueryBlock{
+			Comments: []string{
 				"-- Complex closure relations: find candidates via tuples, validate via check_permission_internal",
 				"-- These relations have exclusions or other complex features that require full permission check",
 			},
-			blockSQL,
-		))
+			SQL: blockSQL,
+		})
 	}
 	return blocks, nil
 }
 
-func buildListObjectsIntersectionBlocks(a RelationAnalysis, validate bool) ([]string, error) {
-	var blocks []string
+func buildListObjectsIntersectionBlocks(a RelationAnalysis, validate bool) ([]QueryBlock, error) {
+	var blocks []QueryBlock
 	for _, rel := range a.IntersectionClosureRelations {
 		functionName := fmt.Sprintf("list_%s_%s_objects", a.ObjectType, rel)
 		var blockSQL string
@@ -891,18 +891,18 @@ func buildListObjectsIntersectionBlocks(a RelationAnalysis, validate bool) ([]st
 		if err != nil {
 			return nil, err
 		}
-		blocks = append(blocks, formatQueryBlock(
-			[]string{
+		blocks = append(blocks, QueryBlock{
+			Comments: []string{
 				fmt.Sprintf("-- Compose with intersection closure relation: %s", rel),
 			},
-			blockSQL,
-		))
+			SQL: blockSQL,
+		})
 	}
 	return blocks, nil
 }
 
-func buildListSubjectsComplexClosureFilterBlocks(a RelationAnalysis, relations, allowedSubjectTypes []string, closureValues string, applyExclusions bool) ([]string, error) {
-	var blocks []string
+func buildListSubjectsComplexClosureFilterBlocks(a RelationAnalysis, relations, allowedSubjectTypes []string, closureValues string, applyExclusions bool) ([]QueryBlock, error) {
+	var blocks []QueryBlock
 	normalizedExpr := UsersetNormalized{Source: Col{Table: "t", Column: "subject_id"}, Relation: ParamRef("v_filter_relation")}
 	for _, rel := range relations {
 		exclusions := ExclusionConfig{}
@@ -927,18 +927,18 @@ func buildListSubjectsComplexClosureFilterBlocks(a RelationAnalysis, relations, 
 		if err != nil {
 			return nil, err
 		}
-		blocks = append(blocks, formatQueryBlock(
-			[]string{
+		blocks = append(blocks, QueryBlock{
+			Comments: []string{
 				"-- Complex closure relations: find candidates via tuples, validate via check_permission_internal",
 			},
-			blockSQL,
-		))
+			SQL: blockSQL,
+		})
 	}
 	return blocks, nil
 }
 
-func buildListSubjectsComplexClosureBlocks(a RelationAnalysis, relations []string, subjectTypeExpr Expr, excludeWildcard bool, exclusions ExclusionConfig) ([]string, error) {
-	var blocks []string
+func buildListSubjectsComplexClosureBlocks(a RelationAnalysis, relations []string, subjectTypeExpr Expr, excludeWildcard bool, exclusions ExclusionConfig) ([]QueryBlock, error) {
+	var blocks []QueryBlock
 	for _, rel := range relations {
 		blockSQL, err := ListSubjectsComplexClosureQuery(ListSubjectsComplexClosureInput{
 			ObjectType:      a.ObjectType,
@@ -951,18 +951,18 @@ func buildListSubjectsComplexClosureBlocks(a RelationAnalysis, relations []strin
 		if err != nil {
 			return nil, err
 		}
-		blocks = append(blocks, formatQueryBlock(
-			[]string{
+		blocks = append(blocks, QueryBlock{
+			Comments: []string{
 				"-- Complex closure relations: find candidates via tuples, validate via check_permission_internal",
 			},
-			blockSQL,
-		))
+			SQL: blockSQL,
+		})
 	}
 	return blocks, nil
 }
 
-func buildListSubjectsIntersectionBlocks(a RelationAnalysis, validate bool, functionSubjectTypeExpr, checkSubjectTypeExpr Expr) ([]string, error) {
-	var blocks []string
+func buildListSubjectsIntersectionBlocks(a RelationAnalysis, validate bool, functionSubjectTypeExpr, checkSubjectTypeExpr Expr) ([]QueryBlock, error) {
+	var blocks []QueryBlock
 	for _, rel := range a.IntersectionClosureRelations {
 		functionName := fmt.Sprintf("list_%s_%s_subjects", a.ObjectType, rel)
 		var blockSQL string
@@ -975,12 +975,12 @@ func buildListSubjectsIntersectionBlocks(a RelationAnalysis, validate bool, func
 		if err != nil {
 			return nil, err
 		}
-		blocks = append(blocks, formatQueryBlock(
-			[]string{
+		blocks = append(blocks, QueryBlock{
+			Comments: []string{
 				fmt.Sprintf("-- Compose with intersection closure relation: %s", rel),
 			},
-			blockSQL,
-		))
+			SQL: blockSQL,
+		})
 	}
 	return blocks, nil
 }
@@ -1008,19 +1008,19 @@ $$ LANGUAGE plpgsql STABLE;`,
 	)
 }
 
-func buildListSubjectsFunctionSQL(functionName string, a RelationAnalysis, usersetFilterBlocks []string, usersetFilterSelfBlock string, regularBlocks []string, templateName string) string {
+func buildListSubjectsFunctionSQL(functionName string, a RelationAnalysis, usersetFilterBlocks []QueryBlock, usersetFilterSelfBlock *QueryBlock, regularBlocks []QueryBlock, templateName string) string {
 	// Build userset filter path query (when p_subject_type contains '#')
 	var usersetFilterPaginatedQuery string
 	if len(usersetFilterBlocks) > 0 {
-		parts := append([]string{}, usersetFilterBlocks...)
-		if usersetFilterSelfBlock != "" {
-			parts = append(parts, usersetFilterSelfBlock)
+		parts := append([]QueryBlock{}, usersetFilterBlocks...)
+		if usersetFilterSelfBlock != nil {
+			parts = append(parts, *usersetFilterSelfBlock)
 		}
-		usersetFilterQuery := joinUnionBlocks(parts)
+		usersetFilterQuery := RenderUnionBlocks(parts)
 		usersetFilterPaginatedQuery = wrapWithPaginationWildcardFirst(usersetFilterQuery)
 	}
 
-	regularQuery := joinUnionBlocks(regularBlocks)
+	regularQuery := RenderUnionBlocks(regularBlocks)
 	regularTypeGuard := ""
 	if templateName != "list_subjects_userset.tpl.sql" {
 		regularTypeGuard = fmt.Sprintf(`
@@ -1273,6 +1273,9 @@ func convertIntersectionGroups(groups []IntersectionGroupInfo) []ExcludedInterse
 	return result
 }
 
+// formatQueryBlock formats a query block with comments and indentation.
+// Deprecated: Use QueryBlock and RenderBlocks/RenderUnionBlocks in sql.go instead.
+// This function is retained for the delegated recursive/intersection generators.
 func formatQueryBlock(comments []string, sql string) string {
 	lines := make([]string, 0, len(comments)+1)
 	for _, comment := range comments {
@@ -1282,19 +1285,11 @@ func formatQueryBlock(comments []string, sql string) string {
 	return strings.Join(lines, "\n")
 }
 
+// joinUnionBlocks joins formatted query blocks with UNION.
+// Deprecated: Use RenderUnionBlocks in sql.go instead.
+// This function is retained for the delegated recursive/intersection generators.
 func joinUnionBlocks(blocks []string) string {
 	return strings.Join(blocks, "\n    UNION\n")
-}
-
-func indentLines(input, indent string) string {
-	if input == "" {
-		return ""
-	}
-	lines := strings.Split(strings.TrimSpace(input), "\n")
-	for i, line := range lines {
-		lines[i] = indent + line
-	}
-	return strings.Join(lines, "\n")
 }
 
 // =============================================================================

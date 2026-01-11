@@ -275,3 +275,62 @@ func (l LateralFunction) TableSQL() string {
 func (l LateralFunction) TableAlias() string {
 	return l.Alias
 }
+
+// =============================================================================
+// Query Blocks (for UNION queries)
+// =============================================================================
+
+// QueryBlock represents a query with optional comments.
+// Used to build UNION queries with descriptive comments for each branch.
+type QueryBlock struct {
+	Comments []string // Comment lines (without -- prefix)
+	SQL      string   // The query SQL
+}
+
+// RenderBlocks renders multiple query blocks sequentially.
+// Each block is indented and comments are rendered as SQL comments.
+func RenderBlocks(blocks []QueryBlock) string {
+	if len(blocks) == 0 {
+		return ""
+	}
+	parts := make([]string, len(blocks))
+	for i, block := range blocks {
+		parts[i] = renderSingleBlock(block)
+	}
+	return strings.Join(parts, "\n")
+}
+
+// RenderUnionBlocks renders query blocks joined with UNION.
+// Each block is indented and comments are rendered as SQL comments.
+func RenderUnionBlocks(blocks []QueryBlock) string {
+	if len(blocks) == 0 {
+		return ""
+	}
+	parts := make([]string, len(blocks))
+	for i, block := range blocks {
+		parts[i] = renderSingleBlock(block)
+	}
+	return strings.Join(parts, "\n    UNION\n")
+}
+
+// renderSingleBlock renders a single query block with comments and indentation.
+func renderSingleBlock(block QueryBlock) string {
+	var lines []string
+	for _, comment := range block.Comments {
+		lines = append(lines, "    "+comment)
+	}
+	lines = append(lines, indentLines(block.SQL, "    "))
+	return strings.Join(lines, "\n")
+}
+
+// indentLines adds the given indent prefix to each line of input.
+func indentLines(input, indent string) string {
+	if input == "" {
+		return ""
+	}
+	lines := strings.Split(strings.TrimSpace(input), "\n")
+	for i, line := range lines {
+		lines[i] = indent + line
+	}
+	return strings.Join(lines, "\n")
+}
