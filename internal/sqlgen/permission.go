@@ -55,27 +55,6 @@ func CheckNoAccess(relation, objectType string, objectID Expr) CheckPermission {
 	}
 }
 
-// CheckAccessCustom creates a CheckPermission with custom subject and object refs.
-func CheckAccessCustom(subject SubjectRef, relation string, object ObjectRef) CheckPermission {
-	return CheckPermission{
-		Subject:     subject,
-		Relation:    relation,
-		Object:      object,
-		ExpectAllow: true,
-	}
-}
-
-// CheckNoAccessCustom creates a CheckPermission with custom subject and object refs
-// that expects access to be denied.
-func CheckNoAccessCustom(subject SubjectRef, relation string, object ObjectRef) CheckPermission {
-	return CheckPermission{
-		Subject:     subject,
-		Relation:    relation,
-		Object:      object,
-		ExpectAllow: false,
-	}
-}
-
 // CheckPermissionCall represents a call to a custom permission check function.
 // This is useful for calling specialized generated functions.
 type CheckPermissionCall struct {

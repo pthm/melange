@@ -65,15 +65,6 @@ func (s SubstringUsersetRelation) SQL() string {
 	return "substring(" + s.Source.SQL() + " from position('#' in " + s.Source.SQL() + ") + 1)"
 }
 
-// UsersetSubjectRef creates an ObjectRef where the ID is extracted from a userset.
-// The type is literal and the ID is the object part of the userset (before #).
-func UsersetSubjectRef(subjectType string, source Expr) ObjectRef {
-	return ObjectRef{
-		Type: Lit(subjectType),
-		ID:   UsersetObjectID{Source: source},
-	}
-}
-
 // IsWildcard checks if an expression equals the wildcard value "*".
 type IsWildcard struct {
 	Source Expr

@@ -40,19 +40,6 @@ const (
 	StatusFail
 )
 
-func (s Status) String() string {
-	switch s {
-	case StatusPass:
-		return "pass"
-	case StatusWarn:
-		return "warn"
-	case StatusFail:
-		return "fail"
-	default:
-		return "unknown"
-	}
-}
-
 // Symbol returns a status indicator symbol for terminal output.
 func (s Status) Symbol() string {
 	switch s {

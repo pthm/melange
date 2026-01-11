@@ -90,24 +90,6 @@ func (i In) SQL() string {
 	return i.Expr.SQL() + " IN (" + strings.Join(quoted, ", ") + ")"
 }
 
-// InExpr represents an IN clause with expression values.
-type InExpr struct {
-	Expr   Expr
-	Values []Expr
-}
-
-// SQL renders the IN clause.
-func (i InExpr) SQL() string {
-	if len(i.Values) == 0 {
-		return "FALSE"
-	}
-	vals := make([]string, len(i.Values))
-	for j, v := range i.Values {
-		vals[j] = v.SQL()
-	}
-	return i.Expr.SQL() + " IN (" + strings.Join(vals, ", ") + ")"
-}
-
 // Logical operators
 
 // AndExpr represents a logical AND of multiple expressions.
@@ -213,12 +195,6 @@ func (n NotExists) SQL() string {
 // Use when you need EXISTS as part of a larger expression (e.g., in WHERE clause).
 func ExistsExpr(stmt SelectStmt) Exists {
 	return Exists{Query: stmt}
-}
-
-// NotExistsExpr creates a NotExists expression from a SelectStmt.
-// Use when you need NOT EXISTS as part of a larger expression (e.g., in WHERE clause).
-func NotExistsExpr(stmt SelectStmt) NotExists {
-	return NotExists{Query: stmt}
 }
 
 // IsNull represents IS NULL check.

@@ -151,77 +151,6 @@ func (c Concat) SQL() string {
 	return strings.Join(parts, " || ")
 }
 
-// Position represents the SQL POSITION function.
-// Example: Position{Substring: "'#'", In: Col{Column: "subject_id"}}
-// Renders: position('#' in subject_id)
-type Position struct {
-	Substring Expr // What to search for
-	In        Expr // Where to search
-}
-
-// SQL renders the POSITION function.
-func (p Position) SQL() string {
-	return fmt.Sprintf("position(%s in %s)", p.Substring.SQL(), p.In.SQL())
-}
-
-// Substring represents the SQL SUBSTRING function.
-// Supports two forms:
-// - Substring{Expr, From, nil} -> substring(expr from start)
-// - Substring{Expr, From, For} -> substring(expr from start for length)
-type Substring struct {
-	Source Expr // The source string
-	From   Expr // Start position (1-based)
-	For    Expr // Optional length (nil means to end)
-}
-
-// SQL renders the SUBSTRING function.
-func (s Substring) SQL() string {
-	if s.For != nil {
-		return fmt.Sprintf("substring(%s from %s for %s)", s.Source.SQL(), s.From.SQL(), s.For.SQL())
-	}
-	return fmt.Sprintf("substring(%s from %s)", s.Source.SQL(), s.From.SQL())
-}
-
-// SplitPart represents the SQL split_part function.
-// Example: SplitPart{String: Col{Column: "subject_id"}, Delimiter: Lit("#"), Part: Int(1)}
-// Renders: split_part(subject_id, '#', 1)
-type SplitPart struct {
-	String    Expr // The string to split
-	Delimiter Expr // The delimiter
-	Part      Expr // Which part (1-based)
-}
-
-// SQL renders the split_part function.
-func (s SplitPart) SQL() string {
-	return fmt.Sprintf("split_part(%s, %s, %s)", s.String.SQL(), s.Delimiter.SQL(), s.Part.SQL())
-}
-
-// =============================================================================
-// Arithmetic Expressions
-// =============================================================================
-
-// Add represents addition (+).
-type Add struct {
-	Left  Expr
-	Right Expr
-}
-
-// SQL renders the addition.
-func (a Add) SQL() string {
-	return fmt.Sprintf("%s + %s", a.Left.SQL(), a.Right.SQL())
-}
-
-// Sub represents subtraction (-).
-type Sub struct {
-	Left  Expr
-	Right Expr
-}
-
-// SQL renders the subtraction.
-func (s Sub) SQL() string {
-	return fmt.Sprintf("%s - %s", s.Left.SQL(), s.Right.SQL())
-}
-
 // =============================================================================
 // Userset String Helpers
 // =============================================================================
@@ -246,31 +175,4 @@ func NormalizedUsersetSubject(subjectID, relation Expr) Expr {
 // Shorthand for Alias{Expr: expr, Name: alias}.
 func SelectAs(expr Expr, alias string) Alias {
 	return Alias{Expr: expr, Name: alias}
-}
-
-// SelectOne returns an Int(1) expression for EXISTS queries.
-func SelectOne() Expr {
-	return Int(1)
-}
-
-// ColAs creates a column reference with an alias.
-func ColAs(table, column, alias string) Alias {
-	return Alias{Expr: Col{Table: table, Column: column}, Name: alias}
-}
-
-// =============================================================================
-// Userset Composition Helpers
-// =============================================================================
-
-// UsersetRef creates a userset reference: object_id || '#' || relation.
-// This is the canonical format for referencing a userset.
-func UsersetRef(objectID, relation Expr) Expr {
-	return Concat{Parts: []Expr{objectID, Lit("#"), relation}}
-}
-
-// UsersetRefFromSubject creates a normalized userset from a subject_id column.
-// Extracts the object part from subject_id and combines with the given relation.
-// Equivalent to: split_part(subject_id, '#', 1) || '#' || relation
-func UsersetRefFromSubject(subjectID, relation Expr) Expr {
-	return NormalizedUsersetSubject(subjectID, relation)
 }

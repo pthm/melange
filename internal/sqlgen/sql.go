@@ -230,23 +230,6 @@ func UsersetValuesTable(values, alias string) ValuesTable {
 // SQL Formatting Helpers
 // =============================================================================
 
-// ListLiterals formats a slice of strings as a SQL list of literals.
-// Example: ListLiterals([]string{"a", "b"}) returns "'a', 'b'"
-// Returns empty string for empty slice - callers should handle this case
-// appropriately (e.g., not generating IN clauses for empty lists).
-func ListLiterals(values []string) string {
-	if len(values) == 0 {
-		return ""
-	}
-	parts := make([]string, len(values))
-	for i, v := range values {
-		// Escape single quotes
-		escaped := strings.ReplaceAll(v, "'", "''")
-		parts[i] = "'" + escaped + "'"
-	}
-	return strings.Join(parts, ", ")
-}
-
 // Ident sanitizes an identifier for use in SQL.
 // Replaces non-alphanumeric characters with underscores.
 func Ident(name string) string {
@@ -259,42 +242,6 @@ func Ident(name string) string {
 		}
 	}
 	return result.String()
-}
-
-// =============================================================================
-// Function/Table Expressions
-// =============================================================================
-
-// FunctionTable represents a function call used as a table source.
-// Example: FunctionTable{Name: "list_doc_viewer_objects", Args: []Expr{Param("p_subject_type"), Param("p_subject_id")}, Alias: "f"}
-// Renders: list_doc_viewer_objects(p_subject_type, p_subject_id) AS f
-type FunctionTable struct {
-	Name  string
-	Args  []Expr
-	Alias string
-}
-
-// SQL renders the function table expression.
-func (f FunctionTable) SQL() string {
-	args := make([]string, len(f.Args))
-	for i, arg := range f.Args {
-		args[i] = arg.SQL()
-	}
-	call := f.Name + "(" + strings.Join(args, ", ") + ")"
-	if f.Alias != "" {
-		return call + " AS " + f.Alias
-	}
-	return call
-}
-
-// TableSQL implements TableExpr.
-func (f FunctionTable) TableSQL() string {
-	return f.SQL()
-}
-
-// TableAlias implements TableExpr.
-func (f FunctionTable) TableAlias() string {
-	return f.Alias
 }
 
 // LateralFunction represents a LATERAL function call in a JOIN.
@@ -327,60 +274,4 @@ func (l LateralFunction) TableSQL() string {
 // TableAlias implements TableExpr.
 func (l LateralFunction) TableAlias() string {
 	return l.Alias
-}
-
-// CrossJoinLateral creates a JoinClause for CROSS JOIN LATERAL with a function.
-func CrossJoinLateral(funcName string, args []Expr, alias string) JoinClause {
-	return JoinClause{
-		Type:      "CROSS",
-		TableExpr: LateralFunction{Name: funcName, Args: args, Alias: alias},
-	}
-}
-
-// =============================================================================
-// Join Helper Constructors
-// =============================================================================
-
-// InnerJoin creates an INNER JOIN clause with a typed table expression.
-func InnerJoin(table TableExpr, on Expr) JoinClause {
-	return JoinClause{
-		Type:      "INNER",
-		TableExpr: table,
-		On:        on,
-	}
-}
-
-// LeftJoin creates a LEFT JOIN clause with a typed table expression.
-func LeftJoin(table TableExpr, on Expr) JoinClause {
-	return JoinClause{
-		Type:      "LEFT",
-		TableExpr: table,
-		On:        on,
-	}
-}
-
-// CrossJoin creates a CROSS JOIN clause with a typed table expression.
-func CrossJoin(table TableExpr) JoinClause {
-	return JoinClause{
-		Type:      "CROSS",
-		TableExpr: table,
-	}
-}
-
-// JoinClosure creates an INNER JOIN to a closure VALUES table.
-func JoinClosure(closureValues, alias string, on Expr) JoinClause {
-	return JoinClause{
-		Type:      "INNER",
-		TableExpr: ClosureValuesTable(closureValues, alias),
-		On:        on,
-	}
-}
-
-// JoinUserset creates an INNER JOIN to a userset VALUES table.
-func JoinUserset(usersetValues, alias string, on Expr) JoinClause {
-	return JoinClause{
-		Type:      "INNER",
-		TableExpr: UsersetValuesTable(usersetValues, alias),
-		On:        on,
-	}
 }

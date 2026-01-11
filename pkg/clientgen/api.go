@@ -45,7 +45,12 @@ type TypeDefinition = schema.TypeDefinition
 // DefaultConfig returns sensible defaults for code generation.
 // Package: "authz", no relation filter (all relations), string IDs.
 func DefaultConfig() *Config {
-	return clientgen.DefaultConfig()
+	return &Config{
+		Package:        "authz",
+		RelationFilter: "",
+		IDType:         "string",
+		Options:        make(map[string]any),
+	}
 }
 
 // Generate produces client code for the specified runtime.

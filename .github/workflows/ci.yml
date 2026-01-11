@@ -23,12 +23,6 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Tidy modules
-        run: |
-          go mod tidy
-          cd tooling && go mod tidy
-          cd ../test && go mod tidy
-
       - name: Install tools
         run: go install tool
 
@@ -37,8 +31,7 @@ jobs:
           # Uses golangci-lint version pinned in go.mod via tool directive
           # After `go install tool`, binary is in $GOPATH/bin which is in PATH
           golangci-lint run ./...
-          cd tooling && golangci-lint run ./...
-          cd ../test && golangci-lint run ./...
+          cd melange && golangci-lint run ./...
 
   unit-tests:
     name: Unit Tests
@@ -51,11 +44,6 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-
-      - name: Tidy modules
-        run: |
-          go mod tidy
-          cd tooling && go mod tidy
 
       - name: Run unit tests (root module)
         run: go test -short -race ./...
@@ -75,12 +63,6 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-
-      - name: Tidy modules
-        run: |
-          go mod tidy
-          cd tooling && go mod tidy
-          cd ../test && go mod tidy
 
       - name: Run integration tests
         working-directory: test

@@ -28,39 +28,7 @@ func (t TableRef) TableAlias() string {
 	return t.Alias
 }
 
-// Table creates a simple table reference.
-func Table(name string) TableRef {
-	return TableRef{Name: name}
-}
-
 // TableAs creates a table reference with an alias.
 func TableAs(name, alias string) TableRef {
 	return TableRef{Name: name, Alias: alias}
-}
-
-// RawTableExpr wraps a raw SQL string as a TableExpr.
-// Use for complex table expressions that don't fit other types.
-type RawTableExpr struct {
-	SQL   string
-	Alias string
-}
-
-// TableSQL implements TableExpr.
-func (r RawTableExpr) TableSQL() string {
-	return r.SQL
-}
-
-// TableAlias implements TableExpr.
-func (r RawTableExpr) TableAlias() string {
-	return r.Alias
-}
-
-// RawTable creates a raw table expression.
-func RawTable(sql string) RawTableExpr {
-	return RawTableExpr{SQL: sql}
-}
-
-// RawTableAs creates a raw table expression with an alias.
-func RawTableAs(sql, alias string) RawTableExpr {
-	return RawTableExpr{SQL: sql, Alias: alias}
 }

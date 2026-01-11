@@ -63,16 +63,6 @@ type Config struct {
 	Options map[string]any
 }
 
-// DefaultConfig returns a Config with sensible defaults.
-func DefaultConfig() *Config {
-	return &Config{
-		Package:        "authz",
-		RelationFilter: "",
-		IDType:         "string",
-		Options:        make(map[string]any),
-	}
-}
-
 // registry maps runtime names to generators.
 var registry = make(map[string]Generator)
 
