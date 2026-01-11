@@ -24,7 +24,7 @@ default:
 
 # Sync internal module versions (usage: just release-prepare VERSION=1.2.3 [ALLOW_DIRTY=1])
 [group('Release')]
-[doc('Sync internal module versions and tidy go.mod files')]
+[doc('Update VERSION and package.json for release (no tagging)')]
 release-prepare VERSION ALLOW_DIRTY="":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -38,19 +38,6 @@ release-prepare VERSION ALLOW_DIRTY="":
     fi
     just _assert-clean ALLOW_DIRTY={{ALLOW_DIRTY}}
     printf "%s\n" "$version" > VERSION
-    # Tag and push melange submodule first so go mod tidy can resolve it
-    melange_tag="melange/$version"
-    if git rev-parse -q --verify "refs/tags/$melange_tag" >/dev/null; then
-        echo "Tag already exists: $melange_tag"
-        exit 1
-    fi
-    git tag -a "$melange_tag" -m "$melange_tag"
-    git push origin "$melange_tag"
-    go mod edit -require=github.com/pthm/melange/melange@"$version"
-    # Wait for GitHub to serve the new tag, then bypass proxy cache
-    echo "Waiting for tag to propagate..."
-    sleep 5
-    GOPROXY=direct GONOSUMDB=github.com/pthm/melange go mod tidy
     npm_version="${version#v}"
     NPM_VERSION="$npm_version" node -e "
       const fs = require('fs');
@@ -72,7 +59,25 @@ release VERSION="" ALLOW_DIRTY="":
         exit 1
     fi
     just release-prepare {{VERSION}} {{ALLOW_DIRTY}}
+    # Run tests BEFORE tagging (uses workspace for local resolution)
     just test-openfga
+    version="{{VERSION}}"
+    if [ "${version#v}" = "$version" ]; then
+        version="v$version"
+    fi
+    # Tag and push melange submodule
+    melange_tag="melange/$version"
+    if git rev-parse -q --verify "refs/tags/$melange_tag" >/dev/null; then
+        echo "Tag already exists: $melange_tag"
+        exit 1
+    fi
+    git tag -a "$melange_tag" -m "$melange_tag"
+    git push origin "$melange_tag"
+    # Update go.mod to require the published version
+    go mod edit -require=github.com/pthm/melange/melange@"$version"
+    echo "Waiting for tag to propagate..."
+    sleep 5
+    GOPROXY=direct GONOSUMDB=github.com/pthm/melange go mod tidy
     version_from_file="$(tr -d '[:space:]' < VERSION)"
     if [ -z "$version_from_file" ]; then
         echo "VERSION file is empty; run release-prepare first."
