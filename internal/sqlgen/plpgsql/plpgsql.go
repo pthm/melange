@@ -313,3 +313,63 @@ func ListSubjectsDispatcherArgs() []FuncArg {
 		{Name: "p_after", Type: "TEXT", Default: sqldsl.Null{}},
 	}
 }
+
+// =============================================================================
+// Simple SQL Function Builder (non-PL/pgSQL)
+// =============================================================================
+
+// SqlFunction represents a simple SQL function (LANGUAGE sql).
+// Unlike PlpgsqlFunction, this renders a single SELECT expression as the body.
+type SqlFunction struct {
+	Name    string
+	Args    []FuncArg
+	Returns string
+	Body    sqldsl.SQLer // The body expression (e.g., a SelectStmt or function call)
+	Header  []string     // Comment lines at the top of the function (without -- prefix)
+}
+
+// SQL renders the complete CREATE OR REPLACE FUNCTION statement as LANGUAGE sql.
+func (f SqlFunction) SQL() string {
+	var sb strings.Builder
+
+	// Header comments
+	for _, comment := range f.Header {
+		sb.WriteString("-- ")
+		sb.WriteString(comment)
+		sb.WriteString("\n")
+	}
+
+	// Function signature
+	sb.WriteString("CREATE OR REPLACE FUNCTION ")
+	sb.WriteString(f.Name)
+	sb.WriteString("(\n")
+
+	// Arguments
+	for i, arg := range f.Args {
+		sb.WriteString("    ")
+		sb.WriteString(arg.Name)
+		sb.WriteString(" ")
+		sb.WriteString(arg.Type)
+		if arg.Default != nil {
+			sb.WriteString(" DEFAULT ")
+			sb.WriteString(arg.Default.SQL())
+		}
+		if i < len(f.Args)-1 {
+			sb.WriteString(",")
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString(") RETURNS ")
+	sb.WriteString(f.Returns)
+	sb.WriteString(" AS $$\n")
+
+	// Body (single expression/statement)
+	sb.WriteString("    ")
+	sb.WriteString(f.Body.SQL())
+	sb.WriteString(";\n")
+
+	sb.WriteString("$$ LANGUAGE sql STABLE;")
+
+	return sb.String()
+}

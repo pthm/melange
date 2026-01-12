@@ -127,7 +127,7 @@ func buildIntersectionUsersetFilterQuery(plan ListPlan, candidatesSQL string, se
 		unionQuery := UnionAll{
 			Queries: []SQLer{
 				cteQuery,
-				Raw(formatQueryBlock(rendered.Comments, rendered.Query.SQL())),
+				Raw(formatQueryBlockSQL(rendered.Comments, rendered.Query.SQL())),
 			},
 		}
 		return unionQuery.SQL()

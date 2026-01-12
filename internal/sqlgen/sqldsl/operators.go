@@ -258,3 +258,45 @@ type IsNotNull struct {
 func (i IsNotNull) SQL() string {
 	return i.Expr.SQL() + " IS NOT NULL"
 }
+
+// =============================================================================
+// CASE Expressions
+// =============================================================================
+
+// CaseWhen represents a single WHEN clause in a CASE expression.
+type CaseWhen struct {
+	Cond   Expr // The condition to check
+	Result Expr // The result if condition is true
+}
+
+// CaseExpr represents a CASE expression with multiple WHEN clauses.
+// Renders: CASE WHEN cond1 THEN result1 WHEN cond2 THEN result2 ... ELSE default END
+type CaseExpr struct {
+	Whens []CaseWhen
+	Else  Expr // Default value if no WHEN matches (optional)
+}
+
+// SQL renders the CASE expression.
+func (c CaseExpr) SQL() string {
+	if len(c.Whens) == 0 {
+		if c.Else != nil {
+			return c.Else.SQL()
+		}
+		return "NULL"
+	}
+
+	var sb strings.Builder
+	sb.WriteString("CASE")
+	for _, w := range c.Whens {
+		sb.WriteString("\n        WHEN ")
+		sb.WriteString(w.Cond.SQL())
+		sb.WriteString(" THEN ")
+		sb.WriteString(w.Result.SQL())
+	}
+	if c.Else != nil {
+		sb.WriteString("\n        ELSE ")
+		sb.WriteString(c.Else.SQL())
+	}
+	sb.WriteString("\n    END")
+	return sb.String()
+}

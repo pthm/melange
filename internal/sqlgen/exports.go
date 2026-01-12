@@ -54,6 +54,8 @@ type (
 	NotExists = sqldsl.NotExists
 	IsNull    = sqldsl.IsNull
 	IsNotNull = sqldsl.IsNotNull
+	CaseWhen  = sqldsl.CaseWhen
+	CaseExpr  = sqldsl.CaseExpr
 )
 
 // Table expressions
@@ -157,10 +159,10 @@ var (
 	Optf = sqldsl.Optf
 
 	// Function call helpers
-	InternalPermissionCheckCall  = sqldsl.InternalPermissionCheckCall
+	InternalPermissionCheckCall   = sqldsl.InternalPermissionCheckCall
 	NoWildcardPermissionCheckCall = sqldsl.NoWildcardPermissionCheckCall
-	SpecializedCheckCall         = sqldsl.SpecializedCheckCall
-	InternalCheckCall            = sqldsl.InternalCheckCall
+	SpecializedCheckCall          = sqldsl.SpecializedCheckCall
+	InternalCheckCall             = sqldsl.InternalCheckCall
 
 	// Array helpers
 	VisitedKey     = sqldsl.VisitedKey
@@ -253,6 +255,7 @@ type (
 	Raise           = plpgsql.Raise
 	Comment         = plpgsql.Comment
 	PlpgsqlFunction = plpgsql.PlpgsqlFunction
+	SqlFunction     = plpgsql.SqlFunction
 )
 
 var (

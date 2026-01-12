@@ -1,9 +1,6 @@
 package sqlgen
 
-import (
-	"fmt"
-	"strings"
-)
+import "fmt"
 
 func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, noWildcard bool) (string, error) {
 	// Use Plan → Blocks → Render architecture
@@ -15,27 +12,10 @@ func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, noWildcard 
 	return RenderCheckFunction(plan, blocks)
 }
 
-// selectInto transforms a SELECT query to use SELECT INTO syntax.
-// Used to capture query results into PL/pgSQL variables.
-func selectInto(query, target string) (string, error) {
-	trimmed := strings.TrimSpace(query)
-	if !strings.HasPrefix(strings.ToUpper(trimmed), "SELECT") {
-		return "", fmt.Errorf("expected query to start with SELECT: %s", trimmed)
-	}
-	i := len("SELECT")
-	for i < len(trimmed) && trimmed[i] <= ' ' {
-		i++
-	}
-	if i >= len(trimmed) || trimmed[i] != '1' {
-		return "", fmt.Errorf("expected SELECT 1 prefix: %s", trimmed)
-	}
-	return trimmed[:i+1] + " INTO " + target + trimmed[i+1:], nil
-}
-
 func generateDispatcher(analyses []RelationAnalysis, noWildcard bool) (string, error) {
-	functionName := "check_permission"
+	fnName := "check_permission"
 	if noWildcard {
-		functionName = "check_permission_no_wildcard"
+		fnName = "check_permission_no_wildcard"
 	}
 
 	var cases []DispatcherCase
@@ -51,93 +31,123 @@ func generateDispatcher(analyses []RelationAnalysis, noWildcard bool) (string, e
 		})
 	}
 
-	var buf strings.Builder
 	if len(cases) > 0 {
-		buf.WriteString("-- Generated internal dispatcher for ")
-		buf.WriteString(functionName)
-		buf.WriteString("_internal\n")
-		buf.WriteString("-- Routes to specialized functions with p_visited for cycle detection in TTU patterns\n")
-		buf.WriteString("-- Enforces depth limit of 25 to prevent stack overflow from deep permission chains\n")
-		buf.WriteString("-- Phase 5: All relations use specialized functions - no generic fallback\n")
-		buf.WriteString("CREATE OR REPLACE FUNCTION ")
-		buf.WriteString(functionName)
-		buf.WriteString("_internal (\n")
-		buf.WriteString("p_subject_type TEXT,\n")
-		buf.WriteString("p_subject_id TEXT,\n")
-		buf.WriteString("p_relation TEXT,\n")
-		buf.WriteString("p_object_type TEXT,\n")
-		buf.WriteString("p_object_id TEXT,\n")
-		buf.WriteString("p_visited TEXT[] DEFAULT ARRAY[]::TEXT[]\n")
-		buf.WriteString(") RETURNS INTEGER AS $$\n")
-		buf.WriteString("BEGIN\n")
-		buf.WriteString("    -- Depth limit check: prevent excessively deep permission resolution chains\n")
-		buf.WriteString("    -- This catches both recursive TTU patterns and long userset chains\n")
-		buf.WriteString("    IF array_length(p_visited, 1) >= 25 THEN\n")
-		buf.WriteString("        RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';\n")
-		buf.WriteString("    END IF;\n\n")
-		buf.WriteString("    RETURN (SELECT CASE\n")
-		for _, c := range cases {
-			buf.WriteString("        WHEN p_object_type = '")
-			buf.WriteString(c.ObjectType)
-			buf.WriteString("' AND p_relation = '")
-			buf.WriteString(c.Relation)
-			buf.WriteString("' THEN ")
-			buf.WriteString(c.CheckFunctionName)
-			buf.WriteString("(p_subject_type, p_subject_id, p_object_id, p_visited)\n")
+		return renderDispatcherWithCases(fnName, cases), nil
+	}
+	return renderEmptyDispatcher(fnName), nil
+}
+
+// renderDispatcherWithCases renders the internal and public dispatcher functions
+// when there are specialized check functions to route to.
+func renderDispatcherWithCases(fnName string, cases []DispatcherCase) string {
+	// Build CASE WHEN clauses for routing
+	var whens []CaseWhen
+	for _, c := range cases {
+		// Condition: p_object_type = 'type' AND p_relation = 'relation'
+		cond := AndExpr{Exprs: []Expr{
+			Eq{Left: ObjectType, Right: Lit(c.ObjectType)},
+			Eq{Left: Raw("p_relation"), Right: Lit(c.Relation)},
+		}}
+		// Result: call specialized function
+		result := Func{
+			Name: c.CheckFunctionName,
+			Args: []Expr{SubjectType, SubjectID, ObjectID, Visited},
 		}
-		buf.WriteString("        -- Unknown type/relation: deny by default (no generic fallback)\n")
-		buf.WriteString("        ELSE 0\n")
-		buf.WriteString("    END);\n")
-		buf.WriteString("END;\n")
-		buf.WriteString("$$ LANGUAGE plpgsql STABLE;\n\n")
-		buf.WriteString("-- Generated dispatcher for ")
-		buf.WriteString(functionName)
-		buf.WriteString("\n")
-		buf.WriteString("-- Routes to specialized functions for all known type/relation pairs\n")
-		buf.WriteString("CREATE OR REPLACE FUNCTION ")
-		buf.WriteString(functionName)
-		buf.WriteString(" (\n")
-		buf.WriteString("p_subject_type TEXT,\n")
-		buf.WriteString("p_subject_id TEXT,\n")
-		buf.WriteString("p_relation TEXT,\n")
-		buf.WriteString("p_object_type TEXT,\n")
-		buf.WriteString("p_object_id TEXT\n")
-		buf.WriteString(") RETURNS INTEGER AS $$\n")
-		buf.WriteString("    SELECT ")
-		buf.WriteString(functionName)
-		buf.WriteString("_internal(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, ARRAY[]::TEXT[]);\n")
-		buf.WriteString("$$ LANGUAGE sql STABLE;\n")
-		return buf.String(), nil
+		whens = append(whens, CaseWhen{Cond: cond, Result: result})
 	}
 
-	buf.WriteString("-- Generated dispatcher for ")
-	buf.WriteString(functionName)
-	buf.WriteString(" (no relations defined)\n")
-	buf.WriteString("-- Phase 5: Returns 0 (deny) for all requests - no generic fallback\n")
-	buf.WriteString("CREATE OR REPLACE FUNCTION ")
-	buf.WriteString(functionName)
-	buf.WriteString("_internal (\n")
-	buf.WriteString("p_subject_type TEXT,\n")
-	buf.WriteString("p_subject_id TEXT,\n")
-	buf.WriteString("p_relation TEXT,\n")
-	buf.WriteString("p_object_type TEXT,\n")
-	buf.WriteString("p_object_id TEXT,\n")
-	buf.WriteString("p_visited TEXT[] DEFAULT ARRAY[]::TEXT[]\n")
-	buf.WriteString(") RETURNS INTEGER AS $$\n")
-	buf.WriteString("    SELECT 0;\n")
-	buf.WriteString("$$ LANGUAGE sql STABLE;\n\n")
-	buf.WriteString("CREATE OR REPLACE FUNCTION ")
-	buf.WriteString(functionName)
-	buf.WriteString(" (\n")
-	buf.WriteString("p_subject_type TEXT,\n")
-	buf.WriteString("p_subject_id TEXT,\n")
-	buf.WriteString("p_relation TEXT,\n")
-	buf.WriteString("p_object_type TEXT,\n")
-	buf.WriteString("p_object_id TEXT\n")
-	buf.WriteString(") RETURNS INTEGER AS $$\n")
-	buf.WriteString("    SELECT 0;\n")
-	buf.WriteString("$$ LANGUAGE sql STABLE;\n")
-	return buf.String(), nil
+	caseExpr := CaseExpr{
+		Whens: whens,
+		Else:  Int(0), // Unknown type/relation: deny by default
+	}
+
+	// Build internal dispatcher function (PL/pgSQL with depth limit)
+	internalFn := PlpgsqlFunction{
+		Name: fnName + "_internal",
+		Args: []FuncArg{
+			{Name: "p_subject_type", Type: "TEXT"},
+			{Name: "p_subject_id", Type: "TEXT"},
+			{Name: "p_relation", Type: "TEXT"},
+			{Name: "p_object_type", Type: "TEXT"},
+			{Name: "p_object_id", Type: "TEXT"},
+			{Name: "p_visited", Type: "TEXT []", Default: EmptyArray{}},
+		},
+		Returns: "INTEGER",
+		Body: []Stmt{
+			Comment{Text: "Depth limit check: prevent excessively deep permission resolution chains"},
+			Comment{Text: "This catches both recursive TTU patterns and long userset chains"},
+			If{
+				Cond: Gte{Left: ArrayLength{Array: Visited}, Right: Int(25)},
+				Then: []Stmt{Raise{Message: "resolution too complex", ErrCode: "M2002"}},
+			},
+			ReturnValue{Value: Raw("(SELECT " + caseExpr.SQL() + ")")},
+		},
+		Header: []string{
+			"Generated internal dispatcher for " + fnName + "_internal",
+			"Routes to specialized functions with p_visited for cycle detection in TTU patterns",
+			"Enforces depth limit of 25 to prevent stack overflow from deep permission chains",
+			"Phase 5: All relations use specialized functions - no generic fallback",
+		},
+	}
+
+	// Build public dispatcher function (simple SQL wrapper)
+	publicFn := SqlFunction{
+		Name: fnName,
+		Args: []FuncArg{
+			{Name: "p_subject_type", Type: "TEXT"},
+			{Name: "p_subject_id", Type: "TEXT"},
+			{Name: "p_relation", Type: "TEXT"},
+			{Name: "p_object_type", Type: "TEXT"},
+			{Name: "p_object_id", Type: "TEXT"},
+		},
+		Returns: "INTEGER",
+		Body: Raw("SELECT " + fnName + "_internal(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, ARRAY[]::TEXT[])"),
+		Header: []string{
+			"Generated dispatcher for " + fnName,
+			"Routes to specialized functions for all known type/relation pairs",
+		},
+	}
+
+	return internalFn.SQL() + "\n\n" + publicFn.SQL() + "\n"
+}
+
+// renderEmptyDispatcher renders dispatcher functions when no relations are defined.
+// Both functions simply return 0 (deny all).
+func renderEmptyDispatcher(fnName string) string {
+	// Internal function returns 0 for all requests
+	internalFn := SqlFunction{
+		Name: fnName + "_internal",
+		Args: []FuncArg{
+			{Name: "p_subject_type", Type: "TEXT"},
+			{Name: "p_subject_id", Type: "TEXT"},
+			{Name: "p_relation", Type: "TEXT"},
+			{Name: "p_object_type", Type: "TEXT"},
+			{Name: "p_object_id", Type: "TEXT"},
+			{Name: "p_visited", Type: "TEXT []", Default: EmptyArray{}},
+		},
+		Returns: "INTEGER",
+		Body:    Raw("SELECT 0"),
+		Header: []string{
+			"Generated dispatcher for " + fnName + " (no relations defined)",
+			"Phase 5: Returns 0 (deny) for all requests - no generic fallback",
+		},
+	}
+
+	// Public function also returns 0
+	publicFn := SqlFunction{
+		Name: fnName,
+		Args: []FuncArg{
+			{Name: "p_subject_type", Type: "TEXT"},
+			{Name: "p_subject_id", Type: "TEXT"},
+			{Name: "p_relation", Type: "TEXT"},
+			{Name: "p_object_type", Type: "TEXT"},
+			{Name: "p_object_id", Type: "TEXT"},
+		},
+		Returns: "INTEGER",
+		Body:    Raw("SELECT 0"),
+	}
+
+	return internalFn.SQL() + "\n\n" + publicFn.SQL() + "\n"
 }
 
 func functionNameForDispatcher(a RelationAnalysis, noWildcard bool) string {

@@ -174,19 +174,6 @@ func buildSimpleComplexExclusionInput(a RelationAnalysis, objectIDExpr, subjectT
 	}
 }
 
-// formatQueryBlock formats a query block with comments and indentation.
-// This function is retained for compatibility with some render functions.
-//
-// Deprecated: Use QueryBlock and RenderBlocks/RenderUnionBlocks in sql.go instead.
-func formatQueryBlock(comments []string, sql string) string {
-	lines := make([]string, 0, len(comments)+1)
-	for _, comment := range comments {
-		lines = append(lines, "    "+comment)
-	}
-	lines = append(lines, indentLines(sql, "    "))
-	return strings.Join(lines, "\n")
-}
-
 // trimTrailingSemicolon removes a trailing semicolon from a SQL string.
 func trimTrailingSemicolon(input string) string {
 	trimmed := strings.TrimSpace(input)
@@ -217,12 +204,6 @@ func buildUsersetWildcardTailQuery(a RelationAnalysis) SQLer {
 		ColumnExprs: []Expr{Col{Table: "br", Column: "subject_id"}},
 		FromExpr:    TableAs("base_results", "br"),
 	}
-}
-
-// renderUsersetWildcardTail renders the wildcard handling tail for list_subjects functions.
-// Deprecated: Use buildUsersetWildcardTailQuery for new code.
-func renderUsersetWildcardTail(a RelationAnalysis) string {
-	return buildUsersetWildcardTailQuery(a).SQL()
 }
 
 // generateListObjectsDispatcher generates the list_accessible_objects dispatcher function.

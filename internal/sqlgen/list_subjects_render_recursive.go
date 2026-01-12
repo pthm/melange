@@ -140,10 +140,3 @@ func buildSubjectsWildcardTailQuery(plan ListPlan) SQLer {
 		FromExpr:    TableAs("base_results", "br"),
 	}
 }
-
-// renderSubjectsWildcardTail renders the final SELECT with wildcard handling.
-// Note: No trailing semicolon - this gets wrapped in pagination CTEs.
-// Deprecated: Use buildSubjectsWildcardTailQuery for new code.
-func renderSubjectsWildcardTail(plan ListPlan) string {
-	return buildSubjectsWildcardTailQuery(plan).SQL()
-}
