@@ -52,14 +52,28 @@ Schema Types
 
 ## Key Components
 
-### SQL DSL (`sql.go`, `expr.go`, `table_expr.go`)
+### Subpackages
+
+The package is organized into focused subpackages:
+
+| Package | Purpose |
+|---------|---------|
+| `sqldsl` | Generic SQL builders (SelectStmt, Expr, TableExpr, operators) |
+| `analysis` | Relation analysis and strategy selection |
+| `tuples` | Tuple-table specific query builders |
+| `plpgsql` | PL/pgSQL function builder types |
+| `inline` | Inline SQL model data and typed VALUES rows |
+
+The root `sqlgen` package re-exports types for backward compatibility.
+
+### SQL DSL (`sqldsl/`)
 
 Domain-specific types for building SQL:
 - `SelectStmt` - SELECT query builder
 - `Expr` - SQL expressions (columns, literals, operators)
 - `TableExpr` - Table references (base tables, subqueries, VALUES)
 
-### Analysis (`analysis_types.go`, `capabilities.go`)
+### Analysis (`analysis/`)
 
 Classifies relations by their patterns:
 - Direct assignment, implied relations, wildcards
@@ -80,7 +94,7 @@ Parallel architecture for list functions with additional complexity for:
 - Subject enumeration with wildcard handling
 - Cursor-based pagination
 
-### Inline Data (`inline_data.go`)
+### Inline Data (`inline/`)
 
 Precomputes closure and userset data as SQL VALUES tables, eliminating runtime table lookups.
 

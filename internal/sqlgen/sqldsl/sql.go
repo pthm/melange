@@ -442,7 +442,7 @@ func (l LateralFunction) TableAlias() string {
 // =============================================================================
 
 // SQLer is an interface for types that can render SQL.
-// Both SelectStmt and RawSelectStmt implement this interface.
+// SelectStmt, Raw, and other query types implement this interface.
 type SQLer interface {
 	SQL() string
 }
@@ -451,7 +451,7 @@ type SQLer interface {
 // Used to build UNION queries with descriptive comments for each branch.
 type QueryBlock struct {
 	Comments []string // Comment lines (without -- prefix)
-	Query    SQLer    // The query as typed DSL (SelectStmt, RawSelectStmt, etc.)
+	Query    SQLer    // The query as typed DSL (SelectStmt, Raw, etc.)
 }
 
 // RenderBlocks renders multiple query blocks sequentially.
