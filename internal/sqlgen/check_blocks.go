@@ -176,7 +176,7 @@ func buildTypedDirectCheck(plan CheckPlan) (Expr, error) {
 		Select("1").
 		Limit(1)
 
-	return Exists{q}, nil
+	return Exists{Query: q}, nil
 }
 
 // buildTypedUsersetCheck builds the userset membership check as a DSL expression.
@@ -221,7 +221,7 @@ func buildTypedUsersetCheck(plan CheckPlan) (Expr, error) {
 				).
 				Select("1").
 				Limit(1)
-			checks = append(checks, Exists{q})
+			checks = append(checks, Exists{Query: q})
 		} else {
 			// Simple pattern: use tuple JOIN for membership lookup.
 			// Use the plan's relation for searching grant tuples, not pattern.SourceRelation.
@@ -250,7 +250,7 @@ func buildTypedUsersetCheck(plan CheckPlan) (Expr, error) {
 				).
 				Select("1").
 				Limit(1)
-			checks = append(checks, Exists{q})
+			checks = append(checks, Exists{Query: q})
 		}
 	}
 
@@ -279,12 +279,12 @@ func buildTypedExclusionCheck(plan CheckPlan) (Expr, error) {
 				Eq{Left: Col{Table: "excl", Column: "subject_type"}, Right: SubjectType},
 				Or(
 					Eq{Left: Col{Table: "excl", Column: "subject_id"}, Right: SubjectID},
-					IsWildcard{Col{Table: "excl", Column: "subject_id"}},
+					IsWildcard{Source: Col{Table: "excl", Column: "subject_id"}},
 				),
 			).
 			Select("1").
 			Limit(1)
-		exclusionChecks = append(exclusionChecks, Exists{q})
+		exclusionChecks = append(exclusionChecks, Exists{Query: q})
 	}
 
 	// Complex exclusions: check_permission_internal(...) = 1 with p_visited for cycle detection
@@ -321,14 +321,15 @@ func buildTypedExclusionCheck(plan CheckPlan) (Expr, error) {
 		if len(rel.AllowedLinkingTypes) > 0 {
 			linkQuery.WhereSubjectTypeIn(rel.AllowedLinkingTypes...)
 		}
-		exclusionChecks = append(exclusionChecks, Exists{linkQuery})
+		exclusionChecks = append(exclusionChecks, Exists{Query: linkQuery})
 	}
 
 	// Intersection exclusions: (part1 AND part2 AND ...) - all parts must match
 	for _, group := range plan.Exclusions.ExcludedIntersection {
 		var parts []Expr
 		for _, part := range group.Parts {
-			if part.ParentRelation != nil {
+			switch {
+			case part.ParentRelation != nil:
 				// TTU part: EXISTS (link tuple where check_permission returns 1)
 				linkQuery := Tuples("link").
 					ObjectType(plan.ObjectType).
@@ -351,8 +352,8 @@ func buildTypedExclusionCheck(plan CheckPlan) (Expr, error) {
 				if len(part.ParentRelation.AllowedLinkingTypes) > 0 {
 					linkQuery.WhereSubjectTypeIn(part.ParentRelation.AllowedLinkingTypes...)
 				}
-				parts = append(parts, Exists{linkQuery})
-			} else if part.ExcludedRelation != "" {
+				parts = append(parts, Exists{Query: linkQuery})
+			case part.ExcludedRelation != "":
 				// Nested exclusion: (relation AND NOT excluded_relation)
 				mainCheck := CheckPermission{
 					Subject:     SubjectParams(),
@@ -369,7 +370,7 @@ func buildTypedExclusionCheck(plan CheckPlan) (Expr, error) {
 					ExpectAllow: false,
 				}
 				parts = append(parts, And(mainCheck, excludeCheck))
-			} else {
+			default:
 				// Direct check part
 				parts = append(parts, CheckPermission{
 					Subject:     SubjectParams(),
@@ -395,9 +396,9 @@ func buildTypedExclusionCheck(plan CheckPlan) (Expr, error) {
 }
 
 // buildTypedUsersetSubjectChecks builds the userset subject validation checks.
-func buildTypedUsersetSubjectChecks(plan CheckPlan) (SelectStmt, SelectStmt, error) {
+func buildTypedUsersetSubjectChecks(plan CheckPlan) (selfCheck, computedCheck SelectStmt, err error) {
 	// Self check: validates when subject IS a userset with matching closure
-	selfCheck := SelectStmt{
+	selfCheck = SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
 		FromExpr:    ClosureTable(plan.Inline.ClosureRows, plan.Inline.ClosureValues, "c"),
 		Where: And(
@@ -412,7 +413,7 @@ func buildTypedUsersetSubjectChecks(plan CheckPlan) (SelectStmt, SelectStmt, err
 	}
 
 	// Computed check: validates userset subject via tuple join
-	computedCheck := SelectStmt{
+	computedCheck = SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
 		FromExpr:    TableAs("melange_tuples", "t"),
 		Joins: []JoinClause{
@@ -469,7 +470,7 @@ func buildTypedUsersetSubjectChecks(plan CheckPlan) (SelectStmt, SelectStmt, err
 
 // buildTypedParentRelationBlocks builds TTU checks for parent relations.
 func buildTypedParentRelationBlocks(plan CheckPlan) ([]ParentRelationBlock, error) {
-	var checks []ParentRelationBlock
+	checks := make([]ParentRelationBlock, 0, len(plan.Analysis.ParentRelations))
 
 	for _, parent := range plan.Analysis.ParentRelations {
 		// Build the linking tuple query
@@ -498,7 +499,7 @@ func buildTypedParentRelationBlocks(plan CheckPlan) ([]ParentRelationBlock, erro
 
 // buildTypedImpliedFunctionCalls builds function calls for complex implied relations.
 func buildTypedImpliedFunctionCalls(plan CheckPlan) ([]ImpliedFunctionCheck, error) {
-	var calls []ImpliedFunctionCheck
+	calls := make([]ImpliedFunctionCheck, 0, len(plan.Analysis.ComplexClosureRelations))
 
 	for _, rel := range plan.Analysis.ComplexClosureRelations {
 		funcName := functionName(plan.ObjectType, rel)
@@ -526,13 +527,13 @@ func buildTypedImpliedFunctionCalls(plan CheckPlan) ([]ImpliedFunctionCheck, err
 
 // buildTypedIntersectionGroups builds intersection group checks.
 func buildTypedIntersectionGroups(plan CheckPlan) ([]IntersectionGroupCheck, error) {
-	var groups []IntersectionGroupCheck
+	groups := make([]IntersectionGroupCheck, 0, len(plan.Analysis.IntersectionGroups))
 
 	// Build visited expression that appends the current key for recursive patterns
 	visitedWithKey := Param(fmt.Sprintf("p_visited || ARRAY['%s:' || p_object_id || ':%s']", plan.ObjectType, plan.Relation))
 
 	for _, group := range plan.Analysis.IntersectionGroups {
-		var parts []IntersectionPartCheck
+		parts := make([]IntersectionPartCheck, 0, len(group.Parts))
 
 		for _, part := range group.Parts {
 			partCheck := IntersectionPartCheck{
@@ -540,7 +541,8 @@ func buildTypedIntersectionGroups(plan CheckPlan) ([]IntersectionGroupCheck, err
 				ExcludedRelation: part.ExcludedRelation,
 			}
 
-			if part.ParentRelation != nil {
+			switch {
+			case part.ParentRelation != nil:
 				// TTU part
 				partCheck.IsParent = true
 				partCheck.ParentRelation = part.ParentRelation.Relation
@@ -570,8 +572,8 @@ func buildTypedIntersectionGroups(plan CheckPlan) ([]IntersectionGroupCheck, err
 					q.WhereSubjectTypeIn(part.ParentRelation.AllowedLinkingTypes...)
 				}
 
-				partCheck.Check = Exists{q}
-			} else if part.IsThis {
+				partCheck.Check = Exists{Query: q}
+			case part.IsThis:
 				// "This" pattern - direct tuple lookup for the current relation.
 				// Do NOT use check_permission_internal as it would cause infinite recursion.
 				// Handle wildcards based on the part's HasWildcard flag.
@@ -581,13 +583,13 @@ func buildTypedIntersectionGroups(plan CheckPlan) ([]IntersectionGroupCheck, err
 					// Allow wildcard: match subject_id = p_subject_id OR subject_id = '*'
 					subjectCheck = Or(
 						Eq{Left: Col{Table: "t", Column: "subject_id"}, Right: SubjectID},
-						IsWildcard{Col{Table: "t", Column: "subject_id"}},
+						IsWildcard{Source: Col{Table: "t", Column: "subject_id"}},
 					)
 				} else {
 					// No wildcard: match subject_id = p_subject_id and NOT wildcard
 					subjectCheck = And(
 						Eq{Left: Col{Table: "t", Column: "subject_id"}, Right: SubjectID},
-						NotExpr{Expr: IsWildcard{Col{Table: "t", Column: "subject_id"}}},
+						NotExpr{Expr: IsWildcard{Source: Col{Table: "t", Column: "subject_id"}}},
 					)
 				}
 				q := Tuples("t").
@@ -600,8 +602,8 @@ func buildTypedIntersectionGroups(plan CheckPlan) ([]IntersectionGroupCheck, err
 					).
 					Select("1").
 					Limit(1)
-				partCheck.Check = Exists{q}
-			} else {
+				partCheck.Check = Exists{Query: q}
+			default:
 				// Regular computed userset part
 				partCheck.Check = CheckPermission{
 					Subject:     SubjectParams(),

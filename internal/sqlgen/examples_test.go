@@ -74,9 +74,9 @@ func TestDirectCheck(t *testing.T) {
 		ObjectType("document").
 		Relations("viewer", "editor").
 		Where(
-			sqlgen.Eq{sqlgen.Col{Column: "object_id"}, sqlgen.ObjectID},
+			sqlgen.Eq{Left: sqlgen.Col{Column: "object_id"}, Right: sqlgen.ObjectID},
 			sqlgen.In{Expr: sqlgen.Col{Column: "subject_type"}, Values: []string{"user"}},
-			sqlgen.Eq{sqlgen.Col{Column: "subject_type"}, sqlgen.SubjectType},
+			sqlgen.Eq{Left: sqlgen.Col{Column: "subject_type"}, Right: sqlgen.SubjectType},
 			sqlgen.SubjectIDMatch(sqlgen.Col{Column: "subject_id"}, sqlgen.SubjectID, false),
 		).
 		Select("1").
@@ -120,22 +120,22 @@ func TestUsersetCheck(t *testing.T) {
 		ObjectType("document").
 		Relations("viewer").
 		Where(
-			sqlgen.Eq{sqlgen.Col{Table: "grant_tuple", Column: "object_id"}, sqlgen.ObjectID},
-			sqlgen.Eq{sqlgen.Col{Table: "grant_tuple", Column: "subject_type"}, sqlgen.Lit(subjectType)},
-			sqlgen.HasUserset{sqlgen.Col{Table: "grant_tuple", Column: "subject_id"}},
+			sqlgen.Eq{Left: sqlgen.Col{Table: "grant_tuple", Column: "object_id"}, Right: sqlgen.ObjectID},
+			sqlgen.Eq{Left: sqlgen.Col{Table: "grant_tuple", Column: "subject_type"}, Right: sqlgen.Lit(subjectType)},
+			sqlgen.HasUserset{Source: sqlgen.Col{Table: "grant_tuple", Column: "subject_id"}},
 			sqlgen.Eq{
-				sqlgen.UsersetRelation{sqlgen.Col{Table: "grant_tuple", Column: "subject_id"}},
-				sqlgen.Lit(subjectRelation),
+				Left:  sqlgen.UsersetRelation{Source: sqlgen.Col{Table: "grant_tuple", Column: "subject_id"}},
+				Right: sqlgen.Lit(subjectRelation),
 			},
 		).
 		JoinTuples("membership",
-			sqlgen.Eq{sqlgen.Col{Table: "membership", Column: "object_type"}, sqlgen.Lit(subjectType)},
+			sqlgen.Eq{Left: sqlgen.Col{Table: "membership", Column: "object_type"}, Right: sqlgen.Lit(subjectType)},
 			sqlgen.Eq{
-				sqlgen.Col{Table: "membership", Column: "object_id"},
-				sqlgen.UsersetObjectID{sqlgen.Col{Table: "grant_tuple", Column: "subject_id"}},
+				Left:  sqlgen.Col{Table: "membership", Column: "object_id"},
+				Right: sqlgen.UsersetObjectID{Source: sqlgen.Col{Table: "grant_tuple", Column: "subject_id"}},
 			},
 			sqlgen.In{Expr: sqlgen.Col{Table: "membership", Column: "relation"}, Values: satisfyingRelations},
-			sqlgen.Eq{sqlgen.Col{Table: "membership", Column: "subject_type"}, sqlgen.SubjectType},
+			sqlgen.Eq{Left: sqlgen.Col{Table: "membership", Column: "subject_type"}, Right: sqlgen.SubjectType},
 			sqlgen.SubjectIDMatch(sqlgen.Col{Table: "membership", Column: "subject_id"}, sqlgen.SubjectID, true),
 		).
 		Select("1").
@@ -253,21 +253,21 @@ func TestListObjectsUsersetPatternSimple(t *testing.T) {
 		ObjectType(objectType).
 		Relations(sourceRelations...).
 		Where(
-			sqlgen.Eq{sqlgen.Col{Table: "t", Column: "subject_type"}, sqlgen.Lit(subjectType)},
-			sqlgen.HasUserset{sqlgen.Col{Table: "t", Column: "subject_id"}},
+			sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "subject_type"}, Right: sqlgen.Lit(subjectType)},
+			sqlgen.HasUserset{Source: sqlgen.Col{Table: "t", Column: "subject_id"}},
 			sqlgen.Eq{
-				sqlgen.UsersetRelation{sqlgen.Col{Table: "t", Column: "subject_id"}},
-				sqlgen.Lit(subjectRelation),
+				Left:  sqlgen.UsersetRelation{Source: sqlgen.Col{Table: "t", Column: "subject_id"}},
+				Right: sqlgen.Lit(subjectRelation),
 			},
 		).
 		JoinTuples("m",
-			sqlgen.Eq{sqlgen.Col{Table: "m", Column: "object_type"}, sqlgen.Lit(subjectType)},
+			sqlgen.Eq{Left: sqlgen.Col{Table: "m", Column: "object_type"}, Right: sqlgen.Lit(subjectType)},
 			sqlgen.Eq{
-				sqlgen.Col{Table: "m", Column: "object_id"},
-				sqlgen.UsersetObjectID{sqlgen.Col{Table: "t", Column: "subject_id"}},
+				Left:  sqlgen.Col{Table: "m", Column: "object_id"},
+				Right: sqlgen.UsersetObjectID{Source: sqlgen.Col{Table: "t", Column: "subject_id"}},
 			},
 			sqlgen.In{Expr: sqlgen.Col{Table: "m", Column: "relation"}, Values: satisfyingRelations},
-			sqlgen.Eq{sqlgen.Col{Table: "m", Column: "subject_type"}, sqlgen.SubjectType},
+			sqlgen.Eq{Left: sqlgen.Col{Table: "m", Column: "subject_type"}, Right: sqlgen.SubjectType},
 			sqlgen.In{Expr: sqlgen.SubjectType, Values: allowedSubjectTypes},
 			sqlgen.SubjectIDMatch(sqlgen.Col{Table: "m", Column: "subject_id"}, sqlgen.SubjectID, allowWildcard),
 		).

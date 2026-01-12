@@ -176,8 +176,9 @@ func buildSimpleComplexExclusionInput(a RelationAnalysis, objectIDExpr, subjectT
 }
 
 // formatQueryBlock formats a query block with comments and indentation.
-// Deprecated: Use QueryBlock and RenderBlocks/RenderUnionBlocks in sql.go instead.
 // This function is retained for compatibility with some render functions.
+//
+// Deprecated: Use QueryBlock and RenderBlocks/RenderUnionBlocks in sql.go instead.
 func formatQueryBlock(comments []string, sql string) string {
 	lines := make([]string, 0, len(comments)+1)
 	for _, comment := range comments {
@@ -187,50 +188,10 @@ func formatQueryBlock(comments []string, sql string) string {
 	return strings.Join(lines, "\n")
 }
 
-// joinUnionBlocks joins formatted query blocks with UNION.
-// Deprecated: Use RenderUnionBlocks in sql.go instead.
-// This function is retained for compatibility with some render functions.
-func joinUnionBlocks(blocks []string) string {
-	return strings.Join(blocks, "\n    UNION\n")
-}
-
 // trimTrailingSemicolon removes a trailing semicolon from a SQL string.
 func trimTrailingSemicolon(input string) string {
 	trimmed := strings.TrimSpace(input)
 	return strings.TrimSuffix(trimmed, ";")
-}
-
-// buildDepthCheckSQL generates SQL to check for excessive recursion depth.
-// This is used to detect and fail early on deeply recursive graphs.
-func buildDepthCheckSQL(objectType string, linkingRelations []string) string {
-	if len(linkingRelations) == 0 {
-		return "    v_max_depth := 0;\n"
-	}
-	return fmt.Sprintf(`    -- Check for excessive recursion depth before running the query
-    -- This matches check_permission behavior with M2002 error
-    -- Only self-referential TTUs contribute to recursion depth (cross-type are one-hop)
-    WITH RECURSIVE depth_check(object_id, depth) AS (
-        -- Base case: seed with empty set (we just need depth tracking)
-        SELECT NULL::TEXT, 0
-        WHERE FALSE
-
-        UNION ALL
-        -- Track depth through all self-referential linking relations
-        SELECT t.object_id, d.depth + 1
-        FROM depth_check d
-        JOIN melange_tuples t
-          ON t.object_type = '%s'
-          AND t.relation IN (%s)
-          AND t.subject_type = '%s'
-        WHERE d.depth < 26  -- Allow one extra to detect overflow
-    )
-    SELECT MAX(depth) INTO v_max_depth FROM depth_check;
-`, objectType, formatSQLStringList(linkingRelations), objectType)
-}
-
-// wrapQueryWithDepth wraps a SQL query with a depth tracking column.
-func wrapQueryWithDepth(sql, depthExpr, alias string) string {
-	return fmt.Sprintf("SELECT DISTINCT %s.object_id, %s AS depth\nFROM (\n%s\n) AS %s", alias, depthExpr, sql, alias)
 }
 
 // renderUsersetWildcardTail renders the wildcard handling tail for list_subjects functions.

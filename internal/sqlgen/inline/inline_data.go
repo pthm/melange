@@ -18,9 +18,11 @@ import (
 // trades function size for runtime simplicity and removes a JOIN from every check.
 type InlineSQLData struct {
 	// ClosureValues contains tuples of (object_type, relation, satisfying_relation).
+	//
 	// Deprecated: Use ClosureRows for new code.
 	ClosureValues string
 	// UsersetValues contains tuples of (object_type, relation, subject_type, subject_relation).
+	//
 	// Deprecated: Use UsersetRows for new code.
 	UsersetValues string
 

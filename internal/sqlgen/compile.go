@@ -19,32 +19,6 @@ func formatSQLStringList(items []string) string {
 	return strings.Join(quoted, ", ")
 }
 
-func buildAllowedSubjectTypeList(a RelationAnalysis, emptyValue string) string {
-	subjectTypes := a.AllowedSubjectTypes
-	if len(subjectTypes) == 0 {
-		// Fallback to direct subject types if allowed types not computed.
-		subjectTypes = a.DirectSubjectTypes
-	}
-	if len(subjectTypes) == 0 {
-		return emptyValue
-	}
-	return formatSQLStringList(subjectTypes)
-}
-
-func allowedSubjectTypesForCheck(a RelationAnalysis) []string {
-	subjectTypes := a.AllowedSubjectTypes
-	if len(subjectTypes) == 0 {
-		subjectTypes = a.DirectSubjectTypes
-	}
-	return subjectTypes
-}
-
-// buildTupleLookupRelationList builds a SQL list of relations that can be resolved
-// via tuple lookup for the current relation.
-func buildTupleLookupRelationList(a RelationAnalysis) string {
-	return formatSQLStringList(buildTupleLookupRelations(a))
-}
-
 func buildTupleLookupRelations(a RelationAnalysis) []string {
 	// Build relation list from self + simple closure relations.
 	relations := []string{a.Relation}

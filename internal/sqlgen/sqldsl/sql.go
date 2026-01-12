@@ -372,7 +372,7 @@ func TypedUsersetValuesTable(rows []ValuesRow, alias string) TypedValuesTable {
 // They prefer typed rows when available, falling back to string-based values.
 
 // ClosureTable returns a closure VALUES table, preferring typed rows when available.
-func ClosureTable(rows []ValuesRow, values string, alias string) TableExpr {
+func ClosureTable(rows []ValuesRow, values, alias string) TableExpr {
 	if len(rows) > 0 {
 		return TypedClosureValuesTable(rows, alias)
 	}
@@ -380,7 +380,7 @@ func ClosureTable(rows []ValuesRow, values string, alias string) TableExpr {
 }
 
 // UsersetTable returns a userset VALUES table, preferring typed rows when available.
-func UsersetTable(rows []ValuesRow, values string, alias string) TableExpr {
+func UsersetTable(rows []ValuesRow, values, alias string) TableExpr {
 	if len(rows) > 0 {
 		return TypedUsersetValuesTable(rows, alias)
 	}
@@ -482,7 +482,7 @@ func RenderUnionBlocks(blocks []QueryBlock) string {
 
 // renderSingleBlock renders a single query block with comments and indentation.
 func renderSingleBlock(block QueryBlock) string {
-	var lines []string
+	lines := make([]string, 0, len(block.Comments)+1)
 	for _, comment := range block.Comments {
 		lines = append(lines, "    "+comment)
 	}

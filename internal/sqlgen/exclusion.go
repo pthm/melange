@@ -60,14 +60,14 @@ func (c ExclusionConfig) BuildPredicates() []Expr {
 			Relations(rel).
 			Select("1").
 			Where(
-				Eq{Col{Table: "excl", Column: "object_id"}, c.ObjectIDExpr},
-				Eq{Col{Table: "excl", Column: "subject_type"}, c.SubjectTypeExpr},
+				Eq{Left: Col{Table: "excl", Column: "object_id"}, Right: c.ObjectIDExpr},
+				Eq{Left: Col{Table: "excl", Column: "subject_type"}, Right: c.SubjectTypeExpr},
 				Or(
-					Eq{Col{Table: "excl", Column: "subject_id"}, c.SubjectIDExpr},
-					IsWildcard{Col{Table: "excl", Column: "subject_id"}},
+					Eq{Left: Col{Table: "excl", Column: "subject_id"}, Right: c.SubjectIDExpr},
+					IsWildcard{Source: Col{Table: "excl", Column: "subject_id"}},
 				),
 			)
-		predicates = append(predicates, NotExists{excl})
+		predicates = append(predicates, NotExists{Query: excl})
 	}
 
 	// Complex exclusions: check_permission_internal(...) = 0
@@ -93,7 +93,7 @@ func (c ExclusionConfig) BuildPredicates() []Expr {
 			Relations(rel.LinkingRelation).
 			Select("1").
 			Where(
-				Eq{Col{Table: "link", Column: "object_id"}, c.ObjectIDExpr},
+				Eq{Left: Col{Table: "link", Column: "object_id"}, Right: c.ObjectIDExpr},
 				CheckPermission{
 					Subject: SubjectRef{
 						Type: c.SubjectTypeExpr,
@@ -110,7 +110,7 @@ func (c ExclusionConfig) BuildPredicates() []Expr {
 		if len(rel.AllowedLinkingTypes) > 0 {
 			linkQuery.WhereSubjectTypeIn(rel.AllowedLinkingTypes...)
 		}
-		predicates = append(predicates, NotExists{linkQuery})
+		predicates = append(predicates, NotExists{Query: linkQuery})
 	}
 
 	// Intersection exclusions: NOT (all parts match)
@@ -124,7 +124,7 @@ func (c ExclusionConfig) BuildPredicates() []Expr {
 					Relations(part.ParentRelation.LinkingRelation).
 					Select("1").
 					Where(
-						Eq{Col{Table: "link", Column: "object_id"}, c.ObjectIDExpr},
+						Eq{Left: Col{Table: "link", Column: "object_id"}, Right: c.ObjectIDExpr},
 						CheckPermission{
 							Subject: SubjectRef{
 								Type: c.SubjectTypeExpr,
@@ -141,7 +141,7 @@ func (c ExclusionConfig) BuildPredicates() []Expr {
 				if len(part.ParentRelation.AllowedLinkingTypes) > 0 {
 					linkQuery.WhereSubjectTypeIn(part.ParentRelation.AllowedLinkingTypes...)
 				}
-				parts = append(parts, Exists{linkQuery})
+				parts = append(parts, Exists{Query: linkQuery})
 			} else {
 				// Direct check part
 				partExpr := CheckPermission{
@@ -193,12 +193,12 @@ func SimpleExclusion(objectType, relation string, objectID, subjectType, subject
 		Relations(relation).
 		Select("1").
 		Where(
-			Eq{Col{Table: "excl", Column: "object_id"}, objectID},
-			Eq{Col{Table: "excl", Column: "subject_type"}, subjectType},
+			Eq{Left: Col{Table: "excl", Column: "object_id"}, Right: objectID},
+			Eq{Left: Col{Table: "excl", Column: "subject_type"}, Right: subjectType},
 			Or(
-				Eq{Col{Table: "excl", Column: "subject_id"}, subjectID},
-				IsWildcard{Col{Table: "excl", Column: "subject_id"}},
+				Eq{Left: Col{Table: "excl", Column: "subject_id"}, Right: subjectID},
+				IsWildcard{Source: Col{Table: "excl", Column: "subject_id"}},
 			),
 		)
-	return NotExists{excl}
+	return NotExists{Query: excl}
 }

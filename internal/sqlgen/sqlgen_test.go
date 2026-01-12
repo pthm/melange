@@ -120,37 +120,37 @@ func TestOperators(t *testing.T) {
 		expect string
 	}{
 		// Eq
-		{"eq", Eq{Col{Table: "t", Column: "id"}, Lit("1")}, "t.id = '1'"},
+		{"eq", Eq{Left: Col{Table: "t", Column: "id"}, Right: Lit("1")}, "t.id = '1'"},
 
 		// Ne
-		{"ne", Ne{Col{Column: "status"}, Lit("deleted")}, "status <> 'deleted'"},
+		{"ne", Ne{Left: Col{Column: "status"}, Right: Lit("deleted")}, "status <> 'deleted'"},
 
 		// Lt, Gt, Lte, Gte
-		{"lt", Lt{Col{Column: "age"}, Int(18)}, "age < 18"},
-		{"gt", Gt{Col{Column: "score"}, Int(100)}, "score > 100"},
-		{"lte", Lte{Col{Column: "count"}, Int(10)}, "count <= 10"},
-		{"gte", Gte{Col{Column: "amount"}, Int(0)}, "amount >= 0"},
+		{"lt", Lt{Left: Col{Column: "age"}, Right: Int(18)}, "age < 18"},
+		{"gt", Gt{Left: Col{Column: "score"}, Right: Int(100)}, "score > 100"},
+		{"lte", Lte{Left: Col{Column: "count"}, Right: Int(10)}, "count <= 10"},
+		{"gte", Gte{Left: Col{Column: "amount"}, Right: Int(0)}, "amount >= 0"},
 
 		// In
 		{"in", In{Expr: Col{Column: "status"}, Values: []string{"a", "b"}}, "status IN ('a', 'b')"},
 		{"in empty", In{Expr: Col{Column: "x"}, Values: []string{}}, "FALSE"},
 
 		// And
-		{"and single", And(Eq{Col{Column: "a"}, Int(1)}), "a = 1"},
-		{"and multiple", And(Eq{Col{Column: "a"}, Int(1)}, Eq{Col{Column: "b"}, Int(2)}), "(a = 1 AND b = 2)"},
+		{"and single", And(Eq{Left: Col{Column: "a"}, Right: Int(1)}), "a = 1"},
+		{"and multiple", And(Eq{Left: Col{Column: "a"}, Right: Int(1)}, Eq{Left: Col{Column: "b"}, Right: Int(2)}), "(a = 1 AND b = 2)"},
 		{"and empty", And(), "TRUE"},
 
 		// Or
-		{"or single", Or(Eq{Col{Column: "a"}, Int(1)}), "a = 1"},
-		{"or multiple", Or(Eq{Col{Column: "a"}, Int(1)}, Eq{Col{Column: "b"}, Int(2)}), "(a = 1 OR b = 2)"},
+		{"or single", Or(Eq{Left: Col{Column: "a"}, Right: Int(1)}), "a = 1"},
+		{"or multiple", Or(Eq{Left: Col{Column: "a"}, Right: Int(1)}, Eq{Left: Col{Column: "b"}, Right: Int(2)}), "(a = 1 OR b = 2)"},
 		{"or empty", Or(), "FALSE"},
 
 		// Not
-		{"not", Not(Eq{Col{Column: "active"}, Bool(true)}), "NOT (active = TRUE)"},
+		{"not", Not(Eq{Left: Col{Column: "active"}, Right: Bool(true)}), "NOT (active = TRUE)"},
 
 		// IsNull, IsNotNull
-		{"is null", IsNull{Col{Column: "deleted_at"}}, "deleted_at IS NULL"},
-		{"is not null", IsNotNull{Col{Column: "name"}}, "name IS NOT NULL"},
+		{"is null", IsNull{Expr: Col{Column: "deleted_at"}}, "deleted_at IS NULL"},
+		{"is not null", IsNotNull{Expr: Col{Column: "name"}}, "name IS NOT NULL"},
 	}
 
 	for _, tt := range tests {
@@ -171,32 +171,32 @@ func TestUsersetOperations(t *testing.T) {
 	}{
 		{
 			name:   "userset object id",
-			expr:   UsersetObjectID{Col{Table: "t", Column: "subject_id"}},
+			expr:   UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}},
 			expect: "split_part(t.subject_id, '#', 1)",
 		},
 		{
 			name:   "userset relation",
-			expr:   UsersetRelation{Col{Table: "t", Column: "subject_id"}},
+			expr:   UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}},
 			expect: "split_part(t.subject_id, '#', 2)",
 		},
 		{
 			name:   "has userset",
-			expr:   HasUserset{Col{Table: "t", Column: "subject_id"}},
+			expr:   HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
 			expect: "position('#' in t.subject_id) > 0",
 		},
 		{
 			name:   "no userset",
-			expr:   NoUserset{SubjectID},
+			expr:   NoUserset{Source: SubjectID},
 			expect: "position('#' in p_subject_id) = 0",
 		},
 		{
 			name:   "substring userset relation",
-			expr:   SubstringUsersetRelation{SubjectID},
+			expr:   SubstringUsersetRelation{Source: SubjectID},
 			expect: "substring(p_subject_id from position('#' in p_subject_id) + 1)",
 		},
 		{
 			name:   "is wildcard",
-			expr:   IsWildcard{Col{Column: "subject_id"}},
+			expr:   IsWildcard{Source: Col{Column: "subject_id"}},
 			expect: "subject_id = '*'",
 		},
 	}
@@ -412,8 +412,8 @@ func TestTupleQueryWithJoin(t *testing.T) {
 		ObjectType("document").
 		Select("t.object_id").
 		JoinTuples("m",
-			Eq{Col{Table: "m", Column: "object_type"}, Lit("group")},
-			Eq{Col{Table: "m", Column: "object_id"}, UsersetObjectID{Col{Table: "t", Column: "subject_id"}}},
+			Eq{Left: Col{Table: "m", Column: "object_type"}, Right: Lit("group")},
+			Eq{Left: Col{Table: "m", Column: "object_id"}, Right: UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}}},
 		)
 
 	sql := q.SQL()
@@ -474,7 +474,7 @@ func TestSelectStmt(t *testing.T) {
 		Columns:  []string{"id", "name"},
 		From:     "users",
 		Alias:    "u",
-		Where:    Eq{Col{Table: "u", Column: "active"}, Bool(true)},
+		Where:    Eq{Left: Col{Table: "u", Column: "active"}, Right: Bool(true)},
 		Limit:    10,
 	}
 
@@ -498,7 +498,7 @@ func TestJoinClause(t *testing.T) {
 		Type:  "LEFT",
 		Table: "orders",
 		Alias: "o",
-		On:    Eq{Col{Table: "o", Column: "user_id"}, Col{Table: "u", Column: "id"}},
+		On:    Eq{Left: Col{Table: "o", Column: "user_id"}, Right: Col{Table: "u", Column: "id"}},
 	}
 
 	sql := join.SQL()

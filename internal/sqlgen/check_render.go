@@ -350,7 +350,7 @@ func renderParentRelationExistsFromBlocks(plan CheckPlan, parent ParentRelationB
 		ObjectType(plan.ObjectType).
 		Relations(parent.LinkingRelation).
 		Where(
-			Eq{Col{Table: "link", Column: "object_id"}, Raw("p_object_id")},
+			Eq{Left: Col{Table: "link", Column: "object_id"}, Right: Raw("p_object_id")},
 			Raw(fmt.Sprintf(
 				"%s(p_subject_type, p_subject_id, '%s', link.subject_type, link.subject_id, %s) = 1",
 				plan.InternalCheckFunctionName,

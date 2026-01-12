@@ -103,30 +103,30 @@ var (
 
 // Function aliases
 var (
-	ParamRef                       = sqldsl.ParamRef
-	LitText                        = sqldsl.LitText
-	And                            = sqldsl.And
-	Or                             = sqldsl.Or
-	Not                            = sqldsl.Not
-	ExistsExpr                     = sqldsl.ExistsExpr
-	TableAs                        = sqldsl.TableAs
-	ClosureValuesTable             = sqldsl.ClosureValuesTable
-	UsersetValuesTable             = sqldsl.UsersetValuesTable
-	TypedClosureValuesTable        = sqldsl.TypedClosureValuesTable
-	TypedUsersetValuesTable        = sqldsl.TypedUsersetValuesTable
-	ClosureTable                   = sqldsl.ClosureTable
-	UsersetTable                   = sqldsl.UsersetTable
-	Ident                          = sqldsl.Ident
-	RenderBlocks                   = sqldsl.RenderBlocks
-	RenderUnionBlocks              = sqldsl.RenderUnionBlocks
-	IndentLines                    = sqldsl.IndentLines
-	WrapWithPagination             = sqldsl.WrapWithPagination
+	ParamRef                        = sqldsl.ParamRef
+	LitText                         = sqldsl.LitText
+	And                             = sqldsl.And
+	Or                              = sqldsl.Or
+	Not                             = sqldsl.Not
+	ExistsExpr                      = sqldsl.ExistsExpr
+	TableAs                         = sqldsl.TableAs
+	ClosureValuesTable              = sqldsl.ClosureValuesTable
+	UsersetValuesTable              = sqldsl.UsersetValuesTable
+	TypedClosureValuesTable         = sqldsl.TypedClosureValuesTable
+	TypedUsersetValuesTable         = sqldsl.TypedUsersetValuesTable
+	ClosureTable                    = sqldsl.ClosureTable
+	UsersetTable                    = sqldsl.UsersetTable
+	Ident                           = sqldsl.Ident
+	RenderBlocks                    = sqldsl.RenderBlocks
+	RenderUnionBlocks               = sqldsl.RenderUnionBlocks
+	IndentLines                     = sqldsl.IndentLines
+	WrapWithPagination              = sqldsl.WrapWithPagination
 	WrapWithPaginationWildcardFirst = sqldsl.WrapWithPaginationWildcardFirst
-	SubjectIDMatch                 = sqldsl.SubjectIDMatch
-	NormalizedUsersetSubject       = sqldsl.NormalizedUsersetSubject
-	SelectAs                       = sqldsl.SelectAs
-	SubjectParams                  = sqldsl.SubjectParams
-	LiteralObject                  = sqldsl.LiteralObject
+	SubjectIDMatch                  = sqldsl.SubjectIDMatch
+	NormalizedUsersetSubject        = sqldsl.NormalizedUsersetSubject
+	SelectAs                        = sqldsl.SelectAs
+	SubjectParams                   = sqldsl.SubjectParams
+	LiteralObject                   = sqldsl.LiteralObject
 )
 
 // =============================================================================
@@ -159,13 +159,13 @@ type (
 
 // ListStrategy constants
 const (
-	ListStrategyDirect        = analysis.ListStrategyDirect
-	ListStrategyUserset       = analysis.ListStrategyUserset
-	ListStrategyRecursive     = analysis.ListStrategyRecursive
-	ListStrategyIntersection  = analysis.ListStrategyIntersection
-	ListStrategyDepthExceeded = analysis.ListStrategyDepthExceeded
+	ListStrategyDirect         = analysis.ListStrategyDirect
+	ListStrategyUserset        = analysis.ListStrategyUserset
+	ListStrategyRecursive      = analysis.ListStrategyRecursive
+	ListStrategyIntersection   = analysis.ListStrategyIntersection
+	ListStrategyDepthExceeded  = analysis.ListStrategyDepthExceeded
 	ListStrategySelfRefUserset = analysis.ListStrategySelfRefUserset
-	ListStrategyComposed      = analysis.ListStrategyComposed
+	ListStrategyComposed       = analysis.ListStrategyComposed
 )
 
 // Analysis functions
@@ -190,17 +190,17 @@ var Tuples = tuples.Tuples
 // =============================================================================
 
 type (
-	FuncArg          = plpgsql.FuncArg
-	Decl             = plpgsql.Decl
-	Stmt             = plpgsql.Stmt
-	ReturnQuery      = plpgsql.ReturnQuery
-	Return           = plpgsql.Return
-	Assign           = plpgsql.Assign
-	If               = plpgsql.If
-	RawStmt          = plpgsql.RawStmt
-	Raise            = plpgsql.Raise
-	Comment          = plpgsql.Comment
-	PlpgsqlFunction  = plpgsql.PlpgsqlFunction
+	FuncArg         = plpgsql.FuncArg
+	Decl            = plpgsql.Decl
+	Stmt            = plpgsql.Stmt
+	ReturnQuery     = plpgsql.ReturnQuery
+	Return          = plpgsql.Return
+	Assign          = plpgsql.Assign
+	If              = plpgsql.If
+	RawStmt         = plpgsql.RawStmt
+	Raise           = plpgsql.Raise
+	Comment         = plpgsql.Comment
+	PlpgsqlFunction = plpgsql.PlpgsqlFunction
 )
 
 var (
