@@ -1,7 +1,5 @@
 package sqlgen
 
-import "fmt"
-
 // =============================================================================
 // Intersection List Subjects Render Functions
 // =============================================================================
@@ -61,21 +59,33 @@ func RenderListSubjectsIntersectionFunction(plan ListPlan, blocks SubjectsInters
 // buildIntersectionRegularQuery builds the regular path query for intersection.
 // It wraps candidates in a CTE and filters with check_permission.
 func buildIntersectionRegularQuery(plan ListPlan, candidatesSQL string) string {
-	wildcardTail := renderSubjectsIntersectionWildcardTail(plan)
+	// Build the filtered_candidates CTE query
+	filteredCandidatesQuery := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "c", Column: "subject_id"}},
+		FromExpr:    TableAs("subject_candidates", "c"),
+		Where: CheckPermissionExpr(
+			"check_permission",
+			SubjectRef{Type: SubjectType, ID: Col{Table: "c", Column: "subject_id"}},
+			plan.Relation,
+			LiteralObject(plan.ObjectType, ObjectID),
+			true,
+		),
+	}
 
-	return fmt.Sprintf(`WITH subject_candidates AS (
-%s
-        ),
-        filtered_candidates AS (
-            SELECT DISTINCT c.subject_id
-            FROM subject_candidates c
-            WHERE check_permission(p_subject_type, c.subject_id, '%s', '%s', p_object_id) = 1
-        )%s`,
-		indentLines(candidatesSQL, "        "),
-		plan.Relation,
-		plan.ObjectType,
-		wildcardTail,
-	)
+	// Build the final query that selects from filtered_candidates
+	finalQuery := SelectStmt{
+		ColumnExprs: []Expr{Col{Table: "fc", Column: "subject_id"}},
+		FromExpr:    TableAs("filtered_candidates", "fc"),
+	}
+
+	// Build the full CTE query using MultiCTE
+	cteQuery := MultiCTE(false, []CTEDef{
+		{Name: "subject_candidates", Query: Raw(candidatesSQL)},
+		{Name: "filtered_candidates", Query: filteredCandidatesQuery},
+	}, finalQuery)
+
+	return cteQuery.SQL()
 }
 
 // renderSubjectsIntersectionWildcardTail renders the wildcard handling for intersection.
@@ -94,28 +104,36 @@ func renderSubjectsIntersectionWildcardTail(_ ListPlan) string {
 
 // buildIntersectionUsersetFilterQuery builds the userset filter path query for intersection.
 func buildIntersectionUsersetFilterQuery(plan ListPlan, candidatesSQL string, selfBlock *TypedQueryBlock) string {
-	var selfSQL string
-	if selfBlock != nil {
-		rendered := renderTypedQueryBlock(*selfBlock)
-		selfSQL = fmt.Sprintf(`
-
-        UNION
-
-%s`,
-			formatQueryBlock(rendered.Comments, rendered.Query.SQL()))
+	// Build the main query with check_permission filter
+	mainQuery := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "c", Column: "subject_id"}},
+		FromExpr:    TableAs("userset_candidates", "c"),
+		Where: CheckPermissionExpr(
+			"check_permission",
+			SubjectRef{Type: Param("v_filter_type"), ID: Col{Table: "c", Column: "subject_id"}},
+			plan.Relation,
+			LiteralObject(plan.ObjectType, ObjectID),
+			true,
+		),
 	}
 
-	return fmt.Sprintf(`WITH userset_candidates AS (
-%s
-        )
-        SELECT DISTINCT c.subject_id
-        FROM userset_candidates c
-        WHERE check_permission(v_filter_type, c.subject_id, '%s', '%s', p_object_id) = 1%s`,
-		candidatesSQL,
-		plan.Relation,
-		plan.ObjectType,
-		selfSQL,
-	)
+	// Build the CTE
+	cteQuery := SimpleCTE("userset_candidates", Raw(candidatesSQL), mainQuery)
+
+	// If there's a self block, append it with UNION using UnionAll type
+	if selfBlock != nil {
+		rendered := renderTypedQueryBlock(*selfBlock)
+		unionQuery := UnionAll{
+			Queries: []SQLer{
+				cteQuery,
+				Raw(formatQueryBlock(rendered.Comments, rendered.Query.SQL())),
+			},
+		}
+		return unionQuery.SQL()
+	}
+
+	return cteQuery.SQL()
 }
 
 // renderIntersectionRegularElseBranch builds the ELSE branch for intersection regular path.

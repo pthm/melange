@@ -72,7 +72,7 @@ func buildSubjectsRecursiveRegularQuery(plan ListPlan, regularBlocks, ttuBlocks 
 	// Add TTU blocks to base results
 	if len(ttuBlocks) > 0 {
 		ttuBlocksSQL := RenderUnionBlocks(ttuBlocks)
-		baseBlocksSQL = baseBlocksSQL + "\n    UNION\n" + ttuBlocksSQL
+		baseBlocksSQL = joinUnionBlocksSQL([]string{baseBlocksSQL, ttuBlocksSQL})
 	}
 
 	// Build the has_wildcard CTE query

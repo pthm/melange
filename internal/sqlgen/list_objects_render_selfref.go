@@ -91,7 +91,7 @@ func renderSelfRefUsersetCTEBody(blocks SelfRefUsersetBlockSet) string {
 	if blocks.RecursiveBlock != nil {
 		qb := renderTypedQueryBlock(*blocks.RecursiveBlock)
 		recursiveSQL := formatQueryBlockSQL(qb.Comments, qb.Query.SQL())
-		cteBody = cteBody + "\n    UNION ALL\n" + recursiveSQL
+		cteBody = appendUnionAll(cteBody, recursiveSQL)
 	}
 
 	return cteBody

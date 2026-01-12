@@ -74,6 +74,7 @@ type (
 	LateralFunction   = sqldsl.LateralFunction
 	SQLer             = sqldsl.SQLer
 	QueryBlock        = sqldsl.QueryBlock
+	UnionAll          = sqldsl.UnionAll
 )
 
 // Userset types
@@ -103,8 +104,10 @@ type (
 
 // CTE types
 type (
-	CTEDef  = sqldsl.CTEDef
-	WithCTE = sqldsl.WithCTE
+	CTEDef        = sqldsl.CTEDef
+	WithCTE       = sqldsl.WithCTE
+	CommentedSQL  = sqldsl.CommentedSQL
+	SelectIntoVar = sqldsl.SelectIntoVar
 )
 
 // Ref types
@@ -169,9 +172,10 @@ var (
 	ListSubjectsFunctionName = sqldsl.ListSubjectsFunctionName
 
 	// CTE helpers
-	RecursiveCTE = sqldsl.RecursiveCTE
-	SimpleCTE    = sqldsl.SimpleCTE
-	MultiCTE     = sqldsl.MultiCTE
+	RecursiveCTE     = sqldsl.RecursiveCTE
+	SimpleCTE        = sqldsl.SimpleCTE
+	MultiCTE         = sqldsl.MultiCTE
+	MultiLineComment = sqldsl.MultiLineComment
 )
 
 // =============================================================================

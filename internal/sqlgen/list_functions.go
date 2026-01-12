@@ -190,6 +190,10 @@ type ListParentRelationData struct {
 	ParentType          string // First allowed linking type (for self-referential check)
 	IsSelfReferential   bool   // True if any parent type equals the object type
 
+	// AllowedLinkingTypesSlice contains the same types as AllowedLinkingTypes but as a slice.
+	// Used for typed DSL expressions (In{Expr: ..., Values: AllowedLinkingTypesSlice}).
+	AllowedLinkingTypesSlice []string
+
 	// CrossTypeLinkingTypes is a SQL-formatted list of linking types that are NOT self-referential.
 	// When a parent relation allows both self-referential and cross-type links (e.g., [folder, document]
 	// for document.parent), this contains only the cross-type entries (e.g., "'folder'").
@@ -346,6 +350,7 @@ func buildListParentRelations(a RelationAnalysis) []ListParentRelationData {
 			}
 
 			data.AllowedLinkingTypes = formatSQLStringList(allTypes)
+			data.AllowedLinkingTypesSlice = allTypes
 			data.ParentType = p.AllowedLinkingTypes[0]
 
 			// Set cross-type fields for generating check_permission_internal calls

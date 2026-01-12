@@ -148,13 +148,16 @@ func buildSelfRefUsersetFilterIntersectionBlocks(plan ListPlan) ([]TypedQueryBlo
 	for _, rel := range intersectionRels {
 		funcName := listSubjectsFunctionName(plan.ObjectType, rel)
 		// Call list_subjects for the intersection closure relation with userset filter
-		fromClause := fmt.Sprintf("%s(p_object_id, v_filter_type || '#' || v_filter_relation)", funcName)
+		filterUsersetExpr := Concat{Parts: []Expr{Param("v_filter_type"), Lit("#"), Param("v_filter_relation")}}
 
 		stmt := SelectStmt{
 			Distinct:    true,
 			ColumnExprs: []Expr{Raw("split_part(icr.subject_id, '#', 1) AS userset_object_id"), Raw("0 AS depth")},
-			From:        fromClause,
-			Alias:       "icr",
+			FromExpr: FunctionCallExpr{
+				Name:  funcName,
+				Args:  []Expr{ObjectID, filterUsersetExpr},
+				Alias: "icr",
+			},
 		}
 
 		blocks = append(blocks, TypedQueryBlock{
@@ -387,12 +390,14 @@ func buildSelfRefUsersetRegularIntersectionClosureBlocks(plan ListPlan) ([]Typed
 	var blocks []TypedQueryBlock
 	for _, rel := range intersectionRels {
 		funcName := listSubjectsFunctionName(plan.ObjectType, rel)
-		fromClause := fmt.Sprintf("%s(p_object_id, p_subject_type)", funcName)
 
 		stmt := SelectStmt{
-			Columns: []string{"icr.subject_id"},
-			From:    fromClause,
-			Alias:   "icr",
+			ColumnExprs: []Expr{Col{Table: "icr", Column: "subject_id"}},
+			FromExpr: FunctionCallExpr{
+				Name:  funcName,
+				Args:  []Expr{ObjectID, SubjectType},
+				Alias: "icr",
+			},
 		}
 
 		blocks = append(blocks, TypedQueryBlock{
@@ -495,15 +500,24 @@ func buildSelfRefUsersetRegularComplexPatternBlock(plan ListPlan, pattern listUs
 	}
 
 	// Build LATERAL subquery for subjects from userset object
-	lateralSubquery := fmt.Sprintf("LATERAL %s(split_part(g.subject_id, '#', 1), p_subject_type, NULL, NULL) AS s", funcName)
+	lateralSubquery := LateralFunction{
+		Name: funcName,
+		Args: []Expr{
+			Func{Name: "split_part", Args: []Expr{Col{Table: "g", Column: "subject_id"}, Lit("#"), Int(1)}},
+			SubjectType,
+			Null{},
+			Null{},
+		},
+		Alias: "s",
+	}
 
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "s", Column: "subject_id"}},
 		FromExpr:    TableAs("melange_tuples", "g"),
 		Joins: []JoinClause{{
-			Type:  "CROSS",
-			Table: lateralSubquery,
+			Type:      "CROSS",
+			TableExpr: lateralSubquery,
 		}},
 		Where: And(grantConditions...),
 	}

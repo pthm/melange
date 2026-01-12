@@ -28,8 +28,18 @@ func renderTypedQueryBlock(block TypedQueryBlock) QueryBlock {
 }
 
 // wrapQueryWithDepthForRender wraps a query to include depth column.
+// Uses strings.Builder to avoid direct string concatenation with +.
 func wrapQueryWithDepthForRender(sql, depthExpr, alias string) string {
-	return "SELECT DISTINCT " + alias + ".object_id, " + depthExpr + " AS depth\nFROM (\n" + sql + "\n) AS " + alias
+	var sb strings.Builder
+	sb.WriteString("SELECT DISTINCT ")
+	sb.WriteString(alias)
+	sb.WriteString(".object_id, ")
+	sb.WriteString(depthExpr)
+	sb.WriteString(" AS depth\nFROM (\n")
+	sb.WriteString(sql)
+	sb.WriteString("\n) AS ")
+	sb.WriteString(alias)
+	return sb.String()
 }
 
 // formatQueryBlockSQL formats a query block with comments.
@@ -45,6 +55,18 @@ func formatQueryBlockSQL(comments []string, sql string) string {
 // joinUnionBlocksSQL joins multiple SQL blocks with UNION.
 func joinUnionBlocksSQL(blocks []string) string {
 	return strings.Join(blocks, "\n    UNION\n")
+}
+
+// joinUnionAllBlocksSQL joins multiple SQL blocks with UNION ALL.
+// Used for recursive CTE bodies where duplicate elimination is handled elsewhere.
+func joinUnionAllBlocksSQL(blocks []string) string {
+	return strings.Join(blocks, "\n    UNION ALL\n")
+}
+
+// appendUnionAll appends a part to existing SQL using UNION ALL separator.
+// Avoids direct string concatenation for SQL clause construction.
+func appendUnionAll(base, additional string) string {
+	return joinUnionAllBlocksSQL([]string{base, additional})
 }
 
 // buildDepthCheckSQLForRender builds the depth check SQL for recursive functions.
@@ -78,24 +100,48 @@ func buildDepthCheckSQLForRender(objectType string, linkingRelations []string) s
 		Where: Lt{Left: Col{Table: "d", Column: "depth"}, Right: Int(26)},
 	}
 
-	// Build CTE body as UNION ALL of base and recursive cases
-	cteBody := "-- Base case: seed with empty set (we just need depth tracking)\n" +
-		IndentLines(baseCase.SQL(), "    ") + "\n\n" +
-		"    UNION ALL\n" +
-		"    -- Track depth through all self-referential linking relations\n" +
-		IndentLines(recursiveCase.SQL(), "    ")
+	// Build CTE body as UNION ALL of base and recursive cases using typed DSL
+	cteBody := UnionAll{
+		Queries: []SQLer{
+			CommentedSQL{Comment: "Base case: seed with empty set (we just need depth tracking)", Query: baseCase},
+			CommentedSQL{Comment: "Track depth through all self-referential linking relations", Query: recursiveCase},
+		},
+	}
 
-	// Build the final SELECT INTO
+	// Build the final SELECT
 	finalQuery := Raw("SELECT MAX(depth) FROM depth_check")
 
 	// Build the CTE
-	cteQuery := RecursiveCTE("depth_check", []string{"object_id", "depth"}, Raw(cteBody), finalQuery)
+	cteQuery := RecursiveCTE("depth_check", []string{"object_id", "depth"}, cteBody, finalQuery)
 
-	return "    -- Check for excessive recursion depth before running the query\n" +
-		"    -- This matches check_permission behavior with M2002 error\n" +
-		"    -- Only self-referential TTUs contribute to recursion depth (cross-type are one-hop)\n" +
-		IndentLines(cteQuery.SQL(), "    ") + " INTO v_max_depth;\n"
+	// Wrap with SELECT INTO for PL/pgSQL variable assignment
+	selectInto := SelectIntoVar{Query: cteQuery, Variable: "v_max_depth"}
+
+	// Wrap with explanatory comments
+	commentedQuery := MultiLineComment([]string{
+		"Check for excessive recursion depth before running the query",
+		"This matches check_permission behavior with M2002 error",
+		"Only self-referential TTUs contribute to recursion depth (cross-type are one-hop)",
+	}, selectInto)
+
+	return IndentLines(commentedQuery.SQL(), "    ") + ";\n"
 }
+
+// dispatcherCallArgs defines typed arguments for dispatcher function calls.
+var (
+	listObjectsCallArgs = []Expr{
+		Param("p_subject_type"),
+		Param("p_subject_id"),
+		Param("p_limit"),
+		Param("p_after"),
+	}
+	listSubjectsCallArgs = []Expr{
+		Param("p_object_id"),
+		Param("p_subject_type"),
+		Param("p_limit"),
+		Param("p_after"),
+	}
+)
 
 func renderListDispatcher(functionName string, args []FuncArg, returns string, cases []ListDispatcherCase) string {
 	// Build the body with routing cases
@@ -103,11 +149,20 @@ func renderListDispatcher(functionName string, args []FuncArg, returns string, c
 	if len(cases) > 0 {
 		for _, c := range cases {
 			// Arguments depend on whether this is list_objects or list_subjects
-			var callArgs string
+			var callArgs []Expr
 			if strings.Contains(functionName, "objects") {
-				callArgs = "p_subject_type, p_subject_id, p_limit, p_after"
+				callArgs = listObjectsCallArgs
 			} else {
-				callArgs = "p_object_id, p_subject_type, p_limit, p_after"
+				callArgs = listSubjectsCallArgs
+			}
+
+			// Build SELECT * FROM func_name(args) using typed DSL
+			query := SelectStmt{
+				Columns: []string{"*"},
+				FromExpr: FunctionCallExpr{
+					Name: c.FunctionName,
+					Args: callArgs,
+				},
 			}
 
 			bodyStmts = append(bodyStmts, If{
@@ -116,7 +171,7 @@ func renderListDispatcher(functionName string, args []FuncArg, returns string, c
 					Eq{Left: Param("p_relation"), Right: Lit(c.Relation)},
 				),
 				Then: []Stmt{
-					ReturnQuery{Query: "SELECT * FROM " + c.FunctionName + "(" + callArgs + ")"},
+					ReturnQuery{Query: query.SQL()},
 					Return{},
 				},
 			})

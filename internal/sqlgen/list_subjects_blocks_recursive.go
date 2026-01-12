@@ -398,8 +398,8 @@ func buildListSubjectsRecursiveTTUBlock(plan ListPlan, parent ListParentRelation
 	}
 
 	// Add allowed linking types filter if present
-	if parent.AllowedLinkingTypes != "" {
-		whereConditions = append(whereConditions, Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
+	if len(parent.AllowedLinkingTypesSlice) > 0 {
+		whereConditions = append(whereConditions, In{Expr: Col{Table: "link", Column: "subject_type"}, Values: parent.AllowedLinkingTypesSlice})
 	}
 
 	// Add exclusion predicates
@@ -468,8 +468,11 @@ func buildSubjectsRecursiveUsersetFilterTypedBlocks(plan ListPlan, parentRelatio
 		stmt := SelectStmt{
 			Distinct:    true,
 			ColumnExprs: []Expr{Col{Table: "ics", Column: "subject_id"}},
-			From:        fmt.Sprintf("%s(p_object_id, %s)", funcName, filterUsersetExpr.SQL()),
-			Alias:       "ics",
+			FromExpr: FunctionCallExpr{
+				Name:  funcName,
+				Args:  []Expr{ObjectID, filterUsersetExpr},
+				Alias: "ics",
+			},
 		}
 		blocks = append(blocks, TypedQueryBlock{
 			Comments: []string{
@@ -580,8 +583,8 @@ func buildListSubjectsRecursiveUsersetFilterTTUBlock(plan ListPlan, parent ListP
 	}
 
 	// Add allowed linking types filter if present
-	if parent.AllowedLinkingTypes != "" {
-		whereConditions = append(whereConditions, Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
+	if len(parent.AllowedLinkingTypesSlice) > 0 {
+		whereConditions = append(whereConditions, In{Expr: Col{Table: "link", Column: "subject_type"}, Values: parent.AllowedLinkingTypesSlice})
 	}
 
 	// Build subject_id expression with normalization
@@ -635,8 +638,8 @@ func buildListSubjectsRecursiveUsersetFilterTTUIntermediateBlock(plan ListPlan, 
 	}
 
 	// Add allowed linking types filter if present
-	if parent.AllowedLinkingTypes != "" {
-		whereConditions = append(whereConditions, Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
+	if len(parent.AllowedLinkingTypesSlice) > 0 {
+		whereConditions = append(whereConditions, In{Expr: Col{Table: "link", Column: "subject_type"}, Values: parent.AllowedLinkingTypesSlice})
 	}
 
 	// Build subject_id expression
@@ -660,7 +663,16 @@ func buildListSubjectsRecursiveUsersetFilterTTUIntermediateBlock(plan ListPlan, 
 // buildListSubjectsRecursiveUsersetFilterTTUNestedBlock builds the nested TTU block.
 func buildListSubjectsRecursiveUsersetFilterTTUNestedBlock(plan ListPlan, parent ListParentRelationData) (TypedQueryBlock, error) {
 	// Build LATERAL call to list_accessible_subjects
-	lateralCall := fmt.Sprintf("LATERAL list_accessible_subjects(link.subject_type, link.subject_id, '%s', p_subject_type)", parent.Relation)
+	lateralCall := LateralFunction{
+		Name: "list_accessible_subjects",
+		Args: []Expr{
+			Col{Table: "link", Column: "subject_type"},
+			Col{Table: "link", Column: "subject_id"},
+			Lit(parent.Relation),
+			SubjectType,
+		},
+		Alias: "nested",
+	}
 
 	// Build WHERE conditions
 	whereConditions := []Expr{
@@ -670,17 +682,16 @@ func buildListSubjectsRecursiveUsersetFilterTTUNestedBlock(plan ListPlan, parent
 	}
 
 	// Add allowed linking types filter if present
-	if parent.AllowedLinkingTypes != "" {
-		whereConditions = append(whereConditions, Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
+	if len(parent.AllowedLinkingTypesSlice) > 0 {
+		whereConditions = append(whereConditions, In{Expr: Col{Table: "link", Column: "subject_type"}, Values: parent.AllowedLinkingTypesSlice})
 	}
 
 	stmt := SelectStmt{
 		ColumnExprs: []Expr{Col{Table: "nested", Column: "subject_id"}},
 		FromExpr:    TableAs("melange_tuples", "link"),
 		Joins: []JoinClause{{
-			Type:  "CROSS",
-			Table: lateralCall,
-			Alias: "nested",
+			Type:      "CROSS",
+			TableExpr: lateralCall,
 		}},
 		Where: And(whereConditions...),
 	}

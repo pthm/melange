@@ -480,6 +480,43 @@ func RenderUnionBlocks(blocks []QueryBlock) string {
 	return strings.Join(parts, "\n    UNION\n")
 }
 
+// UnionAll represents multiple queries combined with UNION ALL.
+// Each query is rendered and joined with UNION ALL.
+//
+// Example:
+//
+//	UnionAll{Queries: []SQLer{query1, query2}}
+//
+// Renders:
+//
+//	query1
+//	UNION ALL
+//	query2
+type UnionAll struct {
+	Queries []SQLer
+	Indent  string // Optional indent prefix for each query (default: empty)
+}
+
+// SQL renders the UNION of all queries.
+func (u UnionAll) SQL() string {
+	if len(u.Queries) == 0 {
+		return ""
+	}
+	if len(u.Queries) == 1 {
+		return u.Queries[0].SQL()
+	}
+	parts := make([]string, len(u.Queries))
+	indent := u.Indent
+	for i, q := range u.Queries {
+		sql := q.SQL()
+		if indent != "" {
+			sql = IndentLines(sql, indent)
+		}
+		parts[i] = sql
+	}
+	return strings.Join(parts, "\n\nUNION ALL\n\n")
+}
+
 // renderSingleBlock renders a single query block with comments and indentation.
 func renderSingleBlock(block QueryBlock) string {
 	lines := make([]string, 0, len(block.Comments)+1)

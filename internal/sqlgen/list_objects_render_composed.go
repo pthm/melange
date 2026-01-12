@@ -30,29 +30,27 @@ func RenderListObjectsComposedFunction(plan ListPlan, blocks ComposedObjectsBloc
 	selfPaginatedSQL := wrapWithPagination(selfSQL, "object_id")
 	mainPaginatedSQL := wrapWithPagination(mainQuery, "object_id")
 
-	// Build the body
-	bodySQL := fmt.Sprintf(`-- Self-candidate check: when subject is a userset on the same object type
-IF EXISTS (
-%s
-) THEN
-    RETURN QUERY
-    %s;
-    RETURN;
-END IF;
-
--- Type guard: only return results if subject type is allowed
--- Skip the guard for userset subjects since composed inner calls handle userset subjects
-IF position('#' in p_subject_id) = 0 AND p_subject_type NOT IN (%s) THEN
-    RETURN;
-END IF;
-
-RETURN QUERY
-%s;`,
-		indentLines(selfSQL, "    "),
-		selfPaginatedSQL,
-		formatSQLStringList(blocks.AllowedSubjectTypes),
-		mainPaginatedSQL,
-	)
+	// Build the body using plpgsql DSL types
+	body := []Stmt{
+		Comment{Text: "Self-candidate check: when subject is a userset on the same object type"},
+		If{
+			Cond: Exists{Query: Raw(selfSQL)},
+			Then: []Stmt{
+				ReturnQuery{Query: selfPaginatedSQL},
+				Return{},
+			},
+		},
+		Comment{Text: "Type guard: only return results if subject type is allowed"},
+		Comment{Text: "Skip the guard for userset subjects since composed inner calls handle userset subjects"},
+		If{
+			Cond: And(
+				Eq{Left: Position{Needle: Lit("#"), Haystack: SubjectID}, Right: Int(0)},
+				NotIn{Expr: SubjectType, Values: blocks.AllowedSubjectTypes},
+			),
+			Then: []Stmt{Return{}},
+		},
+		ReturnQuery{Query: mainPaginatedSQL},
+	}
 
 	fn := PlpgsqlFunction{
 		Name:    plan.FunctionName,
@@ -63,9 +61,7 @@ RETURN QUERY
 			fmt.Sprintf("Features: %s", plan.FeaturesString()),
 			fmt.Sprintf("Indirect anchor: %s.%s via %s", blocks.AnchorType, blocks.AnchorRelation, blocks.FirstStepType),
 		},
-		Body: []Stmt{
-			RawStmt{SQLText: bodySQL},
-		},
+		Body: body,
 	}
 	return fn.SQL(), nil
 }

@@ -98,3 +98,61 @@ func MultiCTE(recursive bool, ctes []CTEDef, finalQuery SQLer) WithCTE {
 		Query:     finalQuery,
 	}
 }
+
+// CommentedSQL wraps a query with a SQL comment prefix.
+// Useful for adding descriptive comments to parts of a UNION or CTE body.
+//
+// Example:
+//
+//	CommentedSQL{Comment: "Base case: seed with starting value", Query: baseQuery}
+//
+// Renders:
+//
+//	-- Base case: seed with starting value
+//	<base query>
+type CommentedSQL struct {
+	Comment string // Comment text (without -- prefix)
+	Query   SQLer  // The query to render after the comment
+}
+
+// SQL renders the comment followed by the query.
+func (c CommentedSQL) SQL() string {
+	var sb strings.Builder
+	sb.WriteString("-- ")
+	sb.WriteString(c.Comment)
+	sb.WriteString("\n")
+	sb.WriteString(c.Query.SQL())
+	return sb.String()
+}
+
+// MultiLineComment creates a CommentedSQL with multiple comment lines.
+// The query follows after all comment lines.
+func MultiLineComment(comments []string, query SQLer) CommentedSQL {
+	// Join comments into a single comment block
+	commentText := strings.Join(comments, "\n-- ")
+	return CommentedSQL{Comment: commentText, Query: query}
+}
+
+// SelectIntoVar wraps a query for use with PL/pgSQL SELECT INTO.
+// Appends "INTO <variable>" after the query.
+//
+// Example:
+//
+//	SelectIntoVar{Query: cteQuery, Variable: "v_max_depth"}
+//
+// Renders:
+//
+//	<query> INTO v_max_depth
+type SelectIntoVar struct {
+	Query    SQLer  // The query (e.g., a CTE)
+	Variable string // Variable name to select into
+}
+
+// SQL renders the query with INTO clause appended.
+func (s SelectIntoVar) SQL() string {
+	var sb strings.Builder
+	sb.WriteString(s.Query.SQL())
+	sb.WriteString(" INTO ")
+	sb.WriteString(s.Variable)
+	return sb.String()
+}

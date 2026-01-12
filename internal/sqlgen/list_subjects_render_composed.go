@@ -33,86 +33,92 @@ func RenderListSubjectsComposedFunction(plan ListPlan, blocks ComposedSubjectsBl
 	}
 	regularCandidates := strings.Join(regularBlocksSQL, "\n    UNION\n")
 
-	// Build userset filter query
-	usersetFilterQuery := fmt.Sprintf(`WITH subject_candidates AS (
-%s
-)
-SELECT DISTINCT sc.subject_id
-FROM subject_candidates sc
-WHERE check_permission_internal(v_filter_type, sc.subject_id, '%s', '%s', p_object_id, ARRAY[]::TEXT[]) = 1`,
-		indentLines(usersetFilterCandidates, "        "),
-		plan.Relation,
-		plan.ObjectType,
-	)
+	// Build userset filter query using WithCTE
+	usersetFilterQuery := WithCTE{
+		Recursive: false,
+		CTEs: []CTEDef{{
+			Name:  "subject_candidates",
+			Query: Raw(usersetFilterCandidates),
+		}},
+		Query: SelectStmt{
+			Distinct:    true,
+			ColumnExprs: []Expr{Col{Table: "sc", Column: "subject_id"}},
+			FromExpr:    TableAs("subject_candidates", "sc"),
+			Where: CheckPermission{
+				Subject:     SubjectRef{Type: Param("v_filter_type"), ID: Col{Table: "sc", Column: "subject_id"}},
+				Relation:    plan.Relation,
+				Object:      LiteralObject(plan.ObjectType, ObjectID),
+				ExpectAllow: true,
+			},
+		},
+	}.SQL()
 
-	// Build regular query (with exclusions if needed)
-	var regularQuery string
+	// Build regular query using WithCTE (with exclusions if needed)
+	var regularQueryCTE WithCTE
+	regularQueryCTE = WithCTE{
+		Recursive: false,
+		CTEs: []CTEDef{{
+			Name:  "subject_candidates",
+			Query: Raw(regularCandidates),
+		}},
+		Query: SelectStmt{
+			Distinct:    true,
+			ColumnExprs: []Expr{Col{Table: "sc", Column: "subject_id"}},
+			FromExpr:    TableAs("subject_candidates", "sc"),
+		},
+	}
 	if blocks.HasExclusions {
 		exclusions := buildSimpleComplexExclusionInput(plan.Analysis, ObjectID, SubjectType, Col{Table: "sc", Column: "subject_id"})
 		exclusionPreds := exclusions.BuildPredicates()
-		whereClause := ""
 		if len(exclusionPreds) > 0 {
-			whereClause = "\nWHERE " + And(exclusionPreds...).SQL()
+			selectStmt := regularQueryCTE.Query.(SelectStmt)
+			selectStmt.Where = And(exclusionPreds...)
+			regularQueryCTE.Query = selectStmt
 		}
-		regularQuery = fmt.Sprintf(`WITH subject_candidates AS (
-%s
-)
-SELECT DISTINCT sc.subject_id
-FROM subject_candidates sc%s`,
-			indentLines(regularCandidates, "        "),
-			whereClause,
-		)
-	} else {
-		regularQuery = fmt.Sprintf(`WITH subject_candidates AS (
-%s
-)
-SELECT DISTINCT sc.subject_id
-FROM subject_candidates sc`,
-			indentLines(regularCandidates, "        "),
-		)
 	}
+	regularQuery := regularQueryCTE.SQL()
 
 	// Wrap queries with pagination
 	selfPaginatedSQL := wrapWithPaginationWildcardFirst(selfSQL)
 	usersetFilterPaginatedSQL := wrapWithPaginationWildcardFirst(usersetFilterQuery)
 	regularPaginatedSQL := wrapWithPaginationWildcardFirst(regularQuery)
 
-	// Build the body
-	bodySQL := fmt.Sprintf(`v_is_userset_filter := position('#' in p_subject_type) > 0;
-IF v_is_userset_filter THEN
-    v_filter_type := split_part(p_subject_type, '#', 1);
-    v_filter_relation := split_part(p_subject_type, '#', 2);
-
-    -- Self-candidate: when filter type matches object type
-    IF v_filter_type = '%s' THEN
-        IF EXISTS (
-%s
-        ) THEN
-            RETURN QUERY
-            %s;
-            RETURN;
-        END IF;
-    END IF;
-
-    -- Userset filter case
-    RETURN QUERY
-    %s;
-ELSE
-    -- Direct subject type case
-    IF p_subject_type NOT IN (%s) THEN
-        RETURN;
-    END IF;
-
-    RETURN QUERY
-    %s;
-END IF;`,
-		plan.ObjectType,
-		indentLines(selfSQL, "            "),
-		selfPaginatedSQL,
-		usersetFilterPaginatedSQL,
-		formatSQLStringList(blocks.AllowedSubjectTypes),
-		regularPaginatedSQL,
-	)
+	// Build the body using plpgsql DSL types
+	body := []Stmt{
+		// Determine if this is a userset filter request
+		Assign{Name: "v_is_userset_filter", Value: Gt{Left: Position{Needle: Lit("#"), Haystack: SubjectType}, Right: Int(0)}},
+		If{
+			Cond: Param("v_is_userset_filter"),
+			Then: []Stmt{
+				// Extract filter type and relation from userset subject type
+				Assign{Name: "v_filter_type", Value: Raw("split_part(p_subject_type, '#', 1)")},
+				Assign{Name: "v_filter_relation", Value: Raw("split_part(p_subject_type, '#', 2)")},
+				Comment{Text: "Self-candidate: when filter type matches object type"},
+				If{
+					Cond: Eq{Left: Param("v_filter_type"), Right: Lit(plan.ObjectType)},
+					Then: []Stmt{
+						If{
+							Cond: Exists{Query: Raw(selfSQL)},
+							Then: []Stmt{
+								ReturnQuery{Query: selfPaginatedSQL},
+								Return{},
+							},
+						},
+					},
+				},
+				Comment{Text: "Userset filter case"},
+				ReturnQuery{Query: usersetFilterPaginatedSQL},
+			},
+			Else: []Stmt{
+				Comment{Text: "Direct subject type case"},
+				If{
+					Cond: NotIn{Expr: SubjectType, Values: blocks.AllowedSubjectTypes},
+					Then: []Stmt{Return{}},
+				},
+				ReturnQuery{Query: regularPaginatedSQL},
+			},
+		},
+	}
 
 	fn := PlpgsqlFunction{
 		Name:    plan.FunctionName,
@@ -128,9 +134,7 @@ END IF;`,
 			{Name: "v_filter_type", Type: "TEXT"},
 			{Name: "v_filter_relation", Type: "TEXT"},
 		},
-		Body: []Stmt{
-			RawStmt{SQLText: bodySQL},
-		},
+		Body: body,
 	}
 	return fn.SQL(), nil
 }

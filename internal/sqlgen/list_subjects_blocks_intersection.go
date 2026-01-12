@@ -286,8 +286,8 @@ func buildListSubjectsIntersectionTTUBlock(plan ListPlan, parent ListParentRelat
 		Eq{Left: Col{Table: "link", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
 		Eq{Left: Col{Table: "pt", Column: "subject_type"}, Right: SubjectType},
 	}
-	if parent.AllowedLinkingTypes != "" {
-		conditions = append(conditions, Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
+	if len(parent.AllowedLinkingTypesSlice) > 0 {
+		conditions = append(conditions, In{Expr: Col{Table: "link", Column: "subject_type"}, Values: parent.AllowedLinkingTypesSlice})
 	}
 	if excludeWildcard {
 		conditions = append(conditions, Ne{Left: Col{Table: "pt", Column: "subject_id"}, Right: Lit("*")})
@@ -528,8 +528,8 @@ func buildListSubjectsIntersectionUsersetFilterTTUBlock(plan ListPlan, parent Li
 		Gt{Left: Raw("position('#' in pt.subject_id)"), Right: Int(0)},
 		relationMatch,
 	}
-	if parent.AllowedLinkingTypes != "" {
-		conditions = append(conditions, Raw(fmt.Sprintf("link.subject_type IN (%s)", parent.AllowedLinkingTypes)))
+	if len(parent.AllowedLinkingTypesSlice) > 0 {
+		conditions = append(conditions, In{Expr: Col{Table: "link", Column: "subject_type"}, Values: parent.AllowedLinkingTypesSlice})
 	}
 
 	subjectExpr := Raw("substring(pt.subject_id from 1 for position('#' in pt.subject_id) - 1) || '#' || v_filter_relation AS subject_id")

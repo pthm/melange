@@ -1,7 +1,5 @@
 package sqlgen
 
-import "fmt"
-
 // CheckPermission represents a call to check_permission_internal.
 // This is the core permission check expression used in queries.
 type CheckPermission struct {
@@ -13,24 +11,28 @@ type CheckPermission struct {
 }
 
 // SQL renders the check_permission_internal call with comparison.
+// Uses FuncCallEq internally to avoid fmt.Sprintf for SQL construction.
 func (c CheckPermission) SQL() string {
-	visited := "ARRAY[]::TEXT[]"
+	var visited Expr = EmptyArray{}
 	if c.Visited != nil {
-		visited = c.Visited.SQL()
+		visited = c.Visited
 	}
-	result := "1"
+	value := Int(1)
 	if !c.ExpectAllow {
-		result = "0"
+		value = Int(0)
 	}
-	return fmt.Sprintf("check_permission_internal(%s, %s, '%s', %s, %s, %s) = %s",
-		c.Subject.Type.SQL(),
-		c.Subject.ID.SQL(),
-		c.Relation,
-		c.Object.Type.SQL(),
-		c.Object.ID.SQL(),
-		visited,
-		result,
-	)
+	return FuncCallEq{
+		FuncName: "check_permission_internal",
+		Args: []Expr{
+			c.Subject.Type,
+			c.Subject.ID,
+			Lit(c.Relation),
+			c.Object.Type,
+			c.Object.ID,
+			visited,
+		},
+		Value: value,
+	}.SQL()
 }
 
 // CheckAccess creates a CheckPermission that expects access to be allowed.
@@ -66,18 +68,21 @@ type CheckPermissionCall struct {
 }
 
 // SQL renders the function call with comparison.
+// Uses FuncCallEq internally to avoid fmt.Sprintf for SQL construction.
 func (c CheckPermissionCall) SQL() string {
-	result := "1"
+	value := Int(1)
 	if !c.ExpectAllow {
-		result = "0"
+		value = Int(0)
 	}
-	return fmt.Sprintf("%s(%s, %s, '%s', %s, %s) = %s",
-		c.FunctionName,
-		c.Subject.Type.SQL(),
-		c.Subject.ID.SQL(),
-		c.Relation,
-		c.Object.Type.SQL(),
-		c.Object.ID.SQL(),
-		result,
-	)
+	return FuncCallEq{
+		FuncName: c.FunctionName,
+		Args: []Expr{
+			c.Subject.Type,
+			c.Subject.ID,
+			Lit(c.Relation),
+			c.Object.Type,
+			c.Object.ID,
+		},
+		Value: value,
+	}.SQL()
 }

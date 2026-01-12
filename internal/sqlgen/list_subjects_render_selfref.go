@@ -70,7 +70,7 @@ func renderSelfRefUsersetFilterQuery(blocks SelfRefUsersetSubjectsBlockSet) stri
 	if blocks.UsersetFilterRecursiveBlock != nil {
 		qb := renderTypedQueryBlock(*blocks.UsersetFilterRecursiveBlock)
 		recursiveSQL := formatQueryBlockSQL(qb.Comments, qb.Query.SQL())
-		cteBody = cteBody + "\n    UNION ALL\n" + recursiveSQL
+		cteBody = appendUnionAll(cteBody, recursiveSQL)
 	}
 
 	// Build result blocks
@@ -122,7 +122,7 @@ func renderSelfRefUsersetRegularQuery(plan ListPlan, blocks SelfRefUsersetSubjec
 		if blocks.UsersetObjectsRecursiveBlock != nil {
 			recursiveQB := renderTypedQueryBlock(*blocks.UsersetObjectsRecursiveBlock)
 			recursiveSQL := formatQueryBlockSQL(recursiveQB.Comments, recursiveQB.Query.SQL())
-			usersetObjectsCTE = usersetObjectsCTE + "\n            UNION ALL\n" + recursiveSQL
+			usersetObjectsCTE = strings.Join([]string{usersetObjectsCTE, recursiveSQL}, "\n            UNION ALL\n")
 		}
 	}
 
