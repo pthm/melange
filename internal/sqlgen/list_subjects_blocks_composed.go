@@ -113,7 +113,12 @@ func buildTypedComposedSubjectsCandidateBlocks(plan ListPlan, anchor *IndirectAn
 
 // buildComposedTTUSubjectsBlock builds a TTU subjects candidate block.
 func buildComposedTTUSubjectsBlock(plan ListPlan, anchor *IndirectAnchorInfo, targetType string) (*TypedQueryBlock, error) {
-	listFunction := fmt.Sprintf("list_%s_%s_subjects(link.subject_id, p_subject_type)", targetType, anchor.Path[0].TargetRelation)
+	// Use LateralFunction DSL type instead of string concatenation
+	lateralFunc := LateralFunction{
+		Name:  ListSubjectsFunctionName(targetType, anchor.Path[0].TargetRelation),
+		Args:  []Expr{Col{Table: "link", Column: "subject_id"}, SubjectType},
+		Alias: "s",
+	}
 
 	conditions := []Expr{
 		Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(plan.ObjectType)},
@@ -127,17 +132,16 @@ func buildComposedTTUSubjectsBlock(plan ListPlan, anchor *IndirectAnchorInfo, ta
 		ColumnExprs: []Expr{Col{Table: "s", Column: "subject_id"}},
 		FromExpr:    TableAs("melange_tuples", "link"),
 		Joins: []JoinClause{{
-			Type:  "CROSS",
-			Table: "LATERAL " + listFunction,
-			Alias: "s",
-			On:    nil, // CROSS JOIN has no ON clause
+			Type:      "CROSS",
+			TableExpr: lateralFunc,
+			On:        nil, // CROSS JOIN has no ON clause
 		}},
 		Where: And(conditions...),
 	}
 
 	return &TypedQueryBlock{
 		Comments: []string{
-			fmt.Sprintf("-- From %s parents", targetType),
+			"-- From " + targetType + " parents",
 		},
 		Query: stmt,
 	}, nil
@@ -145,7 +149,13 @@ func buildComposedTTUSubjectsBlock(plan ListPlan, anchor *IndirectAnchorInfo, ta
 
 // buildComposedUsersetSubjectsBlock builds a userset subjects candidate block.
 func buildComposedUsersetSubjectsBlock(plan ListPlan, firstStep AnchorPathStep) (*TypedQueryBlock, error) {
-	listFunction := fmt.Sprintf("list_%s_%s_subjects(split_part(t.subject_id, '#', 1), p_subject_type)", firstStep.SubjectType, firstStep.SubjectRelation)
+	// Use LateralFunction DSL type instead of string concatenation
+	// split_part(t.subject_id, '#', 1) extracts the object_id from the userset
+	lateralFunc := LateralFunction{
+		Name:  ListSubjectsFunctionName(firstStep.SubjectType, firstStep.SubjectRelation),
+		Args:  []Expr{Raw("split_part(t.subject_id, '#', 1)"), SubjectType},
+		Alias: "s",
+	}
 
 	conditions := []Expr{
 		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
@@ -161,17 +171,16 @@ func buildComposedUsersetSubjectsBlock(plan ListPlan, firstStep AnchorPathStep) 
 		ColumnExprs: []Expr{Col{Table: "s", Column: "subject_id"}},
 		FromExpr:    TableAs("melange_tuples", "t"),
 		Joins: []JoinClause{{
-			Type:  "CROSS",
-			Table: "LATERAL " + listFunction,
-			Alias: "s",
-			On:    nil,
+			Type:      "CROSS",
+			TableExpr: lateralFunc,
+			On:        nil,
 		}},
 		Where: And(conditions...),
 	}
 
 	return &TypedQueryBlock{
 		Comments: []string{
-			fmt.Sprintf("-- Userset: %s#%s grants", firstStep.SubjectType, firstStep.SubjectRelation),
+			"-- Userset: " + firstStep.SubjectType + "#" + firstStep.SubjectRelation + " grants",
 		},
 		Query: stmt,
 	}, nil

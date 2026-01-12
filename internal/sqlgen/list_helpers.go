@@ -1,7 +1,6 @@
 package sqlgen
 
 import (
-	"fmt"
 	"strings"
 )
 
@@ -194,30 +193,36 @@ func trimTrailingSemicolon(input string) string {
 	return strings.TrimSuffix(trimmed, ";")
 }
 
-// renderUsersetWildcardTail renders the wildcard handling tail for list_subjects functions.
-func renderUsersetWildcardTail(a RelationAnalysis) string {
+// buildUsersetWildcardTailQuery builds the wildcard handling tail as a typed query for list_subjects functions.
+func buildUsersetWildcardTailQuery(a RelationAnalysis) SQLer {
 	if a.Features.HasWildcard {
-		return fmt.Sprintf(`
-        -- Wildcard handling: when wildcard exists, filter non-wildcard subjects
-        -- to only those with explicit (non-wildcard-derived) access
-        SELECT br.subject_id
-        FROM base_results br
-        CROSS JOIN has_wildcard hw
-        WHERE (NOT hw.has_wildcard)
-           OR (br.subject_id = '*')
-           OR (
-               br.subject_id != '*'
-               AND check_permission_no_wildcard(
-                   p_subject_type,
-                   br.subject_id,
-                   '%s',
-                   '%s',
-                   p_object_id
-               ) = 1
-           );`, a.Relation, a.ObjectType)
+		// Build the wildcard handling query with permission check
+		return SelectStmt{
+			ColumnExprs: []Expr{Col{Table: "br", Column: "subject_id"}},
+			FromExpr:    TableAs("base_results", "br"),
+			Joins: []JoinClause{
+				{Type: "CROSS", Table: "has_wildcard", Alias: "hw"},
+			},
+			Where: Or(
+				NotExpr{Expr: Col{Table: "hw", Column: "has_wildcard"}},
+				Eq{Left: Col{Table: "br", Column: "subject_id"}, Right: Lit("*")},
+				And(
+					Ne{Left: Col{Table: "br", Column: "subject_id"}, Right: Lit("*")},
+					NoWildcardPermissionCheckCall(a.Relation, a.ObjectType, Col{Table: "br", Column: "subject_id"}, ObjectID),
+				),
+			),
+		}
 	}
+	return SelectStmt{
+		ColumnExprs: []Expr{Col{Table: "br", Column: "subject_id"}},
+		FromExpr:    TableAs("base_results", "br"),
+	}
+}
 
-	return "        SELECT br.subject_id FROM base_results br;"
+// renderUsersetWildcardTail renders the wildcard handling tail for list_subjects functions.
+// Deprecated: Use buildUsersetWildcardTailQuery for new code.
+func renderUsersetWildcardTail(a RelationAnalysis) string {
+	return buildUsersetWildcardTailQuery(a).SQL()
 }
 
 // generateListObjectsDispatcher generates the list_accessible_objects dispatcher function.

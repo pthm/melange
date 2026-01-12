@@ -208,9 +208,12 @@ func buildListObjectsIntersectionClosureBlocks(plan ListPlan) ([]TypedQueryBlock
 	for _, rel := range plan.Analysis.IntersectionClosureRelations {
 		funcName := listObjectsFunctionName(plan.ObjectType, rel)
 		stmt := SelectStmt{
-			Columns: []string{"icr.object_id"},
-			From:    funcName + "(p_subject_type, p_subject_id, NULL, NULL)",
-			Alias:   "icr",
+			ColumnExprs: []Expr{Col{Table: "icr", Column: "object_id"}},
+			FromExpr: FunctionCallExpr{
+				Name:  funcName,
+				Args:  []Expr{SubjectType, SubjectID, Null{}, Null{}},
+				Alias: "icr",
+			},
 		}
 
 		// Apply exclusion predicates to the composed results

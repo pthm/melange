@@ -307,18 +307,20 @@ func buildListSubjectsIntersectionClosureBlocks(plan ListPlan, subjectTypeExpr, 
 	var blocks []TypedQueryBlock
 	for _, rel := range plan.Analysis.IntersectionClosureRelations {
 		funcName := listSubjectsFunctionName(plan.ObjectType, rel)
-		// Call list_subjects for the intersection closure relation
-		// e.g., list_folder_reader_subjects(p_object_id, p_subject_type)
-		fromClause := fmt.Sprintf("%s(p_object_id, %s)", funcName, subjectTypeExpr)
+		// Build the function call expression
+		funcCall := FunctionCallExpr{
+			Name:  funcName,
+			Args:  []Expr{ObjectID, Raw(subjectTypeExpr)},
+			Alias: "ics",
+		}
 
 		var stmt SelectStmt
 		if validate && checkSubjectTypeExpr != "" {
 			// Validated path: wrap with check_permission to apply exclusion
 			stmt = SelectStmt{
-				Distinct: true,
-				Columns:  []string{"ics.subject_id"},
-				From:     fromClause,
-				Alias:    "ics",
+				Distinct:    true,
+				ColumnExprs: []Expr{Col{Table: "ics", Column: "subject_id"}},
+				FromExpr:    funcCall,
 				Where: CheckPermissionCall{
 					FunctionName: "check_permission",
 					Subject:      SubjectRef{Type: Raw(checkSubjectTypeExpr), ID: Col{Table: "ics", Column: "subject_id"}},
@@ -330,9 +332,8 @@ func buildListSubjectsIntersectionClosureBlocks(plan ListPlan, subjectTypeExpr, 
 		} else {
 			// Non-validated path: just return the results
 			stmt = SelectStmt{
-				Columns: []string{"ics.subject_id"},
-				From:    fromClause,
-				Alias:   "ics",
+				ColumnExprs: []Expr{Col{Table: "ics", Column: "subject_id"}},
+				FromExpr:    funcCall,
 			}
 		}
 

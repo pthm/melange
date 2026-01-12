@@ -86,6 +86,27 @@ type (
 	IsWildcard               = sqldsl.IsWildcard
 )
 
+// Function call types
+type (
+	FuncCallEq       = sqldsl.FuncCallEq
+	FuncCallNe       = sqldsl.FuncCallNe
+	InFunctionSelect = sqldsl.InFunctionSelect
+)
+
+// Array types
+type (
+	ArrayLiteral  = sqldsl.ArrayLiteral
+	ArrayAppend   = sqldsl.ArrayAppend
+	ArrayContains = sqldsl.ArrayContains
+	ArrayLength   = sqldsl.ArrayLength
+)
+
+// CTE types
+type (
+	CTEDef  = sqldsl.CTEDef
+	WithCTE = sqldsl.WithCTE
+)
+
 // Ref types
 type (
 	SubjectRef = sqldsl.SubjectRef
@@ -127,6 +148,30 @@ var (
 	SelectAs                        = sqldsl.SelectAs
 	SubjectParams                   = sqldsl.SubjectParams
 	LiteralObject                   = sqldsl.LiteralObject
+
+	// SQL formatting
+	Sqlf = sqldsl.Sqlf
+	Optf = sqldsl.Optf
+
+	// Function call helpers
+	InternalPermissionCheckCall  = sqldsl.InternalPermissionCheckCall
+	NoWildcardPermissionCheckCall = sqldsl.NoWildcardPermissionCheckCall
+	SpecializedCheckCall         = sqldsl.SpecializedCheckCall
+	InternalCheckCall            = sqldsl.InternalCheckCall
+
+	// Array helpers
+	VisitedKey     = sqldsl.VisitedKey
+	VisitedWithKey = sqldsl.VisitedWithKey
+	VisitedKeyVar  = sqldsl.VisitedKeyVar
+
+	// Function naming helpers
+	ListObjectsFunctionName  = sqldsl.ListObjectsFunctionName
+	ListSubjectsFunctionName = sqldsl.ListSubjectsFunctionName
+
+	// CTE helpers
+	RecursiveCTE = sqldsl.RecursiveCTE
+	SimpleCTE    = sqldsl.SimpleCTE
+	MultiCTE     = sqldsl.MultiCTE
 )
 
 // =============================================================================
@@ -195,8 +240,11 @@ type (
 	Stmt            = plpgsql.Stmt
 	ReturnQuery     = plpgsql.ReturnQuery
 	Return          = plpgsql.Return
+	ReturnValue     = plpgsql.ReturnValue
+	ReturnInt       = plpgsql.ReturnInt
 	Assign          = plpgsql.Assign
 	If              = plpgsql.If
+	SelectInto      = plpgsql.SelectInto
 	RawStmt         = plpgsql.RawStmt
 	Raise           = plpgsql.Raise
 	Comment         = plpgsql.Comment

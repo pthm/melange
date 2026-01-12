@@ -138,16 +138,21 @@ func buildComposedObjectsSelfBlock(plan ListPlan) (*TypedQueryBlock, error) {
 func buildComposedTTUObjectsBlock(plan ListPlan, anchor *IndirectAnchorInfo, targetType string, exclusions ExclusionConfig) (*TypedQueryBlock, error) {
 	exclusionPreds := exclusions.BuildPredicates()
 
-	// Build subquery for list function call
-	targetFunction := fmt.Sprintf("list_%s_%s_objects", targetType, anchor.Path[0].TargetRelation)
-	subquery := fmt.Sprintf("SELECT obj.object_id FROM %s(p_subject_type, p_subject_id, NULL, NULL) obj", targetFunction)
+	// Build subquery for list function call using typed DSL
+	inSubquery := InFunctionSelect{
+		Expr:      Col{Table: "t", Column: "subject_id"},
+		FuncName:  ListObjectsFunctionName(targetType, anchor.Path[0].TargetRelation),
+		Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
+		Alias:     "obj",
+		SelectCol: "object_id",
+	}
 
 	conditions := make([]Expr, 0, 4+len(exclusionPreds))
 	conditions = append(conditions,
 		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 		Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(anchor.Path[0].LinkingRelation)},
 		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(targetType)},
-		Raw("t.subject_id IN ("+subquery+")"),
+		inSubquery,
 	)
 	conditions = append(conditions, exclusionPreds...)
 
@@ -198,9 +203,16 @@ func buildComposedRecursiveTTUObjectsBlock(plan ListPlan, anchor *IndirectAnchor
 func buildComposedUsersetObjectsBlock(plan ListPlan, _ *IndirectAnchorInfo, firstStep AnchorPathStep, exclusions ExclusionConfig) (*TypedQueryBlock, error) {
 	exclusionPreds := exclusions.BuildPredicates()
 
-	// Build subquery for list function call
-	targetFunction := fmt.Sprintf("list_%s_%s_objects", firstStep.SubjectType, firstStep.SubjectRelation)
-	subquery := fmt.Sprintf("SELECT obj.object_id FROM %s(p_subject_type, p_subject_id, NULL, NULL) obj", targetFunction)
+	// Build subquery for list function call using typed DSL
+	// split_part(t.subject_id, '#', 1) extracts the object_id from the userset
+	usersetObjectID := Raw("split_part(t.subject_id, '#', 1)")
+	inSubquery := InFunctionSelect{
+		Expr:      usersetObjectID,
+		FuncName:  ListObjectsFunctionName(firstStep.SubjectType, firstStep.SubjectRelation),
+		Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
+		Alias:     "obj",
+		SelectCol: "object_id",
+	}
 
 	conditions := make([]Expr, 0, 6+len(exclusionPreds))
 	conditions = append(conditions,
@@ -210,8 +222,8 @@ func buildComposedUsersetObjectsBlock(plan ListPlan, _ *IndirectAnchorInfo, firs
 		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
 		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(firstStep.SubjectRelation)},
 		Or(
-			Raw("split_part(t.subject_id, '#', 1) IN ("+subquery+")"),
-			CheckPermissionInternalExpr(SubjectParams(), firstStep.SubjectRelation, ObjectRef{Type: Lit(firstStep.SubjectType), ID: Raw("split_part(t.subject_id, '#', 1)")}, true),
+			inSubquery,
+			CheckPermissionInternalExpr(SubjectParams(), firstStep.SubjectRelation, ObjectRef{Type: Lit(firstStep.SubjectType), ID: usersetObjectID}, true),
 		),
 	)
 	conditions = append(conditions, exclusionPreds...)

@@ -123,9 +123,12 @@ func ListObjectsIntersectionClosureQuery(functionName string) (string, error) {
 	// outer pagination wrapper handles limiting
 	// Use alias to avoid column ambiguity with pagination-returning functions
 	stmt := SelectStmt{
-		Columns: []string{"icr.object_id"},
-		From:    functionName + "(p_subject_type, p_subject_id, NULL, NULL)",
-		Alias:   "icr",
+		ColumnExprs: []Expr{Col{Table: "icr", Column: "object_id"}},
+		FromExpr: FunctionCallExpr{
+			Name:  functionName,
+			Args:  []Expr{SubjectType, SubjectID, Null{}, Null{}},
+			Alias: "icr",
+		},
 	}
 	return stmt.SQL(), nil
 }
@@ -134,10 +137,13 @@ func ListObjectsIntersectionClosureValidatedQuery(objectType, relation, function
 	// Pass NULL for pagination params - inner function should return all results,
 	// outer pagination wrapper handles limiting
 	stmt := SelectStmt{
-		Distinct: true,
-		Columns:  []string{"icr.object_id"},
-		From:     functionName + "(p_subject_type, p_subject_id, NULL, NULL)",
-		Alias:    "icr",
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "icr", Column: "object_id"}},
+		FromExpr: FunctionCallExpr{
+			Name:  functionName,
+			Args:  []Expr{SubjectType, SubjectID, Null{}, Null{}},
+			Alias: "icr",
+		},
 		Where: CheckPermission{
 			Subject:     SubjectParams(),
 			Relation:    relation,
@@ -548,12 +554,13 @@ func ListSubjectsComplexClosureQuery(input ListSubjectsComplexClosureInput) (str
 func ListSubjectsIntersectionClosureQuery(functionName string, subjectTypeExpr Expr) (string, error) {
 	// Inner list functions don't have pagination params - they return all results.
 	// Outer pagination wrapper handles limiting.
-	// Build function call string: functionName(p_object_id, subjectTypeExpr)
-	fromClause := functionName + "(p_object_id, " + subjectTypeExpr.SQL() + ")"
 	stmt := SelectStmt{
-		Columns: []string{"ics.subject_id"},
-		From:    fromClause,
-		Alias:   "ics",
+		ColumnExprs: []Expr{Col{Table: "ics", Column: "subject_id"}},
+		FromExpr: FunctionCallExpr{
+			Name:  functionName,
+			Args:  []Expr{ObjectID, subjectTypeExpr},
+			Alias: "ics",
+		},
 	}
 	return stmt.SQL(), nil
 }
@@ -561,14 +568,14 @@ func ListSubjectsIntersectionClosureQuery(functionName string, subjectTypeExpr E
 func ListSubjectsIntersectionClosureValidatedQuery(objectType, relation, functionName string, functionSubjectTypeExpr, checkSubjectTypeExpr, objectIDExpr Expr) (string, error) {
 	// Inner list functions don't have pagination params - they return all results.
 	// Outer pagination wrapper handles limiting.
-	// Build function call string: functionName(objectIDExpr, functionSubjectTypeExpr)
-	fromClause := functionName + "(" + objectIDExpr.SQL() + ", " + functionSubjectTypeExpr.SQL() + ")"
-
 	stmt := SelectStmt{
-		Distinct: true,
-		Columns:  []string{"ics.subject_id"},
-		From:     fromClause,
-		Alias:    "ics",
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "ics", Column: "subject_id"}},
+		FromExpr: FunctionCallExpr{
+			Name:  functionName,
+			Args:  []Expr{objectIDExpr, functionSubjectTypeExpr},
+			Alias: "ics",
+		},
 		Where: CheckPermissionCall{
 			FunctionName: "check_permission",
 			Subject: SubjectRef{

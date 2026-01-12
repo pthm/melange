@@ -52,25 +52,49 @@ func buildDepthCheckSQLForRender(objectType string, linkingRelations []string) s
 	if len(linkingRelations) == 0 {
 		return "    v_max_depth := 0;\n"
 	}
+
+	// Build the base case: seed with empty set (we just need depth tracking)
+	baseCase := SelectStmt{
+		ColumnExprs: []Expr{Raw("NULL::TEXT"), Int(0)},
+		Where:       Raw("FALSE"),
+	}
+
+	// Build the recursive case: track depth through all self-referential linking relations
+	recursiveCase := SelectStmt{
+		ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}, Add{Left: Col{Table: "d", Column: "depth"}, Right: Int(1)}},
+		FromExpr:    TableAs("depth_check", "d"),
+		Joins: []JoinClause{
+			{
+				Type:  "INNER",
+				Table: "melange_tuples",
+				Alias: "t",
+				On: And(
+					Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(objectType)},
+					In{Expr: Col{Table: "t", Column: "relation"}, Values: linkingRelations},
+					Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(objectType)},
+				),
+			},
+		},
+		Where: Lt{Left: Col{Table: "d", Column: "depth"}, Right: Int(26)},
+	}
+
+	// Build CTE body as UNION ALL of base and recursive cases
+	cteBody := "-- Base case: seed with empty set (we just need depth tracking)\n" +
+		IndentLines(baseCase.SQL(), "    ") + "\n\n" +
+		"    UNION ALL\n" +
+		"    -- Track depth through all self-referential linking relations\n" +
+		IndentLines(recursiveCase.SQL(), "    ")
+
+	// Build the final SELECT INTO
+	finalQuery := Raw("SELECT MAX(depth) FROM depth_check")
+
+	// Build the CTE
+	cteQuery := RecursiveCTE("depth_check", []string{"object_id", "depth"}, Raw(cteBody), finalQuery)
+
 	return "    -- Check for excessive recursion depth before running the query\n" +
 		"    -- This matches check_permission behavior with M2002 error\n" +
 		"    -- Only self-referential TTUs contribute to recursion depth (cross-type are one-hop)\n" +
-		"    WITH RECURSIVE depth_check(object_id, depth) AS (\n" +
-		"        -- Base case: seed with empty set (we just need depth tracking)\n" +
-		"        SELECT NULL::TEXT, 0\n" +
-		"        WHERE FALSE\n" +
-		"\n" +
-		"        UNION ALL\n" +
-		"        -- Track depth through all self-referential linking relations\n" +
-		"        SELECT t.object_id, d.depth + 1\n" +
-		"        FROM depth_check d\n" +
-		"        JOIN melange_tuples t\n" +
-		"          ON t.object_type = '" + objectType + "'\n" +
-		"          AND t.relation IN (" + formatSQLStringList(linkingRelations) + ")\n" +
-		"          AND t.subject_type = '" + objectType + "'\n" +
-		"        WHERE d.depth < 26  -- Allow one extra to detect overflow\n" +
-		"    )\n" +
-		"    SELECT MAX(depth) INTO v_max_depth FROM depth_check;\n"
+		IndentLines(cteQuery.SQL(), "    ") + " INTO v_max_depth;\n"
 }
 
 func renderListDispatcher(functionName string, args []FuncArg, returns string, cases []ListDispatcherCase) string {

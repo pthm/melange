@@ -33,8 +33,17 @@ func RenderListObjectsRecursiveFunction(plan ListPlan, blocks RecursiveBlockSet)
 		Where:       whereExpr,
 	}
 
-	// Build the CTE SQL
-	cteSQL := "WITH RECURSIVE accessible(object_id, depth) AS (\n" + cteBody + "\n)\n" + finalStmt.SQL()
+	// Build the CTE SQL using WithCTE type
+	cteQuery := WithCTE{
+		Recursive: true,
+		CTEs: []CTEDef{{
+			Name:    "accessible",
+			Columns: []string{"object_id", "depth"},
+			Query:   Raw(cteBody),
+		}},
+		Query: finalStmt,
+	}
+	cteSQL := cteQuery.SQL()
 
 	// Build self-candidate SQL
 	var selfCandidateSQL string

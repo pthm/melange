@@ -75,19 +75,27 @@ func buildSubjectsRecursiveRegularQuery(plan ListPlan, regularBlocks, ttuBlocks 
 		baseBlocksSQL = baseBlocksSQL + "\n    UNION\n" + ttuBlocksSQL
 	}
 
-	// Build the full CTE query with wildcard handling
-	wildcardTailSQL := renderSubjectsWildcardTail(plan)
+	// Build the has_wildcard CTE query
+	hasWildcardQuery := SelectStmt{
+		ColumnExprs: []Expr{
+			Alias{
+				Expr: Raw("EXISTS (SELECT 1 FROM base_results br WHERE br.subject_id = '*')"),
+				Name: "has_wildcard",
+			},
+		},
+	}
 
-	return "WITH subject_pool AS (\n" +
-		indentLines(subjectPoolSQL, "        ") + "\n" +
-		"        ),\n" +
-		"        base_results AS (\n" +
-		indentLines(baseBlocksSQL, "        ") + "\n" +
-		"        ),\n" +
-		"        has_wildcard AS (\n" +
-		"            SELECT EXISTS (SELECT 1 FROM base_results br WHERE br.subject_id = '*') AS has_wildcard\n" +
-		"        )\n" +
-		wildcardTailSQL
+	// Build the final query with wildcard handling
+	wildcardTailQuery := buildSubjectsWildcardTailQuery(plan)
+
+	// Build the full CTE query using MultiCTE
+	cteQuery := MultiCTE(false, []CTEDef{
+		{Name: "subject_pool", Query: Raw(subjectPoolSQL)},
+		{Name: "base_results", Query: Raw(baseBlocksSQL)},
+		{Name: "has_wildcard", Query: hasWildcardQuery},
+	}, wildcardTailQuery)
+
+	return cteQuery.SQL()
 }
 
 // buildSubjectPoolCTESQL builds the subject_pool CTE SQL.
@@ -106,27 +114,36 @@ func buildSubjectPoolCTESQL(plan ListPlan) string {
 	return q.SQL()
 }
 
+// buildSubjectsWildcardTailQuery builds the final SELECT with wildcard handling as a typed query.
+// Note: No trailing semicolon - this gets wrapped in pagination CTEs.
+func buildSubjectsWildcardTailQuery(plan ListPlan) SQLer {
+	if plan.AllowWildcard {
+		// Build the wildcard handling query with permission check
+		return SelectStmt{
+			ColumnExprs: []Expr{Col{Table: "br", Column: "subject_id"}},
+			FromExpr:    TableAs("base_results", "br"),
+			Joins: []JoinClause{
+				{Type: "CROSS", Table: "has_wildcard", Alias: "hw"},
+			},
+			Where: Or(
+				NotExpr{Expr: Col{Table: "hw", Column: "has_wildcard"}},
+				Eq{Left: Col{Table: "br", Column: "subject_id"}, Right: Lit("*")},
+				And(
+					Ne{Left: Col{Table: "br", Column: "subject_id"}, Right: Lit("*")},
+					NoWildcardPermissionCheckCall(plan.Relation, plan.ObjectType, Col{Table: "br", Column: "subject_id"}, ObjectID),
+				),
+			),
+		}
+	}
+	return SelectStmt{
+		ColumnExprs: []Expr{Col{Table: "br", Column: "subject_id"}},
+		FromExpr:    TableAs("base_results", "br"),
+	}
+}
+
 // renderSubjectsWildcardTail renders the final SELECT with wildcard handling.
 // Note: No trailing semicolon - this gets wrapped in pagination CTEs.
+// Deprecated: Use buildSubjectsWildcardTailQuery for new code.
 func renderSubjectsWildcardTail(plan ListPlan) string {
-	if plan.AllowWildcard {
-		return "        -- Wildcard handling: when wildcard exists, filter non-wildcard subjects\n" +
-			"        -- to only those with explicit (non-wildcard-derived) access\n" +
-			"        SELECT br.subject_id\n" +
-			"        FROM base_results br\n" +
-			"        CROSS JOIN has_wildcard hw\n" +
-			"        WHERE (NOT hw.has_wildcard)\n" +
-			"           OR (br.subject_id = '*')\n" +
-			"           OR (\n" +
-			"               br.subject_id != '*'\n" +
-			"               AND check_permission_no_wildcard(\n" +
-			"                   p_subject_type,\n" +
-			"                   br.subject_id,\n" +
-			"                   '" + plan.Relation + "',\n" +
-			"                   '" + plan.ObjectType + "',\n" +
-			"                   p_object_id\n" +
-			"               ) = 1\n" +
-			"           )"
-	}
-	return "        SELECT br.subject_id FROM base_results br"
+	return buildSubjectsWildcardTailQuery(plan).SQL()
 }

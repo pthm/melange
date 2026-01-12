@@ -73,28 +73,41 @@ func renderSelfRefUsersetFilterQuery(blocks SelfRefUsersetSubjectsBlockSet) stri
 		cteBody = cteBody + "\n    UNION ALL\n" + recursiveSQL
 	}
 
-	// Build main CTE query
-	mainCTE := fmt.Sprintf(`WITH RECURSIVE userset_expansion(userset_object_id, depth) AS (
-%s
-)`, indentLines(cteBody, "        "))
-
 	// Build result blocks
-	var resultBlocks []string
+	var resultBlocks []QueryBlock
 
 	// Userset filter returns normalized references
-	resultBlocks = append(resultBlocks, formatQueryBlockSQL(
-		[]string{"-- Userset filter: return normalized userset references"},
-		`SELECT DISTINCT ue.userset_object_id || '#' || v_filter_relation AS subject_id
-FROM userset_expansion ue`,
-	))
+	resultBlocks = append(resultBlocks, QueryBlock{
+		Comments: []string{"-- Userset filter: return normalized userset references"},
+		Query: SelectStmt{
+			Distinct: true,
+			ColumnExprs: []Expr{
+				Alias{
+					Expr: Concat{Parts: []Expr{Col{Table: "ue", Column: "userset_object_id"}, Lit("#"), Param("v_filter_relation")}},
+					Name: "subject_id",
+				},
+			},
+			FromExpr: TableAs("userset_expansion", "ue"),
+		},
+	})
 
 	// Add self-candidate block if present
 	if blocks.UsersetFilterSelfBlock != nil {
 		qb := renderTypedQueryBlock(*blocks.UsersetFilterSelfBlock)
-		resultBlocks = append(resultBlocks, formatQueryBlockSQL(qb.Comments, qb.Query.SQL()))
+		resultBlocks = append(resultBlocks, qb)
 	}
 
-	return mainCTE + "\n" + strings.Join(resultBlocks, "\nUNION\n")
+	// Build the CTE with final UNION query
+	finalQuery := Raw(RenderUnionBlocks(resultBlocks))
+
+	cteQuery := RecursiveCTE(
+		"userset_expansion",
+		[]string{"userset_object_id", "depth"},
+		Raw(cteBody),
+		finalQuery,
+	)
+
+	return cteQuery.SQL()
 }
 
 // renderSelfRefUsersetRegularQuery renders the regular path query with userset_objects CTE.
@@ -122,22 +135,25 @@ func renderSelfRefUsersetRegularQuery(plan ListPlan, blocks SelfRefUsersetSubjec
 
 	baseResultsSQL := strings.Join(baseBlocksSQL, "\n    UNION\n")
 
-	// Build full CTE with has_wildcard
-	wildcardTailSQL := renderUsersetWildcardTail(plan.Analysis)
+	// Build the has_wildcard CTE query
+	hasWildcardQuery := SelectStmt{
+		ColumnExprs: []Expr{
+			Alias{
+				Expr: Raw("EXISTS (SELECT 1 FROM base_results br WHERE br.subject_id = '*')"),
+				Name: "has_wildcard",
+			},
+		},
+	}
 
-	return fmt.Sprintf(`WITH RECURSIVE
-        userset_objects(userset_object_id, depth) AS (
-%s
-        ),
-        base_results AS (
-%s
-        ),
-        has_wildcard AS (
-            SELECT EXISTS (SELECT 1 FROM base_results br WHERE br.subject_id = '*') AS has_wildcard
-        )
-%s`,
-		indentLines(usersetObjectsCTE, "            "),
-		indentLines(baseResultsSQL, "        "),
-		wildcardTailSQL,
-	)
+	// Build the final query with wildcard handling
+	wildcardTailQuery := buildUsersetWildcardTailQuery(plan.Analysis)
+
+	// Build the full CTE query using MultiCTE
+	cteQuery := MultiCTE(true, []CTEDef{
+		{Name: "userset_objects", Columns: []string{"userset_object_id", "depth"}, Query: Raw(usersetObjectsCTE)},
+		{Name: "base_results", Query: Raw(baseResultsSQL)},
+		{Name: "has_wildcard", Query: hasWildcardQuery},
+	}, wildcardTailQuery)
+
+	return cteQuery.SQL()
 }

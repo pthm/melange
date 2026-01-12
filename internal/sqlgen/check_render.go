@@ -1,7 +1,6 @@
 package sqlgen
 
 import (
-	"fmt"
 	"strings"
 )
 
@@ -40,39 +39,58 @@ func RenderCheckFunction(plan CheckPlan, blocks CheckBlocks) (string, error) {
 // =============================================================================
 
 func renderCheckDirectFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) (string, error) {
-	usersetBlock, err := renderCheckUsersetSubjectBlockFromBlocks(plan, blocks)
-	if err != nil {
-		return "", err
-	}
+	// Build function body using plpgsql types
+	var body []Stmt
 
-	accessCondition := renderAccessChecksFromBlocks(blocks, "p_visited")
+	// Add userset subject handling
+	body = append(body, buildUsersetSubjectStmts(plan, blocks)...)
 
-	var buf strings.Builder
-	writeCheckHeaderFromPlan(&buf, plan)
-	buf.WriteString("\nDECLARE\n    v_userset_check INTEGER := 0;\nBEGIN\n")
-	buf.WriteString(usersetBlock)
+	// Build access check expression
+	accessExpr := buildAccessCheckExpr(blocks, Visited)
 
+	// Build the final access check with optional exclusion
 	if plan.HasExclusion {
-		exclusionSQL := renderExclusionCheckFromBlocks(blocks)
-		buf.WriteString("\n    IF " + accessCondition + " THEN\n")
-		buf.WriteString("        IF " + exclusionSQL + " THEN\n")
-		buf.WriteString("            RETURN 0;\n")
-		buf.WriteString("        ELSE\n")
-		buf.WriteString("            RETURN 1;\n")
-		buf.WriteString("        END IF;\n")
-		buf.WriteString("    ELSE\n")
-		buf.WriteString("        RETURN 0;\n")
-		buf.WriteString("    END IF;\n")
+		exclusionExpr := blocks.ExclusionCheck
+		if exclusionExpr == nil {
+			exclusionExpr = Bool(false)
+		}
+		body = append(body, If{
+			Cond: accessExpr,
+			Then: []Stmt{
+				If{
+					Cond: exclusionExpr,
+					Then: []Stmt{ReturnInt{Value: 0}},
+					Else: []Stmt{ReturnInt{Value: 1}},
+				},
+			},
+			Else: []Stmt{ReturnInt{Value: 0}},
+		})
 	} else {
-		buf.WriteString("\n    IF " + accessCondition + " THEN\n")
-		buf.WriteString("        RETURN 1;\n")
-		buf.WriteString("    ELSE\n")
-		buf.WriteString("        RETURN 0;\n")
-		buf.WriteString("    END IF;\n")
+		body = append(body, If{
+			Cond: accessExpr,
+			Then: []Stmt{ReturnInt{Value: 1}},
+			Else: []Stmt{ReturnInt{Value: 0}},
+		})
 	}
 
-	buf.WriteString("END;\n$$ LANGUAGE plpgsql STABLE ;\n")
-	return buf.String(), nil
+	fn := PlpgsqlFunction{
+		Name: plan.FunctionName,
+		Args: []FuncArg{
+			{Name: "p_subject_type", Type: "TEXT"},
+			{Name: "p_subject_id", Type: "TEXT"},
+			{Name: "p_object_id", Type: "TEXT"},
+			{Name: "p_visited", Type: "TEXT []", Default: EmptyArray{}},
+		},
+		Returns: "INTEGER",
+		Decls:   []Decl{{Name: "v_userset_check", Type: "INTEGER := 0"}},
+		Body:    body,
+		Header: []string{
+			"Generated check function for " + plan.ObjectType + "." + plan.Relation,
+			"Features: " + plan.FeaturesString,
+		},
+	}
+
+	return fn.SQL() + "\n", nil
 }
 
 // =============================================================================
@@ -80,32 +98,54 @@ func renderCheckDirectFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) (st
 // =============================================================================
 
 func renderCheckIntersectionFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) (string, error) {
-	usersetBlock, err := renderCheckUsersetSubjectBlockFromBlocks(plan, blocks)
-	if err != nil {
-		return "", err
-	}
+	// Build function body using plpgsql types
+	var body []Stmt
 
-	var buf strings.Builder
-	writeCheckHeaderFromPlan(&buf, plan)
-	buf.WriteString("\nDECLARE\n    v_userset_check INTEGER := 0;\n    v_has_access BOOLEAN := FALSE;\nBEGIN\n")
-	buf.WriteString(usersetBlock)
+	// Add userset subject handling
+	body = append(body, buildUsersetSubjectStmts(plan, blocks)...)
 
+	// Non-intersection access paths (if any)
 	if blocks.HasStandaloneAccess {
-		accessCondition := renderAccessChecksFromBlocks(blocks, "p_visited")
-		buf.WriteString("\n    -- Non-intersection access paths\n")
-		buf.WriteString("    IF " + accessCondition + " THEN\n")
-		buf.WriteString("        v_has_access := TRUE;\n")
-		buf.WriteString("    END IF;\n")
+		accessExpr := buildAccessCheckExpr(blocks, Visited)
+		body = append(body,
+			Comment{Text: "Non-intersection access paths"},
+			If{
+				Cond: accessExpr,
+				Then: []Stmt{Assign{Name: "v_has_access", Value: Bool(true)}},
+			},
+		)
 	}
 
-	intersectionBlock, err := renderIntersectionGroupsFromBlocks(plan, blocks, "p_visited")
-	if err != nil {
-		return "", err
+	// Add intersection group checks
+	body = append(body, buildIntersectionGroupStmts(plan, blocks, Visited)...)
+
+	// Add exclusion check with access
+	body = append(body, buildExclusionWithAccessStmts(plan, blocks)...)
+
+	// Final return
+	body = append(body, ReturnInt{Value: 0})
+
+	fn := PlpgsqlFunction{
+		Name: plan.FunctionName,
+		Args: []FuncArg{
+			{Name: "p_subject_type", Type: "TEXT"},
+			{Name: "p_subject_id", Type: "TEXT"},
+			{Name: "p_object_id", Type: "TEXT"},
+			{Name: "p_visited", Type: "TEXT []", Default: EmptyArray{}},
+		},
+		Returns: "INTEGER",
+		Decls: []Decl{
+			{Name: "v_userset_check", Type: "INTEGER := 0"},
+			{Name: "v_has_access", Type: "BOOLEAN := FALSE"},
+		},
+		Body: body,
+		Header: []string{
+			"Generated check function for " + plan.ObjectType + "." + plan.Relation,
+			"Features: " + plan.FeaturesString,
+		},
 	}
-	buf.WriteString(intersectionBlock)
-	buf.WriteString(renderExclusionWithAccessFromBlocks(plan, blocks))
-	buf.WriteString("\n    RETURN 0;\nEND;\n$$ LANGUAGE plpgsql STABLE ;\n")
-	return buf.String(), nil
+
+	return fn.SQL() + "\n", nil
 }
 
 // =============================================================================
@@ -113,35 +153,59 @@ func renderCheckIntersectionFunctionFromBlocks(plan CheckPlan, blocks CheckBlock
 // =============================================================================
 
 func renderCheckRecursiveFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) (string, error) {
-	usersetBlock, err := renderCheckUsersetSubjectBlockFromBlocks(plan, blocks)
-	if err != nil {
-		return "", err
+	// Build function body using plpgsql types
+	var body []Stmt
+
+	// Cycle detection
+	body = append(body, buildCycleDetectionStmts()...)
+
+	// Initialize v_has_access
+	body = append(body, Assign{Name: "v_has_access", Value: Bool(false)})
+
+	// Add userset subject handling
+	body = append(body, buildUsersetSubjectStmts(plan, blocks)...)
+
+	// Build visited expression: p_visited || ARRAY[v_key]
+	visitedWithKey := Raw("p_visited || ARRAY[v_key]")
+
+	// Add standalone access paths
+	body = append(body, buildStandaloneAccessPathStmts(plan, blocks, visitedWithKey)...)
+
+	// Add exclusion check with access
+	body = append(body, buildExclusionWithAccessStmts(plan, blocks)...)
+
+	// Final return
+	body = append(body, ReturnInt{Value: 0})
+
+	// Build visited key expression for declaration
+	vKeyExpr := Concat{Parts: []Expr{
+		Lit(plan.ObjectType + ":"),
+		ObjectID,
+		Lit(":" + plan.Relation),
+	}}
+
+	fn := PlpgsqlFunction{
+		Name: plan.FunctionName,
+		Args: []FuncArg{
+			{Name: "p_subject_type", Type: "TEXT"},
+			{Name: "p_subject_id", Type: "TEXT"},
+			{Name: "p_object_id", Type: "TEXT"},
+			{Name: "p_visited", Type: "TEXT []", Default: EmptyArray{}},
+		},
+		Returns: "INTEGER",
+		Decls: []Decl{
+			{Name: "v_has_access", Type: "BOOLEAN := FALSE"},
+			{Name: "v_key", Type: "TEXT := " + vKeyExpr.SQL()},
+			{Name: "v_userset_check", Type: "INTEGER := 0"},
+		},
+		Body: body,
+		Header: []string{
+			"Generated check function for " + plan.ObjectType + "." + plan.Relation,
+			"Features: " + plan.FeaturesString,
+		},
 	}
 
-	standaloneBlock, err := renderRecursiveStandalonePathsFromBlocks(plan, blocks, "p_visited || v_key")
-	if err != nil {
-		return "", err
-	}
-
-	var buf strings.Builder
-	writeCheckHeaderFromPlan(&buf, plan)
-	buf.WriteString("\nDECLARE\n    v_has_access BOOLEAN := FALSE;\n    v_key TEXT := '")
-	buf.WriteString(plan.ObjectType)
-	buf.WriteString(":' || p_object_id || ':")
-	buf.WriteString(plan.Relation)
-	buf.WriteString("';\n    v_userset_check INTEGER := 0;\nBEGIN\n")
-	buf.WriteString("    -- Cycle detection\n")
-	buf.WriteString("    IF v_key = ANY(p_visited) THEN RETURN 0; END IF;\n")
-	buf.WriteString("    IF array_length(p_visited, 1) >= 25 THEN\n")
-	buf.WriteString("        RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';\n")
-	buf.WriteString("    END IF;\n\n")
-	buf.WriteString("    v_has_access := FALSE;\n\n")
-	buf.WriteString(usersetBlock)
-	buf.WriteString("\n")
-	buf.WriteString(standaloneBlock)
-	buf.WriteString(renderExclusionWithAccessFromBlocks(plan, blocks))
-	buf.WriteString("\n    RETURN 0;\nEND;\n$$ LANGUAGE plpgsql STABLE ;\n")
-	return buf.String(), nil
+	return fn.SQL() + "\n", nil
 }
 
 // =============================================================================
@@ -149,214 +213,272 @@ func renderCheckRecursiveFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) 
 // =============================================================================
 
 func renderCheckRecursiveIntersectionFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) (string, error) {
-	usersetBlock, err := renderCheckUsersetSubjectBlockFromBlocks(plan, blocks)
-	if err != nil {
-		return "", err
-	}
+	// Build function body using plpgsql types
+	var body []Stmt
 
-	var standaloneBlock string
+	// Cycle detection
+	body = append(body, buildCycleDetectionStmts()...)
+
+	// Initialize v_has_access
+	body = append(body, Assign{Name: "v_has_access", Value: Bool(false)})
+
+	// Add userset subject handling
+	body = append(body, buildUsersetSubjectStmts(plan, blocks)...)
+
+	// Build visited expression: p_visited || ARRAY[v_key]
+	visitedWithKey := Raw("p_visited || ARRAY[v_key]")
+
+	// Comment about intersection handling
+	body = append(body, Comment{Text: "Relation has intersection; only render standalone paths if HasStandaloneAccess is true"})
+
+	// Add standalone access paths (if any)
 	if blocks.HasStandaloneAccess {
-		standaloneBlock, err = renderRecursiveStandalonePathsFromBlocks(plan, blocks, "p_visited || v_key")
-		if err != nil {
-			return "", err
-		}
+		body = append(body, buildStandaloneAccessPathStmts(plan, blocks, visitedWithKey)...)
 	}
 
-	intersectionBlock, err := renderIntersectionGroupsFromBlocks(plan, blocks, "p_visited || v_key")
-	if err != nil {
-		return "", err
+	// Add intersection group checks
+	body = append(body, buildIntersectionGroupStmts(plan, blocks, visitedWithKey)...)
+
+	// Add exclusion check with access
+	body = append(body, buildExclusionWithAccessStmts(plan, blocks)...)
+
+	// Final return
+	body = append(body, ReturnInt{Value: 0})
+
+	// Build visited key expression for declaration
+	vKeyExpr := Concat{Parts: []Expr{
+		Lit(plan.ObjectType + ":"),
+		ObjectID,
+		Lit(":" + plan.Relation),
+	}}
+
+	fn := PlpgsqlFunction{
+		Name: plan.FunctionName,
+		Args: []FuncArg{
+			{Name: "p_subject_type", Type: "TEXT"},
+			{Name: "p_subject_id", Type: "TEXT"},
+			{Name: "p_object_id", Type: "TEXT"},
+			{Name: "p_visited", Type: "TEXT []", Default: EmptyArray{}},
+		},
+		Returns: "INTEGER",
+		Decls: []Decl{
+			{Name: "v_has_access", Type: "BOOLEAN := FALSE"},
+			{Name: "v_key", Type: "TEXT := " + vKeyExpr.SQL()},
+			{Name: "v_userset_check", Type: "INTEGER := 0"},
+		},
+		Body: body,
+		Header: []string{
+			"Generated check function for " + plan.ObjectType + "." + plan.Relation,
+			"Features: " + plan.FeaturesString,
+		},
 	}
 
-	var buf strings.Builder
-	writeCheckHeaderFromPlan(&buf, plan)
-	buf.WriteString("\nDECLARE\n    v_has_access BOOLEAN := FALSE;\n    v_key TEXT := '")
-	buf.WriteString(plan.ObjectType)
-	buf.WriteString(":' || p_object_id || ':")
-	buf.WriteString(plan.Relation)
-	buf.WriteString("';\n    v_userset_check INTEGER := 0;\nBEGIN\n")
-	buf.WriteString("    -- Cycle detection\n")
-	buf.WriteString("    IF v_key = ANY(p_visited) THEN RETURN 0; END IF;\n")
-	buf.WriteString("    IF array_length(p_visited, 1) >= 25 THEN\n")
-	buf.WriteString("        RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';\n")
-	buf.WriteString("    END IF;\n\n")
-	buf.WriteString("    v_has_access := FALSE;\n\n")
-	buf.WriteString(usersetBlock)
-	buf.WriteString("\n    -- Relation has intersection; only render standalone paths if HasStandaloneAccess is true\n")
-	if standaloneBlock != "" {
-		buf.WriteString(standaloneBlock)
-	}
-	buf.WriteString(intersectionBlock)
-	buf.WriteString(renderExclusionWithAccessFromBlocks(plan, blocks))
-	buf.WriteString("\n    RETURN 0;\nEND;\n$$ LANGUAGE plpgsql STABLE ;\n")
-	return buf.String(), nil
+	return fn.SQL() + "\n", nil
 }
 
 // =============================================================================
 // Helper Functions
 // =============================================================================
 
-func writeCheckHeaderFromPlan(buf *strings.Builder, plan CheckPlan) {
-	buf.WriteString("-- Generated check function for ")
-	buf.WriteString(plan.ObjectType)
-	buf.WriteString(".")
-	buf.WriteString(plan.Relation)
-	buf.WriteString("\n-- Features: ")
-	buf.WriteString(plan.FeaturesString)
-	buf.WriteString("\nCREATE OR REPLACE FUNCTION ")
-	buf.WriteString(plan.FunctionName)
-	buf.WriteString(" (\n")
-	buf.WriteString("p_subject_type TEXT,\n")
-	buf.WriteString("p_subject_id TEXT,\n")
-	buf.WriteString("p_object_id TEXT,\n")
-	buf.WriteString("p_visited TEXT [] DEFAULT ARRAY []::TEXT []\n")
-	buf.WriteString(") RETURNS INTEGER AS $$")
+// buildUsersetSubjectStmts builds the userset subject handling statements.
+// This handles the case where the subject itself is a userset (e.g., group#member).
+func buildUsersetSubjectStmts(plan CheckPlan, blocks CheckBlocks) []Stmt {
+	// Build the exclusion check if needed
+	var exclusionStmts []Stmt
+	if plan.HasExclusion && blocks.ExclusionCheck != nil {
+		exclusionStmts = []Stmt{
+			If{
+				Cond: blocks.ExclusionCheck,
+				Then: []Stmt{ReturnInt{Value: 0}},
+			},
+		}
+	}
+
+	// Case 1: Self-referential userset check
+	// IF p_subject_type = 'objectType' AND substring(...) = p_object_id
+	selfRefCond := AndExpr{Exprs: []Expr{
+		Eq{Left: SubjectType, Right: Lit(plan.ObjectType)},
+		Eq{
+			Left: Substring{
+				Source: SubjectID,
+				From:   Int(1),
+				For: Sub{
+					Left:  Position{Needle: Lit("#"), Haystack: SubjectID},
+					Right: Int(1),
+				},
+			},
+			Right: ObjectID,
+		},
+	}}
+
+	// Case 1 body: SELECT INTO, then check result
+	case1Body := []Stmt{
+		SelectInto{Query: blocks.UsersetSubjectSelfCheck, Variable: "v_userset_check"},
+		If{
+			Cond: Eq{Left: Raw("v_userset_check"), Right: Int(1)},
+			Then: []Stmt{ReturnInt{Value: 1}},
+		},
+	}
+
+	// Case 2 body: computed userset matching
+	case2Body := []Stmt{
+		SelectInto{Query: blocks.UsersetSubjectComputedCheck, Variable: "v_userset_check"},
+	}
+
+	// Build case 2 return with optional exclusion
+	case2ReturnStmts := append(exclusionStmts, ReturnInt{Value: 1})
+	case2Body = append(case2Body, If{
+		Cond: Eq{Left: Raw("v_userset_check"), Right: Int(1)},
+		Then: case2ReturnStmts,
+	})
+
+	return []Stmt{
+		Comment{Text: "Userset subject handling"},
+		If{
+			Cond: Gt{Left: Position{Needle: Lit("#"), Haystack: SubjectID}, Right: Int(0)},
+			Then: []Stmt{
+				Comment{Text: "Case 1: Self-referential userset check"},
+				If{
+					Cond: selfRefCond,
+					Then: case1Body,
+				},
+				Comment{Text: "Case 2: Computed userset matching"},
+				case2Body[0], // SelectInto
+				case2Body[1], // If check
+			},
+		},
+	}
 }
 
-func renderCheckUsersetSubjectBlockFromBlocks(plan CheckPlan, blocks CheckBlocks) (string, error) {
-	selfQuery := blocks.UsersetSubjectSelfCheck.SQL()
-	selfQuery, err := selectInto(selfQuery, "v_userset_check")
-	if err != nil {
-		return "", err
-	}
-
-	computedQuery := blocks.UsersetSubjectComputedCheck.SQL()
-	computedQuery, err = selectInto(computedQuery, "v_userset_check")
-	if err != nil {
-		return "", err
-	}
-
-	var exclusionBlock string
-	if plan.HasExclusion {
-		exclusionSQL := renderExclusionCheckFromBlocks(blocks)
-		exclusionBlock = "            IF " + exclusionSQL + " THEN\n" +
-			"                RETURN 0;\n" +
-			"            END IF;\n"
-	}
-
-	var block strings.Builder
-	block.WriteString("    -- Userset subject handling\n")
-	block.WriteString("    IF position('#' in p_subject_id) > 0 THEN\n")
-	block.WriteString("        -- Case 1: Self-referential userset check\n")
-	block.WriteString("        IF p_subject_type = '")
-	block.WriteString(plan.ObjectType)
-	block.WriteString("' AND\n")
-	block.WriteString("           substring(p_subject_id from 1 for position('#' in p_subject_id) - 1) = p_object_id THEN\n")
-	block.WriteString(indentLines(selfQuery, "            "))
-	block.WriteString(";\n")
-	block.WriteString("            IF v_userset_check = 1 THEN\n")
-	block.WriteString("                RETURN 1;\n")
-	block.WriteString("            END IF;\n")
-	block.WriteString("        END IF;\n\n")
-	block.WriteString("        -- Case 2: Computed userset matching\n")
-	block.WriteString(indentLines(computedQuery, "        "))
-	block.WriteString(";\n")
-	block.WriteString("        IF v_userset_check = 1 THEN\n")
-	if exclusionBlock != "" {
-		block.WriteString(exclusionBlock)
-	}
-	block.WriteString("            RETURN 1;\n")
-	block.WriteString("        END IF;\n")
-	block.WriteString("    END IF;\n")
-	return block.String(), nil
-}
-
-func renderAccessChecksFromBlocks(blocks CheckBlocks, visitedExpr string) string {
-	condition := ""
+// buildAccessCheckExpr builds an OR expression for all access paths.
+// Returns nil if there are no access checks, or an Expr for the combined condition.
+func buildAccessCheckExpr(blocks CheckBlocks, visitedExpr Expr) Expr {
+	var parts []Expr
 	if blocks.DirectCheck != nil {
-		condition = blocks.DirectCheck.SQL()
+		parts = append(parts, blocks.DirectCheck)
 	}
 	if blocks.UsersetCheck != nil {
-		if condition != "" {
-			condition += " OR "
-		}
-		condition += blocks.UsersetCheck.SQL()
+		parts = append(parts, blocks.UsersetCheck)
 	}
 
 	for _, call := range blocks.ImpliedFunctionCalls {
-		if condition != "" {
-			condition += " OR "
-		}
-		condition += fmt.Sprintf("%s(p_subject_type, p_subject_id, p_object_id, %s) = 1",
-			call.FunctionName, visitedExpr)
+		checkCall := SpecializedCheckCall(call.FunctionName, SubjectType, SubjectID, ObjectID, visitedExpr)
+		parts = append(parts, Raw(checkCall.SQL()))
 	}
 
-	if condition == "" {
-		condition = "FALSE"
+	if len(parts) == 0 {
+		return Bool(false)
 	}
-	return condition
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	return OrExpr{Exprs: parts}
 }
 
-func renderExclusionCheckFromBlocks(blocks CheckBlocks) string {
-	if blocks.ExclusionCheck == nil {
-		return "FALSE"
+// buildCycleDetectionStmts builds the cycle detection statements for recursive functions.
+// Pattern: check if v_key is in p_visited, check depth limit.
+func buildCycleDetectionStmts() []Stmt {
+	return []Stmt{
+		Comment{Text: "Cycle detection"},
+		If{
+			Cond: ArrayContains{Value: Raw("v_key"), Array: Visited},
+			Then: []Stmt{ReturnInt{Value: 0}},
+		},
+		If{
+			Cond: Gte{Left: ArrayLength{Array: Visited}, Right: Int(25)},
+			Then: []Stmt{
+				Raise{Message: "resolution too complex", ErrCode: "M2002"},
+			},
+		},
 	}
-	return blocks.ExclusionCheck.SQL()
 }
 
-func renderRecursiveStandalonePathsFromBlocks(plan CheckPlan, blocks CheckBlocks, visitedExpr string) (string, error) {
-	var parts []string
+// buildStandaloneAccessPathStmts builds statements for standalone (non-intersection) access paths.
+// Used in recursive check functions to check direct, userset, implied, and parent relation paths.
+func buildStandaloneAccessPathStmts(plan CheckPlan, blocks CheckBlocks, visitedExpr Expr) []Stmt {
+	var stmts []Stmt
 
 	// Direct/Implied access path
 	if blocks.DirectCheck != nil {
-		parts = append(parts, fmt.Sprintf(`
-    -- Direct/Implied access path
-    IF %s THEN
-        v_has_access := TRUE;
-    END IF;`, blocks.DirectCheck.SQL()))
+		stmts = append(stmts,
+			Comment{Text: "Direct/Implied access path"},
+			If{
+				Cond: blocks.DirectCheck,
+				Then: []Stmt{Assign{Name: "v_has_access", Value: Bool(true)}},
+			},
+		)
 	}
 
-	// Userset access path
+	// Userset access path (only if not already has access)
 	if blocks.UsersetCheck != nil {
-		parts = append(parts, fmt.Sprintf(`
-    -- Userset access path
-    IF NOT v_has_access THEN
-        IF %s THEN
-            v_has_access := TRUE;
-        END IF;
-    END IF;`, blocks.UsersetCheck.SQL()))
+		stmts = append(stmts,
+			Comment{Text: "Userset access path"},
+			If{
+				Cond: NotExpr{Expr: Raw("v_has_access")},
+				Then: []Stmt{
+					If{
+						Cond: blocks.UsersetCheck,
+						Then: []Stmt{Assign{Name: "v_has_access", Value: Bool(true)}},
+					},
+				},
+			},
+		)
 	}
 
 	// Implied function calls
 	for _, call := range blocks.ImpliedFunctionCalls {
-		parts = append(parts, fmt.Sprintf(`
-    -- Implied access path via %s
-    IF NOT v_has_access THEN
-        IF %s(p_subject_type, p_subject_id, p_object_id, %s) = 1 THEN
-            v_has_access := TRUE;
-        END IF;
-    END IF;`, call.FunctionName, call.FunctionName, visitedExpr))
+		checkCall := SpecializedCheckCall(call.FunctionName, SubjectType, SubjectID, ObjectID, visitedExpr)
+		stmts = append(stmts,
+			Comment{Text: "Implied access path via " + call.FunctionName},
+			If{
+				Cond: NotExpr{Expr: Raw("v_has_access")},
+				Then: []Stmt{
+					If{
+						Cond: Raw(checkCall.SQL()),
+						Then: []Stmt{Assign{Name: "v_has_access", Value: Bool(true)}},
+					},
+				},
+			},
+		)
 	}
 
 	// Parent relation checks (TTU)
 	for _, parent := range blocks.ParentRelationBlocks {
-		existsSQL := renderParentRelationExistsFromBlocks(plan, parent, visitedExpr)
-		parts = append(parts, fmt.Sprintf(`
-    -- Recursive access path via %s -> %s
-    IF NOT v_has_access THEN
-        IF %s THEN
-            v_has_access := TRUE;
-        END IF;
-    END IF;`, parent.LinkingRelation, parent.ParentRelation, existsSQL))
+		existsSQL := renderParentRelationExistsFromBlocks(plan, parent, visitedExpr.SQL())
+		stmts = append(stmts,
+			Comment{Text: "Recursive access path via " + parent.LinkingRelation + " -> " + parent.ParentRelation},
+			If{
+				Cond: NotExpr{Expr: Raw("v_has_access")},
+				Then: []Stmt{
+					If{
+						Cond: Raw(existsSQL),
+						Then: []Stmt{Assign{Name: "v_has_access", Value: Bool(true)}},
+					},
+				},
+			},
+		)
 	}
 
-	if len(parts) == 0 {
-		return "", nil
-	}
-	return strings.Join(parts, "\n"), nil
+	return stmts
 }
 
 func renderParentRelationExistsFromBlocks(plan CheckPlan, parent ParentRelationBlock, visitedExpr string) string {
+	// Use InternalCheckCall DSL instead of fmt.Sprintf
+	checkCall := InternalCheckCall(
+		SubjectType,
+		SubjectID,
+		parent.ParentRelation,
+		Col{Table: "link", Column: "subject_type"},
+		Col{Table: "link", Column: "subject_id"},
+		Raw(visitedExpr),
+	)
+
 	q := Tuples("link").
 		ObjectType(plan.ObjectType).
 		Relations(parent.LinkingRelation).
 		Where(
 			Eq{Left: Col{Table: "link", Column: "object_id"}, Right: Raw("p_object_id")},
-			Raw(fmt.Sprintf(
-				"%s(p_subject_type, p_subject_id, '%s', link.subject_type, link.subject_id, %s) = 1",
-				plan.InternalCheckFunctionName,
-				parent.ParentRelation,
-				visitedExpr,
-			)),
+			Raw(checkCall.SQL()),
 		)
 
 	if len(parent.AllowedLinkingTypes) > 0 {
@@ -366,64 +488,119 @@ func renderParentRelationExistsFromBlocks(plan CheckPlan, parent ParentRelationB
 	return q.ExistsSQL()
 }
 
-func renderIntersectionGroupsFromBlocks(plan CheckPlan, blocks CheckBlocks, visitedExpr string) (string, error) {
+// buildIntersectionGroupStmts builds statements for intersection group checks.
+// Each group is AND'd together, groups are OR'd (first match wins).
+func buildIntersectionGroupStmts(plan CheckPlan, blocks CheckBlocks, visitedExpr Expr) []Stmt {
 	if len(blocks.IntersectionGroups) == 0 {
-		return "", nil
+		return nil
 	}
 
-	var buf strings.Builder
-	buf.WriteString("\n    -- Intersection groups (OR'd together, parts within group AND'd)\n")
+	stmts := []Stmt{Comment{Text: "Intersection groups (OR'd together, parts within group AND'd)"}}
 
 	for _, group := range blocks.IntersectionGroups {
-		partExprs := make([]string, 0, len(group.Parts))
-		var exclusionBlocks []string
-		var exclusionClosers []string
+		// Build the AND condition for all parts
+		var partExprs []Expr
+		for _, part := range group.Parts {
+			partExprs = append(partExprs, part.Check)
+		}
 
-		for partIdx, part := range group.Parts {
-			partExprs = append(partExprs, part.Check.SQL())
+		// Build the condition: all parts must be true
+		var groupCond Expr
+		if len(partExprs) == 1 {
+			groupCond = partExprs[0]
+		} else {
+			groupCond = AndExpr{Exprs: partExprs}
+		}
 
+		// Build inner statements: exclusion checks + set v_has_access
+		var innerStmts []Stmt
+
+		// Handle exclusions - wrap in nested IFs
+		// For each part with exclusion, we need IF exclusion THEN (fail) ELSE (continue)
+		var hasExclusions bool
+		for _, part := range group.Parts {
 			if part.ExcludedRelation != "" {
-				exclusionBlocks = append(exclusionBlocks, fmt.Sprintf(
-					"            -- Check exclusion for part %d\n            IF %s(p_subject_type, p_subject_id, '%s', '%s', p_object_id, %s) = 1 THEN\n                -- Excluded, this group fails\n            ELSE",
-					partIdx,
-					plan.InternalCheckFunctionName,
-					part.ExcludedRelation,
-					plan.ObjectType,
-					visitedExpr,
-				))
-				exclusionClosers = append(exclusionClosers, "            END IF;")
+				hasExclusions = true
+				break
 			}
 		}
 
-		groupCondition := strings.Join(partExprs, " AND ")
-		buf.WriteString("    IF NOT v_has_access THEN\n")
-		buf.WriteString("        IF " + groupCondition + " THEN\n")
-		for _, exclusionBlock := range exclusionBlocks {
-			buf.WriteString(exclusionBlock + "\n")
+		if hasExclusions {
+			// Build nested exclusion checks
+			// This is complex: we need to build inside-out
+			// Start with the innermost action (set v_has_access)
+			innermost := []Stmt{Assign{Name: "v_has_access", Value: Bool(true)}}
+
+			// Wrap from last to first exclusion
+			for i := len(group.Parts) - 1; i >= 0; i-- {
+				part := group.Parts[i]
+				if part.ExcludedRelation != "" {
+					checkCall := InternalCheckCall(
+						SubjectType,
+						SubjectID,
+						part.ExcludedRelation,
+						Lit(plan.ObjectType),
+						ObjectID,
+						visitedExpr,
+					)
+					innermost = []Stmt{
+						Comment{Text: "Check exclusion for part " + part.ExcludedRelation},
+						If{
+							Cond: Raw(checkCall.SQL()),
+							Then: []Stmt{Comment{Text: "Excluded, this group fails"}},
+							Else: innermost,
+						},
+					}
+				}
+			}
+			innerStmts = innermost
+		} else {
+			innerStmts = []Stmt{Assign{Name: "v_has_access", Value: Bool(true)}}
 		}
-		buf.WriteString("            v_has_access := TRUE;\n")
-		for _, closer := range exclusionClosers {
-			buf.WriteString(closer + "\n")
-		}
-		buf.WriteString("        END IF;\n")
-		buf.WriteString("    END IF;\n")
+
+		// Wrap in: IF NOT v_has_access THEN IF groupCond THEN ... END IF; END IF;
+		stmts = append(stmts, If{
+			Cond: NotExpr{Expr: Raw("v_has_access")},
+			Then: []Stmt{
+				If{
+					Cond: groupCond,
+					Then: innerStmts,
+				},
+			},
+		})
 	}
 
-	return buf.String(), nil
+	return stmts
 }
 
-func renderExclusionWithAccessFromBlocks(plan CheckPlan, blocks CheckBlocks) string {
+// buildExclusionWithAccessStmts builds the final exclusion check statements.
+// Returns plpgsql statements for the "if has access, check exclusion, return" pattern.
+func buildExclusionWithAccessStmts(plan CheckPlan, blocks CheckBlocks) []Stmt {
 	if plan.HasExclusion {
-		exclusionSQL := renderExclusionCheckFromBlocks(blocks)
-		return "\n    -- Exclusion check\n" +
-			"    IF v_has_access THEN\n" +
-			"        IF " + exclusionSQL + " THEN\n" +
-			"            RETURN 0;\n" +
-			"        END IF;\n" +
-			"        RETURN 1;\n" +
-			"    END IF;\n"
+		exclusionExpr := blocks.ExclusionCheck
+		if exclusionExpr == nil {
+			exclusionExpr = Bool(false)
+		}
+		return []Stmt{
+			Comment{Text: "Exclusion check"},
+			If{
+				Cond: Raw("v_has_access"),
+				Then: []Stmt{
+					If{
+						Cond: exclusionExpr,
+						Then: []Stmt{ReturnInt{Value: 0}},
+					},
+					ReturnInt{Value: 1},
+				},
+			},
+		}
 	}
-	return "\n    IF v_has_access THEN RETURN 1; END IF;\n"
+	return []Stmt{
+		If{
+			Cond: Raw("v_has_access"),
+			Then: []Stmt{ReturnInt{Value: 1}},
+		},
+	}
 }
 
 // =============================================================================

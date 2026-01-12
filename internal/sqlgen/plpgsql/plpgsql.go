@@ -49,6 +49,24 @@ func (Return) StmtSQL() string {
 	return "RETURN;"
 }
 
+// ReturnValue renders RETURN <expr>;
+type ReturnValue struct {
+	Value sqldsl.Expr
+}
+
+func (r ReturnValue) StmtSQL() string {
+	return fmt.Sprintf("RETURN %s;", r.Value.SQL())
+}
+
+// ReturnInt renders RETURN <int>; as a convenience.
+type ReturnInt struct {
+	Value int
+}
+
+func (r ReturnInt) StmtSQL() string {
+	return fmt.Sprintf("RETURN %d;", r.Value)
+}
+
 // Assign renders name := value;
 type Assign struct {
 	Name  string
@@ -89,6 +107,23 @@ func (i If) StmtSQL() string {
 
 	sb.WriteString("END IF;")
 	return sb.String()
+}
+
+// SelectInto renders SELECT ... INTO variable;
+// Used for assigning query results to PL/pgSQL variables.
+type SelectInto struct {
+	Query    sqldsl.SQLer // The SELECT query
+	Variable string       // Variable name to select into
+}
+
+func (s SelectInto) StmtSQL() string {
+	q := s.Query.SQL()
+	// Insert INTO clause after SELECT
+	if len(q) >= 6 && q[:6] == "SELECT" {
+		return "SELECT" + " INTO " + s.Variable + q[6:] + ";"
+	}
+	// Fallback: wrap the query
+	return fmt.Sprintf("SELECT INTO %s (%s);", s.Variable, q)
 }
 
 // RawStmt is an escape hatch for SQL that doesn't map cleanly to typed constructs.

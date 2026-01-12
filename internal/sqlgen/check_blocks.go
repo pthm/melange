@@ -1,7 +1,5 @@
 package sqlgen
 
-import "fmt"
-
 // =============================================================================
 // Check Blocks Layer
 // =============================================================================
@@ -189,7 +187,7 @@ func buildTypedUsersetCheck(plan CheckPlan) (Expr, error) {
 
 	var checks []Expr
 	// Build visited expression that appends the current key: p_visited || ARRAY['type:' || p_object_id || ':relation']
-	visitedWithKey := Param(fmt.Sprintf("p_visited || ARRAY['%s:' || p_object_id || ':%s']", plan.ObjectType, plan.Relation))
+	visitedWithKey := VisitedWithKey(plan.ObjectType, plan.Relation, ObjectID)
 
 	for _, pattern := range patterns {
 		if pattern.IsComplex {
@@ -530,7 +528,7 @@ func buildTypedIntersectionGroups(plan CheckPlan) ([]IntersectionGroupCheck, err
 	groups := make([]IntersectionGroupCheck, 0, len(plan.Analysis.IntersectionGroups))
 
 	// Build visited expression that appends the current key for recursive patterns
-	visitedWithKey := Param(fmt.Sprintf("p_visited || ARRAY['%s:' || p_object_id || ':%s']", plan.ObjectType, plan.Relation))
+	visitedWithKey := VisitedWithKey(plan.ObjectType, plan.Relation, ObjectID)
 
 	for _, group := range plan.Analysis.IntersectionGroups {
 		parts := make([]IntersectionPartCheck, 0, len(group.Parts))
