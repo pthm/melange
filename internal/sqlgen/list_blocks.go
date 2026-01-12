@@ -854,6 +854,11 @@ func buildTypedListSubjectsComplexClosureBlocks(plan ListPlan) ([]TypedQueryBloc
 			q.Where(Ne{Left: Col{Table: "t", Column: "subject_id"}, Right: Lit("*")})
 		}
 
+		// Add exclusion predicates
+		for _, pred := range plan.Exclusions.BuildPredicates() {
+			q.Where(pred)
+		}
+
 		blocks = append(blocks, TypedQueryBlock{
 			Comments: []string{
 				"-- Complex closure relations: find candidates via tuples, validate via check_permission_internal",
@@ -1651,6 +1656,11 @@ func buildListSubjectsRecursiveComplexClosureBlocks(plan ListPlan) ([]TypedQuery
 		// Exclude wildcards if needed
 		if excludeWildcard {
 			q.Where(Ne{Left: Col{Table: "t", Column: "subject_id"}, Right: Lit("*")})
+		}
+
+		// Add exclusion predicates
+		for _, pred := range plan.Exclusions.BuildPredicates() {
+			q.Where(pred)
 		}
 
 		blocks = append(blocks, TypedQueryBlock{
