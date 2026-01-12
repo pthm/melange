@@ -1,7 +1,6 @@
 package sqlgen
 
 import (
-	"fmt"
 	"strings"
 )
 
@@ -66,10 +65,7 @@ func RenderListObjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUserse
 		Name:    plan.FunctionName,
 		Args:    ListObjectsArgs(),
 		Returns: ListObjectsReturns(),
-		Header: []string{
-			fmt.Sprintf("Generated list_objects function for %s.%s", plan.ObjectType, plan.Relation),
-			fmt.Sprintf("Features: %s (self-referential userset)", plan.FeaturesString()),
-		},
+		Header:  ListObjectsFunctionHeader(plan.ObjectType, plan.Relation, plan.FeaturesString()+" (self-referential userset)"),
 		Body: []Stmt{
 			ReturnQuery{Query: paginatedQuery},
 		},

@@ -240,26 +240,27 @@ func generateListObjectsDispatcher(analyses []RelationAnalysis) (string, error) 
 	}
 
 	// Build the body with routing cases
-	var bodyBuf strings.Builder
+	var bodyStmts []Stmt
 	if len(cases) > 0 {
-		bodyBuf.WriteString("-- Route to specialized functions for all type/relation pairs\n")
+		bodyStmts = append(bodyStmts, Comment{Text: "Route to specialized functions for all type/relation pairs"})
 		for _, c := range cases {
-			bodyBuf.WriteString("IF p_object_type = '")
-			bodyBuf.WriteString(c.ObjectType)
-			bodyBuf.WriteString("' AND p_relation = '")
-			bodyBuf.WriteString(c.Relation)
-			bodyBuf.WriteString("' THEN\n")
-			bodyBuf.WriteString("    RETURN QUERY SELECT * FROM ")
-			bodyBuf.WriteString(c.FunctionName)
-			bodyBuf.WriteString("(p_subject_type, p_subject_id, p_limit, p_after);\n")
-			bodyBuf.WriteString("    RETURN;\n")
-			bodyBuf.WriteString("END IF;\n")
+			bodyStmts = append(bodyStmts, If{
+				Cond: And(
+					Eq{Left: ObjectType, Right: Lit(c.ObjectType)},
+					Eq{Left: Param("p_relation"), Right: Lit(c.Relation)},
+				),
+				Then: []Stmt{
+					ReturnQuery{Query: "SELECT * FROM " + c.FunctionName + "(p_subject_type, p_subject_id, p_limit, p_after)"},
+					Return{},
+				},
+			})
 		}
 	}
-	bodyBuf.WriteString("\n")
-	bodyBuf.WriteString("-- Unknown type/relation pair - return empty result (relation not defined in model)\n")
-	bodyBuf.WriteString("-- This matches check_permission behavior for unknown relations (returns 0/denied)\n")
-	bodyBuf.WriteString("RETURN;")
+	bodyStmts = append(bodyStmts,
+		Comment{Text: "Unknown type/relation pair - return empty result (relation not defined in model)"},
+		Comment{Text: "This matches check_permission behavior for unknown relations (returns 0/denied)"},
+		Return{},
+	)
 
 	fn := PlpgsqlFunction{
 		Name:    "list_accessible_objects",
@@ -269,9 +270,7 @@ func generateListObjectsDispatcher(analyses []RelationAnalysis) (string, error) 
 			"Generated dispatcher for list_accessible_objects",
 			"Routes to specialized functions for all type/relation pairs",
 		},
-		Body: []Stmt{
-			RawStmt{SQLText: bodyBuf.String()},
-		},
+		Body: bodyStmts,
 	}
 	return fn.SQL(), nil
 }
@@ -291,26 +290,27 @@ func generateListSubjectsDispatcher(analyses []RelationAnalysis) (string, error)
 	}
 
 	// Build the body with routing cases
-	var bodyBuf strings.Builder
+	var bodyStmts []Stmt
 	if len(cases) > 0 {
-		bodyBuf.WriteString("-- Route to specialized functions for all type/relation pairs\n")
+		bodyStmts = append(bodyStmts, Comment{Text: "Route to specialized functions for all type/relation pairs"})
 		for _, c := range cases {
-			bodyBuf.WriteString("IF p_object_type = '")
-			bodyBuf.WriteString(c.ObjectType)
-			bodyBuf.WriteString("' AND p_relation = '")
-			bodyBuf.WriteString(c.Relation)
-			bodyBuf.WriteString("' THEN\n")
-			bodyBuf.WriteString("    RETURN QUERY SELECT * FROM ")
-			bodyBuf.WriteString(c.FunctionName)
-			bodyBuf.WriteString("(p_object_id, p_subject_type, p_limit, p_after);\n")
-			bodyBuf.WriteString("    RETURN;\n")
-			bodyBuf.WriteString("END IF;\n")
+			bodyStmts = append(bodyStmts, If{
+				Cond: And(
+					Eq{Left: ObjectType, Right: Lit(c.ObjectType)},
+					Eq{Left: Param("p_relation"), Right: Lit(c.Relation)},
+				),
+				Then: []Stmt{
+					ReturnQuery{Query: "SELECT * FROM " + c.FunctionName + "(p_object_id, p_subject_type, p_limit, p_after)"},
+					Return{},
+				},
+			})
 		}
 	}
-	bodyBuf.WriteString("\n")
-	bodyBuf.WriteString("-- Unknown type/relation pair - return empty result (relation not defined in model)\n")
-	bodyBuf.WriteString("-- This matches check_permission behavior for unknown relations (returns 0/denied)\n")
-	bodyBuf.WriteString("RETURN;")
+	bodyStmts = append(bodyStmts,
+		Comment{Text: "Unknown type/relation pair - return empty result (relation not defined in model)"},
+		Comment{Text: "This matches check_permission behavior for unknown relations (returns 0/denied)"},
+		Return{},
+	)
 
 	fn := PlpgsqlFunction{
 		Name:    "list_accessible_subjects",
@@ -320,9 +320,7 @@ func generateListSubjectsDispatcher(analyses []RelationAnalysis) (string, error)
 			"Generated dispatcher for list_accessible_subjects",
 			"Routes to specialized functions for all type/relation pairs",
 		},
-		Body: []Stmt{
-			RawStmt{SQLText: bodyBuf.String()},
-		},
+		Body: bodyStmts,
 	}
 	return fn.SQL(), nil
 }

@@ -1,7 +1,6 @@
 package sqlgen
 
 import (
-	"fmt"
 	"strings"
 )
 
@@ -19,36 +18,37 @@ func RenderListSubjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUsers
 	regularQuery = trimTrailingSemicolon(regularQuery)
 	regularPaginatedQuery := wrapWithPaginationWildcardFirst(regularQuery)
 
-	// Build the IF/ELSE body
-	bodySQL := fmt.Sprintf(`-- Check if p_subject_type is a userset filter (contains '#')
-IF position('#' in p_subject_type) > 0 THEN
-    v_filter_type := split_part(p_subject_type, '#', 1);
-    v_filter_relation := split_part(p_subject_type, '#', 2);
+	// Build the THEN branch (userset filter path)
+	thenBranch := renderUsersetFilterThenBranch(usersetFilterPaginatedQuery)
 
-    -- Userset filter case: find userset tuples and recursively expand
-    -- Returns normalized references like 'group:1#member'
-    RETURN QUERY
-    %s;
-ELSE
-    -- Regular subject type: find individual subjects via recursive userset expansion
-    RETURN QUERY
-    %s;
-END IF;`, usersetFilterPaginatedQuery, regularPaginatedQuery)
+	// Build the ELSE branch (regular subject type path)
+	elseBranch := []Stmt{
+		Comment{Text: "Regular subject type: find individual subjects via recursive userset expansion"},
+		ReturnQuery{Query: regularPaginatedQuery},
+	}
+
+	// Build main IF statement: check if subject_type is a userset filter
+	mainIf := If{
+		Cond: Gt{
+			Left:  Position{Needle: Lit("#"), Haystack: SubjectType},
+			Right: Int(0),
+		},
+		Then: thenBranch,
+		Else: elseBranch,
+	}
 
 	fn := PlpgsqlFunction{
 		Name:    plan.FunctionName,
 		Args:    ListSubjectsArgs(),
 		Returns: ListSubjectsReturns(),
-		Header: []string{
-			fmt.Sprintf("Generated list_subjects function for %s.%s", plan.ObjectType, plan.Relation),
-			fmt.Sprintf("Features: %s (self-referential userset)", plan.FeaturesString()),
-		},
+		Header:  ListSubjectsFunctionHeader(plan.ObjectType, plan.Relation, plan.FeaturesString()+" (self-referential userset)"),
 		Decls: []Decl{
 			{Name: "v_filter_type", Type: "TEXT"},
 			{Name: "v_filter_relation", Type: "TEXT"},
 		},
 		Body: []Stmt{
-			RawStmt{SQLText: bodySQL},
+			Comment{Text: "Check if p_subject_type is a userset filter (contains '#')"},
+			mainIf,
 		},
 	}
 

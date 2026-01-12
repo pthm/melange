@@ -98,62 +98,44 @@ func buildDepthCheckSQLForRender(objectType string, linkingRelations []string) s
 }
 
 func renderListDispatcher(functionName string, args []FuncArg, returns string, cases []ListDispatcherCase) string {
-	var buf strings.Builder
-
-	buf.WriteString("-- Generated dispatcher for ")
-	buf.WriteString(functionName)
-	buf.WriteString("\n")
-	buf.WriteString("-- Routes to specialized functions for known type/relation pairs\n")
-	buf.WriteString("CREATE OR REPLACE FUNCTION ")
-	buf.WriteString(functionName)
-	buf.WriteString("(\n")
-
-	for i, arg := range args {
-		buf.WriteString("    ")
-		buf.WriteString(arg.Name)
-		buf.WriteString(" ")
-		buf.WriteString(arg.Type)
-		if arg.Default != nil {
-			buf.WriteString(" DEFAULT ")
-			buf.WriteString(arg.Default.SQL())
-		}
-		if i < len(args)-1 {
-			buf.WriteString(",")
-		}
-		buf.WriteString("\n")
-	}
-
-	buf.WriteString(") RETURNS ")
-	buf.WriteString(returns)
-	buf.WriteString(" AS $$\n")
-	buf.WriteString("BEGIN\n")
-
+	// Build the body with routing cases
+	var bodyStmts []Stmt
 	if len(cases) > 0 {
 		for _, c := range cases {
-			buf.WriteString("    IF p_object_type = '")
-			buf.WriteString(c.ObjectType)
-			buf.WriteString("' AND p_relation = '")
-			buf.WriteString(c.Relation)
-			buf.WriteString("' THEN\n")
-			buf.WriteString("        RETURN QUERY SELECT * FROM ")
-			buf.WriteString(c.FunctionName)
-			buf.WriteString("(")
 			// Arguments depend on whether this is list_objects or list_subjects
+			var callArgs string
 			if strings.Contains(functionName, "objects") {
-				buf.WriteString("p_subject_type, p_subject_id, p_limit, p_after")
+				callArgs = "p_subject_type, p_subject_id, p_limit, p_after"
 			} else {
-				buf.WriteString("p_object_id, p_subject_type, p_limit, p_after")
+				callArgs = "p_object_id, p_subject_type, p_limit, p_after"
 			}
-			buf.WriteString(");\n")
-			buf.WriteString("        RETURN;\n")
-			buf.WriteString("    END IF;\n")
+
+			bodyStmts = append(bodyStmts, If{
+				Cond: And(
+					Eq{Left: ObjectType, Right: Lit(c.ObjectType)},
+					Eq{Left: Param("p_relation"), Right: Lit(c.Relation)},
+				),
+				Then: []Stmt{
+					ReturnQuery{Query: "SELECT * FROM " + c.FunctionName + "(" + callArgs + ")"},
+					Return{},
+				},
+			})
 		}
 	}
+	bodyStmts = append(bodyStmts,
+		Comment{Text: "Unknown type/relation: return empty result"},
+		Return{},
+	)
 
-	buf.WriteString("    -- Unknown type/relation: return empty result\n")
-	buf.WriteString("    RETURN;\n")
-	buf.WriteString("END;\n")
-	buf.WriteString("$$ LANGUAGE plpgsql STABLE;\n")
-
-	return buf.String()
+	fn := PlpgsqlFunction{
+		Name:    functionName,
+		Args:    args,
+		Returns: returns,
+		Header: []string{
+			"Generated dispatcher for " + functionName,
+			"Routes to specialized functions for known type/relation pairs",
+		},
+		Body: bodyStmts,
+	}
+	return fn.SQL() + "\n"
 }
