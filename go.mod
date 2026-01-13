@@ -299,6 +299,9 @@ require (
 	mvdan.cc/unparam v0.0.0-20251027182757-5beb8c8f8f15 // indirect
 )
 
+// Use local melange module during development instead of published version
+replace github.com/pthm/melange/melange => ./melange
+
 // Development tools - install with: go install tool
 tool (
 	github.com/golangci/golangci-lint/v2/cmd/golangci-lint

@@ -65,15 +65,18 @@ release VERSION="" ALLOW_DIRTY="":
     if [ "${version#v}" = "$version" ]; then
         version="v$version"
     fi
+    # Remove replace directive for release (allows go.mod to use published version)
+    just _remove-replace-directive
     # Tag and push melange submodule
     melange_tag="melange/$version"
     if git rev-parse -q --verify "refs/tags/$melange_tag" >/dev/null; then
         echo "Tag already exists: $melange_tag"
+        just _restore-replace-directive
         exit 1
     fi
     git tag -a "$melange_tag" -m "$melange_tag"
     git push origin "$melange_tag"
-    # Update go.mod to require the published version
+    # Update go.mod to require the published version (instead of local replace)
     go mod edit -require=github.com/pthm/melange/melange@"$version"
     echo "Waiting for tag to propagate..."
     sleep 5
@@ -125,6 +128,11 @@ release VERSION="" ALLOW_DIRTY="":
         fi
     fi
     goreleaser release --clean
+    # Restore replace directive for development
+    just _restore-replace-directive
+    git add go.mod
+    git commit -m "chore(release): restore replace directive for development"
+    git push
 
 # Build release snapshot for local testing (no publish)
 [group('Release')]
@@ -165,6 +173,27 @@ release-local:
         fi
     fi
     goreleaser release --clean --skip=publish
+
+[group('Release')]
+[private]
+[doc('Remove replace directive from go.mod for release')]
+_remove-replace-directive:
+    @sed -i.bak '/^\/\/ Use local melange module/,/^replace github.com\/pthm\/melange\/melange => \.\/melange/d' go.mod && rm -f go.mod.bak
+    @go mod tidy
+
+[group('Release')]
+[private]
+[doc('Restore replace directive to go.mod for development')]
+_restore-replace-directive:
+    @# Check if replace directive already exists
+    @if grep -q "replace github.com/pthm/melange/melange" go.mod; then \
+        echo "Replace directive already exists"; \
+        exit 0; \
+    fi
+    @# Add replace directive before the tool section
+    @awk '/^\/\/ Development tools/ { print "// Use local melange module during development instead of published version"; print "replace github.com/pthm/melange/melange => ./melange"; print ""; } { print }' go.mod > go.mod.tmp
+    @mv go.mod.tmp go.mod
+    @go mod tidy
 
 [group('Release')]
 [private]
