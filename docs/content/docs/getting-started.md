@@ -41,6 +41,34 @@ Verify the installation:
 melange --help
 ```
 
+### Updating
+
+Melange will automatically check for updates and notify you when a new version is available.
+
+To update to the latest version:
+
+{{< tabs items="Homebrew,Go" >}}
+
+{{< tab >}}
+```bash
+brew upgrade melange
+```
+{{< /tab >}}
+
+{{< tab >}}
+```bash
+go install github.com/pthm/melange/cmd/melange@latest
+```
+{{< /tab >}}
+
+{{< /tabs >}}
+
+To disable update notifications, use the `--no-update-check` flag:
+
+```bash
+melange --no-update-check migrate
+```
+
 ## Quick Start
 
 ### Step 1: Define Your Authorization Model

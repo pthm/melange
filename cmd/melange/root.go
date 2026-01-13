@@ -1,9 +1,15 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"os"
+	"time"
+
 	"github.com/spf13/cobra"
 
 	"github.com/pthm/melange/internal/cli"
+	"github.com/pthm/melange/internal/update"
 )
 
 var (
@@ -12,9 +18,13 @@ var (
 	configPath string
 
 	// Persistent flags
-	cfgFile string
-	verbose int
-	quiet   bool
+	cfgFile       string
+	verbose       int
+	quiet         bool
+	noUpdateCheck bool
+
+	// Update check result channel
+	updateResult chan *update.Info
 )
 
 var rootCmd = &cobra.Command{
@@ -28,6 +38,17 @@ from OpenFGA schemas, enabling single-query permission checks in PostgreSQL.`,
 		// Skip config loading for help/completion/version/license commands
 		if cmd.Name() == "help" || cmd.Name() == "completion" || cmd.Name() == "version" || cmd.Name() == "license" {
 			return nil
+		}
+
+		// Start background update check (unless disabled)
+		if !noUpdateCheck && !isCI() {
+			updateResult = make(chan *update.Info, 1)
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				info, _ := update.CheckWithCache(ctx)
+				updateResult <- info
+			}()
 		}
 
 		var err error
@@ -54,6 +75,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: auto-discover melange.yaml)")
 	rootCmd.PersistentFlags().CountVarP(&verbose, "verbose", "v", "increase verbosity (can be repeated)")
 	rootCmd.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false, "suppress non-error output")
+	rootCmd.PersistentFlags().BoolVar(&noUpdateCheck, "no-update-check", false, "disable update check")
 
 	// Define command groups
 	rootCmd.AddGroup(
@@ -112,4 +134,36 @@ func resolveBool(values ...bool) bool {
 		}
 	}
 	return false
+}
+
+// isCI detects if running in a CI environment
+func isCI() bool {
+	return os.Getenv("CI") != ""
+}
+
+// ShowUpdateNoticeIfAvailable checks for pending update results and displays a notice
+// This should be called after command execution (from main.go) since PersistentPostRun
+// doesn't run when commands return errors.
+func ShowUpdateNoticeIfAvailable() {
+	if updateResult == nil {
+		return
+	}
+
+	// Wait briefly for results (1s should be fast enough for cached results,
+	// and reasonable even for network fetch)
+	select {
+	case info := <-updateResult:
+		if info != nil && info.UpdateAvailable {
+			showUpdateNotice(info)
+		}
+	case <-time.After(1 * time.Second):
+		// Check not finished in time, skip notice
+	}
+}
+
+func showUpdateNotice(info *update.Info) {
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintf(os.Stderr, "* A new version of melange is available: v%s (current: %s)\n",
+		info.LatestVersion, info.CurrentVersion)
+	fmt.Fprintln(os.Stderr, "  brew upgrade melange  or  go install github.com/pthm/melange/cmd/melange@latest")
 }

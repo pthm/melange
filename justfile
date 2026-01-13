@@ -116,7 +116,55 @@ release VERSION="" ALLOW_DIRTY="":
             exit 1
         fi
     fi
+    if [ -z "${HOMEBREW_TAP_GITHUB_TOKEN:-}" ]; then
+        if command -v gh >/dev/null 2>&1; then
+            export HOMEBREW_TAP_GITHUB_TOKEN="$(gh auth token)"
+        else
+            echo "HOMEBREW_TAP_GITHUB_TOKEN not set and gh cli not found"
+            exit 1
+        fi
+    fi
     goreleaser release --clean
+
+# Build release snapshot for local testing (no publish)
+[group('Release')]
+[doc('Build release artifacts locally without publishing')]
+release-snapshot:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${GITHUB_TOKEN:-}" ]; then
+        if command -v gh >/dev/null 2>&1; then
+            export GITHUB_TOKEN="$(gh auth token)"
+        else
+            echo "GITHUB_TOKEN not set and gh cli not found"
+            exit 1
+        fi
+    fi
+    goreleaser release --snapshot --clean
+
+# Build release locally with GoReleaser (without publishing)
+[group('Release')]
+[doc('Build and package release locally, skipping publish step')]
+release-local:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${GITHUB_TOKEN:-}" ]; then
+        if command -v gh >/dev/null 2>&1; then
+            export GITHUB_TOKEN="$(gh auth token)"
+        else
+            echo "GITHUB_TOKEN not set and gh cli not found"
+            exit 1
+        fi
+    fi
+    if [ -z "${HOMEBREW_TAP_GITHUB_TOKEN:-}" ]; then
+        if command -v gh >/dev/null 2>&1; then
+            export HOMEBREW_TAP_GITHUB_TOKEN="$(gh auth token)"
+        else
+            echo "HOMEBREW_TAP_GITHUB_TOKEN not set and gh cli not found"
+            exit 1
+        fi
+    fi
+    goreleaser release --clean --skip=publish
 
 [group('Release')]
 [private]
@@ -196,12 +244,22 @@ build:
     version=$(cat VERSION 2>/dev/null || echo "dev")
     commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
     date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    go build -ldflags "-X main.version=$version -X main.commit=$commit -X main.date=$date" -o bin/melange ./cmd/melange
+    go build -ldflags "-X github.com/pthm/melange/internal/version.Version=$version -X github.com/pthm/melange/internal/version.Commit=$commit -X github.com/pthm/melange/internal/version.Date=$date" -o bin/melange ./cmd/melange
 
 # Build the CLI without version info (faster for development)
 [group('Build')]
 build-dev:
     go build -o bin/melange ./cmd/melange
+
+# Build and sign the binary (macOS only)
+[group('Build')]
+build-signed: build
+    mise exec -- ./scripts/sign-macos.sh bin/melange
+
+# Build, sign, and notarize the binary (macOS only, requires 1Password or env vars)
+[group('Build')]
+build-notarized: build
+    mise exec -- ./scripts/sign-macos.sh bin/melange --notarize
 
 # Generate root THIRD_PARTY_NOTICES from go-licenses output
 [group('Release')]
@@ -217,7 +275,7 @@ install:
     version=$(cat VERSION 2>/dev/null || echo "dev")
     commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
     date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    go install -ldflags "-X main.version=$version -X main.commit=$commit -X main.date=$date" ./cmd/melange
+    go install -ldflags "-X github.com/pthm/melange/internal/version.Version=$version -X github.com/pthm/melange/internal/version.Commit=$commit -X github.com/pthm/melange/internal/version.Date=$date" ./cmd/melange
 
 # =============================================================================
 # Linting and Formatting

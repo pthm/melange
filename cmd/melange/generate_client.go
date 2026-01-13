@@ -9,6 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/pthm/melange/internal/cli"
+	"github.com/pthm/melange/internal/version"
 	"github.com/pthm/melange/pkg/clientgen"
 	"github.com/pthm/melange/pkg/parser"
 )
@@ -79,7 +80,7 @@ Supported runtimes: ` + strings.Join(clientgen.ListRuntimes(), ", "),
 			Package:        pkg,
 			RelationFilter: filter,
 			IDType:         idType,
-			Version:        version,
+			Version:        version.Version,
 			SourcePath:     schema,
 		}
 		files, err := clientgen.Generate(runtime, types, genCfg)

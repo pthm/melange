@@ -32,9 +32,29 @@ Inspired by [OpenFGA](https://openfga.dev) and built on ideas from [pgFGA](https
 
 ### CLI
 
+**Homebrew (macOS and Linux):**
+```bash
+brew install pthm/tap/melange
+```
+
+**Go install:**
 ```bash
 go install github.com/pthm/melange/cmd/melange@latest
 ```
+
+**Pre-built binaries:**
+Download from [GitHub Releases](https://github.com/pthm/melange/releases) (macOS binaries are code-signed)
+
+**Updating:**
+```bash
+# Homebrew
+brew upgrade melange
+
+# Go install
+go install github.com/pthm/melange/cmd/melange@latest
+```
+
+Melange automatically checks for updates and notifies you when a new version is available. Use `--no-update-check` to disable.
 
 ### Go Runtime
 
