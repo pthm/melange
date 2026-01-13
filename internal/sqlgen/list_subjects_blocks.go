@@ -40,10 +40,11 @@ func BuildListSubjectsBlocks(plan ListPlan) (BlockSet, error) {
 // The userset filter path is ALWAYS built because any subject can be a userset
 // reference (e.g., document:1#writer), even when there are no [group#member]
 // patterns in the model.
-func buildListSubjectsUsersetFilterBlocks(plan ListPlan) ([]TypedQueryBlock, *TypedQueryBlock, error) {
+func buildListSubjectsUsersetFilterBlocks(plan ListPlan) (blocks []TypedQueryBlock, selfBlock *TypedQueryBlock, err error) {
 	directBlock := buildListSubjectsUsersetFilterDirectBlock(plan)
 
-	intersectionBlocks, err := buildListSubjectsIntersectionClosureBlocks(
+	var intersectionBlocks []TypedQueryBlock
+	intersectionBlocks, err = buildListSubjectsIntersectionClosureBlocks(
 		plan,
 		"v_filter_type || '#' || v_filter_relation",
 		"v_filter_type",
@@ -53,9 +54,9 @@ func buildListSubjectsUsersetFilterBlocks(plan ListPlan) ([]TypedQueryBlock, *Ty
 		return nil, nil, err
 	}
 
-	selfBlock := buildListSubjectsUsersetFilterSelfBlock(plan)
+	selfBlock = buildListSubjectsUsersetFilterSelfBlock(plan)
 
-	blocks := make([]TypedQueryBlock, 0, 1+len(intersectionBlocks))
+	blocks = make([]TypedQueryBlock, 0, 1+len(intersectionBlocks))
 	blocks = append(blocks, directBlock)
 	blocks = append(blocks, intersectionBlocks...)
 

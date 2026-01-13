@@ -109,7 +109,7 @@ func (c ExclusionConfig) BuildPredicates() []Expr {
 }
 
 func (c ExclusionConfig) buildIntersectionPredicate(group ExcludedIntersectionGroup) Expr {
-	var parts []Expr
+	parts := make([]Expr, 0, len(group.Parts))
 	for _, part := range group.Parts {
 		parts = append(parts, c.buildIntersectionPart(part))
 	}

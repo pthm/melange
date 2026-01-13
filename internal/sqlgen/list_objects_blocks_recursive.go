@@ -45,7 +45,7 @@ func BuildListObjectsRecursiveBlocks(plan ListPlan) (RecursiveBlockSet, error) {
 
 // buildRecursiveBaseBlocks builds the base case blocks for the recursive CTE.
 func buildRecursiveBaseBlocks(plan ListPlan, parentRelations []ListParentRelationData) ([]TypedQueryBlock, error) {
-	var blocks []TypedQueryBlock
+	blocks := make([]TypedQueryBlock, 0, 8)
 
 	blocks = append(blocks, buildRecursiveDirectBlock(plan))
 	blocks = append(blocks, buildRecursiveComplexClosureBlocks(plan)...)

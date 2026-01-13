@@ -232,6 +232,7 @@ var (
 func wrapWithPagination(query, idColumn string) string {
 	return sqldsl.WrapWithPagination(query, idColumn)
 }
+
 func wrapWithPaginationWildcardFirst(query string) string {
 	return sqldsl.WrapWithPaginationWildcardFirst(query)
 }

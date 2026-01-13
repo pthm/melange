@@ -314,7 +314,8 @@ func buildListSubjectsRecursiveTTUBlock(plan ListPlan, parent ListParentRelation
 
 // buildSubjectsRecursiveUsersetFilterTypedBlocks builds the userset filter path blocks.
 func buildSubjectsRecursiveUsersetFilterTypedBlocks(plan ListPlan, parentRelations []ListParentRelationData) ([]TypedQueryBlock, error) {
-	blocks := []TypedQueryBlock{buildListSubjectsRecursiveUsersetFilterDirectBlock(plan)}
+	blocks := make([]TypedQueryBlock, 0, 8)
+	blocks = append(blocks, buildListSubjectsRecursiveUsersetFilterDirectBlock(plan))
 
 	for _, parent := range parentRelations {
 		blocks = append(blocks,

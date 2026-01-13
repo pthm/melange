@@ -10,10 +10,10 @@ type CheckBlocks struct {
 	// UsersetSubjectComputedCheck validates userset subject via tuple join
 	UsersetSubjectComputedCheck SelectStmt
 
-	ParentRelationBlocks []ParentRelationBlock   // TTU pattern checks
-	ImpliedFunctionCalls []ImpliedFunctionCheck  // Complex implied relation checks
+	ParentRelationBlocks []ParentRelationBlock    // TTU pattern checks
+	ImpliedFunctionCalls []ImpliedFunctionCheck   // Complex implied relation checks
 	IntersectionGroups   []IntersectionGroupCheck // AND groups for intersection patterns
-	HasStandaloneAccess  bool                    // Access paths outside intersections exist
+	HasStandaloneAccess  bool                     // Access paths outside intersections exist
 }
 
 // ParentRelationBlock represents a TTU check through a parent relation.

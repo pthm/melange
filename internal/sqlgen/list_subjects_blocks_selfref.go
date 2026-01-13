@@ -32,17 +32,18 @@ func BuildListSubjectsSelfRefUsersetBlocks(plan ListPlan) (SelfRefUsersetSubject
 	regularBlocks, usersetBase, usersetRecursive := buildSelfRefUsersetRegularBlocks(plan)
 
 	return SelfRefUsersetSubjectsBlockSet{
-		UsersetFilterBlocks:         filterBlocks,
-		UsersetFilterSelfBlock:      filterSelf,
-		UsersetFilterRecursiveBlock: filterRecursive,
-		RegularBlocks:               regularBlocks,
-		UsersetObjectsBaseBlock:     usersetBase,
+		UsersetFilterBlocks:          filterBlocks,
+		UsersetFilterSelfBlock:       filterSelf,
+		UsersetFilterRecursiveBlock:  filterRecursive,
+		RegularBlocks:                regularBlocks,
+		UsersetObjectsBaseBlock:      usersetBase,
 		UsersetObjectsRecursiveBlock: usersetRecursive,
 	}, nil
 }
 
-func buildSelfRefUsersetFilterBlocks(plan ListPlan) ([]TypedQueryBlock, *TypedQueryBlock, *TypedQueryBlock) {
-	blocks := []TypedQueryBlock{buildSelfRefUsersetFilterBaseBlock(plan)}
+func buildSelfRefUsersetFilterBlocks(plan ListPlan) (blocks []TypedQueryBlock, selfBlock, recursiveBlock *TypedQueryBlock) {
+	blocks = make([]TypedQueryBlock, 0, 8)
+	blocks = append(blocks, buildSelfRefUsersetFilterBaseBlock(plan))
 	blocks = append(blocks, buildSelfRefUsersetFilterIntersectionBlocks(plan)...)
 
 	return blocks, buildSelfRefUsersetFilterSelfBlock(plan), buildSelfRefUsersetFilterRecursiveBlock()
@@ -182,7 +183,7 @@ func buildSelfRefUsersetFilterRecursiveBlock() *TypedQueryBlock {
 }
 
 // buildSelfRefUsersetRegularBlocks builds blocks for the regular path (individual subjects).
-func buildSelfRefUsersetRegularBlocks(plan ListPlan) ([]TypedQueryBlock, *TypedQueryBlock, *TypedQueryBlock) {
+func buildSelfRefUsersetRegularBlocks(plan ListPlan) (blocks []TypedQueryBlock, baseBlock, recursiveBlock *TypedQueryBlock) {
 	exclusions := buildExclusionInput(
 		plan.Analysis,
 		ObjectID,
@@ -190,7 +191,8 @@ func buildSelfRefUsersetRegularBlocks(plan ListPlan) ([]TypedQueryBlock, *TypedQ
 		Col{Table: "t", Column: "subject_id"},
 	)
 
-	blocks := []TypedQueryBlock{buildSelfRefUsersetRegularDirectBlock(plan, exclusions)}
+	blocks = make([]TypedQueryBlock, 0, 8)
+	blocks = append(blocks, buildSelfRefUsersetRegularDirectBlock(plan, exclusions))
 	blocks = append(blocks, buildSelfRefUsersetRegularComplexClosureBlocks(plan, exclusions)...)
 	blocks = append(blocks, buildSelfRefUsersetRegularIntersectionClosureBlocks(plan)...)
 	blocks = append(blocks, buildSelfRefUsersetRegularExpansionBlock(plan, exclusions))

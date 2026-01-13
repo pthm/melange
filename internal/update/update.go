@@ -59,7 +59,7 @@ func CheckWithCache(ctx context.Context) (*Info, error) {
 
 // check fetches the latest release from GitHub
 func check(ctx context.Context) (*Info, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", githubAPIURL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", githubAPIURL, http.NoBody)
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +71,9 @@ func check(ctx context.Context) (*Info, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
@@ -134,7 +136,7 @@ func saveCache(info *Info) error {
 		return err
 	}
 
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 
@@ -143,7 +145,7 @@ func saveCache(info *Info) error {
 		return err
 	}
 
-	return os.WriteFile(filepath.Join(dir, cacheFile), data, 0644)
+	return os.WriteFile(filepath.Join(dir, cacheFile), data, 0o644)
 }
 
 // compareVersions compares two semver strings

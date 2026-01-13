@@ -1,9 +1,5 @@
 package sqlgen
 
-import (
-	"strings"
-)
-
 // =============================================================================
 // Self-Referential Userset Render Functions (List Subjects)
 // =============================================================================
@@ -123,5 +119,5 @@ func buildUsersetObjectsCTE(blocks SelfRefUsersetSubjectsBlockSet) string {
 	}
 	recursiveBlock := renderTypedQueryBlock(*blocks.UsersetObjectsRecursiveBlock)
 	recursiveSQL := formatQueryBlockSQL(recursiveBlock.Comments, recursiveBlock.Query.SQL())
-	return strings.Join([]string{baseSQL, recursiveSQL}, "\n            UNION ALL\n")
+	return baseSQL + "\n            UNION ALL\n" + recursiveSQL
 }

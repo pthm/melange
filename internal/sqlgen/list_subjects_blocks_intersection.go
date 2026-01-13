@@ -74,7 +74,7 @@ func BuildListSubjectsIntersectionBlocks(plan ListPlan) SubjectsIntersectionBloc
 func buildListSubjectsIntersectionRegularCandidates(plan ListPlan) []TypedQueryBlock {
 	excludeWildcard := plan.ExcludeWildcard()
 
-	var blocks []TypedQueryBlock
+	blocks := make([]TypedQueryBlock, 0, 8)
 	blocks = append(blocks, buildListSubjectsIntersectionBaseBlock(plan, excludeWildcard))
 	blocks = append(blocks, buildListSubjectsIntersectionPartBlocks(plan, excludeWildcard)...)
 	blocks = append(blocks, buildListSubjectsIntersectionUsersetPatternBlocks(plan, excludeWildcard)...)
@@ -258,7 +258,7 @@ func buildListSubjectsIntersectionPoolBlock(plan ListPlan, excludeWildcard bool)
 }
 
 func buildListSubjectsIntersectionUsersetCandidates(plan ListPlan) []TypedQueryBlock {
-	var blocks []TypedQueryBlock
+	blocks := make([]TypedQueryBlock, 0, 8)
 	blocks = append(blocks, buildListSubjectsIntersectionUsersetFilterBaseBlock(plan))
 	blocks = append(blocks, buildListSubjectsIntersectionUsersetFilterPartBlocks(plan)...)
 	blocks = append(blocks, buildListSubjectsIntersectionUsersetFilterTTUBlocks(plan)...)
@@ -324,7 +324,7 @@ func buildListSubjectsIntersectionUsersetFilterPartBlock(plan ListPlan, part Int
 
 		return TypedQueryBlock{
 			Comments: []string{fmt.Sprintf("-- Userset filter intersection part: via %s", part.ParentRelation.LinkingRelation)},
-			Query: buildUsersetFilterTTUSelectStmt(plan.ObjectType, part.ParentRelation.LinkingRelation, subjectExpr, relationMatch),
+			Query:    buildUsersetFilterTTUSelectStmt(plan.ObjectType, part.ParentRelation.LinkingRelation, subjectExpr, relationMatch),
 		}
 	}
 

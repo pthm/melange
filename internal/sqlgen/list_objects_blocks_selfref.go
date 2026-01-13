@@ -36,7 +36,8 @@ func BuildListObjectsSelfRefUsersetBlocks(plan ListPlan) (SelfRefUsersetBlockSet
 
 // buildSelfRefUsersetBaseBlocks builds the base case blocks for self-referential userset CTE.
 func buildSelfRefUsersetBaseBlocks(plan ListPlan) ([]TypedQueryBlock, error) {
-	blocks := []TypedQueryBlock{buildSelfRefUsersetDirectBlock(plan)}
+	blocks := make([]TypedQueryBlock, 0, 8)
+	blocks = append(blocks, buildSelfRefUsersetDirectBlock(plan))
 	blocks = append(blocks, buildSelfRefUsersetComplexClosureBlocks(plan)...)
 	blocks = append(blocks, buildSelfRefUsersetIntersectionClosureBlocks(plan)...)
 	blocks = append(blocks, buildSelfRefUsersetPatternBlocks(plan)...)

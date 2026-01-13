@@ -67,7 +67,7 @@ func renderDispatcherWithCases(fnName string, cases []DispatcherCase) string {
 		Name:    fnName,
 		Args:    dispatcherPublicArgs(),
 		Returns: "INTEGER",
-		Body: Raw("SELECT " + fnName + "_internal(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, ARRAY[]::TEXT[])"),
+		Body:    Raw("SELECT " + fnName + "_internal(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, ARRAY[]::TEXT[])"),
 		Header: []string{
 			"Generated dispatcher for " + fnName,
 			"Routes to specialized functions for all known type/relation pairs",
@@ -107,7 +107,7 @@ func functionNameForDispatcher(a RelationAnalysis, noWildcard bool) string {
 }
 
 func buildDispatcherCaseExpr(cases []DispatcherCase) CaseExpr {
-	var whens []CaseWhen
+	whens := make([]CaseWhen, 0, len(cases))
 	for _, c := range cases {
 		cond := AndExpr{Exprs: []Expr{
 			Eq{Left: ObjectType, Right: Lit(c.ObjectType)},
