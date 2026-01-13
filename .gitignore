@@ -49,9 +49,6 @@ specs/
 # CK index
 .ck/
 
-# Blog
-blog/
-!docs/content/blog/
 
 dist/
 **/dist/

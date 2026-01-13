@@ -37,27 +37,38 @@ func buildTupleLookupRelations(a RelationAnalysis) []string {
 }
 
 // GeneratedSQL contains all SQL generated for a schema.
-// This is applied atomically during migration.
+// This is applied atomically during migration to ensure consistent state.
 type GeneratedSQL struct {
 	// Functions contains CREATE OR REPLACE FUNCTION statements
-	// for each specialized check function.
+	// for each specialized check function (check_{type}_{relation}).
 	Functions []string
+
 	// NoWildcardFunctions contains CREATE OR REPLACE FUNCTION statements
-	// for no-wildcard variants of each specialized check function.
+	// for no-wildcard variants (check_{type}_{relation}_no_wildcard).
+	// These skip wildcard matching for performance-critical paths.
 	NoWildcardFunctions []string
 
 	// Dispatcher contains the check_permission dispatcher function
-	// that routes to specialized functions.
+	// that routes requests to specialized functions based on object type and relation.
 	Dispatcher string
 
 	// DispatcherNoWildcard contains the check_permission_no_wildcard dispatcher.
 	DispatcherNoWildcard string
 }
 
-// GenerateSQL generates specialized SQL functions for all relations.
-// The generated SQL includes:
-//   - Per-relation check functions (check_{type}_{relation})
-//   - A dispatcher that routes check_permission to specialized functions
+// GenerateSQL generates specialized SQL functions for all relations in the schema.
+//
+// For each relation, it generates:
+//   - A specialized check function that evaluates permission checks efficiently
+//   - A no-wildcard variant for scenarios where wildcards are disallowed
+//   - Dispatcher functions that route to the appropriate specialized function
+//
+// The inline parameter provides precomputed closure and userset data that is
+// inlined into the generated functions as VALUES clauses, eliminating runtime
+// table joins for this metadata.
+//
+// Returns an error if any function fails to generate, though this is rare
+// as the analysis phase validates generation feasibility.
 func GenerateSQL(analyses []RelationAnalysis, inline InlineSQLData) (GeneratedSQL, error) {
 	var result GeneratedSQL
 
@@ -130,7 +141,7 @@ func computeHasStandaloneAccess(a RelationAnalysis) bool {
 	return (a.Features.HasDirect || a.Features.HasUserset) && !hasIntersectionWithThis
 }
 
-// DispatcherData contains data for rendering dispatcher template.
+// DispatcherData contains data for rendering the dispatcher template.
 type DispatcherData struct {
 	FunctionName            string
 	HasSpecializedFunctions bool
@@ -138,6 +149,7 @@ type DispatcherData struct {
 }
 
 // DispatcherCase represents a single CASE WHEN branch in the dispatcher.
+// Each case routes a specific (object_type, relation) pair to its specialized function.
 type DispatcherCase struct {
 	ObjectType        string
 	Relation          string
@@ -145,13 +157,14 @@ type DispatcherCase struct {
 }
 
 // CollectFunctionNames returns all function names that will be generated for the given analyses.
-// This is used for migration tracking and orphan detection.
+// This is used for migration tracking and orphan detection to identify stale functions
+// that need to be dropped when the schema changes.
 //
 // The returned list includes:
 //   - Specialized check functions: check_{type}_{relation}
 //   - No-wildcard check variants: check_{type}_{relation}_no_wildcard
 //   - Specialized list functions: list_{type}_{relation}_objects, list_{type}_{relation}_subjects
-//   - Dispatcher functions (always included)
+//   - Dispatcher functions (always included): check_permission, list_accessible_objects, etc.
 func CollectFunctionNames(analyses []RelationAnalysis) []string {
 	var names []string
 

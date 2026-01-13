@@ -1,36 +1,48 @@
 package sqlgen
 
-// ExcludedParentRelation represents a TTU exclusion pattern.
+// ExcludedParentRelation represents a TTU exclusion pattern like "but not viewer from parent".
+// The exclusion is satisfied when a tuple exists linking the object to a parent object
+// that grants the excluded relation.
 type ExcludedParentRelation struct {
-	Relation            string
-	LinkingRelation     string
-	AllowedLinkingTypes []string
+	Relation            string   // The relation to check on the parent (e.g., "viewer")
+	LinkingRelation     string   // The relation linking to the parent (e.g., "parent")
+	AllowedLinkingTypes []string // Object types the linking relation can point to
 }
 
 // ExcludedIntersectionPart represents one part of an intersection exclusion.
+// For "but not (editor and owner)", there would be two parts: one for editor, one for owner.
 type ExcludedIntersectionPart struct {
-	Relation         string
-	ExcludedRelation string
-	ParentRelation   *ExcludedParentRelation
+	Relation         string                   // The relation to check
+	ExcludedRelation string                   // Optional nested exclusion (e.g., "editor but not owner")
+	ParentRelation   *ExcludedParentRelation  // Optional TTU pattern in the intersection
 }
 
-// ExcludedIntersectionGroup represents a complete intersection exclusion.
+// ExcludedIntersectionGroup represents a complete intersection exclusion like "but not (A and B)".
+// Access is denied if ALL parts in the group are satisfied.
 type ExcludedIntersectionGroup struct {
 	Parts []ExcludedIntersectionPart
 }
 
 // ExclusionConfig holds all exclusion rules for a query.
+// It classifies exclusions by complexity and generates appropriate SQL predicates.
 type ExclusionConfig struct {
-	ObjectType string
+	ObjectType string // The object type being checked
 
-	ObjectIDExpr    Expr
-	SubjectTypeExpr Expr
-	SubjectIDExpr   Expr
+	ObjectIDExpr    Expr // Expression for the object ID (typically a column or parameter)
+	SubjectTypeExpr Expr // Expression for the subject type
+	SubjectIDExpr   Expr // Expression for the subject ID
 
-	SimpleExcludedRelations  []string
+	// SimpleExcludedRelations can use direct tuple lookups (NOT EXISTS).
+	SimpleExcludedRelations []string
+
+	// ComplexExcludedRelations need check_permission_internal calls.
 	ComplexExcludedRelations []string
-	ExcludedParentRelations  []ExcludedParentRelation
-	ExcludedIntersection     []ExcludedIntersectionGroup
+
+	// ExcludedParentRelations represent TTU exclusions (e.g., "but not viewer from parent").
+	ExcludedParentRelations []ExcludedParentRelation
+
+	// ExcludedIntersection represents intersection exclusions (e.g., "but not (A and B)").
+	ExcludedIntersection []ExcludedIntersectionGroup
 }
 
 // HasExclusions returns true if any exclusion rules are configured.
@@ -77,7 +89,14 @@ func (c ExclusionConfig) ttuLinkQuery(rel ExcludedParentRelation) *TupleQuery {
 	return q
 }
 
-// BuildPredicates returns the exclusion predicates as Expr slices.
+// BuildPredicates converts exclusion rules into SQL predicates.
+//
+// Simple exclusions become NOT EXISTS subqueries checking for direct tuples.
+// Complex exclusions become check_permission_internal(...) = 0 calls.
+// TTU exclusions check for linking tuples where the parent grants the excluded relation.
+// Intersection exclusions become NOT (part1 AND part2 AND ...) expressions.
+//
+// All predicates are returned as a slice that should be ANDed into the WHERE clause.
 func (c ExclusionConfig) BuildPredicates() []Expr {
 	if !c.HasExclusions() {
 		return nil
@@ -152,6 +171,8 @@ func simpleExclusionQuery(objectType, relation string, objectID, subjectType, su
 }
 
 // SimpleExclusion creates a NOT EXISTS exclusion for a simple "but not" rule.
+// This checks for the absence of a tuple granting the excluded relation to the subject.
+// Wildcards are handled: if a wildcard tuple exists for the excluded relation, access is denied.
 func SimpleExclusion(objectType, relation string, objectID, subjectType, subjectID Expr) Expr {
 	return simpleExclusionQuery(objectType, relation, objectID, subjectType, subjectID)
 }
