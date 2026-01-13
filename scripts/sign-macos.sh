@@ -113,6 +113,18 @@ elif load_from_1password; then
 
 # Mode 3: Fallback to codesign with keychain (signing only)
 else
+    # Fail if notarization was requested but credentials aren't available
+    if [[ "$NOTARIZE" == "--notarize" ]]; then
+        echo "ERROR: Notarization requested but credentials not available"
+        echo "  - Neither QUILL_SIGN_P12 environment variable is set"
+        echo "  - Nor 1Password credentials could be loaded"
+        echo ""
+        echo "To fix, ensure one of:"
+        echo "  1. Set environment variables: QUILL_SIGN_P12, QUILL_SIGN_PASSWORD, QUILL_NOTARY_KEY, QUILL_NOTARY_KEY_ID, QUILL_NOTARY_ISSUER"
+        echo "  2. Sign in to 1Password CLI and ensure 'Apple Developer ID' and 'App Store Connect API Key' items exist in 'Developer' vault"
+        exit 1
+    fi
+
     echo "Signing with codesign (keychain mode): $BINARY"
     codesign --sign "$IDENTITY" \
         --options runtime \
@@ -126,8 +138,25 @@ else
     exit 0
 fi
 
+# Verify notarization credentials if notarization was requested
+if [[ "$NOTARIZE" == "--notarize" ]]; then
+    if [[ -z "${QUILL_NOTARY_KEY:-}" ]] || [[ -z "${QUILL_NOTARY_KEY_ID:-}" ]] || [[ -z "${QUILL_NOTARY_ISSUER:-}" ]]; then
+        echo "ERROR: Notarization requested but notarization credentials are incomplete"
+        echo "  Missing credentials:"
+        [[ -z "${QUILL_NOTARY_KEY:-}" ]] && echo "    - QUILL_NOTARY_KEY (path to .p8 file)"
+        [[ -z "${QUILL_NOTARY_KEY_ID:-}" ]] && echo "    - QUILL_NOTARY_KEY_ID"
+        [[ -z "${QUILL_NOTARY_ISSUER:-}" ]] && echo "    - QUILL_NOTARY_ISSUER"
+        echo ""
+        echo "Ensure 1Password 'App Store Connect API Key' item in 'Developer' vault has:"
+        echo "  - Document: .p8 file attached"
+        echo "  - Field: 'Key ID'"
+        echo "  - Field: 'Issuer ID'"
+        exit 1
+    fi
+fi
+
 # Use quill for signing (and optionally notarization)
-if [[ "$NOTARIZE" == "--notarize" ]] && [[ -n "${QUILL_NOTARY_KEY:-}" ]]; then
+if [[ "$NOTARIZE" == "--notarize" ]]; then
     echo "Signing and notarizing with quill: $BINARY"
     quill sign-and-notarize "$BINARY" -vv
 else

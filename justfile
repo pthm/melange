@@ -58,6 +58,7 @@ release VERSION="" ALLOW_DIRTY="":
         echo "VERSION is required (e.g. just release VERSION=1.2.3)"
         exit 1
     fi
+    just _check-1password
     just release-prepare {{VERSION}} {{ALLOW_DIRTY}}
     # Run tests BEFORE tagging (uses workspace for local resolution)
     just test-openfga
@@ -137,7 +138,7 @@ release VERSION="" ALLOW_DIRTY="":
 # Build release snapshot for local testing (no publish)
 [group('Release')]
 [doc('Build release artifacts locally without publishing')]
-release-snapshot:
+release-snapshot: _check-1password
     #!/usr/bin/env bash
     set -euo pipefail
     if [ -z "${GITHUB_TOKEN:-}" ]; then
@@ -153,7 +154,7 @@ release-snapshot:
 # Build release locally with GoReleaser (without publishing)
 [group('Release')]
 [doc('Build and package release locally, skipping publish step')]
-release-local:
+release-local: _check-1password
     #!/usr/bin/env bash
     set -euo pipefail
     if [ -z "${GITHUB_TOKEN:-}" ]; then
@@ -194,6 +195,42 @@ _restore-replace-directive:
     @awk '/^\/\/ Development tools/ { print "// Use local melange module during development instead of published version"; print "replace github.com/pthm/melange/melange => ./melange"; print ""; } { print }' go.mod > go.mod.tmp
     @mv go.mod.tmp go.mod
     @go mod tidy
+
+[group('Release')]
+[private]
+[doc('Verify 1Password CLI is signed in for notarization')]
+_check-1password:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Skip check if not on macOS
+    if [[ "$(uname)" != "Darwin" ]]; then
+        exit 0
+    fi
+    # Skip check if credentials are already in environment
+    if [[ -n "${QUILL_SIGN_P12:-}" ]] && [[ -n "${QUILL_NOTARY_KEY:-}" ]]; then
+        echo "✓ Using credentials from environment variables"
+        exit 0
+    fi
+    # Check if 1Password CLI is available
+    if ! command -v op &> /dev/null; then
+        echo "⚠️  1Password CLI not found. Install it for automatic credential loading:"
+        echo "   brew install 1password-cli"
+        echo ""
+        echo "Or set environment variables manually:"
+        echo "   QUILL_SIGN_P12, QUILL_SIGN_PASSWORD, QUILL_NOTARY_KEY, QUILL_NOTARY_KEY_ID, QUILL_NOTARY_ISSUER"
+        exit 1
+    fi
+    # Check if signed in to 1Password
+    if ! op account list &> /dev/null; then
+        echo "❌ 1Password CLI is not signed in"
+        echo ""
+        echo "Sign in to 1Password by running:"
+        echo "   eval \$(op signin)"
+        echo ""
+        echo "Then run this command again."
+        exit 1
+    fi
+    echo "✓ 1Password CLI is signed in"
 
 [group('Release')]
 [private]
@@ -287,7 +324,7 @@ build-signed: build
 
 # Build, sign, and notarize the binary (macOS only, requires 1Password or env vars)
 [group('Build')]
-build-notarized: build
+build-notarized: _check-1password build
     mise exec -- ./scripts/sign-macos.sh bin/melange --notarize
 
 # Generate root THIRD_PARTY_NOTICES from go-licenses output
