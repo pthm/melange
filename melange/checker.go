@@ -422,7 +422,7 @@ func sqlState(err error) string {
 //
 // Uses a recursive CTE to walk the permission graph in a single query,
 // providing 10-50x improvement over N+1 patterns on large datasets.
-func (c *Checker) ListObjects(ctx context.Context, subject SubjectLike, relation RelationLike, objectType ObjectType, page PageOptions) ([]string, *string, error) {
+func (c *Checker) ListObjects(ctx context.Context, subject SubjectLike, relation RelationLike, objectType ObjectType, page PageOptions) (ids []string, nextCursor *string, err error) {
 	if c.validateUserset {
 		if err := c.validateUsersetSubject(ctx, c.q, subject.FGASubject()); err != nil {
 			return nil, nil, err
@@ -464,8 +464,7 @@ func (c *Checker) ListObjects(ctx context.Context, subject SubjectLike, relation
 	}
 	defer func() { _ = rows.Close() }()
 
-	ids := make([]string, 0, 16)
-	var nextCursor *string
+	ids = make([]string, 0, 16)
 	for rows.Next() {
 		var id string
 		var cursor *string
@@ -515,7 +514,7 @@ func (c *Checker) ListObjectsWithContextualTuples(
 	objectType ObjectType,
 	tuples []ContextualTuple,
 	page PageOptions,
-) ([]string, *string, error) {
+) (ids []string, nextCursor *string, err error) {
 	if len(tuples) == 0 {
 		return c.ListObjects(ctx, subject, relation, objectType, page)
 	}
@@ -569,8 +568,7 @@ func (c *Checker) ListObjectsWithContextualTuples(
 	}
 	defer func() { _ = rows.Close() }()
 
-	ids := make([]string, 0, 16)
-	var nextCursor *string
+	ids = make([]string, 0, 16)
 	for rows.Next() {
 		var id string
 		var cursor *string
@@ -602,7 +600,7 @@ func (c *Checker) ListObjectsWithContextualTuples(
 //
 // Uses a recursive CTE to walk the permission graph in a single query,
 // providing 10-50x improvement over N+1 patterns on large datasets.
-func (c *Checker) ListSubjects(ctx context.Context, object ObjectLike, relation RelationLike, subjectType ObjectType, page PageOptions) ([]string, *string, error) {
+func (c *Checker) ListSubjects(ctx context.Context, object ObjectLike, relation RelationLike, subjectType ObjectType, page PageOptions) (ids []string, nextCursor *string, err error) {
 	if c.validateRequest {
 		if err := c.validateListUsersRequest(ctx, c.q, relation.FGARelation(), object.FGAObject(), subjectType); err != nil {
 			return nil, nil, err
@@ -638,8 +636,7 @@ func (c *Checker) ListSubjects(ctx context.Context, object ObjectLike, relation 
 	}
 	defer func() { _ = rows.Close() }()
 
-	ids := make([]string, 0, 16)
-	var nextCursor *string
+	ids = make([]string, 0, 16)
 	for rows.Next() {
 		var id string
 		var cursor *string
@@ -689,7 +686,7 @@ func (c *Checker) ListSubjectsWithContextualTuples(
 	subjectType ObjectType,
 	tuples []ContextualTuple,
 	page PageOptions,
-) ([]string, *string, error) {
+) (ids []string, nextCursor *string, err error) {
 	if len(tuples) == 0 {
 		return c.ListSubjects(ctx, object, relation, subjectType, page)
 	}
@@ -737,8 +734,7 @@ func (c *Checker) ListSubjectsWithContextualTuples(
 	}
 	defer func() { _ = rows.Close() }()
 
-	ids := make([]string, 0, 16)
-	var nextCursor *string
+	ids = make([]string, 0, 16)
 	for rows.Next() {
 		var id string
 		var cursor *string

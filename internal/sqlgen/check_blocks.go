@@ -287,7 +287,7 @@ func orExprs(exprs []Expr) Expr {
 }
 
 func buildUsersetSubjectChecks(plan CheckPlan) (selfCheck, computedCheck SelectStmt) {
-	closureTable := ClosureTable(plan.Inline.ClosureRows, plan.Inline.ClosureValues, "c")
+	closureTable := ClosureTable(plan.Inline.ClosureRows, "c")
 
 	selfCheck = SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
@@ -315,7 +315,7 @@ func buildUsersetSubjectChecks(plan CheckPlan) (selfCheck, computedCheck SelectS
 			},
 			{
 				Type:      "INNER",
-				TableExpr: UsersetTable(plan.Inline.UsersetRows, plan.Inline.UsersetValues, "m"),
+				TableExpr: UsersetTable(plan.Inline.UsersetRows, "m"),
 				On: And(
 					Eq{Left: Col{Table: "m", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 					Eq{Left: Col{Table: "m", Column: "relation"}, Right: Col{Table: "c", Column: "satisfying_relation"}},
@@ -324,7 +324,7 @@ func buildUsersetSubjectChecks(plan CheckPlan) (selfCheck, computedCheck SelectS
 			},
 			{
 				Type:      "INNER",
-				TableExpr: ClosureTable(plan.Inline.ClosureRows, plan.Inline.ClosureValues, "subj_c"),
+				TableExpr: ClosureTable(plan.Inline.ClosureRows, "subj_c"),
 				On: And(
 					Eq{Left: Col{Table: "subj_c", Column: "object_type"}, Right: Col{Table: "t", Column: "subject_type"}},
 					Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: SubstringUsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}},

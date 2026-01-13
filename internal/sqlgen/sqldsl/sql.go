@@ -251,26 +251,6 @@ func (v ValuesTable) TableAlias() string {
 	return v.Alias
 }
 
-// ClosureValuesTable creates a standard closure VALUES table.
-// The table has columns: object_type, relation, satisfying_relation
-func ClosureValuesTable(values, alias string) ValuesTable {
-	return ValuesTable{
-		Values:  values,
-		Alias:   alias,
-		Columns: []string{"object_type", "relation", "satisfying_relation"},
-	}
-}
-
-// UsersetValuesTable creates a standard userset VALUES table.
-// The table has columns: object_type, relation, subject_type, subject_relation
-func UsersetValuesTable(values, alias string) ValuesTable {
-	return ValuesTable{
-		Values:  values,
-		Alias:   alias,
-		Columns: []string{"object_type", "relation", "subject_type", "subject_relation"},
-	}
-}
-
 // =============================================================================
 // Typed Values Tables (Phase 5 - Expr-based inline data)
 // =============================================================================
@@ -380,20 +360,14 @@ func TypedUsersetValuesTable(rows []ValuesRow, alias string) TypedValuesTable {
 // These helpers support gradual migration from string-based VALUES to typed rows.
 // They prefer typed rows when available, falling back to string-based values.
 
-// ClosureTable returns a closure VALUES table, preferring typed rows when available.
-func ClosureTable(rows []ValuesRow, values, alias string) TableExpr {
-	if len(rows) > 0 {
-		return TypedClosureValuesTable(rows, alias)
-	}
-	return ClosureValuesTable(values, alias)
+// ClosureTable returns a typed closure VALUES table.
+func ClosureTable(rows []ValuesRow, alias string) TableExpr {
+	return TypedClosureValuesTable(rows, alias)
 }
 
-// UsersetTable returns a userset VALUES table, preferring typed rows when available.
-func UsersetTable(rows []ValuesRow, values, alias string) TableExpr {
-	if len(rows) > 0 {
-		return TypedUsersetValuesTable(rows, alias)
-	}
-	return UsersetValuesTable(values, alias)
+// UsersetTable returns a typed userset VALUES table.
+func UsersetTable(rows []ValuesRow, alias string) TableExpr {
+	return TypedUsersetValuesTable(rows, alias)
 }
 
 // =============================================================================

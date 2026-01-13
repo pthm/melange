@@ -928,27 +928,3 @@ func TestBuildUsersetTypedRows(t *testing.T) {
 		}
 	})
 }
-
-func TestTypedValuesTableConsistencyWithStringBased(t *testing.T) {
-	// Verify that typed and string-based VALUES produce equivalent SQL
-	closureRows := []ClosureRow{
-		{ObjectType: "doc", Relation: "viewer", SatisfyingRelation: "editor"},
-		{ObjectType: "doc", Relation: "viewer", SatisfyingRelation: "viewer"},
-	}
-
-	// String-based (existing)
-	stringValues := BuildClosureValues(closureRows)
-	stringTable := ClosureValuesTable(stringValues, "c")
-
-	// Typed (new)
-	typedRows := BuildClosureTypedRows(closureRows)
-	typedTable := TypedClosureValuesTable(typedRows, "c")
-
-	// Both should produce the same SQL
-	stringSQL := stringTable.SQL()
-	typedSQL := typedTable.SQL()
-
-	if stringSQL != typedSQL {
-		t.Errorf("String-based and typed VALUES tables differ:\nString: %s\nTyped:  %s", stringSQL, typedSQL)
-	}
-}

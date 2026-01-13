@@ -41,7 +41,7 @@ func ListObjectsUsersetSubjectQuery(input ListObjectsUsersetSubjectInput) (strin
 	// Build the closure EXISTS subquery
 	closureExistsStmt := SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
-		FromExpr:    ClosureTable(input.ClosureRows, input.ClosureValues, "c"),
+		FromExpr:    ClosureTable(input.ClosureRows, "c"),
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: SubjectType},
 			Eq{Left: Col{Table: "c", Column: "relation"}, Right: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}},
@@ -261,7 +261,7 @@ func ListObjectsSelfCandidateQuery(input ListObjectsSelfCandidateInput) (string,
 	// Build the closure EXISTS subquery
 	closureExistsStmt := SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
-		FromExpr:    ClosureTable(input.ClosureRows, input.ClosureValues, "c"),
+		FromExpr:    ClosureTable(input.ClosureRows, "c"),
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(input.ObjectType)},
 			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(input.Relation)},
@@ -368,7 +368,7 @@ func ListSubjectsUsersetFilterQuery(input ListSubjectsUsersetFilterInput) (strin
 	// Build the closure EXISTS subquery
 	closureExistsStmt := SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
-		FromExpr:    ClosureTable(input.ClosureRows, input.ClosureValues, "subj_c"),
+		FromExpr:    ClosureTable(input.ClosureRows, "subj_c"),
 		Where: And(
 			Eq{Left: Col{Table: "subj_c", Column: "object_type"}, Right: input.FilterTypeExpr},
 			Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: SubstringUsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}},
@@ -422,7 +422,7 @@ func ListSubjectsSelfCandidateQuery(input ListSubjectsSelfCandidateInput) (strin
 	// Build the closure EXISTS subquery
 	closureExistsStmt := SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
-		FromExpr:    ClosureTable(input.ClosureRows, input.ClosureValues, "c"),
+		FromExpr:    ClosureTable(input.ClosureRows, "c"),
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(input.ObjectType)},
 			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(input.Relation)},

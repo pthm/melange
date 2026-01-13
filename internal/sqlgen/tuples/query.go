@@ -174,17 +174,6 @@ func (q *TupleQuery) JoinTuples(alias string, on ...sqldsl.Expr) *TupleQuery {
 	return q.InnerJoin("melange_tuples", alias, on...)
 }
 
-// JoinClosure adds an INNER JOIN to an inline VALUES closure table.
-// closureValues should be in the format "('type1','rel1','sat1'),('type2','rel2','sat2')"
-func (q *TupleQuery) JoinClosure(alias, closureValues string, on ...sqldsl.Expr) *TupleQuery {
-	q.joins = append(q.joins, sqldsl.JoinClause{
-		Type:      "INNER",
-		TableExpr: sqldsl.ClosureValuesTable(closureValues, alias),
-		On:        sqldsl.And(on...),
-	})
-	return q
-}
-
 // JoinRaw adds a JOIN with a raw table expression.
 func (q *TupleQuery) JoinRaw(joinType, tableExpr string, on ...sqldsl.Expr) *TupleQuery {
 	q.joins = append(q.joins, sqldsl.JoinClause{

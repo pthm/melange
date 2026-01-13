@@ -70,7 +70,7 @@ func buildListSubjectsUsersetFilterBlocks(plan ListPlan) (blocks []TypedQueryBlo
 func buildListSubjectsUsersetFilterDirectBlock(plan ListPlan) TypedQueryBlock {
 	closureExistsStmt := SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
-		FromExpr:    ClosureTable(plan.Inline.ClosureRows, plan.Inline.ClosureValues, "subj_c"),
+		FromExpr:    ClosureTable(plan.Inline.ClosureRows, "subj_c"),
 		Where: And(
 			Eq{Left: Col{Table: "subj_c", Column: "object_type"}, Right: Param("v_filter_type")},
 			Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: SubstringUsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}},
@@ -120,7 +120,7 @@ func buildListSubjectsUsersetFilterDirectBlock(plan ListPlan) TypedQueryBlock {
 func buildListSubjectsUsersetFilterSelfBlock(plan ListPlan) *TypedQueryBlock {
 	closureStmt := SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
-		FromExpr:    ClosureTable(plan.Inline.ClosureRows, plan.Inline.ClosureValues, "c"),
+		FromExpr:    ClosureTable(plan.Inline.ClosureRows, "c"),
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(plan.Relation)},

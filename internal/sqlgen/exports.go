@@ -112,8 +112,6 @@ var (
 	Not                             = sqldsl.Not
 	ExistsExpr                      = sqldsl.ExistsExpr
 	TableAs                         = sqldsl.TableAs
-	ClosureValuesTable              = sqldsl.ClosureValuesTable
-	UsersetValuesTable              = sqldsl.UsersetValuesTable
 	TypedClosureValuesTable         = sqldsl.TypedClosureValuesTable
 	TypedUsersetValuesTable         = sqldsl.TypedUsersetValuesTable
 	ClosureTable                    = sqldsl.ClosureTable
@@ -225,7 +223,6 @@ var (
 	BuildInlineSQLData    = inline.BuildInlineSQLData
 	BuildClosureTypedRows = inline.BuildClosureTypedRows
 	BuildUsersetTypedRows = inline.BuildUsersetTypedRows
-	BuildClosureValues    = inline.BuildClosureValues
 )
 
 // Package-internal lowercase aliases for pagination helpers used by render functions.

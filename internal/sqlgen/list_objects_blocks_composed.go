@@ -102,7 +102,7 @@ func BuildListObjectsComposedBlocks(plan ListPlan) (ComposedObjectsBlockSet, err
 func buildComposedObjectsSelfBlock(plan ListPlan) (*TypedQueryBlock, error) {
 	closureStmt := SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
-		FromExpr:    ClosureTable(plan.Inline.ClosureRows, plan.Inline.ClosureValues, "c"),
+		FromExpr:    ClosureTable(plan.Inline.ClosureRows, "c"),
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(plan.Relation)},
