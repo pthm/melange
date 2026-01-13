@@ -24,7 +24,7 @@ Inspired by [OpenFGA](https://openfga.dev) and built on ideas from [pgFGA](https
 
 > **📚 Full Documentation**
 >
-> Visit **[melange.pthm.dev](https://melange.pthm.dev)** for comprehensive guides, API reference, and examples.
+> Visit **[melange.sh](https://melange.sh)** for comprehensive guides, API reference, and examples.
 
 ---
 
@@ -226,7 +226,7 @@ For bug reports and feature requests, please [open an issue](https://github.com/
 
 ## Resources
 
-- **[Documentation](https://melange.pthm.dev)** — Guides, API reference, and examples
+- **[Documentation](https://melange.sh)** — Guides, API reference, and examples
 - **[OpenFGA](https://openfga.dev)** — The authorization model Melange implements
 - **[Zanzibar Paper](https://research.google/pubs/pub48190/)** — Google's original authorization system
 - **[pgFGA](https://github.com/rover-app/pgfga)** — PostgreSQL FGA implementation that inspired this project
