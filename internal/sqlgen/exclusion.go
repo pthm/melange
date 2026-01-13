@@ -12,9 +12,9 @@ type ExcludedParentRelation struct {
 // ExcludedIntersectionPart represents one part of an intersection exclusion.
 // For "but not (editor and owner)", there would be two parts: one for editor, one for owner.
 type ExcludedIntersectionPart struct {
-	Relation         string                   // The relation to check
-	ExcludedRelation string                   // Optional nested exclusion (e.g., "editor but not owner")
-	ParentRelation   *ExcludedParentRelation  // Optional TTU pattern in the intersection
+	Relation         string                  // The relation to check
+	ExcludedRelation string                  // Optional nested exclusion (e.g., "editor but not owner")
+	ParentRelation   *ExcludedParentRelation // Optional TTU pattern in the intersection
 }
 
 // ExcludedIntersectionGroup represents a complete intersection exclusion like "but not (A and B)".
