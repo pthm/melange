@@ -9,6 +9,7 @@ experimental = true
 # Release automation
 goreleaser = "latest"
 node = "lts"
+pnpm = "latest"
 
 # macOS code signing and notarization
 "ubi:anchore/quill" = "latest"

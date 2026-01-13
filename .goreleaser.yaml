@@ -69,7 +69,7 @@ archives:
       - THIRD_PARTY_NOTICES
 
 checksum:
-  name_template: 'checksums.txt'
+  name_template: "checksums.txt"
   algorithm: sha256
 
 release:
@@ -86,9 +86,9 @@ changelog:
   sort: asc
   filters:
     exclude:
-      - '^docs:'
-      - '^test:'
-      - '^chore:'
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
       - Merge pull request
       - Merge branch
 
@@ -107,4 +107,4 @@ publishers:
   - name: npm
     ids:
       - default
-    cmd: sh -c 'cd clients/typescript && npm run build && npm publish --access public'
+    cmd: sh -c 'cd clients/typescript && pnpm build && pnpm publish --access public'
