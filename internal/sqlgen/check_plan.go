@@ -1,20 +1,5 @@
 package sqlgen
 
-// =============================================================================
-// Check Plan Layer
-// =============================================================================
-//
-// This file implements the Plan layer for check function generation.
-// The Plan layer computes flags and normalized inputs from RelationAnalysis
-// and InlineSQLData, using unified analysis outputs (Capabilities).
-//
-// Architecture: Plan → Blocks → Render
-// - Plan: compute flags and normalized inputs (this file)
-// - Blocks: build QueryBlock/SelectStmt values using DSL only
-// - Render: produce SQL/PLpgSQL strings
-//
-// CheckPlan contains pure data (no pre-rendered SQL fragments).
-
 // CheckPlan contains all computed data needed to generate a check function.
 // This separates plan computation from block building and rendering.
 // Unlike CheckFunctionData, this contains no pre-rendered SQL fragments.
@@ -122,27 +107,6 @@ func BuildCheckPlan(a RelationAnalysis, inline InlineSQLData, noWildcard bool) C
 	return plan
 }
 
-// NeedsRecursiveFunction returns true if this check requires recursive PL/pgSQL.
-func (p CheckPlan) NeedsRecursiveFunction() bool {
-	return p.NeedsPLpgSQL && !p.HasIntersection
-}
-
-// NeedsIntersectionFunction returns true if this check handles intersection patterns.
-func (p CheckPlan) NeedsIntersectionFunction() bool {
-	return p.HasIntersection
-}
-
-// NeedsRecursiveIntersectionFunction returns true if this check has both
-// recursive patterns and intersection patterns.
-func (p CheckPlan) NeedsRecursiveIntersectionFunction() bool {
-	return p.NeedsPLpgSQL && p.HasIntersection
-}
-
-// NeedsDirectFunction returns true if this check can use simple direct SQL.
-func (p CheckPlan) NeedsDirectFunction() bool {
-	return !p.NeedsPLpgSQL && !p.HasIntersection
-}
-
 // DetermineCheckFunctionType returns which type of check function to generate.
 // Returns one of: "direct", "intersection", "recursive", "recursive_intersection"
 func (p CheckPlan) DetermineCheckFunctionType() string {
@@ -156,9 +120,4 @@ func (p CheckPlan) DetermineCheckFunctionType() string {
 	default:
 		return "recursive_intersection"
 	}
-}
-
-// HasAccessPaths returns true if the relation has any access paths (direct, userset, etc).
-func (p CheckPlan) HasAccessPaths() bool {
-	return p.HasDirect || p.HasImplied || p.HasUserset || p.HasRecursive
 }

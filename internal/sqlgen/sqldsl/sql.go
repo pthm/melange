@@ -2,6 +2,7 @@ package sqldsl
 
 import (
 	"fmt"
+	"math"
 	"strings"
 )
 
@@ -12,14 +13,13 @@ func Sqlf(format string, args ...any) string {
 	lines := strings.Split(s, "\n")
 
 	// Find minimum indentation (ignoring empty lines)
-	minIndent := 1000
+	minIndent := math.MaxInt
 	for _, line := range lines {
 		trimmed := strings.TrimLeft(line, " \t")
 		if trimmed == "" {
 			continue
 		}
-		indent := len(line) - len(trimmed)
-		if indent < minIndent {
+		if indent := len(line) - len(trimmed); indent < minIndent {
 			minIndent = indent
 		}
 	}
@@ -60,29 +60,34 @@ type JoinClause struct {
 
 // SQL renders the JOIN clause.
 func (j JoinClause) SQL() string {
-	// Use TableExpr if provided, otherwise fall back to Table string
-	var tableSQL string
-	if j.TableExpr != nil {
-		tableSQL = j.TableExpr.TableSQL()
-	} else {
-		tableSQL = j.Table
-		if j.Alias != "" {
-			tableSQL += " AS " + j.Alias
-		}
-	}
+	tableSQL := j.tableSQL()
+	joinKeyword := j.joinKeyword()
 
-	// Determine join keyword - don't add "JOIN" if Type already contains it
-	// (e.g., "CROSS JOIN LATERAL" should not become "CROSS JOIN LATERAL JOIN")
-	joinKeyword := j.Type + " JOIN"
-	if strings.Contains(j.Type, "JOIN") {
-		joinKeyword = j.Type
-	}
-
-	// CROSS JOIN doesn't have an ON clause
-	if j.Type == "CROSS" || strings.HasPrefix(j.Type, "CROSS") || j.On == nil {
+	if j.isCrossJoin() || j.On == nil {
 		return joinKeyword + " " + tableSQL
 	}
 	return joinKeyword + " " + tableSQL + " ON " + j.On.SQL()
+}
+
+func (j JoinClause) tableSQL() string {
+	if j.TableExpr != nil {
+		return j.TableExpr.TableSQL()
+	}
+	if j.Alias != "" {
+		return j.Table + " AS " + j.Alias
+	}
+	return j.Table
+}
+
+func (j JoinClause) joinKeyword() string {
+	if strings.Contains(j.Type, "JOIN") {
+		return j.Type
+	}
+	return j.Type + " JOIN"
+}
+
+func (j JoinClause) isCrossJoin() bool {
+	return j.Type == "CROSS" || strings.HasPrefix(j.Type, "CROSS")
 }
 
 // SelectStmt represents a SELECT query.
@@ -148,9 +153,9 @@ func (s SelectStmt) joinsSQL() string {
 	if len(s.Joins) == 0 {
 		return ""
 	}
-	var parts []string
-	for _, j := range s.Joins {
-		parts = append(parts, j.SQL())
+	parts := make([]string, len(s.Joins))
+	for i, j := range s.Joins {
+		parts[i] = j.SQL()
 	}
 	return strings.Join(parts, "\n")
 }
@@ -201,10 +206,9 @@ func (i IntersectSubquery) TableSQL() string {
 	if len(i.Queries) == 1 {
 		return "(" + i.Queries[0].SQL() + ") AS " + i.Alias
 	}
-
-	var parts []string
-	for _, q := range i.Queries {
-		parts = append(parts, q.SQL())
+	parts := make([]string, len(i.Queries))
+	for j, q := range i.Queries {
+		parts[j] = q.SQL()
 	}
 	return "(\n" + strings.Join(parts, "\nINTERSECT\n") + "\n) AS " + i.Alias
 }
@@ -318,21 +322,26 @@ func (v TypedValuesTable) SQL() string {
 // valuesSQL renders the rows portion of the VALUES clause.
 func (v TypedValuesTable) valuesSQL() string {
 	if len(v.Rows) == 0 {
-		// Return a NULL row with correct column count based on Columns
-		if len(v.Columns) > 0 {
-			nulls := make([]string, len(v.Columns))
-			for i := range nulls {
-				nulls[i] = "NULL::TEXT"
-			}
-			return "(" + strings.Join(nulls, ", ") + ")"
-		}
-		return "(NULL::TEXT)"
+		return v.nullRowSQL()
 	}
 	parts := make([]string, len(v.Rows))
 	for i, row := range v.Rows {
 		parts[i] = row.SQL()
 	}
 	return strings.Join(parts, ", ")
+}
+
+// nullRowSQL generates a placeholder row of NULLs matching the column count.
+func (v TypedValuesTable) nullRowSQL() string {
+	count := len(v.Columns)
+	if count == 0 {
+		count = 1
+	}
+	nulls := make([]string, count)
+	for i := range nulls {
+		nulls[i] = "NULL::TEXT"
+	}
+	return "(" + strings.Join(nulls, ", ") + ")"
 }
 
 // TableSQL implements TableExpr.
@@ -457,19 +466,16 @@ type QueryBlock struct {
 // RenderBlocks renders multiple query blocks sequentially.
 // Each block is indented and comments are rendered as SQL comments.
 func RenderBlocks(blocks []QueryBlock) string {
-	if len(blocks) == 0 {
-		return ""
-	}
-	parts := make([]string, len(blocks))
-	for i, block := range blocks {
-		parts[i] = renderSingleBlock(block)
-	}
-	return strings.Join(parts, "\n")
+	return renderBlocksWithSeparator(blocks, "\n")
 }
 
 // RenderUnionBlocks renders query blocks joined with UNION.
 // Each block is indented and comments are rendered as SQL comments.
 func RenderUnionBlocks(blocks []QueryBlock) string {
+	return renderBlocksWithSeparator(blocks, "\n    UNION\n")
+}
+
+func renderBlocksWithSeparator(blocks []QueryBlock, sep string) string {
 	if len(blocks) == 0 {
 		return ""
 	}
@@ -477,7 +483,7 @@ func RenderUnionBlocks(blocks []QueryBlock) string {
 	for i, block := range blocks {
 		parts[i] = renderSingleBlock(block)
 	}
-	return strings.Join(parts, "\n    UNION\n")
+	return strings.Join(parts, sep)
 }
 
 // UnionAll represents multiple queries combined with UNION ALL.
@@ -506,11 +512,10 @@ func (u UnionAll) SQL() string {
 		return u.Queries[0].SQL()
 	}
 	parts := make([]string, len(u.Queries))
-	indent := u.Indent
 	for i, q := range u.Queries {
 		sql := q.SQL()
-		if indent != "" {
-			sql = IndentLines(sql, indent)
+		if u.Indent != "" {
+			sql = IndentLines(sql, u.Indent)
 		}
 		parts[i] = sql
 	}

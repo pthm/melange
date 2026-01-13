@@ -4,37 +4,25 @@ import (
 	"strings"
 )
 
-// =============================================================================
-// Self-Referential Userset Render Functions (List Objects)
-// =============================================================================
 // RenderListObjectsSelfRefUsersetFunction renders a list_objects function for self-referential userset patterns.
 func RenderListObjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUsersetBlockSet) (string, error) {
-	// Build CTE body from base blocks with depth wrapping
 	cteBody := renderSelfRefUsersetCTEBody(blocks)
 
-	// Build final exclusion predicates for the CTE result
-	finalExclusions := buildExclusionInput(
+	exclusionConfig := buildExclusionInput(
 		plan.Analysis,
 		Col{Table: "me", Column: "object_id"},
 		SubjectType,
 		SubjectID,
 	)
-	exclusionPreds := finalExclusions.BuildPredicates()
-
-	var whereExpr Expr
-	if len(exclusionPreds) > 0 {
-		whereExpr = And(exclusionPreds...)
-	}
 
 	finalStmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "me", Column: "object_id"}},
 		FromExpr:    TableAs("member_expansion", "me"),
-		Where:       whereExpr,
+		Where:       buildWhereFromPredicates(exclusionConfig.BuildPredicates()),
 	}
 
-	// Build the CTE SQL using WithCTE type
-	cteQuery := WithCTE{
+	cteSQL := WithCTE{
 		Recursive: true,
 		CTEs: []CTEDef{{
 			Name:    "member_expansion",
@@ -42,24 +30,13 @@ func RenderListObjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUserse
 			Query:   Raw(cteBody),
 		}},
 		Query: finalStmt,
-	}
-	cteSQL := cteQuery.SQL()
+	}.SQL()
 
-	// Build self-candidate SQL
-	var selfCandidateSQL string
+	query := cteSQL
 	if blocks.SelfCandidateBlock != nil {
-		selfCandidateSQL = renderTypedQueryBlock(*blocks.SelfCandidateBlock).Query.SQL()
-	}
-
-	// Combine CTE and self-candidate with UNION
-	var query string
-	if selfCandidateSQL != "" {
+		selfCandidateSQL := renderTypedQueryBlock(*blocks.SelfCandidateBlock).Query.SQL()
 		query = joinUnionBlocksSQL([]string{cteSQL, selfCandidateSQL})
-	} else {
-		query = cteSQL
 	}
-
-	paginatedQuery := wrapWithPagination(query, "object_id")
 
 	fn := PlpgsqlFunction{
 		Name:    plan.FunctionName,
@@ -67,7 +44,7 @@ func RenderListObjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUserse
 		Returns: ListObjectsReturns(),
 		Header:  ListObjectsFunctionHeader(plan.ObjectType, plan.Relation, plan.FeaturesString()+" (self-referential userset)"),
 		Body: []Stmt{
-			ReturnQuery{Query: paginatedQuery},
+			ReturnQuery{Query: wrapWithPagination(query, "object_id")},
 		},
 	}
 

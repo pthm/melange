@@ -5,12 +5,6 @@ import "fmt"
 // =============================================================================
 // Depth Exceeded Render Functions (List Objects)
 // =============================================================================
-// =============================================================================
-// Depth Exceeded Render Functions
-// =============================================================================
-//
-// These render functions handle relations that exceed the userset depth limit.
-// They generate simple functions that immediately raise M2002 without computation.
 
 // RenderListObjectsDepthExceededFunction renders a list_objects function for a relation
 // that exceeds the userset depth limit. The generated function raises M2002 immediately.

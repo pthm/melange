@@ -1,9 +1,6 @@
 package sqldsl
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestArrayLiteral_SQL(t *testing.T) {
 	tests := []struct {
@@ -142,12 +139,3 @@ func TestArrayLength_SQL(t *testing.T) {
 	}
 }
 
-func TestVisitedKeyVar(t *testing.T) {
-	// VisitedKeyVar returns the same as VisitedKey - just the RHS expression
-	expr := VisitedKeyVar("folder", "owner", ObjectID)
-	got := expr.SQL()
-
-	if !strings.Contains(got, "'folder:'") || !strings.Contains(got, "':owner'") {
-		t.Errorf("VisitedKeyVar() = %q, want to contain folder and owner", got)
-	}
-}

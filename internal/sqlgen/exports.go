@@ -1,4 +1,4 @@
-// This file re-exports types from subpackages for backward compatibility.
+// Re-exports types from subpackages for backward compatibility.
 // New code should import the subpackages directly.
 
 package sqlgen
@@ -11,12 +11,9 @@ import (
 	"github.com/pthm/melange/internal/sqlgen/tuples"
 )
 
-// =============================================================================
-// Re-exports from sqldsl package
-// =============================================================================
-
-// Expr interface and types
+// sqldsl types
 type (
+	// Expressions
 	Expr              = sqldsl.Expr
 	Param             = sqldsl.Param
 	Col               = sqldsl.Col
@@ -33,10 +30,8 @@ type (
 	Position          = sqldsl.Position
 	Substring         = sqldsl.Substring
 	UsersetNormalized = sqldsl.UsersetNormalized
-)
 
-// Operators
-type (
+	// Operators
 	Eq        = sqldsl.Eq
 	Ne        = sqldsl.Ne
 	Lt        = sqldsl.Lt
@@ -56,17 +51,13 @@ type (
 	IsNotNull = sqldsl.IsNotNull
 	CaseWhen  = sqldsl.CaseWhen
 	CaseExpr  = sqldsl.CaseExpr
-)
 
-// Table expressions
-type (
+	// Table expressions
 	TableExpr        = sqldsl.TableExpr
 	TableRef         = sqldsl.TableRef
 	FunctionCallExpr = sqldsl.FunctionCallExpr
-)
 
-// SQL statements and structures
-type (
+	// Statements and structures
 	JoinClause        = sqldsl.JoinClause
 	SelectStmt        = sqldsl.SelectStmt
 	IntersectSubquery = sqldsl.IntersectSubquery
@@ -77,58 +68,43 @@ type (
 	SQLer             = sqldsl.SQLer
 	QueryBlock        = sqldsl.QueryBlock
 	UnionAll          = sqldsl.UnionAll
-)
 
-// Userset types
-type (
+	// Userset types
 	UsersetObjectID          = sqldsl.UsersetObjectID
 	UsersetRelation          = sqldsl.UsersetRelation
 	HasUserset               = sqldsl.HasUserset
 	NoUserset                = sqldsl.NoUserset
 	SubstringUsersetRelation = sqldsl.SubstringUsersetRelation
 	IsWildcard               = sqldsl.IsWildcard
-)
 
-// Function call types
-type (
+	// Function call types
 	FuncCallEq       = sqldsl.FuncCallEq
 	FuncCallNe       = sqldsl.FuncCallNe
 	InFunctionSelect = sqldsl.InFunctionSelect
-)
 
-// Array types
-type (
+	// Array types
 	ArrayLiteral  = sqldsl.ArrayLiteral
 	ArrayAppend   = sqldsl.ArrayAppend
 	ArrayContains = sqldsl.ArrayContains
 	ArrayLength   = sqldsl.ArrayLength
-)
 
-// CTE types
-type (
+	// CTE types
 	CTEDef        = sqldsl.CTEDef
 	WithCTE       = sqldsl.WithCTE
 	CommentedSQL  = sqldsl.CommentedSQL
 	SelectIntoVar = sqldsl.SelectIntoVar
-)
 
-// Ref types
-type (
+	// Ref types
 	SubjectRef = sqldsl.SubjectRef
 	ObjectRef  = sqldsl.ObjectRef
 )
 
-// Common parameter constants
 var (
-	SubjectType = sqldsl.SubjectType
-	SubjectID   = sqldsl.SubjectID
-	ObjectType  = sqldsl.ObjectType
-	ObjectID    = sqldsl.ObjectID
-	Visited     = sqldsl.Visited
-)
-
-// Function aliases
-var (
+	SubjectType                     = sqldsl.SubjectType
+	SubjectID                       = sqldsl.SubjectID
+	ObjectType                      = sqldsl.ObjectType
+	ObjectID                        = sqldsl.ObjectID
+	Visited                         = sqldsl.Visited
 	ParamRef                        = sqldsl.ParamRef
 	LitText                         = sqldsl.LitText
 	And                             = sqldsl.And
@@ -153,49 +129,30 @@ var (
 	SelectAs                        = sqldsl.SelectAs
 	SubjectParams                   = sqldsl.SubjectParams
 	LiteralObject                   = sqldsl.LiteralObject
-
-	// SQL formatting
-	Sqlf = sqldsl.Sqlf
-	Optf = sqldsl.Optf
-
-	// Function call helpers
-	InternalPermissionCheckCall   = sqldsl.InternalPermissionCheckCall
-	NoWildcardPermissionCheckCall = sqldsl.NoWildcardPermissionCheckCall
-	SpecializedCheckCall          = sqldsl.SpecializedCheckCall
-	InternalCheckCall             = sqldsl.InternalCheckCall
-
-	// Array helpers
-	VisitedKey     = sqldsl.VisitedKey
-	VisitedWithKey = sqldsl.VisitedWithKey
-	VisitedKeyVar  = sqldsl.VisitedKeyVar
-
-	// Function naming helpers
-	ListObjectsFunctionName  = sqldsl.ListObjectsFunctionName
-	ListSubjectsFunctionName = sqldsl.ListSubjectsFunctionName
-
-	// CTE helpers
-	RecursiveCTE     = sqldsl.RecursiveCTE
-	SimpleCTE        = sqldsl.SimpleCTE
-	MultiCTE         = sqldsl.MultiCTE
-	MultiLineComment = sqldsl.MultiLineComment
+	Sqlf                            = sqldsl.Sqlf
+	Optf                            = sqldsl.Optf
+	InternalPermissionCheckCall     = sqldsl.InternalPermissionCheckCall
+	NoWildcardPermissionCheckCall   = sqldsl.NoWildcardPermissionCheckCall
+	SpecializedCheckCall            = sqldsl.SpecializedCheckCall
+	InternalCheckCall               = sqldsl.InternalCheckCall
+	VisitedKey                      = sqldsl.VisitedKey
+	VisitedWithKey                  = sqldsl.VisitedWithKey
+	ListObjectsFunctionName         = sqldsl.ListObjectsFunctionName
+	ListSubjectsFunctionName        = sqldsl.ListSubjectsFunctionName
+	RecursiveCTE                    = sqldsl.RecursiveCTE
+	SimpleCTE                       = sqldsl.SimpleCTE
+	MultiCTE                        = sqldsl.MultiCTE
+	MultiLineComment                = sqldsl.MultiLineComment
 )
 
-// =============================================================================
-// Re-exports from analysis package
-// =============================================================================
-
-// Schema type aliases (originally from pkg/schema via analysis)
+// analysis types
 type (
-	TypeDefinition      = analysis.TypeDefinition
-	RelationDefinition  = analysis.RelationDefinition
-	SubjectTypeRef      = analysis.SubjectTypeRef
-	ClosureRow          = analysis.ClosureRow
-	IntersectionGroup   = analysis.IntersectionGroup
-	ParentRelationCheck = analysis.ParentRelationCheck
-)
-
-// Analysis types
-type (
+	TypeDefinition         = analysis.TypeDefinition
+	RelationDefinition     = analysis.RelationDefinition
+	SubjectTypeRef         = analysis.SubjectTypeRef
+	ClosureRow             = analysis.ClosureRow
+	IntersectionGroup      = analysis.IntersectionGroup
+	ParentRelationCheck    = analysis.ParentRelationCheck
 	RelationFeatures       = analysis.RelationFeatures
 	UsersetPattern         = analysis.UsersetPattern
 	ParentRelationInfo     = analysis.ParentRelationInfo
@@ -208,7 +165,6 @@ type (
 	ListStrategy           = analysis.ListStrategy
 )
 
-// ListStrategy constants
 const (
 	ListStrategyDirect         = analysis.ListStrategyDirect
 	ListStrategyUserset        = analysis.ListStrategyUserset
@@ -219,7 +175,6 @@ const (
 	ListStrategyComposed       = analysis.ListStrategyComposed
 )
 
-// Analysis functions
 var (
 	ComputeRelationClosure = analysis.ComputeRelationClosure
 	AnalyzeRelations       = analysis.AnalyzeRelations
@@ -228,18 +183,12 @@ var (
 	BuildAnalysisLookup    = analysis.BuildAnalysisLookup
 )
 
-// =============================================================================
-// Re-exports from tuples package
-// =============================================================================
-
+// tuples types
 type TupleQuery = tuples.TupleQuery
 
 var Tuples = tuples.Tuples
 
-// =============================================================================
-// Re-exports from plpgsql package
-// =============================================================================
-
+// plpgsql types
 type (
 	FuncArg         = plpgsql.FuncArg
 	Decl            = plpgsql.Decl
@@ -263,68 +212,26 @@ var (
 	ListSubjectsArgs           = plpgsql.ListSubjectsArgs
 	ListObjectsReturns         = plpgsql.ListObjectsReturns
 	ListSubjectsReturns        = plpgsql.ListSubjectsReturns
-	FunctionHeader             = plpgsql.FunctionHeader
 	ListObjectsFunctionHeader  = plpgsql.ListObjectsFunctionHeader
 	ListSubjectsFunctionHeader = plpgsql.ListSubjectsFunctionHeader
 	ListObjectsDispatcherArgs  = plpgsql.ListObjectsDispatcherArgs
 	ListSubjectsDispatcherArgs = plpgsql.ListSubjectsDispatcherArgs
 )
 
-// =============================================================================
-// Re-exports from inline package
-// =============================================================================
-
+// inline types
 type InlineSQLData = inline.InlineSQLData
 
-var BuildInlineSQLData = inline.BuildInlineSQLData
-
-// Typed row builders (used by tests)
 var (
+	BuildInlineSQLData    = inline.BuildInlineSQLData
 	BuildClosureTypedRows = inline.BuildClosureTypedRows
 	BuildUsersetTypedRows = inline.BuildUsersetTypedRows
 	BuildClosureValues    = inline.BuildClosureValues
 )
 
-// =============================================================================
-// Internal helper re-exports (lowercase for backward compatibility)
-// =============================================================================
-
-// indentLines is a lowercase alias for IndentLines (backward compatibility).
-func indentLines(input, indent string) string {
-	return sqldsl.IndentLines(input, indent)
-}
-
-// sqlf is a lowercase alias for Sqlf (backward compatibility for tests).
-func sqlf(format string, args ...any) string {
-	return sqldsl.Sqlf(format, args...)
-}
-
-// optf is a lowercase alias for Optf (backward compatibility for tests).
-func optf(cond bool, format string, args ...any) string {
-	return sqldsl.Optf(cond, format, args...)
-}
-
-// buildClosureTypedRows is a lowercase alias for BuildClosureTypedRows (backward compatibility for tests).
-func buildClosureTypedRows(closureRows []ClosureRow) []ValuesRow {
-	return inline.BuildClosureTypedRows(closureRows)
-}
-
-// buildUsersetTypedRows is a lowercase alias for BuildUsersetTypedRows (backward compatibility for tests).
-func buildUsersetTypedRows(analyses []RelationAnalysis) []ValuesRow {
-	return inline.BuildUsersetTypedRows(analyses)
-}
-
-// buildClosureValues is a lowercase alias for BuildClosureValues (backward compatibility for tests).
-func buildClosureValues(closureRows []ClosureRow) string {
-	return inline.BuildClosureValues(closureRows)
-}
-
-// wrapWithPagination is a lowercase alias for WrapWithPagination (backward compatibility).
+// Package-internal lowercase aliases for pagination helpers used by render functions.
 func wrapWithPagination(query, idColumn string) string {
 	return sqldsl.WrapWithPagination(query, idColumn)
 }
-
-// wrapWithPaginationWildcardFirst is a lowercase alias for WrapWithPaginationWildcardFirst (backward compatibility).
 func wrapWithPaginationWildcardFirst(query string) string {
 	return sqldsl.WrapWithPaginationWildcardFirst(query)
 }

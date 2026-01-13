@@ -1,7 +1,5 @@
 package sqldsl
 
-import "strings"
-
 // FuncCallEq compares a function call result to a value.
 // Used for authorization check expressions like "check_permission(...) = 1".
 //
@@ -22,11 +20,7 @@ type FuncCallEq struct {
 
 // SQL renders the function call comparison.
 func (f FuncCallEq) SQL() string {
-	args := make([]string, len(f.Args))
-	for i, arg := range f.Args {
-		args[i] = arg.SQL()
-	}
-	return f.FuncName + "(" + strings.Join(args, ", ") + ") = " + f.Value.SQL()
+	return Eq{Left: Func{Name: f.FuncName, Args: f.Args}, Right: f.Value}.SQL()
 }
 
 // FuncCallNe compares a function call result for inequality.
@@ -39,11 +33,7 @@ type FuncCallNe struct {
 
 // SQL renders the function call not-equal comparison.
 func (f FuncCallNe) SQL() string {
-	args := make([]string, len(f.Args))
-	for i, arg := range f.Args {
-		args[i] = arg.SQL()
-	}
-	return f.FuncName + "(" + strings.Join(args, ", ") + ") <> " + f.Value.SQL()
+	return Ne{Left: Func{Name: f.FuncName, Args: f.Args}, Right: f.Value}.SQL()
 }
 
 // InternalPermissionCheckCall creates a check_permission_internal function call comparison.
@@ -147,20 +137,17 @@ type InFunctionSelect struct {
 
 // SQL renders the IN subquery expression.
 func (i InFunctionSelect) SQL() string {
-	args := make([]string, len(i.Args))
-	for j, arg := range i.Args {
-		args[j] = arg.SQL()
-	}
-	subquery := "SELECT " + i.Alias + "." + i.SelectCol + " FROM " + i.FuncName + "(" + strings.Join(args, ", ") + ") " + i.Alias
+	funcCall := Func{Name: i.FuncName, Args: i.Args}.SQL()
+	subquery := "SELECT " + i.Alias + "." + i.SelectCol + " FROM " + funcCall + " " + i.Alias
 	return i.Expr.SQL() + " IN (" + subquery + ")"
 }
 
 // ListObjectsFunctionName generates a list_TYPE_RELATION_objects function name.
 func ListObjectsFunctionName(objectType, relation string) string {
-	return "list_" + objectType + "_" + relation + "_objects"
+	return "list_" + Ident(objectType) + "_" + Ident(relation) + "_objects"
 }
 
 // ListSubjectsFunctionName generates a list_TYPE_RELATION_subjects function name.
 func ListSubjectsFunctionName(objectType, relation string) string {
-	return "list_" + objectType + "_" + relation + "_subjects"
+	return "list_" + Ident(objectType) + "_" + Ident(relation) + "_subjects"
 }

@@ -8,15 +8,12 @@ import (
 // Self-Referential Userset Render Functions (List Subjects)
 // =============================================================================
 func RenderListSubjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUsersetSubjectsBlockSet) (string, error) {
-	// Build userset filter path query
-	usersetFilterQuery := renderSelfRefUsersetFilterQuery(blocks)
-	usersetFilterQuery = trimTrailingSemicolon(usersetFilterQuery)
-	usersetFilterPaginatedQuery := wrapWithPaginationWildcardFirst(usersetFilterQuery)
-
-	// Build regular path query
-	regularQuery := renderSelfRefUsersetRegularQuery(plan, blocks)
-	regularQuery = trimTrailingSemicolon(regularQuery)
-	regularPaginatedQuery := wrapWithPaginationWildcardFirst(regularQuery)
+	usersetFilterPaginatedQuery := wrapWithPaginationWildcardFirst(
+		trimTrailingSemicolon(renderSelfRefUsersetFilterQuery(blocks)),
+	)
+	regularPaginatedQuery := wrapWithPaginationWildcardFirst(
+		trimTrailingSemicolon(renderSelfRefUsersetRegularQuery(plan, blocks)),
+	)
 
 	// Build the THEN branch (userset filter path)
 	thenBranch := renderUsersetFilterThenBranch(usersetFilterPaginatedQuery)
@@ -55,29 +52,16 @@ func RenderListSubjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUsers
 	return fn.SQL(), nil
 }
 
-// renderSelfRefUsersetFilterQuery renders the userset filter path query with recursive CTE.
 func renderSelfRefUsersetFilterQuery(blocks SelfRefUsersetSubjectsBlockSet) string {
-	// Render base blocks for userset filter path
-	baseBlocksSQL := make([]string, 0, len(blocks.UsersetFilterBlocks))
-	for _, block := range blocks.UsersetFilterBlocks {
-		qb := renderTypedQueryBlock(block)
-		baseBlocksSQL = append(baseBlocksSQL, formatQueryBlockSQL(qb.Comments, qb.Query.SQL()))
-	}
+	baseBlocks := renderTypedQueryBlocks(blocks.UsersetFilterBlocks)
+	cteBody := RenderUnionBlocks(baseBlocks)
 
-	cteBody := strings.Join(baseBlocksSQL, "\n    UNION\n")
-
-	// Add recursive block
 	if blocks.UsersetFilterRecursiveBlock != nil {
-		qb := renderTypedQueryBlock(*blocks.UsersetFilterRecursiveBlock)
-		recursiveSQL := formatQueryBlockSQL(qb.Comments, qb.Query.SQL())
-		cteBody = appendUnionAll(cteBody, recursiveSQL)
+		recursiveBlock := renderTypedQueryBlock(*blocks.UsersetFilterRecursiveBlock)
+		cteBody = appendUnionAll(cteBody, formatQueryBlockSQL(recursiveBlock.Comments, recursiveBlock.Query.SQL()))
 	}
 
-	// Build result blocks
-	var resultBlocks []QueryBlock
-
-	// Userset filter returns normalized references
-	resultBlocks = append(resultBlocks, QueryBlock{
+	resultBlocks := []QueryBlock{{
 		Comments: []string{"-- Userset filter: return normalized userset references"},
 		Query: SelectStmt{
 			Distinct: true,
@@ -89,53 +73,26 @@ func renderSelfRefUsersetFilterQuery(blocks SelfRefUsersetSubjectsBlockSet) stri
 			},
 			FromExpr: TableAs("userset_expansion", "ue"),
 		},
-	})
+	}}
 
-	// Add self-candidate block if present
 	if blocks.UsersetFilterSelfBlock != nil {
-		qb := renderTypedQueryBlock(*blocks.UsersetFilterSelfBlock)
-		resultBlocks = append(resultBlocks, qb)
+		resultBlocks = append(resultBlocks, renderTypedQueryBlock(*blocks.UsersetFilterSelfBlock))
 	}
-
-	// Build the CTE with final UNION query
-	finalQuery := Raw(RenderUnionBlocks(resultBlocks))
 
 	cteQuery := RecursiveCTE(
 		"userset_expansion",
 		[]string{"userset_object_id", "depth"},
 		Raw(cteBody),
-		finalQuery,
+		Raw(RenderUnionBlocks(resultBlocks)),
 	)
 
 	return cteQuery.SQL()
 }
 
-// renderSelfRefUsersetRegularQuery renders the regular path query with userset_objects CTE.
 func renderSelfRefUsersetRegularQuery(plan ListPlan, blocks SelfRefUsersetSubjectsBlockSet) string {
-	// Build userset_objects CTE
-	var usersetObjectsCTE string
-	if blocks.UsersetObjectsBaseBlock != nil {
-		baseQB := renderTypedQueryBlock(*blocks.UsersetObjectsBaseBlock)
-		baseSQL := formatQueryBlockSQL(baseQB.Comments, baseQB.Query.SQL())
+	usersetObjectsCTE := buildUsersetObjectsCTE(blocks)
+	baseResultsSQL := RenderUnionBlocks(renderTypedQueryBlocks(blocks.RegularBlocks))
 
-		usersetObjectsCTE = baseSQL
-		if blocks.UsersetObjectsRecursiveBlock != nil {
-			recursiveQB := renderTypedQueryBlock(*blocks.UsersetObjectsRecursiveBlock)
-			recursiveSQL := formatQueryBlockSQL(recursiveQB.Comments, recursiveQB.Query.SQL())
-			usersetObjectsCTE = strings.Join([]string{usersetObjectsCTE, recursiveSQL}, "\n            UNION ALL\n")
-		}
-	}
-
-	// Render regular blocks
-	baseBlocksSQL := make([]string, 0, len(blocks.RegularBlocks))
-	for _, block := range blocks.RegularBlocks {
-		qb := renderTypedQueryBlock(block)
-		baseBlocksSQL = append(baseBlocksSQL, formatQueryBlockSQL(qb.Comments, qb.Query.SQL()))
-	}
-
-	baseResultsSQL := strings.Join(baseBlocksSQL, "\n    UNION\n")
-
-	// Build the has_wildcard CTE query
 	hasWildcardQuery := SelectStmt{
 		ColumnExprs: []Expr{
 			Alias{
@@ -145,15 +102,26 @@ func renderSelfRefUsersetRegularQuery(plan ListPlan, blocks SelfRefUsersetSubjec
 		},
 	}
 
-	// Build the final query with wildcard handling
-	wildcardTailQuery := buildUsersetWildcardTailQuery(plan.Analysis)
-
-	// Build the full CTE query using MultiCTE
 	cteQuery := MultiCTE(true, []CTEDef{
 		{Name: "userset_objects", Columns: []string{"userset_object_id", "depth"}, Query: Raw(usersetObjectsCTE)},
 		{Name: "base_results", Query: Raw(baseResultsSQL)},
 		{Name: "has_wildcard", Query: hasWildcardQuery},
-	}, wildcardTailQuery)
+	}, buildUsersetWildcardTailQuery(plan.Analysis))
 
 	return cteQuery.SQL()
+}
+
+func buildUsersetObjectsCTE(blocks SelfRefUsersetSubjectsBlockSet) string {
+	if blocks.UsersetObjectsBaseBlock == nil {
+		return ""
+	}
+	baseBlock := renderTypedQueryBlock(*blocks.UsersetObjectsBaseBlock)
+	baseSQL := formatQueryBlockSQL(baseBlock.Comments, baseBlock.Query.SQL())
+
+	if blocks.UsersetObjectsRecursiveBlock == nil {
+		return baseSQL
+	}
+	recursiveBlock := renderTypedQueryBlock(*blocks.UsersetObjectsRecursiveBlock)
+	recursiveSQL := formatQueryBlockSQL(recursiveBlock.Comments, recursiveBlock.Query.SQL())
+	return strings.Join([]string{baseSQL, recursiveSQL}, "\n            UNION ALL\n")
 }

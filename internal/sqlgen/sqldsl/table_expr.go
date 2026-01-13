@@ -1,5 +1,7 @@
 package sqldsl
 
+import "strings"
+
 // TableExpr is the interface for table expressions in FROM and JOIN clauses.
 // Types that can be used as table sources implement this interface.
 type TableExpr interface {
@@ -47,26 +49,14 @@ func (f FunctionCallExpr) TableSQL() string {
 	for i, arg := range f.Args {
 		args[i] = arg.SQL()
 	}
-	result := f.Name + "(" + joinStrings(args, ", ") + ")"
+	sql := f.Name + "(" + strings.Join(args, ", ") + ")"
 	if f.Alias != "" {
-		result += " AS " + f.Alias
+		return sql + " AS " + f.Alias
 	}
-	return result
+	return sql
 }
 
 // TableAlias implements TableExpr.
 func (f FunctionCallExpr) TableAlias() string {
 	return f.Alias
-}
-
-// joinStrings joins strings with a separator (local helper to avoid import).
-func joinStrings(strs []string, sep string) string {
-	if len(strs) == 0 {
-		return ""
-	}
-	result := strs[0]
-	for _, s := range strs[1:] {
-		result += sep + s
-	}
-	return result
 }

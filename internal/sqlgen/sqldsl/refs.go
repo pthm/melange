@@ -1,7 +1,6 @@
 package sqldsl
 
 // SubjectRef represents a subject reference (type + id).
-// A subject is always identified by a type and an id.
 type SubjectRef struct {
 	Type Expr
 	ID   Expr
@@ -16,7 +15,6 @@ func SubjectParams() SubjectRef {
 }
 
 // ObjectRef represents an object reference (type + id).
-// An object is always identified by a type and an id.
 type ObjectRef struct {
 	Type Expr
 	ID   Expr

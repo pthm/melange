@@ -73,14 +73,12 @@ func GenerateListSQL(analyses []RelationAnalysis, inline InlineSQLData) (ListGen
 	return result, nil
 }
 
-// listObjectsFunctionName returns the name for a specialized list_objects function.
 func listObjectsFunctionName(objectType, relation string) string {
-	return fmt.Sprintf("list_%s_%s_objects", sanitizeIdentifier(objectType), sanitizeIdentifier(relation))
+	return ListObjectsFunctionName(objectType, relation)
 }
 
-// listSubjectsFunctionName returns the name for a specialized list_subjects function.
 func listSubjectsFunctionName(objectType, relation string) string {
-	return fmt.Sprintf("list_%s_%s_subjects", sanitizeIdentifier(objectType), sanitizeIdentifier(relation))
+	return ListSubjectsFunctionName(objectType, relation)
 }
 
 // generateListObjectsFunction generates a specialized list_objects function for a relation.
@@ -149,12 +147,8 @@ func generateListSubjectsFunction(a RelationAnalysis, inline InlineSQLData) (str
 		}
 		return RenderListSubjectsRecursiveFunction(plan, blocks)
 	case ListStrategyIntersection:
-		// Wire to Plan → Blocks → Render for intersection patterns
 		plan := BuildListSubjectsPlan(a, inline)
-		blocks, err := BuildListSubjectsIntersectionBlocks(plan)
-		if err != nil {
-			return "", err
-		}
+		blocks := BuildListSubjectsIntersectionBlocks(plan)
 		return RenderListSubjectsIntersectionFunction(plan, blocks)
 	case ListStrategyDepthExceeded:
 		// Use Plan → Render (no blocks needed - just raises error)
@@ -333,15 +327,9 @@ func buildListParentRelations(a RelationAnalysis) []ListParentRelationData {
 			LinkingRelation: p.LinkingRelation,
 		}
 
-		// Build SQL-formatted list of allowed linking types
-		// Also track cross-type (non-self-referential) types separately
 		if len(p.AllowedLinkingTypes) > 0 {
-			var allTypes []string
 			var crossTypes []string
-
 			for _, t := range p.AllowedLinkingTypes {
-				allTypes = append(allTypes, t)
-
 				if t == a.ObjectType {
 					data.IsSelfReferential = true
 				} else {
@@ -349,12 +337,10 @@ func buildListParentRelations(a RelationAnalysis) []ListParentRelationData {
 				}
 			}
 
-			data.AllowedLinkingTypes = formatSQLStringList(allTypes)
-			data.AllowedLinkingTypesSlice = allTypes
+			data.AllowedLinkingTypes = formatSQLStringList(p.AllowedLinkingTypes)
+			data.AllowedLinkingTypesSlice = p.AllowedLinkingTypes
 			data.ParentType = p.AllowedLinkingTypes[0]
 
-			// Set cross-type fields for generating check_permission_internal calls
-			// even when the relation has self-referential links
 			if len(crossTypes) > 0 {
 				data.CrossTypeLinkingTypes = formatSQLStringList(crossTypes)
 				data.HasCrossTypeLinks = true

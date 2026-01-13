@@ -169,39 +169,9 @@ type PlpgsqlFunction struct {
 func (f PlpgsqlFunction) SQL() string {
 	var sb strings.Builder
 
-	// Header comments
-	for _, comment := range f.Header {
-		sb.WriteString("-- ")
-		sb.WriteString(comment)
-		sb.WriteString("\n")
-	}
+	writeHeader(&sb, f.Header)
+	writeSignature(&sb, f.Name, f.Args, f.Returns)
 
-	// Function signature
-	sb.WriteString("CREATE OR REPLACE FUNCTION ")
-	sb.WriteString(f.Name)
-	sb.WriteString("(\n")
-
-	// Arguments
-	for i, arg := range f.Args {
-		sb.WriteString("    ")
-		sb.WriteString(arg.Name)
-		sb.WriteString(" ")
-		sb.WriteString(arg.Type)
-		if arg.Default != nil {
-			sb.WriteString(" DEFAULT ")
-			sb.WriteString(arg.Default.SQL())
-		}
-		if i < len(f.Args)-1 {
-			sb.WriteString(",")
-		}
-		sb.WriteString("\n")
-	}
-
-	sb.WriteString(") RETURNS ")
-	sb.WriteString(f.Returns)
-	sb.WriteString(" AS $$\n")
-
-	// DECLARE block
 	if len(f.Decls) > 0 {
 		sb.WriteString("DECLARE\n")
 		for _, d := range f.Decls {
@@ -213,19 +183,14 @@ func (f PlpgsqlFunction) SQL() string {
 		}
 	}
 
-	// BEGIN block
 	sb.WriteString("BEGIN\n")
-
 	for _, stmt := range f.Body {
-		// Indent each line of the statement
-		lines := strings.Split(stmt.StmtSQL(), "\n")
-		for _, line := range lines {
+		for _, line := range strings.Split(stmt.StmtSQL(), "\n") {
 			sb.WriteString("    ")
 			sb.WriteString(line)
 			sb.WriteString("\n")
 		}
 	}
-
 	sb.WriteString("END;\n")
 	sb.WriteString("$$ LANGUAGE plpgsql STABLE;")
 
@@ -264,14 +229,6 @@ func ListObjectsReturns() string {
 // ListSubjectsReturns returns the standard RETURNS clause for list_subjects.
 func ListSubjectsReturns() string {
 	return "TABLE(subject_id TEXT, next_cursor TEXT)"
-}
-
-// FunctionHeader creates header comments for a generated function.
-func FunctionHeader(objectType, relation, features string) []string {
-	return []string{
-		fmt.Sprintf("Generated list_objects function for %s.%s", objectType, relation),
-		fmt.Sprintf("Features: %s", features),
-	}
 }
 
 // ListObjectsFunctionHeader creates header comments for a list_objects function.
@@ -332,20 +289,33 @@ type SqlFunction struct {
 func (f SqlFunction) SQL() string {
 	var sb strings.Builder
 
-	// Header comments
-	for _, comment := range f.Header {
+	writeHeader(&sb, f.Header)
+	writeSignature(&sb, f.Name, f.Args, f.Returns)
+
+	sb.WriteString("    ")
+	sb.WriteString(f.Body.SQL())
+	sb.WriteString(";\n")
+	sb.WriteString("$$ LANGUAGE sql STABLE;")
+
+	return sb.String()
+}
+
+// writeHeader writes SQL comment lines to the builder.
+func writeHeader(sb *strings.Builder, header []string) {
+	for _, comment := range header {
 		sb.WriteString("-- ")
 		sb.WriteString(comment)
 		sb.WriteString("\n")
 	}
+}
 
-	// Function signature
+// writeSignature writes CREATE OR REPLACE FUNCTION ... AS $$ to the builder.
+func writeSignature(sb *strings.Builder, name string, args []FuncArg, returns string) {
 	sb.WriteString("CREATE OR REPLACE FUNCTION ")
-	sb.WriteString(f.Name)
+	sb.WriteString(name)
 	sb.WriteString("(\n")
 
-	// Arguments
-	for i, arg := range f.Args {
+	for i, arg := range args {
 		sb.WriteString("    ")
 		sb.WriteString(arg.Name)
 		sb.WriteString(" ")
@@ -354,22 +324,13 @@ func (f SqlFunction) SQL() string {
 			sb.WriteString(" DEFAULT ")
 			sb.WriteString(arg.Default.SQL())
 		}
-		if i < len(f.Args)-1 {
+		if i < len(args)-1 {
 			sb.WriteString(",")
 		}
 		sb.WriteString("\n")
 	}
 
 	sb.WriteString(") RETURNS ")
-	sb.WriteString(f.Returns)
+	sb.WriteString(returns)
 	sb.WriteString(" AS $$\n")
-
-	// Body (single expression/statement)
-	sb.WriteString("    ")
-	sb.WriteString(f.Body.SQL())
-	sb.WriteString(";\n")
-
-	sb.WriteString("$$ LANGUAGE sql STABLE;")
-
-	return sb.String()
 }

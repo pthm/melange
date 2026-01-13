@@ -93,41 +93,23 @@ func (s ListStrategy) String() string {
 // 6. Userset - has userset patterns or closure userset patterns
 // 7. Direct - default (handles direct, implied, and exclusion patterns)
 func DetermineListStrategy(a RelationAnalysis) ListStrategy {
-	// Phase 9A: Depth exceeded takes highest priority
-	// These immediately raise M2002 without any computation
 	if a.ExceedsDepthLimit {
 		return ListStrategyDepthExceeded
 	}
-
-	// Phase 9B: Self-referential userset patterns require recursive CTEs
 	if a.HasSelfReferentialUserset {
 		return ListStrategySelfRefUserset
 	}
-
-	// Phase 8: Indirect anchor patterns use composed template
-	// These trace through TTU paths to reach an anchor with direct grants
 	if a.IndirectAnchor != nil {
 		return ListStrategyComposed
 	}
-
-	// Phase 6: Intersection patterns use INTERSECT queries
-	// The intersection strategy handles all pattern combinations
 	if a.Features.HasIntersection {
 		return ListStrategyIntersection
 	}
-
-	// Phase 5: TTU patterns (direct or inherited) use recursive strategy
-	// The recursive template handles direct, userset, exclusion, and TTU
 	if a.Features.HasRecursive || len(a.ClosureParentRelations) > 0 {
 		return ListStrategyRecursive
 	}
-
-	// Phase 4: Userset patterns (direct or inherited) use userset strategy
-	// The userset template also handles exclusions if present
 	if a.Features.HasUserset || len(a.ClosureUsersetPatterns) > 0 {
 		return ListStrategyUserset
 	}
-
-	// Default: Direct strategy handles direct, implied, and exclusion patterns
 	return ListStrategyDirect
 }

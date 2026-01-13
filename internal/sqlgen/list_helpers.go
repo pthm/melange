@@ -21,17 +21,20 @@ type listUsersetPatternInput struct {
 // filterComplexClosureRelations returns complex closure relations excluding those
 // that are already handled by intersection closure blocks.
 func filterComplexClosureRelations(a RelationAnalysis) []string {
-	intersectionSet := make(map[string]bool)
-	for _, rel := range a.IntersectionClosureRelations {
-		intersectionSet[rel] = true
+	if len(a.IntersectionClosureRelations) == 0 {
+		return a.ComplexClosureRelations
 	}
-	var complexRels []string
+	excluded := make(map[string]bool, len(a.IntersectionClosureRelations))
+	for _, rel := range a.IntersectionClosureRelations {
+		excluded[rel] = true
+	}
+	var result []string
 	for _, rel := range a.ComplexClosureRelations {
-		if !intersectionSet[rel] {
-			complexRels = append(complexRels, rel)
+		if !excluded[rel] {
+			result = append(result, rel)
 		}
 	}
-	return complexRels
+	return result
 }
 
 // buildAllowedSubjectTypesList returns the list of allowed subject types for a relation.
@@ -63,10 +66,11 @@ func buildListUsersetPatternInputs(a RelationAnalysis) []listUsersetPatternInput
 	if len(a.UsersetPatterns) == 0 && len(a.ClosureUsersetPatterns) == 0 {
 		return nil
 	}
-	directRelationList := buildTupleLookupRelations(a)
-	var patterns []listUsersetPatternInput
 
-	for _, p := range a.UsersetPatterns {
+	directRelations := buildTupleLookupRelations(a)
+	patterns := make([]listUsersetPatternInput, 0, len(a.UsersetPatterns)+len(a.ClosureUsersetPatterns))
+
+	addPattern := func(p UsersetPattern, isClosurePattern bool, sourceRelations []string) {
 		satisfying := p.SatisfyingRelations
 		if len(satisfying) == 0 {
 			satisfying = []string{p.SubjectRelation}
@@ -75,31 +79,20 @@ func buildListUsersetPatternInputs(a RelationAnalysis) []listUsersetPatternInput
 			SubjectType:         p.SubjectType,
 			SubjectRelation:     p.SubjectRelation,
 			SatisfyingRelations: satisfying,
-			SourceRelations:     directRelationList,
-			SourceRelation:      "",
-			IsClosurePattern:    false,
+			SourceRelations:     sourceRelations,
+			SourceRelation:      p.SourceRelation,
+			IsClosurePattern:    isClosurePattern,
 			HasWildcard:         p.HasWildcard,
 			IsComplex:           p.IsComplex,
 			IsSelfReferential:   p.SubjectType == a.ObjectType && p.SubjectRelation == a.Relation,
 		})
 	}
 
+	for _, p := range a.UsersetPatterns {
+		addPattern(p, false, directRelations)
+	}
 	for _, p := range a.ClosureUsersetPatterns {
-		satisfying := p.SatisfyingRelations
-		if len(satisfying) == 0 {
-			satisfying = []string{p.SubjectRelation}
-		}
-		patterns = append(patterns, listUsersetPatternInput{
-			SubjectType:         p.SubjectType,
-			SubjectRelation:     p.SubjectRelation,
-			SatisfyingRelations: satisfying,
-			SourceRelations:     []string{p.SourceRelation},
-			SourceRelation:      p.SourceRelation,
-			IsClosurePattern:    true,
-			HasWildcard:         p.HasWildcard,
-			IsComplex:           p.IsComplex,
-			IsSelfReferential:   p.SubjectType == a.ObjectType && p.SubjectRelation == a.Relation,
-		})
+		addPattern(p, true, []string{p.SourceRelation})
 	}
 
 	return patterns
@@ -125,9 +118,9 @@ func convertParentRelations(relations []ParentRelationInfo) []ExcludedParentRela
 	if len(relations) == 0 {
 		return nil
 	}
-	result := make([]ExcludedParentRelation, 0, len(relations))
-	for _, rel := range relations {
-		result = append(result, ExcludedParentRelation(rel))
+	result := make([]ExcludedParentRelation, len(relations))
+	for i, rel := range relations {
+		result[i] = ExcludedParentRelation(rel)
 	}
 	return result
 }
@@ -137,26 +130,26 @@ func convertIntersectionGroups(groups []IntersectionGroupInfo) []ExcludedInterse
 	if len(groups) == 0 {
 		return nil
 	}
-	result := make([]ExcludedIntersectionGroup, 0, len(groups))
-	for _, group := range groups {
-		parts := make([]ExcludedIntersectionPart, 0, len(group.Parts))
-		for _, part := range group.Parts {
+	result := make([]ExcludedIntersectionGroup, len(groups))
+	for i, group := range groups {
+		parts := make([]ExcludedIntersectionPart, len(group.Parts))
+		for j, part := range group.Parts {
 			if part.ParentRelation != nil {
-				parts = append(parts, ExcludedIntersectionPart{
+				parts[j] = ExcludedIntersectionPart{
 					ParentRelation: &ExcludedParentRelation{
 						Relation:            part.ParentRelation.Relation,
 						LinkingRelation:     part.ParentRelation.LinkingRelation,
 						AllowedLinkingTypes: part.ParentRelation.AllowedLinkingTypes,
 					},
-				})
-				continue
+				}
+			} else {
+				parts[j] = ExcludedIntersectionPart{
+					Relation:         part.Relation,
+					ExcludedRelation: part.ExcludedRelation,
+				}
 			}
-			parts = append(parts, ExcludedIntersectionPart{
-				Relation:         part.Relation,
-				ExcludedRelation: part.ExcludedRelation,
-			})
 		}
-		result = append(result, ExcludedIntersectionGroup{Parts: parts})
+		result[i] = ExcludedIntersectionGroup{Parts: parts}
 	}
 	return result
 }
@@ -178,6 +171,14 @@ func buildSimpleComplexExclusionInput(a RelationAnalysis, objectIDExpr, subjectT
 func trimTrailingSemicolon(input string) string {
 	trimmed := strings.TrimSpace(input)
 	return strings.TrimSuffix(trimmed, ";")
+}
+
+// buildWhereFromPredicates returns an And expression if predicates are non-empty, otherwise nil.
+func buildWhereFromPredicates(predicates []Expr) Expr {
+	if len(predicates) == 0 {
+		return nil
+	}
+	return And(predicates...)
 }
 
 // buildUsersetWildcardTailQuery builds the wildcard handling tail as a typed query for list_subjects functions.
@@ -206,42 +207,35 @@ func buildUsersetWildcardTailQuery(a RelationAnalysis) SQLer {
 	}
 }
 
-// generateListObjectsDispatcher generates the list_accessible_objects dispatcher function.
-func generateListObjectsDispatcher(analyses []RelationAnalysis) (string, error) {
-	var cases []ListDispatcherCase
-	for _, a := range analyses {
-		if !a.Capabilities.ListAllowed {
-			continue
-		}
-		cases = append(cases, ListDispatcherCase{
-			ObjectType:   a.ObjectType,
-			Relation:     a.Relation,
-			FunctionName: listObjectsFunctionName(a.ObjectType, a.Relation),
-		})
-	}
-
-	// Build the body with routing cases
-	var bodyStmts []Stmt
+// buildDispatcherBody builds the common routing logic for list dispatcher functions.
+func buildDispatcherBody(cases []ListDispatcherCase, callArgs string) []Stmt {
+	var stmts []Stmt
 	if len(cases) > 0 {
-		bodyStmts = append(bodyStmts, Comment{Text: "Route to specialized functions for all type/relation pairs"})
+		stmts = append(stmts, Comment{Text: "Route to specialized functions for all type/relation pairs"})
 		for _, c := range cases {
-			bodyStmts = append(bodyStmts, If{
+			stmts = append(stmts, If{
 				Cond: And(
 					Eq{Left: ObjectType, Right: Lit(c.ObjectType)},
 					Eq{Left: Param("p_relation"), Right: Lit(c.Relation)},
 				),
 				Then: []Stmt{
-					ReturnQuery{Query: "SELECT * FROM " + c.FunctionName + "(p_subject_type, p_subject_id, p_limit, p_after)"},
+					ReturnQuery{Query: "SELECT * FROM " + c.FunctionName + "(" + callArgs + ")"},
 					Return{},
 				},
 			})
 		}
 	}
-	bodyStmts = append(bodyStmts,
+	stmts = append(stmts,
 		Comment{Text: "Unknown type/relation pair - return empty result (relation not defined in model)"},
 		Comment{Text: "This matches check_permission behavior for unknown relations (returns 0/denied)"},
 		Return{},
 	)
+	return stmts
+}
+
+// generateListObjectsDispatcher generates the list_accessible_objects dispatcher function.
+func generateListObjectsDispatcher(analyses []RelationAnalysis) (string, error) {
+	cases := collectListDispatcherCases(analyses, listObjectsFunctionName)
 
 	fn := PlpgsqlFunction{
 		Name:    "list_accessible_objects",
@@ -251,47 +245,14 @@ func generateListObjectsDispatcher(analyses []RelationAnalysis) (string, error) 
 			"Generated dispatcher for list_accessible_objects",
 			"Routes to specialized functions for all type/relation pairs",
 		},
-		Body: bodyStmts,
+		Body: buildDispatcherBody(cases, "p_subject_type, p_subject_id, p_limit, p_after"),
 	}
 	return fn.SQL(), nil
 }
 
 // generateListSubjectsDispatcher generates the list_accessible_subjects dispatcher function.
 func generateListSubjectsDispatcher(analyses []RelationAnalysis) (string, error) {
-	var cases []ListDispatcherCase
-	for _, a := range analyses {
-		if !a.Capabilities.ListAllowed {
-			continue
-		}
-		cases = append(cases, ListDispatcherCase{
-			ObjectType:   a.ObjectType,
-			Relation:     a.Relation,
-			FunctionName: listSubjectsFunctionName(a.ObjectType, a.Relation),
-		})
-	}
-
-	// Build the body with routing cases
-	var bodyStmts []Stmt
-	if len(cases) > 0 {
-		bodyStmts = append(bodyStmts, Comment{Text: "Route to specialized functions for all type/relation pairs"})
-		for _, c := range cases {
-			bodyStmts = append(bodyStmts, If{
-				Cond: And(
-					Eq{Left: ObjectType, Right: Lit(c.ObjectType)},
-					Eq{Left: Param("p_relation"), Right: Lit(c.Relation)},
-				),
-				Then: []Stmt{
-					ReturnQuery{Query: "SELECT * FROM " + c.FunctionName + "(p_object_id, p_subject_type, p_limit, p_after)"},
-					Return{},
-				},
-			})
-		}
-	}
-	bodyStmts = append(bodyStmts,
-		Comment{Text: "Unknown type/relation pair - return empty result (relation not defined in model)"},
-		Comment{Text: "This matches check_permission behavior for unknown relations (returns 0/denied)"},
-		Return{},
-	)
+	cases := collectListDispatcherCases(analyses, listSubjectsFunctionName)
 
 	fn := PlpgsqlFunction{
 		Name:    "list_accessible_subjects",
@@ -301,7 +262,23 @@ func generateListSubjectsDispatcher(analyses []RelationAnalysis) (string, error)
 			"Generated dispatcher for list_accessible_subjects",
 			"Routes to specialized functions for all type/relation pairs",
 		},
-		Body: bodyStmts,
+		Body: buildDispatcherBody(cases, "p_object_id, p_subject_type, p_limit, p_after"),
 	}
 	return fn.SQL(), nil
+}
+
+// collectListDispatcherCases gathers eligible analyses into dispatcher cases.
+func collectListDispatcherCases(analyses []RelationAnalysis, nameFunc func(string, string) string) []ListDispatcherCase {
+	var cases []ListDispatcherCase
+	for _, a := range analyses {
+		if !a.Capabilities.ListAllowed {
+			continue
+		}
+		cases = append(cases, ListDispatcherCase{
+			ObjectType:   a.ObjectType,
+			Relation:     a.Relation,
+			FunctionName: nameFunc(a.ObjectType, a.Relation),
+		})
+	}
+	return cases
 }

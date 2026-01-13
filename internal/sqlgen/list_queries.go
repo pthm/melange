@@ -24,10 +24,7 @@ func ListObjectsDirectQuery(input ListObjectsDirectInput) (string, error) {
 		SelectCol("object_id").
 		Distinct()
 
-	// Add exclusion predicates
-	for _, pred := range input.Exclusions.BuildPredicates() {
-		q.Where(pred)
-	}
+	q.Where(input.Exclusions.BuildPredicates()...)
 
 	return q.SQL(), nil
 }
@@ -76,10 +73,7 @@ func ListObjectsUsersetSubjectQuery(input ListObjectsUsersetSubjectInput) (strin
 		SelectCol("object_id").
 		Distinct()
 
-	// Add exclusion predicates
-	for _, pred := range input.Exclusions.BuildPredicates() {
-		q.Where(pred)
-	}
+	q.Where(input.Exclusions.BuildPredicates()...)
 
 	return q.SQL(), nil
 }
@@ -110,10 +104,7 @@ func ListObjectsComplexClosureQuery(input ListObjectsComplexClosureInput) (strin
 		SelectCol("object_id").
 		Distinct()
 
-	// Add exclusion predicates
-	for _, pred := range input.Exclusions.BuildPredicates() {
-		q.Where(pred)
-	}
+	q.Where(input.Exclusions.BuildPredicates()...)
 
 	return q.SQL(), nil
 }
@@ -204,10 +195,7 @@ func ListObjectsUsersetPatternSimpleQuery(input ListObjectsUsersetPatternSimpleI
 		SelectCol("object_id").
 		Distinct()
 
-	// Add exclusion predicates
-	for _, pred := range input.Exclusions.BuildPredicates() {
-		q.Where(pred)
-	}
+	q.Where(input.Exclusions.BuildPredicates()...)
 
 	return q.SQL(), nil
 }
@@ -257,10 +245,7 @@ func ListObjectsUsersetPatternComplexQuery(input ListObjectsUsersetPatternComple
 		SelectCol("object_id").
 		Distinct()
 
-	// Add exclusion predicates
-	for _, pred := range input.Exclusions.BuildPredicates() {
-		q.Where(pred)
-	}
+	q.Where(input.Exclusions.BuildPredicates()...)
 
 	return q.SQL(), nil
 }
@@ -323,10 +308,7 @@ func ListObjectsCrossTypeTTUQuery(input ListObjectsCrossTypeTTUInput) (string, e
 		SelectCol("object_id").
 		Distinct()
 
-	// Add exclusion predicates
-	for _, pred := range input.Exclusions.BuildPredicates() {
-		q.Where(pred)
-	}
+	q.Where(input.Exclusions.BuildPredicates()...)
 
 	return q.SQL(), nil
 }
@@ -338,7 +320,9 @@ type ListObjectsRecursiveTTUInput struct {
 }
 
 func ListObjectsRecursiveTTUQuery(input ListObjectsRecursiveTTUInput) (string, error) {
-	// This is a CTE recursive query pattern - uses 'accessible' as the source table
+	depthLimit := Lt{Left: Col{Table: "a", Column: "depth"}, Right: Int(25)}
+	whereExprs := append([]Expr{depthLimit}, input.Exclusions.BuildPredicates()...)
+
 	stmt := SelectStmt{
 		Distinct: true,
 		Columns:  []string{"child.object_id", "a.depth + 1 AS depth"},
@@ -357,14 +341,7 @@ func ListObjectsRecursiveTTUQuery(input ListObjectsRecursiveTTUInput) (string, e
 				),
 			},
 		},
-		Where: Lt{Left: Col{Table: "a", Column: "depth"}, Right: Int(25)},
-	}
-
-	// Add exclusion predicates to WHERE
-	predicates := input.Exclusions.BuildPredicates()
-	if len(predicates) > 0 {
-		allPredicates := append([]Expr{stmt.Where}, predicates...)
-		stmt.Where = And(allPredicates...)
+		Where: And(whereExprs...),
 	}
 
 	return stmt.SQL(), nil
@@ -500,10 +477,7 @@ func ListSubjectsDirectQuery(input ListSubjectsDirectInput) (string, error) {
 		SelectCol("subject_id").
 		Distinct()
 
-	// Add exclusion predicates
-	for _, pred := range input.Exclusions.BuildPredicates() {
-		q.Where(pred)
-	}
+	q.Where(input.Exclusions.BuildPredicates()...)
 
 	return q.SQL(), nil
 }
@@ -543,10 +517,7 @@ func ListSubjectsComplexClosureQuery(input ListSubjectsComplexClosureInput) (str
 		SelectCol("subject_id").
 		Distinct()
 
-	// Add exclusion predicates
-	for _, pred := range input.Exclusions.BuildPredicates() {
-		q.Where(pred)
-	}
+	q.Where(input.Exclusions.BuildPredicates()...)
 
 	return q.SQL(), nil
 }
@@ -646,10 +617,7 @@ func ListSubjectsUsersetPatternSimpleQuery(input ListSubjectsUsersetPatternSimpl
 		Select("s.subject_id").
 		Distinct()
 
-	// Add exclusion predicates
-	for _, pred := range input.Exclusions.BuildPredicates() {
-		q.Where(pred)
-	}
+	q.Where(input.Exclusions.BuildPredicates()...)
 
 	return q.SQL(), nil
 }
@@ -667,7 +635,9 @@ type ListSubjectsUsersetPatternComplexInput struct {
 }
 
 func ListSubjectsUsersetPatternComplexQuery(input ListSubjectsUsersetPatternComplexInput) (string, error) {
-	conditions := []Expr{
+	whereExprs := []Expr{
+		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(input.ObjectType)},
+		In{Expr: Col{Table: "t", Column: "relation"}, Values: input.SourceRelations},
 		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: input.ObjectIDExpr},
 		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(input.SubjectType)},
 		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
@@ -675,7 +645,7 @@ func ListSubjectsUsersetPatternComplexQuery(input ListSubjectsUsersetPatternComp
 	}
 
 	if input.IsClosurePattern {
-		conditions = append(conditions, CheckPermission{
+		whereExprs = append(whereExprs, CheckPermission{
 			Subject: SubjectRef{
 				Type: input.SubjectTypeExpr,
 				ID:   Col{Table: "s", Column: "subject_id"},
@@ -686,7 +656,8 @@ func ListSubjectsUsersetPatternComplexQuery(input ListSubjectsUsersetPatternComp
 		})
 	}
 
-	// Use lateral join with list function
+	whereExprs = append(whereExprs, input.Exclusions.BuildPredicates()...)
+
 	listFuncName := "list_" + Ident(input.SubjectType) + "_" + Ident(input.SubjectRelation) + "_subjects"
 	listFunc := LateralFunction{
 		Name:  listFuncName,
@@ -704,18 +675,7 @@ func ListSubjectsUsersetPatternComplexQuery(input ListSubjectsUsersetPatternComp
 				TableExpr: listFunc,
 			},
 		},
-		Where: And(
-			Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(input.ObjectType)},
-			In{Expr: Col{Table: "t", Column: "relation"}, Values: input.SourceRelations},
-			And(conditions...),
-		),
-	}
-
-	// Add exclusion predicates to WHERE
-	predicates := input.Exclusions.BuildPredicates()
-	if len(predicates) > 0 {
-		allPredicates := append([]Expr{stmt.Where}, predicates...)
-		stmt.Where = And(allPredicates...)
+		Where: And(whereExprs...),
 	}
 
 	return stmt.SQL(), nil
@@ -787,10 +747,7 @@ func ListSubjectsUsersetPatternRecursiveComplexQuery(input ListSubjectsUsersetPa
 		Select("m.subject_id").
 		Distinct()
 
-	// Add exclusion predicates
-	for _, pred := range input.Exclusions.BuildPredicates() {
-		q.Where(pred)
-	}
+	q.Where(input.Exclusions.BuildPredicates()...)
 
 	return q.SQL(), nil
 }

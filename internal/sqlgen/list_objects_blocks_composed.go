@@ -2,13 +2,6 @@ package sqlgen
 
 import "fmt"
 
-// =============================================================================
-// Composed Strategy Blocks (List Objects)
-// =============================================================================
-// =============================================================================
-// Composed Strategy Blocks
-// =============================================================================
-
 // ComposedObjectsBlockSet contains blocks for a composed list_objects function.
 // Composed functions handle indirect anchor patterns (TTU and userset composition).
 type ComposedObjectsBlockSet struct {
@@ -95,7 +88,7 @@ func BuildListObjectsComposedBlocks(plan ListPlan) (ComposedObjectsBlockSet, err
 		}
 
 	case "userset":
-		block, err := buildComposedUsersetObjectsBlock(plan, anchor, firstStep, exclusions)
+		block, err := buildComposedUsersetObjectsBlock(plan, firstStep, exclusions)
 		if err != nil {
 			return ComposedObjectsBlockSet{}, err
 		}
@@ -200,7 +193,7 @@ func buildComposedRecursiveTTUObjectsBlock(plan ListPlan, anchor *IndirectAnchor
 }
 
 // buildComposedUsersetObjectsBlock builds a userset composition block.
-func buildComposedUsersetObjectsBlock(plan ListPlan, _ *IndirectAnchorInfo, firstStep AnchorPathStep, exclusions ExclusionConfig) (*TypedQueryBlock, error) {
+func buildComposedUsersetObjectsBlock(plan ListPlan, firstStep AnchorPathStep, exclusions ExclusionConfig) (*TypedQueryBlock, error) {
 	exclusionPreds := exclusions.BuildPredicates()
 
 	// Build subquery for list function call using typed DSL

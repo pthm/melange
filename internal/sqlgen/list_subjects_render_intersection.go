@@ -88,20 +88,6 @@ func buildIntersectionRegularQuery(plan ListPlan, candidatesSQL string) string {
 	return cteQuery.SQL()
 }
 
-// renderSubjectsIntersectionWildcardTail renders the wildcard handling for intersection.
-// Unlike simple wildcard relations, intersections require all parts to be satisfied.
-// The check_permission filter already correctly handles intersection logic, so we
-// return filtered_candidates directly without additional wildcard filtering.
-// For example: `viewer: [user:*] and allowed` - a user who gets viewer via the
-// wildcard AND is in allowed should be returned, even though check_permission_no_wildcard
-// would fail (since there's no direct viewer tuple for that user).
-func renderSubjectsIntersectionWildcardTail(_ ListPlan) string {
-	// For intersections, return all filtered candidates directly.
-	// The check_permission filter in filtered_candidates already handles
-	// intersection logic correctly, including wildcard components.
-	return "\n        SELECT fc.subject_id FROM filtered_candidates fc"
-}
-
 // buildIntersectionUsersetFilterQuery builds the userset filter path query for intersection.
 func buildIntersectionUsersetFilterQuery(plan ListPlan, candidatesSQL string, selfBlock *TypedQueryBlock) string {
 	// Build the main query with check_permission filter
@@ -138,18 +124,13 @@ func buildIntersectionUsersetFilterQuery(plan ListPlan, candidatesSQL string, se
 
 // renderIntersectionRegularElseBranch builds the ELSE branch for intersection regular path.
 func renderIntersectionRegularElseBranch(plan ListPlan, regularPaginatedQuery string) []Stmt {
-	stmts := make([]Stmt, 0, 4)
-
-	// Add type guard
-	typeGuard := If{
-		Cond: NotIn{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
-		Then: []Stmt{Return{}},
-	}
-	stmts = append(stmts,
+	return []Stmt{
 		Comment{Text: "Regular subject type: gather candidates and filter with check_permission"},
 		Comment{Text: "Guard: return empty if subject type is not allowed by the model"},
-		typeGuard,
+		If{
+			Cond: NotIn{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
+			Then: []Stmt{Return{}},
+		},
 		ReturnQuery{Query: regularPaginatedQuery},
-	)
-	return stmts
+	}
 }

@@ -2,75 +2,70 @@ package sqlgen
 
 import "fmt"
 
-// =============================================================================
-// List Objects Block Builders
-// =============================================================================
-
 // BuildListObjectsBlocks builds all query blocks for a list_objects function.
 // Returns a BlockSet with Primary blocks for the main query path.
 func BuildListObjectsBlocks(plan ListPlan) (BlockSet, error) {
 	var blocks BlockSet
 
-	// Standalone access blocks are only added when there are access paths
-	// not constrained by intersection. For patterns like `viewer: [user] and writer`,
-	// the direct access ([user]) is inside the intersection, so we skip standalone blocks.
 	if plan.HasStandaloneAccess {
-		// Build direct tuple lookup block
-		directBlock, err := buildListObjectsDirectBlock(plan)
+		standaloneBlocks, err := buildStandaloneAccessBlocks(plan)
 		if err != nil {
 			return BlockSet{}, err
 		}
-		blocks.Primary = append(blocks.Primary, directBlock)
-
-		// Build userset subject block if needed
-		if plan.HasUsersetSubject {
-			usersetBlock, err := buildListObjectsUsersetSubjectBlock(plan)
-			if err != nil {
-				return BlockSet{}, err
-			}
-			blocks.Primary = append(blocks.Primary, usersetBlock)
-		}
-
-		// Build complex closure blocks
-		complexBlocks, err := buildTypedListObjectsComplexClosureBlocks(plan)
-		if err != nil {
-			return BlockSet{}, err
-		}
-		blocks.Primary = append(blocks.Primary, complexBlocks...)
-
-		// Build intersection closure blocks (for composing with other relations)
-		intersectionClosureBlocks, err := buildListObjectsIntersectionClosureBlocks(plan)
-		if err != nil {
-			return BlockSet{}, err
-		}
-		blocks.Primary = append(blocks.Primary, intersectionClosureBlocks...)
-
-		// Build userset pattern blocks if needed
-		if plan.HasUsersetPatterns {
-			usersetPatternBlocks, err := buildListObjectsUsersetPatternBlocks(plan)
-			if err != nil {
-				return BlockSet{}, err
-			}
-			blocks.Primary = append(blocks.Primary, usersetPatternBlocks...)
-		}
+		blocks.Primary = append(blocks.Primary, standaloneBlocks...)
 	}
 
-	// Intersection group blocks are always added when present
-	// These represent AND groups that must all be satisfied
 	intersectionGroupBlocks, err := buildListObjectsIntersectionGroupBlocks(plan)
 	if err != nil {
 		return BlockSet{}, err
 	}
 	blocks.Primary = append(blocks.Primary, intersectionGroupBlocks...)
 
-	// Self-candidate block is always added
-	// This handles the case where the subject is a userset on the same object type
-	selfBlock, err := buildListObjectsSelfCandidateBlock(plan)
-	if err != nil {
-		return BlockSet{}, err
-	}
-	if selfBlock != nil {
+	if selfBlock := buildListObjectsSelfCandidateBlock(plan); selfBlock != nil {
 		blocks.Primary = append(blocks.Primary, *selfBlock)
+	}
+
+	return blocks, nil
+}
+
+// buildStandaloneAccessBlocks builds blocks for access paths not constrained by intersection.
+// For patterns like `viewer: [user] and writer`, the direct access ([user]) is inside
+// the intersection, so standalone blocks are skipped.
+func buildStandaloneAccessBlocks(plan ListPlan) ([]TypedQueryBlock, error) {
+	var blocks []TypedQueryBlock
+
+	directBlock, err := buildListObjectsDirectBlock(plan)
+	if err != nil {
+		return nil, err
+	}
+	blocks = append(blocks, directBlock)
+
+	if plan.HasUsersetSubject {
+		usersetBlock, err := buildListObjectsUsersetSubjectBlock(plan)
+		if err != nil {
+			return nil, err
+		}
+		blocks = append(blocks, usersetBlock)
+	}
+
+	complexBlocks, err := buildTypedListObjectsComplexClosureBlocks(plan)
+	if err != nil {
+		return nil, err
+	}
+	blocks = append(blocks, complexBlocks...)
+
+	intersectionClosureBlocks, err := buildListObjectsIntersectionClosureBlocks(plan)
+	if err != nil {
+		return nil, err
+	}
+	blocks = append(blocks, intersectionClosureBlocks...)
+
+	if plan.HasUsersetPatterns {
+		usersetPatternBlocks, err := buildListObjectsUsersetPatternBlocks(plan)
+		if err != nil {
+			return nil, err
+		}
+		blocks = append(blocks, usersetPatternBlocks...)
 	}
 
 	return blocks, nil
@@ -147,10 +142,8 @@ func buildListObjectsUsersetSubjectBlock(plan ListPlan) (TypedQueryBlock, error)
 
 	return TypedQueryBlock{
 		Comments: []string{
-			"-- Direct userset subject matching: when the subject IS a userset (e.g., group:fga#member)",
-			"-- and there's a tuple with that userset (or a satisfying relation) as the subject",
-			"-- This handles cases like: tuple(document:1, viewer, group:fga#member_c4) queried by group:fga#member",
-			"-- where member satisfies member_c4 via the closure (member → member_c1 → ... → member_c4)",
+			"-- Userset subject matching: subject IS a userset (e.g., group:fga#member)",
+			"-- matches tuples where subject_id has equivalent or satisfying relation via closure",
 		},
 		Query: q.Build(),
 	}, nil
@@ -310,35 +303,25 @@ func buildIntersectionGroupBlock(plan ListPlan, idx int, group IntersectionGroup
 
 // buildIntersectionPartQuery builds a query for a single intersection part.
 func buildIntersectionPartQuery(plan ListPlan, part IntersectionPart) SelectStmt {
+	var q *TupleQuery
+	alias := "t"
+
 	switch {
 	case part.IsThis:
-		// Direct tuple lookup on the same relation
-		q := Tuples("t").
+		q = Tuples(alias).
 			ObjectType(plan.ObjectType).
 			Relations(plan.Relation).
 			SelectCol("object_id").
 			Where(
-				Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
-				In{Expr: SubjectType, Values: plan.AllowedSubjectTypes}, // Type guard for allowed subject types
-				SubjectIDMatch(Col{Table: "t", Column: "subject_id"}, SubjectID, part.HasWildcard),
+				Eq{Left: Col{Table: alias, Column: "subject_type"}, Right: SubjectType},
+				In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
+				SubjectIDMatch(Col{Table: alias, Column: "subject_id"}, SubjectID, part.HasWildcard),
 			).
 			Distinct()
 
-		// Add exclusion check if part has nested exclusion
-		if part.ExcludedRelation != "" {
-			q.Where(CheckPermission{
-				Subject:     SubjectParams(),
-				Relation:    part.ExcludedRelation,
-				Object:      LiteralObject(plan.ObjectType, Col{Table: "t", Column: "object_id"}),
-				ExpectAllow: false,
-			})
-		}
-
-		return q.Build()
-
 	case part.ParentRelation != nil:
-		// TTU pattern: lookup via parent with check_permission validation
-		q := Tuples("child").
+		alias = "child"
+		q = Tuples(alias).
 			ObjectType(plan.ObjectType).
 			Relations(part.ParentRelation.LinkingRelation).
 			SelectCol("object_id").
@@ -346,50 +329,36 @@ func buildIntersectionPartQuery(plan ListPlan, part IntersectionPart) SelectStmt
 				Subject:  SubjectParams(),
 				Relation: part.ParentRelation.Relation,
 				Object: ObjectRef{
-					Type: Col{Table: "child", Column: "subject_type"},
-					ID:   Col{Table: "child", Column: "subject_id"},
+					Type: Col{Table: alias, Column: "subject_type"},
+					ID:   Col{Table: alias, Column: "subject_id"},
 				},
 				ExpectAllow: true,
 			}).
 			Distinct()
 
-		// Add exclusion check if part has nested exclusion
-		if part.ExcludedRelation != "" {
-			q.Where(CheckPermission{
-				Subject:     SubjectParams(),
-				Relation:    part.ExcludedRelation,
-				Object:      LiteralObject(plan.ObjectType, Col{Table: "child", Column: "object_id"}),
-				ExpectAllow: false,
-			})
-		}
-
-		return q.Build()
-
 	default:
-		// Computed userset: use check_permission to validate
-		q := Tuples("t").
+		q = Tuples(alias).
 			ObjectType(plan.ObjectType).
 			SelectCol("object_id").
 			Where(CheckPermission{
 				Subject:     SubjectParams(),
 				Relation:    part.Relation,
-				Object:      LiteralObject(plan.ObjectType, Col{Table: "t", Column: "object_id"}),
+				Object:      LiteralObject(plan.ObjectType, Col{Table: alias, Column: "object_id"}),
 				ExpectAllow: true,
 			}).
 			Distinct()
-
-		// Add exclusion check if part has nested exclusion
-		if part.ExcludedRelation != "" {
-			q.Where(CheckPermission{
-				Subject:     SubjectParams(),
-				Relation:    part.ExcludedRelation,
-				Object:      LiteralObject(plan.ObjectType, Col{Table: "t", Column: "object_id"}),
-				ExpectAllow: false,
-			})
-		}
-
-		return q.Build()
 	}
+
+	if part.ExcludedRelation != "" {
+		q.Where(CheckPermission{
+			Subject:     SubjectParams(),
+			Relation:    part.ExcludedRelation,
+			Object:      LiteralObject(plan.ObjectType, Col{Table: alias, Column: "object_id"}),
+			ExpectAllow: false,
+		})
+	}
+
+	return q.Build()
 }
 
 // buildListObjectsUsersetPatternBlocks builds blocks for userset patterns.
@@ -448,10 +417,7 @@ func buildListObjectsComplexUsersetBlock(plan ListPlan, pattern listUsersetPatte
 
 	return TypedQueryBlock{
 		Comments: []string{
-			"-- Path: Via " + pattern.SubjectType + "#" + pattern.SubjectRelation + " membership",
-			"-- Complex userset: use check_permission_internal for membership verification",
-			"-- Note: No type guard needed here because check_permission_internal handles all validation",
-			"-- including userset self-referential checks (e.g., group:1#member checking member on group:1)",
+			"-- Via " + pattern.SubjectType + "#" + pattern.SubjectRelation + " (complex userset, validated by check_permission)",
 		},
 		Query: q.Build(),
 	}, nil
@@ -485,21 +451,15 @@ func buildListObjectsSimpleUsersetBlock(plan ListPlan, pattern listUsersetPatter
 
 	return TypedQueryBlock{
 		Comments: []string{
-			"-- Path: Via " + pattern.SubjectType + "#" + pattern.SubjectRelation + " membership",
-			"-- Simple userset: JOIN with membership tuples",
+			"-- Via " + pattern.SubjectType + "#" + pattern.SubjectRelation + " (simple userset, JOIN with membership tuples)",
 		},
 		Query: q.Build(),
 	}, nil
 }
 
-// buildListObjectsSelfCandidateBlock builds the self-candidate block.
-// This block handles the case where the subject is a userset on the same object type.
-// For example: querying list_objects(document, viewer, document:1#writer) should return
-// document:1 if writer satisfies viewer.
-func buildListObjectsSelfCandidateBlock(plan ListPlan) (*TypedQueryBlock, error) {
-	// Build closure check: does the userset relation in the subject satisfy the queried relation?
-	// Check: c.object_type = plan.ObjectType AND c.relation = plan.Relation AND
-	//        c.satisfying_relation = substring(p_subject_id from position('#') + 1)
+// buildListObjectsSelfCandidateBlock builds the self-candidate block for when
+// the subject is a userset on the same object type (e.g., document:1#writer).
+func buildListObjectsSelfCandidateBlock(plan ListPlan) *TypedQueryBlock {
 	closureStmt := SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
 		FromExpr:    ClosureTable(plan.Inline.ClosureRows, plan.Inline.ClosureValues, "c"),
@@ -521,13 +481,7 @@ func buildListObjectsSelfCandidateBlock(plan ListPlan) (*TypedQueryBlock, error)
 	}
 
 	return &TypedQueryBlock{
-		Comments: []string{
-			"-- Self-candidate: when subject is a userset on the same object type",
-			"-- e.g., subject_id = 'document:1#viewer' querying object_type = 'document'",
-			"-- The object 'document:1' should be considered as a candidate",
-			"-- No type guard here - validity comes from the closure check below",
-			"-- No exclusion checks for self-candidate - this is a structural validity check",
-		},
-		Query: stmt,
-	}, nil
+		Comments: []string{"-- Self-candidate: subject is userset on same object type"},
+		Query:    stmt,
+	}
 }

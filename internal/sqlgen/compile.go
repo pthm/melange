@@ -2,6 +2,7 @@ package sqlgen
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -101,50 +102,32 @@ func functionNameNoWildcard(objectType, relation string) string {
 }
 
 // sanitizeIdentifier converts a type/relation name to a valid SQL identifier.
+// Delegates to the canonical implementation in sqldsl.
 func sanitizeIdentifier(s string) string {
-	var result strings.Builder
-	for _, c := range s {
-		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' {
-			result.WriteRune(c)
-		} else {
-			result.WriteRune('_')
-		}
-	}
-	return result.String()
+	return Ident(s)
 }
 
 // computeHasStandaloneAccess determines if the relation has access paths outside of intersections.
 func computeHasStandaloneAccess(a RelationAnalysis) bool {
-	// If no intersection, all access paths are standalone
 	if !a.Features.HasIntersection {
 		return a.Features.HasDirect || a.Features.HasImplied || a.Features.HasUserset || a.Features.HasRecursive
 	}
 
-	// Check if any intersection group has a "This" part, meaning direct access is
-	// constrained by the intersection rather than being standalone.
-	hasIntersectionWithThis := false
-	for _, group := range a.IntersectionGroups {
-		for _, part := range group.Parts {
-			if part.IsThis {
-				hasIntersectionWithThis = true
-				break
-			}
-		}
-		if hasIntersectionWithThis {
-			break
-		}
+	// Implied and recursive are always standalone, regardless of intersection.
+	if a.Features.HasImplied || a.Features.HasRecursive {
+		return true
 	}
 
-	// If direct types are inside an intersection (This pattern), don't count them as standalone.
-	// Userset patterns from subject type restrictions (e.g., [group#member]) are also part of
-	// the "This" pattern, so they shouldn't be standalone either.
-	// Check for other standalone access paths (implied, recursive).
-	hasStandaloneDirect := a.Features.HasDirect && !hasIntersectionWithThis
-	hasStandaloneImplied := a.Features.HasImplied
-	hasStandaloneUserset := a.Features.HasUserset && !hasIntersectionWithThis
-	hasStandaloneRecursive := a.Features.HasRecursive
+	// Check if any intersection group has a "This" part, meaning direct/userset access
+	// is constrained by the intersection rather than being standalone.
+	hasIntersectionWithThis := slices.ContainsFunc(a.IntersectionGroups, func(g IntersectionGroupInfo) bool {
+		return slices.ContainsFunc(g.Parts, func(p IntersectionPart) bool {
+			return p.IsThis
+		})
+	})
 
-	return hasStandaloneDirect || hasStandaloneImplied || hasStandaloneUserset || hasStandaloneRecursive
+	// Direct and userset are standalone only if not inside an intersection.
+	return (a.Features.HasDirect || a.Features.HasUserset) && !hasIntersectionWithThis
 }
 
 // DispatcherData contains data for rendering dispatcher template.

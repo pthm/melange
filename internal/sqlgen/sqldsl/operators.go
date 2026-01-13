@@ -12,10 +12,7 @@ type Eq struct {
 	Right Expr
 }
 
-// SQL renders the equality comparison.
-func (e Eq) SQL() string {
-	return e.Left.SQL() + " = " + e.Right.SQL()
-}
+func (e Eq) SQL() string { return e.Left.SQL() + " = " + e.Right.SQL() }
 
 // Ne represents a not-equal comparison (<>).
 type Ne struct {
@@ -23,10 +20,7 @@ type Ne struct {
 	Right Expr
 }
 
-// SQL renders the not-equal comparison.
-func (n Ne) SQL() string {
-	return n.Left.SQL() + " <> " + n.Right.SQL()
-}
+func (n Ne) SQL() string { return n.Left.SQL() + " <> " + n.Right.SQL() }
 
 // Lt represents a less-than comparison (<).
 type Lt struct {
@@ -34,10 +28,7 @@ type Lt struct {
 	Right Expr
 }
 
-// SQL renders the less-than comparison.
-func (l Lt) SQL() string {
-	return l.Left.SQL() + " < " + l.Right.SQL()
-}
+func (l Lt) SQL() string { return l.Left.SQL() + " < " + l.Right.SQL() }
 
 // Gt represents a greater-than comparison (>).
 type Gt struct {
@@ -45,10 +36,7 @@ type Gt struct {
 	Right Expr
 }
 
-// SQL renders the greater-than comparison.
-func (g Gt) SQL() string {
-	return g.Left.SQL() + " > " + g.Right.SQL()
-}
+func (g Gt) SQL() string { return g.Left.SQL() + " > " + g.Right.SQL() }
 
 // Lte represents a less-than-or-equal comparison (<=).
 type Lte struct {
@@ -56,10 +44,7 @@ type Lte struct {
 	Right Expr
 }
 
-// SQL renders the less-than-or-equal comparison.
-func (l Lte) SQL() string {
-	return l.Left.SQL() + " <= " + l.Right.SQL()
-}
+func (l Lte) SQL() string { return l.Left.SQL() + " <= " + l.Right.SQL() }
 
 // Gte represents a greater-than-or-equal comparison (>=).
 type Gte struct {
@@ -67,10 +52,7 @@ type Gte struct {
 	Right Expr
 }
 
-// SQL renders the greater-than-or-equal comparison.
-func (g Gte) SQL() string {
-	return g.Left.SQL() + " >= " + g.Right.SQL()
-}
+func (g Gte) SQL() string { return g.Left.SQL() + " >= " + g.Right.SQL() }
 
 // Arithmetic operators
 
@@ -80,10 +62,7 @@ type Add struct {
 	Right Expr
 }
 
-// SQL renders the addition.
-func (a Add) SQL() string {
-	return a.Left.SQL() + " + " + a.Right.SQL()
-}
+func (a Add) SQL() string { return a.Left.SQL() + " + " + a.Right.SQL() }
 
 // Sub represents subtraction (-).
 type Sub struct {
@@ -91,9 +70,15 @@ type Sub struct {
 	Right Expr
 }
 
-// SQL renders the subtraction.
-func (s Sub) SQL() string {
-	return s.Left.SQL() + " - " + s.Right.SQL()
+func (s Sub) SQL() string { return s.Left.SQL() + " - " + s.Right.SQL() }
+
+// quoteValues renders a slice of strings as quoted SQL literals.
+func quoteValues(values []string) string {
+	quoted := make([]string, len(values))
+	for i, v := range values {
+		quoted[i] = Lit(v).SQL()
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // In represents an IN clause for string values.
@@ -102,16 +87,11 @@ type In struct {
 	Values []string
 }
 
-// SQL renders the IN clause.
 func (i In) SQL() string {
 	if len(i.Values) == 0 {
 		return "FALSE"
 	}
-	quoted := make([]string, len(i.Values))
-	for j, v := range i.Values {
-		quoted[j] = Lit(v).SQL()
-	}
-	return i.Expr.SQL() + " IN (" + strings.Join(quoted, ", ") + ")"
+	return i.Expr.SQL() + " IN (" + quoteValues(i.Values) + ")"
 }
 
 // NotIn represents a NOT IN clause for string values.
@@ -120,50 +100,52 @@ type NotIn struct {
 	Values []string
 }
 
-// SQL renders the NOT IN clause.
 func (n NotIn) SQL() string {
 	if len(n.Values) == 0 {
 		return "TRUE"
 	}
-	quoted := make([]string, len(n.Values))
-	for j, v := range n.Values {
-		quoted[j] = Lit(v).SQL()
-	}
-	return n.Expr.SQL() + " NOT IN (" + strings.Join(quoted, ", ") + ")"
+	return n.Expr.SQL() + " NOT IN (" + quoteValues(n.Values) + ")"
 }
 
 // Logical operators
 
-// AndExpr represents a logical AND of multiple expressions.
-type AndExpr struct {
-	Exprs []Expr
-}
-
-// SQL renders the AND expression.
-func (a AndExpr) SQL() string {
-	if len(a.Exprs) == 0 {
-		return "TRUE"
-	}
-	if len(a.Exprs) == 1 {
-		return a.Exprs[0].SQL()
-	}
-	parts := make([]string, len(a.Exprs))
-	for i, e := range a.Exprs {
-		parts[i] = e.SQL()
-	}
-	return "(" + strings.Join(parts, " AND ") + ")"
-}
-
-// And creates an AND expression from multiple expressions.
-func And(exprs ...Expr) AndExpr {
-	// Filter out nil expressions
+// filterNilExprs removes nil expressions from the slice.
+func filterNilExprs(exprs []Expr) []Expr {
 	filtered := make([]Expr, 0, len(exprs))
 	for _, e := range exprs {
 		if e != nil {
 			filtered = append(filtered, e)
 		}
 	}
-	return AndExpr{Exprs: filtered}
+	return filtered
+}
+
+// joinExprs renders expressions joined by a separator, wrapped in parentheses if more than one.
+func joinExprs(exprs []Expr, sep, emptyVal string) string {
+	switch len(exprs) {
+	case 0:
+		return emptyVal
+	case 1:
+		return exprs[0].SQL()
+	default:
+		parts := make([]string, len(exprs))
+		for i, e := range exprs {
+			parts[i] = e.SQL()
+		}
+		return "(" + strings.Join(parts, sep) + ")"
+	}
+}
+
+// AndExpr represents a logical AND of multiple expressions.
+type AndExpr struct {
+	Exprs []Expr
+}
+
+func (a AndExpr) SQL() string { return joinExprs(a.Exprs, " AND ", "TRUE") }
+
+// And creates an AND expression from multiple expressions.
+func And(exprs ...Expr) AndExpr {
+	return AndExpr{Exprs: filterNilExprs(exprs)}
 }
 
 // OrExpr represents a logical OR of multiple expressions.
@@ -171,31 +153,11 @@ type OrExpr struct {
 	Exprs []Expr
 }
 
-// SQL renders the OR expression.
-func (o OrExpr) SQL() string {
-	if len(o.Exprs) == 0 {
-		return "FALSE"
-	}
-	if len(o.Exprs) == 1 {
-		return o.Exprs[0].SQL()
-	}
-	parts := make([]string, len(o.Exprs))
-	for i, e := range o.Exprs {
-		parts[i] = e.SQL()
-	}
-	return "(" + strings.Join(parts, " OR ") + ")"
-}
+func (o OrExpr) SQL() string { return joinExprs(o.Exprs, " OR ", "FALSE") }
 
 // Or creates an OR expression from multiple expressions.
 func Or(exprs ...Expr) OrExpr {
-	// Filter out nil expressions
-	filtered := make([]Expr, 0, len(exprs))
-	for _, e := range exprs {
-		if e != nil {
-			filtered = append(filtered, e)
-		}
-	}
-	return OrExpr{Exprs: filtered}
+	return OrExpr{Exprs: filterNilExprs(exprs)}
 }
 
 // NotExpr represents a logical NOT of an expression.
@@ -203,80 +165,54 @@ type NotExpr struct {
 	Expr Expr
 }
 
-// SQL renders the NOT expression.
-func (n NotExpr) SQL() string {
-	return "NOT (" + n.Expr.SQL() + ")"
-}
+func (n NotExpr) SQL() string { return "NOT (" + n.Expr.SQL() + ")" }
 
 // Not creates a NOT expression.
-func Not(expr Expr) NotExpr {
-	return NotExpr{Expr: expr}
-}
+func Not(expr Expr) NotExpr { return NotExpr{Expr: expr} }
 
 // Exists represents an EXISTS subquery.
 type Exists struct {
 	Query interface{ SQL() string }
 }
 
-// SQL renders the EXISTS expression.
-func (e Exists) SQL() string {
-	return "EXISTS (\n" + e.Query.SQL() + "\n)"
-}
+func (e Exists) SQL() string { return "EXISTS (\n" + e.Query.SQL() + "\n)" }
 
 // NotExists represents a NOT EXISTS subquery.
 type NotExists struct {
 	Query interface{ SQL() string }
 }
 
-// SQL renders the NOT EXISTS expression.
-func (n NotExists) SQL() string {
-	return "NOT EXISTS (\n" + n.Query.SQL() + "\n)"
-}
+func (n NotExists) SQL() string { return "NOT EXISTS (\n" + n.Query.SQL() + "\n)" }
 
 // ExistsExpr creates an Exists expression from a SelectStmt.
-// Use when you need EXISTS as part of a larger expression (e.g., in WHERE clause).
-func ExistsExpr(stmt SelectStmt) Exists {
-	return Exists{Query: stmt}
-}
+func ExistsExpr(stmt SelectStmt) Exists { return Exists{Query: stmt} }
 
 // IsNull represents IS NULL check.
 type IsNull struct {
 	Expr Expr
 }
 
-// SQL renders the IS NULL expression.
-func (i IsNull) SQL() string {
-	return i.Expr.SQL() + " IS NULL"
-}
+func (i IsNull) SQL() string { return i.Expr.SQL() + " IS NULL" }
 
 // IsNotNull represents IS NOT NULL check.
 type IsNotNull struct {
 	Expr Expr
 }
 
-// SQL renders the IS NOT NULL expression.
-func (i IsNotNull) SQL() string {
-	return i.Expr.SQL() + " IS NOT NULL"
-}
-
-// =============================================================================
-// CASE Expressions
-// =============================================================================
+func (i IsNotNull) SQL() string { return i.Expr.SQL() + " IS NOT NULL" }
 
 // CaseWhen represents a single WHEN clause in a CASE expression.
 type CaseWhen struct {
-	Cond   Expr // The condition to check
-	Result Expr // The result if condition is true
+	Cond   Expr
+	Result Expr
 }
 
 // CaseExpr represents a CASE expression with multiple WHEN clauses.
-// Renders: CASE WHEN cond1 THEN result1 WHEN cond2 THEN result2 ... ELSE default END
 type CaseExpr struct {
 	Whens []CaseWhen
-	Else  Expr // Default value if no WHEN matches (optional)
+	Else  Expr // optional default value
 }
 
-// SQL renders the CASE expression.
 func (c CaseExpr) SQL() string {
 	if len(c.Whens) == 0 {
 		if c.Else != nil {

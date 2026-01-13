@@ -120,11 +120,7 @@ func (f RelationFeatures) String() string {
 	if len(parts) == 0 {
 		return "None"
 	}
-	result := parts[0]
-	for i := 1; i < len(parts); i++ {
-		result += "+" + parts[i]
-	}
-	return result
+	return strings.Join(parts, "+")
 }
 
 // UsersetPattern represents a [type#relation] pattern in a relation definition.
@@ -454,33 +450,31 @@ func analyzeRelation(
 // detectFeatures identifies which features a relation uses.
 // Multiple features can be present - they will be composed in generated SQL.
 func detectFeatures(r RelationDefinition, analysis RelationAnalysis) RelationFeatures {
-	// Check for TTU in top-level parent relations
-	hasRecursive := len(analysis.ParentRelations) > 0
-
-	// Also check for TTU inside intersection groups - these also need cycle detection
-	if !hasRecursive {
-		for _, ig := range analysis.IntersectionGroups {
-			for _, part := range ig.Parts {
-				if part.ParentRelation != nil {
-					hasRecursive = true
-					break
-				}
-			}
-			if hasRecursive {
-				break
-			}
-		}
-	}
-
 	return RelationFeatures{
 		HasDirect:       len(analysis.DirectSubjectTypes) > 0,
 		HasImplied:      len(r.ImpliedBy) > 0,
 		HasWildcard:     hasWildcardRefs(r),
 		HasUserset:      len(analysis.UsersetPatterns) > 0,
-		HasRecursive:    hasRecursive,
+		HasRecursive:    hasTTUPatterns(analysis),
 		HasExclusion:    len(analysis.ExcludedRelations) > 0 || len(r.ExcludedParentRelations) > 0 || len(r.ExcludedIntersectionGroups) > 0,
 		HasIntersection: len(r.IntersectionGroups) > 0,
 	}
+}
+
+// hasTTUPatterns returns true if the relation has tuple-to-userset patterns.
+// This includes both top-level ParentRelations and TTU inside intersection groups.
+func hasTTUPatterns(analysis RelationAnalysis) bool {
+	if len(analysis.ParentRelations) > 0 {
+		return true
+	}
+	for _, ig := range analysis.IntersectionGroups {
+		for _, part := range ig.Parts {
+			if part.ParentRelation != nil {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // collectDirectSubjectTypes extracts direct subject types (not usersets).
@@ -547,9 +541,7 @@ func collectParentRelations(r RelationDefinition) []ParentRelationInfo {
 
 // collectExcludedRelations extracts all "but not X" patterns from a relation.
 func collectExcludedRelations(r RelationDefinition) []string {
-	excluded := make([]string, len(r.ExcludedRelations))
-	copy(excluded, r.ExcludedRelations)
-	return excluded
+	return append([]string(nil), r.ExcludedRelations...)
 }
 
 // collectExcludedParentRelations extracts TTU exclusions like "but not viewer from parent".
@@ -831,64 +823,101 @@ func sortByDependency(analyses []RelationAnalysis) []RelationAnalysis {
 }
 
 // canGenerateListFeatures checks if the given features allow list generation.
-// This checks a single relation's features - the full check in ComputeCanGenerate
-// also validates that ALL relations in the closure have compatible features.
+// The full check in ComputeCanGenerate also validates that ALL relations in the
+// closure have compatible features.
 //
-// List functions have different constraints than check functions because they use set
-// operations (UNION, EXCEPT, INTERSECT) rather than boolean composition.
-//
-// The hasIndirectAnchor parameter indicates whether an indirect anchor was found
-// via findIndirectAnchor(). When true, list generation is allowed even without
+// When hasIndirectAnchor is true, list generation is allowed even without
 // direct/implied access paths, as the access comes through the indirect anchor.
 func canGenerateListFeatures(f RelationFeatures, hasIndirectAnchor bool) (canGenerate bool, reason string) {
-	// Phase 8: If we have an indirect anchor, we can generate even without direct/implied.
-	// The composed template will trace through TTU paths to the anchor.
 	if hasIndirectAnchor {
-		// Indirect anchor provides access path - allow generation.
-		// The composed template will compose with the anchor relation's list function.
 		return true, ""
 	}
 
-	// Phase 2 & 4: Support Direct, Implied, Userset, and Wildcard patterns.
-	// These can all be handled with tuple lookup or JOIN patterns.
-	//
-	// Must have at least one access path:
-	// - Direct: relation has [user] or similar type restriction
-	// - Implied: relation references another relation (can_view: viewer)
-	// - Userset: relation has [group#member] patterns (Phase 4 handles these)
-	// - Recursive (TTU): relation has "viewer from parent" patterns (Phase 5 handles these)
-	//
-	// Any of these is sufficient as long as the closure validation passes.
-	// Phase 6: HasIntersection is also a valid access path - intersection groups
-	// combine direct relations and/or TTU patterns into a single access check.
+	// Must have at least one access path. All feature types are now supported:
+	// - Direct/Implied: tuple lookup
+	// - Userset: JOIN patterns (or check_permission_internal for complex)
+	// - Recursive (TTU): recursive CTEs or check_permission_internal
+	// - Intersection: INTERSECT set operations
+	// - Exclusion: NOT EXISTS anti-join or check_permission_internal
+	// - Wildcard: SubjectIDCheck handles matching
 	if !f.HasDirect && !f.HasImplied && !f.HasUserset && !f.HasRecursive && !f.HasIntersection {
 		return false, "no access path (neither direct nor implied)"
 	}
 
-	// HasWildcard is allowed: SubjectIDCheck handles wildcard matching,
-	// and model changes regenerate functions with correct behavior.
-	// Type guards (AllowedSubjectTypes) ensure type restrictions are enforced.
-
-	// HasImplied is allowed: the relation closure (SatisfyingRelations) is inlined
-	// into the RelationList. The closure validation in computeCanGenerateList
-	// ensures all relations in the closure are themselves simple.
-
-	// Phase 3: HasExclusion is now supported via NOT EXISTS anti-join
-	// or check_permission_internal for complex excluded relations.
-
-	// Phase 4: HasUserset is now supported via UNION with JOIN patterns.
-	// Simple userset patterns use tuple JOINs; complex patterns (where the
-	// subject relation has TTU/exclusion/etc.) use check_permission_internal.
-
-	// Phase 5: HasRecursive is now supported via recursive CTEs.
-	// Self-referential TTU uses true recursive CTEs with depth limit.
-	// Cross-type TTU uses check_permission_internal on parent objects.
-
-	// Phase 6: HasIntersection is now supported via INTERSECT set operations.
-	// Each intersection group uses INTERSECT on its parts, groups are UNION'd.
-	// For list_subjects, candidates are gathered and filtered with check_permission.
-
 	return true, ""
+}
+
+// subjectTypeCollector tracks seen subject types and appends new ones to a target slice.
+// This reduces repetition when propagating AllowedSubjectTypes from multiple sources.
+type subjectTypeCollector struct {
+	seen   map[string]bool
+	target *[]string
+}
+
+// newSubjectTypeCollector creates a collector initialized with existing types.
+func newSubjectTypeCollector(target *[]string) *subjectTypeCollector {
+	seen := make(map[string]bool)
+	for _, t := range *target {
+		seen[t] = true
+	}
+	return &subjectTypeCollector{seen: seen, target: target}
+}
+
+// add appends a type if not already seen. Returns true if a new type was added.
+func (c *subjectTypeCollector) add(t string) bool {
+	if c.seen[t] {
+		return false
+	}
+	c.seen[t] = true
+	*c.target = append(*c.target, t)
+	return true
+}
+
+// addFrom adds all types from both DirectSubjectTypes and AllowedSubjectTypes.
+// Returns true if any new types were added.
+func (c *subjectTypeCollector) addFrom(a *RelationAnalysis) bool {
+	changed := false
+	for _, t := range a.DirectSubjectTypes {
+		if c.add(t) {
+			changed = true
+		}
+	}
+	for _, t := range a.AllowedSubjectTypes {
+		if c.add(t) {
+			changed = true
+		}
+	}
+	return changed
+}
+
+// addTypesFromTTU adds subject types from TTU target relations.
+// For patterns like "viewer from parent" where parent links to folders,
+// this adds subject types from folder.viewer.
+func addTypesFromTTU(
+	collector *subjectTypeCollector,
+	lookup map[string]map[string]*RelationAnalysis,
+	objectType string,
+	parent *ParentRelationInfo,
+) {
+	targetTypes := getLinkingTypes(lookup, objectType, parent.LinkingRelation)
+	for _, targetType := range targetTypes {
+		if targetAnalysis, ok := lookup[targetType][parent.Relation]; ok {
+			collector.addFrom(targetAnalysis)
+		}
+	}
+}
+
+// getLinkingTypes returns the allowed types for a linking relation.
+// Prefers AllowedSubjectTypes, falls back to DirectSubjectTypes.
+func getLinkingTypes(lookup map[string]map[string]*RelationAnalysis, objectType, linkingRelation string) []string {
+	linkingAnalysis, ok := lookup[objectType][linkingRelation]
+	if !ok {
+		return nil
+	}
+	if len(linkingAnalysis.AllowedSubjectTypes) > 0 {
+		return linkingAnalysis.AllowedSubjectTypes
+	}
+	return linkingAnalysis.DirectSubjectTypes
 }
 
 // ComputeCanGenerate walks the dependency graph and sets Capabilities on each analysis.
@@ -919,79 +948,33 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 	for i := range sorted {
 		a := &sorted[i]
 
-		// Collect allowed subject types from all satisfying relations
-		// This ensures type restrictions are enforced correctly
-		seenTypes := make(map[string]bool)
+		// Collect allowed subject types from all satisfying relations and their userset patterns.
+		// This ensures type restrictions are enforced correctly.
+		collector := newSubjectTypeCollector(&a.AllowedSubjectTypes)
 		for _, rel := range a.SatisfyingRelations {
 			relAnalysis, ok := lookup[a.ObjectType][rel]
 			if !ok {
 				continue
 			}
-			for _, t := range relAnalysis.DirectSubjectTypes {
-				if !seenTypes[t] {
-					seenTypes[t] = true
-					a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
-				}
-			}
-			// Also propagate AllowedSubjectTypes from satisfying relations.
-			// This is critical for purely implied relations (like "can_view: viewer")
-			// where the satisfying relation (viewer) may only have AllowedSubjectTypes
-			// from TTU chains, not DirectSubjectTypes.
-			for _, t := range relAnalysis.AllowedSubjectTypes {
-				if !seenTypes[t] {
-					seenTypes[t] = true
-					a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
-				}
-			}
-			// Also propagate wildcard flag
+			collector.addFrom(relAnalysis)
 			if relAnalysis.Features.HasWildcard {
 				a.Features.HasWildcard = true
 			}
-			// For userset patterns in closure relations, also include the subject types
-			// from the userset's subject relation. E.g., for viewer: [group#member],
-			// include subject types from group.member (user).
+			// Include subject types from userset patterns in closure relations
 			for _, pattern := range relAnalysis.UsersetPatterns {
-				subjectAnalysis, ok := lookup[pattern.SubjectType][pattern.SubjectRelation]
-				if !ok {
-					continue
-				}
-				// Add types from the userset's subject relation
-				for _, t := range subjectAnalysis.DirectSubjectTypes {
-					if !seenTypes[t] {
-						seenTypes[t] = true
-						a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
-					}
-				}
-				for _, t := range subjectAnalysis.AllowedSubjectTypes {
-					if !seenTypes[t] {
-						seenTypes[t] = true
-						a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
-					}
+				if subjectAnalysis, ok := lookup[pattern.SubjectType][pattern.SubjectRelation]; ok {
+					collector.addFrom(subjectAnalysis)
 				}
 			}
 		}
 
-		// Also propagate from this relation's own userset patterns
-		// This handles cases like viewer: [group#member] where we need to
-		// include subject types from group.member (user).
+		// Propagate from this relation's own userset patterns
 		for _, pattern := range a.UsersetPatterns {
 			subjectAnalysis, ok := lookup[pattern.SubjectType][pattern.SubjectRelation]
 			if !ok {
 				continue
 			}
-			for _, t := range subjectAnalysis.DirectSubjectTypes {
-				if !seenTypes[t] {
-					seenTypes[t] = true
-					a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
-				}
-			}
-			for _, t := range subjectAnalysis.AllowedSubjectTypes {
-				if !seenTypes[t] {
-					seenTypes[t] = true
-					a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
-				}
-			}
-			// Propagate wildcard from userset subject relation
+			collector.addFrom(subjectAnalysis)
 			if subjectAnalysis.Features.HasWildcard {
 				a.Features.HasWildcard = true
 			}
@@ -1030,119 +1013,32 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		// Populate AllowedLinkingTypes for parent relations from the linking relation's analysis.
 		// This ensures TTU lookups only match parent types allowed by the current model.
 		for i := range a.ParentRelations {
-			parent := &a.ParentRelations[i]
-			linkingAnalysis, ok := lookup[a.ObjectType][parent.LinkingRelation]
-			if ok && len(linkingAnalysis.AllowedSubjectTypes) > 0 {
-				parent.AllowedLinkingTypes = linkingAnalysis.AllowedSubjectTypes
-			} else if ok && len(linkingAnalysis.DirectSubjectTypes) > 0 {
-				parent.AllowedLinkingTypes = linkingAnalysis.DirectSubjectTypes
-			}
+			a.ParentRelations[i].AllowedLinkingTypes = getLinkingTypes(lookup, a.ObjectType, a.ParentRelations[i].LinkingRelation)
 		}
-
-		// Also populate AllowedLinkingTypes for excluded parent relations (TTU exclusions).
-		// This ensures TTU exclusion checks only match allowed parent types.
 		for i := range a.ExcludedParentRelations {
-			excludedParent := &a.ExcludedParentRelations[i]
-			linkingAnalysis, ok := lookup[a.ObjectType][excludedParent.LinkingRelation]
-			if ok && len(linkingAnalysis.AllowedSubjectTypes) > 0 {
-				excludedParent.AllowedLinkingTypes = linkingAnalysis.AllowedSubjectTypes
-			} else if ok && len(linkingAnalysis.DirectSubjectTypes) > 0 {
-				excludedParent.AllowedLinkingTypes = linkingAnalysis.DirectSubjectTypes
-			}
+			a.ExcludedParentRelations[i].AllowedLinkingTypes = getLinkingTypes(lookup, a.ObjectType, a.ExcludedParentRelations[i].LinkingRelation)
 		}
 
 		// Propagate AllowedSubjectTypes from intersection group parts.
-		// For intersection patterns like "writer AND viewer from parent", we need to
-		// collect subject types from both parts.
 		for _, group := range a.IntersectionGroups {
 			for _, part := range group.Parts {
-				// Skip "This" patterns - already handled by DirectSubjectTypes
 				if part.IsThis {
 					continue
 				}
-				// For regular relation parts (like "writer"), get types from that relation
 				if part.Relation != "" && part.ParentRelation == nil {
-					partAnalysis, ok := lookup[a.ObjectType][part.Relation]
-					if ok {
-						for _, t := range partAnalysis.DirectSubjectTypes {
-							if !seenTypes[t] {
-								seenTypes[t] = true
-								a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
-							}
-						}
-						for _, t := range partAnalysis.AllowedSubjectTypes {
-							if !seenTypes[t] {
-								seenTypes[t] = true
-								a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
-							}
-						}
+					if partAnalysis, ok := lookup[a.ObjectType][part.Relation]; ok {
+						collector.addFrom(partAnalysis)
 					}
 				}
-				// For TTU parts (like "viewer from parent"), get types from the target relation
 				if part.ParentRelation != nil {
-					parent := part.ParentRelation
-					// Get the linking relation to find target types
-					linkingAnalysis, ok := lookup[a.ObjectType][parent.LinkingRelation]
-					if ok {
-						// For each possible target type, get the target relation's types
-						targetTypes := linkingAnalysis.AllowedSubjectTypes
-						if len(targetTypes) == 0 {
-							targetTypes = linkingAnalysis.DirectSubjectTypes
-						}
-						for _, targetType := range targetTypes {
-							targetAnalysis, ok := lookup[targetType][parent.Relation]
-							if ok {
-								for _, t := range targetAnalysis.DirectSubjectTypes {
-									if !seenTypes[t] {
-										seenTypes[t] = true
-										a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
-									}
-								}
-								for _, t := range targetAnalysis.AllowedSubjectTypes {
-									if !seenTypes[t] {
-										seenTypes[t] = true
-										a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
-									}
-								}
-							}
-						}
-					}
+					addTypesFromTTU(collector, lookup, a.ObjectType, part.ParentRelation)
 				}
 			}
 		}
 
 		// Propagate AllowedSubjectTypes from TTU target relations (ParentRelations).
-		// For patterns like "viewer from parent" where parent links to folders,
-		// we need the subject types from folder.viewer.
 		for _, parent := range a.ParentRelations {
-			// Get the linking relation to find target types
-			linkingAnalysis, ok := lookup[a.ObjectType][parent.LinkingRelation]
-			if !ok {
-				continue
-			}
-			// For each possible target type, get the target relation's types
-			targetTypes := linkingAnalysis.AllowedSubjectTypes
-			if len(targetTypes) == 0 {
-				targetTypes = linkingAnalysis.DirectSubjectTypes
-			}
-			for _, targetType := range targetTypes {
-				targetAnalysis, ok := lookup[targetType][parent.Relation]
-				if !ok {
-					continue
-				}
-				for _, t := range targetAnalysis.DirectSubjectTypes {
-					if !seenTypes[t] {
-						seenTypes[t] = true
-						a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
-					}
-				}
-				for _, t := range targetAnalysis.AllowedSubjectTypes {
-					if !seenTypes[t] {
-						seenTypes[t] = true
-						a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
-					}
-				}
-			}
+			addTypesFromTTU(collector, lookup, a.ObjectType, &parent)
 		}
 
 		// First check: does this relation's features allow generation?
@@ -1456,71 +1352,34 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 	}
 
 	// Second pass: propagate AllowedSubjectTypes through cross-type userset patterns.
-	// This is needed because cross-type relations (e.g., folder.viewer: [group#member])
-	// aren't ordered as dependencies to avoid creating cycles. After the first pass,
-	// all relations have their AllowedSubjectTypes computed for same-type chains.
-	// Now we can propagate types across type boundaries.
+	// Cross-type relations (e.g., folder.viewer: [group#member]) aren't ordered as
+	// dependencies to avoid creating cycles. After the first pass, same-type chains
+	// are computed; now we propagate across type boundaries.
 	for i := range sorted {
 		a := &sorted[i]
 		if !a.Features.HasUserset {
 			continue
 		}
 
-		// Collect types from cross-type userset patterns
-		seenTypes := make(map[string]bool)
-		for _, t := range a.AllowedSubjectTypes {
-			seenTypes[t] = true
-		}
+		collector := newSubjectTypeCollector(&a.AllowedSubjectTypes)
 
+		// Propagate from cross-type userset patterns (skip same-type, already handled)
 		for _, pattern := range a.UsersetPatterns {
-			// Skip same-type patterns (already handled in first pass)
 			if pattern.SubjectType == a.ObjectType {
 				continue
 			}
-
-			subjectAnalysis, ok := lookup[pattern.SubjectType][pattern.SubjectRelation]
-			if !ok {
-				continue
-			}
-
-			// Propagate subject types from the cross-type userset's subject relation
-			for _, t := range subjectAnalysis.DirectSubjectTypes {
-				if !seenTypes[t] {
-					seenTypes[t] = true
-					a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
-				}
-			}
-			for _, t := range subjectAnalysis.AllowedSubjectTypes {
-				if !seenTypes[t] {
-					seenTypes[t] = true
-					a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
-				}
+			if subjectAnalysis, ok := lookup[pattern.SubjectType][pattern.SubjectRelation]; ok {
+				collector.addFrom(subjectAnalysis)
 			}
 		}
 
 		// Also propagate through closure userset patterns (for implied relations)
 		for _, pattern := range a.ClosureUsersetPatterns {
-			// Skip same-type patterns
 			if pattern.SubjectType == a.ObjectType {
 				continue
 			}
-
-			subjectAnalysis, ok := lookup[pattern.SubjectType][pattern.SubjectRelation]
-			if !ok {
-				continue
-			}
-
-			for _, t := range subjectAnalysis.DirectSubjectTypes {
-				if !seenTypes[t] {
-					seenTypes[t] = true
-					a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
-				}
-			}
-			for _, t := range subjectAnalysis.AllowedSubjectTypes {
-				if !seenTypes[t] {
-					seenTypes[t] = true
-					a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
-				}
+			if subjectAnalysis, ok := lookup[pattern.SubjectType][pattern.SubjectRelation]; ok {
+				collector.addFrom(subjectAnalysis)
 			}
 		}
 	}
@@ -1537,60 +1396,25 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		for i := range sorted {
 			a := &sorted[i]
 
-			// Re-propagate AllowedSubjectTypes from satisfying relations.
-			// This is needed for implied relations (e.g., can_read: reader but not nblocked)
-			// where the satisfying relation (reader) may have been processed after this
-			// relation in the first pass (especially for intersection relations).
-			seenTypes := make(map[string]bool)
-			for _, t := range a.AllowedSubjectTypes {
-				seenTypes[t] = true
-			}
+			// Re-propagate AllowedSubjectTypes from satisfying relations and userset patterns.
+			// This handles cycles in the dependency graph and cases where implied relations
+			// were processed before their dependencies.
+			collector := newSubjectTypeCollector(&a.AllowedSubjectTypes)
 			for _, rel := range a.SatisfyingRelations {
-				relAnalysis, ok := lookup[a.ObjectType][rel]
-				if !ok {
-					continue
-				}
-				for _, t := range relAnalysis.DirectSubjectTypes {
-					if !seenTypes[t] {
-						seenTypes[t] = true
-						a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
-						changed = true
-					}
-				}
-				for _, t := range relAnalysis.AllowedSubjectTypes {
-					if !seenTypes[t] {
-						seenTypes[t] = true
-						a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
+				if relAnalysis, ok := lookup[a.ObjectType][rel]; ok {
+					if collector.addFrom(relAnalysis) {
 						changed = true
 					}
 				}
 			}
-
-			// Re-propagate AllowedSubjectTypes from userset patterns.
-			// This is needed for cyclic dependencies where the subject relation
-			// may have been processed after this relation in the first pass.
 			for _, pattern := range a.UsersetPatterns {
-				subjectAnalysis, ok := lookup[pattern.SubjectType][pattern.SubjectRelation]
-				if !ok {
-					continue
-				}
-				for _, t := range subjectAnalysis.DirectSubjectTypes {
-					if !seenTypes[t] {
-						seenTypes[t] = true
-						a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
-						changed = true
-					}
-				}
-				for _, t := range subjectAnalysis.AllowedSubjectTypes {
-					if !seenTypes[t] {
-						seenTypes[t] = true
-						a.AllowedSubjectTypes = append(a.AllowedSubjectTypes, t)
+				if subjectAnalysis, ok := lookup[pattern.SubjectType][pattern.SubjectRelation]; ok {
+					if collector.addFrom(subjectAnalysis) {
 						changed = true
 					}
 				}
 			}
 
-			// Skip relations that already can generate list
 			if a.Capabilities.ListAllowed {
 				continue
 			}

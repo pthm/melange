@@ -75,14 +75,6 @@ func VisitedWithKey(objectType, relation string, objectID Expr) ArrayAppend {
 	}
 }
 
-// VisitedKeyVar creates the v_key variable assignment expression.
-// Used at the start of recursive functions: v_key := 'objectType:' || p_object_id || ':relation'
-//
-// Returns the right-hand side expression (without assignment).
-func VisitedKeyVar(objectType, relation string, objectID Expr) Expr {
-	return VisitedKey(objectType, relation, objectID)
-}
-
 // ArrayContains represents the ANY() check: value = ANY(array).
 type ArrayContains struct {
 	Value Expr

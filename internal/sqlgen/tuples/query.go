@@ -151,19 +151,17 @@ func (q *TupleQuery) WhereUsersetRelation(rel string) *TupleQuery {
 
 // InnerJoin adds an INNER JOIN clause.
 func (q *TupleQuery) InnerJoin(table, alias string, on ...sqldsl.Expr) *TupleQuery {
-	q.joins = append(q.joins, sqldsl.JoinClause{
-		Type:  "INNER",
-		Table: table,
-		Alias: alias,
-		On:    sqldsl.And(on...),
-	})
-	return q
+	return q.addJoin("INNER", table, alias, on)
 }
 
 // LeftJoin adds a LEFT JOIN clause.
 func (q *TupleQuery) LeftJoin(table, alias string, on ...sqldsl.Expr) *TupleQuery {
+	return q.addJoin("LEFT", table, alias, on)
+}
+
+func (q *TupleQuery) addJoin(joinType, table, alias string, on []sqldsl.Expr) *TupleQuery {
 	q.joins = append(q.joins, sqldsl.JoinClause{
-		Type:  "LEFT",
+		Type:  joinType,
 		Table: table,
 		Alias: alias,
 		On:    sqldsl.And(on...),
@@ -203,24 +201,10 @@ func (q *TupleQuery) col(name string) sqldsl.Col {
 	return sqldsl.Col{Table: q.alias, Column: name}
 }
 
-// Col returns a column reference for this query's table (public API).
-func (q *TupleQuery) Col(name string) sqldsl.Col {
-	return q.col(name)
-}
-
 // Build returns the declarative SelectStmt for inspection or testing.
 func (q *TupleQuery) Build() sqldsl.SelectStmt {
-	// Collect WHERE conditions
-	var where []sqldsl.Expr
-	if q.objectType != "" {
-		where = append(where, sqldsl.Eq{Left: q.col("object_type"), Right: sqldsl.Lit(q.objectType)})
-	}
-	if len(q.relations) > 0 {
-		where = append(where, sqldsl.In{Expr: q.col("relation"), Values: q.relations})
-	}
-	where = append(where, q.conditions...)
+	where := q.buildWhereConditions()
 
-	// Build the WHERE clause
 	var whereExpr sqldsl.Expr
 	if len(where) > 0 {
 		whereExpr = sqldsl.And(where...)
@@ -234,15 +218,24 @@ func (q *TupleQuery) Build() sqldsl.SelectStmt {
 		Limit:    q.limit,
 	}
 
-	// Use typed columns if available, otherwise string columns
 	if len(q.columnExprs) > 0 {
 		stmt.ColumnExprs = q.columnExprs
 	} else if len(q.columns) > 0 {
 		stmt.Columns = q.columns
 	}
-	// If neither, SelectStmt.columnsSQL() will default to "1"
 
 	return stmt
+}
+
+func (q *TupleQuery) buildWhereConditions() []sqldsl.Expr {
+	var where []sqldsl.Expr
+	if q.objectType != "" {
+		where = append(where, sqldsl.Eq{Left: q.col("object_type"), Right: sqldsl.Lit(q.objectType)})
+	}
+	if len(q.relations) > 0 {
+		where = append(where, sqldsl.In{Expr: q.col("relation"), Values: q.relations})
+	}
+	return append(where, q.conditions...)
 }
 
 // SQL renders the query to a SQL string.

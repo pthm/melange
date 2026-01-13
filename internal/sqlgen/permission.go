@@ -1,25 +1,18 @@
 package sqlgen
 
 // CheckPermission represents a call to check_permission_internal.
-// This is the core permission check expression used in queries.
 type CheckPermission struct {
 	Subject     SubjectRef
 	Relation    string
 	Object      ObjectRef
-	Visited     Expr // nil for default empty array
-	ExpectAllow bool // true = "= 1", false = "= 0"
+	Visited     Expr // nil uses empty array
+	ExpectAllow bool // true compares "= 1", false compares "= 0"
 }
 
-// SQL renders the check_permission_internal call with comparison.
-// Uses FuncCallEq internally to avoid fmt.Sprintf for SQL construction.
 func (c CheckPermission) SQL() string {
-	var visited Expr = EmptyArray{}
-	if c.Visited != nil {
-		visited = c.Visited
-	}
-	value := Int(1)
-	if !c.ExpectAllow {
-		value = Int(0)
+	visited := c.Visited
+	if visited == nil {
+		visited = EmptyArray{}
 	}
 	return FuncCallEq{
 		FuncName: "check_permission_internal",
@@ -31,12 +24,11 @@ func (c CheckPermission) SQL() string {
 			c.Object.ID,
 			visited,
 		},
-		Value: value,
+		Value: expectValue(c.ExpectAllow),
 	}.SQL()
 }
 
 // CheckAccess creates a CheckPermission that expects access to be allowed.
-// Uses SubjectParams() for subject and the given parameters for object.
 func CheckAccess(relation, objectType string, objectID Expr) CheckPermission {
 	return CheckPermission{
 		Subject:     SubjectParams(),
@@ -47,7 +39,6 @@ func CheckAccess(relation, objectType string, objectID Expr) CheckPermission {
 }
 
 // CheckNoAccess creates a CheckPermission that expects access to be denied.
-// Uses SubjectParams() for subject and the given parameters for object.
 func CheckNoAccess(relation, objectType string, objectID Expr) CheckPermission {
 	return CheckPermission{
 		Subject:     SubjectParams(),
@@ -57,8 +48,7 @@ func CheckNoAccess(relation, objectType string, objectID Expr) CheckPermission {
 	}
 }
 
-// CheckPermissionCall represents a call to a custom permission check function.
-// This is useful for calling specialized generated functions.
+// CheckPermissionCall represents a call to a specialized permission check function.
 type CheckPermissionCall struct {
 	FunctionName string
 	Subject      SubjectRef
@@ -67,13 +57,7 @@ type CheckPermissionCall struct {
 	ExpectAllow  bool
 }
 
-// SQL renders the function call with comparison.
-// Uses FuncCallEq internally to avoid fmt.Sprintf for SQL construction.
 func (c CheckPermissionCall) SQL() string {
-	value := Int(1)
-	if !c.ExpectAllow {
-		value = Int(0)
-	}
 	return FuncCallEq{
 		FuncName: c.FunctionName,
 		Args: []Expr{
@@ -83,6 +67,14 @@ func (c CheckPermissionCall) SQL() string {
 			c.Object.Type,
 			c.Object.ID,
 		},
-		Value: value,
+		Value: expectValue(c.ExpectAllow),
 	}.SQL()
+}
+
+// expectValue returns Int(1) for allow, Int(0) for deny.
+func expectValue(allow bool) Expr {
+	if allow {
+		return Int(1)
+	}
+	return Int(0)
 }

@@ -6,41 +6,19 @@ package sqlgen
 // RenderListSubjectsRecursiveFunction renders a recursive list_subjects function from plan and blocks.
 // This handles TTU patterns with subject_pool CTE and check_permission_internal calls.
 func RenderListSubjectsRecursiveFunction(plan ListPlan, blocks SubjectsRecursiveBlockSet) (string, error) {
-	// Render userset filter path query
-	usersetFilterBlocks := renderTypedQueryBlocks(blocks.UsersetFilterBlocks)
-	var usersetFilterParts []QueryBlock
-	usersetFilterParts = append(usersetFilterParts, usersetFilterBlocks...)
-	if blocks.UsersetFilterSelfBlock != nil {
-		usersetFilterParts = append(usersetFilterParts, renderTypedQueryBlock(*blocks.UsersetFilterSelfBlock))
-	}
-	usersetFilterQuery := RenderUnionBlocks(usersetFilterParts)
-	usersetFilterPaginatedQuery := wrapWithPaginationWildcardFirst(usersetFilterQuery)
+	usersetFilterPaginatedQuery := buildUsersetFilterQuery(blocks)
+	regularPaginatedQuery := buildRegularPaginatedQuery(plan, blocks)
 
-	// Render regular path blocks
-	regularBlocks := renderTypedQueryBlocks(blocks.RegularBlocks)
-	ttuBlocks := renderTypedQueryBlocks(blocks.RegularTTUBlocks)
-
-	// Build the regular query with subject_pool and base_results CTEs
-	regularQuery := buildSubjectsRecursiveRegularQuery(plan, regularBlocks, ttuBlocks)
-	regularPaginatedQuery := wrapWithPaginationWildcardFirst(regularQuery)
-
-	// Build the THEN branch (userset filter path)
-	thenBranch := renderUsersetFilterThenBranch(usersetFilterPaginatedQuery)
-
-	// Build the ELSE branch (regular subject type path)
-	elseBranch := []Stmt{
-		Comment{Text: "Regular subject type: find direct subjects and expand usersets"},
-		ReturnQuery{Query: regularPaginatedQuery},
-	}
-
-	// Build main IF statement: check if subject_type is a userset filter
 	mainIf := If{
 		Cond: Gt{
 			Left:  Position{Needle: Lit("#"), Haystack: SubjectType},
 			Right: Int(0),
 		},
-		Then: thenBranch,
-		Else: elseBranch,
+		Then: renderUsersetFilterThenBranch(usersetFilterPaginatedQuery),
+		Else: []Stmt{
+			Comment{Text: "Regular subject type: find direct subjects and expand usersets"},
+			ReturnQuery{Query: regularPaginatedQuery},
+		},
 	}
 
 	fn := PlpgsqlFunction{
@@ -59,6 +37,21 @@ func RenderListSubjectsRecursiveFunction(plan ListPlan, blocks SubjectsRecursive
 	}
 
 	return fn.SQL(), nil
+}
+
+func buildUsersetFilterQuery(blocks SubjectsRecursiveBlockSet) string {
+	usersetFilterParts := renderTypedQueryBlocks(blocks.UsersetFilterBlocks)
+	if blocks.UsersetFilterSelfBlock != nil {
+		usersetFilterParts = append(usersetFilterParts, renderTypedQueryBlock(*blocks.UsersetFilterSelfBlock))
+	}
+	return wrapWithPaginationWildcardFirst(RenderUnionBlocks(usersetFilterParts))
+}
+
+func buildRegularPaginatedQuery(plan ListPlan, blocks SubjectsRecursiveBlockSet) string {
+	regularBlocks := renderTypedQueryBlocks(blocks.RegularBlocks)
+	ttuBlocks := renderTypedQueryBlocks(blocks.RegularTTUBlocks)
+	regularQuery := buildSubjectsRecursiveRegularQuery(plan, regularBlocks, ttuBlocks)
+	return wrapWithPaginationWildcardFirst(regularQuery)
 }
 
 // buildSubjectsRecursiveRegularQuery builds the regular path query with subject_pool and base_results CTEs.

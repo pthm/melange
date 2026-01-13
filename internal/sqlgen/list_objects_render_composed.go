@@ -1,9 +1,6 @@
 package sqlgen
 
-import (
-	"fmt"
-	"strings"
-)
+import "fmt"
 
 // =============================================================================
 // Composed Strategy Render Functions (List Objects)
@@ -11,20 +8,13 @@ import (
 // RenderListObjectsComposedFunction renders a list_objects function for composed access.
 // Composed functions handle indirect anchor patterns (TTU and userset composition).
 func RenderListObjectsComposedFunction(plan ListPlan, blocks ComposedObjectsBlockSet) (string, error) {
-	// Render self-candidate query
 	var selfSQL string
 	if blocks.SelfBlock != nil {
-		qb := renderTypedQueryBlock(*blocks.SelfBlock)
-		selfSQL = qb.Query.SQL()
+		selfSQL = renderTypedQueryBlock(*blocks.SelfBlock).Query.SQL()
 	}
 
-	// Render main query blocks
-	mainBlocksSQL := make([]string, 0, len(blocks.MainBlocks))
-	for _, block := range blocks.MainBlocks {
-		qb := renderTypedQueryBlock(block)
-		mainBlocksSQL = append(mainBlocksSQL, formatQueryBlockSQL(qb.Comments, qb.Query.SQL()))
-	}
-	mainQuery := strings.Join(mainBlocksSQL, "\n    UNION\n")
+	mainBlocks := renderTypedQueryBlocks(blocks.MainBlocks)
+	mainQuery := RenderUnionBlocks(mainBlocks)
 
 	// Wrap with pagination
 	selfPaginatedSQL := wrapWithPagination(selfSQL, "object_id")

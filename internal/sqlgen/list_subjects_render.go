@@ -1,26 +1,12 @@
 package sqlgen
 
-// =============================================================================
-// List Subjects Render Functions
-// =============================================================================
 // RenderListSubjectsFunction renders a complete list_subjects function from plan and blocks.
 func RenderListSubjectsFunction(plan ListPlan, blocks BlockSet) (string, error) {
-	// Convert typed blocks to QueryBlocks with rendered SQL
 	primaryBlocks := renderTypedQueryBlocks(blocks.Primary)
 	secondaryBlocks := renderTypedQueryBlocks(blocks.Secondary)
 
-	// Build userset filter path query (when p_subject_type contains '#')
-	var usersetFilterPaginatedQuery string
-	if len(secondaryBlocks) > 0 || blocks.SecondarySelf != nil {
-		parts := append([]QueryBlock{}, secondaryBlocks...)
-		if blocks.SecondarySelf != nil {
-			parts = append(parts, renderTypedQueryBlock(*blocks.SecondarySelf))
-		}
-		usersetFilterQuery := RenderUnionBlocks(parts)
-		usersetFilterPaginatedQuery = wrapWithPaginationWildcardFirst(usersetFilterQuery)
-	}
+	usersetFilterPaginatedQuery := renderUsersetFilterPaginatedQuery(secondaryBlocks, blocks.SecondarySelf)
 
-	// Render regular path query
 	regularQuery := RenderUnionBlocks(primaryBlocks)
 	regularPaginatedQuery := wrapWithPaginationWildcardFirst(regularQuery)
 

@@ -1,73 +1,34 @@
 package sqlgen
 
-// =============================================================================
-// Check Blocks Layer
-// =============================================================================
-//
-// This file implements the Blocks layer for check function generation.
-// The Blocks layer builds DSL expressions for permission checking.
-//
-// Unlike list functions which use UNION'd query blocks, check functions use
-// DSL expressions in PL/pgSQL IF statements. The "blocks" here are the
-// individual check expressions that get composed in the render layer.
-//
-// Architecture: Plan → Blocks → Render
-// - Plan: compute flags and normalized inputs
-// - Blocks: build typed DSL expressions (this file)
-// - Render: produce SQL/PLpgSQL strings
-
 // CheckBlocks contains all the DSL blocks needed to generate a check function.
-// Each block is an Expr that can be rendered to SQL.
 type CheckBlocks struct {
-	// DirectCheck is the EXISTS check for direct tuple lookup.
-	// Returns true if there's a direct or implied tuple grant.
-	DirectCheck Expr
+	DirectCheck             Expr       // EXISTS check for direct/implied tuple lookup
+	UsersetCheck            Expr       // EXISTS check for userset membership
+	ExclusionCheck          Expr       // EXISTS check for exclusion (denial)
+	UsersetSubjectSelfCheck SelectStmt // Validates when subject IS a userset
 
-	// UsersetCheck is the EXISTS check for userset membership.
-	// Returns true if access is granted through a userset pattern.
-	UsersetCheck Expr
-
-	// ExclusionCheck is the EXISTS check for exclusion (denial).
-	// Returns true if access should be denied due to exclusion.
-	ExclusionCheck Expr
-
-	// UsersetSubjectSelfCheck validates when the subject IS a userset.
-	// Used for self-referential userset validation.
-	UsersetSubjectSelfCheck SelectStmt
-
-	// UsersetSubjectComputedCheck validates computed userset subject matching.
-	// Used when the subject is a userset that requires closure validation.
+	// UsersetSubjectComputedCheck validates userset subject via tuple join
 	UsersetSubjectComputedCheck SelectStmt
 
-	// ParentRelationBlocks contains checks for TTU (tuple-to-userset) patterns.
-	// Each check traverses through a parent relation.
-	ParentRelationBlocks []ParentRelationBlock
-
-	// ImpliedFunctionCalls contains checks for complex implied relations.
-	// These require calling specialized check functions.
-	ImpliedFunctionCalls []ImpliedFunctionCheck
-
-	// IntersectionGroups contains AND groups for intersection patterns.
-	// Each group is a set of checks that must all pass.
-	IntersectionGroups []IntersectionGroupCheck
-
-	// HasStandaloneAccess indicates if there are access paths outside intersections.
-	HasStandaloneAccess bool
+	ParentRelationBlocks []ParentRelationBlock   // TTU pattern checks
+	ImpliedFunctionCalls []ImpliedFunctionCheck  // Complex implied relation checks
+	IntersectionGroups   []IntersectionGroupCheck // AND groups for intersection patterns
+	HasStandaloneAccess  bool                    // Access paths outside intersections exist
 }
 
 // ParentRelationBlock represents a TTU check through a parent relation.
 type ParentRelationBlock struct {
-	LinkingRelation     string   // The linking relation (e.g., "parent")
-	ParentRelation      string   // The relation to check on the parent
-	AllowedLinkingTypes []string // Types allowed for the linking relation
+	LinkingRelation     string
+	ParentRelation      string
+	AllowedLinkingTypes []string
 	Query               SelectStmt
 }
 
 // ImpliedFunctionCheck represents a check that calls another check function.
 type ImpliedFunctionCheck struct {
-	Relation     string // The implied relation to check
-	FunctionName string // The function to call
-	Check        Expr   // The check expression
+	Relation     string
+	FunctionName string
+	Check        Expr
 }
 
 // IntersectionGroupCheck represents an AND group where all checks must pass.
@@ -77,91 +38,46 @@ type IntersectionGroupCheck struct {
 
 // IntersectionPartCheck represents one part of an intersection check.
 type IntersectionPartCheck struct {
-	Relation         string // The relation being checked
-	ExcludedRelation string // Optional: excluded relation (for "but not" in intersection)
-	IsParent         bool   // True if this is a TTU part
-	ParentRelation   string // For TTU: the parent relation
-	LinkingRelation  string // For TTU: the linking relation
-	Check            Expr   // The check expression
+	Relation         string
+	ExcludedRelation string
+	IsParent         bool
+	ParentRelation   string
+	LinkingRelation  string
+	Check            Expr
 }
 
 // BuildCheckBlocks builds all DSL blocks for a check function.
 func BuildCheckBlocks(plan CheckPlan) (CheckBlocks, error) {
-	var blocks CheckBlocks
+	blocks := CheckBlocks{
+		HasStandaloneAccess: plan.HasStandaloneAccess,
+	}
 
-	// Build direct check
 	if plan.HasDirect || plan.HasImplied {
-		directCheck, err := buildTypedDirectCheck(plan)
-		if err != nil {
-			return CheckBlocks{}, err
-		}
-		blocks.DirectCheck = directCheck
+		blocks.DirectCheck = buildDirectCheck(plan)
 	}
-
-	// Build userset check
 	if plan.HasUserset {
-		usersetCheck, err := buildTypedUsersetCheck(plan)
-		if err != nil {
-			return CheckBlocks{}, err
-		}
-		blocks.UsersetCheck = usersetCheck
+		blocks.UsersetCheck = buildUsersetCheck(plan)
 	}
-
-	// Build exclusion check
 	if plan.HasExclusion {
-		exclusionCheck, err := buildTypedExclusionCheck(plan)
-		if err != nil {
-			return CheckBlocks{}, err
-		}
-		blocks.ExclusionCheck = exclusionCheck
+		blocks.ExclusionCheck = buildExclusionCheck(plan)
 	}
 
-	// Build userset subject checks
-	selfCheck, computedCheck, err := buildTypedUsersetSubjectChecks(plan)
-	if err != nil {
-		return CheckBlocks{}, err
-	}
-	blocks.UsersetSubjectSelfCheck = selfCheck
-	blocks.UsersetSubjectComputedCheck = computedCheck
+	blocks.UsersetSubjectSelfCheck, blocks.UsersetSubjectComputedCheck = buildUsersetSubjectChecks(plan)
 
-	// Build parent relation checks for TTU
 	if plan.HasParentRelations {
-		parentChecks, err := buildTypedParentRelationBlocks(plan)
-		if err != nil {
-			return CheckBlocks{}, err
-		}
-		blocks.ParentRelationBlocks = parentChecks
+		blocks.ParentRelationBlocks = buildParentRelationBlocks(plan)
 	}
-
-	// Build implied function calls for complex closure
 	if plan.HasImpliedFunctionCall {
-		impliedCalls, err := buildTypedImpliedFunctionCalls(plan)
-		if err != nil {
-			return CheckBlocks{}, err
-		}
-		blocks.ImpliedFunctionCalls = impliedCalls
+		blocks.ImpliedFunctionCalls = buildImpliedFunctionCalls(plan)
 	}
-
-	// Build intersection groups
 	if plan.HasIntersection {
-		intersectionGroups, err := buildTypedIntersectionGroups(plan)
-		if err != nil {
-			return CheckBlocks{}, err
-		}
-		blocks.IntersectionGroups = intersectionGroups
+		blocks.IntersectionGroups = buildIntersectionGroups(plan)
 	}
-
-	blocks.HasStandaloneAccess = plan.HasStandaloneAccess
 
 	return blocks, nil
 }
 
-// =============================================================================
-// Block Building Functions
-// =============================================================================
-
-// buildTypedDirectCheck builds the direct tuple lookup check as a DSL expression.
-func buildTypedDirectCheck(plan CheckPlan) (Expr, error) {
+func buildDirectCheck(plan CheckPlan) Expr {
 	q := Tuples("").
 		ObjectType(plan.ObjectType).
 		Relations(plan.RelationList...).
@@ -174,98 +90,82 @@ func buildTypedDirectCheck(plan CheckPlan) (Expr, error) {
 		Select("1").
 		Limit(1)
 
-	return Exists{Query: q}, nil
+	return Exists{Query: q}
 }
 
-// buildTypedUsersetCheck builds the userset membership check as a DSL expression.
-func buildTypedUsersetCheck(plan CheckPlan) (Expr, error) {
-	// Get userset patterns from analysis
+func buildUsersetCheck(plan CheckPlan) Expr {
 	patterns := plan.Analysis.UsersetPatterns
 	if len(patterns) == 0 {
-		return nil, nil
+		return nil
 	}
 
-	var checks []Expr
-	// Build visited expression that appends the current key: p_visited || ARRAY['type:' || p_object_id || ':relation']
 	visitedWithKey := VisitedWithKey(plan.ObjectType, plan.Relation, ObjectID)
+	checks := make([]Expr, 0, len(patterns))
 
 	for _, pattern := range patterns {
-		if pattern.IsComplex {
-			// Complex pattern: use check_permission_internal to verify membership.
-			// This handles cases where the userset closure contains relations with
-			// exclusions, usersets, TTU, or intersections.
-			q := Tuples("grant_tuple").
-				ObjectType(plan.ObjectType).
-				Relations(plan.Relation).
-				Where(
-					Eq{Left: Col{Table: "grant_tuple", Column: "object_id"}, Right: ObjectID},
-					Eq{Left: Col{Table: "grant_tuple", Column: "subject_type"}, Right: Lit(pattern.SubjectType)},
-					HasUserset{Source: Col{Table: "grant_tuple", Column: "subject_id"}},
-					Eq{
-						Left:  UsersetRelation{Source: Col{Table: "grant_tuple", Column: "subject_id"}},
-						Right: Lit(pattern.SubjectRelation),
-					},
-					// Use check_permission_internal to recursively verify membership
-					CheckPermission{
-						Subject:  SubjectParams(),
-						Relation: pattern.SubjectRelation,
-						Object: ObjectRef{
-							Type: Lit(pattern.SubjectType),
-							ID:   UsersetObjectID{Source: Col{Table: "grant_tuple", Column: "subject_id"}},
-						},
-						Visited:     visitedWithKey, // Include visited key for cycle detection
-						ExpectAllow: true,
-					},
-				).
-				Select("1").
-				Limit(1)
-			checks = append(checks, Exists{Query: q})
-		} else {
-			// Simple pattern: use tuple JOIN for membership lookup.
-			// Use the plan's relation for searching grant tuples, not pattern.SourceRelation.
-			// For check functions, we search tuples like (object:id, relation, subject_type:id#subject_relation).
-			q := Tuples("grant_tuple").
-				ObjectType(plan.ObjectType).
-				Relations(plan.Relation).
-				Where(
-					Eq{Left: Col{Table: "grant_tuple", Column: "object_id"}, Right: ObjectID},
-					Eq{Left: Col{Table: "grant_tuple", Column: "subject_type"}, Right: Lit(pattern.SubjectType)},
-					HasUserset{Source: Col{Table: "grant_tuple", Column: "subject_id"}},
-					Eq{
-						Left:  UsersetRelation{Source: Col{Table: "grant_tuple", Column: "subject_id"}},
-						Right: Lit(pattern.SubjectRelation),
-					},
-				).
-				JoinTuples("membership",
-					Eq{Left: Col{Table: "membership", Column: "object_type"}, Right: Lit(pattern.SubjectType)},
-					Eq{
-						Left:  Col{Table: "membership", Column: "object_id"},
-						Right: UsersetObjectID{Source: Col{Table: "grant_tuple", Column: "subject_id"}},
-					},
-					In{Expr: Col{Table: "membership", Column: "relation"}, Values: pattern.SatisfyingRelations},
-					Eq{Left: Col{Table: "membership", Column: "subject_type"}, Right: SubjectType},
-					SubjectIDMatch(Col{Table: "membership", Column: "subject_id"}, SubjectID, plan.AllowWildcard),
-				).
-				Select("1").
-				Limit(1)
-			checks = append(checks, Exists{Query: q})
-		}
+		checks = append(checks, buildUsersetPatternCheck(plan, pattern, visitedWithKey))
 	}
 
 	if len(checks) == 1 {
-		return checks[0], nil
+		return checks[0]
 	}
-	return Or(checks...), nil
+	return Or(checks...)
 }
 
-// buildTypedExclusionCheck builds the exclusion check as a DSL expression.
-// Returns an expression that evaluates to TRUE when the subject is excluded.
-func buildTypedExclusionCheck(plan CheckPlan) (Expr, error) {
-	if !plan.Exclusions.HasExclusions() {
-		return nil, nil
+func buildUsersetPatternCheck(plan CheckPlan, pattern UsersetPattern, visitedWithKey Expr) Expr {
+	grantTuple := Col{Table: "grant_tuple", Column: "subject_id"}
+
+	baseWhere := []Expr{
+		Eq{Left: Col{Table: "grant_tuple", Column: "object_id"}, Right: ObjectID},
+		Eq{Left: Col{Table: "grant_tuple", Column: "subject_type"}, Right: Lit(pattern.SubjectType)},
+		HasUserset{Source: grantTuple},
+		Eq{Left: UsersetRelation{Source: grantTuple}, Right: Lit(pattern.SubjectRelation)},
 	}
 
-	var exclusionChecks []Expr
+	if pattern.IsComplex {
+		// Complex pattern: use check_permission_internal for recursive membership verification
+		q := Tuples("grant_tuple").
+			ObjectType(plan.ObjectType).
+			Relations(plan.Relation).
+			Where(append(baseWhere, CheckPermission{
+				Subject:  SubjectParams(),
+				Relation: pattern.SubjectRelation,
+				Object: ObjectRef{
+					Type: Lit(pattern.SubjectType),
+					ID:   UsersetObjectID{Source: grantTuple},
+				},
+				Visited:     visitedWithKey,
+				ExpectAllow: true,
+			})...).
+			Select("1").
+			Limit(1)
+		return Exists{Query: q}
+	}
+
+	// Simple pattern: use tuple JOIN for membership lookup
+	q := Tuples("grant_tuple").
+		ObjectType(plan.ObjectType).
+		Relations(plan.Relation).
+		Where(baseWhere...).
+		JoinTuples("membership",
+			Eq{Left: Col{Table: "membership", Column: "object_type"}, Right: Lit(pattern.SubjectType)},
+			Eq{Left: Col{Table: "membership", Column: "object_id"}, Right: UsersetObjectID{Source: grantTuple}},
+			In{Expr: Col{Table: "membership", Column: "relation"}, Values: pattern.SatisfyingRelations},
+			Eq{Left: Col{Table: "membership", Column: "subject_type"}, Right: SubjectType},
+			SubjectIDMatch(Col{Table: "membership", Column: "subject_id"}, SubjectID, plan.AllowWildcard),
+		).
+		Select("1").
+		Limit(1)
+	return Exists{Query: q}
+}
+
+func buildExclusionCheck(plan CheckPlan) Expr {
+	if !plan.Exclusions.HasExclusions() {
+		return nil
+	}
+
+	var checks []Expr
+	obj := LiteralObject(plan.ObjectType, ObjectID)
 
 	// Simple exclusions: EXISTS (excluded tuple)
 	for _, rel := range plan.Exclusions.SimpleExcludedRelations {
@@ -282,142 +182,131 @@ func buildTypedExclusionCheck(plan CheckPlan) (Expr, error) {
 			).
 			Select("1").
 			Limit(1)
-		exclusionChecks = append(exclusionChecks, Exists{Query: q})
+		checks = append(checks, Exists{Query: q})
 	}
 
-	// Complex exclusions: check_permission_internal(...) = 1 with p_visited for cycle detection
+	// Complex exclusions: check_permission_internal
 	for _, rel := range plan.Exclusions.ComplexExcludedRelations {
-		exclusionChecks = append(exclusionChecks, CheckPermission{
-			Subject:     SubjectParams(),
-			Relation:    rel,
-			Object:      LiteralObject(plan.ObjectType, ObjectID),
-			Visited:     Visited, // Use p_visited parameter for cycle detection
-			ExpectAllow: true,
-		})
+		checks = append(checks, checkPermissionAllow(rel, obj))
 	}
 
-	// TTU exclusions: EXISTS (link tuple where check_permission on linked object returns 1)
+	// TTU exclusions
 	for _, rel := range plan.Exclusions.ExcludedParentRelations {
-		linkQuery := Tuples("link").
-			ObjectType(plan.ObjectType).
-			Relations(rel.LinkingRelation).
-			Where(
-				Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
-				CheckPermission{
-					Subject:  SubjectParams(),
-					Relation: rel.Relation,
-					Object: ObjectRef{
-						Type: Col{Table: "link", Column: "subject_type"},
-						ID:   Col{Table: "link", Column: "subject_id"},
-					},
-					Visited:     Visited,
-					ExpectAllow: true,
-				},
-			).
-			Select("1").
-			Limit(1)
-		if len(rel.AllowedLinkingTypes) > 0 {
-			linkQuery.WhereSubjectTypeIn(rel.AllowedLinkingTypes...)
-		}
-		exclusionChecks = append(exclusionChecks, Exists{Query: linkQuery})
+		checks = append(checks, buildTTUExclusionCheck(plan.ObjectType, rel))
 	}
 
-	// Intersection exclusions: (part1 AND part2 AND ...) - all parts must match
+	// Intersection exclusions
 	for _, group := range plan.Exclusions.ExcludedIntersection {
-		var parts []Expr
-		for _, part := range group.Parts {
-			switch {
-			case part.ParentRelation != nil:
-				// TTU part: EXISTS (link tuple where check_permission returns 1)
-				linkQuery := Tuples("link").
-					ObjectType(plan.ObjectType).
-					Relations(part.ParentRelation.LinkingRelation).
-					Where(
-						Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
-						CheckPermission{
-							Subject:  SubjectParams(),
-							Relation: part.ParentRelation.Relation,
-							Object: ObjectRef{
-								Type: Col{Table: "link", Column: "subject_type"},
-								ID:   Col{Table: "link", Column: "subject_id"},
-							},
-							Visited:     Visited,
-							ExpectAllow: true,
-						},
-					).
-					Select("1").
-					Limit(1)
-				if len(part.ParentRelation.AllowedLinkingTypes) > 0 {
-					linkQuery.WhereSubjectTypeIn(part.ParentRelation.AllowedLinkingTypes...)
-				}
-				parts = append(parts, Exists{Query: linkQuery})
-			case part.ExcludedRelation != "":
-				// Nested exclusion: (relation AND NOT excluded_relation)
-				mainCheck := CheckPermission{
-					Subject:     SubjectParams(),
-					Relation:    part.Relation,
-					Object:      LiteralObject(plan.ObjectType, ObjectID),
-					Visited:     Visited,
-					ExpectAllow: true,
-				}
-				excludeCheck := CheckPermission{
-					Subject:     SubjectParams(),
-					Relation:    part.ExcludedRelation,
-					Object:      LiteralObject(plan.ObjectType, ObjectID),
-					Visited:     Visited,
-					ExpectAllow: false,
-				}
-				parts = append(parts, And(mainCheck, excludeCheck))
-			default:
-				// Direct check part
-				parts = append(parts, CheckPermission{
-					Subject:     SubjectParams(),
-					Relation:    part.Relation,
-					Object:      LiteralObject(plan.ObjectType, ObjectID),
-					Visited:     Visited,
-					ExpectAllow: true,
-				})
-			}
-		}
-		if len(parts) > 0 {
-			exclusionChecks = append(exclusionChecks, And(parts...))
+		if expr := buildIntersectionExclusionCheck(plan.ObjectType, group); expr != nil {
+			checks = append(checks, expr)
 		}
 	}
 
-	if len(exclusionChecks) == 0 {
-		return nil, nil
-	}
-	if len(exclusionChecks) == 1 {
-		return exclusionChecks[0], nil
-	}
-	return Or(exclusionChecks...), nil
+	return orExprs(checks)
 }
 
-// buildTypedUsersetSubjectChecks builds the userset subject validation checks.
-func buildTypedUsersetSubjectChecks(plan CheckPlan) (selfCheck, computedCheck SelectStmt, err error) {
-	// Self check: validates when subject IS a userset with matching closure
+func buildTTUExclusionCheck(objectType string, rel ExcludedParentRelation) Expr {
+	linkQuery := Tuples("link").
+		ObjectType(objectType).
+		Relations(rel.LinkingRelation).
+		Where(
+			Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
+			CheckPermission{
+				Subject:  SubjectParams(),
+				Relation: rel.Relation,
+				Object: ObjectRef{
+					Type: Col{Table: "link", Column: "subject_type"},
+					ID:   Col{Table: "link", Column: "subject_id"},
+				},
+				Visited:     Visited,
+				ExpectAllow: true,
+			},
+		).
+		Select("1").
+		Limit(1)
+
+	if len(rel.AllowedLinkingTypes) > 0 {
+		linkQuery.WhereSubjectTypeIn(rel.AllowedLinkingTypes...)
+	}
+	return Exists{Query: linkQuery}
+}
+
+func buildIntersectionExclusionCheck(objectType string, group ExcludedIntersectionGroup) Expr {
+	obj := LiteralObject(objectType, ObjectID)
+	parts := make([]Expr, 0, len(group.Parts))
+
+	for _, part := range group.Parts {
+		switch {
+		case part.ParentRelation != nil:
+			parts = append(parts, buildTTUExclusionCheck(objectType, *part.ParentRelation))
+		case part.ExcludedRelation != "":
+			parts = append(parts, And(
+				checkPermissionAllow(part.Relation, obj),
+				checkPermissionDeny(part.ExcludedRelation, obj),
+			))
+		default:
+			parts = append(parts, checkPermissionAllow(part.Relation, obj))
+		}
+	}
+
+	if len(parts) == 0 {
+		return nil
+	}
+	return And(parts...)
+}
+
+func checkPermissionAllow(relation string, obj ObjectRef) CheckPermission {
+	return CheckPermission{
+		Subject:     SubjectParams(),
+		Relation:    relation,
+		Object:      obj,
+		Visited:     Visited,
+		ExpectAllow: true,
+	}
+}
+
+func checkPermissionDeny(relation string, obj ObjectRef) CheckPermission {
+	return CheckPermission{
+		Subject:     SubjectParams(),
+		Relation:    relation,
+		Object:      obj,
+		Visited:     Visited,
+		ExpectAllow: false,
+	}
+}
+
+func orExprs(exprs []Expr) Expr {
+	switch len(exprs) {
+	case 0:
+		return nil
+	case 1:
+		return exprs[0]
+	default:
+		return Or(exprs...)
+	}
+}
+
+func buildUsersetSubjectChecks(plan CheckPlan) (selfCheck, computedCheck SelectStmt) {
+	closureTable := ClosureTable(plan.Inline.ClosureRows, plan.Inline.ClosureValues, "c")
+
 	selfCheck = SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
-		FromExpr:    ClosureTable(plan.Inline.ClosureRows, plan.Inline.ClosureValues, "c"),
+		FromExpr:    closureTable,
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(plan.Relation)},
-			Eq{
-				Left:  Col{Table: "c", Column: "satisfying_relation"},
-				Right: SubstringUsersetRelation{Source: SubjectID},
-			},
+			Eq{Left: Col{Table: "c", Column: "satisfying_relation"}, Right: SubstringUsersetRelation{Source: SubjectID}},
 		),
 		Limit: 1,
 	}
 
-	// Computed check: validates userset subject via tuple join
 	computedCheck = SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
 		FromExpr:    TableAs("melange_tuples", "t"),
 		Joins: []JoinClause{
 			{
 				Type:      "INNER",
-				TableExpr: ClosureTable(plan.Inline.ClosureRows, plan.Inline.ClosureValues, "c"),
+				TableExpr: closureTable,
 				On: And(
 					Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 					Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(plan.Relation)},
@@ -438,14 +327,8 @@ func buildTypedUsersetSubjectChecks(plan CheckPlan) (selfCheck, computedCheck Se
 				TableExpr: ClosureTable(plan.Inline.ClosureRows, plan.Inline.ClosureValues, "subj_c"),
 				On: And(
 					Eq{Left: Col{Table: "subj_c", Column: "object_type"}, Right: Col{Table: "t", Column: "subject_type"}},
-					Eq{
-						Left:  Col{Table: "subj_c", Column: "relation"},
-						Right: SubstringUsersetRelation{Source: Col{Table: "t", Column: "subject_id"}},
-					},
-					Eq{
-						Left:  Col{Table: "subj_c", Column: "satisfying_relation"},
-						Right: SubstringUsersetRelation{Source: SubjectID},
-					},
+					Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: SubstringUsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}},
+					Eq{Left: Col{Table: "subj_c", Column: "satisfying_relation"}, Right: SubstringUsersetRelation{Source: SubjectID}},
 				),
 			},
 		},
@@ -455,36 +338,29 @@ func buildTypedUsersetSubjectChecks(plan CheckPlan) (selfCheck, computedCheck Se
 			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
 			Ne{Left: Col{Table: "t", Column: "subject_id"}, Right: Lit("*")},
 			HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
-			Eq{
-				Left:  UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}},
-				Right: UsersetObjectID{Source: SubjectID},
-			},
+			Eq{Left: UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}}, Right: UsersetObjectID{Source: SubjectID}},
 		),
 		Limit: 1,
 	}
 
-	return selfCheck, computedCheck, nil
+	return selfCheck, computedCheck
 }
 
-// buildTypedParentRelationBlocks builds TTU checks for parent relations.
-func buildTypedParentRelationBlocks(plan CheckPlan) ([]ParentRelationBlock, error) {
-	checks := make([]ParentRelationBlock, 0, len(plan.Analysis.ParentRelations))
+func buildParentRelationBlocks(plan CheckPlan) []ParentRelationBlock {
+	blocks := make([]ParentRelationBlock, 0, len(plan.Analysis.ParentRelations))
 
 	for _, parent := range plan.Analysis.ParentRelations {
-		// Build the linking tuple query
 		q := Tuples("link").
 			ObjectType(plan.ObjectType).
 			Relations(parent.LinkingRelation).
-			Where(
-				Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
-			).
+			Where(Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID}).
 			Select("link.subject_type", "link.subject_id")
 
 		if len(parent.AllowedLinkingTypes) > 0 {
 			q.WhereSubjectTypeIn(parent.AllowedLinkingTypes...)
 		}
 
-		checks = append(checks, ParentRelationBlock{
+		blocks = append(blocks, ParentRelationBlock{
 			LinkingRelation:     parent.LinkingRelation,
 			ParentRelation:      parent.Relation,
 			AllowedLinkingTypes: parent.AllowedLinkingTypes,
@@ -492,11 +368,10 @@ func buildTypedParentRelationBlocks(plan CheckPlan) ([]ParentRelationBlock, erro
 		})
 	}
 
-	return checks, nil
+	return blocks
 }
 
-// buildTypedImpliedFunctionCalls builds function calls for complex implied relations.
-func buildTypedImpliedFunctionCalls(plan CheckPlan) ([]ImpliedFunctionCheck, error) {
+func buildImpliedFunctionCalls(plan CheckPlan) []ImpliedFunctionCheck {
 	calls := make([]ImpliedFunctionCheck, 0, len(plan.Analysis.ComplexClosureRelations))
 
 	for _, rel := range plan.Analysis.ComplexClosureRelations {
@@ -505,157 +380,129 @@ func buildTypedImpliedFunctionCalls(plan CheckPlan) ([]ImpliedFunctionCheck, err
 			funcName = functionNameNoWildcard(plan.ObjectType, rel)
 		}
 
-		check := CheckPermissionCall{
-			FunctionName: funcName,
-			Subject:      SubjectParams(),
-			Relation:     rel,
-			Object:       LiteralObject(plan.ObjectType, ObjectID),
-			ExpectAllow:  true,
-		}
-
 		calls = append(calls, ImpliedFunctionCheck{
 			Relation:     rel,
 			FunctionName: funcName,
-			Check:        check,
+			Check: CheckPermissionCall{
+				FunctionName: funcName,
+				Subject:      SubjectParams(),
+				Relation:     rel,
+				Object:       LiteralObject(plan.ObjectType, ObjectID),
+				ExpectAllow:  true,
+			},
 		})
 	}
 
-	return calls, nil
+	return calls
 }
 
-// buildTypedIntersectionGroups builds intersection group checks.
-func buildTypedIntersectionGroups(plan CheckPlan) ([]IntersectionGroupCheck, error) {
+func buildIntersectionGroups(plan CheckPlan) []IntersectionGroupCheck {
 	groups := make([]IntersectionGroupCheck, 0, len(plan.Analysis.IntersectionGroups))
-
-	// Build visited expression that appends the current key for recursive patterns
 	visitedWithKey := VisitedWithKey(plan.ObjectType, plan.Relation, ObjectID)
 
 	for _, group := range plan.Analysis.IntersectionGroups {
 		parts := make([]IntersectionPartCheck, 0, len(group.Parts))
-
 		for _, part := range group.Parts {
-			partCheck := IntersectionPartCheck{
-				Relation:         part.Relation,
-				ExcludedRelation: part.ExcludedRelation,
-			}
-
-			switch {
-			case part.ParentRelation != nil:
-				// TTU part
-				partCheck.IsParent = true
-				partCheck.ParentRelation = part.ParentRelation.Relation
-				partCheck.LinkingRelation = part.ParentRelation.LinkingRelation
-
-				// Build EXISTS check for parent relation
-				q := Tuples("link").
-					ObjectType(plan.ObjectType).
-					Relations(part.ParentRelation.LinkingRelation).
-					Where(
-						Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
-						CheckPermission{
-							Subject:  SubjectParams(),
-							Relation: part.ParentRelation.Relation,
-							Object: ObjectRef{
-								Type: Col{Table: "link", Column: "subject_type"},
-								ID:   Col{Table: "link", Column: "subject_id"},
-							},
-							Visited:     visitedWithKey, // Include visited key for cycle detection
-							ExpectAllow: true,
-						},
-					).
-					Select("1").
-					Limit(1)
-
-				if len(part.ParentRelation.AllowedLinkingTypes) > 0 {
-					q.WhereSubjectTypeIn(part.ParentRelation.AllowedLinkingTypes...)
-				}
-
-				partCheck.Check = Exists{Query: q}
-			case part.IsThis:
-				// "This" pattern - direct tuple lookup for the current relation.
-				// Do NOT use check_permission_internal as it would cause infinite recursion.
-				// Handle wildcards based on the part's HasWildcard flag.
-				thisHasWildcard := part.HasWildcard && plan.AllowWildcard
-				var subjectCheck Expr
-				if thisHasWildcard {
-					// Allow wildcard: match subject_id = p_subject_id OR subject_id = '*'
-					subjectCheck = Or(
-						Eq{Left: Col{Table: "t", Column: "subject_id"}, Right: SubjectID},
-						IsWildcard{Source: Col{Table: "t", Column: "subject_id"}},
-					)
-				} else {
-					// No wildcard: match subject_id = p_subject_id and NOT wildcard
-					subjectCheck = And(
-						Eq{Left: Col{Table: "t", Column: "subject_id"}, Right: SubjectID},
-						NotExpr{Expr: IsWildcard{Source: Col{Table: "t", Column: "subject_id"}}},
-					)
-				}
-				q := Tuples("t").
-					ObjectType(plan.ObjectType).
-					Relations(part.Relation).
-					Where(
-						Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
-						Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
-						subjectCheck,
-					).
-					Select("1").
-					Limit(1)
-				partCheck.Check = Exists{Query: q}
-			default:
-				// Regular computed userset part
-				partCheck.Check = CheckPermission{
-					Subject:     SubjectParams(),
-					Relation:    part.Relation,
-					Object:      LiteralObject(plan.ObjectType, ObjectID),
-					Visited:     visitedWithKey, // Include visited key for cycle detection
-					ExpectAllow: true,
-				}
-			}
-
-			// Add exclusion check if needed
-			if part.ExcludedRelation != "" {
-				exclusionCheck := CheckPermission{
-					Subject:     SubjectParams(),
-					Relation:    part.ExcludedRelation,
-					Object:      LiteralObject(plan.ObjectType, ObjectID),
-					Visited:     visitedWithKey, // Include visited key for cycle detection
-					ExpectAllow: false,
-				}
-				partCheck.Check = And(partCheck.Check, exclusionCheck)
-			}
-
-			parts = append(parts, partCheck)
+			parts = append(parts, buildIntersectionPartCheck(plan, part, visitedWithKey))
 		}
-
 		groups = append(groups, IntersectionGroupCheck{Parts: parts})
 	}
 
-	return groups, nil
+	return groups
 }
 
-// =============================================================================
-// Helper Functions
-// =============================================================================
+func buildIntersectionPartCheck(plan CheckPlan, part IntersectionPart, visitedWithKey Expr) IntersectionPartCheck {
+	pc := IntersectionPartCheck{
+		Relation:         part.Relation,
+		ExcludedRelation: part.ExcludedRelation,
+	}
 
-// HasDirectOrUsersetCheck returns true if the blocks have direct or userset checks.
-func (b CheckBlocks) HasDirectOrUsersetCheck() bool {
-	return b.DirectCheck != nil || b.UsersetCheck != nil
+	switch {
+	case part.ParentRelation != nil:
+		pc.IsParent = true
+		pc.ParentRelation = part.ParentRelation.Relation
+		pc.LinkingRelation = part.ParentRelation.LinkingRelation
+		pc.Check = buildParentCheck(plan.ObjectType, part.ParentRelation, visitedWithKey)
+
+	case part.IsThis:
+		pc.Check = buildThisCheck(plan, part)
+
+	default:
+		pc.Check = CheckPermission{
+			Subject:     SubjectParams(),
+			Relation:    part.Relation,
+			Object:      LiteralObject(plan.ObjectType, ObjectID),
+			Visited:     visitedWithKey,
+			ExpectAllow: true,
+		}
+	}
+
+	if part.ExcludedRelation != "" {
+		exclusionCheck := CheckPermission{
+			Subject:     SubjectParams(),
+			Relation:    part.ExcludedRelation,
+			Object:      LiteralObject(plan.ObjectType, ObjectID),
+			Visited:     visitedWithKey,
+			ExpectAllow: false,
+		}
+		pc.Check = And(pc.Check, exclusionCheck)
+	}
+
+	return pc
 }
 
-// CombinedAccessCheck returns the OR of direct and userset checks.
-func (b CheckBlocks) CombinedAccessCheck() Expr {
-	var checks []Expr
-	if b.DirectCheck != nil {
-		checks = append(checks, b.DirectCheck)
+func buildParentCheck(objectType string, parent *ParentRelationInfo, visitedWithKey Expr) Expr {
+	q := Tuples("link").
+		ObjectType(objectType).
+		Relations(parent.LinkingRelation).
+		Where(
+			Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
+			CheckPermission{
+				Subject:  SubjectParams(),
+				Relation: parent.Relation,
+				Object: ObjectRef{
+					Type: Col{Table: "link", Column: "subject_type"},
+					ID:   Col{Table: "link", Column: "subject_id"},
+				},
+				Visited:     visitedWithKey,
+				ExpectAllow: true,
+			},
+		).
+		Select("1").
+		Limit(1)
+
+	if len(parent.AllowedLinkingTypes) > 0 {
+		q.WhereSubjectTypeIn(parent.AllowedLinkingTypes...)
 	}
-	if b.UsersetCheck != nil {
-		checks = append(checks, b.UsersetCheck)
+	return Exists{Query: q}
+}
+
+func buildThisCheck(plan CheckPlan, part IntersectionPart) Expr {
+	allowWildcard := part.HasWildcard && plan.AllowWildcard
+	subjectCol := Col{Table: "t", Column: "subject_id"}
+
+	var subjectCheck Expr
+	if allowWildcard {
+		subjectCheck = Or(
+			Eq{Left: subjectCol, Right: SubjectID},
+			IsWildcard{Source: subjectCol},
+		)
+	} else {
+		subjectCheck = And(
+			Eq{Left: subjectCol, Right: SubjectID},
+			NotExpr{Expr: IsWildcard{Source: subjectCol}},
+		)
 	}
-	if len(checks) == 0 {
-		return nil
-	}
-	if len(checks) == 1 {
-		return checks[0]
-	}
-	return Or(checks...)
+
+	q := Tuples("t").
+		ObjectType(plan.ObjectType).
+		Relations(part.Relation).
+		Where(
+			Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
+			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
+			subjectCheck,
+		).
+		Select("1").
+		Limit(1)
+	return Exists{Query: q}
 }

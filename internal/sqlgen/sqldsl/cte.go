@@ -117,12 +117,7 @@ type CommentedSQL struct {
 
 // SQL renders the comment followed by the query.
 func (c CommentedSQL) SQL() string {
-	var sb strings.Builder
-	sb.WriteString("-- ")
-	sb.WriteString(c.Comment)
-	sb.WriteString("\n")
-	sb.WriteString(c.Query.SQL())
-	return sb.String()
+	return "-- " + c.Comment + "\n" + c.Query.SQL()
 }
 
 // MultiLineComment creates a CommentedSQL with multiple comment lines.
@@ -150,9 +145,5 @@ type SelectIntoVar struct {
 
 // SQL renders the query with INTO clause appended.
 func (s SelectIntoVar) SQL() string {
-	var sb strings.Builder
-	sb.WriteString(s.Query.SQL())
-	sb.WriteString(" INTO ")
-	sb.WriteString(s.Variable)
-	return sb.String()
+	return s.Query.SQL() + " INTO " + s.Variable
 }

@@ -2,9 +2,6 @@ package sqlgen
 
 import "fmt"
 
-// =============================================================================
-// Depth Exceeded Render Functions (List Subjects)
-// =============================================================================
 // RenderListSubjectsDepthExceededFunction renders a list_subjects function for a relation
 // that exceeds the userset depth limit. The generated function raises M2002 immediately.
 func RenderListSubjectsDepthExceededFunction(plan ListPlan) string {

@@ -1,23 +1,6 @@
 package sqlgen
 
-// =============================================================================
-// Check Render Layer
-// =============================================================================
-//
-// This file implements the Render layer for check function generation.
-// The Render layer produces SQL/PLpgSQL strings from Plan and CheckBlocks data.
-//
-// Architecture: Plan → Blocks → Render
-// - Plan: compute flags and normalized inputs
-// - Blocks: build typed DSL expressions (CheckBlocks)
-// - Render: produce SQL/PLpgSQL strings (this file)
-//
-// The render layer is the ONLY place in the check generation pipeline that
-// produces SQL strings. All other layers work with typed DSL structures.
-
-// RenderCheckFunction renders a complete check function from plan and blocks.
 func RenderCheckFunction(plan CheckPlan, blocks CheckBlocks) (string, error) {
-	// Determine function type and route to appropriate renderer
 	switch plan.DetermineCheckFunctionType() {
 	case "direct":
 		return renderCheckDirectFunctionFromBlocks(plan, blocks)
@@ -25,26 +8,15 @@ func RenderCheckFunction(plan CheckPlan, blocks CheckBlocks) (string, error) {
 		return renderCheckIntersectionFunctionFromBlocks(plan, blocks)
 	case "recursive":
 		return renderCheckRecursiveFunctionFromBlocks(plan, blocks)
-	default: // "recursive_intersection"
+	default:
 		return renderCheckRecursiveIntersectionFunctionFromBlocks(plan, blocks)
 	}
 }
 
-// =============================================================================
-// Direct Check Function (no recursion, no intersection)
-// =============================================================================
-
 func renderCheckDirectFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) (string, error) {
-	// Build function body using plpgsql types
-	var body []Stmt
-
-	// Add userset subject handling
-	body = append(body, buildUsersetSubjectStmts(plan, blocks)...)
-
-	// Build access check expression
+	body := buildUsersetSubjectStmts(plan, blocks)
 	accessExpr := buildAccessCheckExpr(blocks, Visited)
 
-	// Build the final access check with optional exclusion
 	if plan.HasExclusion {
 		exclusionExpr := blocks.ExclusionCheck
 		if exclusionExpr == nil {
@@ -70,37 +42,20 @@ func renderCheckDirectFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) (st
 	}
 
 	fn := PlpgsqlFunction{
-		Name: plan.FunctionName,
-		Args: []FuncArg{
-			{Name: "p_subject_type", Type: "TEXT"},
-			{Name: "p_subject_id", Type: "TEXT"},
-			{Name: "p_object_id", Type: "TEXT"},
-			{Name: "p_visited", Type: "TEXT []", Default: EmptyArray{}},
-		},
+		Name:    plan.FunctionName,
+		Args:    checkFunctionArgs(),
 		Returns: "INTEGER",
 		Decls:   []Decl{{Name: "v_userset_check", Type: "INTEGER := 0"}},
 		Body:    body,
-		Header: []string{
-			"Generated check function for " + plan.ObjectType + "." + plan.Relation,
-			"Features: " + plan.FeaturesString,
-		},
+		Header:  checkFunctionHeader(plan),
 	}
 
 	return fn.SQL() + "\n", nil
 }
 
-// =============================================================================
-// Intersection Check Function (intersection patterns, no recursion)
-// =============================================================================
-
 func renderCheckIntersectionFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) (string, error) {
-	// Build function body using plpgsql types
-	var body []Stmt
+	body := buildUsersetSubjectStmts(plan, blocks)
 
-	// Add userset subject handling
-	body = append(body, buildUsersetSubjectStmts(plan, blocks)...)
-
-	// Non-intersection access paths (if any)
 	if blocks.HasStandaloneAccess {
 		accessExpr := buildAccessCheckExpr(blocks, Visited)
 		body = append(body,
@@ -112,174 +67,105 @@ func renderCheckIntersectionFunctionFromBlocks(plan CheckPlan, blocks CheckBlock
 		)
 	}
 
-	// Add intersection group checks
 	body = append(body, buildIntersectionGroupStmts(plan, blocks, Visited)...)
-
-	// Add exclusion check with access
 	body = append(body, buildExclusionWithAccessStmts(plan, blocks)...)
-
-	// Final return
 	body = append(body, ReturnInt{Value: 0})
 
 	fn := PlpgsqlFunction{
-		Name: plan.FunctionName,
-		Args: []FuncArg{
-			{Name: "p_subject_type", Type: "TEXT"},
-			{Name: "p_subject_id", Type: "TEXT"},
-			{Name: "p_object_id", Type: "TEXT"},
-			{Name: "p_visited", Type: "TEXT []", Default: EmptyArray{}},
-		},
+		Name:    plan.FunctionName,
+		Args:    checkFunctionArgs(),
 		Returns: "INTEGER",
 		Decls: []Decl{
 			{Name: "v_userset_check", Type: "INTEGER := 0"},
 			{Name: "v_has_access", Type: "BOOLEAN := FALSE"},
 		},
-		Body: body,
-		Header: []string{
-			"Generated check function for " + plan.ObjectType + "." + plan.Relation,
-			"Features: " + plan.FeaturesString,
-		},
+		Body:   body,
+		Header: checkFunctionHeader(plan),
 	}
 
 	return fn.SQL() + "\n", nil
 }
-
-// =============================================================================
-// Recursive Check Function (recursion, no intersection)
-// =============================================================================
 
 func renderCheckRecursiveFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) (string, error) {
-	// Build function body using plpgsql types
-	var body []Stmt
-
-	// Cycle detection
-	body = append(body, buildCycleDetectionStmts()...)
-
-	// Initialize v_has_access
-	body = append(body, Assign{Name: "v_has_access", Value: Bool(false)})
-
-	// Add userset subject handling
-	body = append(body, buildUsersetSubjectStmts(plan, blocks)...)
-
-	// Build visited expression: p_visited || ARRAY[v_key]
 	visitedWithKey := Raw("p_visited || ARRAY[v_key]")
 
-	// Add standalone access paths
+	body := buildCycleDetectionStmts()
+	body = append(body, Assign{Name: "v_has_access", Value: Bool(false)})
+	body = append(body, buildUsersetSubjectStmts(plan, blocks)...)
 	body = append(body, buildStandaloneAccessPathStmts(plan, blocks, visitedWithKey)...)
-
-	// Add exclusion check with access
 	body = append(body, buildExclusionWithAccessStmts(plan, blocks)...)
-
-	// Final return
 	body = append(body, ReturnInt{Value: 0})
 
-	// Build visited key expression for declaration
-	vKeyExpr := Concat{Parts: []Expr{
-		Lit(plan.ObjectType + ":"),
-		ObjectID,
-		Lit(":" + plan.Relation),
-	}}
-
 	fn := PlpgsqlFunction{
-		Name: plan.FunctionName,
-		Args: []FuncArg{
-			{Name: "p_subject_type", Type: "TEXT"},
-			{Name: "p_subject_id", Type: "TEXT"},
-			{Name: "p_object_id", Type: "TEXT"},
-			{Name: "p_visited", Type: "TEXT []", Default: EmptyArray{}},
-		},
+		Name:    plan.FunctionName,
+		Args:    checkFunctionArgs(),
 		Returns: "INTEGER",
-		Decls: []Decl{
-			{Name: "v_has_access", Type: "BOOLEAN := FALSE"},
-			{Name: "v_key", Type: "TEXT := " + vKeyExpr.SQL()},
-			{Name: "v_userset_check", Type: "INTEGER := 0"},
-		},
-		Body: body,
-		Header: []string{
-			"Generated check function for " + plan.ObjectType + "." + plan.Relation,
-			"Features: " + plan.FeaturesString,
-		},
+		Decls:   recursiveCheckDecls(plan),
+		Body:    body,
+		Header:  checkFunctionHeader(plan),
 	}
 
 	return fn.SQL() + "\n", nil
 }
 
-// =============================================================================
-// Recursive Intersection Check Function (both recursion and intersection)
-// =============================================================================
-
 func renderCheckRecursiveIntersectionFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) (string, error) {
-	// Build function body using plpgsql types
-	var body []Stmt
-
-	// Cycle detection
-	body = append(body, buildCycleDetectionStmts()...)
-
-	// Initialize v_has_access
-	body = append(body, Assign{Name: "v_has_access", Value: Bool(false)})
-
-	// Add userset subject handling
-	body = append(body, buildUsersetSubjectStmts(plan, blocks)...)
-
-	// Build visited expression: p_visited || ARRAY[v_key]
 	visitedWithKey := Raw("p_visited || ARRAY[v_key]")
 
-	// Comment about intersection handling
+	body := buildCycleDetectionStmts()
+	body = append(body, Assign{Name: "v_has_access", Value: Bool(false)})
+	body = append(body, buildUsersetSubjectStmts(plan, blocks)...)
 	body = append(body, Comment{Text: "Relation has intersection; only render standalone paths if HasStandaloneAccess is true"})
 
-	// Add standalone access paths (if any)
 	if blocks.HasStandaloneAccess {
 		body = append(body, buildStandaloneAccessPathStmts(plan, blocks, visitedWithKey)...)
 	}
 
-	// Add intersection group checks
 	body = append(body, buildIntersectionGroupStmts(plan, blocks, visitedWithKey)...)
-
-	// Add exclusion check with access
 	body = append(body, buildExclusionWithAccessStmts(plan, blocks)...)
-
-	// Final return
 	body = append(body, ReturnInt{Value: 0})
 
-	// Build visited key expression for declaration
-	vKeyExpr := Concat{Parts: []Expr{
-		Lit(plan.ObjectType + ":"),
-		ObjectID,
-		Lit(":" + plan.Relation),
-	}}
-
 	fn := PlpgsqlFunction{
-		Name: plan.FunctionName,
-		Args: []FuncArg{
-			{Name: "p_subject_type", Type: "TEXT"},
-			{Name: "p_subject_id", Type: "TEXT"},
-			{Name: "p_object_id", Type: "TEXT"},
-			{Name: "p_visited", Type: "TEXT []", Default: EmptyArray{}},
-		},
+		Name:    plan.FunctionName,
+		Args:    checkFunctionArgs(),
 		Returns: "INTEGER",
-		Decls: []Decl{
-			{Name: "v_has_access", Type: "BOOLEAN := FALSE"},
-			{Name: "v_key", Type: "TEXT := " + vKeyExpr.SQL()},
-			{Name: "v_userset_check", Type: "INTEGER := 0"},
-		},
-		Body: body,
-		Header: []string{
-			"Generated check function for " + plan.ObjectType + "." + plan.Relation,
-			"Features: " + plan.FeaturesString,
-		},
+		Decls:   recursiveCheckDecls(plan),
+		Body:    body,
+		Header:  checkFunctionHeader(plan),
 	}
 
 	return fn.SQL() + "\n", nil
 }
 
-// =============================================================================
-// Helper Functions
-// =============================================================================
+func checkFunctionArgs() []FuncArg {
+	return []FuncArg{
+		{Name: "p_subject_type", Type: "TEXT"},
+		{Name: "p_subject_id", Type: "TEXT"},
+		{Name: "p_object_id", Type: "TEXT"},
+		{Name: "p_visited", Type: "TEXT []", Default: EmptyArray{}},
+	}
+}
 
-// buildUsersetSubjectStmts builds the userset subject handling statements.
-// This handles the case where the subject itself is a userset (e.g., group#member).
+func checkFunctionHeader(plan CheckPlan) []string {
+	return []string{
+		"Generated check function for " + plan.ObjectType + "." + plan.Relation,
+		"Features: " + plan.FeaturesString,
+	}
+}
+
+func recursiveCheckDecls(plan CheckPlan) []Decl {
+	vKeyExpr := Concat{Parts: []Expr{
+		Lit(plan.ObjectType + ":"),
+		ObjectID,
+		Lit(":" + plan.Relation),
+	}}
+	return []Decl{
+		{Name: "v_has_access", Type: "BOOLEAN := FALSE"},
+		{Name: "v_key", Type: "TEXT := " + vKeyExpr.SQL()},
+		{Name: "v_userset_check", Type: "INTEGER := 0"},
+	}
+}
+
 func buildUsersetSubjectStmts(plan CheckPlan, blocks CheckBlocks) []Stmt {
-	// Build the exclusion check if needed
 	var exclusionStmts []Stmt
 	if plan.HasExclusion && blocks.ExclusionCheck != nil {
 		exclusionStmts = []Stmt{
@@ -290,8 +176,6 @@ func buildUsersetSubjectStmts(plan CheckPlan, blocks CheckBlocks) []Stmt {
 		}
 	}
 
-	// Case 1: Self-referential userset check
-	// IF p_subject_type = 'objectType' AND substring(...) = p_object_id
 	selfRefCond := AndExpr{Exprs: []Expr{
 		Eq{Left: SubjectType, Right: Lit(plan.ObjectType)},
 		Eq{
@@ -307,7 +191,6 @@ func buildUsersetSubjectStmts(plan CheckPlan, blocks CheckBlocks) []Stmt {
 		},
 	}}
 
-	// Case 1 body: SELECT INTO, then check result
 	case1Body := []Stmt{
 		SelectInto{Query: blocks.UsersetSubjectSelfCheck, Variable: "v_userset_check"},
 		If{
@@ -316,17 +199,11 @@ func buildUsersetSubjectStmts(plan CheckPlan, blocks CheckBlocks) []Stmt {
 		},
 	}
 
-	// Case 2 body: computed userset matching
-	case2Body := []Stmt{
-		SelectInto{Query: blocks.UsersetSubjectComputedCheck, Variable: "v_userset_check"},
-	}
-
-	// Build case 2 return with optional exclusion
-	case2ReturnStmts := append(exclusionStmts, ReturnInt{Value: 1})
-	case2Body = append(case2Body, If{
+	case2SelectInto := SelectInto{Query: blocks.UsersetSubjectComputedCheck, Variable: "v_userset_check"}
+	case2ResultCheck := If{
 		Cond: Eq{Left: Raw("v_userset_check"), Right: Int(1)},
-		Then: case2ReturnStmts,
-	})
+		Then: append(exclusionStmts, ReturnInt{Value: 1}),
+	}
 
 	return []Stmt{
 		Comment{Text: "Userset subject handling"},
@@ -334,20 +211,15 @@ func buildUsersetSubjectStmts(plan CheckPlan, blocks CheckBlocks) []Stmt {
 			Cond: Gt{Left: Position{Needle: Lit("#"), Haystack: SubjectID}, Right: Int(0)},
 			Then: []Stmt{
 				Comment{Text: "Case 1: Self-referential userset check"},
-				If{
-					Cond: selfRefCond,
-					Then: case1Body,
-				},
+				If{Cond: selfRefCond, Then: case1Body},
 				Comment{Text: "Case 2: Computed userset matching"},
-				case2Body[0], // SelectInto
-				case2Body[1], // If check
+				case2SelectInto,
+				case2ResultCheck,
 			},
 		},
 	}
 }
 
-// buildAccessCheckExpr builds an OR expression for all access paths.
-// Returns nil if there are no access checks, or an Expr for the combined condition.
 func buildAccessCheckExpr(blocks CheckBlocks, visitedExpr Expr) Expr {
 	var parts []Expr
 	if blocks.DirectCheck != nil {
@@ -356,23 +228,21 @@ func buildAccessCheckExpr(blocks CheckBlocks, visitedExpr Expr) Expr {
 	if blocks.UsersetCheck != nil {
 		parts = append(parts, blocks.UsersetCheck)
 	}
-
 	for _, call := range blocks.ImpliedFunctionCalls {
 		checkCall := SpecializedCheckCall(call.FunctionName, SubjectType, SubjectID, ObjectID, visitedExpr)
 		parts = append(parts, Raw(checkCall.SQL()))
 	}
 
-	if len(parts) == 0 {
+	switch len(parts) {
+	case 0:
 		return Bool(false)
-	}
-	if len(parts) == 1 {
+	case 1:
 		return parts[0]
+	default:
+		return OrExpr{Exprs: parts}
 	}
-	return OrExpr{Exprs: parts}
 }
 
-// buildCycleDetectionStmts builds the cycle detection statements for recursive functions.
-// Pattern: check if v_key is in p_visited, check depth limit.
 func buildCycleDetectionStmts() []Stmt {
 	return []Stmt{
 		Comment{Text: "Cycle detection"},
@@ -382,19 +252,14 @@ func buildCycleDetectionStmts() []Stmt {
 		},
 		If{
 			Cond: Gte{Left: ArrayLength{Array: Visited}, Right: Int(25)},
-			Then: []Stmt{
-				Raise{Message: "resolution too complex", ErrCode: "M2002"},
-			},
+			Then: []Stmt{Raise{Message: "resolution too complex", ErrCode: "M2002"}},
 		},
 	}
 }
 
-// buildStandaloneAccessPathStmts builds statements for standalone (non-intersection) access paths.
-// Used in recursive check functions to check direct, userset, implied, and parent relation paths.
 func buildStandaloneAccessPathStmts(plan CheckPlan, blocks CheckBlocks, visitedExpr Expr) []Stmt {
 	var stmts []Stmt
 
-	// Direct/Implied access path
 	if blocks.DirectCheck != nil {
 		stmts = append(stmts,
 			Comment{Text: "Direct/Implied access path"},
@@ -405,65 +270,40 @@ func buildStandaloneAccessPathStmts(plan CheckPlan, blocks CheckBlocks, visitedE
 		)
 	}
 
-	// Userset access path (only if not already has access)
 	if blocks.UsersetCheck != nil {
-		stmts = append(stmts,
-			Comment{Text: "Userset access path"},
-			If{
-				Cond: NotExpr{Expr: Raw("v_has_access")},
-				Then: []Stmt{
-					If{
-						Cond: blocks.UsersetCheck,
-						Then: []Stmt{Assign{Name: "v_has_access", Value: Bool(true)}},
-					},
-				},
-			},
-		)
+		stmts = append(stmts, accessPathCheck("Userset access path", blocks.UsersetCheck))
 	}
 
-	// Implied function calls
 	for _, call := range blocks.ImpliedFunctionCalls {
 		checkCall := SpecializedCheckCall(call.FunctionName, SubjectType, SubjectID, ObjectID, visitedExpr)
-		stmts = append(stmts,
-			Comment{Text: "Implied access path via " + call.FunctionName},
-			If{
-				Cond: NotExpr{Expr: Raw("v_has_access")},
-				Then: []Stmt{
-					If{
-						Cond: Raw(checkCall.SQL()),
-						Then: []Stmt{Assign{Name: "v_has_access", Value: Bool(true)}},
-					},
-				},
-			},
-		)
+		stmts = append(stmts, accessPathCheck("Implied access path via "+call.FunctionName, Raw(checkCall.SQL())))
 	}
 
-	// Parent relation checks (TTU)
 	for _, parent := range blocks.ParentRelationBlocks {
 		existsSQL := renderParentRelationExistsFromBlocks(plan, parent, visitedExpr.SQL())
-		stmts = append(stmts,
-			Comment{Text: "Recursive access path via " + parent.LinkingRelation + " -> " + parent.ParentRelation},
-			If{
-				Cond: NotExpr{Expr: Raw("v_has_access")},
-				Then: []Stmt{
-					If{
-						Cond: Raw(existsSQL),
-						Then: []Stmt{Assign{Name: "v_has_access", Value: Bool(true)}},
-					},
-				},
-			},
-		)
+		comment := "Recursive access path via " + parent.LinkingRelation + " -> " + parent.ParentRelation
+		stmts = append(stmts, accessPathCheck(comment, Raw(existsSQL)))
 	}
 
 	return stmts
 }
 
+func accessPathCheck(comment string, cond Expr) If {
+	return If{
+		Cond: NotExpr{Expr: Raw("v_has_access")},
+		Then: []Stmt{
+			Comment{Text: comment},
+			If{
+				Cond: cond,
+				Then: []Stmt{Assign{Name: "v_has_access", Value: Bool(true)}},
+			},
+		},
+	}
+}
+
 func renderParentRelationExistsFromBlocks(plan CheckPlan, parent ParentRelationBlock, visitedExpr string) string {
-	// Use InternalCheckCall DSL instead of fmt.Sprintf
 	checkCall := InternalCheckCall(
-		SubjectType,
-		SubjectID,
-		parent.ParentRelation,
+		SubjectType, SubjectID, parent.ParentRelation,
 		Col{Table: "link", Column: "subject_type"},
 		Col{Table: "link", Column: "subject_id"},
 		Raw(visitedExpr),
@@ -484,8 +324,6 @@ func renderParentRelationExistsFromBlocks(plan CheckPlan, parent ParentRelationB
 	return q.ExistsSQL()
 }
 
-// buildIntersectionGroupStmts builds statements for intersection group checks.
-// Each group is AND'd together, groups are OR'd (first match wins).
 func buildIntersectionGroupStmts(plan CheckPlan, blocks CheckBlocks, visitedExpr Expr) []Stmt {
 	if len(blocks.IntersectionGroups) == 0 {
 		return nil
@@ -494,107 +332,91 @@ func buildIntersectionGroupStmts(plan CheckPlan, blocks CheckBlocks, visitedExpr
 	stmts := []Stmt{Comment{Text: "Intersection groups (OR'd together, parts within group AND'd)"}}
 
 	for _, group := range blocks.IntersectionGroups {
-		// Build the AND condition for all parts
-		var partExprs []Expr
-		for _, part := range group.Parts {
-			partExprs = append(partExprs, part.Check)
+		partExprs := make([]Expr, len(group.Parts))
+		for i, part := range group.Parts {
+			partExprs[i] = part.Check
 		}
 
-		// Build the condition: all parts must be true
-		var groupCond Expr
-		if len(partExprs) == 1 {
-			groupCond = partExprs[0]
-		} else {
-			groupCond = AndExpr{Exprs: partExprs}
-		}
+		groupCond := andExprs(partExprs)
+		innerStmts := buildIntersectionInnerStmts(plan, group.Parts, visitedExpr)
 
-		// Build inner statements: exclusion checks + set v_has_access
-		var innerStmts []Stmt
-
-		// Handle exclusions - wrap in nested IFs
-		// For each part with exclusion, we need IF exclusion THEN (fail) ELSE (continue)
-		var hasExclusions bool
-		for _, part := range group.Parts {
-			if part.ExcludedRelation != "" {
-				hasExclusions = true
-				break
-			}
-		}
-
-		if hasExclusions {
-			// Build nested exclusion checks
-			// This is complex: we need to build inside-out
-			// Start with the innermost action (set v_has_access)
-			innermost := []Stmt{Assign{Name: "v_has_access", Value: Bool(true)}}
-
-			// Wrap from last to first exclusion
-			for i := len(group.Parts) - 1; i >= 0; i-- {
-				part := group.Parts[i]
-				if part.ExcludedRelation != "" {
-					checkCall := InternalCheckCall(
-						SubjectType,
-						SubjectID,
-						part.ExcludedRelation,
-						Lit(plan.ObjectType),
-						ObjectID,
-						visitedExpr,
-					)
-					innermost = []Stmt{
-						Comment{Text: "Check exclusion for part " + part.ExcludedRelation},
-						If{
-							Cond: Raw(checkCall.SQL()),
-							Then: []Stmt{Comment{Text: "Excluded, this group fails"}},
-							Else: innermost,
-						},
-					}
-				}
-			}
-			innerStmts = innermost
-		} else {
-			innerStmts = []Stmt{Assign{Name: "v_has_access", Value: Bool(true)}}
-		}
-
-		// Wrap in: IF NOT v_has_access THEN IF groupCond THEN ... END IF; END IF;
 		stmts = append(stmts, If{
 			Cond: NotExpr{Expr: Raw("v_has_access")},
-			Then: []Stmt{
-				If{
-					Cond: groupCond,
-					Then: innerStmts,
-				},
-			},
+			Then: []Stmt{If{Cond: groupCond, Then: innerStmts}},
 		})
 	}
 
 	return stmts
 }
 
-// buildExclusionWithAccessStmts builds the final exclusion check statements.
-// Returns plpgsql statements for the "if has access, check exclusion, return" pattern.
-func buildExclusionWithAccessStmts(plan CheckPlan, blocks CheckBlocks) []Stmt {
-	if plan.HasExclusion {
-		exclusionExpr := blocks.ExclusionCheck
-		if exclusionExpr == nil {
-			exclusionExpr = Bool(false)
+func andExprs(exprs []Expr) Expr {
+	if len(exprs) == 1 {
+		return exprs[0]
+	}
+	return AndExpr{Exprs: exprs}
+}
+
+func buildIntersectionInnerStmts(plan CheckPlan, parts []IntersectionPartCheck, visitedExpr Expr) []Stmt {
+	hasExclusions := false
+	for _, part := range parts {
+		if part.ExcludedRelation != "" {
+			hasExclusions = true
+			break
 		}
-		return []Stmt{
-			Comment{Text: "Exclusion check"},
+	}
+
+	if !hasExclusions {
+		return []Stmt{Assign{Name: "v_has_access", Value: Bool(true)}}
+	}
+
+	innermost := []Stmt{Assign{Name: "v_has_access", Value: Bool(true)}}
+	for i := len(parts) - 1; i >= 0; i-- {
+		part := parts[i]
+		if part.ExcludedRelation == "" {
+			continue
+		}
+		checkCall := InternalCheckCall(
+			SubjectType, SubjectID, part.ExcludedRelation,
+			Lit(plan.ObjectType), ObjectID, visitedExpr,
+		)
+		innermost = []Stmt{
+			Comment{Text: "Check exclusion for part " + part.ExcludedRelation},
 			If{
-				Cond: Raw("v_has_access"),
-				Then: []Stmt{
-					If{
-						Cond: exclusionExpr,
-						Then: []Stmt{ReturnInt{Value: 0}},
-					},
-					ReturnInt{Value: 1},
-				},
+				Cond: Raw(checkCall.SQL()),
+				Then: []Stmt{Comment{Text: "Excluded, this group fails"}},
+				Else: innermost,
 			},
 		}
 	}
+	return innermost
+}
+
+func buildExclusionWithAccessStmts(plan CheckPlan, blocks CheckBlocks) []Stmt {
+	if !plan.HasExclusion {
+		return []Stmt{
+			If{
+				Cond: Raw("v_has_access"),
+				Then: []Stmt{ReturnInt{Value: 1}},
+			},
+		}
+	}
+
+	exclusionExpr := blocks.ExclusionCheck
+	if exclusionExpr == nil {
+		exclusionExpr = Bool(false)
+	}
+
 	return []Stmt{
+		Comment{Text: "Exclusion check"},
 		If{
 			Cond: Raw("v_has_access"),
-			Then: []Stmt{ReturnInt{Value: 1}},
+			Then: []Stmt{
+				If{
+					Cond: exclusionExpr,
+					Then: []Stmt{ReturnInt{Value: 0}},
+				},
+				ReturnInt{Value: 1},
+			},
 		},
 	}
 }

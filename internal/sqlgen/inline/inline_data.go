@@ -34,18 +34,14 @@ type InlineSQLData struct {
 	UsersetRows []sqldsl.ValuesRow
 }
 
-func buildInlineSQLData(closureRows []analysis.ClosureRow, analyses []analysis.RelationAnalysis) InlineSQLData {
+// BuildInlineSQLData builds inline SQL data for tools and tests.
+func BuildInlineSQLData(closureRows []analysis.ClosureRow, analyses []analysis.RelationAnalysis) InlineSQLData {
 	return InlineSQLData{
 		ClosureValues: BuildClosureValues(closureRows),
 		UsersetValues: buildUsersetValues(analyses),
 		ClosureRows:   BuildClosureTypedRows(closureRows),
 		UsersetRows:   BuildUsersetTypedRows(analyses),
 	}
-}
-
-// BuildInlineSQLData exposes inline SQL generation for tools and tests.
-func BuildInlineSQLData(closureRows []analysis.ClosureRow, analyses []analysis.RelationAnalysis) InlineSQLData {
-	return buildInlineSQLData(closureRows, analyses)
 }
 
 // BuildClosureValues builds string-based closure VALUES content.
@@ -103,36 +99,20 @@ func escapeSQLLiteral(value string) string {
 	return strings.ReplaceAll(value, "'", "''")
 }
 
-// =============================================================================
-// Typed Row Builders (Phase 5)
-// =============================================================================
+// keyedRow pairs a sort key with a ValuesRow for deterministic ordering.
+type keyedRow struct {
+	key string
+	row sqldsl.ValuesRow
+}
 
-// BuildClosureTypedRows builds typed ValuesRow slices for closure data.
-// Returns nil for empty input (TypedValuesTable handles empty case).
-func BuildClosureTypedRows(closureRows []analysis.ClosureRow) []sqldsl.ValuesRow {
-	if len(closureRows) == 0 {
+// sortAndExtract sorts keyed rows by key and returns the rows in sorted order.
+func sortAndExtract(keyed []keyedRow) []sqldsl.ValuesRow {
+	if len(keyed) == 0 {
 		return nil
 	}
-
-	// Build rows with sort keys
-	type rowWithKey struct {
-		key string
-		row sqldsl.ValuesRow
-	}
-	keyed := make([]rowWithKey, 0, len(closureRows))
-	for _, cr := range closureRows {
-		keyed = append(keyed, rowWithKey{
-			key: cr.ObjectType + "\x00" + cr.Relation + "\x00" + cr.SatisfyingRelation,
-			row: sqldsl.ValuesRow{sqldsl.Lit(cr.ObjectType), sqldsl.Lit(cr.Relation), sqldsl.Lit(cr.SatisfyingRelation)},
-		})
-	}
-
-	// Sort by key for deterministic output
 	sort.Slice(keyed, func(i, j int) bool {
 		return keyed[i].key < keyed[j].key
 	})
-
-	// Extract sorted rows
 	result := make([]sqldsl.ValuesRow, len(keyed))
 	for i, k := range keyed {
 		result[i] = k.row
@@ -140,29 +120,36 @@ func BuildClosureTypedRows(closureRows []analysis.ClosureRow) []sqldsl.ValuesRow
 	return result
 }
 
+// BuildClosureTypedRows builds typed ValuesRow slices for closure data.
+// Returns nil for empty input (TypedValuesTable handles empty case).
+func BuildClosureTypedRows(closureRows []analysis.ClosureRow) []sqldsl.ValuesRow {
+	if len(closureRows) == 0 {
+		return nil
+	}
+	keyed := make([]keyedRow, 0, len(closureRows))
+	for _, cr := range closureRows {
+		keyed = append(keyed, keyedRow{
+			key: cr.ObjectType + "\x00" + cr.Relation + "\x00" + cr.SatisfyingRelation,
+			row: sqldsl.ValuesRow{sqldsl.Lit(cr.ObjectType), sqldsl.Lit(cr.Relation), sqldsl.Lit(cr.SatisfyingRelation)},
+		})
+	}
+	return sortAndExtract(keyed)
+}
+
 // BuildUsersetTypedRows builds typed ValuesRow slices for userset data.
 // Returns nil for empty input (TypedValuesTable handles empty case).
 func BuildUsersetTypedRows(analyses []analysis.RelationAnalysis) []sqldsl.ValuesRow {
 	seen := make(map[string]struct{})
-	type rowWithKey struct {
-		key string
-		row sqldsl.ValuesRow
-	}
-	var keyed []rowWithKey
+	var keyed []keyedRow
 
 	for _, a := range analyses {
 		for _, pattern := range a.UsersetPatterns {
-			key := strings.Join([]string{
-				a.ObjectType,
-				a.Relation,
-				pattern.SubjectType,
-				pattern.SubjectRelation,
-			}, "\x00")
+			key := a.ObjectType + "\x00" + a.Relation + "\x00" + pattern.SubjectType + "\x00" + pattern.SubjectRelation
 			if _, ok := seen[key]; ok {
 				continue
 			}
 			seen[key] = struct{}{}
-			keyed = append(keyed, rowWithKey{
+			keyed = append(keyed, keyedRow{
 				key: key,
 				row: sqldsl.ValuesRow{
 					sqldsl.Lit(a.ObjectType),
@@ -173,20 +160,5 @@ func BuildUsersetTypedRows(analyses []analysis.RelationAnalysis) []sqldsl.Values
 			})
 		}
 	}
-
-	if len(keyed) == 0 {
-		return nil
-	}
-
-	// Sort by key for deterministic output
-	sort.Slice(keyed, func(i, j int) bool {
-		return keyed[i].key < keyed[j].key
-	})
-
-	// Extract sorted rows
-	result := make([]sqldsl.ValuesRow, len(keyed))
-	for i, k := range keyed {
-		result[i] = k.row
-	}
-	return result
+	return sortAndExtract(keyed)
 }

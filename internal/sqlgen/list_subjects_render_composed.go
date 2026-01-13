@@ -1,82 +1,30 @@
 package sqlgen
 
-import (
-	"fmt"
-	"strings"
-)
+import "fmt"
 
-// =============================================================================
-// Composed Strategy Render Functions (List Subjects)
-// =============================================================================
 // RenderListSubjectsComposedFunction renders a list_subjects function for composed access.
 func RenderListSubjectsComposedFunction(plan ListPlan, blocks ComposedSubjectsBlockSet) (string, error) {
-	// Render self-candidate query
 	var selfSQL string
 	if blocks.SelfBlock != nil {
-		qb := renderTypedQueryBlock(*blocks.SelfBlock)
-		selfSQL = qb.Query.SQL()
+		selfSQL = blocks.SelfBlock.Query.SQL()
 	}
 
-	// Render userset filter candidate blocks
-	usersetFilterBlocksSQL := make([]string, 0, len(blocks.UsersetFilterBlocks))
-	for _, block := range blocks.UsersetFilterBlocks {
-		qb := renderTypedQueryBlock(block)
-		usersetFilterBlocksSQL = append(usersetFilterBlocksSQL, formatQueryBlockSQL(qb.Comments, qb.Query.SQL()))
-	}
-	usersetFilterCandidates := strings.Join(usersetFilterBlocksSQL, "\n    UNION\n")
+	usersetFilterCandidates := renderBlocksUnion(blocks.UsersetFilterBlocks)
+	regularCandidates := renderBlocksUnion(blocks.RegularBlocks)
 
-	// Render regular candidate blocks
-	regularBlocksSQL := make([]string, 0, len(blocks.RegularBlocks))
-	for _, block := range blocks.RegularBlocks {
-		qb := renderTypedQueryBlock(block)
-		regularBlocksSQL = append(regularBlocksSQL, formatQueryBlockSQL(qb.Comments, qb.Query.SQL()))
-	}
-	regularCandidates := strings.Join(regularBlocksSQL, "\n    UNION\n")
-
-	// Build userset filter query using WithCTE
-	usersetFilterQuery := WithCTE{
-		Recursive: false,
-		CTEs: []CTEDef{{
-			Name:  "subject_candidates",
-			Query: Raw(usersetFilterCandidates),
-		}},
-		Query: SelectStmt{
-			Distinct:    true,
-			ColumnExprs: []Expr{Col{Table: "sc", Column: "subject_id"}},
-			FromExpr:    TableAs("subject_candidates", "sc"),
-			Where: CheckPermission{
-				Subject:     SubjectRef{Type: Param("v_filter_type"), ID: Col{Table: "sc", Column: "subject_id"}},
-				Relation:    plan.Relation,
-				Object:      LiteralObject(plan.ObjectType, ObjectID),
-				ExpectAllow: true,
-			},
+	usersetFilterQuery := buildCandidatesCTE(usersetFilterCandidates, SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "sc", Column: "subject_id"}},
+		FromExpr:    TableAs("subject_candidates", "sc"),
+		Where: CheckPermission{
+			Subject:     SubjectRef{Type: Param("v_filter_type"), ID: Col{Table: "sc", Column: "subject_id"}},
+			Relation:    plan.Relation,
+			Object:      LiteralObject(plan.ObjectType, ObjectID),
+			ExpectAllow: true,
 		},
-	}.SQL()
+	}).SQL()
 
-	// Build regular query using WithCTE (with exclusions if needed)
-	var regularQueryCTE WithCTE
-	regularQueryCTE = WithCTE{
-		Recursive: false,
-		CTEs: []CTEDef{{
-			Name:  "subject_candidates",
-			Query: Raw(regularCandidates),
-		}},
-		Query: SelectStmt{
-			Distinct:    true,
-			ColumnExprs: []Expr{Col{Table: "sc", Column: "subject_id"}},
-			FromExpr:    TableAs("subject_candidates", "sc"),
-		},
-	}
-	if blocks.HasExclusions {
-		exclusions := buildSimpleComplexExclusionInput(plan.Analysis, ObjectID, SubjectType, Col{Table: "sc", Column: "subject_id"})
-		exclusionPreds := exclusions.BuildPredicates()
-		if len(exclusionPreds) > 0 {
-			selectStmt := regularQueryCTE.Query.(SelectStmt)
-			selectStmt.Where = And(exclusionPreds...)
-			regularQueryCTE.Query = selectStmt
-		}
-	}
-	regularQuery := regularQueryCTE.SQL()
+	regularQuery := buildRegularQueryWithExclusions(plan, blocks, regularCandidates)
 
 	// Wrap queries with pagination
 	selfPaginatedSQL := wrapWithPaginationWildcardFirst(selfSQL)
@@ -137,4 +85,40 @@ func RenderListSubjectsComposedFunction(plan ListPlan, blocks ComposedSubjectsBl
 		Body: body,
 	}
 	return fn.SQL(), nil
+}
+
+func renderBlocksUnion(blocks []TypedQueryBlock) string {
+	parts := make([]string, len(blocks))
+	for i, block := range blocks {
+		parts[i] = formatQueryBlockSQL(block.Comments, block.Query.SQL())
+	}
+	return joinUnionBlocksSQL(parts)
+}
+
+func buildCandidatesCTE(candidates string, query SelectStmt) WithCTE {
+	return WithCTE{
+		Recursive: false,
+		CTEs: []CTEDef{{
+			Name:  "subject_candidates",
+			Query: Raw(candidates),
+		}},
+		Query: query,
+	}
+}
+
+func buildRegularQueryWithExclusions(plan ListPlan, blocks ComposedSubjectsBlockSet, candidates string) string {
+	query := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "sc", Column: "subject_id"}},
+		FromExpr:    TableAs("subject_candidates", "sc"),
+	}
+
+	if blocks.HasExclusions {
+		exclusions := buildSimpleComplexExclusionInput(plan.Analysis, ObjectID, SubjectType, Col{Table: "sc", Column: "subject_id"})
+		if preds := exclusions.BuildPredicates(); len(preds) > 0 {
+			query.Where = And(preds...)
+		}
+	}
+
+	return buildCandidatesCTE(candidates, query).SQL()
 }

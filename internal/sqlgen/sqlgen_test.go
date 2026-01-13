@@ -38,23 +38,23 @@ func TestSqlf(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := sqlf(tt.input, tt.args...)
+			got := Sqlf(tt.input, tt.args...)
 			if got != tt.expect {
-				t.Errorf("sqlf() =\n%q\nwant:\n%q", got, tt.expect)
+				t.Errorf("Sqlf() =\n%q\nwant:\n%q", got, tt.expect)
 			}
 		})
 	}
 }
 
 func TestOptf(t *testing.T) {
-	if got := optf(true, "DISTINCT "); got != "DISTINCT " {
-		t.Errorf("optf(true) = %q, want %q", got, "DISTINCT ")
+	if got := Optf(true, "DISTINCT "); got != "DISTINCT " {
+		t.Errorf("Optf(true) = %q, want %q", got, "DISTINCT ")
 	}
-	if got := optf(false, "DISTINCT "); got != "" {
-		t.Errorf("optf(false) = %q, want %q", got, "")
+	if got := Optf(false, "DISTINCT "); got != "" {
+		t.Errorf("Optf(false) = %q, want %q", got, "")
 	}
-	if got := optf(true, "LIMIT %d", 10); got != "LIMIT 10" {
-		t.Errorf("optf with args = %q, want %q", got, "LIMIT 10")
+	if got := Optf(true, "LIMIT %d", 10); got != "LIMIT 10" {
+		t.Errorf("Optf with args = %q, want %q", got, "LIMIT 10")
 	}
 }
 
@@ -627,9 +627,9 @@ func TestIndentLines(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := indentLines(tt.input, tt.indent)
+			got := IndentLines(tt.input, tt.indent)
 			if got != tt.expect {
-				t.Errorf("indentLines() =\n%q\nwant:\n%q", got, tt.expect)
+				t.Errorf("IndentLines() =\n%q\nwant:\n%q", got, tt.expect)
 			}
 		})
 	}
@@ -791,9 +791,9 @@ func TestTypedUsersetValuesTable(t *testing.T) {
 
 func TestBuildClosureTypedRows(t *testing.T) {
 	t.Run("empty input", func(t *testing.T) {
-		rows := buildClosureTypedRows(nil)
+		rows := BuildClosureTypedRows(nil)
 		if rows != nil {
-			t.Errorf("buildClosureTypedRows(nil) = %v, want nil", rows)
+			t.Errorf("BuildClosureTypedRows(nil) = %v, want nil", rows)
 		}
 	})
 
@@ -801,7 +801,7 @@ func TestBuildClosureTypedRows(t *testing.T) {
 		input := []ClosureRow{
 			{ObjectType: "doc", Relation: "viewer", SatisfyingRelation: "editor"},
 		}
-		rows := buildClosureTypedRows(input)
+		rows := BuildClosureTypedRows(input)
 		if len(rows) != 1 {
 			t.Fatalf("len(rows) = %d, want 1", len(rows))
 		}
@@ -818,7 +818,7 @@ func TestBuildClosureTypedRows(t *testing.T) {
 			{ObjectType: "doc", Relation: "editor", SatisfyingRelation: "editor"},
 			{ObjectType: "doc", Relation: "viewer", SatisfyingRelation: "editor"},
 		}
-		rows := buildClosureTypedRows(input)
+		rows := BuildClosureTypedRows(input)
 		if len(rows) != 3 {
 			t.Fatalf("len(rows) = %d, want 3", len(rows))
 		}
@@ -840,7 +840,7 @@ func TestBuildClosureTypedRows(t *testing.T) {
 		input := []ClosureRow{
 			{ObjectType: "it's", Relation: "a'test", SatisfyingRelation: "value"},
 		}
-		rows := buildClosureTypedRows(input)
+		rows := BuildClosureTypedRows(input)
 		got := rows[0].SQL()
 		if !strings.Contains(got, "''") {
 			t.Errorf("Expected escaped quotes in %q", got)
@@ -850,9 +850,9 @@ func TestBuildClosureTypedRows(t *testing.T) {
 
 func TestBuildUsersetTypedRows(t *testing.T) {
 	t.Run("empty input", func(t *testing.T) {
-		rows := buildUsersetTypedRows(nil)
+		rows := BuildUsersetTypedRows(nil)
 		if rows != nil {
-			t.Errorf("buildUsersetTypedRows(nil) = %v, want nil", rows)
+			t.Errorf("BuildUsersetTypedRows(nil) = %v, want nil", rows)
 		}
 	})
 
@@ -860,9 +860,9 @@ func TestBuildUsersetTypedRows(t *testing.T) {
 		input := []RelationAnalysis{
 			{ObjectType: "doc", Relation: "viewer", UsersetPatterns: nil},
 		}
-		rows := buildUsersetTypedRows(input)
+		rows := BuildUsersetTypedRows(input)
 		if rows != nil {
-			t.Errorf("buildUsersetTypedRows(empty patterns) = %v, want nil", rows)
+			t.Errorf("BuildUsersetTypedRows(empty patterns) = %v, want nil", rows)
 		}
 	})
 
@@ -876,7 +876,7 @@ func TestBuildUsersetTypedRows(t *testing.T) {
 				},
 			},
 		}
-		rows := buildUsersetTypedRows(input)
+		rows := BuildUsersetTypedRows(input)
 		if len(rows) != 1 {
 			t.Fatalf("len(rows) = %d, want 1", len(rows))
 		}
@@ -898,7 +898,7 @@ func TestBuildUsersetTypedRows(t *testing.T) {
 				},
 			},
 		}
-		rows := buildUsersetTypedRows(input)
+		rows := BuildUsersetTypedRows(input)
 		if len(rows) != 1 {
 			t.Errorf("len(rows) = %d, want 1 (deduped)", len(rows))
 		}
@@ -915,7 +915,7 @@ func TestBuildUsersetTypedRows(t *testing.T) {
 				},
 			},
 		}
-		rows := buildUsersetTypedRows(input)
+		rows := BuildUsersetTypedRows(input)
 		if len(rows) != 2 {
 			t.Fatalf("len(rows) = %d, want 2", len(rows))
 		}
@@ -937,11 +937,11 @@ func TestTypedValuesTableConsistencyWithStringBased(t *testing.T) {
 	}
 
 	// String-based (existing)
-	stringValues := buildClosureValues(closureRows)
+	stringValues := BuildClosureValues(closureRows)
 	stringTable := ClosureValuesTable(stringValues, "c")
 
 	// Typed (new)
-	typedRows := buildClosureTypedRows(closureRows)
+	typedRows := BuildClosureTypedRows(closureRows)
 	typedTable := TypedClosureValuesTable(typedRows, "c")
 
 	// Both should produce the same SQL

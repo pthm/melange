@@ -3,7 +3,7 @@
 package sqldsl
 
 import (
-	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -79,7 +79,7 @@ type Int int
 
 // SQL renders the integer.
 func (i Int) SQL() string {
-	return fmt.Sprintf("%d", i)
+	return strconv.Itoa(int(i))
 }
 
 // Bool represents a boolean literal.
@@ -194,43 +194,6 @@ func (s Substring) SQL() string {
 	}
 	return "substring(" + s.Source.SQL() + " from " + s.From.SQL() + " for " + s.For.SQL() + ")"
 }
-
-// UsersetNormalized extracts the object ID from a userset and combines with a new relation.
-// Renders: substring(source from 1 for position('#' in source) - 1) || '#' || relation
-// Example: "group:1#admin" with relation "member" -> "group:1#member"
-// This is used to normalize userset subjects to a specific relation.
-type UsersetNormalized struct {
-	Source   Expr
-	Relation Expr
-}
-
-// SQL renders the userset normalization expression.
-func (u UsersetNormalized) SQL() string {
-	// substring(source from 1 for position('#' in source) - 1) || '#' || relation
-	posExpr := "position('#' in " + u.Source.SQL() + ")"
-	objectID := "substring(" + u.Source.SQL() + " from 1 for " + posExpr + " - 1)"
-	return objectID + " || '#' || " + u.Relation.SQL()
-}
-
-// =============================================================================
-// Userset String Helpers
-// =============================================================================
-
-// NormalizedUsersetSubject creates a normalized userset subject reference.
-// Takes the object_id from subjectID and combines with the given relation.
-// Example: NormalizedUsersetSubject(Col{Column: "subject_id"}, Raw("v_filter_relation"))
-// SQL: split_part(subject_id, '#', 1) || '#' || v_filter_relation
-func NormalizedUsersetSubject(subjectID, relation Expr) Expr {
-	return Concat{Parts: []Expr{
-		UsersetObjectID{Source: subjectID},
-		Lit("#"),
-		relation,
-	}}
-}
-
-// =============================================================================
-// Column Expression Helpers
-// =============================================================================
 
 // SelectAs creates an aliased column expression (expr AS alias).
 // Shorthand for Alias{Expr: expr, Name: alias}.

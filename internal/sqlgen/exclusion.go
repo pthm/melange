@@ -1,7 +1,5 @@
 package sqlgen
 
-// Exclusion builders for handling "but not" patterns in authorization rules.
-
 // ExcludedParentRelation represents a TTU exclusion pattern.
 type ExcludedParentRelation struct {
 	Relation            string
@@ -25,12 +23,10 @@ type ExcludedIntersectionGroup struct {
 type ExclusionConfig struct {
 	ObjectType string
 
-	// References to use in exclusion predicates
 	ObjectIDExpr    Expr
 	SubjectTypeExpr Expr
 	SubjectIDExpr   Expr
 
-	// Exclusion types
 	SimpleExcludedRelations  []string
 	ComplexExcludedRelations []string
 	ExcludedParentRelations  []ExcludedParentRelation
@@ -45,6 +41,42 @@ func (c ExclusionConfig) HasExclusions() bool {
 		len(c.ExcludedIntersection) > 0
 }
 
+func (c ExclusionConfig) subjectRef() SubjectRef {
+	return SubjectRef{Type: c.SubjectTypeExpr, ID: c.SubjectIDExpr}
+}
+
+func (c ExclusionConfig) objectRef() ObjectRef {
+	return ObjectRef{Type: Lit(c.ObjectType), ID: c.ObjectIDExpr}
+}
+
+func (c ExclusionConfig) checkPermission(relation string, obj ObjectRef, expectAllow bool) CheckPermission {
+	return CheckPermission{
+		Subject:     c.subjectRef(),
+		Relation:    relation,
+		Object:      obj,
+		ExpectAllow: expectAllow,
+	}
+}
+
+func (c ExclusionConfig) ttuLinkQuery(rel ExcludedParentRelation) *TupleQuery {
+	linkedObject := ObjectRef{
+		Type: Col{Table: "link", Column: "subject_type"},
+		ID:   Col{Table: "link", Column: "subject_id"},
+	}
+	q := Tuples("link").
+		ObjectType(c.ObjectType).
+		Relations(rel.LinkingRelation).
+		Select("1").
+		Where(
+			Eq{Left: Col{Table: "link", Column: "object_id"}, Right: c.ObjectIDExpr},
+			c.checkPermission(rel.Relation, linkedObject, true),
+		)
+	if len(rel.AllowedLinkingTypes) > 0 {
+		q.WhereSubjectTypeIn(rel.AllowedLinkingTypes...)
+	}
+	return q
+}
+
 // BuildPredicates returns the exclusion predicates as Expr slices.
 func (c ExclusionConfig) BuildPredicates() []Expr {
 	if !c.HasExclusions() {
@@ -53,141 +85,57 @@ func (c ExclusionConfig) BuildPredicates() []Expr {
 
 	var predicates []Expr
 
-	// Simple exclusions: NOT EXISTS (tuple with excluded relation)
 	for _, rel := range c.SimpleExcludedRelations {
-		excl := Tuples("excl").
-			ObjectType(c.ObjectType).
-			Relations(rel).
-			Select("1").
-			Where(
-				Eq{Left: Col{Table: "excl", Column: "object_id"}, Right: c.ObjectIDExpr},
-				Eq{Left: Col{Table: "excl", Column: "subject_type"}, Right: c.SubjectTypeExpr},
-				Or(
-					Eq{Left: Col{Table: "excl", Column: "subject_id"}, Right: c.SubjectIDExpr},
-					IsWildcard{Source: Col{Table: "excl", Column: "subject_id"}},
-				),
-			)
-		predicates = append(predicates, NotExists{Query: excl})
+		predicates = append(predicates, simpleExclusionQuery(
+			c.ObjectType, rel, c.ObjectIDExpr, c.SubjectTypeExpr, c.SubjectIDExpr,
+		))
 	}
 
-	// Complex exclusions: check_permission_internal(...) = 0
 	for _, rel := range c.ComplexExcludedRelations {
-		predicates = append(predicates, CheckPermission{
-			Subject: SubjectRef{
-				Type: c.SubjectTypeExpr,
-				ID:   c.SubjectIDExpr,
-			},
-			Relation: rel,
-			Object: ObjectRef{
-				Type: Lit(c.ObjectType),
-				ID:   c.ObjectIDExpr,
-			},
-			ExpectAllow: false,
-		})
+		predicates = append(predicates, c.checkPermission(rel, c.objectRef(), false))
 	}
 
-	// TTU exclusions: NOT EXISTS (link tuple where check_permission on linked object returns 1)
 	for _, rel := range c.ExcludedParentRelations {
-		linkQuery := Tuples("link").
-			ObjectType(c.ObjectType).
-			Relations(rel.LinkingRelation).
-			Select("1").
-			Where(
-				Eq{Left: Col{Table: "link", Column: "object_id"}, Right: c.ObjectIDExpr},
-				CheckPermission{
-					Subject: SubjectRef{
-						Type: c.SubjectTypeExpr,
-						ID:   c.SubjectIDExpr,
-					},
-					Relation: rel.Relation,
-					Object: ObjectRef{
-						Type: Col{Table: "link", Column: "subject_type"},
-						ID:   Col{Table: "link", Column: "subject_id"},
-					},
-					ExpectAllow: true,
-				},
-			)
-		if len(rel.AllowedLinkingTypes) > 0 {
-			linkQuery.WhereSubjectTypeIn(rel.AllowedLinkingTypes...)
-		}
-		predicates = append(predicates, NotExists{Query: linkQuery})
+		predicates = append(predicates, NotExists{Query: c.ttuLinkQuery(rel)})
 	}
 
-	// Intersection exclusions: NOT (all parts match)
 	for _, group := range c.ExcludedIntersection {
-		var parts []Expr
-		for _, part := range group.Parts {
-			if part.ParentRelation != nil {
-				// TTU part: EXISTS (link tuple where check_permission returns 1)
-				linkQuery := Tuples("link").
-					ObjectType(c.ObjectType).
-					Relations(part.ParentRelation.LinkingRelation).
-					Select("1").
-					Where(
-						Eq{Left: Col{Table: "link", Column: "object_id"}, Right: c.ObjectIDExpr},
-						CheckPermission{
-							Subject: SubjectRef{
-								Type: c.SubjectTypeExpr,
-								ID:   c.SubjectIDExpr,
-							},
-							Relation: part.ParentRelation.Relation,
-							Object: ObjectRef{
-								Type: Col{Table: "link", Column: "subject_type"},
-								ID:   Col{Table: "link", Column: "subject_id"},
-							},
-							ExpectAllow: true,
-						},
-					)
-				if len(part.ParentRelation.AllowedLinkingTypes) > 0 {
-					linkQuery.WhereSubjectTypeIn(part.ParentRelation.AllowedLinkingTypes...)
-				}
-				parts = append(parts, Exists{Query: linkQuery})
-			} else {
-				// Direct check part
-				partExpr := CheckPermission{
-					Subject: SubjectRef{
-						Type: c.SubjectTypeExpr,
-						ID:   c.SubjectIDExpr,
-					},
-					Relation: part.Relation,
-					Object: ObjectRef{
-						Type: Lit(c.ObjectType),
-						ID:   c.ObjectIDExpr,
-					},
-					ExpectAllow: true,
-				}
-				if part.ExcludedRelation != "" {
-					// Add nested exclusion
-					parts = append(parts, And(
-						partExpr,
-						CheckPermission{
-							Subject: SubjectRef{
-								Type: c.SubjectTypeExpr,
-								ID:   c.SubjectIDExpr,
-							},
-							Relation: part.ExcludedRelation,
-							Object: ObjectRef{
-								Type: Lit(c.ObjectType),
-								ID:   c.ObjectIDExpr,
-							},
-							ExpectAllow: false,
-						},
-					))
-				} else {
-					parts = append(parts, partExpr)
-				}
-			}
-		}
-		if len(parts) > 0 {
-			predicates = append(predicates, Not(And(parts...)))
+		if pred := c.buildIntersectionPredicate(group); pred != nil {
+			predicates = append(predicates, pred)
 		}
 	}
 
 	return predicates
 }
 
-// SimpleExclusion creates a NOT EXISTS exclusion for a simple "but not" rule.
-func SimpleExclusion(objectType, relation string, objectID, subjectType, subjectID Expr) Expr {
+func (c ExclusionConfig) buildIntersectionPredicate(group ExcludedIntersectionGroup) Expr {
+	var parts []Expr
+	for _, part := range group.Parts {
+		parts = append(parts, c.buildIntersectionPart(part))
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	return Not(And(parts...))
+}
+
+func (c ExclusionConfig) buildIntersectionPart(part ExcludedIntersectionPart) Expr {
+	if part.ParentRelation != nil {
+		return Exists{Query: c.ttuLinkQuery(*part.ParentRelation)}
+	}
+
+	partExpr := c.checkPermission(part.Relation, c.objectRef(), true)
+	if part.ExcludedRelation == "" {
+		return partExpr
+	}
+
+	return And(
+		partExpr,
+		c.checkPermission(part.ExcludedRelation, c.objectRef(), false),
+	)
+}
+
+func simpleExclusionQuery(objectType, relation string, objectID, subjectType, subjectID Expr) NotExists {
 	excl := Tuples("excl").
 		ObjectType(objectType).
 		Relations(relation).
@@ -201,4 +149,9 @@ func SimpleExclusion(objectType, relation string, objectID, subjectType, subject
 			),
 		)
 	return NotExists{Query: excl}
+}
+
+// SimpleExclusion creates a NOT EXISTS exclusion for a simple "but not" rule.
+func SimpleExclusion(objectType, relation string, objectID, subjectType, subjectID Expr) Expr {
+	return simpleExclusionQuery(objectType, relation, objectID, subjectType, subjectID)
 }
