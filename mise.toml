@@ -10,6 +10,10 @@ experimental = true
 goreleaser = "latest"
 node = "lts"
 
+# macOS code signing and notarization
+"ubi:anchore/quill" = "latest"
+1password-cli = "latest"
+
 # Code search tool with semantic search (from crates.io)
 "cargo:ck-search" = "latest"
 

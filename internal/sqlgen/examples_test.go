@@ -7,13 +7,13 @@ import (
 	"github.com/pthm/melange/internal/sqlgen"
 )
 
-// This file demonstrates how to migrate queries from Bob to the DSL.
-// Each test shows the DSL equivalent of existing Bob-based queries.
+// This file demonstrates the DSL query patterns.
+// Each test shows how to construct SQL queries using the DSL types.
 
 // TestListObjectsDirectQuery shows the DSL equivalent of ListObjectsDirectQuery.
 // This is the simplest query pattern - direct tuple lookup.
 //
-// Original Bob implementation:
+// Previous implementation (for reference):
 //
 //	where := []bob.Expression{
 //	    psql.Quote("t", "object_type").EQ(psql.S(input.ObjectType)),
@@ -59,7 +59,7 @@ func TestListObjectsDirectQuery(t *testing.T) {
 
 // TestDirectCheck shows the DSL equivalent of DirectCheck (EXISTS pattern).
 //
-// Original Bob implementation:
+// Previous implementation (for reference):
 //
 //	query := psql.Select(
 //	    sm.Columns(psql.Raw("1")),
@@ -74,9 +74,9 @@ func TestDirectCheck(t *testing.T) {
 		ObjectType("document").
 		Relations("viewer", "editor").
 		Where(
-			sqlgen.Eq{sqlgen.Col{Column: "object_id"}, sqlgen.ObjectID},
+			sqlgen.Eq{Left: sqlgen.Col{Column: "object_id"}, Right: sqlgen.ObjectID},
 			sqlgen.In{Expr: sqlgen.Col{Column: "subject_type"}, Values: []string{"user"}},
-			sqlgen.Eq{sqlgen.Col{Column: "subject_type"}, sqlgen.SubjectType},
+			sqlgen.Eq{Left: sqlgen.Col{Column: "subject_type"}, Right: sqlgen.SubjectType},
 			sqlgen.SubjectIDMatch(sqlgen.Col{Column: "subject_id"}, sqlgen.SubjectID, false),
 		).
 		Select("1").
@@ -94,7 +94,7 @@ func TestDirectCheck(t *testing.T) {
 
 // TestUsersetCheck shows the DSL equivalent of UsersetCheck (JOIN pattern).
 //
-// Original Bob implementation:
+// Previous implementation (for reference):
 //
 //	joinConditions := []bob.Expression{
 //	    psql.Quote("membership", "object_type").EQ(psql.S(input.SubjectType)),
@@ -120,22 +120,22 @@ func TestUsersetCheck(t *testing.T) {
 		ObjectType("document").
 		Relations("viewer").
 		Where(
-			sqlgen.Eq{sqlgen.Col{Table: "grant_tuple", Column: "object_id"}, sqlgen.ObjectID},
-			sqlgen.Eq{sqlgen.Col{Table: "grant_tuple", Column: "subject_type"}, sqlgen.Lit(subjectType)},
-			sqlgen.HasUserset{sqlgen.Col{Table: "grant_tuple", Column: "subject_id"}},
+			sqlgen.Eq{Left: sqlgen.Col{Table: "grant_tuple", Column: "object_id"}, Right: sqlgen.ObjectID},
+			sqlgen.Eq{Left: sqlgen.Col{Table: "grant_tuple", Column: "subject_type"}, Right: sqlgen.Lit(subjectType)},
+			sqlgen.HasUserset{Source: sqlgen.Col{Table: "grant_tuple", Column: "subject_id"}},
 			sqlgen.Eq{
-				sqlgen.UsersetRelation{sqlgen.Col{Table: "grant_tuple", Column: "subject_id"}},
-				sqlgen.Lit(subjectRelation),
+				Left:  sqlgen.UsersetRelation{Source: sqlgen.Col{Table: "grant_tuple", Column: "subject_id"}},
+				Right: sqlgen.Lit(subjectRelation),
 			},
 		).
 		JoinTuples("membership",
-			sqlgen.Eq{sqlgen.Col{Table: "membership", Column: "object_type"}, sqlgen.Lit(subjectType)},
+			sqlgen.Eq{Left: sqlgen.Col{Table: "membership", Column: "object_type"}, Right: sqlgen.Lit(subjectType)},
 			sqlgen.Eq{
-				sqlgen.Col{Table: "membership", Column: "object_id"},
-				sqlgen.UsersetObjectID{sqlgen.Col{Table: "grant_tuple", Column: "subject_id"}},
+				Left:  sqlgen.Col{Table: "membership", Column: "object_id"},
+				Right: sqlgen.UsersetObjectID{Source: sqlgen.Col{Table: "grant_tuple", Column: "subject_id"}},
 			},
 			sqlgen.In{Expr: sqlgen.Col{Table: "membership", Column: "relation"}, Values: satisfyingRelations},
-			sqlgen.Eq{sqlgen.Col{Table: "membership", Column: "subject_type"}, sqlgen.SubjectType},
+			sqlgen.Eq{Left: sqlgen.Col{Table: "membership", Column: "subject_type"}, Right: sqlgen.SubjectType},
 			sqlgen.SubjectIDMatch(sqlgen.Col{Table: "membership", Column: "subject_id"}, sqlgen.SubjectID, true),
 		).
 		Select("1").
@@ -161,7 +161,7 @@ func TestUsersetCheck(t *testing.T) {
 
 // TestExclusionPattern shows the DSL equivalent of simple exclusion.
 //
-// Original Bob implementation:
+// Previous implementation (for reference):
 //
 //	subquery := psql.Select(
 //	    sm.Columns(psql.Raw("1")),
@@ -206,7 +206,7 @@ func TestExclusionPattern(t *testing.T) {
 
 // TestCheckPermissionInternal shows the DSL equivalent of CheckPermissionInternalExpr.
 //
-// Original Bob implementation:
+// Previous implementation (for reference):
 //
 //	psql.Raw(fmt.Sprintf(
 //	    "check_permission_internal(%s, %s, '%s', %s, %s, ARRAY[]::TEXT[]) = %s",
@@ -253,21 +253,21 @@ func TestListObjectsUsersetPatternSimple(t *testing.T) {
 		ObjectType(objectType).
 		Relations(sourceRelations...).
 		Where(
-			sqlgen.Eq{sqlgen.Col{Table: "t", Column: "subject_type"}, sqlgen.Lit(subjectType)},
-			sqlgen.HasUserset{sqlgen.Col{Table: "t", Column: "subject_id"}},
+			sqlgen.Eq{Left: sqlgen.Col{Table: "t", Column: "subject_type"}, Right: sqlgen.Lit(subjectType)},
+			sqlgen.HasUserset{Source: sqlgen.Col{Table: "t", Column: "subject_id"}},
 			sqlgen.Eq{
-				sqlgen.UsersetRelation{sqlgen.Col{Table: "t", Column: "subject_id"}},
-				sqlgen.Lit(subjectRelation),
+				Left:  sqlgen.UsersetRelation{Source: sqlgen.Col{Table: "t", Column: "subject_id"}},
+				Right: sqlgen.Lit(subjectRelation),
 			},
 		).
 		JoinTuples("m",
-			sqlgen.Eq{sqlgen.Col{Table: "m", Column: "object_type"}, sqlgen.Lit(subjectType)},
+			sqlgen.Eq{Left: sqlgen.Col{Table: "m", Column: "object_type"}, Right: sqlgen.Lit(subjectType)},
 			sqlgen.Eq{
-				sqlgen.Col{Table: "m", Column: "object_id"},
-				sqlgen.UsersetObjectID{sqlgen.Col{Table: "t", Column: "subject_id"}},
+				Left:  sqlgen.Col{Table: "m", Column: "object_id"},
+				Right: sqlgen.UsersetObjectID{Source: sqlgen.Col{Table: "t", Column: "subject_id"}},
 			},
 			sqlgen.In{Expr: sqlgen.Col{Table: "m", Column: "relation"}, Values: satisfyingRelations},
-			sqlgen.Eq{sqlgen.Col{Table: "m", Column: "subject_type"}, sqlgen.SubjectType},
+			sqlgen.Eq{Left: sqlgen.Col{Table: "m", Column: "subject_type"}, Right: sqlgen.SubjectType},
 			sqlgen.In{Expr: sqlgen.SubjectType, Values: allowedSubjectTypes},
 			sqlgen.SubjectIDMatch(sqlgen.Col{Table: "m", Column: "subject_id"}, sqlgen.SubjectID, allowWildcard),
 		).

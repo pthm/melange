@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/pthm/melange/internal/cli"
+	"github.com/pthm/melange/internal/version"
 	"github.com/pthm/melange/pkg/migrator"
 )
 
@@ -83,7 +84,8 @@ func runMigrate(dsn, schemaPath string, dryRun, force bool) error {
 	ctx := context.Background()
 
 	opts := migrator.MigrateOptions{
-		Force: force,
+		Force:   force,
+		Version: version.Version,
 	}
 
 	if dryRun {

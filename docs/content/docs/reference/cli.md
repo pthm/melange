@@ -20,6 +20,37 @@ These flags are available on all commands:
 | `--config` | Path to config file (default: auto-discover `melange.yaml`). See [Configuration](configuration.md). |
 | `-v`, `--verbose` | Increase verbosity (can be repeated: `-vv`, `-vvv`) |
 | `-q`, `--quiet` | Suppress non-error output |
+| `--no-update-check` | Disable automatic update checking |
+
+### Update Notifications
+
+By default, Melange automatically checks for new versions in the background and displays a notification if an update is available. The check is:
+
+- **Non-blocking**: Runs in a background goroutine with a 5-second timeout
+- **Cached**: Results are cached for 24 hours in `~/.cache/melange/update-check.json`
+- **Fast**: Uses a 1-second wait time for displaying results
+- **Respectful**: Automatically disabled in CI environments (when `CI` env var is set)
+
+**Example notification:**
+```
+$ melange migrate
+Migration completed successfully
+
+* A new version of melange is available: v1.2.3 (current: v1.2.0)
+  brew upgrade melange  or  go install github.com/pthm/melange/cmd/melange@latest
+```
+
+**To disable update checks:**
+```bash
+melange --no-update-check migrate
+```
+
+**To clear the cache:**
+```bash
+rm -rf ~/.cache/melange/update-check.json
+```
+
+The cache respects the `XDG_CACHE_HOME` environment variable if set.
 
 ## Command Groups
 

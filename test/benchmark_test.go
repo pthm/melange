@@ -204,6 +204,8 @@ func BenchmarkListObjects(b *testing.B) {
 		b.Skip("skipping benchmark in short mode")
 	}
 
+	pageSizes := []int{10, 50, 100, 500}
+
 	for _, scale := range benchmarkScales {
 		b.Run(scale.Name, func(b *testing.B) {
 			data := setupBenchmarkData(b, scale)
@@ -211,49 +213,81 @@ func BenchmarkListObjects(b *testing.B) {
 
 			ctx := context.Background()
 
-			b.Run("ListAccessibleRepos", func(b *testing.B) {
-				// List all repos a user can read
+			for _, pageSize := range pageSizes {
+				b.Run(fmt.Sprintf("ListAccessibleRepos_Page%d", pageSize), func(b *testing.B) {
+					// List first page of repos a user can read
+					user := authz.User(data.users[0])
+
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						ids, cursor, err := data.checker.ListObjects(ctx, user, authz.RelCanRead, authz.TypeRepository, melange.PageOptions{Limit: pageSize})
+						if err != nil {
+							b.Fatal(err)
+						}
+						_ = ids
+						_ = cursor
+					}
+				})
+			}
+
+			for _, pageSize := range pageSizes {
+				b.Run(fmt.Sprintf("ListAccessibleOrgs_Page%d", pageSize), func(b *testing.B) {
+					// List first page of orgs a user can read
+					user := authz.User(data.users[0])
+
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						ids, cursor, err := data.checker.ListObjects(ctx, user, authz.RelCanRead, authz.TypeOrganization, melange.PageOptions{Limit: pageSize})
+						if err != nil {
+							b.Fatal(err)
+						}
+						_ = ids
+						_ = cursor
+					}
+				})
+			}
+
+			for _, pageSize := range pageSizes {
+				b.Run(fmt.Sprintf("ListAccessiblePRs_Page%d", pageSize), func(b *testing.B) {
+					if len(data.prs) == 0 {
+						b.Skip("no PRs created")
+					}
+
+					// List first page of PRs a user can read
+					user := authz.User(data.users[0])
+
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						ids, cursor, err := data.checker.ListObjects(ctx, user, authz.RelCanRead, authz.TypePullRequest, melange.PageOptions{Limit: pageSize})
+						if err != nil {
+							b.Fatal(err)
+						}
+						_ = ids
+						_ = cursor
+					}
+				})
+			}
+
+			// Benchmark pagination: fetching all results by walking through pages
+			b.Run("ListAccessibleRepos_PaginateAll", func(b *testing.B) {
 				user := authz.User(data.users[0])
 
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					ids, err := data.checker.ListObjects(ctx, user, authz.RelCanRead, authz.TypeRepository)
-					if err != nil {
-						b.Fatal(err)
+					var allIDs []string
+					var cursor *string
+					for {
+						ids, next, err := data.checker.ListObjects(ctx, user, authz.RelCanRead, authz.TypeRepository, melange.PageOptions{Limit: 100, After: cursor})
+						if err != nil {
+							b.Fatal(err)
+						}
+						allIDs = append(allIDs, ids...)
+						if next == nil {
+							break
+						}
+						cursor = next
 					}
-					_ = ids
-				}
-			})
-
-			b.Run("ListAccessibleOrgs", func(b *testing.B) {
-				// List all orgs a user can read
-				user := authz.User(data.users[0])
-
-				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
-					ids, err := data.checker.ListObjects(ctx, user, authz.RelCanRead, authz.TypeOrganization)
-					if err != nil {
-						b.Fatal(err)
-					}
-					_ = ids
-				}
-			})
-
-			b.Run("ListAccessiblePRs", func(b *testing.B) {
-				if len(data.prs) == 0 {
-					b.Skip("no PRs created")
-				}
-
-				// List all PRs a user can read
-				user := authz.User(data.users[0])
-
-				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
-					ids, err := data.checker.ListObjects(ctx, user, authz.RelCanRead, authz.TypePullRequest)
-					if err != nil {
-						b.Fatal(err)
-					}
-					_ = ids
+					_ = allIDs
 				}
 			})
 		})
@@ -266,6 +300,8 @@ func BenchmarkListSubjects(b *testing.B) {
 		b.Skip("skipping benchmark in short mode")
 	}
 
+	pageSizes := []int{10, 50, 100, 500}
+
 	for _, scale := range benchmarkScales {
 		b.Run(scale.Name, func(b *testing.B) {
 			data := setupBenchmarkData(b, scale)
@@ -273,45 +309,77 @@ func BenchmarkListSubjects(b *testing.B) {
 
 			ctx := context.Background()
 
-			b.Run("ListOrgMembers", func(b *testing.B) {
-				// List all users who can read an org
-				org := authz.Organization(data.orgs[0])
+			for _, pageSize := range pageSizes {
+				b.Run(fmt.Sprintf("ListOrgMembers_Page%d", pageSize), func(b *testing.B) {
+					// List first page of users who can read an org
+					org := authz.Organization(data.orgs[0])
 
-				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
-					ids, err := data.checker.ListSubjects(ctx, org, authz.RelCanRead, authz.TypeUser)
-					if err != nil {
-						b.Fatal(err)
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						ids, cursor, err := data.checker.ListSubjects(ctx, org, authz.RelCanRead, authz.TypeUser, melange.PageOptions{Limit: pageSize})
+						if err != nil {
+							b.Fatal(err)
+						}
+						_ = ids
+						_ = cursor
 					}
-					_ = ids
-				}
-			})
+				})
+			}
 
-			b.Run("ListRepoReaders", func(b *testing.B) {
-				// List all users who can read a repo
+			for _, pageSize := range pageSizes {
+				b.Run(fmt.Sprintf("ListRepoReaders_Page%d", pageSize), func(b *testing.B) {
+					// List first page of users who can read a repo
+					repo := authz.Repository(data.repos[0])
+
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						ids, cursor, err := data.checker.ListSubjects(ctx, repo, authz.RelCanRead, authz.TypeUser, melange.PageOptions{Limit: pageSize})
+						if err != nil {
+							b.Fatal(err)
+						}
+						_ = ids
+						_ = cursor
+					}
+				})
+			}
+
+			for _, pageSize := range pageSizes {
+				b.Run(fmt.Sprintf("ListRepoWriters_Page%d", pageSize), func(b *testing.B) {
+					// List first page of users who can write to a repo (usually smaller set)
+					repo := authz.Repository(data.repos[0])
+
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						ids, cursor, err := data.checker.ListSubjects(ctx, repo, authz.RelCanWrite, authz.TypeUser, melange.PageOptions{Limit: pageSize})
+						if err != nil {
+							b.Fatal(err)
+						}
+						_ = ids
+						_ = cursor
+					}
+				})
+			}
+
+			// Benchmark pagination: fetching all results by walking through pages
+			b.Run("ListRepoReaders_PaginateAll", func(b *testing.B) {
 				repo := authz.Repository(data.repos[0])
 
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
-					ids, err := data.checker.ListSubjects(ctx, repo, authz.RelCanRead, authz.TypeUser)
-					if err != nil {
-						b.Fatal(err)
+					var allIDs []string
+					var cursor *string
+					for {
+						ids, next, err := data.checker.ListSubjects(ctx, repo, authz.RelCanRead, authz.TypeUser, melange.PageOptions{Limit: 100, After: cursor})
+						if err != nil {
+							b.Fatal(err)
+						}
+						allIDs = append(allIDs, ids...)
+						if next == nil {
+							break
+						}
+						cursor = next
 					}
-					_ = ids
-				}
-			})
-
-			b.Run("ListRepoWriters", func(b *testing.B) {
-				// List all users who can write to a repo (usually smaller set)
-				repo := authz.Repository(data.repos[0])
-
-				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
-					ids, err := data.checker.ListSubjects(ctx, repo, authz.RelCanWrite, authz.TypeUser)
-					if err != nil {
-						b.Fatal(err)
-					}
-					_ = ids
+					_ = allIDs
 				}
 			})
 		})

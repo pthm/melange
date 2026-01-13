@@ -347,9 +347,9 @@ func (c *Client) ListObjects(ctx context.Context, req *openfgav1.ListObjectsRequ
 	}
 	var ids []string
 	if len(contextualTuples) > 0 {
-		ids, err = checker.ListObjectsWithContextualTuples(ctx, subject, melange.Relation(req.GetRelation()), melange.ObjectType(req.GetType()), contextualTuples)
+		ids, _, err = checker.ListObjectsWithContextualTuples(ctx, subject, melange.Relation(req.GetRelation()), melange.ObjectType(req.GetType()), contextualTuples, melange.PageOptions{})
 	} else {
-		ids, err = checker.ListObjects(ctx, subject, melange.Relation(req.GetRelation()), melange.ObjectType(req.GetType()))
+		ids, err = checker.ListObjectsAll(ctx, subject, melange.Relation(req.GetRelation()), melange.ObjectType(req.GetType()))
 	}
 	if err != nil {
 		return nil, fmt.Errorf("list objects failed: %w", err)
@@ -406,9 +406,9 @@ func (c *Client) ListUsers(ctx context.Context, req *openfgav1.ListUsersRequest,
 		}
 		var ids []string
 		if len(contextualTuples) > 0 {
-			ids, err = checker.ListSubjectsWithContextualTuples(ctx, object, melange.Relation(req.GetRelation()), subjectType, contextualTuples)
+			ids, _, err = checker.ListSubjectsWithContextualTuples(ctx, object, melange.Relation(req.GetRelation()), subjectType, contextualTuples, melange.PageOptions{})
 		} else {
-			ids, err = checker.ListSubjects(ctx, object, melange.Relation(req.GetRelation()), subjectType)
+			ids, err = checker.ListSubjectsAll(ctx, object, melange.Relation(req.GetRelation()), subjectType)
 		}
 		if err != nil {
 			return nil, fmt.Errorf("list subjects failed: %w", err)

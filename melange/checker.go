@@ -70,6 +70,17 @@ type Checker struct {
 // Option configures a Checker.
 type Option func(*Checker)
 
+// PageOptions configures pagination for list operations.
+type PageOptions struct {
+	// Limit is the maximum number of results to return per page.
+	// Zero or negative means no limit (returns all results).
+	Limit int
+
+	// After is the cursor from a previous page.
+	// If nil, starts from the beginning.
+	After *string
+}
+
 // WithCache enables caching for permission check results.
 // Caching is safe across goroutines but scoped to a single Checker instance.
 // For request-scoped caching, create a new Checker per request with a
@@ -393,11 +404,14 @@ func sqlState(err error) string {
 	return ""
 }
 
-// ListObjects returns all object IDs of the given type that subject has relation on.
+// ListObjects returns object IDs of the given type that subject has relation on,
+// with cursor-based pagination support.
 //
 // Example:
 //
-//	ids, _ := checker.ListObjects(ctx, authz.User("123"), authz.RelCanRead, authz.TypeRepository)
+//	ids, cursor, _ := checker.ListObjects(ctx, authz.User("123"), authz.RelCanRead, authz.TypeRepository, melange.PageOptions{Limit: 10})
+//	// Get next page
+//	ids2, cursor2, _ := checker.ListObjects(ctx, authz.User("123"), authz.RelCanRead, authz.TypeRepository, melange.PageOptions{Limit: 10, After: cursor})
 //
 // Note: This method does NOT use the permission cache because it returns a list
 // rather than a single boolean result.
@@ -408,55 +422,90 @@ func sqlState(err error) string {
 //
 // Uses a recursive CTE to walk the permission graph in a single query,
 // providing 10-50x improvement over N+1 patterns on large datasets.
-func (c *Checker) ListObjects(ctx context.Context, subject SubjectLike, relation RelationLike, objectType ObjectType) ([]string, error) {
+func (c *Checker) ListObjects(ctx context.Context, subject SubjectLike, relation RelationLike, objectType ObjectType, page PageOptions) (ids []string, nextCursor *string, err error) {
 	if c.validateUserset {
 		if err := c.validateUsersetSubject(ctx, c.q, subject.FGASubject()); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
 	if c.validateRequest {
 		if err := c.validateCheckRequest(ctx, c.q, subject.FGASubject(), relation.FGARelation(), Object{Type: objectType}); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
 	// Check context decision if enabled
 	if c.useContextDecision {
 		if d := GetDecisionContext(ctx); d == DecisionDeny {
-			return nil, nil
+			return nil, nil, nil
 		}
 	}
 
 	// DecisionDeny means no access to anything
 	if c.decision == DecisionDeny {
-		return nil, nil
+		return nil, nil, nil
 	}
 	// DecisionAllow falls through - we can't enumerate all objects from here,
 	// callers needing all objects should query the underlying tables directly.
 
+	// Convert limit: 0 or negative means no limit (pass NULL to SQL)
+	var limit interface{}
+	if page.Limit > 0 {
+		limit = page.Limit
+	}
+
 	rows, err := c.q.QueryContext(ctx,
-		"SELECT object_id FROM list_accessible_objects($1, $2, $3, $4)",
-		subject.FGASubject().Type, subject.FGASubject().ID, relation.FGARelation(), objectType,
+		"SELECT object_id, next_cursor FROM list_accessible_objects($1, $2, $3, $4, $5, $6)",
+		subject.FGASubject().Type, subject.FGASubject().ID, relation.FGARelation(), objectType, limit, page.After,
 	)
 	if err != nil {
-		return nil, c.mapError("list_accessible_objects", err)
+		return nil, nil, c.mapError("list_accessible_objects", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	ids := make([]string, 0, 16)
+	ids = make([]string, 0, 16)
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
+		var cursor *string
+		if err := rows.Scan(&id, &cursor); err != nil {
+			return nil, nil, err
 		}
 		ids = append(ids, id)
+		nextCursor = cursor // All rows have the same cursor, keep the last one
 	}
 
-	return ids, rows.Err()
+	return ids, nextCursor, rows.Err()
 }
 
-// ListObjectsWithContextualTuples returns object IDs for a subject using contextual tuples.
+// ListObjectsAll returns all object IDs by automatically paginating through
+// all results. This is equivalent to the previous ListObjects behavior.
+//
+// Example:
+//
+//	ids, _ := checker.ListObjectsAll(ctx, authz.User("123"), authz.RelCanRead, authz.TypeRepository)
+func (c *Checker) ListObjectsAll(ctx context.Context, subject SubjectLike, relation RelationLike, objectType ObjectType) ([]string, error) {
+	var allIDs []string
+	var cursor *string
+
+	for {
+		ids, next, err := c.ListObjects(ctx, subject, relation, objectType, PageOptions{Limit: 500, After: cursor})
+		if err != nil {
+			return nil, err
+		}
+		allIDs = append(allIDs, ids...)
+
+		if next == nil {
+			break
+		}
+		cursor = next
+	}
+
+	return allIDs, nil
+}
+
+// ListObjectsWithContextualTuples returns object IDs for a subject using contextual tuples,
+// with cursor-based pagination support.
 // Contextual tuples are validated against the loaded model before evaluation.
 func (c *Checker) ListObjectsWithContextualTuples(
 	ctx context.Context,
@@ -464,73 +513,83 @@ func (c *Checker) ListObjectsWithContextualTuples(
 	relation RelationLike,
 	objectType ObjectType,
 	tuples []ContextualTuple,
-) ([]string, error) {
+	page PageOptions,
+) (ids []string, nextCursor *string, err error) {
 	if len(tuples) == 0 {
-		return c.ListObjects(ctx, subject, relation, objectType)
+		return c.ListObjects(ctx, subject, relation, objectType, page)
 	}
 
 	if c.validateUserset {
 		if err := c.validateUsersetSubject(ctx, c.q, subject.FGASubject()); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
 	if c.validateRequest {
 		if err := c.validateCheckRequest(ctx, c.q, subject.FGASubject(), relation.FGARelation(), Object{Type: objectType}); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
 	// Check context decision if enabled
 	if c.useContextDecision {
 		if d := GetDecisionContext(ctx); d == DecisionDeny {
-			return nil, nil
+			return nil, nil, nil
 		}
 	}
 
 	// DecisionDeny means no access to anything
 	if c.decision == DecisionDeny {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	if err := c.validateContextualTuples(ctx, tuples); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	execer, cleanup, err := c.prepareContextualTuples(ctx, tuples)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer cleanup()
 
+	// Convert limit: 0 or negative means no limit (pass NULL to SQL)
+	var limit interface{}
+	if page.Limit > 0 {
+		limit = page.Limit
+	}
+
 	rows, err := execer.QueryContext(ctx,
-		"SELECT object_id FROM list_accessible_objects($1, $2, $3, $4)",
-		subject.FGASubject().Type, subject.FGASubject().ID, relation.FGARelation(), objectType,
+		"SELECT object_id, next_cursor FROM list_accessible_objects($1, $2, $3, $4, $5, $6)",
+		subject.FGASubject().Type, subject.FGASubject().ID, relation.FGARelation(), objectType, limit, page.After,
 	)
 	if err != nil {
-		return nil, c.mapError("list_accessible_objects", err)
+		return nil, nil, c.mapError("list_accessible_objects", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	ids := make([]string, 0, 16)
+	ids = make([]string, 0, 16)
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
+		var cursor *string
+		if err := rows.Scan(&id, &cursor); err != nil {
+			return nil, nil, err
 		}
 		ids = append(ids, id)
+		nextCursor = cursor
 	}
 
-	return ids, rows.Err()
+	return ids, nextCursor, rows.Err()
 }
 
-// ListSubjects returns all subject IDs of the given type that have relation on object.
+// ListSubjects returns subject IDs of the given type that have relation on object,
+// with cursor-based pagination support.
 // This is the inverse of ListObjects - it answers "who has access to this object?"
 //
 // Example:
 //
-//	ids, _ := checker.ListSubjects(ctx, authz.Repository("456"), authz.RelCanRead, authz.TypeUser)
-//	// Returns IDs of all users who can read repository 456
+//	ids, cursor, _ := checker.ListSubjects(ctx, authz.Repository("456"), authz.RelCanRead, authz.TypeUser, melange.PageOptions{Limit: 10})
+//	// Returns IDs of users who can read repository 456 (first page)
 //
 // Note: This method does NOT use the permission cache because it returns a list
 // rather than a single boolean result.
@@ -541,49 +600,84 @@ func (c *Checker) ListObjectsWithContextualTuples(
 //
 // Uses a recursive CTE to walk the permission graph in a single query,
 // providing 10-50x improvement over N+1 patterns on large datasets.
-func (c *Checker) ListSubjects(ctx context.Context, object ObjectLike, relation RelationLike, subjectType ObjectType) ([]string, error) {
+func (c *Checker) ListSubjects(ctx context.Context, object ObjectLike, relation RelationLike, subjectType ObjectType, page PageOptions) (ids []string, nextCursor *string, err error) {
 	if c.validateRequest {
 		if err := c.validateListUsersRequest(ctx, c.q, relation.FGARelation(), object.FGAObject(), subjectType); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
 	// Check context decision if enabled
 	if c.useContextDecision {
 		if d := GetDecisionContext(ctx); d == DecisionDeny {
-			return nil, nil
+			return nil, nil, nil
 		}
 	}
 
 	// DecisionDeny means no subjects have access
 	if c.decision == DecisionDeny {
-		return nil, nil
+		return nil, nil, nil
 	}
 	// DecisionAllow falls through - we can't enumerate all subjects from here,
 	// callers needing all subjects should query the underlying tables directly.
 
+	// Convert limit: 0 or negative means no limit (pass NULL to SQL)
+	var limit interface{}
+	if page.Limit > 0 {
+		limit = page.Limit
+	}
+
 	rows, err := c.q.QueryContext(ctx,
-		"SELECT subject_id FROM list_accessible_subjects($1, $2, $3, $4)",
-		object.FGAObject().Type, object.FGAObject().ID, relation.FGARelation(), subjectType,
+		"SELECT subject_id, next_cursor FROM list_accessible_subjects($1, $2, $3, $4, $5, $6)",
+		object.FGAObject().Type, object.FGAObject().ID, relation.FGARelation(), subjectType, limit, page.After,
 	)
 	if err != nil {
-		return nil, c.mapError("list_accessible_subjects", err)
+		return nil, nil, c.mapError("list_accessible_subjects", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	ids := make([]string, 0, 16)
+	ids = make([]string, 0, 16)
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
+		var cursor *string
+		if err := rows.Scan(&id, &cursor); err != nil {
+			return nil, nil, err
 		}
 		ids = append(ids, id)
+		nextCursor = cursor
 	}
 
-	return ids, rows.Err()
+	return ids, nextCursor, rows.Err()
 }
 
-// ListSubjectsWithContextualTuples returns subject IDs for an object using contextual tuples.
+// ListSubjectsAll returns all subject IDs by automatically paginating through
+// all results. This is equivalent to the previous ListSubjects behavior.
+//
+// Example:
+//
+//	ids, _ := checker.ListSubjectsAll(ctx, authz.Repository("456"), authz.RelCanRead, authz.TypeUser)
+func (c *Checker) ListSubjectsAll(ctx context.Context, object ObjectLike, relation RelationLike, subjectType ObjectType) ([]string, error) {
+	var allIDs []string
+	var cursor *string
+
+	for {
+		ids, next, err := c.ListSubjects(ctx, object, relation, subjectType, PageOptions{Limit: 500, After: cursor})
+		if err != nil {
+			return nil, err
+		}
+		allIDs = append(allIDs, ids...)
+
+		if next == nil {
+			break
+		}
+		cursor = next
+	}
+
+	return allIDs, nil
+}
+
+// ListSubjectsWithContextualTuples returns subject IDs for an object using contextual tuples,
+// with cursor-based pagination support.
 // Contextual tuples are validated against the loaded model before evaluation.
 func (c *Checker) ListSubjectsWithContextualTuples(
 	ctx context.Context,
@@ -591,58 +685,67 @@ func (c *Checker) ListSubjectsWithContextualTuples(
 	relation RelationLike,
 	subjectType ObjectType,
 	tuples []ContextualTuple,
-) ([]string, error) {
+	page PageOptions,
+) (ids []string, nextCursor *string, err error) {
 	if len(tuples) == 0 {
-		return c.ListSubjects(ctx, object, relation, subjectType)
+		return c.ListSubjects(ctx, object, relation, subjectType, page)
 	}
 
 	if c.validateRequest {
 		if err := c.validateListUsersRequest(ctx, c.q, relation.FGARelation(), object.FGAObject(), subjectType); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
 	// Check context decision if enabled
 	if c.useContextDecision {
 		if d := GetDecisionContext(ctx); d == DecisionDeny {
-			return nil, nil
+			return nil, nil, nil
 		}
 	}
 
 	// DecisionDeny means no subjects have access
 	if c.decision == DecisionDeny {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	if err := c.validateContextualTuples(ctx, tuples); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	execer, cleanup, err := c.prepareContextualTuples(ctx, tuples)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer cleanup()
 
+	// Convert limit: 0 or negative means no limit (pass NULL to SQL)
+	var limit interface{}
+	if page.Limit > 0 {
+		limit = page.Limit
+	}
+
 	rows, err := execer.QueryContext(ctx,
-		"SELECT subject_id FROM list_accessible_subjects($1, $2, $3, $4)",
-		object.FGAObject().Type, object.FGAObject().ID, relation.FGARelation(), subjectType,
+		"SELECT subject_id, next_cursor FROM list_accessible_subjects($1, $2, $3, $4, $5, $6)",
+		object.FGAObject().Type, object.FGAObject().ID, relation.FGARelation(), subjectType, limit, page.After,
 	)
 	if err != nil {
-		return nil, c.mapError("list_accessible_subjects", err)
+		return nil, nil, c.mapError("list_accessible_subjects", err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	ids := make([]string, 0, 16)
+	ids = make([]string, 0, 16)
 	for rows.Next() {
 		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
+		var cursor *string
+		if err := rows.Scan(&id, &cursor); err != nil {
+			return nil, nil, err
 		}
 		ids = append(ids, id)
+		nextCursor = cursor
 	}
 
-	return ids, rows.Err()
+	return ids, nextCursor, rows.Err()
 }
 
 // validateContextualTuples validates all contextual tuples for basic shape errors.

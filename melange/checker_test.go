@@ -16,7 +16,7 @@ func TestListSubjects_DecisionOverrides(t *testing.T) {
 		checker := melange.NewChecker(nil, melange.WithDecision(melange.DecisionDeny))
 		object := melange.Object{Type: "repository", ID: "123"}
 
-		ids, err := checker.ListSubjects(ctx, object, melange.Relation("can_read"), "user")
+		ids, err := checker.ListSubjectsAll(ctx, object, melange.Relation("can_read"), "user")
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -30,7 +30,7 @@ func TestListSubjects_DecisionOverrides(t *testing.T) {
 		ctx := melange.WithDecisionContext(context.Background(), melange.DecisionDeny)
 		object := melange.Object{Type: "repository", ID: "123"}
 
-		ids, err := checker.ListSubjects(ctx, object, melange.Relation("can_read"), "user")
+		ids, err := checker.ListSubjectsAll(ctx, object, melange.Relation("can_read"), "user")
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -48,7 +48,7 @@ func TestListObjects_DecisionOverrides(t *testing.T) {
 		checker := melange.NewChecker(nil, melange.WithDecision(melange.DecisionDeny))
 		subject := melange.Object{Type: "user", ID: "123"}
 
-		ids, err := checker.ListObjects(ctx, subject, melange.Relation("can_read"), "repository")
+		ids, err := checker.ListObjectsAll(ctx, subject, melange.Relation("can_read"), "repository")
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}
@@ -62,7 +62,7 @@ func TestListObjects_DecisionOverrides(t *testing.T) {
 		ctx := melange.WithDecisionContext(context.Background(), melange.DecisionDeny)
 		subject := melange.Object{Type: "user", ID: "123"}
 
-		ids, err := checker.ListObjects(ctx, subject, melange.Relation("can_read"), "repository")
+		ids, err := checker.ListObjectsAll(ctx, subject, melange.Relation("can_read"), "repository")
 		if err != nil {
 			t.Errorf("unexpected error: %v", err)
 		}

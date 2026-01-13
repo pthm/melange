@@ -213,6 +213,58 @@ func TestGenerator_Generate(t *testing.T) {
 	})
 }
 
+func TestGenerator_VersionHeader(t *testing.T) {
+	types := []schema.TypeDefinition{
+		{Name: "user"},
+	}
+
+	gen := &gogen.Generator{}
+
+	t.Run("includes version and source in header", func(t *testing.T) {
+		cfg := &clientgen.Config{
+			Package:    "authz",
+			Version:    "v0.4.3",
+			SourcePath: "schemas/schema.fga",
+		}
+
+		files, err := gen.Generate(types, cfg)
+		if err != nil {
+			t.Fatalf("Generate error: %v", err)
+		}
+
+		code := string(files["schema_gen.go"])
+
+		if !strings.Contains(code, "// melange version: v0.4.3") {
+			t.Error("should include melange version in header")
+		}
+		if !strings.Contains(code, "// source: schemas/schema.fga") {
+			t.Error("should include source path in header")
+		}
+	})
+
+	t.Run("omits version/source when empty", func(t *testing.T) {
+		cfg := &clientgen.Config{
+			Package:    "authz",
+			Version:    "",
+			SourcePath: "",
+		}
+
+		files, err := gen.Generate(types, cfg)
+		if err != nil {
+			t.Fatalf("Generate error: %v", err)
+		}
+
+		code := string(files["schema_gen.go"])
+
+		if strings.Contains(code, "melange version:") {
+			t.Error("should not include melange version when empty")
+		}
+		if strings.Contains(code, "// source:") {
+			t.Error("should not include source when empty")
+		}
+	})
+}
+
 func TestRegistry_GoGeneratorRegistered(t *testing.T) {
 	gen := clientgen.Get("go")
 	if gen == nil {

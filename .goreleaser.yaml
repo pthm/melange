@@ -11,23 +11,44 @@ before:
     - go mod tidy
 
 builds:
-  - id: melange
+  # Non-darwin builds (no signing needed)
+  - id: melange-linux-windows
     main: ./cmd/melange
     binary: melange
     env:
       - CGO_ENABLED=0
     goos:
       - linux
-      - darwin
       - windows
     goarch:
       - amd64
       - arm64
     ldflags:
       - -s -w
-      - -X main.version={{.Version}}
-      - -X main.commit={{.Commit}}
-      - -X main.date={{.Date}}
+      - -X github.com/pthm/melange/internal/version.Version={{.Version}}
+      - -X github.com/pthm/melange/internal/version.Commit={{.Commit}}
+      - -X github.com/pthm/melange/internal/version.Date={{.Date}}
+
+  # Darwin builds with code signing
+  - id: melange-darwin
+    main: ./cmd/melange
+    binary: melange
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/pthm/melange/internal/version.Version={{.Version}}
+      - -X github.com/pthm/melange/internal/version.Commit={{.Commit}}
+      - -X github.com/pthm/melange/internal/version.Date={{.Date}}
+    hooks:
+      post:
+        - cmd: ./scripts/sign-macos.sh "{{ .Path }}" --notarize
+          output: true
 
 archives:
   - id: default
@@ -70,6 +91,17 @@ changelog:
       - '^chore:'
       - Merge pull request
       - Merge branch
+
+homebrew_casks:
+  - name: melange
+    repository:
+      owner: pthm
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    homepage: "https://github.com/pthm/melange"
+    description: "PostgreSQL Fine-Grained Authorization - OpenFGA to SQL compiler"
+    license: "MIT"
 
 publishers:
   - name: npm

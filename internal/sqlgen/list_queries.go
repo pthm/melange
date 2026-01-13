@@ -1,30 +1,6 @@
 package sqlgen
 
 // =============================================================================
-// Helper Functions
-// =============================================================================
-
-// stringToDSLExpr converts a string expression to Expr.
-// Recognizes common parameter names and converts them to DSL constants.
-func stringToDSLExpr(s string) Expr {
-	if s == "" {
-		return nil
-	}
-	switch s {
-	case "p_subject_type":
-		return SubjectType
-	case "p_subject_id":
-		return SubjectID
-	case "p_object_type":
-		return ObjectType
-	case "p_object_id":
-		return ObjectID
-	default:
-		return Raw(s)
-	}
-}
-
-// =============================================================================
 // List Objects Queries
 // =============================================================================
 
@@ -48,10 +24,7 @@ func ListObjectsDirectQuery(input ListObjectsDirectInput) (string, error) {
 		SelectCol("object_id").
 		Distinct()
 
-	// Add exclusion predicates
-	for _, pred := range input.Exclusions.BuildPredicates() {
-		q.Where(pred)
-	}
+	q.Where(input.Exclusions.BuildPredicates()...)
 
 	return q.SQL(), nil
 }
@@ -59,7 +32,8 @@ func ListObjectsDirectQuery(input ListObjectsDirectInput) (string, error) {
 type ListObjectsUsersetSubjectInput struct {
 	ObjectType    string
 	Relations     []string
-	ClosureValues string
+	ClosureValues string      // Deprecated: use ClosureRows
+	ClosureRows   []ValuesRow // Typed closure rows (preferred)
 	Exclusions    ExclusionConfig
 }
 
@@ -67,7 +41,7 @@ func ListObjectsUsersetSubjectQuery(input ListObjectsUsersetSubjectInput) (strin
 	// Build the closure EXISTS subquery
 	closureExistsStmt := SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
-		FromExpr:    ClosureValuesTable(input.ClosureValues, "c"),
+		FromExpr:    ClosureTable(input.ClosureRows, "c"),
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: SubjectType},
 			Eq{Left: Col{Table: "c", Column: "relation"}, Right: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}},
@@ -99,10 +73,7 @@ func ListObjectsUsersetSubjectQuery(input ListObjectsUsersetSubjectInput) (strin
 		SelectCol("object_id").
 		Distinct()
 
-	// Add exclusion predicates
-	for _, pred := range input.Exclusions.BuildPredicates() {
-		q.Where(pred)
-	}
+	q.Where(input.Exclusions.BuildPredicates()...)
 
 	return q.SQL(), nil
 }
@@ -133,28 +104,37 @@ func ListObjectsComplexClosureQuery(input ListObjectsComplexClosureInput) (strin
 		SelectCol("object_id").
 		Distinct()
 
-	// Add exclusion predicates
-	for _, pred := range input.Exclusions.BuildPredicates() {
-		q.Where(pred)
-	}
+	q.Where(input.Exclusions.BuildPredicates()...)
 
 	return q.SQL(), nil
 }
 
 func ListObjectsIntersectionClosureQuery(functionName string) (string, error) {
+	// Pass NULL for pagination params - inner function should return all results,
+	// outer pagination wrapper handles limiting
+	// Use alias to avoid column ambiguity with pagination-returning functions
 	stmt := SelectStmt{
-		Columns: []string{"*"},
-		From:    functionName + "(p_subject_type, p_subject_id)",
+		ColumnExprs: []Expr{Col{Table: "icr", Column: "object_id"}},
+		FromExpr: FunctionCallExpr{
+			Name:  functionName,
+			Args:  []Expr{SubjectType, SubjectID, Null{}, Null{}},
+			Alias: "icr",
+		},
 	}
 	return stmt.SQL(), nil
 }
 
 func ListObjectsIntersectionClosureValidatedQuery(objectType, relation, functionName string) (string, error) {
+	// Pass NULL for pagination params - inner function should return all results,
+	// outer pagination wrapper handles limiting
 	stmt := SelectStmt{
-		Distinct: true,
-		Columns:  []string{"icr.object_id"},
-		From:     functionName + "(p_subject_type, p_subject_id)",
-		Alias:    "icr",
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "icr", Column: "object_id"}},
+		FromExpr: FunctionCallExpr{
+			Name:  functionName,
+			Args:  []Expr{SubjectType, SubjectID, Null{}, Null{}},
+			Alias: "icr",
+		},
 		Where: CheckPermission{
 			Subject:     SubjectParams(),
 			Relation:    relation,
@@ -215,10 +195,7 @@ func ListObjectsUsersetPatternSimpleQuery(input ListObjectsUsersetPatternSimpleI
 		SelectCol("object_id").
 		Distinct()
 
-	// Add exclusion predicates
-	for _, pred := range input.Exclusions.BuildPredicates() {
-		q.Where(pred)
-	}
+	q.Where(input.Exclusions.BuildPredicates()...)
 
 	return q.SQL(), nil
 }
@@ -268,10 +245,7 @@ func ListObjectsUsersetPatternComplexQuery(input ListObjectsUsersetPatternComple
 		SelectCol("object_id").
 		Distinct()
 
-	// Add exclusion predicates
-	for _, pred := range input.Exclusions.BuildPredicates() {
-		q.Where(pred)
-	}
+	q.Where(input.Exclusions.BuildPredicates()...)
 
 	return q.SQL(), nil
 }
@@ -279,14 +253,15 @@ func ListObjectsUsersetPatternComplexQuery(input ListObjectsUsersetPatternComple
 type ListObjectsSelfCandidateInput struct {
 	ObjectType    string
 	Relation      string
-	ClosureValues string
+	ClosureValues string      // Deprecated: use ClosureRows
+	ClosureRows   []ValuesRow // Typed closure rows (preferred)
 }
 
 func ListObjectsSelfCandidateQuery(input ListObjectsSelfCandidateInput) (string, error) {
 	// Build the closure EXISTS subquery
 	closureExistsStmt := SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
-		FromExpr:    ClosureValuesTable(input.ClosureValues, "c"),
+		FromExpr:    ClosureTable(input.ClosureRows, "c"),
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(input.ObjectType)},
 			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(input.Relation)},
@@ -333,10 +308,7 @@ func ListObjectsCrossTypeTTUQuery(input ListObjectsCrossTypeTTUInput) (string, e
 		SelectCol("object_id").
 		Distinct()
 
-	// Add exclusion predicates
-	for _, pred := range input.Exclusions.BuildPredicates() {
-		q.Where(pred)
-	}
+	q.Where(input.Exclusions.BuildPredicates()...)
 
 	return q.SQL(), nil
 }
@@ -348,7 +320,9 @@ type ListObjectsRecursiveTTUInput struct {
 }
 
 func ListObjectsRecursiveTTUQuery(input ListObjectsRecursiveTTUInput) (string, error) {
-	// This is a CTE recursive query pattern - uses 'accessible' as the source table
+	depthLimit := Lt{Left: Col{Table: "a", Column: "depth"}, Right: Int(25)}
+	whereExprs := append([]Expr{depthLimit}, input.Exclusions.BuildPredicates()...)
+
 	stmt := SelectStmt{
 		Distinct: true,
 		Columns:  []string{"child.object_id", "a.depth + 1 AS depth"},
@@ -367,14 +341,7 @@ func ListObjectsRecursiveTTUQuery(input ListObjectsRecursiveTTUInput) (string, e
 				),
 			},
 		},
-		Where: Lt{Left: Col{Table: "a", Column: "depth"}, Right: Int(25)},
-	}
-
-	// Add exclusion predicates to WHERE
-	predicates := input.Exclusions.BuildPredicates()
-	if len(predicates) > 0 {
-		allPredicates := append([]Expr{stmt.Where}, predicates...)
-		stmt.Where = And(allPredicates...)
+		Where: And(whereExprs...),
 	}
 
 	return stmt.SQL(), nil
@@ -388,45 +355,42 @@ type ListSubjectsUsersetFilterInput struct {
 	ObjectType          string
 	RelationList        []string
 	AllowedSubjectTypes []string
-	ObjectIDExpr        string
-	FilterTypeExpr      string
-	FilterRelationExpr  string
-	ClosureValues       string
+	ObjectIDExpr        Expr
+	FilterTypeExpr      Expr
+	FilterRelationExpr  Expr
+	ClosureValues       string      // Deprecated: use ClosureRows
+	ClosureRows         []ValuesRow // Typed closure rows (preferred)
 	UseTypeGuard        bool
 	ExtraPredicatesSQL  []string // Raw SQL predicate strings
 }
 
 func ListSubjectsUsersetFilterQuery(input ListSubjectsUsersetFilterInput) (string, error) {
-	filterTypeExpr := stringToDSLExpr(input.FilterTypeExpr)
-	filterRelationExpr := stringToDSLExpr(input.FilterRelationExpr)
-	objectIDExpr := stringToDSLExpr(input.ObjectIDExpr)
-
 	// Build the closure EXISTS subquery
 	closureExistsStmt := SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
-		FromExpr:    ClosureValuesTable(input.ClosureValues, "subj_c"),
+		FromExpr:    ClosureTable(input.ClosureRows, "subj_c"),
 		Where: And(
-			Eq{Left: Col{Table: "subj_c", Column: "object_type"}, Right: filterTypeExpr},
+			Eq{Left: Col{Table: "subj_c", Column: "object_type"}, Right: input.FilterTypeExpr},
 			Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: SubstringUsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}},
-			Eq{Left: Col{Table: "subj_c", Column: "satisfying_relation"}, Right: filterRelationExpr},
+			Eq{Left: Col{Table: "subj_c", Column: "satisfying_relation"}, Right: input.FilterRelationExpr},
 		),
 	}
 
 	// Normalized subject expression: split_part(subject_id, '#', 1) || '#' || filter_relation
-	normalizedSubject := SelectAs(NormalizedUsersetSubject(Col{Table: "t", Column: "subject_id"}, filterRelationExpr), "subject_id")
+	normalizedSubject := SelectAs(NormalizedUsersetSubject(Col{Table: "t", Column: "subject_id"}, input.FilterRelationExpr), "subject_id")
 
 	conditions := []Expr{
-		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: objectIDExpr},
-		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: filterTypeExpr},
+		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: input.ObjectIDExpr},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: input.FilterTypeExpr},
 		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
 		Or(
-			Eq{Left: SubstringUsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: filterRelationExpr},
+			Eq{Left: SubstringUsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: input.FilterRelationExpr},
 			ExistsExpr(closureExistsStmt),
 		),
 	}
 
 	if input.UseTypeGuard {
-		conditions = append(conditions, In{Expr: filterTypeExpr, Values: input.AllowedSubjectTypes})
+		conditions = append(conditions, In{Expr: input.FilterTypeExpr, Values: input.AllowedSubjectTypes})
 	}
 
 	for _, sql := range input.ExtraPredicatesSQL {
@@ -446,32 +410,29 @@ func ListSubjectsUsersetFilterQuery(input ListSubjectsUsersetFilterInput) (strin
 type ListSubjectsSelfCandidateInput struct {
 	ObjectType         string
 	Relation           string
-	ObjectIDExpr       string
-	FilterTypeExpr     string
-	FilterRelationExpr string
-	ClosureValues      string
-	ExtraPredicatesSQL []string // Raw SQL predicate strings
+	ObjectIDExpr       Expr
+	FilterTypeExpr     Expr
+	FilterRelationExpr Expr
+	ClosureValues      string      // Deprecated: use ClosureRows
+	ClosureRows        []ValuesRow // Typed closure rows (preferred)
+	ExtraPredicatesSQL []string    // Raw SQL predicate strings
 }
 
 func ListSubjectsSelfCandidateQuery(input ListSubjectsSelfCandidateInput) (string, error) {
-	filterTypeExpr := stringToDSLExpr(input.FilterTypeExpr)
-	filterRelationExpr := stringToDSLExpr(input.FilterRelationExpr)
-	objectIDExpr := stringToDSLExpr(input.ObjectIDExpr)
-
 	// Build the closure EXISTS subquery
 	closureExistsStmt := SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
-		FromExpr:    ClosureValuesTable(input.ClosureValues, "c"),
+		FromExpr:    ClosureTable(input.ClosureRows, "c"),
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(input.ObjectType)},
 			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(input.Relation)},
-			Eq{Left: Col{Table: "c", Column: "satisfying_relation"}, Right: filterRelationExpr},
+			Eq{Left: Col{Table: "c", Column: "satisfying_relation"}, Right: input.FilterRelationExpr},
 		),
 	}
 
 	conditions := make([]Expr, 0, 2+len(input.ExtraPredicatesSQL))
 	conditions = append(conditions,
-		Eq{Left: filterTypeExpr, Right: Lit(input.ObjectType)},
+		Eq{Left: input.FilterTypeExpr, Right: Lit(input.ObjectType)},
 		ExistsExpr(closureExistsStmt),
 	)
 
@@ -480,7 +441,7 @@ func ListSubjectsSelfCandidateQuery(input ListSubjectsSelfCandidateInput) (strin
 	}
 
 	// Subject ID output: object_id || '#' || filter_relation
-	subjectIDCol := SelectAs(Concat{Parts: []Expr{objectIDExpr, Lit("#"), filterRelationExpr}}, "subject_id")
+	subjectIDCol := SelectAs(Concat{Parts: []Expr{input.ObjectIDExpr, Lit("#"), input.FilterRelationExpr}}, "subject_id")
 
 	stmt := SelectStmt{
 		ColumnExprs: []Expr{subjectIDCol},
@@ -493,19 +454,16 @@ func ListSubjectsSelfCandidateQuery(input ListSubjectsSelfCandidateInput) (strin
 type ListSubjectsDirectInput struct {
 	ObjectType      string
 	RelationList    []string
-	ObjectIDExpr    string
-	SubjectTypeExpr string
+	ObjectIDExpr    Expr
+	SubjectTypeExpr Expr
 	ExcludeWildcard bool
 	Exclusions      ExclusionConfig
 }
 
 func ListSubjectsDirectQuery(input ListSubjectsDirectInput) (string, error) {
-	objectIDExpr := stringToDSLExpr(input.ObjectIDExpr)
-	subjectTypeExpr := stringToDSLExpr(input.SubjectTypeExpr)
-
 	conditions := []Expr{
-		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: objectIDExpr},
-		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: subjectTypeExpr},
+		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: input.ObjectIDExpr},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: input.SubjectTypeExpr},
 	}
 
 	if input.ExcludeWildcard {
@@ -519,10 +477,7 @@ func ListSubjectsDirectQuery(input ListSubjectsDirectInput) (string, error) {
 		SelectCol("subject_id").
 		Distinct()
 
-	// Add exclusion predicates
-	for _, pred := range input.Exclusions.BuildPredicates() {
-		q.Where(pred)
-	}
+	q.Where(input.Exclusions.BuildPredicates()...)
 
 	return q.SQL(), nil
 }
@@ -530,26 +485,23 @@ func ListSubjectsDirectQuery(input ListSubjectsDirectInput) (string, error) {
 type ListSubjectsComplexClosureInput struct {
 	ObjectType      string
 	Relation        string
-	ObjectIDExpr    string
-	SubjectTypeExpr string
+	ObjectIDExpr    Expr
+	SubjectTypeExpr Expr
 	ExcludeWildcard bool
 	Exclusions      ExclusionConfig
 }
 
 func ListSubjectsComplexClosureQuery(input ListSubjectsComplexClosureInput) (string, error) {
-	objectIDExpr := stringToDSLExpr(input.ObjectIDExpr)
-	subjectTypeExpr := stringToDSLExpr(input.SubjectTypeExpr)
-
 	conditions := []Expr{
-		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: objectIDExpr},
-		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: subjectTypeExpr},
+		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: input.ObjectIDExpr},
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: input.SubjectTypeExpr},
 		CheckPermission{
 			Subject: SubjectRef{
-				Type: subjectTypeExpr,
+				Type: input.SubjectTypeExpr,
 				ID:   Col{Table: "t", Column: "subject_id"},
 			},
 			Relation:    input.Relation,
-			Object:      LiteralObject(input.ObjectType, objectIDExpr),
+			Object:      LiteralObject(input.ObjectType, input.ObjectIDExpr),
 			ExpectAllow: true,
 		},
 	}
@@ -565,39 +517,44 @@ func ListSubjectsComplexClosureQuery(input ListSubjectsComplexClosureInput) (str
 		SelectCol("subject_id").
 		Distinct()
 
-	// Add exclusion predicates
-	for _, pred := range input.Exclusions.BuildPredicates() {
-		q.Where(pred)
-	}
+	q.Where(input.Exclusions.BuildPredicates()...)
 
 	return q.SQL(), nil
 }
 
-func ListSubjectsIntersectionClosureQuery(functionName, subjectTypeExpr string) (string, error) {
+func ListSubjectsIntersectionClosureQuery(functionName string, subjectTypeExpr Expr) (string, error) {
+	// Inner list functions don't have pagination params - they return all results.
+	// Outer pagination wrapper handles limiting.
 	stmt := SelectStmt{
-		Columns: []string{"*"},
-		From:    functionName + "(p_object_id, " + subjectTypeExpr + ")",
+		ColumnExprs: []Expr{Col{Table: "ics", Column: "subject_id"}},
+		FromExpr: FunctionCallExpr{
+			Name:  functionName,
+			Args:  []Expr{ObjectID, subjectTypeExpr},
+			Alias: "ics",
+		},
 	}
 	return stmt.SQL(), nil
 }
 
-func ListSubjectsIntersectionClosureValidatedQuery(objectType, relation, functionName, functionSubjectTypeExpr, checkSubjectTypeExpr, objectIDExpr string) (string, error) {
-	checkSubjectType := stringToDSLExpr(checkSubjectTypeExpr)
-	objectID := stringToDSLExpr(objectIDExpr)
-
+func ListSubjectsIntersectionClosureValidatedQuery(objectType, relation, functionName string, functionSubjectTypeExpr, checkSubjectTypeExpr, objectIDExpr Expr) (string, error) {
+	// Inner list functions don't have pagination params - they return all results.
+	// Outer pagination wrapper handles limiting.
 	stmt := SelectStmt{
-		Distinct: true,
-		Columns:  []string{"ics.subject_id"},
-		From:     functionName + "(" + objectIDExpr + ", " + functionSubjectTypeExpr + ")",
-		Alias:    "ics",
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "ics", Column: "subject_id"}},
+		FromExpr: FunctionCallExpr{
+			Name:  functionName,
+			Args:  []Expr{objectIDExpr, functionSubjectTypeExpr},
+			Alias: "ics",
+		},
 		Where: CheckPermissionCall{
 			FunctionName: "check_permission",
 			Subject: SubjectRef{
-				Type: checkSubjectType,
+				Type: checkSubjectTypeExpr,
 				ID:   Col{Table: "ics", Column: "subject_id"},
 			},
 			Relation:    relation,
-			Object:      LiteralObject(objectType, objectID),
+			Object:      LiteralObject(objectType, objectIDExpr),
 			ExpectAllow: true,
 		},
 	}
@@ -610,8 +567,8 @@ type ListSubjectsUsersetPatternSimpleInput struct {
 	SubjectRelation     string
 	SourceRelations     []string
 	SatisfyingRelations []string
-	ObjectIDExpr        string
-	SubjectTypeExpr     string
+	ObjectIDExpr        Expr
+	SubjectTypeExpr     Expr
 	AllowedSubjectTypes []string
 	ExcludeWildcard     bool
 	IsClosurePattern    bool
@@ -620,16 +577,13 @@ type ListSubjectsUsersetPatternSimpleInput struct {
 }
 
 func ListSubjectsUsersetPatternSimpleQuery(input ListSubjectsUsersetPatternSimpleInput) (string, error) {
-	objectIDExpr := stringToDSLExpr(input.ObjectIDExpr)
-	subjectTypeExpr := stringToDSLExpr(input.SubjectTypeExpr)
-
 	// Join conditions for the userset membership table
 	joinConditions := []Expr{
 		Eq{Left: Col{Table: "s", Column: "object_type"}, Right: Lit(input.SubjectType)},
 		Eq{Left: Col{Table: "s", Column: "object_id"}, Right: UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}}},
 		In{Expr: Col{Table: "s", Column: "relation"}, Values: input.SatisfyingRelations},
-		Eq{Left: Col{Table: "s", Column: "subject_type"}, Right: subjectTypeExpr},
-		In{Expr: subjectTypeExpr, Values: input.AllowedSubjectTypes},
+		Eq{Left: Col{Table: "s", Column: "subject_type"}, Right: input.SubjectTypeExpr},
+		In{Expr: input.SubjectTypeExpr, Values: input.AllowedSubjectTypes},
 	}
 
 	if input.ExcludeWildcard {
@@ -637,7 +591,7 @@ func ListSubjectsUsersetPatternSimpleQuery(input ListSubjectsUsersetPatternSimpl
 	}
 
 	conditions := []Expr{
-		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: objectIDExpr},
+		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: input.ObjectIDExpr},
 		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(input.SubjectType)},
 		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
 		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(input.SubjectRelation)},
@@ -646,11 +600,11 @@ func ListSubjectsUsersetPatternSimpleQuery(input ListSubjectsUsersetPatternSimpl
 	if input.IsClosurePattern {
 		conditions = append(conditions, CheckPermission{
 			Subject: SubjectRef{
-				Type: subjectTypeExpr,
+				Type: input.SubjectTypeExpr,
 				ID:   Col{Table: "s", Column: "subject_id"},
 			},
 			Relation:    input.SourceRelation,
-			Object:      LiteralObject(input.ObjectType, objectIDExpr),
+			Object:      LiteralObject(input.ObjectType, input.ObjectIDExpr),
 			ExpectAllow: true,
 		})
 	}
@@ -663,10 +617,7 @@ func ListSubjectsUsersetPatternSimpleQuery(input ListSubjectsUsersetPatternSimpl
 		Select("s.subject_id").
 		Distinct()
 
-	// Add exclusion predicates
-	for _, pred := range input.Exclusions.BuildPredicates() {
-		q.Where(pred)
-	}
+	q.Where(input.Exclusions.BuildPredicates()...)
 
 	return q.SQL(), nil
 }
@@ -676,41 +627,41 @@ type ListSubjectsUsersetPatternComplexInput struct {
 	SubjectType      string
 	SubjectRelation  string
 	SourceRelations  []string
-	ObjectIDExpr     string
-	SubjectTypeExpr  string
+	ObjectIDExpr     Expr
+	SubjectTypeExpr  Expr
 	IsClosurePattern bool
 	SourceRelation   string
 	Exclusions       ExclusionConfig
 }
 
 func ListSubjectsUsersetPatternComplexQuery(input ListSubjectsUsersetPatternComplexInput) (string, error) {
-	objectIDExpr := stringToDSLExpr(input.ObjectIDExpr)
-	subjectTypeExpr := stringToDSLExpr(input.SubjectTypeExpr)
-
-	conditions := []Expr{
-		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: objectIDExpr},
+	whereExprs := []Expr{
+		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(input.ObjectType)},
+		In{Expr: Col{Table: "t", Column: "relation"}, Values: input.SourceRelations},
+		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: input.ObjectIDExpr},
 		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(input.SubjectType)},
 		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
 		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(input.SubjectRelation)},
 	}
 
 	if input.IsClosurePattern {
-		conditions = append(conditions, CheckPermission{
+		whereExprs = append(whereExprs, CheckPermission{
 			Subject: SubjectRef{
-				Type: subjectTypeExpr,
+				Type: input.SubjectTypeExpr,
 				ID:   Col{Table: "s", Column: "subject_id"},
 			},
 			Relation:    input.SourceRelation,
-			Object:      LiteralObject(input.ObjectType, objectIDExpr),
+			Object:      LiteralObject(input.ObjectType, input.ObjectIDExpr),
 			ExpectAllow: true,
 		})
 	}
 
-	// Use lateral join with list function
+	whereExprs = append(whereExprs, input.Exclusions.BuildPredicates()...)
+
 	listFuncName := "list_" + Ident(input.SubjectType) + "_" + Ident(input.SubjectRelation) + "_subjects"
 	listFunc := LateralFunction{
 		Name:  listFuncName,
-		Args:  []Expr{UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}}, subjectTypeExpr},
+		Args:  []Expr{UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}}, input.SubjectTypeExpr},
 		Alias: "s",
 	}
 
@@ -724,18 +675,7 @@ func ListSubjectsUsersetPatternComplexQuery(input ListSubjectsUsersetPatternComp
 				TableExpr: listFunc,
 			},
 		},
-		Where: And(
-			Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(input.ObjectType)},
-			In{Expr: Col{Table: "t", Column: "relation"}, Values: input.SourceRelations},
-			And(conditions...),
-		),
-	}
-
-	// Add exclusion predicates to WHERE
-	predicates := input.Exclusions.BuildPredicates()
-	if len(predicates) > 0 {
-		allPredicates := append([]Expr{stmt.Where}, predicates...)
-		stmt.Where = And(allPredicates...)
+		Where: And(whereExprs...),
 	}
 
 	return stmt.SQL(), nil
@@ -746,8 +686,8 @@ type ListSubjectsUsersetPatternRecursiveComplexInput struct {
 	SubjectType         string
 	SubjectRelation     string
 	SourceRelations     []string
-	ObjectIDExpr        string
-	SubjectTypeExpr     string
+	ObjectIDExpr        Expr
+	SubjectTypeExpr     Expr
 	AllowedSubjectTypes []string
 	ExcludeWildcard     bool
 	IsClosurePattern    bool
@@ -756,15 +696,12 @@ type ListSubjectsUsersetPatternRecursiveComplexInput struct {
 }
 
 func ListSubjectsUsersetPatternRecursiveComplexQuery(input ListSubjectsUsersetPatternRecursiveComplexInput) (string, error) {
-	objectIDExpr := stringToDSLExpr(input.ObjectIDExpr)
-	subjectTypeExpr := stringToDSLExpr(input.SubjectTypeExpr)
-
 	// Join conditions for the membership table
 	joinConditions := []Expr{
 		Eq{Left: Col{Table: "m", Column: "object_type"}, Right: Lit(input.SubjectType)},
 		Eq{Left: Col{Table: "m", Column: "object_id"}, Right: UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}}},
-		Eq{Left: Col{Table: "m", Column: "subject_type"}, Right: subjectTypeExpr},
-		In{Expr: subjectTypeExpr, Values: input.AllowedSubjectTypes},
+		Eq{Left: Col{Table: "m", Column: "subject_type"}, Right: input.SubjectTypeExpr},
+		In{Expr: input.SubjectTypeExpr, Values: input.AllowedSubjectTypes},
 	}
 
 	if input.ExcludeWildcard {
@@ -772,13 +709,13 @@ func ListSubjectsUsersetPatternRecursiveComplexQuery(input ListSubjectsUsersetPa
 	}
 
 	conditions := []Expr{
-		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: objectIDExpr},
+		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: input.ObjectIDExpr},
 		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(input.SubjectType)},
 		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
 		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(input.SubjectRelation)},
 		CheckPermission{
 			Subject: SubjectRef{
-				Type: subjectTypeExpr,
+				Type: input.SubjectTypeExpr,
 				ID:   Col{Table: "m", Column: "subject_id"},
 			},
 			Relation: input.SubjectRelation,
@@ -793,11 +730,11 @@ func ListSubjectsUsersetPatternRecursiveComplexQuery(input ListSubjectsUsersetPa
 	if input.IsClosurePattern {
 		conditions = append(conditions, CheckPermission{
 			Subject: SubjectRef{
-				Type: subjectTypeExpr,
+				Type: input.SubjectTypeExpr,
 				ID:   Col{Table: "m", Column: "subject_id"},
 			},
 			Relation:    input.SourceRelation,
-			Object:      LiteralObject(input.ObjectType, objectIDExpr),
+			Object:      LiteralObject(input.ObjectType, input.ObjectIDExpr),
 			ExpectAllow: true,
 		})
 	}
@@ -810,10 +747,7 @@ func ListSubjectsUsersetPatternRecursiveComplexQuery(input ListSubjectsUsersetPa
 		Select("m.subject_id").
 		Distinct()
 
-	// Add exclusion predicates
-	for _, pred := range input.Exclusions.BuildPredicates() {
-		q.Where(pred)
-	}
+	q.Where(input.Exclusions.BuildPredicates()...)
 
 	return q.SQL(), nil
 }

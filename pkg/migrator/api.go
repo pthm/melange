@@ -121,6 +121,7 @@ func MigrateWithOptions(ctx context.Context, db Execer, schemaPath string, opts 
 	internalOpts := InternalMigrateOptions{
 		DryRun:        opts.DryRun,
 		Force:         opts.Force,
+		Version:       opts.Version,
 		SchemaContent: string(schemaContent),
 	}
 

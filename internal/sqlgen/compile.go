@@ -1,8 +1,8 @@
 package sqlgen
 
 import (
-	"bytes"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -18,32 +18,6 @@ func formatSQLStringList(items []string) string {
 		quoted[i] = fmt.Sprintf("'%s'", item)
 	}
 	return strings.Join(quoted, ", ")
-}
-
-func buildAllowedSubjectTypeList(a RelationAnalysis, emptyValue string) string {
-	subjectTypes := a.AllowedSubjectTypes
-	if len(subjectTypes) == 0 {
-		// Fallback to direct subject types if allowed types not computed.
-		subjectTypes = a.DirectSubjectTypes
-	}
-	if len(subjectTypes) == 0 {
-		return emptyValue
-	}
-	return formatSQLStringList(subjectTypes)
-}
-
-func allowedSubjectTypesForCheck(a RelationAnalysis) []string {
-	subjectTypes := a.AllowedSubjectTypes
-	if len(subjectTypes) == 0 {
-		subjectTypes = a.DirectSubjectTypes
-	}
-	return subjectTypes
-}
-
-// buildTupleLookupRelationList builds a SQL list of relations that can be resolved
-// via tuple lookup for the current relation.
-func buildTupleLookupRelationList(a RelationAnalysis) string {
-	return formatSQLStringList(buildTupleLookupRelations(a))
 }
 
 func buildTupleLookupRelations(a RelationAnalysis) []string {
@@ -89,7 +63,7 @@ func GenerateSQL(analyses []RelationAnalysis, inline InlineSQLData) (GeneratedSQ
 
 	// Generate specialized function for each relation
 	for _, a := range analyses {
-		if !a.CanGenerate {
+		if !a.Capabilities.CheckAllowed {
 			continue
 		}
 		fn, err := generateCheckFunction(a, inline, false)
@@ -128,545 +102,32 @@ func functionNameNoWildcard(objectType, relation string) string {
 }
 
 // sanitizeIdentifier converts a type/relation name to a valid SQL identifier.
+// Delegates to the canonical implementation in sqldsl.
 func sanitizeIdentifier(s string) string {
-	var result strings.Builder
-	for _, c := range s {
-		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' {
-			result.WriteRune(c)
-		} else {
-			result.WriteRune('_')
-		}
-	}
-	return result.String()
-}
-
-// CheckFunctionData contains data for rendering check function templates.
-type CheckFunctionData struct {
-	ObjectType   string // The authorization object type (e.g., "document", "folder")
-	Relation     string // The relation name (e.g., "viewer", "editor")
-	FunctionName string // The generated function name (e.g., "check_document_viewer")
-	// InternalCheckFunctionName is the dispatcher internal function name to call
-	// for recursive or complex checks.
-	InternalCheckFunctionName string
-	FeaturesString            string // Human-readable list of enabled features for SQL comments
-	ClosureValues             string // Inline SQL VALUES for closure lookups, eliminates JOIN
-	UsersetValues             string // Inline SQL VALUES for userset patterns, eliminates JOIN
-
-	// Feature flags
-	HasDirect       bool
-	HasImplied      bool
-	HasWildcard     bool
-	HasUserset      bool
-	HasRecursive    bool
-	HasExclusion    bool
-	HasIntersection bool
-
-	// HasStandaloneAccess is true if the relation has access paths outside of intersections.
-	// When false and HasIntersection is true, the only access is through intersection groups.
-	// For example, "viewer: [user] and writer" has NO standalone access - the [user] is
-	// inside the intersection. But "viewer: [user] or (writer and editor)" HAS standalone
-	// access via the [user] path.
-	HasStandaloneAccess bool
-
-	// Pre-rendered SQL fragments
-	DirectCheck    string // Pre-rendered SQL EXISTS for direct tuple lookup
-	UsersetCheck   string // Pre-rendered SQL EXISTS for userset membership checks
-	ExclusionCheck string // Pre-rendered SQL EXISTS for exclusion (denial) checks
-	AccessChecks   string // All access paths OR'd together for the final permission decision
-
-	// For recursive (TTU) patterns
-	ParentRelations []ParentRelationData // TTU patterns: parent object relations to check recursively
-
-	// For implied relations that need function calls
-	ImpliedFunctionCalls []ImpliedFunctionCall // Complex closure relations requiring function calls
-
-	// For intersection patterns - each group is AND'd, groups are OR'd
-	IntersectionGroups []IntersectionGroupData // AND groups where all parts must be satisfied
-}
-
-// IntersectionGroupData contains data for a single intersection group.
-// All parts within a group must be satisfied (AND semantics).
-type IntersectionGroupData struct {
-	Parts []IntersectionPartData // Individual checks within this AND group
-}
-
-// IntersectionPartData contains data for a single part of an intersection.
-type IntersectionPartData struct {
-	// FunctionName is the check function to call (e.g., "check_document_writer")
-	FunctionName string
-
-	// IsThis is true if this part is a self-reference ([user] pattern)
-	// When true, we check for a direct tuple on the relation being defined
-	IsThis bool
-
-	// ThisHasWildcard is true if this "This" part allows wildcard tuples.
-	// This is only relevant when IsThis is true. It reflects whether the relation's
-	// own direct subject types allow wildcards, NOT whether the relation's overall
-	// HasWildcard flag is set (which may include wildcards from closure relations).
-	ThisHasWildcard bool
-
-	// HasExclusion is true if this part has a nested exclusion (e.g., "editor but not owner")
-	HasExclusion bool
-
-	// ExcludedRelation is the relation to exclude (for nested exclusions)
-	ExcludedRelation string
-
-	// IsTTU is true if this part is a tuple-to-userset pattern
-	IsTTU bool
-
-	// TTULinkingRelation is the linking relation for TTU patterns (e.g., "parent")
-	TTULinkingRelation string
-
-	// TTURelation is the relation to check on the parent for TTU patterns
-	TTURelation string
-}
-
-// ImpliedFunctionCall represents a function call to a complex implied relation.
-// Used when an implied relation has exclusions and can't use simple tuple lookup.
-type ImpliedFunctionCall struct {
-	FunctionName string // Function to call for this implied relation (e.g., "check_document_editor")
-}
-
-// ParentRelationData contains data for rendering recursive access checks.
-type ParentRelationData struct {
-	LinkingRelation     string // Relation linking to parent object (e.g., "parent" in "viewer from parent")
-	ParentRelation      string // Relation to verify on parent (e.g., "viewer" in "viewer from parent")
-	AllowedLinkingTypes string // SQL-formatted list of allowed parent types (e.g., "'folder', 'org'")
-}
-
-// generateCheckFunction generates a specialized check function for a relation.
-func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, noWildcard bool) (string, error) {
-	return generateCheckFunctionBob(a, inline, noWildcard)
-}
-
-// buildCheckFunctionData constructs template data from RelationAnalysis.
-func buildCheckFunctionData(a RelationAnalysis, inline InlineSQLData, noWildcard bool) (CheckFunctionData, error) {
-	hasWildcard := a.Features.HasWildcard && !noWildcard
-	functionNameForRelation := functionName(a.ObjectType, a.Relation)
-	internalCheckFn := "check_permission_internal"
-	if noWildcard {
-		functionNameForRelation = functionNameNoWildcard(a.ObjectType, a.Relation)
-		internalCheckFn = "check_permission_no_wildcard_internal"
-	}
-
-	data := CheckFunctionData{
-		ObjectType:                a.ObjectType,
-		Relation:                  a.Relation,
-		FunctionName:              functionNameForRelation,
-		InternalCheckFunctionName: internalCheckFn,
-		FeaturesString:            a.Features.String(),
-		ClosureValues:             inline.ClosureValues,
-		UsersetValues:             inline.UsersetValues,
-		HasDirect:                 a.Features.HasDirect,
-		HasImplied:                a.Features.HasImplied,
-		HasWildcard:               hasWildcard,
-		HasUserset:                a.Features.HasUserset,
-		HasRecursive:              a.Features.HasRecursive,
-		HasExclusion:              a.Features.HasExclusion,
-		HasIntersection:           a.Features.HasIntersection,
-	}
-
-	// Build SQL fragments
-	var err error
-	data.DirectCheck, err = buildDirectCheck(a, hasWildcard)
-	if err != nil {
-		return CheckFunctionData{}, fmt.Errorf("building direct check: %w", err)
-	}
-	data.UsersetCheck, err = buildUsersetCheck(a, hasWildcard, internalCheckFn)
-	if err != nil {
-		return CheckFunctionData{}, fmt.Errorf("building userset check: %w", err)
-	}
-	data.ExclusionCheck, err = buildExclusionCheck(a, hasWildcard, internalCheckFn)
-	if err != nil {
-		return CheckFunctionData{}, fmt.Errorf("building exclusion check: %w", err)
-	}
-
-	// Build combined access checks
-	var checks []string
-	if a.Features.HasDirect || a.Features.HasImplied {
-		checks = append(checks, data.DirectCheck)
-	}
-	if a.Features.HasUserset {
-		checks = append(checks, data.UsersetCheck)
-	}
-	data.AccessChecks = strings.Join(checks, "\n    OR\n    ")
-
-	// Build parent relation data for recursive checks
-	for _, parent := range a.ParentRelations {
-		// Format allowed linking types as SQL list (e.g., "'group1', 'group2'")
-		var allowedTypes string
-		if len(parent.AllowedLinkingTypes) > 0 {
-			allowedTypes = formatSQLStringList(parent.AllowedLinkingTypes)
-		}
-		data.ParentRelations = append(data.ParentRelations, ParentRelationData{
-			LinkingRelation:     parent.LinkingRelation,
-			ParentRelation:      parent.Relation,
-			AllowedLinkingTypes: allowedTypes,
-		})
-	}
-
-	// Build function calls for complex implied relations
-	data.ImpliedFunctionCalls = buildImpliedFunctionCalls(a, noWildcard)
-
-	// Build intersection groups
-	data.IntersectionGroups = buildIntersectionGroups(a, noWildcard)
-
-	// Compute HasStandaloneAccess - whether there are access paths outside of intersections.
-	// When an intersection contains a "This" pattern (e.g., "viewer: [user] and writer"),
-	// the direct types are constrained by the intersection and should NOT be treated as
-	// standalone access paths.
-	data.HasStandaloneAccess = computeHasStandaloneAccess(a)
-
-	return data, nil
+	return Ident(s)
 }
 
 // computeHasStandaloneAccess determines if the relation has access paths outside of intersections.
 func computeHasStandaloneAccess(a RelationAnalysis) bool {
-	// If no intersection, all access paths are standalone
 	if !a.Features.HasIntersection {
 		return a.Features.HasDirect || a.Features.HasImplied || a.Features.HasUserset || a.Features.HasRecursive
 	}
 
-	// Check if any intersection group has a "This" part, meaning direct access is
-	// constrained by the intersection rather than being standalone.
-	hasIntersectionWithThis := false
-	for _, group := range a.IntersectionGroups {
-		for _, part := range group.Parts {
-			if part.IsThis {
-				hasIntersectionWithThis = true
-				break
-			}
-		}
-		if hasIntersectionWithThis {
-			break
-		}
+	// Implied and recursive are always standalone, regardless of intersection.
+	if a.Features.HasImplied || a.Features.HasRecursive {
+		return true
 	}
 
-	// If direct types are inside an intersection (This pattern), don't count them as standalone.
-	// Userset patterns from subject type restrictions (e.g., [group#member]) are also part of
-	// the "This" pattern, so they shouldn't be standalone either.
-	// Check for other standalone access paths (implied, recursive).
-	hasStandaloneDirect := a.Features.HasDirect && !hasIntersectionWithThis
-	hasStandaloneImplied := a.Features.HasImplied
-	hasStandaloneUserset := a.Features.HasUserset && !hasIntersectionWithThis
-	hasStandaloneRecursive := a.Features.HasRecursive
-
-	return hasStandaloneDirect || hasStandaloneImplied || hasStandaloneUserset || hasStandaloneRecursive
-}
-
-// buildIntersectionGroups creates intersection group data from RelationAnalysis.
-func buildIntersectionGroups(a RelationAnalysis, noWildcard bool) []IntersectionGroupData {
-	var groups []IntersectionGroupData
-
-	for _, ig := range a.IntersectionGroups {
-		group := IntersectionGroupData{}
-
-		for _, part := range ig.Parts {
-			thisHasWildcard := part.HasWildcard
-			if noWildcard {
-				thisHasWildcard = false
-			}
-			partData := IntersectionPartData{
-				IsThis:          part.IsThis,
-				ThisHasWildcard: thisHasWildcard, // For "This" parts, use the part's own wildcard flag
-			}
-
-			if part.ParentRelation != nil {
-				// TTU pattern within intersection
-				partData.IsTTU = true
-				partData.TTULinkingRelation = part.ParentRelation.LinkingRelation
-				partData.TTURelation = part.ParentRelation.Relation
-			} else if !part.IsThis {
-				// Regular relation check - call its function
-				if noWildcard {
-					partData.FunctionName = functionNameNoWildcard(a.ObjectType, part.Relation)
-				} else {
-					partData.FunctionName = functionName(a.ObjectType, part.Relation)
-				}
-			}
-
-			// Handle nested exclusions
-			if part.ExcludedRelation != "" {
-				partData.HasExclusion = true
-				partData.ExcludedRelation = part.ExcludedRelation
-			}
-
-			group.Parts = append(group.Parts, partData)
-		}
-
-		if len(group.Parts) > 0 {
-			groups = append(groups, group)
-		}
-	}
-
-	return groups
-}
-
-// buildImpliedFunctionCalls creates function call data for complex closure relations.
-func buildImpliedFunctionCalls(a RelationAnalysis, noWildcard bool) []ImpliedFunctionCall {
-	calls := make([]ImpliedFunctionCall, 0, len(a.ComplexClosureRelations))
-	for _, rel := range a.ComplexClosureRelations {
-		name := functionName(a.ObjectType, rel)
-		if noWildcard {
-			name = functionNameNoWildcard(a.ObjectType, rel)
-		}
-		calls = append(calls, ImpliedFunctionCall{
-			FunctionName: name,
+	// Check if any intersection group has a "This" part, meaning direct/userset access
+	// is constrained by the intersection rather than being standalone.
+	hasIntersectionWithThis := slices.ContainsFunc(a.IntersectionGroups, func(g IntersectionGroupInfo) bool {
+		return slices.ContainsFunc(g.Parts, func(p IntersectionPart) bool {
+			return p.IsThis
 		})
-	}
-	return calls
-}
-
-// DirectCheckData contains data for rendering direct check template.
-type DirectCheckData struct {
-	ObjectType        string
-	RelationList      string
-	SubjectTypeFilter string // e.g., "'user', 'employee'" - allowed subject types
-	SubjectIDCheck    string
-}
-
-// buildDirectCheck renders the direct check SQL fragment.
-func buildDirectCheck(a RelationAnalysis, allowWildcard bool) (string, error) {
-	// If there are no allowed subject types, the direct check can never match.
-	// Return FALSE to avoid generating invalid SQL like "subject_type IN ()".
-	subjectTypes := allowedSubjectTypesForCheck(a)
-	if len(subjectTypes) == 0 {
-		return "FALSE", nil
-	}
-
-	return DirectCheck(DirectCheckInput{
-		ObjectType:    a.ObjectType,
-		Relations:     buildTupleLookupRelations(a),
-		SubjectTypes:  subjectTypes,
-		AllowWildcard: allowWildcard,
 	})
-}
 
-// UsersetCheckData contains data for rendering userset check template.
-type UsersetCheckData struct {
-	ObjectType      string
-	Relation        string
-	SubjectType     string
-	SubjectRelation string
-
-	// SatisfyingRelationsList is a SQL-formatted list of relations that satisfy SubjectRelation.
-	// For example: "'member_c4', 'member_c3', 'member_c2', 'member_c1', 'member'"
-	SatisfyingRelationsList string
-
-	// HasWildcard is true if the subject relation supports wildcards.
-	// When true, the membership check should also match subject_id = '*'.
-	HasWildcard bool
-
-	InternalCheckFunctionName string
-}
-
-// ComplexUsersetCheckData contains data for rendering complex userset check template.
-// Used when the userset closure contains relations with complex features.
-type ComplexUsersetCheckData struct {
-	ObjectType      string
-	Relation        string
-	SubjectType     string
-	SubjectRelation string
-
-	InternalCheckFunctionName string
-}
-
-// buildUsersetCheck renders the userset check SQL fragment.
-func buildUsersetCheck(a RelationAnalysis, allowWildcard bool, internalCheckFn string) (string, error) {
-	if len(a.UsersetPatterns) == 0 {
-		return "FALSE", nil
-	}
-
-	checks := make([]string, 0, len(a.UsersetPatterns))
-	for _, pattern := range a.UsersetPatterns {
-		var buf bytes.Buffer
-
-		if pattern.IsComplex {
-			// Complex pattern: use check_permission_internal to verify membership.
-			// This handles cases where the userset closure contains relations with
-			// exclusions, usersets, TTU, or intersections.
-			usersetSQL, err := buildComplexUsersetCheck(a, pattern, internalCheckFn)
-			if err != nil {
-				return "", fmt.Errorf("building complex userset check for %s#%s: %w", pattern.SubjectType, pattern.SubjectRelation, err)
-			}
-			buf.WriteString(usersetSQL)
-		} else {
-			// Simple pattern: use tuple JOIN for membership lookup.
-			// Build SQL-formatted list of satisfying relations for the subject relation.
-			// For [group#member_c4], if member_c4 is satisfied by member, we generate:
-			// membership.relation IN ('member_c4', 'member_c3', 'member_c2', 'member_c1', 'member')
-			satisfyingRels := pattern.SatisfyingRelations
-			if len(satisfyingRels) == 0 {
-				// Fallback: use just the subject relation itself
-				satisfyingRels = []string{pattern.SubjectRelation}
-			}
-			usersetSQL, err := UsersetCheck(UsersetCheckInput{
-				ObjectType:          a.ObjectType,
-				Relation:            a.Relation,
-				SubjectType:         pattern.SubjectType,
-				SubjectRelation:     pattern.SubjectRelation,
-				SatisfyingRelations: satisfyingRels,
-				AllowWildcard:       pattern.HasWildcard && allowWildcard,
-			})
-			if err != nil {
-				return "", fmt.Errorf("building userset_check query for %s#%s: %w", pattern.SubjectType, pattern.SubjectRelation, err)
-			}
-			buf.WriteString(usersetSQL)
-		}
-		checks = append(checks, strings.TrimSpace(buf.String()))
-	}
-
-	if len(checks) == 1 {
-		return checks[0], nil
-	}
-	return "(" + strings.Join(checks, " OR ") + ")", nil
-}
-
-// ExclusionCheckData contains data for rendering exclusion check template.
-type ExclusionCheckData struct {
-	ObjectType       string
-	ExcludedRelation string
-	SubjectIDCheck   string
-}
-
-// ComplexExclusionCheckData contains data for rendering complex exclusion checks.
-// These use check_permission_internal instead of direct tuple lookup.
-type ComplexExclusionCheckData struct {
-	ObjectType                string
-	ExcludedRelation          string
-	InternalCheckFunctionName string
-}
-
-// TTUExclusionCheckData contains data for rendering TTU exclusion checks.
-// These check "but not X from Y" patterns by looking up the linking relation
-// and calling check_permission_internal for each linked object.
-type TTUExclusionCheckData struct {
-	ObjectType                string
-	ExcludedRelation          string // The relation to check on the parent (e.g., "viewer")
-	LinkingRelation           string // The linking relation (e.g., "parent")
-	AllowedLinkingTypes       string // SQL-formatted list of allowed parent types (e.g., "'folder', 'org'")
-	InternalCheckFunctionName string
-}
-
-// IntersectionExclusionCheckData contains data for rendering intersection exclusion checks.
-// These check "but not (A and B)" patterns by ANDing together check_permission_internal calls.
-type IntersectionExclusionCheckData struct {
-	ObjectType string
-	Parts      []string // Relations that must ALL be satisfied for exclusion to apply
-}
-
-// buildExclusionCheck renders the exclusion check SQL fragment.
-// Simple exclusions use direct tuple lookup; complex exclusions use check_permission_internal.
-// TTU exclusions check linked objects; intersection exclusions AND together checks.
-func buildExclusionCheck(a RelationAnalysis, _ bool, internalCheckFn string) (string, error) {
-	// Check if there are any exclusions to handle
-	hasSimpleOrComplex := len(a.SimpleExcludedRelations) > 0 || len(a.ComplexExcludedRelations) > 0
-	hasUnclassified := len(a.ExcludedRelations) > 0
-	hasTTU := len(a.ExcludedParentRelations) > 0
-	hasIntersection := len(a.ExcludedIntersectionGroups) > 0
-
-	if !hasSimpleOrComplex && !hasUnclassified && !hasTTU && !hasIntersection {
-		return "FALSE", nil
-	}
-
-	// Use ExcludedRelations if no classification was done
-	if !hasSimpleOrComplex && hasUnclassified && !hasTTU && !hasIntersection {
-		var checks []string
-		for _, excl := range a.ExcludedRelations {
-			// Always include wildcard check in exclusion lookups.
-			// The excluded relation may support wildcards even if the main relation doesn't.
-			// For example: "can_read_safe: can_read but not banned" where "banned: [user:*]"
-			// If there are no wildcard tuples, the check is harmless.
-			// This matches list_objects_exclusion.tpl.sql behavior.
-			exclusionSQL, err := ExclusionCheck(ExclusionCheckInput{
-				ObjectType:       a.ObjectType,
-				ExcludedRelation: excl,
-				AllowWildcard:    true,
-			})
-			if err != nil {
-				return "", fmt.Errorf("building exclusion_check query for %s: %w", excl, err)
-			}
-			checks = append(checks, strings.TrimSpace(exclusionSQL))
-		}
-		return strings.Join(checks, " OR "), nil
-	}
-
-	checks := make([]string, 0, len(a.SimpleExcludedRelations)+len(a.ComplexExcludedRelations)+len(a.ExcludedParentRelations)+len(a.ExcludedIntersectionGroups))
-
-	// Simple exclusions: direct tuple lookup
-	for _, excl := range a.SimpleExcludedRelations {
-		// Always include wildcard check in exclusion lookups.
-		// The excluded relation may support wildcards even if the main relation doesn't.
-		// For example: "can_read_safe: can_read but not banned" where "banned: [user:*]"
-		// If there are no wildcard tuples, the check is harmless.
-		// This matches list_objects_exclusion.tpl.sql behavior.
-		exclusionSQL, err := ExclusionCheck(ExclusionCheckInput{
-			ObjectType:       a.ObjectType,
-			ExcludedRelation: excl,
-			AllowWildcard:    true,
-		})
-		if err != nil {
-			return "", fmt.Errorf("building exclusion_check query for %s: %w", excl, err)
-		}
-		checks = append(checks, strings.TrimSpace(exclusionSQL))
-	}
-
-	// Complex exclusions: use check_permission_internal
-	for _, excl := range a.ComplexExcludedRelations {
-		checks = append(checks, buildComplexExclusionCheck(a.ObjectType, excl, internalCheckFn))
-	}
-
-	// TTU exclusions: "but not X from Y" patterns
-	for _, excl := range a.ExcludedParentRelations {
-		exclusionSQL, err := buildTTUExclusionCheck(a.ObjectType, excl, internalCheckFn)
-		if err != nil {
-			return "", fmt.Errorf("building TTU exclusion check for %s from %s: %w", excl.Relation, excl.LinkingRelation, err)
-		}
-		checks = append(checks, strings.TrimSpace(exclusionSQL))
-	}
-
-	// Intersection exclusions: "but not (A and B)" or "but not (A but not B)" patterns
-	for _, group := range a.ExcludedIntersectionGroups {
-		var parts []string
-		for _, part := range group.Parts {
-			switch {
-			case part.ParentRelation != nil:
-				// TTU part within intersection exclusion
-				exclusionSQL, err := buildTTUExclusionCheck(a.ObjectType, ParentRelationInfo{
-					Relation:            part.ParentRelation.Relation,
-					LinkingRelation:     part.ParentRelation.LinkingRelation,
-					AllowedLinkingTypes: part.ParentRelation.AllowedLinkingTypes,
-				}, internalCheckFn)
-				if err != nil {
-					return "", fmt.Errorf("building ttu exclusion check for intersection: %w", err)
-				}
-				parts = append(parts, strings.TrimSpace(exclusionSQL))
-			case part.ExcludedRelation != "":
-				// Nested exclusion: "editor but not owner" in the exclusion
-				// The exclusion applies when: part.Relation AND NOT part.ExcludedRelation
-				// We check: relation is true AND excluded_relation is false
-				mainCheck := fmt.Sprintf(
-					"%s(p_subject_type, p_subject_id, '%s', '%s', p_object_id, p_visited) = 1",
-					internalCheckFn, part.Relation, a.ObjectType)
-				excludeCheck := fmt.Sprintf(
-					"%s(p_subject_type, p_subject_id, '%s', '%s', p_object_id, p_visited) = 0",
-					internalCheckFn, part.ExcludedRelation, a.ObjectType)
-				parts = append(parts, "("+mainCheck+" AND "+excludeCheck+")")
-			default:
-				// Regular relation part
-				parts = append(parts, buildComplexExclusionCheck(a.ObjectType, part.Relation, internalCheckFn))
-			}
-		}
-		if len(parts) > 0 {
-			// All parts must be true for exclusion to apply (AND)
-			checks = append(checks, "("+strings.Join(parts, " AND ")+")")
-		}
-	}
-
-	if len(checks) == 0 {
-		return "FALSE", nil
-	}
-	return strings.Join(checks, " OR "), nil
+	// Direct and userset are standalone only if not inside an intersection.
+	return (a.Features.HasDirect || a.Features.HasUserset) && !hasIntersectionWithThis
 }
 
 // DispatcherData contains data for rendering dispatcher template.
@@ -683,11 +144,6 @@ type DispatcherCase struct {
 	CheckFunctionName string
 }
 
-// generateDispatcher generates the check_permission dispatcher function.
-func generateDispatcher(analyses []RelationAnalysis, noWildcard bool) (string, error) {
-	return generateDispatcherBob(analyses, noWildcard)
-}
-
 // CollectFunctionNames returns all function names that will be generated for the given analyses.
 // This is used for migration tracking and orphan detection.
 //
@@ -700,13 +156,13 @@ func CollectFunctionNames(analyses []RelationAnalysis) []string {
 	var names []string
 
 	for _, a := range analyses {
-		if a.CanGenerate {
+		if a.Capabilities.CheckAllowed {
 			names = append(names,
 				functionName(a.ObjectType, a.Relation),
 				functionNameNoWildcard(a.ObjectType, a.Relation),
 			)
 		}
-		if a.CanGenerateList() {
+		if a.Capabilities.ListAllowed {
 			names = append(names,
 				listObjectsFunctionName(a.ObjectType, a.Relation),
 				listSubjectsFunctionName(a.ObjectType, a.Relation),

@@ -37,7 +37,7 @@ func GenerateListSQL(analyses []RelationAnalysis, inline InlineSQLData) (ListGen
 
 	// Generate specialized functions for each relation that can be generated
 	for _, a := range analyses {
-		if !a.CanGenerateList() {
+		if !a.Capabilities.ListAllowed {
 			continue
 		}
 
@@ -73,424 +73,106 @@ func GenerateListSQL(analyses []RelationAnalysis, inline InlineSQLData) (ListGen
 	return result, nil
 }
 
-// listObjectsFunctionName returns the name for a specialized list_objects function.
 func listObjectsFunctionName(objectType, relation string) string {
-	return fmt.Sprintf("list_%s_%s_objects", sanitizeIdentifier(objectType), sanitizeIdentifier(relation))
+	return ListObjectsFunctionName(objectType, relation)
 }
 
-// listSubjectsFunctionName returns the name for a specialized list_subjects function.
 func listSubjectsFunctionName(objectType, relation string) string {
-	return fmt.Sprintf("list_%s_%s_subjects", sanitizeIdentifier(objectType), sanitizeIdentifier(relation))
+	return ListSubjectsFunctionName(objectType, relation)
 }
 
 // generateListObjectsFunction generates a specialized list_objects function for a relation.
 func generateListObjectsFunction(a RelationAnalysis, inline InlineSQLData) (string, error) {
-	data := ListObjectsFunctionData{
-		ObjectType:        a.ObjectType,
-		Relation:          a.Relation,
-		FunctionName:      listObjectsFunctionName(a.ObjectType, a.Relation),
-		FeaturesString:    a.Features.String(),
-		MaxUsersetDepth:   a.MaxUsersetDepth,
-		ExceedsDepthLimit: a.ExceedsDepthLimit,
-		ClosureValues:     inline.ClosureValues,
-	}
-
-	// Build relation list from simple closure relations (tuple lookup)
-	data.RelationList = buildRelationList(a)
-
-	// Populate complex closure relations (need check_permission_internal)
-	// Filter out intersection closure relations since they're handled separately via function composition
-	intersectionSet := make(map[string]bool)
-	for _, rel := range a.IntersectionClosureRelations {
-		intersectionSet[rel] = true
-	}
-	for _, rel := range a.ComplexClosureRelations {
-		if !intersectionSet[rel] {
-			data.ComplexClosureRelations = append(data.ComplexClosureRelations, rel)
+	// Route to appropriate generator based on ListStrategy
+	switch a.ListStrategy {
+	case ListStrategyDirect, ListStrategyUserset, ListStrategyIntersection:
+		// Use unified Plan → Blocks → Render architecture
+		plan := BuildListObjectsPlan(a, inline)
+		blocks, err := BuildListObjectsBlocks(plan)
+		if err != nil {
+			return "", err
 		}
-	}
-
-	// Populate intersection closure relations (compose with their list functions)
-	data.IntersectionClosureRelations = a.IntersectionClosureRelations
-
-	// Build subject_id check (with or without wildcard)
-	data.SubjectIDCheck = buildSubjectIDCheck(a.Features.HasWildcard)
-
-	// Build allowed subject types list for type restriction enforcement
-	data.AllowedSubjectTypes = buildAllowedSubjectTypes(a)
-
-	// Populate exclusion fields (Phase 3)
-	data.HasExclusion = a.Features.HasExclusion
-	data.SimpleExcludedRelations = a.SimpleExcludedRelations
-	data.ComplexExcludedRelations = a.ComplexExcludedRelations
-	data.ExcludedParentRelations = a.ExcludedParentRelations
-	data.ExcludedIntersectionGroups = a.ExcludedIntersectionGroups
-
-	// Populate userset fields (Phase 4)
-	data.HasUserset = a.Features.HasUserset
-	data.UsersetPatterns = buildListUsersetPatterns(a)
-
-	// Populate TTU/recursive fields (Phase 5)
-	data.ParentRelations = buildListParentRelations(a)
-	data.SelfReferentialLinkingRelations = buildSelfReferentialLinkingRelations(data.ParentRelations)
-
-	// Populate intersection fields (Phase 6)
-	data.HasIntersection = a.Features.HasIntersection
-	data.IntersectionGroups = a.IntersectionGroups
-	data.HasStandaloneAccess = computeListHasStandaloneAccess(a)
-
-	// Populate indirect anchor fields (Phase 8)
-	data.IndirectAnchor = buildListIndirectAnchorData(a)
-	data.HasIndirectAnchor = data.IndirectAnchor != nil
-
-	// Populate self-referential userset fields (Phase 9B)
-	data.HasSelfReferentialUserset = a.HasSelfReferentialUserset
-
-	// Select appropriate template based on features
-	templateName := selectListObjectsTemplate(a)
-
-	switch templateName {
-	case "list_objects_direct.tpl.sql",
-		"list_objects_exclusion.tpl.sql",
-		"list_objects_userset.tpl.sql",
-		"list_objects_recursive.tpl.sql",
-		"list_objects_intersection.tpl.sql":
-		return generateListObjectsFunctionBob(a, inline, templateName)
-	case "list_objects_depth_exceeded.tpl.sql":
-		return generateListObjectsDepthExceededFunctionBob(a), nil
-	case "list_objects_self_ref_userset.tpl.sql":
-		return generateListObjectsSelfRefUsersetFunctionBob(a, inline)
-	case "list_objects_composed.tpl.sql":
-		return generateListObjectsComposedFunctionBob(a, inline)
+		return RenderListObjectsFunction(plan, blocks)
+	case ListStrategyRecursive:
+		// Use Plan → Blocks → Render for TTU patterns
+		plan := BuildListObjectsPlan(a, inline)
+		blocks, err := BuildListObjectsRecursiveBlocks(plan)
+		if err != nil {
+			return "", err
+		}
+		return RenderListObjectsRecursiveFunction(plan, blocks)
+	case ListStrategyDepthExceeded:
+		// Use Plan → Render (no blocks needed - just raises error)
+		plan := BuildListObjectsPlan(a, inline)
+		return RenderListObjectsDepthExceededFunction(plan), nil
+	case ListStrategySelfRefUserset:
+		// Use Plan → Blocks → Render for self-referential userset patterns
+		plan := BuildListObjectsPlan(a, inline)
+		blocks, err := BuildListObjectsSelfRefUsersetBlocks(plan)
+		if err != nil {
+			return "", err
+		}
+		return RenderListObjectsSelfRefUsersetFunction(plan, blocks)
+	case ListStrategyComposed:
+		// Use Plan → Blocks → Render for indirect anchor composition
+		plan := BuildListObjectsPlan(a, inline)
+		blocks, err := BuildListObjectsComposedBlocks(plan)
+		if err != nil {
+			return "", err
+		}
+		return RenderListObjectsComposedFunction(plan, blocks)
 	default:
-		return "", fmt.Errorf("unknown list_objects template %s", templateName)
+		return "", fmt.Errorf("unknown list strategy %v for %s.%s", a.ListStrategy, a.ObjectType, a.Relation)
 	}
-}
-
-// selectListObjectsTemplate selects the appropriate list_objects template based on features.
-func selectListObjectsTemplate(a RelationAnalysis) string {
-	// Phase 9A: Use depth-exceeded template for relations with userset chains >= 25 levels.
-	// These immediately raise M2002 without any computation.
-	if a.ExceedsDepthLimit {
-		return "list_objects_depth_exceeded.tpl.sql"
-	}
-	// Phase 9B: Use self-referential userset template for patterns like group.member: [group#member].
-	// These require recursive CTEs to expand nested userset membership.
-	if a.HasSelfReferentialUserset {
-		return "list_objects_self_ref_userset.tpl.sql"
-	}
-	// Phase 8: Use composed template for indirect anchor patterns.
-	// These are relations with no direct/implied access but reach subjects through
-	// TTU or userset patterns to an anchor relation.
-	if a.IndirectAnchor != nil {
-		return "list_objects_composed.tpl.sql"
-	}
-	// Phase 6: Use intersection template if relation has intersection patterns.
-	// The intersection template is the most comprehensive and handles all pattern
-	// combinations (direct, userset, exclusion, TTU, intersection).
-	if a.Features.HasIntersection {
-		return "list_objects_intersection.tpl.sql"
-	}
-	// Phase 5: Use recursive template if relation has TTU patterns.
-	// The recursive template is comprehensive and handles all pattern combinations
-	// (direct, userset, exclusion, TTU) since TTU is the most complex pattern.
-	// Also use recursive template if any closure relation has TTU (inherited TTU).
-	if a.Features.HasRecursive || len(a.ClosureParentRelations) > 0 {
-		return "list_objects_recursive.tpl.sql"
-	}
-	// Phase 4: Use userset template if relation has userset patterns.
-	// This includes both direct patterns (UsersetPatterns) and patterns inherited
-	// from closure relations (ClosureUsersetPatterns).
-	// The userset template also handles exclusions if present.
-	if a.Features.HasUserset || len(a.ClosureUsersetPatterns) > 0 {
-		return "list_objects_userset.tpl.sql"
-	}
-	// Phase 3: Use exclusion template if relation has any exclusion patterns
-	if a.Features.HasExclusion {
-		return "list_objects_exclusion.tpl.sql"
-	}
-	// Phase 2: Direct/implied patterns use the direct template
-	return "list_objects_direct.tpl.sql"
 }
 
 // generateListSubjectsFunction generates a specialized list_subjects function for a relation.
 func generateListSubjectsFunction(a RelationAnalysis, inline InlineSQLData) (string, error) {
-	data := ListSubjectsFunctionData{
-		ObjectType:        a.ObjectType,
-		Relation:          a.Relation,
-		FunctionName:      listSubjectsFunctionName(a.ObjectType, a.Relation),
-		FeaturesString:    a.Features.String(),
-		HasWildcard:       a.Features.HasWildcard,
-		MaxUsersetDepth:   a.MaxUsersetDepth,
-		ExceedsDepthLimit: a.ExceedsDepthLimit,
-		ClosureValues:     inline.ClosureValues,
-	}
-
-	// Build relation list from simple closure relations (tuple lookup)
-	data.RelationList = buildRelationList(a)
-
-	// Build all satisfying relations list (for userset filter case)
-	data.AllSatisfyingRelations = buildAllSatisfyingRelations(a)
-
-	// Populate complex closure relations (need check_permission_internal)
-	// Filter out intersection closure relations since they're handled separately via function composition
-	intersectionSet := make(map[string]bool)
-	for _, rel := range a.IntersectionClosureRelations {
-		intersectionSet[rel] = true
-	}
-	for _, rel := range a.ComplexClosureRelations {
-		if !intersectionSet[rel] {
-			data.ComplexClosureRelations = append(data.ComplexClosureRelations, rel)
+	// Route to appropriate generator based on ListStrategy
+	switch a.ListStrategy {
+	case ListStrategyDirect, ListStrategyUserset:
+		// Wire to Plan → Blocks → Render
+		plan := BuildListSubjectsPlan(a, inline)
+		blocks, err := BuildListSubjectsBlocks(plan)
+		if err != nil {
+			return "", err
 		}
-	}
-
-	// Populate intersection closure relations (compose with their list functions)
-	data.IntersectionClosureRelations = a.IntersectionClosureRelations
-
-	// Build allowed subject types list for type restriction enforcement
-	data.AllowedSubjectTypes = buildAllowedSubjectTypes(a)
-
-	// Populate exclusion fields (Phase 3)
-	data.HasExclusion = a.Features.HasExclusion
-	data.SimpleExcludedRelations = a.SimpleExcludedRelations
-	data.ComplexExcludedRelations = a.ComplexExcludedRelations
-	data.ExcludedParentRelations = a.ExcludedParentRelations
-	data.ExcludedIntersectionGroups = a.ExcludedIntersectionGroups
-
-	// Populate userset fields (Phase 4)
-	data.HasUserset = a.Features.HasUserset
-	data.UsersetPatterns = buildListUsersetPatterns(a)
-
-	// Populate TTU/recursive fields (Phase 5)
-	data.ParentRelations = buildListParentRelations(a)
-
-	// Populate intersection fields (Phase 6)
-	data.HasIntersection = a.Features.HasIntersection
-	data.IntersectionGroups = a.IntersectionGroups
-
-	// Populate indirect anchor fields (Phase 8)
-	data.IndirectAnchor = buildListIndirectAnchorData(a)
-	data.HasIndirectAnchor = data.IndirectAnchor != nil
-
-	// Populate self-referential userset fields (Phase 9B)
-	data.HasSelfReferentialUserset = a.HasSelfReferentialUserset
-
-	// Select appropriate template based on features
-	templateName := selectListSubjectsTemplate(a)
-
-	switch templateName {
-	case "list_subjects_direct.tpl.sql",
-		"list_subjects_exclusion.tpl.sql",
-		"list_subjects_userset.tpl.sql",
-		"list_subjects_recursive.tpl.sql",
-		"list_subjects_intersection.tpl.sql":
-		return generateListSubjectsFunctionBob(a, inline, templateName)
-	case "list_subjects_depth_exceeded.tpl.sql":
-		return generateListSubjectsDepthExceededFunctionBob(a), nil
-	case "list_subjects_self_ref_userset.tpl.sql":
-		return generateListSubjectsSelfRefUsersetFunctionBob(a, inline)
-	case "list_subjects_composed.tpl.sql":
-		return generateListSubjectsComposedFunctionBob(a, inline)
+		return RenderListSubjectsFunction(plan, blocks)
+	case ListStrategyRecursive:
+		// Wire to Plan → Blocks → Render for TTU patterns
+		plan := BuildListSubjectsPlan(a, inline)
+		blocks, err := BuildListSubjectsRecursiveBlocks(plan)
+		if err != nil {
+			return "", err
+		}
+		return RenderListSubjectsRecursiveFunction(plan, blocks)
+	case ListStrategyIntersection:
+		plan := BuildListSubjectsPlan(a, inline)
+		blocks := BuildListSubjectsIntersectionBlocks(plan)
+		return RenderListSubjectsIntersectionFunction(plan, blocks)
+	case ListStrategyDepthExceeded:
+		// Use Plan → Render (no blocks needed - just raises error)
+		plan := BuildListSubjectsPlan(a, inline)
+		return RenderListSubjectsDepthExceededFunction(plan), nil
+	case ListStrategySelfRefUserset:
+		// Use Plan → Blocks → Render for self-referential userset patterns
+		plan := BuildListSubjectsPlan(a, inline)
+		blocks, err := BuildListSubjectsSelfRefUsersetBlocks(plan)
+		if err != nil {
+			return "", err
+		}
+		return RenderListSubjectsSelfRefUsersetFunction(plan, blocks)
+	case ListStrategyComposed:
+		// Use Plan → Blocks → Render for indirect anchor composition
+		plan := BuildListSubjectsPlan(a, inline)
+		blocks, err := BuildListSubjectsComposedBlocks(plan)
+		if err != nil {
+			return "", err
+		}
+		return RenderListSubjectsComposedFunction(plan, blocks)
 	default:
-		return "", fmt.Errorf("unknown list_subjects template %s", templateName)
+		return "", fmt.Errorf("unknown list strategy %v for %s.%s", a.ListStrategy, a.ObjectType, a.Relation)
 	}
-}
-
-// selectListSubjectsTemplate selects the appropriate list_subjects template based on features.
-func selectListSubjectsTemplate(a RelationAnalysis) string {
-	// Phase 9A: Use depth-exceeded template for relations with userset chains >= 25 levels.
-	// These immediately raise M2002 without any computation.
-	if a.ExceedsDepthLimit {
-		return "list_subjects_depth_exceeded.tpl.sql"
-	}
-	// Phase 9B: Use self-referential userset template for patterns like group.member: [group#member].
-	// These require recursive CTEs to expand nested userset membership.
-	if a.HasSelfReferentialUserset {
-		return "list_subjects_self_ref_userset.tpl.sql"
-	}
-	// Phase 8: Use composed template for indirect anchor patterns.
-	// These are relations with no direct/implied access but reach subjects through
-	// TTU or userset patterns to an anchor relation.
-	if a.IndirectAnchor != nil {
-		return "list_subjects_composed.tpl.sql"
-	}
-	// Phase 6: Use intersection template if relation has intersection patterns.
-	// The intersection template is the most comprehensive and handles all pattern
-	// combinations (direct, userset, exclusion, TTU, intersection).
-	if a.Features.HasIntersection {
-		return "list_subjects_intersection.tpl.sql"
-	}
-	// Phase 5: Use recursive template if relation has TTU patterns.
-	// The recursive template is comprehensive and handles all pattern combinations
-	// (direct, userset, exclusion, TTU) since TTU is the most complex pattern.
-	// Also use recursive template if any closure relation has TTU (inherited TTU).
-	if a.Features.HasRecursive || len(a.ClosureParentRelations) > 0 {
-		return "list_subjects_recursive.tpl.sql"
-	}
-	// Phase 4: Use userset template if relation has userset patterns.
-	// This includes both direct patterns (UsersetPatterns) and patterns inherited
-	// from closure relations (ClosureUsersetPatterns).
-	// The userset template also handles exclusions if present.
-	if a.Features.HasUserset || len(a.ClosureUsersetPatterns) > 0 {
-		return "list_subjects_userset.tpl.sql"
-	}
-	// Phase 3: Use exclusion template if relation has any exclusion patterns
-	if a.Features.HasExclusion {
-		return "list_subjects_exclusion.tpl.sql"
-	}
-	// Phase 2: Direct/implied patterns use the direct template
-	return "list_subjects_direct.tpl.sql"
-}
-
-// ListObjectsFunctionData contains data for rendering list_objects function templates.
-type ListObjectsFunctionData struct {
-	ObjectType     string
-	Relation       string
-	FunctionName   string
-	FeaturesString string
-	ClosureValues  string
-
-	// MaxUsersetDepth is the maximum userset chain depth reachable from this relation.
-	// Used by depth-exceeded template to report the actual depth in error messages.
-	MaxUsersetDepth int
-
-	// ExceedsDepthLimit is true if MaxUsersetDepth >= 25.
-	// Routes to depth-exceeded template which immediately raises M2002.
-	ExceedsDepthLimit bool
-
-	// RelationList is a SQL-formatted list of simple closure relations to check.
-	// e.g., "'viewer', 'editor', 'owner'" - only relations that can use tuple lookup
-	RelationList string
-
-	// ComplexClosureRelations are closure relations that need check_permission_internal.
-	// These have exclusions or other complex features that can't be resolved via tuple lookup.
-	ComplexClosureRelations []string
-
-	// IntersectionClosureRelations are closure relations that have intersection patterns
-	// and are list-generatable. These need to be composed with their list function.
-	IntersectionClosureRelations []string
-
-	// SubjectIDCheck is the SQL fragment for checking subject_id with wildcard support.
-	// e.g., "(t.subject_id = p_subject_id OR t.subject_id = '*')"
-	SubjectIDCheck string
-
-	// AllowedSubjectTypes is a SQL-formatted list of allowed subject types.
-	// e.g., "'user', 'employee'" - used to enforce model type restrictions.
-	AllowedSubjectTypes string
-
-	// Exclusion-related fields (Phase 3)
-	HasExclusion bool // true if this relation has exclusion patterns
-
-	// SimpleExcludedRelations are excluded relations that can use direct tuple lookup.
-	// These are relations without userset, TTU, exclusion, intersection, or implied closure.
-	SimpleExcludedRelations []string
-
-	// ComplexExcludedRelations are excluded relations that need check_permission_internal.
-	// These have userset, TTU, intersection, exclusion, or implied closure.
-	ComplexExcludedRelations []string
-
-	// ExcludedParentRelations are TTU exclusions like "but not viewer from parent".
-	ExcludedParentRelations []ParentRelationInfo
-
-	// ExcludedIntersectionGroups are intersection exclusions like "but not (editor and owner)".
-	ExcludedIntersectionGroups []IntersectionGroupInfo
-
-	// Userset-related fields (Phase 4)
-	HasUserset      bool                     // true if this relation has userset patterns
-	UsersetPatterns []ListUsersetPatternData // [group#member] patterns for UNION expansion
-
-	// TTU/Recursive-related fields (Phase 5)
-	ParentRelations []ListParentRelationData // TTU patterns like "viewer from parent"
-
-	// SelfReferentialLinkingRelations is a SQL-formatted list of linking relations
-	// from self-referential TTU patterns. Used for depth checking in recursive CTE.
-	// e.g., "'parent', 'folder'" when there are TTU patterns viewer from parent, viewer from folder
-	SelfReferentialLinkingRelations string
-
-	// Intersection-related fields (Phase 6)
-	HasIntersection     bool                    // true if this relation has intersection patterns
-	IntersectionGroups  []IntersectionGroupInfo // Intersection groups for list functions
-	HasStandaloneAccess bool                    // true if there are access paths outside intersections
-
-	// Phase 8: Indirect anchor for composed access patterns
-	HasIndirectAnchor bool                    // true if access is via indirect anchor
-	IndirectAnchor    *ListIndirectAnchorData // Anchor info for composed templates
-
-	// Phase 9B: Self-referential userset patterns
-	HasSelfReferentialUserset bool // true if any userset pattern references same type/relation
-}
-
-// ListSubjectsFunctionData contains data for rendering list_subjects function templates.
-type ListSubjectsFunctionData struct {
-	ObjectType     string
-	Relation       string
-	FunctionName   string
-	FeaturesString string
-	ClosureValues  string
-
-	// MaxUsersetDepth is the maximum userset chain depth reachable from this relation.
-	// Used by depth-exceeded template to report the actual depth in error messages.
-	MaxUsersetDepth int
-
-	// ExceedsDepthLimit is true if MaxUsersetDepth >= 25.
-	// Routes to depth-exceeded template which immediately raises M2002.
-	ExceedsDepthLimit bool
-
-	// RelationList is a SQL-formatted list of simple closure relations to check.
-	RelationList string
-
-	// AllSatisfyingRelations is a SQL-formatted list of ALL relations that satisfy this relation.
-	// Includes both simple and complex closure relations. Used by userset filter case.
-	// e.g., "'can_view', 'viewer'" when viewer implies can_view
-	AllSatisfyingRelations string
-
-	// ComplexClosureRelations are closure relations that need check_permission_internal.
-	ComplexClosureRelations []string
-
-	// IntersectionClosureRelations are closure relations that have intersection patterns
-	// and are list-generatable. These need to be composed with their list function.
-	IntersectionClosureRelations []string
-
-	// AllowedSubjectTypes is a SQL-formatted list of allowed subject types.
-	// e.g., "'user', 'employee'" - used to enforce model type restrictions.
-	AllowedSubjectTypes string
-
-	// HasWildcard is true if the model allows wildcard subjects.
-	// When false, wildcard tuples (subject_id = '*') should be excluded from results.
-	HasWildcard bool
-
-	// Exclusion-related fields (Phase 3)
-	HasExclusion bool // true if this relation has exclusion patterns
-
-	// SimpleExcludedRelations are excluded relations that can use direct tuple lookup.
-	SimpleExcludedRelations []string
-
-	// ComplexExcludedRelations are excluded relations that need check_permission_internal.
-	ComplexExcludedRelations []string
-
-	// ExcludedParentRelations are TTU exclusions like "but not viewer from parent".
-	ExcludedParentRelations []ParentRelationInfo
-
-	// ExcludedIntersectionGroups are intersection exclusions like "but not (editor and owner)".
-	ExcludedIntersectionGroups []IntersectionGroupInfo
-
-	// Userset-related fields (Phase 4)
-	HasUserset      bool                     // true if this relation has userset patterns
-	UsersetPatterns []ListUsersetPatternData // [group#member] patterns for expansion
-
-	// TTU/Recursive-related fields (Phase 5)
-	ParentRelations []ListParentRelationData // TTU patterns like "viewer from parent"
-
-	// Intersection-related fields (Phase 6)
-	HasIntersection    bool                    // true if this relation has intersection patterns
-	IntersectionGroups []IntersectionGroupInfo // Intersection groups for list functions
-
-	// Phase 8: Indirect anchor for composed access patterns
-	HasIndirectAnchor bool                    // true if access is via indirect anchor
-	IndirectAnchor    *ListIndirectAnchorData // Anchor info for composed templates
-
-	// Phase 9B: Self-referential userset patterns
-	HasSelfReferentialUserset bool // true if any userset pattern references same type/relation
 }
 
 // ListParentRelationData contains data for rendering TTU pattern expansion in list templates.
@@ -501,6 +183,10 @@ type ListParentRelationData struct {
 	AllowedLinkingTypes string // SQL-formatted list of parent types (e.g., "'folder', 'org'")
 	ParentType          string // First allowed linking type (for self-referential check)
 	IsSelfReferential   bool   // True if any parent type equals the object type
+
+	// AllowedLinkingTypesSlice contains the same types as AllowedLinkingTypes but as a slice.
+	// Used for typed DSL expressions (In{Expr: ..., Values: AllowedLinkingTypesSlice}).
+	AllowedLinkingTypesSlice []string
 
 	// CrossTypeLinkingTypes is a SQL-formatted list of linking types that are NOT self-referential.
 	// When a parent relation allows both self-referential and cross-type links (e.g., [folder, document]
@@ -608,125 +294,6 @@ type ListDispatcherCase struct {
 	FunctionName string
 }
 
-// generateListObjectsDispatcher generates the list_accessible_objects dispatcher.
-// For Phase 1, this always falls through to the generic implementation.
-func generateListObjectsDispatcher(analyses []RelationAnalysis) (string, error) {
-	return generateListObjectsDispatcherBob(analyses)
-}
-
-// generateListSubjectsDispatcher generates the list_accessible_subjects dispatcher.
-// For Phase 1, this always falls through to the generic implementation.
-func generateListSubjectsDispatcher(analyses []RelationAnalysis) (string, error) {
-	return generateListSubjectsDispatcherBob(analyses)
-}
-
-// buildRelationList builds a SQL-formatted list of simple relations from the closure.
-// For example: "'viewer', 'editor', 'owner'"
-// Only includes relations that can be resolved via tuple lookup (SimpleClosureRelations).
-// Complex closure relations (with exclusions, etc.) are handled separately via check_permission_internal.
-func buildRelationList(a RelationAnalysis) string {
-	return buildTupleLookupRelationList(a)
-}
-
-// buildSubjectIDCheck builds the SQL fragment for checking subject_id.
-// When hasWildcard is true, also matches wildcard tuples (subject_id = '*').
-func buildSubjectIDCheck(hasWildcard bool) string {
-	if hasWildcard {
-		return "(t.subject_id = p_subject_id OR t.subject_id = '*')"
-	}
-	// Exclude wildcard tuples when model doesn't allow wildcards
-	return "t.subject_id = p_subject_id AND t.subject_id != '*'"
-}
-
-// buildAllowedSubjectTypes builds a SQL-formatted list of allowed subject types.
-// This enforces model type restrictions in list queries.
-func buildAllowedSubjectTypes(a RelationAnalysis) string {
-	return buildAllowedSubjectTypeList(a, "''")
-}
-
-// buildAllSatisfyingRelations builds a SQL-formatted list of ALL relations that satisfy this relation.
-// This includes both simple closure relations (tuple lookup) and complex closure relations.
-// Used by the userset filter case to find all tuples that grant access.
-func buildAllSatisfyingRelations(a RelationAnalysis) string {
-	relations := a.SatisfyingRelations
-	if len(relations) == 0 {
-		// Fallback to just self
-		relations = []string{a.Relation}
-	}
-
-	return formatSQLStringList(relations)
-}
-
-// buildListUsersetPatterns builds template data for userset pattern expansion.
-// For each [group#member] pattern, this creates data for a UNION block that:
-// - Finds grant tuples where subject is group#member
-// - JOINs with membership tuples to find subjects who are members
-//
-// This includes both:
-// - UsersetPatterns: patterns from the relation itself (e.g., viewer: [group#member])
-// - ClosureUsersetPatterns: patterns from implied closure relations (e.g., can_view: viewer where viewer has usersets)
-func buildListUsersetPatterns(a RelationAnalysis) []ListUsersetPatternData {
-	if len(a.UsersetPatterns) == 0 && len(a.ClosureUsersetPatterns) == 0 {
-		return nil
-	}
-
-	// Build RelationList for direct patterns (same as main function's RelationList)
-	directRelationList := buildRelationList(a)
-
-	patterns := make([]ListUsersetPatternData, 0, len(a.UsersetPatterns)+len(a.ClosureUsersetPatterns))
-
-	// Process direct userset patterns
-	for _, p := range a.UsersetPatterns {
-		pattern := ListUsersetPatternData{
-			SubjectType:        p.SubjectType,
-			SubjectRelation:    p.SubjectRelation,
-			HasWildcard:        p.HasWildcard,
-			IsComplex:          p.IsComplex,
-			SourceRelationList: directRelationList, // Use main RelationList for direct patterns
-			// Mark as self-referential if it references the same type and relation
-			IsSelfReferential: p.SubjectType == a.ObjectType && p.SubjectRelation == a.Relation,
-		}
-
-		// Build satisfying relations list for the subject relation closure
-		satisfying := p.SatisfyingRelations
-		if len(satisfying) == 0 {
-			satisfying = []string{p.SubjectRelation}
-		}
-
-		pattern.SatisfyingRelationsList = formatSQLStringList(satisfying)
-
-		patterns = append(patterns, pattern)
-	}
-
-	// Process closure userset patterns (inherited from implied relations)
-	for _, p := range a.ClosureUsersetPatterns {
-		pattern := ListUsersetPatternData{
-			SubjectType:        p.SubjectType,
-			SubjectRelation:    p.SubjectRelation,
-			HasWildcard:        p.HasWildcard,
-			IsComplex:          p.IsComplex,
-			SourceRelationList: formatSQLStringList([]string{p.SourceRelation}), // Use source relation for closure patterns
-			SourceRelation:     p.SourceRelation,
-			IsClosurePattern:   true, // Closure patterns need source relation verification
-			// Closure patterns are self-referential if they reference the same type and relation
-			// (rare, but possible in complex models)
-			IsSelfReferential: p.SubjectType == a.ObjectType && p.SubjectRelation == a.Relation,
-		}
-
-		// Build satisfying relations list for the subject relation closure
-		satisfying := p.SatisfyingRelations
-		if len(satisfying) == 0 {
-			satisfying = []string{p.SubjectRelation}
-		}
-
-		pattern.SatisfyingRelationsList = formatSQLStringList(satisfying)
-
-		patterns = append(patterns, pattern)
-	}
-
-	return patterns
-}
-
 // buildListParentRelations builds template data for TTU pattern expansion in list templates.
 // For each "viewer from parent" pattern, this creates data for recursive CTE traversal or
 // cross-type lookup using check_permission_internal.
@@ -760,15 +327,9 @@ func buildListParentRelations(a RelationAnalysis) []ListParentRelationData {
 			LinkingRelation: p.LinkingRelation,
 		}
 
-		// Build SQL-formatted list of allowed linking types
-		// Also track cross-type (non-self-referential) types separately
 		if len(p.AllowedLinkingTypes) > 0 {
-			var allTypes []string
 			var crossTypes []string
-
 			for _, t := range p.AllowedLinkingTypes {
-				allTypes = append(allTypes, t)
-
 				if t == a.ObjectType {
 					data.IsSelfReferential = true
 				} else {
@@ -776,11 +337,10 @@ func buildListParentRelations(a RelationAnalysis) []ListParentRelationData {
 				}
 			}
 
-			data.AllowedLinkingTypes = formatSQLStringList(allTypes)
+			data.AllowedLinkingTypes = formatSQLStringList(p.AllowedLinkingTypes)
+			data.AllowedLinkingTypesSlice = p.AllowedLinkingTypes
 			data.ParentType = p.AllowedLinkingTypes[0]
 
-			// Set cross-type fields for generating check_permission_internal calls
-			// even when the relation has self-referential links
 			if len(crossTypes) > 0 {
 				data.CrossTypeLinkingTypes = formatSQLStringList(crossTypes)
 				data.HasCrossTypeLinks = true
@@ -812,67 +372,4 @@ func buildSelfReferentialLinkingRelations(parentRelations []ListParentRelationDa
 	}
 
 	return formatSQLStringList(linkingRelations)
-}
-
-// buildListIndirectAnchorData builds template data for indirect anchor composed access.
-// Returns nil if the relation has no indirect anchor.
-func buildListIndirectAnchorData(a RelationAnalysis) *ListIndirectAnchorData {
-	if a.IndirectAnchor == nil {
-		return nil
-	}
-
-	anchor := a.IndirectAnchor
-	data := &ListIndirectAnchorData{
-		AnchorType:         anchor.AnchorType,
-		AnchorRelation:     anchor.AnchorRelation,
-		AnchorFunctionName: listObjectsFunctionName(anchor.AnchorType, anchor.AnchorRelation),
-	}
-
-	// Build path step data
-	for _, step := range anchor.Path {
-		stepData := ListAnchorPathStepData{
-			Type:            step.Type,
-			LinkingRelation: step.LinkingRelation,
-			TargetType:      step.TargetType,
-			TargetRelation:  step.TargetRelation,
-			AllTargetTypes:  step.AllTargetTypes,
-			RecursiveTypes:  step.RecursiveTypes,
-			SubjectType:     step.SubjectType,
-			SubjectRelation: step.SubjectRelation,
-		}
-		data.Path = append(data.Path, stepData)
-	}
-
-	// Set FirstStepTargetFunctionName - used for composition.
-	// For multi-hop chains, we compose with the first step's target function,
-	// not the anchor's. This allows each step to handle its own traversal.
-	if len(anchor.Path) > 0 {
-		firstStep := anchor.Path[0]
-		switch firstStep.Type {
-		case "ttu":
-			// For TTU, the first step's target is the relation we're looking up on the parent type
-			data.FirstStepTargetFunctionName = listObjectsFunctionName(firstStep.TargetType, firstStep.TargetRelation)
-		case "userset":
-			// For userset, the first step's target is the membership relation on the subject type
-			data.FirstStepTargetFunctionName = listObjectsFunctionName(firstStep.SubjectType, firstStep.SubjectRelation)
-		}
-	}
-
-	// Build AllowedSubjectTypes from the relation's propagated types
-	if len(a.AllowedSubjectTypes) > 0 {
-		data.AnchorSubjectTypes = formatSQLStringList(a.AllowedSubjectTypes)
-	} else {
-		data.AnchorSubjectTypes = "''"
-	}
-
-	data.AnchorHasWildcard = a.Features.HasWildcard
-
-	return data
-}
-
-// computeListHasStandaloneAccess determines if the relation has access paths outside of intersections.
-// This is similar to computeHasStandaloneAccess in codegen.go but adapted for list functions.
-// When false and HasIntersection is true, the only access is through intersection groups.
-func computeListHasStandaloneAccess(a RelationAnalysis) bool {
-	return computeHasStandaloneAccess(a)
 }

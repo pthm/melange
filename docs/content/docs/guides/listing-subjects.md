@@ -11,28 +11,31 @@ The `ListSubjects` operation returns all subjects of a given type that have a sp
 
 {{< tab >}}
 ```go
-// Find all users who can read a repository
-userIDs, err := checker.ListSubjects(ctx,
+// Find all users who can read a repository (with pagination)
+userIDs, cursor, err := checker.ListSubjects(ctx,
     authz.Repository("456"),
     authz.RelCanRead,
     "user",
+    melange.PageOptions{Limit: 100},
 )
 if err != nil {
     return err
 }
 
 // userIDs = ["alice", "bob", "carol"]
+// cursor = nil when no more pages, or a string to fetch the next page
 ```
 {{< /tab >}}
 
 {{< tab >}}
 ```typescript
-// Find all users who can read a repository
+// Find all users who can read a repository (with pagination)
 const { rows } = await pool.query(
-  'SELECT * FROM list_accessible_subjects($1, $2, $3, $4)',
-  ['repository', '456', 'can_read', 'user']
+  'SELECT subject_id, next_cursor FROM list_accessible_subjects($1, $2, $3, $4, $5, $6)',
+  ['repository', '456', 'can_read', 'user', 100, null]
 );
 const userIds = rows.map(row => row.subject_id);
+const nextCursor = rows.length > 0 ? rows[0].next_cursor : null;
 
 // userIds = ["alice", "bob", "carol"]
 ```
@@ -40,10 +43,12 @@ const userIds = rows.map(row => row.subject_id);
 
 {{< tab >}}
 ```sql
--- Get all users who can view document 456
-SELECT * FROM list_accessible_subjects('document', '456', 'viewer', 'user');
+-- Get all users who can view document 456 (first 100)
+SELECT subject_id, next_cursor
+FROM list_accessible_subjects('document', '456', 'viewer', 'user', 100, NULL);
 
--- Returns a table with subject_id column
+-- Returns a table with subject_id and next_cursor columns
+-- next_cursor is NULL when no more pages exist
 ```
 {{< /tab >}}
 
@@ -57,10 +62,121 @@ SELECT * FROM list_accessible_subjects('document', '456', 'viewer', 'user');
 | `object_id` | `text` | ID of the object |
 | `relation` | `text` | The relation to check |
 | `subject_type` | `text` | Type of subjects to return |
+| `p_limit` | `int` | Maximum number of results per page (NULL = no limit) |
+| `p_after` | `text` | Cursor from previous page (NULL = start from beginning) |
 
 ## Return Value
 
-Returns a list of subject IDs that have the relation on the object. Empty list if no subjects found (not an error).
+Returns a table with `subject_id` and `next_cursor` columns. The `next_cursor` value is repeated on every row for convenience - use the last row's cursor to fetch the next page. Returns an empty result set if no subjects found (not an error).
+
+{{< callout type="info" >}}
+**Ordering**: Results are ordered with wildcard subjects (`'*'`) first, then alphabetically by `subject_id`. This ensures stable pagination while keeping wildcard entries grouped at the top.
+{{< /callout >}}
+
+## Pagination
+
+### Cursor-Based Pagination
+
+Use cursor-based pagination to iterate through large result sets efficiently:
+
+{{< tabs items="Go,TypeScript,SQL" >}}
+
+{{< tab >}}
+```go
+// Paginate through all users with access
+var cursor *string
+for {
+    ids, next, err := checker.ListSubjects(ctx,
+        authz.Repository("456"),
+        authz.RelCanRead,
+        "user",
+        melange.PageOptions{Limit: 100, After: cursor},
+    )
+    if err != nil {
+        return err
+    }
+
+    for _, id := range ids {
+        // Process each user ID
+        fmt.Println("Has access:", id)
+    }
+
+    if next == nil {
+        break // No more pages
+    }
+    cursor = next
+}
+```
+{{< /tab >}}
+
+{{< tab >}}
+```typescript
+// Paginate through all users with access
+let cursor: string | null = null;
+
+while (true) {
+  const { rows } = await pool.query(
+    'SELECT subject_id, next_cursor FROM list_accessible_subjects($1, $2, $3, $4, $5, $6)',
+    ['repository', repoId, 'can_read', 'user', 100, cursor]
+  );
+
+  for (const row of rows) {
+    // Process each user ID
+    console.log('Has access:', row.subject_id);
+  }
+
+  cursor = rows.length > 0 ? rows[rows.length - 1].next_cursor : null;
+  if (!cursor) break; // No more pages
+}
+```
+{{< /tab >}}
+
+{{< tab >}}
+```sql
+-- First page
+SELECT subject_id, next_cursor
+FROM list_accessible_subjects('document', '456', 'viewer', 'user', 100, NULL);
+
+-- Returns: subject_id | next_cursor
+--          *          | user-100   (wildcard first)
+--          alice      | user-100
+--          bob        | user-100
+--          ...
+
+-- Next page (use the next_cursor value)
+SELECT subject_id, next_cursor
+FROM list_accessible_subjects('document', '456', 'viewer', 'user', 100, 'user-100');
+```
+{{< /tab >}}
+
+{{< /tabs >}}
+
+### Fetching All Results
+
+For convenience, use the `ListSubjectsAll` helper which automatically paginates through all results:
+
+{{< tabs items="Go" >}}
+
+{{< tab >}}
+```go
+// Get all users who can read (auto-paginates internally)
+allUserIDs, err := checker.ListSubjectsAll(ctx,
+    authz.Repository("456"),
+    authz.RelCanRead,
+    "user",
+)
+if err != nil {
+    return err
+}
+// allUserIDs contains all user IDs with access
+```
+{{< /tab >}}
+
+{{< /tabs >}}
+
+{{< callout type="warning" >}}
+**Use with caution**: `ListSubjectsAll` loads all IDs into memory. For large datasets, prefer paginated queries with `ListSubjects` to control memory usage.
+{{< /callout >}}
 
 ## Examples
 
@@ -79,7 +195,7 @@ func GetAccessList(ctx context.Context, repo Repository) ([]AccessEntry, error) 
     permissions := []string{"owner", "admin", "can_write", "can_read"}
 
     for _, perm := range permissions {
-        userIDs, err := checker.ListSubjects(ctx, repo, perm, "user")
+        userIDs, err := checker.ListSubjectsAll(ctx, repo, perm, "user")
         if err != nil {
             return nil, err
         }
@@ -110,8 +226,8 @@ async function getAccessList(repoId: string): Promise<AccessEntry[]> {
 
   for (const perm of permissions) {
     const { rows } = await pool.query(
-      'SELECT * FROM list_accessible_subjects($1, $2, $3, $4)',
-      ['repository', repoId, perm, 'user']
+      'SELECT subject_id FROM list_accessible_subjects($1, $2, $3, $4, $5, $6)',
+      ['repository', repoId, perm, 'user', null, null]
     );
 
     for (const row of rows) {
@@ -129,10 +245,10 @@ async function getAccessList(repoId: string): Promise<AccessEntry[]> {
 
 {{< tab >}}
 ```sql
--- Join with users table to get full user records
+-- Join with users table to get full user records (NULL limit returns all)
 SELECT u.*
 FROM users u
-JOIN list_accessible_subjects('document', '456', 'viewer', 'user') a
+JOIN list_accessible_subjects('document', '456', 'viewer', 'user', NULL, NULL) a
     ON u.id::text = a.subject_id;
 ```
 {{< /tab >}}
@@ -148,7 +264,9 @@ Verify at least one user has access:
 {{< tab >}}
 ```go
 func HasAnyViewers(ctx context.Context, doc Document) (bool, error) {
-    viewers, err := checker.ListSubjects(ctx, doc, "can_read", "user")
+    // Use Limit: 1 to efficiently check for any results
+    viewers, _, err := checker.ListSubjects(ctx, doc, "can_read", "user",
+        melange.PageOptions{Limit: 1})
     if err != nil {
         return false, err
     }
@@ -160,9 +278,10 @@ func HasAnyViewers(ctx context.Context, doc Document) (bool, error) {
 {{< tab >}}
 ```typescript
 async function hasAnyViewers(docId: string): Promise<boolean> {
+  // Use limit 1 to efficiently check for any results
   const { rows } = await pool.query(
-    'SELECT * FROM list_accessible_subjects($1, $2, $3, $4) LIMIT 1',
-    ['document', docId, 'can_read', 'user']
+    'SELECT subject_id FROM list_accessible_subjects($1, $2, $3, $4, $5, $6) LIMIT 1',
+    ['document', docId, 'can_read', 'user', 1, null]
   );
   return rows.length > 0;
 }
@@ -173,7 +292,7 @@ async function hasAnyViewers(docId: string): Promise<boolean> {
 ```sql
 -- Check if anyone has access (returns true/false)
 SELECT EXISTS(
-    SELECT 1 FROM list_accessible_subjects('document', '456', 'viewer', 'user')
+    SELECT 1 FROM list_accessible_subjects('document', '456', 'viewer', 'user', 1, NULL)
 );
 ```
 {{< /tab >}}
@@ -187,8 +306,8 @@ SELECT EXISTS(
 {{< tab >}}
 ```go
 func NotifyCollaborators(ctx context.Context, repo Repository, message string) error {
-    // Get all users who can read
-    userIDs, err := checker.ListSubjects(ctx, repo, "can_read", "user")
+    // Get all users who can read (using ListSubjectsAll)
+    userIDs, err := checker.ListSubjectsAll(ctx, repo, "can_read", "user")
     if err != nil {
         return err
     }
@@ -207,10 +326,10 @@ func NotifyCollaborators(ctx context.Context, repo Repository, message string) e
 {{< tab >}}
 ```typescript
 async function notifyCollaborators(repoId: string, message: string): Promise<void> {
-  // Get all users who can read
+  // Get all users who can read (NULL limit returns all)
   const { rows } = await pool.query(
-    'SELECT * FROM list_accessible_subjects($1, $2, $3, $4)',
-    ['repository', repoId, 'can_read', 'user']
+    'SELECT subject_id FROM list_accessible_subjects($1, $2, $3, $4, $5, $6)',
+    ['repository', repoId, 'can_read', 'user', null, null]
   );
 
   for (const row of rows) {
@@ -246,7 +365,7 @@ func AuditRepositoryAccess(ctx context.Context, repo Repository) ([]AccessAuditE
     permissions := []string{"owner", "admin", "can_write", "can_read"}
 
     for _, perm := range permissions {
-        userIDs, err := checker.ListSubjects(ctx, repo, perm, "user")
+        userIDs, err := checker.ListSubjectsAll(ctx, repo, perm, "user")
         if err != nil {
             return nil, err
         }
@@ -283,8 +402,8 @@ async function auditRepositoryAccess(repoId: string): Promise<AccessAuditEntry[]
 
   for (const perm of permissions) {
     const { rows } = await pool.query(
-      'SELECT * FROM list_accessible_subjects($1, $2, $3, $4)',
-      ['repository', repoId, perm, 'user']
+      'SELECT subject_id FROM list_accessible_subjects($1, $2, $3, $4, $5, $6)',
+      ['repository', repoId, perm, 'user', null, null]
     );
 
     for (const row of rows) {
@@ -336,7 +455,7 @@ Like `ListObjects`, `ListSubjects` does **not** use the permission cache. Implem
 
 {{< tab >}}
 ```go
-func (c *CachedChecker) ListSubjects(ctx context.Context, object ObjectLike, relation RelationLike, subjectType ObjectType) ([]string, error) {
+func (c *CachedChecker) ListSubjectsAll(ctx context.Context, object ObjectLike, relation RelationLike, subjectType ObjectType) ([]string, error) {
     key := fmt.Sprintf("subjects:%s:%s:%s:%s",
         object.FGAObject().Type,
         object.FGAObject().ID,
@@ -348,7 +467,7 @@ func (c *CachedChecker) ListSubjects(ctx context.Context, object ObjectLike, rel
         return cached.([]string), nil
     }
 
-    ids, err := c.Checker.ListSubjects(ctx, object, relation, subjectType)
+    ids, err := c.Checker.ListSubjectsAll(ctx, object, relation, subjectType)
     if err != nil {
         return nil, err
     }
@@ -382,8 +501,8 @@ async function listSubjectsCached(
   }
 
   const { rows } = await pool.query(
-    'SELECT * FROM list_accessible_subjects($1, $2, $3, $4)',
-    [objectType, objectId, relation, subjectType]
+    'SELECT subject_id FROM list_accessible_subjects($1, $2, $3, $4, $5, $6)',
+    [objectType, objectId, relation, subjectType, null, null]
   );
   const ids = rows.map(r => r.subject_id);
 
@@ -423,19 +542,19 @@ func GetPermissionBreakdown(ctx context.Context, repo Repository) (*PermissionBr
 
     go func() {
         defer wg.Done()
-        owners, ownerErr = checker.ListSubjects(ctx, repo, "owner", "user")
+        owners, ownerErr = checker.ListSubjectsAll(ctx, repo, "owner", "user")
     }()
     go func() {
         defer wg.Done()
-        admins, adminErr = checker.ListSubjects(ctx, repo, "admin", "user")
+        admins, adminErr = checker.ListSubjectsAll(ctx, repo, "admin", "user")
     }()
     go func() {
         defer wg.Done()
-        writers, writerErr = checker.ListSubjects(ctx, repo, "can_write", "user")
+        writers, writerErr = checker.ListSubjectsAll(ctx, repo, "can_write", "user")
     }()
     go func() {
         defer wg.Done()
-        readers, readerErr = checker.ListSubjects(ctx, repo, "can_read", "user")
+        readers, readerErr = checker.ListSubjectsAll(ctx, repo, "can_read", "user")
     }()
 
     wg.Wait()
@@ -462,11 +581,12 @@ interface PermissionBreakdown {
 }
 
 async function getPermissionBreakdown(repoId: string): Promise<PermissionBreakdown> {
+  // Fetch all permission sets in parallel (NULL limit returns all)
   const [ownersRes, adminsRes, writersRes, readersRes] = await Promise.all([
-    pool.query('SELECT * FROM list_accessible_subjects($1, $2, $3, $4)', ['repository', repoId, 'owner', 'user']),
-    pool.query('SELECT * FROM list_accessible_subjects($1, $2, $3, $4)', ['repository', repoId, 'admin', 'user']),
-    pool.query('SELECT * FROM list_accessible_subjects($1, $2, $3, $4)', ['repository', repoId, 'can_write', 'user']),
-    pool.query('SELECT * FROM list_accessible_subjects($1, $2, $3, $4)', ['repository', repoId, 'can_read', 'user']),
+    pool.query('SELECT subject_id FROM list_accessible_subjects($1, $2, $3, $4, $5, $6)', ['repository', repoId, 'owner', 'user', null, null]),
+    pool.query('SELECT subject_id FROM list_accessible_subjects($1, $2, $3, $4, $5, $6)', ['repository', repoId, 'admin', 'user', null, null]),
+    pool.query('SELECT subject_id FROM list_accessible_subjects($1, $2, $3, $4, $5, $6)', ['repository', repoId, 'can_write', 'user', null, null]),
+    pool.query('SELECT subject_id FROM list_accessible_subjects($1, $2, $3, $4, $5, $6)', ['repository', repoId, 'can_read', 'user', null, null]),
   ]);
 
   return {
@@ -496,7 +616,7 @@ When teams are modeled as objects:
 func GetTeamMembers(ctx context.Context, teamID string) ([]User, error) {
     team := melange.Object{Type: "team", ID: teamID}
 
-    memberIDs, err := checker.ListSubjects(ctx, team, "member", "user")
+    memberIDs, err := checker.ListSubjectsAll(ctx, team, "member", "user")
     if err != nil {
         return nil, err
     }
@@ -514,8 +634,8 @@ func GetTeamMembers(ctx context.Context, teamID string) ([]User, error) {
 
 async function getTeamMembers(teamId: string): Promise<User[]> {
   const { rows } = await pool.query(
-    'SELECT * FROM list_accessible_subjects($1, $2, $3, $4)',
-    ['team', teamId, 'member', 'user']
+    'SELECT subject_id FROM list_accessible_subjects($1, $2, $3, $4, $5, $6)',
+    ['team', teamId, 'member', 'user', null, null]
   );
   const memberIds = rows.map(r => r.subject_id);
 
@@ -528,7 +648,63 @@ async function getTeamMembers(teamId: string): Promise<User[]> {
 ```sql
 -- Get all team members with access (userset filter)
 -- Note: Use 'team#member' as subject_type to filter by userset
-SELECT * FROM list_accessible_subjects('document', '456', 'viewer', 'team#member');
+SELECT subject_id, next_cursor
+FROM list_accessible_subjects('document', '456', 'viewer', 'team#member', NULL, NULL);
+```
+{{< /tab >}}
+
+{{< /tabs >}}
+
+## Transaction Consistency
+
+Paginated queries across multiple calls can observe changes between pages. For consistency-critical flows, run paging inside a transaction with repeatable-read or snapshot semantics:
+
+{{< tabs items="Go,SQL" >}}
+
+{{< tab >}}
+```go
+// For consistent pagination across pages, use a transaction
+tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
+if err != nil {
+    return err
+}
+defer tx.Rollback()
+
+txChecker := melange.NewChecker(tx)
+
+var allIDs []string
+var cursor *string
+for {
+    ids, next, err := txChecker.ListSubjects(ctx, repo, "can_read", "user",
+        melange.PageOptions{Limit: 100, After: cursor})
+    if err != nil {
+        return err
+    }
+    allIDs = append(allIDs, ids...)
+    if next == nil {
+        break
+    }
+    cursor = next
+}
+
+tx.Commit()
+```
+{{< /tab >}}
+
+{{< tab >}}
+```sql
+-- For consistent pagination, use a transaction
+BEGIN ISOLATION LEVEL REPEATABLE READ;
+
+-- First page
+SELECT subject_id, next_cursor
+FROM list_accessible_subjects('repository', '456', 'can_read', 'user', 100, NULL);
+
+-- Subsequent pages within the same transaction see consistent data
+SELECT subject_id, next_cursor
+FROM list_accessible_subjects('repository', '456', 'can_read', 'user', 100, 'user-100');
+
+COMMIT;
 ```
 {{< /tab >}}
 

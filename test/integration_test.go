@@ -346,7 +346,7 @@ func TestListObjects(t *testing.T) {
 	outsider := authz.User(outsiderID)
 
 	t.Run("org member can list accessible repositories", func(t *testing.T) {
-		ids, err := checker.ListObjects(ctx, user, authz.RelCanRead, authz.TypeRepository)
+		ids, err := checker.ListObjectsAll(ctx, user, authz.RelCanRead, authz.TypeRepository)
 		require.NoError(t, err)
 		assert.Len(t, ids, 3, "should find 3 repositories")
 		assert.Contains(t, ids, idStr(repo1ID))
@@ -355,7 +355,7 @@ func TestListObjects(t *testing.T) {
 	})
 
 	t.Run("outsider cannot list any repositories", func(t *testing.T) {
-		ids, err := checker.ListObjects(ctx, outsider, authz.RelCanRead, authz.TypeRepository)
+		ids, err := checker.ListObjectsAll(ctx, outsider, authz.RelCanRead, authz.TypeRepository)
 		require.NoError(t, err)
 		assert.Empty(t, ids, "outsider should not see any repositories")
 	})
@@ -398,7 +398,7 @@ func TestListSubjects(t *testing.T) {
 	org := authz.Organization(orgID)
 
 	t.Run("list users who can read org", func(t *testing.T) {
-		ids, err := checker.ListSubjects(ctx, org, authz.RelCanRead, authz.TypeUser)
+		ids, err := checker.ListSubjectsAll(ctx, org, authz.RelCanRead, authz.TypeUser)
 		require.NoError(t, err)
 		assert.Len(t, ids, 3, "should find 3 users with can_read")
 		assert.Contains(t, ids, idStr(user1ID))
@@ -407,7 +407,7 @@ func TestListSubjects(t *testing.T) {
 	})
 
 	t.Run("list users who can admin org", func(t *testing.T) {
-		ids, err := checker.ListSubjects(ctx, org, authz.RelCanAdmin, authz.TypeUser)
+		ids, err := checker.ListSubjectsAll(ctx, org, authz.RelCanAdmin, authz.TypeUser)
 		require.NoError(t, err)
 		assert.Len(t, ids, 2, "should find 2 users with can_admin (owner + admin)")
 		assert.Contains(t, ids, idStr(user1ID))
@@ -415,7 +415,7 @@ func TestListSubjects(t *testing.T) {
 	})
 
 	t.Run("list users who can delete org", func(t *testing.T) {
-		ids, err := checker.ListSubjects(ctx, org, authz.RelCanDelete, authz.TypeUser)
+		ids, err := checker.ListSubjectsAll(ctx, org, authz.RelCanDelete, authz.TypeUser)
 		require.NoError(t, err)
 		assert.Len(t, ids, 1, "should find 1 user with can_delete (owner only)")
 		assert.Contains(t, ids, idStr(user1ID))
@@ -647,21 +647,21 @@ func TestExclusionViaImpliedBy(t *testing.T) {
 
 	// Verify ListObjects excludes repo for owner (parity with Check)
 	t.Run("list_accessible_objects excludes repo for owner", func(t *testing.T) {
-		ids, err := checker.ListObjects(ctx, owner, melange.Relation("can_review"), authz.TypeRepository)
+		ids, err := checker.ListObjectsAll(ctx, owner, melange.Relation("can_review"), authz.TypeRepository)
 		require.NoError(t, err)
 		assert.NotContains(t, ids, idStr(repoID), "list_accessible_objects should exclude repo where owner is author")
 	})
 
 	// Verify ListObjects includes repo for reader
 	t.Run("list_accessible_objects includes repo for reader", func(t *testing.T) {
-		ids, err := checker.ListObjects(ctx, reader, melange.Relation("can_review"), authz.TypeRepository)
+		ids, err := checker.ListObjectsAll(ctx, reader, melange.Relation("can_review"), authz.TypeRepository)
 		require.NoError(t, err)
 		assert.Contains(t, ids, idStr(repoID), "list_accessible_objects should include repo for reader")
 	})
 
 	// Verify ListSubjects excludes owner (parity with Check)
 	t.Run("list_accessible_subjects excludes owner", func(t *testing.T) {
-		ids, err := checker.ListSubjects(ctx, repo, melange.Relation("can_review"), authz.TypeUser)
+		ids, err := checker.ListSubjectsAll(ctx, repo, melange.Relation("can_review"), authz.TypeUser)
 		require.NoError(t, err)
 		assert.NotContains(t, ids, idStr(ownerID), "list_accessible_subjects should exclude owner (implied author)")
 		assert.Contains(t, ids, idStr(readerID), "list_accessible_subjects should include reader")
@@ -732,14 +732,14 @@ func TestParentRelationMismatch(t *testing.T) {
 
 	// Verify ListObjects returns repo for admin (parity with Check)
 	t.Run("list_accessible_objects includes repo for admin", func(t *testing.T) {
-		ids, err := checker.ListObjects(ctx, admin, melange.Relation("can_deploy"), authz.TypeRepository)
+		ids, err := checker.ListObjectsAll(ctx, admin, melange.Relation("can_deploy"), authz.TypeRepository)
 		require.NoError(t, err)
 		assert.Contains(t, ids, idStr(repoID), "list_accessible_objects should include repo for org admin")
 	})
 
 	// Verify ListSubjects returns admin (parity with Check)
 	t.Run("list_accessible_subjects includes admin", func(t *testing.T) {
-		ids, err := checker.ListSubjects(ctx, repo, melange.Relation("can_deploy"), authz.TypeUser)
+		ids, err := checker.ListSubjectsAll(ctx, repo, melange.Relation("can_deploy"), authz.TypeUser)
 		require.NoError(t, err)
 		assert.Contains(t, ids, idStr(adminID), "list_accessible_subjects should include org admin")
 	})
@@ -810,14 +810,14 @@ func TestDirectAccessExclusionParity(t *testing.T) {
 
 	// Verify ListObjects excludes repo for author (parity with Check)
 	t.Run("list_accessible_objects excludes repo for author", func(t *testing.T) {
-		ids, err := checker.ListObjects(ctx, authorUser, melange.Relation("can_review"), authz.TypeRepository)
+		ids, err := checker.ListObjectsAll(ctx, authorUser, melange.Relation("can_review"), authz.TypeRepository)
 		require.NoError(t, err)
 		assert.NotContains(t, ids, idStr(repoID), "list_accessible_objects should exclude repo for author")
 	})
 
 	// Verify ListSubjects excludes author (parity with Check)
 	t.Run("list_accessible_subjects excludes author", func(t *testing.T) {
-		ids, err := checker.ListSubjects(ctx, repo, melange.Relation("can_review"), authz.TypeUser)
+		ids, err := checker.ListSubjectsAll(ctx, repo, melange.Relation("can_review"), authz.TypeUser)
 		require.NoError(t, err)
 		assert.NotContains(t, ids, idStr(authorUserID), "list_accessible_subjects should exclude author")
 		assert.Contains(t, ids, idStr(readerUserID), "list_accessible_subjects should include reader")
@@ -887,14 +887,14 @@ func TestWildcardExclusion(t *testing.T) {
 
 	// Verify ListObjects excludes repo (parity with Check)
 	t.Run("list_accessible_objects excludes repo", func(t *testing.T) {
-		ids, err := checker.ListObjects(ctx, user, melange.Relation("can_read_safe"), authz.TypeRepository)
+		ids, err := checker.ListObjectsAll(ctx, user, melange.Relation("can_read_safe"), authz.TypeRepository)
 		require.NoError(t, err)
 		assert.NotContains(t, ids, idStr(repoID), "list_accessible_objects should exclude repo with wildcard ban")
 	})
 
 	// Verify ListSubjects returns empty (all users banned)
 	t.Run("list_accessible_subjects returns empty", func(t *testing.T) {
-		ids, err := checker.ListSubjects(ctx, repo, melange.Relation("can_read_safe"), authz.TypeUser)
+		ids, err := checker.ListSubjectsAll(ctx, repo, melange.Relation("can_read_safe"), authz.TypeUser)
 		require.NoError(t, err)
 		assert.Empty(t, ids, "list_accessible_subjects should return empty when all users banned")
 	})
@@ -982,7 +982,7 @@ func TestParentLevelExclusions(t *testing.T) {
 
 	// Verify ListObjects excludes PR for admin (parity with Check)
 	t.Run("list_accessible_objects excludes PR for admin", func(t *testing.T) {
-		ids, err := checker.ListObjects(ctx, admin, melange.Relation("can_review_strict"), authz.TypePullRequest)
+		ids, err := checker.ListObjectsAll(ctx, admin, melange.Relation("can_review_strict"), authz.TypePullRequest)
 		require.NoError(t, err)
 		assert.NotContains(t, ids, idStr(prID), "list_accessible_objects should exclude PR for banned admin")
 	})
@@ -992,7 +992,7 @@ func TestParentLevelExclusions(t *testing.T) {
 	// exclusion has parent inheritance (e.g., banned: can_admin from repo). This requires
 	// the recursive CTE to expand via the closure table for satisfying relations.
 	t.Run("list_accessible_subjects excludes admin", func(t *testing.T) {
-		ids, err := checker.ListSubjects(ctx, pr, melange.Relation("can_review_strict"), authz.TypeUser)
+		ids, err := checker.ListSubjectsAll(ctx, pr, melange.Relation("can_review_strict"), authz.TypeUser)
 		require.NoError(t, err)
 
 		// Reader should be included (not banned)
@@ -1065,7 +1065,7 @@ func TestListCheckParityProperty(t *testing.T) {
 		t.Run(fmt.Sprintf("ListObjects/%s", rel), func(t *testing.T) {
 			for _, uid := range users {
 				user := authz.User(uid)
-				ids, err := checker.ListObjects(ctx, user, melange.Relation(rel), authz.TypeRepository)
+				ids, err := checker.ListObjectsAll(ctx, user, melange.Relation(rel), authz.TypeRepository)
 				require.NoError(t, err)
 
 				// Every returned object must pass Check
@@ -1084,7 +1084,7 @@ func TestListCheckParityProperty(t *testing.T) {
 		t.Run(fmt.Sprintf("ListSubjects/%s", rel), func(t *testing.T) {
 			for _, rid := range repos {
 				repo := authz.Repository(rid)
-				ids, err := checker.ListSubjects(ctx, repo, melange.Relation(rel), authz.TypeUser)
+				ids, err := checker.ListSubjectsAll(ctx, repo, melange.Relation(rel), authz.TypeUser)
 				require.NoError(t, err)
 
 				// Every returned subject must pass Check
@@ -1097,4 +1097,329 @@ func TestListCheckParityProperty(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ============================================================================
+// Pagination Tests
+// ============================================================================
+
+// TestListObjects_Pagination tests cursor-based pagination for ListObjects.
+func TestListObjects_Pagination(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	db := testutil.DB(t)
+	ctx := context.Background()
+
+	// Create test data: 1 user with access to 25 repositories
+	var orgID, userID int64
+	repoIDs := make([]int64, 25)
+
+	// Create user
+	err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('pagination_user') RETURNING id`).Scan(&userID)
+	require.NoError(t, err)
+
+	// Create organization and add user
+	err = db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('pagination_org') RETURNING id`).Scan(&orgID)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'member')`, orgID, userID)
+	require.NoError(t, err)
+
+	// Create 25 repositories under the organization
+	for i := 0; i < 25; i++ {
+		err = db.QueryRowContext(ctx, `INSERT INTO repositories (organization_id, name) VALUES ($1, $2) RETURNING id`,
+			orgID, fmt.Sprintf("pagination_repo_%02d", i)).Scan(&repoIDs[i])
+		require.NoError(t, err)
+	}
+
+	checker := melange.NewChecker(db)
+	user := authz.User(userID)
+
+	t.Run("first page returns limit results with cursor", func(t *testing.T) {
+		ids, cursor, err := checker.ListObjects(ctx, user, authz.RelCanRead, authz.TypeRepository,
+			melange.PageOptions{Limit: 10})
+		require.NoError(t, err)
+		assert.Len(t, ids, 10, "first page should have 10 results")
+		assert.NotNil(t, cursor, "cursor should be set when more results exist")
+	})
+
+	t.Run("subsequent pages return correct results", func(t *testing.T) {
+		// Collect all pages
+		var allIDs []string
+		var cursor *string
+
+		for pageNum := 0; pageNum < 10; pageNum++ { // Safety limit
+			ids, next, err := checker.ListObjects(ctx, user, authz.RelCanRead, authz.TypeRepository,
+				melange.PageOptions{Limit: 10, After: cursor})
+			require.NoError(t, err)
+
+			allIDs = append(allIDs, ids...)
+
+			if next == nil {
+				break
+			}
+			cursor = next
+		}
+
+		assert.Len(t, allIDs, 25, "should collect all 25 repositories")
+	})
+
+	t.Run("results are sorted consistently", func(t *testing.T) {
+		ids1, _, err := checker.ListObjects(ctx, user, authz.RelCanRead, authz.TypeRepository,
+			melange.PageOptions{Limit: 25})
+		require.NoError(t, err)
+
+		ids2, _, err := checker.ListObjects(ctx, user, authz.RelCanRead, authz.TypeRepository,
+			melange.PageOptions{Limit: 25})
+		require.NoError(t, err)
+
+		assert.Equal(t, ids1, ids2, "results should be deterministically sorted")
+	})
+
+	t.Run("no duplicates across pages", func(t *testing.T) {
+		var allIDs []string
+		var cursor *string
+
+		for pageNum := 0; pageNum < 10; pageNum++ {
+			ids, next, err := checker.ListObjects(ctx, user, authz.RelCanRead, authz.TypeRepository,
+				melange.PageOptions{Limit: 10, After: cursor})
+			require.NoError(t, err)
+
+			allIDs = append(allIDs, ids...)
+
+			if next == nil {
+				break
+			}
+			cursor = next
+		}
+
+		// Check for duplicates
+		seen := make(map[string]bool)
+		for _, id := range allIDs {
+			assert.False(t, seen[id], "duplicate ID found: %s", id)
+			seen[id] = true
+		}
+	})
+
+	t.Run("cursor nil on last page", func(t *testing.T) {
+		// Request more than available
+		ids, cursor, err := checker.ListObjects(ctx, user, authz.RelCanRead, authz.TypeRepository,
+			melange.PageOptions{Limit: 100})
+		require.NoError(t, err)
+		assert.Len(t, ids, 25, "should return all results")
+		assert.Nil(t, cursor, "cursor should be nil when no more results")
+	})
+
+	t.Run("limit=0 returns all results", func(t *testing.T) {
+		ids, cursor, err := checker.ListObjects(ctx, user, authz.RelCanRead, authz.TypeRepository,
+			melange.PageOptions{Limit: 0})
+		require.NoError(t, err)
+		assert.Len(t, ids, 25, "limit=0 should return all results")
+		assert.Nil(t, cursor, "cursor should be nil when returning all results")
+	})
+}
+
+// TestListSubjects_Pagination tests cursor-based pagination for ListSubjects.
+func TestListSubjects_Pagination(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	db := testutil.DB(t)
+	ctx := context.Background()
+
+	// Create test data: 25 users with access to 1 organization
+	var orgID int64
+	userIDs := make([]int64, 25)
+
+	// Create organization
+	err := db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('subj_pagination_org') RETURNING id`).Scan(&orgID)
+	require.NoError(t, err)
+
+	// Create 25 users and add them to the organization
+	for i := 0; i < 25; i++ {
+		err = db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ($1) RETURNING id`,
+			fmt.Sprintf("subj_pagination_user_%02d", i)).Scan(&userIDs[i])
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'member')`,
+			orgID, userIDs[i])
+		require.NoError(t, err)
+	}
+
+	checker := melange.NewChecker(db)
+	org := authz.Organization(orgID)
+
+	t.Run("first page returns limit results with cursor", func(t *testing.T) {
+		ids, cursor, err := checker.ListSubjects(ctx, org, authz.RelCanRead, authz.TypeUser,
+			melange.PageOptions{Limit: 10})
+		require.NoError(t, err)
+		assert.Len(t, ids, 10, "first page should have 10 results")
+		assert.NotNil(t, cursor, "cursor should be set when more results exist")
+	})
+
+	t.Run("subsequent pages return correct results", func(t *testing.T) {
+		var allIDs []string
+		var cursor *string
+
+		for pageNum := 0; pageNum < 10; pageNum++ {
+			ids, next, err := checker.ListSubjects(ctx, org, authz.RelCanRead, authz.TypeUser,
+				melange.PageOptions{Limit: 10, After: cursor})
+			require.NoError(t, err)
+
+			allIDs = append(allIDs, ids...)
+
+			if next == nil {
+				break
+			}
+			cursor = next
+		}
+
+		assert.Len(t, allIDs, 25, "should collect all 25 users")
+	})
+
+	t.Run("no duplicates across pages", func(t *testing.T) {
+		var allIDs []string
+		var cursor *string
+
+		for pageNum := 0; pageNum < 10; pageNum++ {
+			ids, next, err := checker.ListSubjects(ctx, org, authz.RelCanRead, authz.TypeUser,
+				melange.PageOptions{Limit: 10, After: cursor})
+			require.NoError(t, err)
+
+			allIDs = append(allIDs, ids...)
+
+			if next == nil {
+				break
+			}
+			cursor = next
+		}
+
+		// Check for duplicates
+		seen := make(map[string]bool)
+		for _, id := range allIDs {
+			assert.False(t, seen[id], "duplicate ID found: %s", id)
+			seen[id] = true
+		}
+	})
+}
+
+// TestListObjectsAll_Aggregates verifies that ListObjectsAll correctly aggregates
+// all results by iterating through pages internally.
+func TestListObjectsAll_Aggregates(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	db := testutil.DB(t)
+	ctx := context.Background()
+
+	// Create test data: 1 user with access to 1000 repositories
+	// This tests the internal pagination of ListObjectsAll (which uses 500 per page)
+	var orgID, userID int64
+
+	// Create user
+	err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('all_pagination_user') RETURNING id`).Scan(&userID)
+	require.NoError(t, err)
+
+	// Create organization and add user
+	err = db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('all_pagination_org') RETURNING id`).Scan(&orgID)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'member')`, orgID, userID)
+	require.NoError(t, err)
+
+	// Create 1000 repositories (will require 2 pages internally)
+	for i := 0; i < 1000; i++ {
+		_, err = db.ExecContext(ctx, `INSERT INTO repositories (organization_id, name) VALUES ($1, $2)`,
+			orgID, fmt.Sprintf("all_pagination_repo_%04d", i))
+		require.NoError(t, err)
+	}
+
+	checker := melange.NewChecker(db)
+	user := authz.User(userID)
+
+	t.Run("ListObjectsAll returns all results", func(t *testing.T) {
+		ids, err := checker.ListObjectsAll(ctx, user, authz.RelCanRead, authz.TypeRepository)
+		require.NoError(t, err)
+		assert.Len(t, ids, 1000, "ListObjectsAll should return all 1000 repositories")
+	})
+
+	t.Run("ListSubjectsAll returns all results", func(t *testing.T) {
+		org := authz.Organization(orgID)
+		ids, err := checker.ListSubjectsAll(ctx, org, authz.RelCanRead, authz.TypeUser)
+		require.NoError(t, err)
+		// Only 1 user was added to this org
+		assert.Contains(t, ids, idStr(userID), "ListSubjectsAll should include the user")
+	})
+}
+
+// TestPagination_EmptyResults tests pagination behavior with no matching results.
+func TestPagination_EmptyResults(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	db := testutil.DB(t)
+	ctx := context.Background()
+
+	// Create a user with no permissions
+	var userID int64
+	err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('empty_pagination_user') RETURNING id`).Scan(&userID)
+	require.NoError(t, err)
+
+	checker := melange.NewChecker(db)
+	user := authz.User(userID)
+
+	t.Run("ListObjects returns empty with nil cursor", func(t *testing.T) {
+		ids, cursor, err := checker.ListObjects(ctx, user, authz.RelCanRead, authz.TypeRepository,
+			melange.PageOptions{Limit: 10})
+		require.NoError(t, err)
+		assert.Empty(t, ids, "should return empty results")
+		assert.Nil(t, cursor, "cursor should be nil for empty results")
+	})
+
+	t.Run("ListObjectsAll returns empty slice", func(t *testing.T) {
+		ids, err := checker.ListObjectsAll(ctx, user, authz.RelCanRead, authz.TypeRepository)
+		require.NoError(t, err)
+		assert.Empty(t, ids, "should return empty slice")
+	})
+}
+
+// TestPagination_InvalidCursor tests behavior with invalid cursor values.
+func TestPagination_InvalidCursor(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	db := testutil.DB(t)
+	ctx := context.Background()
+
+	// Create minimal test data
+	var orgID, userID int64
+	err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('cursor_test_user') RETURNING id`).Scan(&userID)
+	require.NoError(t, err)
+	err = db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('cursor_test_org') RETURNING id`).Scan(&orgID)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'member')`, orgID, userID)
+	require.NoError(t, err)
+
+	// Create a few repos
+	for i := 0; i < 5; i++ {
+		_, err = db.ExecContext(ctx, `INSERT INTO repositories (organization_id, name) VALUES ($1, $2)`,
+			orgID, fmt.Sprintf("cursor_repo_%d", i))
+		require.NoError(t, err)
+	}
+
+	checker := melange.NewChecker(db)
+	user := authz.User(userID)
+
+	t.Run("cursor pointing beyond all results returns empty", func(t *testing.T) {
+		// Use a cursor that's beyond all IDs (assuming numeric IDs)
+		beyondCursor := "99999999999"
+		ids, cursor, err := checker.ListObjects(ctx, user, authz.RelCanRead, authz.TypeRepository,
+			melange.PageOptions{Limit: 10, After: &beyondCursor})
+		require.NoError(t, err)
+		assert.Empty(t, ids, "should return empty when cursor is beyond all results")
+		assert.Nil(t, cursor, "cursor should be nil")
+	})
 }

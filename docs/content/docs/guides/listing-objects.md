@@ -11,28 +11,31 @@ The `ListObjects` operation returns all objects of a given type that a subject h
 
 {{< tab >}}
 ```go
-// Find all repositories user can read
-repoIDs, err := checker.ListObjects(ctx,
+// Find all repositories user can read (with pagination)
+repoIDs, cursor, err := checker.ListObjects(ctx,
     authz.User("123"),
     authz.RelCanRead,
     "repository",
+    melange.PageOptions{Limit: 100},
 )
 if err != nil {
     return err
 }
 
 // repoIDs = ["repo-1", "repo-456", "repo-789"]
+// cursor = nil when no more pages, or a string to fetch the next page
 ```
 {{< /tab >}}
 
 {{< tab >}}
 ```typescript
-// Find all repositories user can read
+// Find all repositories user can read (with pagination)
 const { rows } = await pool.query(
-  'SELECT * FROM list_accessible_objects($1, $2, $3, $4)',
-  ['user', '123', 'can_read', 'repository']
+  'SELECT object_id, next_cursor FROM list_accessible_objects($1, $2, $3, $4, $5, $6)',
+  ['user', '123', 'can_read', 'repository', 100, null]
 );
 const repoIds = rows.map(row => row.object_id);
+const nextCursor = rows.length > 0 ? rows[0].next_cursor : null;
 
 // repoIds = ["repo-1", "repo-456", "repo-789"]
 ```
@@ -40,10 +43,12 @@ const repoIds = rows.map(row => row.object_id);
 
 {{< tab >}}
 ```sql
--- Get all documents user 123 can view
-SELECT * FROM list_accessible_objects('user', '123', 'viewer', 'document');
+-- Get documents user 123 can view (first 100)
+SELECT object_id, next_cursor
+FROM list_accessible_objects('user', '123', 'viewer', 'document', 100, NULL);
 
--- Returns a table with object_id column
+-- Returns a table with object_id and next_cursor columns
+-- next_cursor is NULL when no more pages exist
 ```
 {{< /tab >}}
 
@@ -57,10 +62,121 @@ SELECT * FROM list_accessible_objects('user', '123', 'viewer', 'document');
 | `subject_id` | `text` | ID of the subject |
 | `relation` | `text` | The relation to check |
 | `object_type` | `text` | Type of objects to return |
+| `p_limit` | `int` | Maximum number of results per page (NULL = no limit) |
+| `p_after` | `text` | Cursor from previous page (NULL = start from beginning) |
 
 ## Return Value
 
-Returns a list of object IDs that the subject has the relation on. Empty list if no objects found (not an error).
+Returns a table with `object_id` and `next_cursor` columns. The `next_cursor` value is repeated on every row for convenience - use the last row's cursor to fetch the next page. Returns an empty result set if no objects found (not an error).
+
+{{< callout type="info" >}}
+**Ordering**: Results are ordered deterministically by `object_id` to ensure stable pagination across requests.
+{{< /callout >}}
+
+## Pagination
+
+### Cursor-Based Pagination
+
+Use cursor-based pagination to iterate through large result sets efficiently:
+
+{{< tabs items="Go,TypeScript,SQL" >}}
+
+{{< tab >}}
+```go
+// Paginate through all accessible repositories
+var cursor *string
+for {
+    ids, next, err := checker.ListObjects(ctx,
+        authz.User("123"),
+        authz.RelCanRead,
+        "repository",
+        melange.PageOptions{Limit: 100, After: cursor},
+    )
+    if err != nil {
+        return err
+    }
+
+    for _, id := range ids {
+        // Process each repository ID
+        fmt.Println("Accessible:", id)
+    }
+
+    if next == nil {
+        break // No more pages
+    }
+    cursor = next
+}
+```
+{{< /tab >}}
+
+{{< tab >}}
+```typescript
+// Paginate through all accessible repositories
+let cursor: string | null = null;
+
+while (true) {
+  const { rows } = await pool.query(
+    'SELECT object_id, next_cursor FROM list_accessible_objects($1, $2, $3, $4, $5, $6)',
+    ['user', userId, 'can_read', 'repository', 100, cursor]
+  );
+
+  for (const row of rows) {
+    // Process each repository ID
+    console.log('Accessible:', row.object_id);
+  }
+
+  cursor = rows.length > 0 ? rows[rows.length - 1].next_cursor : null;
+  if (!cursor) break; // No more pages
+}
+```
+{{< /tab >}}
+
+{{< tab >}}
+```sql
+-- First page
+SELECT object_id, next_cursor
+FROM list_accessible_objects('user', '123', 'viewer', 'document', 100, NULL);
+
+-- Returns: object_id | next_cursor
+--          doc-001   | doc-100
+--          doc-002   | doc-100
+--          ...
+--          doc-100   | doc-100
+
+-- Next page (use the next_cursor value)
+SELECT object_id, next_cursor
+FROM list_accessible_objects('user', '123', 'viewer', 'document', 100, 'doc-100');
+```
+{{< /tab >}}
+
+{{< /tabs >}}
+
+### Fetching All Results
+
+For convenience, use the `ListObjectsAll` helper which automatically paginates through all results:
+
+{{< tabs items="Go" >}}
+
+{{< tab >}}
+```go
+// Get all accessible repositories (auto-paginates internally)
+allRepoIDs, err := checker.ListObjectsAll(ctx,
+    authz.User("123"),
+    authz.RelCanRead,
+    "repository",
+)
+if err != nil {
+    return err
+}
+// allRepoIDs contains all accessible repository IDs
+```
+{{< /tab >}}
+
+{{< /tabs >}}
+
+{{< callout type="warning" >}}
+**Use with caution**: `ListObjectsAll` loads all IDs into memory. For large datasets, prefer paginated queries with `ListObjects` to control memory usage.
+{{< /callout >}}
 
 ## Examples
 
@@ -76,8 +192,8 @@ if err != nil {
     return err
 }
 
-// Get IDs the user can access
-accessibleIDs, err := checker.ListObjects(ctx, user, "can_read", "repository")
+// Get IDs the user can access (using ListObjectsAll for convenience)
+accessibleIDs, err := checker.ListObjectsAll(ctx, user, "can_read", "repository")
 if err != nil {
     return err
 }
@@ -103,10 +219,10 @@ for _, repo := range repos {
 // Get all repositories from your data layer
 const repos = await db.getAllRepositories();
 
-// Get IDs the user can access
+// Get IDs the user can access (NULL limit returns all)
 const { rows } = await pool.query(
-  'SELECT * FROM list_accessible_objects($1, $2, $3, $4)',
-  ['user', userId, 'can_read', 'repository']
+  'SELECT object_id FROM list_accessible_objects($1, $2, $3, $4, $5, $6)',
+  ['user', userId, 'can_read', 'repository', null, null]
 );
 const accessibleIds = new Set(rows.map(r => r.object_id));
 
@@ -117,10 +233,10 @@ const visibleRepos = repos.filter(repo => accessibleIds.has(repo.id));
 
 {{< tab >}}
 ```sql
--- Join with domain table to get full records
+-- Join with domain table to get full records (NULL limit returns all)
 SELECT d.*
 FROM documents d
-JOIN list_accessible_objects('user', '123', 'viewer', 'document') a
+JOIN list_accessible_objects('user', '123', 'viewer', 'document', NULL, NULL) a
     ON d.id::text = a.object_id;
 ```
 {{< /tab >}}
@@ -133,8 +249,8 @@ JOIN list_accessible_objects('user', '123', 'viewer', 'document') a
 
 {{< tab >}}
 ```go
-// Get accessible IDs first
-ids, err := checker.ListObjects(ctx, user, "can_read", "document")
+// Get accessible IDs first (using ListObjectsAll)
+ids, err := checker.ListObjectsAll(ctx, user, "can_read", "document")
 if err != nil {
     return nil, err
 }
@@ -151,10 +267,10 @@ return docs, err
 
 {{< tab >}}
 ```typescript
-// Get accessible IDs first
+// Get accessible IDs first (NULL limit returns all)
 const { rows } = await pool.query(
-  'SELECT * FROM list_accessible_objects($1, $2, $3, $4)',
-  ['user', userId, 'can_read', 'document']
+  'SELECT object_id FROM list_accessible_objects($1, $2, $3, $4, $5, $6)',
+  ['user', userId, 'can_read', 'document', null, null]
 );
 const ids = rows.map(r => r.object_id);
 
@@ -171,7 +287,7 @@ return docs;
 {{< tab >}}
 ```sql
 -- Count accessible objects
-SELECT COUNT(*) FROM list_accessible_objects('user', '123', 'viewer', 'document');
+SELECT COUNT(*) FROM list_accessible_objects('user', '123', 'viewer', 'document', NULL, NULL);
 ```
 {{< /tab >}}
 
@@ -190,7 +306,7 @@ type RepoWithPermissions struct {
     CanDelete bool
 }
 
-// Fetch all permission sets in parallel
+// Fetch all permission sets in parallel (using ListObjectsAll)
 var (
     readIDs, writeIDs, deleteIDs []string
     readErr, writeErr, deleteErr error
@@ -201,15 +317,15 @@ wg.Add(3)
 
 go func() {
     defer wg.Done()
-    readIDs, readErr = checker.ListObjects(ctx, user, "can_read", "repository")
+    readIDs, readErr = checker.ListObjectsAll(ctx, user, "can_read", "repository")
 }()
 go func() {
     defer wg.Done()
-    writeIDs, writeErr = checker.ListObjects(ctx, user, "can_write", "repository")
+    writeIDs, writeErr = checker.ListObjectsAll(ctx, user, "can_write", "repository")
 }()
 go func() {
     defer wg.Done()
-    deleteIDs, deleteErr = checker.ListObjects(ctx, user, "can_delete", "repository")
+    deleteIDs, deleteErr = checker.ListObjectsAll(ctx, user, "can_delete", "repository")
 }()
 wg.Wait()
 
@@ -243,11 +359,11 @@ interface RepoWithPermissions {
   canDelete: boolean;
 }
 
-// Fetch all permission sets in parallel
+// Fetch all permission sets in parallel (NULL limit returns all)
 const [readRows, writeRows, deleteRows] = await Promise.all([
-  pool.query('SELECT * FROM list_accessible_objects($1, $2, $3, $4)', ['user', userId, 'can_read', 'repository']),
-  pool.query('SELECT * FROM list_accessible_objects($1, $2, $3, $4)', ['user', userId, 'can_write', 'repository']),
-  pool.query('SELECT * FROM list_accessible_objects($1, $2, $3, $4)', ['user', userId, 'can_delete', 'repository']),
+  pool.query('SELECT object_id FROM list_accessible_objects($1, $2, $3, $4, $5, $6)', ['user', userId, 'can_read', 'repository', null, null]),
+  pool.query('SELECT object_id FROM list_accessible_objects($1, $2, $3, $4, $5, $6)', ['user', userId, 'can_write', 'repository', null, null]),
+  pool.query('SELECT object_id FROM list_accessible_objects($1, $2, $3, $4, $5, $6)', ['user', userId, 'can_delete', 'repository', null, null]),
 ]);
 
 // Build permission sets
@@ -281,8 +397,8 @@ ListObjects uses a recursive CTE that walks the permission graph in a single que
 
 Performance scales linearly with the number of tuples. For large datasets:
 
-1. **Pre-filter candidates** - If you know the user only cares about certain objects, filter at the application layer first
-2. **Use pagination** - Limit results and paginate through large sets
+1. **Use pagination** - Use `p_limit` to control result size and avoid loading unbounded data
+2. **Pre-filter candidates** - If you know the user only cares about certain objects, filter at the application layer first
 3. **Cache results** - Cache ListObjects results for repeated queries
 
 ## Decision Override Behavior
@@ -308,7 +424,7 @@ type CachedChecker struct {
     listCache *lru.Cache
 }
 
-func (c *CachedChecker) ListObjects(ctx context.Context, subject SubjectLike, relation RelationLike, objectType ObjectType) ([]string, error) {
+func (c *CachedChecker) ListObjectsAll(ctx context.Context, subject SubjectLike, relation RelationLike, objectType ObjectType) ([]string, error) {
     key := fmt.Sprintf("list:%s:%s:%s:%s",
         subject.FGASubject().Type,
         subject.FGASubject().ID,
@@ -320,7 +436,7 @@ func (c *CachedChecker) ListObjects(ctx context.Context, subject SubjectLike, re
         return cached.([]string), nil
     }
 
-    ids, err := c.Checker.ListObjects(ctx, subject, relation, objectType)
+    ids, err := c.Checker.ListObjectsAll(ctx, subject, relation, objectType)
     if err != nil {
         return nil, err
     }
@@ -354,8 +470,8 @@ async function listObjectsCached(
   }
 
   const { rows } = await pool.query(
-    'SELECT * FROM list_accessible_objects($1, $2, $3, $4)',
-    [subjectType, subjectId, relation, objectType]
+    'SELECT object_id FROM list_accessible_objects($1, $2, $3, $4, $5, $6)',
+    [subjectType, subjectId, relation, objectType, null, null]
   );
   const ids = rows.map(r => r.object_id);
 
@@ -375,26 +491,21 @@ async function listObjectsCached(
 
 {{< tab >}}
 ```go
-func GetAccessibleRepos(ctx context.Context, user User, page, pageSize int) ([]Repository, error) {
-    // Get all accessible IDs
-    allIDs, err := checker.ListObjects(ctx, user, "can_read", "repository")
+func GetAccessibleRepos(ctx context.Context, user User, cursor *string, pageSize int) ([]Repository, *string, error) {
+    // Get a page of accessible IDs with built-in pagination
+    ids, nextCursor, err := checker.ListObjects(ctx, user, "can_read", "repository",
+        melange.PageOptions{Limit: pageSize, After: cursor})
     if err != nil {
-        return nil, err
+        return nil, nil, err
     }
 
-    // Paginate the IDs
-    start := page * pageSize
-    if start >= len(allIDs) {
-        return []Repository{}, nil
+    if len(ids) == 0 {
+        return []Repository{}, nil, nil
     }
-    end := start + pageSize
-    if end > len(allIDs) {
-        end = len(allIDs)
-    }
-    pageIDs := allIDs[start:end]
 
-    // Fetch only the page of repos
-    return db.GetRepositoriesByIDs(ctx, pageIDs)
+    // Fetch the repos for this page
+    repos, err := db.GetRepositoriesByIDs(ctx, ids)
+    return repos, nextCursor, err
 }
 ```
 {{< /tab >}}
@@ -403,25 +514,25 @@ func GetAccessibleRepos(ctx context.Context, user User, page, pageSize int) ([]R
 ```typescript
 async function getAccessibleRepos(
   userId: string,
-  page: number,
+  cursor: string | null,
   pageSize: number
-): Promise<Repository[]> {
-  // Get all accessible IDs
+): Promise<{ repos: Repository[]; nextCursor: string | null }> {
+  // Get a page of accessible IDs with built-in pagination
   const { rows } = await pool.query(
-    'SELECT * FROM list_accessible_objects($1, $2, $3, $4)',
-    ['user', userId, 'can_read', 'repository']
+    'SELECT object_id, next_cursor FROM list_accessible_objects($1, $2, $3, $4, $5, $6)',
+    ['user', userId, 'can_read', 'repository', pageSize, cursor]
   );
-  const allIds = rows.map(r => r.object_id);
 
-  // Paginate the IDs
-  const start = page * pageSize;
-  if (start >= allIds.length) {
-    return [];
+  if (rows.length === 0) {
+    return { repos: [], nextCursor: null };
   }
-  const pageIds = allIds.slice(start, start + pageSize);
 
-  // Fetch only the page of repos
-  return db.getRepositoriesByIds(pageIds);
+  const ids = rows.map(r => r.object_id);
+  const nextCursor = rows[rows.length - 1].next_cursor;
+
+  // Fetch the repos for this page
+  const repos = await db.getRepositoriesByIds(ids);
+  return { repos, nextCursor };
 }
 ```
 {{< /tab >}}
@@ -441,7 +552,7 @@ func GetVisibleRepos(ctx context.Context, user User, isAdmin bool) ([]Repository
     }
 
     // Regular users see only accessible repos
-    ids, err := checker.ListObjects(ctx, user, "can_read", "repository")
+    ids, err := checker.ListObjectsAll(ctx, user, "can_read", "repository")
     if err != nil {
         return nil, err
     }
@@ -459,15 +570,70 @@ async function getVisibleRepos(userId: string, isAdmin: boolean): Promise<Reposi
     return db.getAllRepositories();
   }
 
-  // Regular users see only accessible repos
+  // Regular users see only accessible repos (NULL limit returns all)
   const { rows } = await pool.query(
-    'SELECT * FROM list_accessible_objects($1, $2, $3, $4)',
-    ['user', userId, 'can_read', 'repository']
+    'SELECT object_id FROM list_accessible_objects($1, $2, $3, $4, $5, $6)',
+    ['user', userId, 'can_read', 'repository', null, null]
   );
   const ids = rows.map(r => r.object_id);
 
   return db.getRepositoriesByIds(ids);
 }
+```
+{{< /tab >}}
+
+{{< /tabs >}}
+
+## Transaction Consistency
+
+Paginated queries across multiple calls can observe changes between pages. For consistency-critical flows, run paging inside a transaction with repeatable-read or snapshot semantics:
+
+{{< tabs items="Go,SQL" >}}
+
+{{< tab >}}
+```go
+// For consistent pagination across pages, use a transaction
+tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead})
+if err != nil {
+    return err
+}
+defer tx.Rollback()
+
+txChecker := melange.NewChecker(tx)
+
+var allIDs []string
+var cursor *string
+for {
+    ids, next, err := txChecker.ListObjects(ctx, user, "can_read", "document",
+        melange.PageOptions{Limit: 100, After: cursor})
+    if err != nil {
+        return err
+    }
+    allIDs = append(allIDs, ids...)
+    if next == nil {
+        break
+    }
+    cursor = next
+}
+
+tx.Commit()
+```
+{{< /tab >}}
+
+{{< tab >}}
+```sql
+-- For consistent pagination, use a transaction
+BEGIN ISOLATION LEVEL REPEATABLE READ;
+
+-- First page
+SELECT object_id, next_cursor
+FROM list_accessible_objects('user', '123', 'viewer', 'document', 100, NULL);
+
+-- Subsequent pages within the same transaction see consistent data
+SELECT object_id, next_cursor
+FROM list_accessible_objects('user', '123', 'viewer', 'document', 100, 'doc-100');
+
+COMMIT;
 ```
 {{< /tab >}}
 

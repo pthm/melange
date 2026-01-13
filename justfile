@@ -65,15 +65,18 @@ release VERSION="" ALLOW_DIRTY="":
     if [ "${version#v}" = "$version" ]; then
         version="v$version"
     fi
+    # Remove replace directive for release (allows go.mod to use published version)
+    just _remove-replace-directive
     # Tag and push melange submodule
     melange_tag="melange/$version"
     if git rev-parse -q --verify "refs/tags/$melange_tag" >/dev/null; then
         echo "Tag already exists: $melange_tag"
+        just _restore-replace-directive
         exit 1
     fi
     git tag -a "$melange_tag" -m "$melange_tag"
     git push origin "$melange_tag"
-    # Update go.mod to require the published version
+    # Update go.mod to require the published version (instead of local replace)
     go mod edit -require=github.com/pthm/melange/melange@"$version"
     echo "Waiting for tag to propagate..."
     sleep 5
@@ -116,7 +119,81 @@ release VERSION="" ALLOW_DIRTY="":
             exit 1
         fi
     fi
+    if [ -z "${HOMEBREW_TAP_GITHUB_TOKEN:-}" ]; then
+        if command -v gh >/dev/null 2>&1; then
+            export HOMEBREW_TAP_GITHUB_TOKEN="$(gh auth token)"
+        else
+            echo "HOMEBREW_TAP_GITHUB_TOKEN not set and gh cli not found"
+            exit 1
+        fi
+    fi
     goreleaser release --clean
+    # Restore replace directive for development
+    just _restore-replace-directive
+    git add go.mod
+    git commit -m "chore(release): restore replace directive for development"
+    git push
+
+# Build release snapshot for local testing (no publish)
+[group('Release')]
+[doc('Build release artifacts locally without publishing')]
+release-snapshot:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${GITHUB_TOKEN:-}" ]; then
+        if command -v gh >/dev/null 2>&1; then
+            export GITHUB_TOKEN="$(gh auth token)"
+        else
+            echo "GITHUB_TOKEN not set and gh cli not found"
+            exit 1
+        fi
+    fi
+    goreleaser release --snapshot --clean
+
+# Build release locally with GoReleaser (without publishing)
+[group('Release')]
+[doc('Build and package release locally, skipping publish step')]
+release-local:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "${GITHUB_TOKEN:-}" ]; then
+        if command -v gh >/dev/null 2>&1; then
+            export GITHUB_TOKEN="$(gh auth token)"
+        else
+            echo "GITHUB_TOKEN not set and gh cli not found"
+            exit 1
+        fi
+    fi
+    if [ -z "${HOMEBREW_TAP_GITHUB_TOKEN:-}" ]; then
+        if command -v gh >/dev/null 2>&1; then
+            export HOMEBREW_TAP_GITHUB_TOKEN="$(gh auth token)"
+        else
+            echo "HOMEBREW_TAP_GITHUB_TOKEN not set and gh cli not found"
+            exit 1
+        fi
+    fi
+    goreleaser release --clean --skip=publish
+
+[group('Release')]
+[private]
+[doc('Remove replace directive from go.mod for release')]
+_remove-replace-directive:
+    @sed -i.bak '/^\/\/ Use local melange module/,/^replace github.com\/pthm\/melange\/melange => \.\/melange/d' go.mod && rm -f go.mod.bak
+    @go mod tidy
+
+[group('Release')]
+[private]
+[doc('Restore replace directive to go.mod for development')]
+_restore-replace-directive:
+    @# Check if replace directive already exists
+    @if grep -q "replace github.com/pthm/melange/melange" go.mod; then \
+        echo "Replace directive already exists"; \
+        exit 0; \
+    fi
+    @# Add replace directive before the tool section
+    @awk '/^\/\/ Development tools/ { print "// Use local melange module during development instead of published version"; print "replace github.com/pthm/melange/melange => ./melange"; print ""; } { print }' go.mod > go.mod.tmp
+    @mv go.mod.tmp go.mod
+    @go mod tidy
 
 [group('Release')]
 [private]
@@ -196,12 +273,22 @@ build:
     version=$(cat VERSION 2>/dev/null || echo "dev")
     commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
     date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    go build -ldflags "-X main.version=$version -X main.commit=$commit -X main.date=$date" -o bin/melange ./cmd/melange
+    go build -ldflags "-X github.com/pthm/melange/internal/version.Version=$version -X github.com/pthm/melange/internal/version.Commit=$commit -X github.com/pthm/melange/internal/version.Date=$date" -o bin/melange ./cmd/melange
 
 # Build the CLI without version info (faster for development)
 [group('Build')]
 build-dev:
     go build -o bin/melange ./cmd/melange
+
+# Build and sign the binary (macOS only)
+[group('Build')]
+build-signed: build
+    mise exec -- ./scripts/sign-macos.sh bin/melange
+
+# Build, sign, and notarize the binary (macOS only, requires 1Password or env vars)
+[group('Build')]
+build-notarized: build
+    mise exec -- ./scripts/sign-macos.sh bin/melange --notarize
 
 # Generate root THIRD_PARTY_NOTICES from go-licenses output
 [group('Release')]
@@ -217,7 +304,7 @@ install:
     version=$(cat VERSION 2>/dev/null || echo "dev")
     commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
     date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    go install -ldflags "-X main.version=$version -X main.commit=$commit -X main.date=$date" ./cmd/melange
+    go install -ldflags "-X github.com/pthm/melange/internal/version.Version=$version -X github.com/pthm/melange/internal/version.Commit=$commit -X github.com/pthm/melange/internal/version.Date=$date" ./cmd/melange
 
 # =============================================================================
 # Linting and Formatting
@@ -324,11 +411,6 @@ test-openfga-full-check:
     @echo ""
     cd {{TEST}} && {{GO_TEST}} -count=1 -timeout {{OPENFGA_TEST_TIMEOUT_LONG}} \
         -run "TestOpenFGACheckSuite" {{OPENFGA_PKGS}} || true
-
-# Install gotestfmt if not already installed
-[group('OpenFGA Test')]
-install-gotestfmt:
-    go install github.com/gotesttools/gotestfmt/v2/cmd/gotestfmt@latest
 
 # =============================================================================
 # OpenFGA Benchmarks

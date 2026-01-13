@@ -29,4 +29,7 @@ package main
 
 func main() {
 	Execute()
+
+	// Show update notice after command execution (works even when commands fail)
+	ShowUpdateNoticeIfAvailable()
 }

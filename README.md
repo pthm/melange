@@ -24,7 +24,7 @@ Inspired by [OpenFGA](https://openfga.dev) and built on ideas from [pgFGA](https
 
 > **📚 Full Documentation**
 >
-> Visit **[melange.pthm.dev](https://melange.pthm.dev)** for comprehensive guides, API reference, and examples.
+> Visit **[melange.sh](https://melange.sh)** for comprehensive guides, API reference, and examples.
 
 ---
 
@@ -32,9 +32,29 @@ Inspired by [OpenFGA](https://openfga.dev) and built on ideas from [pgFGA](https
 
 ### CLI
 
+**Homebrew (macOS and Linux):**
+```bash
+brew install pthm/tap/melange
+```
+
+**Go install:**
 ```bash
 go install github.com/pthm/melange/cmd/melange@latest
 ```
+
+**Pre-built binaries:**
+Download from [GitHub Releases](https://github.com/pthm/melange/releases) (macOS binaries are code-signed)
+
+**Updating:**
+```bash
+# Homebrew
+brew upgrade melange
+
+# Go install
+go install github.com/pthm/melange/cmd/melange@latest
+```
+
+Melange automatically checks for updates and notifies you when a new version is available. Use `--no-update-check` to disable.
 
 ### Go Runtime
 
@@ -206,7 +226,7 @@ For bug reports and feature requests, please [open an issue](https://github.com/
 
 ## Resources
 
-- **[Documentation](https://melange.pthm.dev)** — Guides, API reference, and examples
+- **[Documentation](https://melange.sh)** — Guides, API reference, and examples
 - **[OpenFGA](https://openfga.dev)** — The authorization model Melange implements
 - **[Zanzibar Paper](https://research.google/pubs/pub48190/)** — Google's original authorization system
 - **[pgFGA](https://github.com/rover-app/pgfga)** — PostgreSQL FGA implementation that inspired this project
