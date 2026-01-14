@@ -35,6 +35,9 @@ type ListGeneratedSQL struct {
 func GenerateListSQL(analyses []RelationAnalysis, inline InlineSQLData) (ListGeneratedSQL, error) {
 	var result ListGeneratedSQL
 
+	// Build analysis lookup for TTU parent relation complexity detection
+	analysisLookup := buildAnalysisLookup(analyses)
+
 	// Generate specialized functions for each relation that can be generated
 	for _, a := range analyses {
 		if !a.Capabilities.ListAllowed {
@@ -42,7 +45,7 @@ func GenerateListSQL(analyses []RelationAnalysis, inline InlineSQLData) (ListGen
 		}
 
 		// Generate list_objects function
-		objFn, err := generateListObjectsFunction(a, inline)
+		objFn, err := generateListObjectsFunctionWithLookup(a, inline, analysisLookup)
 		if err != nil {
 			return ListGeneratedSQL{}, fmt.Errorf("generating list_objects function for %s.%s: %w",
 				a.ObjectType, a.Relation, err)
@@ -50,7 +53,7 @@ func GenerateListSQL(analyses []RelationAnalysis, inline InlineSQLData) (ListGen
 		result.ListObjectsFunctions = append(result.ListObjectsFunctions, objFn)
 
 		// Generate list_subjects function
-		subjFn, err := generateListSubjectsFunction(a, inline)
+		subjFn, err := generateListSubjectsFunctionWithLookup(a, inline, analysisLookup)
 		if err != nil {
 			return ListGeneratedSQL{}, fmt.Errorf("generating list_subjects function for %s.%s: %w",
 				a.ObjectType, a.Relation, err)
@@ -73,6 +76,16 @@ func GenerateListSQL(analyses []RelationAnalysis, inline InlineSQLData) (ListGen
 	return result, nil
 }
 
+// buildAnalysisLookup creates a map for quick analysis lookup by "objectType.relation".
+func buildAnalysisLookup(analyses []RelationAnalysis) map[string]*RelationAnalysis {
+	lookup := make(map[string]*RelationAnalysis, len(analyses))
+	for i := range analyses {
+		key := analyses[i].ObjectType + "." + analyses[i].Relation
+		lookup[key] = &analyses[i]
+	}
+	return lookup
+}
+
 func listObjectsFunctionName(objectType, relation string) string {
 	return ListObjectsFunctionName(objectType, relation)
 }
@@ -83,11 +96,16 @@ func listSubjectsFunctionName(objectType, relation string) string {
 
 // generateListObjectsFunction generates a specialized list_objects function for a relation.
 func generateListObjectsFunction(a RelationAnalysis, inline InlineSQLData) (string, error) {
+	return generateListObjectsFunctionWithLookup(a, inline, nil)
+}
+
+// generateListObjectsFunctionWithLookup generates a list_objects function with analysis lookup for TTU optimization.
+func generateListObjectsFunctionWithLookup(a RelationAnalysis, inline InlineSQLData, lookup map[string]*RelationAnalysis) (string, error) {
 	// Route to appropriate generator based on ListStrategy
 	switch a.ListStrategy {
 	case ListStrategyDirect, ListStrategyUserset, ListStrategyIntersection:
 		// Use unified Plan → Blocks → Render architecture
-		plan := BuildListObjectsPlan(a, inline)
+		plan := BuildListObjectsPlanWithLookup(a, inline, lookup)
 		blocks, err := BuildListObjectsBlocks(plan)
 		if err != nil {
 			return "", err
@@ -95,7 +113,7 @@ func generateListObjectsFunction(a RelationAnalysis, inline InlineSQLData) (stri
 		return RenderListObjectsFunction(plan, blocks)
 	case ListStrategyRecursive:
 		// Use Plan → Blocks → Render for TTU patterns
-		plan := BuildListObjectsPlan(a, inline)
+		plan := BuildListObjectsPlanWithLookup(a, inline, lookup)
 		blocks, err := BuildListObjectsRecursiveBlocks(plan)
 		if err != nil {
 			return "", err
@@ -103,11 +121,11 @@ func generateListObjectsFunction(a RelationAnalysis, inline InlineSQLData) (stri
 		return RenderListObjectsRecursiveFunction(plan, blocks)
 	case ListStrategyDepthExceeded:
 		// Use Plan → Render (no blocks needed - just raises error)
-		plan := BuildListObjectsPlan(a, inline)
+		plan := BuildListObjectsPlanWithLookup(a, inline, lookup)
 		return RenderListObjectsDepthExceededFunction(plan), nil
 	case ListStrategySelfRefUserset:
 		// Use Plan → Blocks → Render for self-referential userset patterns
-		plan := BuildListObjectsPlan(a, inline)
+		plan := BuildListObjectsPlanWithLookup(a, inline, lookup)
 		blocks, err := BuildListObjectsSelfRefUsersetBlocks(plan)
 		if err != nil {
 			return "", err
@@ -115,7 +133,7 @@ func generateListObjectsFunction(a RelationAnalysis, inline InlineSQLData) (stri
 		return RenderListObjectsSelfRefUsersetFunction(plan, blocks)
 	case ListStrategyComposed:
 		// Use Plan → Blocks → Render for indirect anchor composition
-		plan := BuildListObjectsPlan(a, inline)
+		plan := BuildListObjectsPlanWithLookup(a, inline, lookup)
 		blocks, err := BuildListObjectsComposedBlocks(plan)
 		if err != nil {
 			return "", err
@@ -128,11 +146,16 @@ func generateListObjectsFunction(a RelationAnalysis, inline InlineSQLData) (stri
 
 // generateListSubjectsFunction generates a specialized list_subjects function for a relation.
 func generateListSubjectsFunction(a RelationAnalysis, inline InlineSQLData) (string, error) {
+	return generateListSubjectsFunctionWithLookup(a, inline, nil)
+}
+
+// generateListSubjectsFunctionWithLookup generates a list_subjects function with analysis lookup for TTU optimization.
+func generateListSubjectsFunctionWithLookup(a RelationAnalysis, inline InlineSQLData, lookup map[string]*RelationAnalysis) (string, error) {
 	// Route to appropriate generator based on ListStrategy
 	switch a.ListStrategy {
 	case ListStrategyDirect, ListStrategyUserset:
 		// Wire to Plan → Blocks → Render
-		plan := BuildListSubjectsPlan(a, inline)
+		plan := BuildListSubjectsPlanWithLookup(a, inline, lookup)
 		blocks, err := BuildListSubjectsBlocks(plan)
 		if err != nil {
 			return "", err
@@ -140,23 +163,23 @@ func generateListSubjectsFunction(a RelationAnalysis, inline InlineSQLData) (str
 		return RenderListSubjectsFunction(plan, blocks)
 	case ListStrategyRecursive:
 		// Wire to Plan → Blocks → Render for TTU patterns
-		plan := BuildListSubjectsPlan(a, inline)
+		plan := BuildListSubjectsPlanWithLookup(a, inline, lookup)
 		blocks, err := BuildListSubjectsRecursiveBlocks(plan)
 		if err != nil {
 			return "", err
 		}
 		return RenderListSubjectsRecursiveFunction(plan, blocks)
 	case ListStrategyIntersection:
-		plan := BuildListSubjectsPlan(a, inline)
+		plan := BuildListSubjectsPlanWithLookup(a, inline, lookup)
 		blocks := BuildListSubjectsIntersectionBlocks(plan)
 		return RenderListSubjectsIntersectionFunction(plan, blocks)
 	case ListStrategyDepthExceeded:
 		// Use Plan → Render (no blocks needed - just raises error)
-		plan := BuildListSubjectsPlan(a, inline)
+		plan := BuildListSubjectsPlanWithLookup(a, inline, lookup)
 		return RenderListSubjectsDepthExceededFunction(plan), nil
 	case ListStrategySelfRefUserset:
 		// Use Plan → Blocks → Render for self-referential userset patterns
-		plan := BuildListSubjectsPlan(a, inline)
+		plan := BuildListSubjectsPlanWithLookup(a, inline, lookup)
 		blocks, err := BuildListSubjectsSelfRefUsersetBlocks(plan)
 		if err != nil {
 			return "", err
@@ -164,7 +187,7 @@ func generateListSubjectsFunction(a RelationAnalysis, inline InlineSQLData) (str
 		return RenderListSubjectsSelfRefUsersetFunction(plan, blocks)
 	case ListStrategyComposed:
 		// Use Plan → Blocks → Render for indirect anchor composition
-		plan := BuildListSubjectsPlan(a, inline)
+		plan := BuildListSubjectsPlanWithLookup(a, inline, lookup)
 		blocks, err := BuildListSubjectsComposedBlocks(plan)
 		if err != nil {
 			return "", err
@@ -195,6 +218,13 @@ type ListParentRelationData struct {
 	// IsSelfReferential is true for the same linking relation.
 	CrossTypeLinkingTypes string
 	HasCrossTypeLinks     bool // True if CrossTypeLinkingTypes is non-empty
+
+	// IsClosurePattern indicates this TTU pattern was inherited from an implied relation.
+	// For example, if `can_read: reader` and `reader: repo_admin from owner but not restricted`,
+	// then can_read's TTU "owner -> repo_admin" is a closure pattern with SourceRelation="reader".
+	// Closure patterns must verify through the source relation to honor its exclusions/intersections.
+	IsClosurePattern bool
+	SourceRelation   string // The relation this TTU was inherited from (for closure patterns)
 }
 
 // ListUsersetPatternData contains data for rendering userset pattern expansion in list templates.
@@ -323,8 +353,10 @@ func buildListParentRelations(a RelationAnalysis) []ListParentRelationData {
 		seen[key] = true
 
 		data := ListParentRelationData{
-			Relation:        p.Relation,
-			LinkingRelation: p.LinkingRelation,
+			Relation:         p.Relation,
+			LinkingRelation:  p.LinkingRelation,
+			IsClosurePattern: p.SourceRelation != "", // Closure pattern if SourceRelation was set
+			SourceRelation:   p.SourceRelation,       // Will be empty for direct patterns
 		}
 
 		if len(p.AllowedLinkingTypes) > 0 {

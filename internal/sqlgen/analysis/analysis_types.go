@@ -167,6 +167,7 @@ type ParentRelationInfo struct {
 	Relation            string   // Relation to check on parent (e.g., "viewer")
 	LinkingRelation     string   // Relation that links to parent (e.g., "parent")
 	AllowedLinkingTypes []string // Types allowed for linking relation (e.g., ["folder", "org"])
+	SourceRelation      string   // For closure patterns: the relation this TTU was inherited from (e.g., "reader" in "can_read: reader")
 }
 
 // IntersectionPart represents one part of an intersection check.
@@ -1332,7 +1333,11 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 					key := parent.LinkingRelation + "->" + parent.Relation
 					if !seenParent[key] {
 						seenParent[key] = true
-						closureParentRelations = append(closureParentRelations, parent)
+						// Copy the parent and set SourceRelation to the closure relation
+						// so list functions know this TTU was inherited and must verify through source relation
+						parentCopy := parent
+						parentCopy.SourceRelation = rel
+						closureParentRelations = append(closureParentRelations, parentCopy)
 					}
 				}
 			}

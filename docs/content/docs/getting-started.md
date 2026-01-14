@@ -471,7 +471,7 @@ checker := melange.NewChecker(db, melange.WithCache(cache))
 allowed, _ := checker.Check(ctx, user, "can_read", repo)
 
 // Subsequent checks for same tuple are served from cache
-allowed, _ = checker.Check(ctx, user, "can_read", repo) // ~79ns vs ~980us
+allowed, _ = checker.Check(ctx, user, "can_read", repo) // ~83ns vs ~422μs
 ```
 {{< /tab >}}
 

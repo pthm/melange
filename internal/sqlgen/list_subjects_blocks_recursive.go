@@ -271,28 +271,137 @@ func buildListSubjectsRecursiveTTUBlocks(plan ListPlan, parentRelations []ListPa
 }
 
 // buildListSubjectsRecursiveTTUBlock builds a single TTU path block for recursive list_subjects.
+// Chooses between parent closure optimization (for simple relations) and subject_pool approach (for complex relations).
 func buildListSubjectsRecursiveTTUBlock(plan ListPlan, parent ListParentRelationData) TypedQueryBlock {
-	exclusions := buildExclusionInput(plan.Analysis, ObjectID, SubjectType, Col{Table: "sp", Column: "subject_id"})
+	// Check if ANY parent type has a complex target relation
+	// If so, we must use the subject_pool approach for ALL parent types
+	isComplex := isParentRelationComplex(plan, parent)
 
-	checkExpr := CheckPermissionInternalExpr(
-		SubjectRef{Type: SubjectType, ID: Col{Table: "sp", Column: "subject_id"}},
-		parent.Relation,
-		ObjectRef{Type: Col{Table: "link", Column: "subject_type"}, ID: Col{Table: "link", Column: "subject_id"}},
-		true,
-	)
-
-	whereConditions := []Expr{
-		Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(plan.ObjectType)},
-		Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
-		Eq{Left: Col{Table: "link", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
-		checkExpr,
+	if isComplex {
+		// Parent relation has intersection/exclusion/etc - use subject_pool + check_permission_internal
+		return buildListSubjectsRecursiveTTUBlockSubjectPool(plan, parent)
 	}
 
-	if len(parent.AllowedLinkingTypesSlice) > 0 {
-		whereConditions = append(whereConditions, In{Expr: Col{Table: "link", Column: "subject_type"}, Values: parent.AllowedLinkingTypesSlice})
+	// Parent relation is simple (Direct or simple Implied) - use parent closure optimization
+	return buildListSubjectsRecursiveTTUBlockParentClosure(plan, parent)
+}
+
+// isParentRelationComplex checks if any parent type's target relation is complex.
+// Returns true if ANY parent type has intersection, exclusion, userset, or recursive features
+// in the target relation, which means we cannot use parent closure optimization.
+func isParentRelationComplex(plan ListPlan, parent ListParentRelationData) bool {
+	// If we don't have an analysis lookup, conservatively assume simple (current behavior)
+	if plan.AnalysisLookup == nil {
+		return false
+	}
+
+	// Check each parent type's target relation
+	for _, parentType := range parent.AllowedLinkingTypesSlice {
+		key := parentType + "." + parent.Relation
+		analysis := plan.AnalysisLookup[key]
+		if analysis == nil {
+			// Unknown parent relation - conservatively treat as complex
+			return true
+		}
+
+		// Check if this parent relation has complex features
+		// Complex = not simply resolvable (has intersection, exclusion, userset, or recursive)
+		if !analysis.Features.IsSimplyResolvable() {
+			return true
+		}
+	}
+
+	return false
+}
+
+// buildListSubjectsRecursiveTTUBlockParentClosure builds a TTU block using parent closure optimization.
+// This scans for direct grants on parent ancestors - only correct for simple parent relations.
+func buildListSubjectsRecursiveTTUBlockParentClosure(plan ListPlan, parent ListParentRelationData) TypedQueryBlock {
+	exclusions := buildExclusionInput(plan.Analysis, ObjectID, SubjectType, Col{Table: "t", Column: "subject_id"})
+
+	// Build query that scans for grants on parent ancestors
+	// parent_closure CTE returns (subject_type, subject_id, depth) where subject is the parent object
+	whereConditions := []Expr{
+		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
+		Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(parent.Relation)},
+		NoUserset{Source: Col{Table: "t", Column: "subject_id"}},
+	}
+
+	if plan.ExcludeWildcard() {
+		whereConditions = append(whereConditions, Ne{Left: Col{Table: "t", Column: "subject_id"}, Right: Lit("*")})
 	}
 	whereConditions = append(whereConditions, exclusions.BuildPredicates()...)
 
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "t", Column: "subject_id"}},
+		FromExpr:    TableAs("parent_closure", "p"),
+		Joins: []JoinClause{{
+			Type:  "INNER",
+			Table: "melange_tuples",
+			Alias: "t",
+			On: And(
+				Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Col{Table: "p", Column: "subject_type"}},
+				Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "p", Column: "subject_id"}},
+			),
+		}},
+		Where: And(whereConditions...),
+	}
+
+	return TypedQueryBlock{
+		Comments: []string{fmt.Sprintf("-- TTU: subjects via %s -> %s (parent closure optimization)", parent.LinkingRelation, parent.Relation)},
+		Query:    stmt,
+	}
+}
+
+// buildListSubjectsRecursiveTTUBlockSubjectPool builds a TTU block using subject_pool + check_permission_internal.
+// This is used when the parent relation is complex (has intersection, exclusion, etc.) and cannot use
+// the parent closure optimization. It verifies each subject-parent combination via permission check.
+func buildListSubjectsRecursiveTTUBlockSubjectPool(plan ListPlan, parent ListParentRelationData) TypedQueryBlock {
+	// Build WHERE clause for linking relation tuples
+	linkWhere := []Expr{
+		Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+		Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
+		Eq{Left: Col{Table: "link", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
+	}
+
+	if len(parent.AllowedLinkingTypesSlice) > 0 {
+		linkWhere = append(linkWhere, In{Expr: Col{Table: "link", Column: "subject_type"}, Values: parent.AllowedLinkingTypesSlice})
+	}
+
+	// Build check_permission_internal call
+	// For closure patterns, verify through the SOURCE relation (e.g., "reader") not the current relation (e.g., "can_read")
+	// This ensures exclusions and other complex features from the source relation are honored
+	var checkCallSQL string
+	var comment string
+	if parent.IsClosurePattern {
+		// Closure pattern: verify through source relation on the TARGET object
+		// Example: can_read->owner->repo_admin should verify "reader" on the target object (repo)
+		// to honor "reader: repo_admin from owner but not restricted"
+		checkCallSQL = fmt.Sprintf(
+			"check_permission_internal(%s, %s, %s, %s, %s) = 1",
+			SubjectType.SQL(),                                  // subject_type (param)
+			Col{Table: "sp", Column: "subject_id"}.SQL(),      // subject_id (from subject_pool)
+			Lit(parent.SourceRelation).SQL(),                   // relation to check (SOURCE relation like "reader")
+			Lit(plan.ObjectType).SQL(),                         // object_type (target object type like "repo")
+			ObjectID.SQL(),                                     // object_id (target object id - param)
+		)
+		comment = fmt.Sprintf("-- TTU: subjects via %s -> %s (closure pattern from %s - verifying through source relation)", parent.LinkingRelation, parent.Relation, parent.SourceRelation)
+	} else {
+		// Direct parent pattern: verify the parent relation on the parent object
+		// check_permission_internal(subject_type, subject_id, relation, object_type, object_id)
+		checkCallSQL = fmt.Sprintf(
+			"check_permission_internal(%s, %s, %s, %s, %s) = 1",
+			SubjectType.SQL(),                                  // subject_type (param)
+			Col{Table: "sp", Column: "subject_id"}.SQL(),      // subject_id (from subject_pool)
+			Lit(parent.Relation).SQL(),                         // relation to check on parent
+			Col{Table: "link", Column: "subject_type"}.SQL(),  // object_type (parent type)
+			Col{Table: "link", Column: "subject_id"}.SQL(),    // object_id (parent id)
+		)
+		comment = fmt.Sprintf("-- TTU: subjects via %s -> %s (complex parent relation - using subject_pool)", parent.LinkingRelation, parent.Relation)
+	}
+
+	// Build the query: CROSS JOIN subject_pool with parent links, filter by permission check
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "sp", Column: "subject_id"}},
@@ -301,13 +410,12 @@ func buildListSubjectsRecursiveTTUBlock(plan ListPlan, parent ListParentRelation
 			Type:  "CROSS",
 			Table: "melange_tuples",
 			Alias: "link",
-			On:    Bool(true),
 		}},
-		Where: And(whereConditions...),
+		Where: And(append(linkWhere, Raw(checkCallSQL))...),
 	}
 
 	return TypedQueryBlock{
-		Comments: []string{fmt.Sprintf("-- TTU: subjects via %s -> %s", parent.LinkingRelation, parent.Relation)},
+		Comments: []string{comment},
 		Query:    stmt,
 	}
 }

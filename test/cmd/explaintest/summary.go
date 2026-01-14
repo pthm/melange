@@ -9,16 +9,21 @@ import (
 	"github.com/openfga/openfga/pkg/testutils"
 )
 
-// TestSummary holds aggregate performance metrics for a test.
+// EndpointMetrics holds performance metrics for a specific endpoint type.
+type EndpointMetrics struct {
+	Count         int
+	AvgExecTimeMS float64
+	MaxExecTimeMS float64
+	TotalBuffers  int
+}
+
+// TestSummary holds aggregate performance metrics for a test, split by endpoint type.
 type TestSummary struct {
-	TestName       string
-	CheckCount     int
-	ListObjsCount  int
-	ListUsersCount int
-	AvgExecTimeMS  float64
-	MaxExecTimeMS  float64
-	TotalBuffers   int
-	OutlierCount   int
+	TestName     string
+	Check        EndpointMetrics
+	ListObjects  EndpointMetrics
+	ListSubjects EndpointMetrics
+	OutlierCount int
 }
 
 // runSummaryMode executes EXPLAIN ANALYZE across all tests matching a pattern
@@ -45,9 +50,9 @@ func runSummaryMode(pattern string) error {
 
 	fmt.Println()
 
-	// Sort by average execution time (descending - slowest first)
+	// Sort by overall average execution time (descending - slowest first)
 	sort.Slice(summaries, func(i, j int) bool {
-		return summaries[i].AvgExecTimeMS > summaries[j].AvgExecTimeMS
+		return getOverallAvgTime(summaries[i]) > getOverallAvgTime(summaries[j])
 	})
 
 	// Calculate median for outlier detection
@@ -55,7 +60,7 @@ func runSummaryMode(pattern string) error {
 
 	// Mark outliers (>2x median)
 	for _, s := range summaries {
-		if s.AvgExecTimeMS > 2*median && median > 0 {
+		if getOverallAvgTime(s) > 2*median && median > 0 {
 			s.OutlierCount = 1 // Flag as outlier
 		}
 	}
@@ -64,6 +69,18 @@ func runSummaryMode(pattern string) error {
 	printSummaryTable(summaries)
 
 	return nil
+}
+
+// getOverallAvgTime calculates the overall average execution time across all endpoint types.
+func getOverallAvgTime(s *TestSummary) float64 {
+	totalTime := s.Check.AvgExecTimeMS*float64(s.Check.Count) +
+		s.ListObjects.AvgExecTimeMS*float64(s.ListObjects.Count) +
+		s.ListSubjects.AvgExecTimeMS*float64(s.ListSubjects.Count)
+	totalCount := s.Check.Count + s.ListObjects.Count + s.ListSubjects.Count
+	if totalCount == 0 {
+		return 0
+	}
+	return totalTime / float64(totalCount)
 }
 
 // runTestSummary executes EXPLAIN ANALYZE on a single test and returns aggregated metrics.
@@ -118,9 +135,9 @@ func runTestSummary(tc TestCase) (*TestSummary, error) {
 		}
 	}
 
-	var totalExecTime float64
-	var maxExecTime float64
-	var totalBuffers int
+	// Separate metrics for each endpoint type
+	var checkExecTime, listObjsExecTime, listUsersExecTime float64
+	var checkBuffers, listObjsBuffers, listUsersBuffers int
 
 	// Process check assertions
 	opts := Options{Buffers: true, Timing: true}
@@ -129,17 +146,17 @@ func runTestSummary(tc TestCase) (*TestSummary, error) {
 			continue
 		}
 
-		result, err := explainCheckAssertion(ctx, db, summary.CheckCount+1, assertion, opts)
+		result, err := explainCheckAssertion(ctx, db, summary.Check.Count+1, assertion, opts)
 		if err != nil {
 			continue // Skip failures in summary mode
 		}
 
-		summary.CheckCount++
-		totalExecTime += result.Metrics.ExecutionTimeMS
-		if result.Metrics.ExecutionTimeMS > maxExecTime {
-			maxExecTime = result.Metrics.ExecutionTimeMS
+		summary.Check.Count++
+		checkExecTime += result.Metrics.ExecutionTimeMS
+		if result.Metrics.ExecutionTimeMS > summary.Check.MaxExecTimeMS {
+			summary.Check.MaxExecTimeMS = result.Metrics.ExecutionTimeMS
 		}
-		totalBuffers += result.Metrics.BufferHits
+		checkBuffers += result.Metrics.BufferHits
 	}
 
 	// Process list_objects assertions
@@ -153,12 +170,12 @@ func runTestSummary(tc TestCase) (*TestSummary, error) {
 			continue
 		}
 
-		summary.ListObjsCount++
-		totalExecTime += result.Metrics.ExecutionTimeMS
-		if result.Metrics.ExecutionTimeMS > maxExecTime {
-			maxExecTime = result.Metrics.ExecutionTimeMS
+		summary.ListObjects.Count++
+		listObjsExecTime += result.Metrics.ExecutionTimeMS
+		if result.Metrics.ExecutionTimeMS > summary.ListObjects.MaxExecTimeMS {
+			summary.ListObjects.MaxExecTimeMS = result.Metrics.ExecutionTimeMS
 		}
-		totalBuffers += result.Metrics.BufferHits
+		listObjsBuffers += result.Metrics.BufferHits
 	}
 
 	// Process list_users assertions
@@ -172,30 +189,53 @@ func runTestSummary(tc TestCase) (*TestSummary, error) {
 			continue
 		}
 
-		summary.ListUsersCount++
-		totalExecTime += result.Metrics.ExecutionTimeMS
-		if result.Metrics.ExecutionTimeMS > maxExecTime {
-			maxExecTime = result.Metrics.ExecutionTimeMS
+		summary.ListSubjects.Count++
+		listUsersExecTime += result.Metrics.ExecutionTimeMS
+		if result.Metrics.ExecutionTimeMS > summary.ListSubjects.MaxExecTimeMS {
+			summary.ListSubjects.MaxExecTimeMS = result.Metrics.ExecutionTimeMS
 		}
-		totalBuffers += result.Metrics.BufferHits
+		listUsersBuffers += result.Metrics.BufferHits
 	}
 
-	// Calculate averages
-	totalAssertions := summary.CheckCount + summary.ListObjsCount + summary.ListUsersCount
-	if totalAssertions > 0 {
-		summary.AvgExecTimeMS = totalExecTime / float64(totalAssertions)
+	// Calculate averages for each endpoint type
+	if summary.Check.Count > 0 {
+		summary.Check.AvgExecTimeMS = checkExecTime / float64(summary.Check.Count)
+		summary.Check.TotalBuffers = checkBuffers
 	}
-	summary.MaxExecTimeMS = maxExecTime
-	summary.TotalBuffers = totalBuffers
+	if summary.ListObjects.Count > 0 {
+		summary.ListObjects.AvgExecTimeMS = listObjsExecTime / float64(summary.ListObjects.Count)
+		summary.ListObjects.TotalBuffers = listObjsBuffers
+	}
+	if summary.ListSubjects.Count > 0 {
+		summary.ListSubjects.AvgExecTimeMS = listUsersExecTime / float64(summary.ListSubjects.Count)
+		summary.ListSubjects.TotalBuffers = listUsersBuffers
+	}
 
 	return summary, nil
 }
 
-// printSummaryTable prints a formatted table of test summaries.
+// printSummaryTable prints a formatted table of test summaries with split metrics.
 func printSummaryTable(summaries []*TestSummary) {
-	fmt.Printf("%-40s %7s %8s %8s %9s %9s\n",
-		"Test", "Checks", "Avg(ms)", "Max(ms)", "Buffers", "Outlier")
-	fmt.Println(strings.Repeat("-", 95))
+	// Header
+	fmt.Println("Performance Summary by Endpoint Type")
+	fmt.Println()
+
+	// Column headers
+	fmt.Printf("%-40s | %-30s | %-30s | %-30s | %7s\n",
+		"Test",
+		"Check",
+		"ListObjects",
+		"ListSubjects",
+		"Outlier",
+	)
+	fmt.Printf("%-40s | %5s %8s %8s %6s | %5s %8s %8s %6s | %5s %8s %8s %6s | %7s\n",
+		"",
+		"Cnt", "Avg(ms)", "Max(ms)", "Bufs",
+		"Cnt", "Avg(ms)", "Max(ms)", "Bufs",
+		"Cnt", "Avg(ms)", "Max(ms)", "Bufs",
+		"",
+	)
+	fmt.Println(strings.Repeat("-", 180))
 
 	for _, s := range summaries {
 		outlierMarker := ""
@@ -203,17 +243,34 @@ func printSummaryTable(summaries []*TestSummary) {
 			outlierMarker = "⚠"
 		}
 
-		fmt.Printf("%-40s %7d %8.2f %8.2f %9d %9s\n",
+		// Format each endpoint's metrics
+		checkStr := formatEndpointMetrics(s.Check)
+		listObjsStr := formatEndpointMetrics(s.ListObjects)
+		listSubjectsStr := formatEndpointMetrics(s.ListSubjects)
+
+		fmt.Printf("%-40s | %30s | %30s | %30s | %7s\n",
 			truncate(s.TestName, 40),
-			s.CheckCount,
-			s.AvgExecTimeMS,
-			s.MaxExecTimeMS,
-			s.TotalBuffers,
+			checkStr,
+			listObjsStr,
+			listSubjectsStr,
 			outlierMarker,
 		)
 	}
 
 	fmt.Println()
+}
+
+// formatEndpointMetrics formats endpoint metrics into a string.
+func formatEndpointMetrics(m EndpointMetrics) string {
+	if m.Count == 0 {
+		return fmt.Sprintf("%5s %8s %8s %6s", "-", "-", "-", "-")
+	}
+	return fmt.Sprintf("%5d %8.2f %8.2f %6d",
+		m.Count,
+		m.AvgExecTimeMS,
+		m.MaxExecTimeMS,
+		m.TotalBuffers,
+	)
 }
 
 // truncate truncates a string to a maximum length.
@@ -224,16 +281,16 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
-// calculateMedian calculates the median average execution time.
+// calculateMedian calculates the median overall average execution time.
 func calculateMedian(summaries []*TestSummary) float64 {
 	if len(summaries) == 0 {
 		return 0
 	}
 
-	// Extract execution times
+	// Extract overall execution times
 	times := make([]float64, len(summaries))
 	for i, s := range summaries {
-		times[i] = s.AvgExecTimeMS
+		times[i] = getOverallAvgTime(s)
 	}
 
 	// Sort times

@@ -120,7 +120,11 @@ func convertParentRelations(relations []ParentRelationInfo) []ExcludedParentRela
 	}
 	result := make([]ExcludedParentRelation, len(relations))
 	for i, rel := range relations {
-		result[i] = ExcludedParentRelation(rel)
+		result[i] = ExcludedParentRelation{
+			Relation:            rel.Relation,
+			LinkingRelation:     rel.LinkingRelation,
+			AllowedLinkingTypes: rel.AllowedLinkingTypes,
+		}
 	}
 	return result
 }

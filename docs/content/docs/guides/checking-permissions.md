@@ -189,10 +189,10 @@ Enable caching to reduce database load for repeated checks:
 cache := melange.NewCache(melange.WithTTL(time.Minute))
 checker := melange.NewChecker(db, melange.WithCache(cache))
 
-// First check hits the database (~1ms)
+// First check hits the database (~422μs)
 allowed, _ := checker.Check(ctx, user, "can_read", repo)
 
-// Subsequent checks hit the cache (~79ns)
+// Subsequent checks hit the cache (~83ns)
 allowed, _ = checker.Check(ctx, user, "can_read", repo)
 ```
 
