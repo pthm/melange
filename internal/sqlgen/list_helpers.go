@@ -240,7 +240,7 @@ func generateListObjectsDispatcher(analyses []RelationAnalysis) (string, error) 
 	fn := PlpgsqlFunction{
 		Name:    "list_accessible_objects",
 		Args:    ListObjectsDispatcherArgs(),
-		Returns: "TABLE (object_id TEXT, next_cursor TEXT)",
+		Returns: "TABLE (object_id TEXT, next_cursor TEXT) ROWS 100",
 		Header: []string{
 			"Generated dispatcher for list_accessible_objects",
 			"Routes to specialized functions for all type/relation pairs",
@@ -257,7 +257,7 @@ func generateListSubjectsDispatcher(analyses []RelationAnalysis) (string, error)
 	fn := PlpgsqlFunction{
 		Name:    "list_accessible_subjects",
 		Args:    ListSubjectsDispatcherArgs(),
-		Returns: "TABLE (subject_id TEXT, next_cursor TEXT)",
+		Returns: "TABLE (subject_id TEXT, next_cursor TEXT) ROWS 100",
 		Header: []string{
 			"Generated dispatcher for list_accessible_subjects",
 			"Routes to specialized functions for all type/relation pairs",
