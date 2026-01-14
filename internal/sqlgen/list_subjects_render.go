@@ -8,7 +8,7 @@ func RenderListSubjectsFunction(plan ListPlan, blocks BlockSet) (string, error) 
 	usersetFilterPaginatedQuery := renderUsersetFilterPaginatedQuery(secondaryBlocks, blocks.SecondarySelf)
 
 	regularQuery := RenderUnionBlocks(primaryBlocks)
-	regularPaginatedQuery := wrapWithPaginationWildcardFirst(regularQuery)
+	regularPaginatedQuery := renderRegularPaginatedQuery(plan, regularQuery)
 
 	// Build the THEN branch (userset filter path)
 	thenBranch := renderUsersetFilterThenBranch(usersetFilterPaginatedQuery)

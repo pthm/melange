@@ -36,6 +36,9 @@ type ListPlan struct {
 	HasUsersetPatterns  bool // Has userset patterns to expand
 	HasComplexUsersets  bool // Has userset patterns requiring check_permission calls
 	HasStandaloneAccess bool // Has standalone access paths (not constrained by intersection)
+
+	// Optimization flags
+	UseCTEExclusion bool // Use CTE-based exclusion optimization (precompute + anti-join)
 }
 
 // BuildListObjectsPlan creates a plan for generating a list_objects function.
@@ -62,6 +65,9 @@ func BuildListSubjectsPlan(a RelationAnalysis, inline InlineSQLData) ListPlan {
 			Col{Table: "t", Column: "subject_type"},
 			Col{Table: "t", Column: "subject_id"},
 		)
+		// Enable CTE optimization when eligible and relation has userset patterns
+		// (JOIN expansion benefits from precomputed exclusions)
+		plan.UseCTEExclusion = plan.Exclusions.CanUseCTEOptimization() && a.Features.HasUserset
 	}
 	return plan
 }

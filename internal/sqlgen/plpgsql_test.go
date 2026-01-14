@@ -230,7 +230,7 @@ func TestListObjectsHelpers(t *testing.T) {
 	}
 
 	returns := ListObjectsReturns()
-	if returns != "TABLE(object_id TEXT, next_cursor TEXT)" {
+	if returns != "TABLE(object_id TEXT, next_cursor TEXT) ROWS 100" {
 		t.Errorf("ListObjectsReturns() = %q", returns)
 	}
 }
@@ -242,7 +242,7 @@ func TestListSubjectsHelpers(t *testing.T) {
 	}
 
 	returns := ListSubjectsReturns()
-	if returns != "TABLE(subject_id TEXT, next_cursor TEXT)" {
+	if returns != "TABLE(subject_id TEXT, next_cursor TEXT) ROWS 100" {
 		t.Errorf("ListSubjectsReturns() = %q", returns)
 	}
 }

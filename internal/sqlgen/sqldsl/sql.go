@@ -588,3 +588,71 @@ func WrapWithPaginationWildcardFirst(query string) string {
     CROSS JOIN next n`,
 		IndentLines(query, "        "))
 }
+
+// WrapWithExclusionCTEAndPagination wraps a query with exclusion CTE precomputation
+// and wildcard-first pagination.
+//
+// Optimization: Materializes excluded subjects once in a CTE, then applies a single
+// LEFT JOIN...WHERE IS NULL anti-pattern instead of repeated NOT EXISTS subqueries.
+//
+// Structure:
+//   WITH excluded_subjects AS (SELECT subject_id FROM melange_tuples WHERE ...),
+//   candidates AS (...original UNION without exclusion predicates...),
+//   base_results AS (
+//     SELECT DISTINCT s.subject_id FROM candidates s
+//     LEFT JOIN excluded_subjects excl
+//       ON excl.subject_id = s.subject_id OR excl.subject_id = '*'
+//     WHERE excl.subject_id IS NULL
+//   ),
+//   ...pagination CTEs...
+//
+// Parameters:
+//   query: UNION of all access paths (without exclusion predicates)
+//   exclusionCTE: SQL for exclusion CTE (SELECT subject_id FROM ...)
+//
+// Returns: Complete paginated query with exclusion anti-join
+func WrapWithExclusionCTEAndPagination(query, exclusionCTE string) string {
+	return fmt.Sprintf(`WITH excluded_subjects AS (
+%s
+    ),
+    candidates AS (
+%s
+    ),
+    base_results AS (
+        SELECT DISTINCT s.subject_id
+        FROM candidates s
+        LEFT JOIN excluded_subjects excl
+          ON excl.subject_id = s.subject_id OR excl.subject_id = '*'
+        WHERE excl.subject_id IS NULL
+    ),
+    paged AS (
+        SELECT br.subject_id
+        FROM base_results br
+        WHERE p_after IS NULL OR (
+            -- Compound comparison for wildcard-first ordering:
+            -- (is_not_wildcard, subject_id) > (cursor_is_not_wildcard, cursor)
+            (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END, br.subject_id) >
+            (CASE WHEN p_after = '*' THEN 0 ELSE 1 END, p_after)
+        )
+        ORDER BY (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END), br.subject_id
+        LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
+    ),
+    returned AS (
+        SELECT p.subject_id FROM paged p
+        ORDER BY (CASE WHEN p.subject_id = '*' THEN 0 ELSE 1 END), p.subject_id
+        LIMIT p_limit
+    ),
+    next AS (
+        SELECT CASE
+            WHEN p_limit IS NOT NULL AND (SELECT count(*) FROM paged) > p_limit
+            THEN (SELECT r.subject_id FROM returned r
+                  ORDER BY (CASE WHEN r.subject_id = '*' THEN 0 ELSE 1 END) DESC, r.subject_id DESC
+                  LIMIT 1)
+        END AS next_cursor
+    )
+    SELECT r.subject_id, n.next_cursor
+    FROM returned r
+    CROSS JOIN next n`,
+		IndentLines(exclusionCTE, "        "),
+		IndentLines(query, "        "))
+}

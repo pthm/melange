@@ -69,7 +69,7 @@ func buildListSubjectsRecursiveDirectBlock(plan ListPlan) TypedQueryBlock {
 		Distinct()
 
 	applyWildcardExclusion(q, plan, "t")
-	applyExclusionPredicates(q, plan.Exclusions)
+	applyExclusionPredicates(q, plan.Exclusions, plan.UseCTEExclusion)
 
 	return TypedQueryBlock{
 		Comments: []string{"-- Direct tuple lookup with simple closure relations"},
@@ -106,7 +106,7 @@ func buildListSubjectsRecursiveComplexClosureBlocks(plan ListPlan) []TypedQueryB
 			Distinct()
 
 		applyWildcardExclusion(q, plan, "t")
-		applyExclusionPredicates(q, plan.Exclusions)
+		applyExclusionPredicates(q, plan.Exclusions, plan.UseCTEExclusion)
 
 		blocks = append(blocks, TypedQueryBlock{
 			Comments: []string{fmt.Sprintf("-- Complex closure relation: %s", rel)},

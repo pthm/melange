@@ -107,6 +107,26 @@ func (n NotIn) SQL() string {
 	return n.Expr.SQL() + " NOT IN (" + quoteValues(n.Values) + ")"
 }
 
+// Like represents a LIKE pattern match.
+type Like struct {
+	Expr    Expr
+	Pattern Expr
+}
+
+func (l Like) SQL() string {
+	return l.Expr.SQL() + " LIKE " + l.Pattern.SQL()
+}
+
+// NotLike represents a NOT LIKE pattern match.
+type NotLike struct {
+	Expr    Expr
+	Pattern Expr
+}
+
+func (n NotLike) SQL() string {
+	return n.Expr.SQL() + " NOT LIKE " + n.Pattern.SQL()
+}
+
 // Logical operators
 
 // filterNilExprs removes nil expressions from the slice.

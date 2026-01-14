@@ -9,8 +9,12 @@ func applyWildcardExclusion(q *TupleQuery, plan ListPlan, tableAlias string) {
 	}
 }
 
-// applyExclusionPredicates adds all exclusion predicates from the config.
-func applyExclusionPredicates(q *TupleQuery, config ExclusionConfig) {
+// applyExclusionPredicates adds exclusion predicates to the query.
+// When useCTE is true, skips predicates (applied via CTE anti-join instead).
+func applyExclusionPredicates(q *TupleQuery, config ExclusionConfig, useCTE bool) {
+	if useCTE {
+		return
+	}
 	for _, pred := range config.BuildPredicates() {
 		q.Where(pred)
 	}
@@ -190,7 +194,7 @@ func buildListSubjectsDirectBlock(plan ListPlan) TypedQueryBlock {
 		Distinct()
 
 	applyWildcardExclusion(q, plan, "t")
-	applyExclusionPredicates(q, plan.Exclusions)
+	applyExclusionPredicates(q, plan.Exclusions, plan.UseCTEExclusion)
 
 	return TypedQueryBlock{
 		Comments: []string{"-- Path 1: Direct tuple lookup with simple closure relations"},
@@ -227,7 +231,7 @@ func buildTypedListSubjectsComplexClosureBlocks(plan ListPlan) []TypedQueryBlock
 			Distinct()
 
 		applyWildcardExclusion(q, plan, "t")
-		applyExclusionPredicates(q, plan.Exclusions)
+		applyExclusionPredicates(q, plan.Exclusions, plan.UseCTEExclusion)
 
 		blocks = append(blocks, TypedQueryBlock{
 			Comments: []string{"-- Complex closure: validate via check_permission_internal"},
@@ -385,7 +389,7 @@ func buildListSubjectsSimpleUsersetBlock(plan ListPlan, pattern listUsersetPatte
 		})
 	}
 
-	applyExclusionPredicates(q, plan.Exclusions)
+	applyExclusionPredicates(q, plan.Exclusions, plan.UseCTEExclusion)
 
 	return TypedQueryBlock{
 		Comments: []string{

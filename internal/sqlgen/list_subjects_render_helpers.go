@@ -39,6 +39,16 @@ func renderUsersetFilterThenBranch(usersetFilterPaginatedQuery string) []Stmt {
 	}
 }
 
+// renderRegularPaginatedQuery wraps the regular query with pagination.
+// Uses CTE-based exclusion optimization when enabled, otherwise traditional pagination.
+func renderRegularPaginatedQuery(plan ListPlan, regularQuery string) string {
+	if plan.UseCTEExclusion {
+		exclusionCTE := plan.Exclusions.BuildExclusionCTE()
+		return wrapWithExclusionCTEAndPagination(regularQuery, exclusionCTE)
+	}
+	return wrapWithPaginationWildcardFirst(regularQuery)
+}
+
 // renderRegularSubjectElseBranch builds the ELSE branch statements for regular subject type path.
 func renderRegularSubjectElseBranch(plan ListPlan, regularPaginatedQuery string) []Stmt {
 	if plan.HasUsersetPatterns {
