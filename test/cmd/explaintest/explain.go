@@ -365,6 +365,15 @@ func buildExplainOptions(opts Options) string {
 	if opts.Timing {
 		parts = append(parts, "TIMING")
 	}
+	if opts.Verbose {
+		parts = append(parts, "VERBOSE")
+	}
+	if opts.Settings {
+		parts = append(parts, "SETTINGS")
+	}
+	if opts.WAL {
+		parts = append(parts, "WAL")
+	}
 
 	// Always include COSTS for completeness
 	parts = append(parts, "COSTS")

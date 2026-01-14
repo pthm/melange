@@ -1,12 +1,22 @@
 // Command explaintest runs EXPLAIN ANALYZE on OpenFGA test cases to show query
 // execution plans, buffer statistics, and performance metrics.
 //
+// By default, runs EXPLAIN with ANALYZE, BUFFERS, TIMING, VERBOSE, SETTINGS, and WAL
+// options enabled to provide comprehensive query analysis including:
+// - Execution plans with actual row counts and timing
+// - Buffer cache hit/miss statistics
+// - Configuration parameters affecting query planning
+// - WAL (Write-Ahead Log) generation information
+// - Verbose details like output columns and schema-qualified names
+//
 // Usage:
 //
 //	explaintest <name>                      # Run EXPLAIN on specific test
 //	explaintest --format json <name>        # JSON output
 //	explaintest --assertion 3 <name>        # Single assertion only
 //	explaintest --summary "^userset"        # Summary mode for pattern
+//	explaintest --verbose=false <name>      # Disable verbose output
+//	explaintest --settings=false <name>     # Disable settings output
 //
 // Examples:
 //
@@ -14,6 +24,7 @@
 //	explaintest --format json computed_userset_simple
 //	explaintest --assertion 1 wildcard_direct
 //	explaintest --summary ".*"
+//	explaintest --verbose=false --settings=false wildcard_direct
 package main
 
 import (
@@ -86,6 +97,9 @@ type Options struct {
 	Pattern   string
 	Buffers   bool
 	Timing    bool
+	Verbose   bool
+	Settings  bool
+	WAL       bool
 }
 
 func main() {
@@ -96,6 +110,9 @@ func main() {
 	pattern := flag.String("pattern", "", "Pattern for summary mode (default: all tests)")
 	buffers := flag.Bool("buffers", true, "Include buffer statistics")
 	timing := flag.Bool("timing", true, "Include timing information")
+	verbose := flag.Bool("verbose", true, "Include verbose output (column lists, schema-qualified names)")
+	settings := flag.Bool("settings", true, "Include configuration parameters that affect query planning")
+	wal := flag.Bool("wal", true, "Include information about WAL record generation")
 	flag.Parse()
 
 	opts := Options{
@@ -105,6 +122,9 @@ func main() {
 		Pattern:   *pattern,
 		Buffers:   *buffers,
 		Timing:    *timing,
+		Verbose:   *verbose,
+		Settings:  *settings,
+		WAL:       *wal,
 	}
 
 	// Summary mode
