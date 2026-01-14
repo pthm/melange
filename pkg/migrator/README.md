@@ -201,6 +201,7 @@ When you run migration, the following steps occur:
 ## Skip-If-Unchanged Optimization
 
 Migrations are skipped when both conditions are met:
+
 - Schema content hash matches last migration
 - Codegen version matches last migration
 

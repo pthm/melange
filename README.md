@@ -1,6 +1,6 @@
 # Melange
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/pthm/melange.svg)](https://pkg.go.dev/github.com/pthm/melange)
+[![Go Reference](https://.go.dev/badge/github.com/pthm/melange.svg)](https://pkg.go.dev/github.com/pthm/melange)
 [![Go Report Card](https://goreportcard.com/badge/github.com/pthm/melange)](https://goreportcard.com/report/github.com/pthm/melange)
 
 <img align="right" width="300" src="assets/mascot.png">

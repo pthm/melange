@@ -15,12 +15,12 @@ go install github.com/pthm/melange/cmd/melange@latest
 
 These flags are available on all commands:
 
-| Flag | Description |
-|------|-------------|
-| `--config` | Path to config file (default: auto-discover `melange.yaml`). See [Configuration](configuration.md). |
-| `-v`, `--verbose` | Increase verbosity (can be repeated: `-vv`, `-vvv`) |
-| `-q`, `--quiet` | Suppress non-error output |
-| `--no-update-check` | Disable automatic update checking |
+| Flag                | Description                                                                                         |
+| ------------------- | --------------------------------------------------------------------------------------------------- |
+| `--config`          | Path to config file (default: auto-discover `melange.yaml`). See [Configuration](configuration.md). |
+| `-v`, `--verbose`   | Increase verbosity (can be repeated: `-vv`, `-vvv`)                                                 |
+| `-q`, `--quiet`     | Suppress non-error output                                                                           |
+| `--no-update-check` | Disable automatic update checking                                                                   |
 
 ### Update Notifications
 
@@ -32,6 +32,7 @@ By default, Melange automatically checks for new versions in the background and 
 - **Respectful**: Automatically disabled in CI environments (when `CI` env var is set)
 
 **Example notification:**
+
 ```
 $ melange migrate
 Migration completed successfully
@@ -41,11 +42,13 @@ Migration completed successfully
 ```
 
 **To disable update checks:**
+
 ```bash
 melange --no-update-check migrate
 ```
 
 **To clear the cache:**
+
 ```bash
 rm -rf ~/.cache/melange/update-check.json
 ```
@@ -73,6 +76,7 @@ melange validate --schema schemas/schema.fga
 ```
 
 **Output:**
+
 ```
 Schema is valid. Found 3 types:
   - user (0 relations)
@@ -84,8 +88,8 @@ This command parses the schema using the OpenFGA parser and reports any syntax e
 
 **Flags:**
 
-| Flag | Default | Description |
-|------|---------|-------------|
+| Flag       | Default              | Description             |
+| ---------- | -------------------- | ----------------------- |
 | `--schema` | `schemas/schema.fga` | Path to schema.fga file |
 
 The schema path can also be set via configuration file or environment variable. See [Configuration](#configuration).
@@ -102,14 +106,15 @@ melange migrate \
 
 **Flags:**
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--db` | (from config) | PostgreSQL connection string |
-| `--schema` | `schemas/schema.fga` | Path to schema.fga file |
-| `--dry-run` | `false` | Output SQL to stdout without applying changes |
-| `--force` | `false` | Force migration even if schema is unchanged |
+| Flag        | Default              | Description                                   |
+| ----------- | -------------------- | --------------------------------------------- |
+| `--db`      | (from config)        | PostgreSQL connection string                  |
+| `--schema`  | `schemas/schema.fga` | Path to schema.fga file                       |
+| `--dry-run` | `false`              | Output SQL to stdout without applying changes |
+| `--force`   | `false`              | Force migration even if schema is unchanged   |
 
 This command:
+
 1. Checks if the schema has changed since the last migration
 2. Installs generated SQL functions (`check_permission`, `list_accessible_objects`, etc.)
 3. Cleans up orphaned functions from removed relations
@@ -135,6 +140,7 @@ melange migrate --db postgres://localhost/mydb --dry-run
 ```
 
 This outputs the complete SQL that would be executed, including:
+
 - DDL for the migrations tracking table
 - All generated check functions
 - All generated list functions
@@ -174,18 +180,20 @@ melange status \
 
 **Flags:**
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--db` | (from config) | PostgreSQL connection string |
-| `--schema` | `schemas/schema.fga` | Path to schema.fga file |
+| Flag       | Default              | Description                  |
+| ---------- | -------------------- | ---------------------------- |
+| `--db`     | (from config)        | PostgreSQL connection string |
+| `--schema` | `schemas/schema.fga` | Path to schema.fga file      |
 
 **Output:**
+
 ```
 Schema file:  present
 Tuples view:  present
 ```
 
 This helps you verify that:
+
 - Your schema file exists
 - The tuples view exists in the database
 
@@ -201,13 +209,14 @@ melange doctor \
 
 **Flags:**
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--db` | (from config) | PostgreSQL connection string |
-| `--schema` | `schemas/schema.fga` | Path to schema.fga file |
-| `--verbose` | `false` | Show detailed output with additional context |
+| Flag        | Default              | Description                                  |
+| ----------- | -------------------- | -------------------------------------------- |
+| `--db`      | (from config)        | PostgreSQL connection string                 |
+| `--schema`  | `schemas/schema.fga` | Path to schema.fga file                      |
+| `--verbose` | `false`              | Show detailed output with additional context |
 
 **Output:**
+
 ```
 melange doctor - Health Check
 
@@ -239,27 +248,32 @@ Summary: 11 passed, 0 warnings, 0 errors
 The doctor command performs the following checks:
 
 **Schema File:**
+
 - Verifies the schema file exists
 - Parses and validates schema syntax
 - Detects cyclic dependencies in implied-by relationships
 
 **Migration State:**
+
 - Checks if the `melange_migrations` tracking table exists
 - Verifies a migration has been applied
 - Compares schema checksum to detect if schema has changed since last migration
 - Checks if codegen version has changed (indicating Melange was updated)
 
 **Generated Functions:**
+
 - Verifies all dispatcher functions exist (`check_permission`, `list_accessible_objects`, etc.)
 - Compares expected functions from schema against actual functions in database
 - Identifies orphan functions from previous schema versions
 
 **Tuples Source:**
+
 - Verifies `melange_tuples` view/table exists
 - Checks required columns: `object_type`, `object_id`, `relation`, `subject_type`, `subject_id`
 - Warns if using a materialized view (requires manual refresh)
 
 **Data Health:**
+
 - Reports tuple count
 - Validates that tuples reference valid types and relations defined in the schema
 
@@ -272,22 +286,23 @@ melange doctor --db postgres://localhost/mydb --verbose
 ```
 
 This shows:
+
 - Exact file paths and checksums
 - Lists of missing or orphan functions
 - Specific unknown types or relations found in data
 
 **Common issues and fixes:**
 
-| Issue | Fix |
-|-------|-----|
-| Schema file not found | Create `schemas/schema.fga` |
-| Schema has syntax errors | Run `fga model validate` for detailed errors |
-| Schema out of sync | Run `melange migrate` |
-| Missing functions | Run `melange migrate` |
-| Orphan functions | Run `melange migrate` (cleanup is automatic) |
-| melange_tuples missing | Create a view over your domain tables |
-| Missing columns | Update melange_tuples to include all required columns |
-| Unknown types in tuples | Update tuples view or schema to match |
+| Issue                    | Fix                                                   |
+| ------------------------ | ----------------------------------------------------- |
+| Schema file not found    | Create `schemas/schema.fga`                           |
+| Schema has syntax errors | Run `fga model validate` for detailed errors          |
+| Schema out of sync       | Run `melange migrate`                                 |
+| Missing functions        | Run `melange migrate`                                 |
+| Orphan functions         | Run `melange migrate` (cleanup is automatic)          |
+| melange_tuples missing   | Create a view over your domain tables                 |
+| Missing columns          | Update melange_tuples to include all required columns |
+| Unknown types in tuples  | Update tuples view or schema to match                 |
 
 ---
 
@@ -307,16 +322,17 @@ melange generate client \
 
 **Flags:**
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--runtime` | (required) | Target runtime: `go`, `typescript` |
-| `--schema` | `schemas/schema.fga` | Path to schema.fga file |
-| `--output` | stdout | Output directory for generated code |
-| `--package` | `authz` | Package name for generated code |
-| `--id-type` | `string` | ID type for constructors (`string`, `int64`, `uuid.UUID`) |
-| `--filter` | `""` | Only generate relations with this prefix (e.g., `can_`) |
+| Flag        | Default              | Description                                               |
+| ----------- | -------------------- | --------------------------------------------------------- |
+| `--runtime` | (required)           | Target runtime: `go`, `typescript`                        |
+| `--schema`  | `schemas/schema.fga` | Path to schema.fga file                                   |
+| `--output`  | stdout               | Output directory for generated code                       |
+| `--package` | `authz`              | Package name for generated code                           |
+| `--id-type` | `string`             | ID type for constructors (`string`, `int64`, `uuid.UUID`) |
+| `--filter`  | `""`                 | Only generate relations with this prefix (e.g., `can_`)   |
 
 **Example with all options:**
+
 ```bash
 melange generate client \
   --runtime go \
@@ -328,11 +344,13 @@ melange generate client \
 ```
 
 **Output to stdout:**
+
 ```bash
 melange generate client --runtime go --schema schemas/schema.fga
 ```
 
 **Generated code example:**
+
 ```go
 // schema_gen.go
 package authz
@@ -370,10 +388,10 @@ func AnyUser() melange.Object {
 
 **Supported runtimes:**
 
-| Runtime | Status | Description |
-|---------|--------|-------------|
-| `go` | Implemented | Type-safe Go code with constants and constructors |
-| `typescript` | Planned | TypeScript types and factory functions |
+| Runtime      | Status      | Description                                       |
+| ------------ | ----------- | ------------------------------------------------- |
+| `go`         | Implemented | Type-safe Go code with constants and constructors |
+| `typescript` | Planned     | TypeScript types and factory functions            |
 
 ---
 
@@ -389,16 +407,18 @@ melange config show
 
 **Flags:**
 
-| Flag | Default | Description |
-|------|---------|-------------|
+| Flag       | Default | Description                          |
+| ---------- | ------- | ------------------------------------ |
 | `--source` | `false` | Show the config file path being used |
 
 **Example with source:**
+
 ```bash
 melange config show --source
 ```
 
 **Output:**
+
 ```
 Config file: /path/to/project/melange.yaml
 
@@ -421,6 +441,7 @@ melange version
 ```
 
 **Output:**
+
 ```
 melange v1.0.0 (commit: abc1234, built: 2024-01-15)
 ```
@@ -439,13 +460,13 @@ This displays the Melange license and attribution for all embedded third-party d
 
 ## Exit Codes
 
-| Code | Meaning |
-|------|---------|
-| 0 | Success |
-| 1 | General error (validation, runtime, IO) |
-| 2 | Configuration error (invalid config file, missing required settings) |
-| 3 | Schema parse error |
-| 4 | Database connection error |
+| Code | Meaning                                                              |
+| ---- | -------------------------------------------------------------------- |
+| 0    | Success                                                              |
+| 1    | General error (validation, runtime, IO)                              |
+| 2    | Configuration error (invalid config file, missing required settings) |
+| 3    | Schema parse error                                                   |
+| 4    | Database connection error                                            |
 
 ## Common Workflows
 
@@ -454,6 +475,7 @@ This displays the Melange license and attribution for all embedded third-party d
 **With configuration file (recommended):**
 
 Create a `melange.yaml`:
+
 ```yaml
 schema: schemas/schema.fga
 
@@ -468,6 +490,7 @@ generate:
 ```
 
 Then run commands without flags:
+
 ```bash
 # Validate schema
 melange validate

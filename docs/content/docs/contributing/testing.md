@@ -38,16 +38,16 @@ just test-openfga-full-check
 
 ### Feature Test Categories
 
-| Category | Command | Tests |
-|----------|---------|-------|
+| Category          | Command                                      | Tests                                                   |
+| ----------------- | -------------------------------------------- | ------------------------------------------------------- |
 | Direct Assignment | `just test-openfga-feature DirectAssignment` | `this`, `this_with_contextual_tuples`, `this_and_union` |
-| Computed Userset | `just test-openfga-feature ComputedUserset` | Role hierarchy via `or` |
-| Tuple-to-Userset | `just test-openfga-feature TupleToUserset` | Parent inheritance via `from` |
-| Wildcards | `just test-openfga-feature Wildcards` | Public access via `[user:*]` |
-| Exclusion | `just test-openfga-feature Exclusion` | `but not` patterns |
-| Union | `just test-openfga-feature Union` | Multiple `or` branches |
-| Complex Patterns | `just test-openfga-feature ComplexPatterns` | Nested combinations |
-| Cycle Handling | `just test-openfga-feature CycleHandling` | Cycle detection |
+| Computed Userset  | `just test-openfga-feature ComputedUserset`  | Role hierarchy via `or`                                 |
+| Tuple-to-Userset  | `just test-openfga-feature TupleToUserset`   | Parent inheritance via `from`                           |
+| Wildcards         | `just test-openfga-feature Wildcards`        | Public access via `[user:*]`                            |
+| Exclusion         | `just test-openfga-feature Exclusion`        | `but not` patterns                                      |
+| Union             | `just test-openfga-feature Union`            | Multiple `or` branches                                  |
+| Complex Patterns  | `just test-openfga-feature ComplexPatterns`  | Nested combinations                                     |
+| Cycle Handling    | `just test-openfga-feature CycleHandling`    | Cycle detection                                         |
 
 ### Understanding Test Output
 
@@ -125,6 +125,7 @@ ListUsers Assertions:
 ````
 
 This is useful for:
+
 - Understanding what a failing test expects
 - Learning OpenFGA patterns by example
 - Debugging why a specific assertion fails

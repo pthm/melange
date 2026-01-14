@@ -192,9 +192,18 @@ func ensureTemplate(adminDSN string) (string, error) {
 // Each call creates a new isolated database copied from the template.
 // The database is automatically cleaned up when the test completes.
 // Works with both *testing.T and *testing.B.
+//
+// If DATABASE_URL environment variable is set, connects to remote database instead.
 func DB(tb testing.TB) *sql.DB {
 	tb.Helper()
 
+	// Check for remote database configuration
+	config := GetDatabaseConfig()
+	if config.URL != "" {
+		return remoteDB(tb, config)
+	}
+
+	// Local testcontainers mode (existing behavior)
 	adminDSN, err := ensureSingleton()
 	require.NoError(tb, err, "failed to start PostgreSQL container")
 
@@ -221,6 +230,94 @@ func DB(tb testing.TB) *sql.DB {
 	registerCleanup(tb, db, adminDSN, dbName)
 
 	return db
+}
+
+// remoteDB connects to a remote database for testing.
+// Instead of creating/dropping databases, it truncates tables for cleanup.
+func remoteDB(tb testing.TB, config DatabaseConfig) *sql.DB {
+	tb.Helper()
+	ctx := context.Background()
+
+	// Connect with retry logic
+	var db *sql.DB
+	var err error
+	maxRetries := 5
+
+	for i := 0; i < maxRetries; i++ {
+		db, err = sql.Open("pgx", config.URL)
+		if err != nil {
+			if i == maxRetries-1 {
+				tb.Fatalf("failed to open remote database connection after %d retries: %v", maxRetries, err)
+			}
+			time.Sleep(time.Duration(i+1) * time.Second)
+			continue
+		}
+
+		// Configure connection pool
+		if config.EnablePooling {
+			db.SetMaxOpenConns(config.MaxConnections)
+			db.SetMaxIdleConns(config.MaxConnections / 2)
+			db.SetConnMaxLifetime(5 * time.Minute)
+		}
+
+		// Verify connection with ping
+		err = db.PingContext(ctx)
+		if err == nil {
+			break // Success
+		}
+
+		// Close and retry
+		db.Close()
+		if i == maxRetries-1 {
+			tb.Fatalf("failed to ping remote database after %d retries: %v\nEnsure DATABASE_URL is correct and database is accessible", maxRetries, err)
+		}
+		time.Sleep(time.Duration(i+1) * time.Second)
+	}
+
+	// Apply migrations to remote database
+	err = applyMelangeMigrations(config.URL)
+	if err != nil {
+		db.Close()
+		tb.Fatalf("failed to apply migrations to remote database: %v", err)
+	}
+
+	// Register cleanup (truncate tables, not drop database)
+	tb.Cleanup(func() {
+		cleanupRemoteDB(db)
+		db.Close()
+	})
+
+	return db
+}
+
+// cleanupRemoteDB truncates all tables in the remote database.
+// This is used instead of dropping the database for remote connections.
+func cleanupRemoteDB(db *sql.DB) {
+	ctx := context.Background()
+
+	// List of tables to truncate (in dependency order, CASCADE handles dependencies)
+	tables := []string{
+		"pull_request_reviewers",
+		"pull_requests",
+		"issues",
+		"repository_collaborators",
+		"repository_bans",
+		"repositories",
+		"team_members",
+		"teams",
+		"organization_members",
+		"organizations",
+		"users",
+	}
+
+	// Truncate all tables
+	for _, table := range tables {
+		_, err := db.ExecContext(ctx, fmt.Sprintf("TRUNCATE TABLE %s CASCADE", table))
+		if err != nil {
+			// Log but don't fail - table might not exist
+			// fmt.Printf("Warning: failed to truncate %s: %v\n", table, err)
+		}
+	}
 }
 
 // EmptyDB returns an empty database connection for testing.
