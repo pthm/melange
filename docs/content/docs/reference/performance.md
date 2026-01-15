@@ -278,8 +278,7 @@ Contextual tuples add ~3-5ms overhead per operation due to temporary table setup
 
 ```go
 // Slow: Adds 3-5ms overhead with contextual tuples
-checker.Check(ctx, user, "viewer", doc,
-    melange.WithContextualTuples(temporaryPermissions))
+checker.CheckWithContextualTuples(ctx, user, "viewer", doc, temporaryPermissions)
 
 // Fast: 300-500µs with stored tuples
 checker.Check(ctx, user, "viewer", doc)
