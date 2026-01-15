@@ -38,3 +38,43 @@ export interface CheckRequest {
   readonly relation: Relation;
   readonly object: MelangeObject;
 }
+
+/**
+ * ContextualTuple represents a tuple provided at request time.
+ *
+ * Contextual tuples are not persisted and only affect a single check/list call.
+ * They're useful for temporary permissions or "what-if" scenarios.
+ */
+export interface ContextualTuple {
+  readonly subject: MelangeObject;
+  readonly relation: Relation;
+  readonly object: MelangeObject;
+}
+
+/**
+ * PageOptions configures pagination for list operations.
+ */
+export interface PageOptions {
+  /**
+   * Maximum number of results to return.
+   * Zero or negative means no limit (returns all results).
+   */
+  limit?: number;
+
+  /**
+   * Cursor from a previous page.
+   * If undefined, starts from the beginning.
+   */
+  after?: string;
+}
+
+/**
+ * ListResult contains paginated list results.
+ */
+export interface ListResult<T> {
+  /** Items in this page */
+  readonly items: T[];
+
+  /** Cursor for the next page, if there are more results */
+  readonly nextCursor?: string;
+}
