@@ -101,7 +101,9 @@ release VERSION="" ALLOW_DIRTY="":
     # Remove replace directive for release (allows go.mod to use published version)
     just _remove-replace-directive
 
-    # Tag melange submodule LOCALLY (don't push yet)
+    # Tag and PUSH melange submodule (required for go mod tidy to work)
+    # This is safe to push early - it's just the runtime library
+    # The critical tag (root) stays local until after goreleaser succeeds
     melange_tag="melange/$version"
     if git rev-parse -q --verify "refs/tags/$melange_tag" >/dev/null 2>&1; then
         echo "❌ Tag already exists: $melange_tag"
@@ -109,18 +111,23 @@ release VERSION="" ALLOW_DIRTY="":
         exit 1
     fi
     git tag -a "$melange_tag" -m "$melange_tag"
-    echo "✓ Created local tag: $melange_tag"
+    git push origin "$melange_tag"
+    echo "✓ Created and pushed tag: $melange_tag"
 
-    # Update go.mod to require the tagged version
+    # Update go.mod to require the published version and fetch from remote
     go mod edit -require=github.com/pthm/melange/melange@"$version"
-    go mod tidy
+    echo "Waiting for tag to propagate..."
+    sleep 5
+    GOPROXY=direct GONOSUMDB=github.com/pthm/melange go mod tidy
 
     # Validate version consistency
     version_from_file="$(tr -d '[:space:]' < VERSION)"
     if [ -z "$version_from_file" ]; then
         echo "❌ VERSION file is empty"
-        git tag -d "$melange_tag"
-        just _restore-replace-directive
+        echo ""
+        echo "To clean up:"
+        echo "  git push origin --delete $melange_tag"
+        echo "  just _restore-replace-directive"
         exit 1
     fi
     if [ "${version_from_file#v}" = "$version_from_file" ]; then
@@ -130,14 +137,18 @@ release VERSION="" ALLOW_DIRTY="":
     melange_version="$(awk '$1 == "github.com/pthm/melange/melange" { print $2; exit }' go.mod)"
     if [ -z "$melange_version" ]; then
         echo "❌ Could not read melange module version from go.mod"
-        git tag -d "$melange_tag"
-        just _restore-replace-directive
+        echo ""
+        echo "To clean up:"
+        echo "  git push origin --delete $melange_tag"
+        echo "  just _restore-replace-directive"
         exit 1
     fi
     if [ "$melange_version" != "$version_from_file" ]; then
         echo "❌ VERSION file $version_from_file does not match go.mod $melange_version"
-        git tag -d "$melange_tag"
-        just _restore-replace-directive
+        echo ""
+        echo "To clean up:"
+        echo "  git push origin --delete $melange_tag"
+        echo "  just _restore-replace-directive"
         exit 1
     fi
 
@@ -145,17 +156,19 @@ release VERSION="" ALLOW_DIRTY="":
     git add VERSION go.mod go.sum clients/typescript/package.json
     git commit -m "chore(release): $version_from_file"
 
-    # Tag root LOCALLY (don't push yet)
+    # Tag root LOCALLY (don't push yet - this is the critical one)
     root_tag="$version_from_file"
     if git rev-parse -q --verify "refs/tags/$root_tag" >/dev/null 2>&1; then
         echo "❌ Tag already exists: $root_tag"
-        git reset --hard HEAD~1
-        git tag -d "$melange_tag"
-        just _restore-replace-directive
+        echo ""
+        echo "To clean up:"
+        echo "  git reset --hard HEAD~1"
+        echo "  git push origin --delete $melange_tag"
+        echo "  just _restore-replace-directive"
         exit 1
     fi
     git tag -a "$root_tag" -m "$root_tag"
-    echo "✓ Created local tag: $root_tag"
+    echo "✓ Created local tag: $root_tag (not pushed yet)"
 
     echo ""
     echo "════════════════════════════════════════════════════════════════"
@@ -168,9 +181,12 @@ release VERSION="" ALLOW_DIRTY="":
             export GITHUB_TOKEN="$(gh auth token)"
         else
             echo "❌ GITHUB_TOKEN not set and gh cli not found"
-            git reset --hard HEAD~1
-            git tag -d "$melange_tag" "$root_tag"
-            just _restore-replace-directive
+            echo ""
+            echo "To clean up:"
+            echo "  git reset --hard HEAD~1"
+            echo "  git tag -d $root_tag"
+            echo "  git push origin --delete $melange_tag"
+            echo "  just _restore-replace-directive"
             exit 1
         fi
     fi
@@ -185,8 +201,11 @@ release VERSION="" ALLOW_DIRTY="":
         echo ""
         echo "To clean up, run:"
         echo "  git reset --hard HEAD~1"
-        echo "  git tag -d $melange_tag $root_tag"
+        echo "  git tag -d $root_tag"
+        echo "  git push origin --delete $melange_tag"
         echo "  just _restore-replace-directive"
+        echo ""
+        echo "Note: melange tag $melange_tag was already pushed (safe to leave or delete)"
         exit 1
     fi
 
@@ -194,13 +213,10 @@ release VERSION="" ALLOW_DIRTY="":
     echo "✓ Release artifacts built and published successfully"
     echo ""
     echo "════════════════════════════════════════════════════════════════"
-    echo "Pushing Tags (point of no return)"
+    echo "Pushing Root Tag (final step)"
     echo "════════════════════════════════════════════════════════════════"
 
-    # NOW push the tags (only after successful build/publish)
-    git push origin "$melange_tag"
-    echo "✓ Pushed tag: $melange_tag"
-
+    # NOW push the root tag (melange tag was already pushed earlier)
     git push origin "$root_tag"
     echo "✓ Pushed tag: $root_tag"
 
