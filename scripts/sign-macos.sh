@@ -158,10 +158,10 @@ fi
 # Use quill for signing (and optionally notarization)
 if [[ "$NOTARIZE" == "--notarize" ]]; then
     echo "Signing and notarizing with quill: $BINARY"
-    quill sign-and-notarize "$BINARY" -vv
+    quill sign-and-notarize "$BINARY" -vv </dev/null
 else
     echo "Signing with quill: $BINARY"
-    quill sign "$BINARY" -vv
+    quill sign "$BINARY" -vv </dev/null
 fi
 
 # Verify signature
