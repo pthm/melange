@@ -10,6 +10,11 @@ before:
     - ./scripts/verify-release.sh
     - go mod tidy
 
+after:
+  hooks:
+    - cmd: ./scripts/publish-npm.sh
+      output: true
+
 builds:
   # Non-darwin builds (no signing needed)
   - id: melange-linux-windows
@@ -102,9 +107,3 @@ homebrew_casks:
     homepage: "https://github.com/pthm/melange"
     description: "PostgreSQL Fine-Grained Authorization - OpenFGA to SQL compiler"
     license: "MIT"
-
-publishers:
-  - name: npm
-    ids:
-      - default
-    cmd: ./scripts/publish-npm.sh
