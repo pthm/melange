@@ -35,7 +35,7 @@ func (bf *BulkFixtures) copyFrom(table string, columns []string, data io.Reader)
 	if err != nil {
 		return fmt.Errorf("get connection: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Access the underlying pgx connection through stdlib wrapper
 	var pgxConn *pgx.Conn
@@ -133,13 +133,13 @@ func (bf *BulkFixtures) createUsersFromFile(n int) ([]int64, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create temp file: %w", err)
 	}
-	defer os.Remove(f.Name())
-	defer f.Close()
+	defer func() { _ = os.Remove(f.Name()) }()
+	defer func() { _ = f.Close() }()
 
 	// Write TSV data with buffering
 	w := bufio.NewWriter(f)
 	for i := 0; i < n; i++ {
-		fmt.Fprintf(w, "bench_user_%d\n", i)
+		_, _ = fmt.Fprintf(w, "bench_user_%d\n", i)
 	}
 	if err := w.Flush(); err != nil {
 		return nil, fmt.Errorf("flush temp file: %w", err)
@@ -166,7 +166,7 @@ func (bf *BulkFixtures) fetchUserIDs(n int) ([]int64, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetch user IDs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	ids := make([]int64, 0, n)
 	for rows.Next() {
@@ -235,12 +235,12 @@ func (bf *BulkFixtures) createOrganizationsFromFile(n int) ([]int64, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create temp file: %w", err)
 	}
-	defer os.Remove(f.Name())
-	defer f.Close()
+	defer func() { _ = os.Remove(f.Name()) }()
+	defer func() { _ = f.Close() }()
 
 	w := bufio.NewWriter(f)
 	for i := 0; i < n; i++ {
-		fmt.Fprintf(w, "bench_org_%d\n", i)
+		_, _ = fmt.Fprintf(w, "bench_org_%d\n", i)
 	}
 	if err := w.Flush(); err != nil {
 		return nil, fmt.Errorf("flush: %w", err)
@@ -264,7 +264,7 @@ func (bf *BulkFixtures) fetchOrganizationIDs(n int) ([]int64, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetch org IDs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	ids := make([]int64, 0, n)
 	for rows.Next() {
@@ -332,12 +332,12 @@ func (bf *BulkFixtures) createRepositoriesFromFile(orgID int64, n int) ([]int64,
 	if err != nil {
 		return nil, fmt.Errorf("create temp file: %w", err)
 	}
-	defer os.Remove(f.Name())
-	defer f.Close()
+	defer func() { _ = os.Remove(f.Name()) }()
+	defer func() { _ = f.Close() }()
 
 	w := bufio.NewWriter(f)
 	for i := 0; i < n; i++ {
-		fmt.Fprintf(w, "%d\tbench_repo_%d\n", orgID, i)
+		_, _ = fmt.Fprintf(w, "%d\tbench_repo_%d\n", orgID, i)
 	}
 	if err := w.Flush(); err != nil {
 		return nil, fmt.Errorf("flush: %w", err)
@@ -361,7 +361,7 @@ func (bf *BulkFixtures) fetchRepositoryIDs(n int) ([]int64, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetch repo IDs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	ids := make([]int64, 0, n)
 	for rows.Next() {
@@ -425,12 +425,12 @@ func (bf *BulkFixtures) addOrganizationMembersFromFile(orgID int64, userIDs []in
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
-	defer os.Remove(f.Name())
-	defer f.Close()
+	defer func() { _ = os.Remove(f.Name()) }()
+	defer func() { _ = f.Close() }()
 
 	w := bufio.NewWriter(f)
 	for _, userID := range userIDs {
-		fmt.Fprintf(w, "%d\t%d\t%s\n", orgID, userID, role)
+		_, _ = fmt.Fprintf(w, "%d\t%d\t%s\n", orgID, userID, role)
 	}
 	if err := w.Flush(); err != nil {
 		return fmt.Errorf("flush: %w", err)
@@ -492,13 +492,13 @@ func (bf *BulkFixtures) createPullRequestsFromFile(repoID int64, authorIDs []int
 	if err != nil {
 		return nil, fmt.Errorf("create temp file: %w", err)
 	}
-	defer os.Remove(f.Name())
-	defer f.Close()
+	defer func() { _ = os.Remove(f.Name()) }()
+	defer func() { _ = f.Close() }()
 
 	w := bufio.NewWriter(f)
 	for i := 0; i < n; i++ {
 		authorID := authorIDs[i%len(authorIDs)]
-		fmt.Fprintf(w, "%d\t%d\tPR %d\tfeature-%d\n", repoID, authorID, i, i)
+		_, _ = fmt.Fprintf(w, "%d\t%d\tPR %d\tfeature-%d\n", repoID, authorID, i, i)
 	}
 	if err := w.Flush(); err != nil {
 		return nil, fmt.Errorf("flush: %w", err)
@@ -523,7 +523,7 @@ func (bf *BulkFixtures) fetchPullRequestIDs(n int) ([]int64, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetch PR IDs: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	ids := make([]int64, 0, n)
 	for rows.Next() {

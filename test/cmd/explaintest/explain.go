@@ -177,7 +177,7 @@ func explainCheckAssertion(ctx context.Context, db *sql.DB, index int, assertion
 	if err != nil {
 		return nil, fmt.Errorf("execute EXPLAIN: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	// Collect plan lines
 	var planLines []string
@@ -240,7 +240,7 @@ func explainListObjectsAssertion(ctx context.Context, db *sql.DB, index int, ass
 	if err != nil {
 		return nil, fmt.Errorf("execute EXPLAIN: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	// Collect plan lines
 	var planLines []string
@@ -311,7 +311,7 @@ func explainListUsersAssertion(ctx context.Context, db *sql.DB, index int, asser
 	if err != nil {
 		return nil, fmt.Errorf("execute EXPLAIN: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	// Collect plan lines
 	var planLines []string

@@ -267,7 +267,7 @@ func remoteDB(tb testing.TB, config DatabaseConfig) *sql.DB {
 		}
 
 		// Close and retry
-		db.Close()
+		_ = db.Close()
 		if i == maxRetries-1 {
 			tb.Fatalf("failed to ping remote database after %d retries: %v\nEnsure DATABASE_URL is correct and database is accessible", maxRetries, err)
 		}
@@ -277,14 +277,14 @@ func remoteDB(tb testing.TB, config DatabaseConfig) *sql.DB {
 	// Apply migrations to remote database
 	err = applyMelangeMigrations(config.URL)
 	if err != nil {
-		db.Close()
+		_ = db.Close()
 		tb.Fatalf("failed to apply migrations to remote database: %v", err)
 	}
 
 	// Register cleanup (truncate tables, not drop database)
 	tb.Cleanup(func() {
 		cleanupRemoteDB(db)
-		db.Close()
+		_ = db.Close()
 	})
 
 	return db

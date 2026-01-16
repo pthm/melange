@@ -48,28 +48,28 @@ func setupTest(tc TestCase) (*sql.DB, *openfgatests.Client, func(), error) {
 	dbDSN := replaceDBName(adminDSN, dbName)
 	db, err := sql.Open("pgx", dbDSN)
 	if err != nil {
-		dropDatabase(context.Background(), adminDSN, dbName)
+		_ = dropDatabase(context.Background(), adminDSN, dbName)
 		return nil, nil, nil, fmt.Errorf("connect to database: %w", err)
 	}
 
 	// Verify connection
 	if err := db.Ping(); err != nil {
-		db.Close()
-		dropDatabase(context.Background(), adminDSN, dbName)
+		_ = db.Close()
+		_ = dropDatabase(context.Background(), adminDSN, dbName)
 		return nil, nil, nil, fmt.Errorf("ping database: %w", err)
 	}
 
 	// Get the model from first stage
 	if len(tc.Stages) == 0 {
-		db.Close()
-		dropDatabase(context.Background(), adminDSN, dbName)
+		_ = db.Close()
+		_ = dropDatabase(context.Background(), adminDSN, dbName)
 		return nil, nil, nil, fmt.Errorf("test has no stages")
 	}
 
 	// Initialize melange schema with the test's model
 	if err := initializeMelangeSchema(db, tc.Stages[0].Model); err != nil {
-		db.Close()
-		dropDatabase(context.Background(), adminDSN, dbName)
+		_ = db.Close()
+		_ = dropDatabase(context.Background(), adminDSN, dbName)
 		return nil, nil, nil, fmt.Errorf("initialize schema: %w", err)
 	}
 
@@ -77,8 +77,8 @@ func setupTest(tc TestCase) (*sql.DB, *openfgatests.Client, func(), error) {
 	client := openfgatests.NewClientWithDB(db)
 
 	cleanup := func() {
-		db.Close()
-		go dropDatabase(context.Background(), adminDSN, dbName)
+		_ = db.Close()
+		go func() { _ = dropDatabase(context.Background(), adminDSN, dbName) }()
 	}
 
 	return db, client, cleanup, nil
@@ -119,7 +119,7 @@ func getDatabaseDSN() (string, error) {
 
 	dsn, err := container.ConnectionString(ctx)
 	if err != nil {
-		container.Terminate(ctx)
+		_ = container.Terminate(ctx)
 		containerErr = fmt.Errorf("get connection string: %w", err)
 		return "", containerErr
 	}
@@ -179,7 +179,7 @@ func createDatabase(adminDSN, name string) error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	_, err = db.Exec(fmt.Sprintf("CREATE DATABASE %s", name))
 	return err
@@ -191,7 +191,7 @@ func dropDatabase(ctx context.Context, adminDSN, name string) error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	// Force disconnect all users
 	_, _ = db.ExecContext(ctx, fmt.Sprintf(`
