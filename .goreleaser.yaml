@@ -107,5 +107,4 @@ publishers:
   - name: npm
     ids:
       - default
-    cmd: sh -c 'cd clients/typescript && pnpm build && pnpm publish --access public --no-git-checks'
-    stdin: '{{ .IsSnapshot | not }}'
+    cmd: ./scripts/publish-npm.sh
