@@ -351,22 +351,23 @@ _check-npm:
     #!/usr/bin/env bash
     set -euo pipefail
 
-    # Check if npm is installed
-    if ! command -v npm &> /dev/null; then
-        echo "❌ npm not found. Install Node.js first."
+    # Check if pnpm is installed
+    if ! command -v pnpm &> /dev/null; then
+        echo "❌ pnpm not found. Install it first:"
+        echo "   npm install -g pnpm"
         exit 1
     fi
 
-    # Check npm authentication by trying to view user
-    if ! npm whoami &> /dev/null; then
-        echo "❌ npm not authenticated. Run: npm login"
+    # Check npm authentication by trying to view user (pnpm uses npm registry auth)
+    if ! pnpm whoami &> /dev/null; then
+        echo "❌ npm not authenticated. Run: pnpm login"
         echo ""
         echo "Make sure to log in with an account that has publish access to @pthm/melange"
         exit 1
     fi
 
-    npm_user=$(npm whoami)
-    echo "✓ npm authenticated as: $npm_user"
+    npm_user=$(pnpm whoami)
+    echo "✓ npm authenticated as: $npm_user (via pnpm)"
 
 [group('Release')]
 [private]
