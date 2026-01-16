@@ -237,12 +237,16 @@ release VERSION="" ALLOW_DIRTY="":
     echo "✓ Published to npm"
     echo ""
     echo "════════════════════════════════════════════════════════════════"
-    echo "Pushing Root Tag (final step)"
+    echo "Finalizing Release"
     echo "════════════════════════════════════════════════════════════════"
 
-    # NOW push the root tag (melange tag was already pushed earlier)
-    git push origin "$root_tag"
-    echo "✓ Pushed tag: $root_tag"
+    # Check if root tag was already pushed by goreleaser (it creates the GitHub release)
+    if git ls-remote --tags origin | grep -q "refs/tags/$root_tag$"; then
+        echo "✓ Tag $root_tag already pushed by goreleaser"
+    else
+        git push origin "$root_tag"
+        echo "✓ Pushed tag: $root_tag"
+    fi
 
     # Restore replace directive for development
     just _restore-replace-directive
