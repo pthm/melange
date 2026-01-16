@@ -14,13 +14,13 @@ import (
 
 // ExplainResult holds the results of an EXPLAIN ANALYZE query.
 type ExplainResult struct {
-	AssertionIndex int         `json:"assertion_index"`
-	AssertionType  string      `json:"assertion_type"` // "Check", "ListObjects", "ListUsers"
-	Query          string      `json:"query"`
-	Parameters     []string    `json:"parameters"`
-	Expected       string      `json:"expected"`
-	Plan           string      `json:"plan"`
-	Metrics        Metrics     `json:"metrics"`
+	AssertionIndex int      `json:"assertion_index"`
+	AssertionType  string   `json:"assertion_type"` // "Check", "ListObjects", "ListUsers"
+	Query          string   `json:"query"`
+	Parameters     []string `json:"parameters"`
+	Expected       string   `json:"expected"`
+	Plan           string   `json:"plan"`
+	Metrics        Metrics  `json:"metrics"`
 }
 
 // runTest executes EXPLAIN ANALYZE on all assertions in a test case.
@@ -384,7 +384,7 @@ func buildExplainOptions(opts Options) string {
 // parseEntity parses an OpenFGA entity string into type and ID.
 // Example: "user:123" -> ("user", "123")
 // Example: "group:eng#member" -> ("group", "eng#member")
-func parseEntity(entity string) (typ string, id string) {
+func parseEntity(entity string) (typ, id string) {
 	parts := strings.SplitN(entity, ":", 2)
 	if len(parts) == 2 {
 		return parts[0], parts[1]

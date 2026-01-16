@@ -303,4 +303,3 @@ func calculateMedian(summaries []*TestSummary) float64 {
 	}
 	return times[mid]
 }
-

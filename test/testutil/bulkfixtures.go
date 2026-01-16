@@ -10,7 +10,6 @@ import (
 	"io"
 	"log"
 	"os"
-	"runtime"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
@@ -551,14 +550,4 @@ func (bf *BulkFixtures) TupleCount() (int, error) {
 	var count int
 	err := bf.db.QueryRowContext(bf.ctx, "SELECT COUNT(*) FROM melange_tuples").Scan(&count)
 	return count, err
-}
-
-// hasEnoughMemory checks if there's enough available memory for in-memory operations.
-func hasEnoughMemory(requiredBytes int) bool {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-
-	// Require at least 2x the needed bytes to be safe
-	availableBytes := m.Sys - m.Alloc
-	return availableBytes > uint64(requiredBytes*2)
 }

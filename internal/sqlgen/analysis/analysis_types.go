@@ -180,7 +180,7 @@ type IntersectionPart struct {
 	Relation         string              // Relation to check
 	IsSimple         bool                // True if this relation is simply resolvable (can use inline EXISTS)
 	ExcludedRelation string              // For nested exclusions like "editor but not owner"
-	IsExcludedSimple bool               // True if excluded relation is simply resolvable
+	IsExcludedSimple bool                // True if excluded relation is simply resolvable
 	ParentRelation   *ParentRelationInfo // For tuple-to-userset in intersection
 }
 

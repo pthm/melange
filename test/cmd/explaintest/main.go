@@ -34,8 +34,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/openfga/openfga/assets"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
+	"github.com/openfga/openfga/assets"
 	"sigs.k8s.io/yaml"
 )
 
@@ -52,11 +52,11 @@ type TestCase struct {
 
 // Stage represents a stage within a test case.
 type Stage struct {
-	Model                 string                        `json:"model"`
-	Tuples                []*openfgav1.TupleKey         `json:"tuples"`
-	CheckAssertions       []CheckAssertion              `json:"checkAssertions"`
-	ListObjectsAssertions []ListObjectsAssertion        `json:"listObjectsAssertions"`
-	ListUsersAssertions   []ListUsersAssertion          `json:"listUsersAssertions"`
+	Model                 string                 `json:"model"`
+	Tuples                []*openfgav1.TupleKey  `json:"tuples"`
+	CheckAssertions       []CheckAssertion       `json:"checkAssertions"`
+	ListObjectsAssertions []ListObjectsAssertion `json:"listObjectsAssertions"`
+	ListUsersAssertions   []ListUsersAssertion   `json:"listUsersAssertions"`
 }
 
 // CheckAssertion represents an expected result for a Check call.

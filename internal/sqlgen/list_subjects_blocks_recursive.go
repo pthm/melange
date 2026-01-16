@@ -380,11 +380,11 @@ func buildListSubjectsRecursiveTTUBlockSubjectPool(plan ListPlan, parent ListPar
 		// to honor "reader: repo_admin from owner but not restricted"
 		checkCallSQL = fmt.Sprintf(
 			"check_permission_internal(%s, %s, %s, %s, %s) = 1",
-			SubjectType.SQL(),                                  // subject_type (param)
-			Col{Table: "sp", Column: "subject_id"}.SQL(),      // subject_id (from subject_pool)
-			Lit(parent.SourceRelation).SQL(),                   // relation to check (SOURCE relation like "reader")
-			Lit(plan.ObjectType).SQL(),                         // object_type (target object type like "repo")
-			ObjectID.SQL(),                                     // object_id (target object id - param)
+			SubjectType.SQL(), // subject_type (param)
+			Col{Table: "sp", Column: "subject_id"}.SQL(), // subject_id (from subject_pool)
+			Lit(parent.SourceRelation).SQL(),             // relation to check (SOURCE relation like "reader")
+			Lit(plan.ObjectType).SQL(),                   // object_type (target object type like "repo")
+			ObjectID.SQL(),                               // object_id (target object id - param)
 		)
 		comment = fmt.Sprintf("-- TTU: subjects via %s -> %s (closure pattern from %s - verifying through source relation)", parent.LinkingRelation, parent.Relation, parent.SourceRelation)
 	} else {
@@ -392,11 +392,11 @@ func buildListSubjectsRecursiveTTUBlockSubjectPool(plan ListPlan, parent ListPar
 		// check_permission_internal(subject_type, subject_id, relation, object_type, object_id)
 		checkCallSQL = fmt.Sprintf(
 			"check_permission_internal(%s, %s, %s, %s, %s) = 1",
-			SubjectType.SQL(),                                  // subject_type (param)
-			Col{Table: "sp", Column: "subject_id"}.SQL(),      // subject_id (from subject_pool)
-			Lit(parent.Relation).SQL(),                         // relation to check on parent
-			Col{Table: "link", Column: "subject_type"}.SQL(),  // object_type (parent type)
-			Col{Table: "link", Column: "subject_id"}.SQL(),    // object_id (parent id)
+			SubjectType.SQL(), // subject_type (param)
+			Col{Table: "sp", Column: "subject_id"}.SQL(),     // subject_id (from subject_pool)
+			Lit(parent.Relation).SQL(),                       // relation to check on parent
+			Col{Table: "link", Column: "subject_type"}.SQL(), // object_type (parent type)
+			Col{Table: "link", Column: "subject_id"}.SQL(),   // object_id (parent id)
 		)
 		comment = fmt.Sprintf("-- TTU: subjects via %s -> %s (complex parent relation - using subject_pool)", parent.LinkingRelation, parent.Relation)
 	}

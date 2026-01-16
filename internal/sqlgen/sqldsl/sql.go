@@ -596,19 +596,21 @@ func WrapWithPaginationWildcardFirst(query string) string {
 // LEFT JOIN...WHERE IS NULL anti-pattern instead of repeated NOT EXISTS subqueries.
 //
 // Structure:
-//   WITH excluded_subjects AS (SELECT subject_id FROM melange_tuples WHERE ...),
-//   candidates AS (...original UNION without exclusion predicates...),
-//   base_results AS (
-//     SELECT DISTINCT s.subject_id FROM candidates s
-//     LEFT JOIN excluded_subjects excl
-//       ON excl.subject_id = s.subject_id OR excl.subject_id = '*'
-//     WHERE excl.subject_id IS NULL
-//   ),
-//   ...pagination CTEs...
+//
+//	WITH excluded_subjects AS (SELECT subject_id FROM melange_tuples WHERE ...),
+//	candidates AS (...original UNION without exclusion predicates...),
+//	base_results AS (
+//	  SELECT DISTINCT s.subject_id FROM candidates s
+//	  LEFT JOIN excluded_subjects excl
+//	    ON excl.subject_id = s.subject_id OR excl.subject_id = '*'
+//	  WHERE excl.subject_id IS NULL
+//	),
+//	...pagination CTEs...
 //
 // Parameters:
-//   query: UNION of all access paths (without exclusion predicates)
-//   exclusionCTE: SQL for exclusion CTE (SELECT subject_id FROM ...)
+//
+//	query: UNION of all access paths (without exclusion predicates)
+//	exclusionCTE: SQL for exclusion CTE (SELECT subject_id FROM ...)
 //
 // Returns: Complete paginated query with exclusion anti-join
 func WrapWithExclusionCTEAndPagination(query, exclusionCTE string) string {

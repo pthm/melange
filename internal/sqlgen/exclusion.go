@@ -201,15 +201,17 @@ func SimpleExclusion(objectType, relation string, objectID, subjectType, subject
 // Returns a SELECT statement producing a single column: subject_id
 //
 // Example for "but not restricted" where restricted: [user]:
-//   SELECT subject_id FROM melange_tuples
-//   WHERE object_type = 'document'
-//     AND relation IN ('restricted')
-//     AND object_id = p_object_id
+//
+//	SELECT subject_id FROM melange_tuples
+//	WHERE object_type = 'document'
+//	  AND relation IN ('restricted')
+//	  AND object_id = p_object_id
 //
 // Result is used in anti-join pattern:
-//   LEFT JOIN excluded_subjects ON excluded_subjects.subject_id = candidate.subject_id
-//                                 OR excluded_subjects.subject_id = '*'
-//   WHERE excluded_subjects.subject_id IS NULL
+//
+//	LEFT JOIN excluded_subjects ON excluded_subjects.subject_id = candidate.subject_id
+//	                              OR excluded_subjects.subject_id = '*'
+//	WHERE excluded_subjects.subject_id IS NULL
 func (c ExclusionConfig) BuildExclusionCTE() string {
 	if len(c.SimpleExcludedRelations) == 0 {
 		return "SELECT NULL::TEXT AS subject_id WHERE FALSE"

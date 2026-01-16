@@ -165,57 +165,6 @@ type PaginationSample struct {
 	Offset int
 }
 
-// getPaginationSamples returns representative page samples for testing.
-// For small datasets, tests all pages. For large datasets, tests representative samples.
-func getPaginationSamples(totalCount int, pageSize int) []PaginationSample {
-	if totalCount == 0 || pageSize == 0 {
-		return nil
-	}
-
-	totalPages := (totalCount + pageSize - 1) / pageSize
-
-	// For small datasets (<=5 pages), test all pages
-	if totalPages <= 5 {
-		samples := make([]PaginationSample, totalPages)
-		for i := 0; i < totalPages; i++ {
-			samples[i] = PaginationSample{
-				Name:   fmt.Sprintf("Page%d", i+1),
-				Offset: i * pageSize,
-			}
-		}
-		return samples
-	}
-
-	// For large datasets, test representative samples
-	samples := []PaginationSample{
-		{Name: "FirstPage", Offset: 0},
-		{Name: "Page10", Offset: min(10*pageSize, (totalPages-1)*pageSize)},
-		{Name: "Page100", Offset: min(100*pageSize, (totalPages-1)*pageSize)},
-		{Name: "MiddlePage", Offset: (totalPages / 2) * pageSize},
-		{Name: "LastPage", Offset: (totalPages - 1) * pageSize},
-	}
-
-	// Remove duplicates (can happen when totalPages < 100)
-	seen := make(map[int]bool)
-	unique := make([]PaginationSample, 0, len(samples))
-	for _, s := range samples {
-		if !seen[s.Offset] {
-			seen[s.Offset] = true
-			unique = append(unique, s)
-		}
-	}
-
-	return unique
-}
-
-// min returns the minimum of two integers.
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // BenchmarkCheck benchmarks the Check function across different scales.
 func BenchmarkCheck(b *testing.B) {
 	if testing.Short() {

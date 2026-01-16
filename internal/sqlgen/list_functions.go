@@ -94,11 +94,6 @@ func listSubjectsFunctionName(objectType, relation string) string {
 	return ListSubjectsFunctionName(objectType, relation)
 }
 
-// generateListObjectsFunction generates a specialized list_objects function for a relation.
-func generateListObjectsFunction(a RelationAnalysis, inline InlineSQLData) (string, error) {
-	return generateListObjectsFunctionWithLookup(a, inline, nil)
-}
-
 // generateListObjectsFunctionWithLookup generates a list_objects function with analysis lookup for TTU optimization.
 func generateListObjectsFunctionWithLookup(a RelationAnalysis, inline InlineSQLData, lookup map[string]*RelationAnalysis) (string, error) {
 	// Route to appropriate generator based on ListStrategy
@@ -142,11 +137,6 @@ func generateListObjectsFunctionWithLookup(a RelationAnalysis, inline InlineSQLD
 	default:
 		return "", fmt.Errorf("unknown list strategy %v for %s.%s", a.ListStrategy, a.ObjectType, a.Relation)
 	}
-}
-
-// generateListSubjectsFunction generates a specialized list_subjects function for a relation.
-func generateListSubjectsFunction(a RelationAnalysis, inline InlineSQLData) (string, error) {
-	return generateListSubjectsFunctionWithLookup(a, inline, nil)
 }
 
 // generateListSubjectsFunctionWithLookup generates a list_subjects function with analysis lookup for TTU optimization.

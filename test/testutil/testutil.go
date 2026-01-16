@@ -312,11 +312,8 @@ func cleanupRemoteDB(db *sql.DB) {
 
 	// Truncate all tables
 	for _, table := range tables {
-		_, err := db.ExecContext(ctx, fmt.Sprintf("TRUNCATE TABLE %s CASCADE", table))
-		if err != nil {
-			// Log but don't fail - table might not exist
-			// fmt.Printf("Warning: failed to truncate %s: %v\n", table, err)
-		}
+		_, _ = db.ExecContext(ctx, fmt.Sprintf("TRUNCATE TABLE %s CASCADE", table))
+		// Ignore errors - table might not exist
 	}
 }
 

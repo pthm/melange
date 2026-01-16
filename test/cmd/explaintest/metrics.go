@@ -15,10 +15,10 @@ type Metrics struct {
 }
 
 var (
-	execTimeRe  = regexp.MustCompile(`Execution Time: ([\d.]+) ms`)
-	planTimeRe  = regexp.MustCompile(`Planning Time: ([\d.]+) ms`)
-	buffersRe   = regexp.MustCompile(`Buffers: shared hit=(\d+)(?: read=(\d+))?`)
-	rowsRe      = regexp.MustCompile(`rows=(\d+)`)
+	execTimeRe = regexp.MustCompile(`Execution Time: ([\d.]+) ms`)
+	planTimeRe = regexp.MustCompile(`Planning Time: ([\d.]+) ms`)
+	buffersRe  = regexp.MustCompile(`Buffers: shared hit=(\d+)(?: read=(\d+))?`)
+	rowsRe     = regexp.MustCompile(`rows=(\d+)`)
 )
 
 // extractMetrics extracts performance metrics from an EXPLAIN ANALYZE plan.
