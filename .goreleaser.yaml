@@ -10,11 +10,6 @@ before:
     - ./scripts/verify-release.sh
     - go mod tidy
 
-after:
-  hooks:
-    - cmd: ./scripts/publish-npm.sh
-      output: true
-
 builds:
   # Non-darwin builds (no signing needed)
   - id: melange-linux-windows

@@ -194,7 +194,7 @@ release VERSION="" ALLOW_DIRTY="":
         export HOMEBREW_TAP_GITHUB_TOKEN="$GITHUB_TOKEN"
     fi
 
-    # Run goreleaser (build, sign, publish npm, create GitHub release)
+    # Run goreleaser (build, sign, create GitHub release)
     if ! goreleaser release --clean; then
         echo ""
         echo "❌ goreleaser failed"
@@ -210,7 +210,31 @@ release VERSION="" ALLOW_DIRTY="":
     fi
 
     echo ""
-    echo "✓ Release artifacts built and published successfully"
+    echo "✓ Release artifacts built and published to GitHub"
+    echo ""
+    echo "════════════════════════════════════════════════════════════════"
+    echo "Publishing to npm"
+    echo "════════════════════════════════════════════════════════════════"
+
+    # Publish TypeScript package to npm (will prompt for OTP if needed)
+    if ! ./scripts/publish-npm.sh; then
+        echo ""
+        echo "❌ npm publish failed"
+        echo ""
+        echo "GitHub release was created but npm publish failed."
+        echo "You can manually publish later with: cd clients/typescript && pnpm publish"
+        echo ""
+        echo "To clean up, run:"
+        echo "  git reset --hard HEAD~1"
+        echo "  git tag -d $root_tag"
+        echo "  gh release delete $root_tag -y"
+        echo "  git push origin --delete $melange_tag"
+        echo "  just _restore-replace-directive"
+        exit 1
+    fi
+
+    echo ""
+    echo "✓ Published to npm"
     echo ""
     echo "════════════════════════════════════════════════════════════════"
     echo "Pushing Root Tag (final step)"
