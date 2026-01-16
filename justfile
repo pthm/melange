@@ -54,86 +54,168 @@ release-prepare VERSION ALLOW_DIRTY="":
 release VERSION="" ALLOW_DIRTY="":
     #!/usr/bin/env bash
     set -euo pipefail
+
     if [ -z "{{VERSION}}" ]; then
         echo "VERSION is required (e.g. just release VERSION=1.2.3)"
         exit 1
     fi
-    just _check-1password
-    just release-prepare {{VERSION}} {{ALLOW_DIRTY}}
-    # Run tests BEFORE tagging (uses workspace for local resolution)
-    just test-openfga
+
     version="{{VERSION}}"
     if [ "${version#v}" = "$version" ]; then
         version="v$version"
     fi
+
+    echo "════════════════════════════════════════════════════════════════"
+    echo "Release Pre-flight Checks"
+    echo "════════════════════════════════════════════════════════════════"
+
+    # Run all preflight checks
+    just _preflight-checks
+
+    echo ""
+    echo "════════════════════════════════════════════════════════════════"
+    echo "Running Tests"
+    echo "════════════════════════════════════════════════════════════════"
+
+    # Run tests BEFORE any changes
+    just test-openfga
+
+    echo ""
+    echo "════════════════════════════════════════════════════════════════"
+    echo "Testing Release Pipeline with Snapshot"
+    echo "════════════════════════════════════════════════════════════════"
+
+    # Test the full build/sign/npm pipeline without publishing
+    just release-snapshot
+
+    echo ""
+    echo "✓ Snapshot release succeeded - pipeline is working"
+    echo ""
+    echo "════════════════════════════════════════════════════════════════"
+    echo "Preparing Release $version"
+    echo "════════════════════════════════════════════════════════════════"
+
+    # Prepare version files
+    just release-prepare {{VERSION}} {{ALLOW_DIRTY}}
+
     # Remove replace directive for release (allows go.mod to use published version)
     just _remove-replace-directive
-    # Tag and push melange submodule
+
+    # Tag melange submodule LOCALLY (don't push yet)
     melange_tag="melange/$version"
-    if git rev-parse -q --verify "refs/tags/$melange_tag" >/dev/null; then
-        echo "Tag already exists: $melange_tag"
+    if git rev-parse -q --verify "refs/tags/$melange_tag" >/dev/null 2>&1; then
+        echo "❌ Tag already exists: $melange_tag"
         just _restore-replace-directive
         exit 1
     fi
     git tag -a "$melange_tag" -m "$melange_tag"
-    git push origin "$melange_tag"
-    # Update go.mod to require the published version (instead of local replace)
+    echo "✓ Created local tag: $melange_tag"
+
+    # Update go.mod to require the tagged version
     go mod edit -require=github.com/pthm/melange/melange@"$version"
-    echo "Waiting for tag to propagate..."
-    sleep 5
-    GOPROXY=direct GONOSUMDB=github.com/pthm/melange go mod tidy
+    go mod tidy
+
+    # Validate version consistency
     version_from_file="$(tr -d '[:space:]' < VERSION)"
     if [ -z "$version_from_file" ]; then
-        echo "VERSION file is empty; run release-prepare first."
+        echo "❌ VERSION file is empty"
+        git tag -d "$melange_tag"
+        just _restore-replace-directive
         exit 1
     fi
     if [ "${version_from_file#v}" = "$version_from_file" ]; then
         version_from_file="v$version_from_file"
     fi
+
     melange_version="$(awk '$1 == "github.com/pthm/melange/melange" { print $2; exit }' go.mod)"
     if [ -z "$melange_version" ]; then
-        echo "Could not read melange module version from go.mod; run release-prepare first."
+        echo "❌ Could not read melange module version from go.mod"
+        git tag -d "$melange_tag"
+        just _restore-replace-directive
         exit 1
     fi
     if [ "$melange_version" != "$version_from_file" ]; then
-        echo "VERSION file $version_from_file does not match go.mod $melange_version; run release-prepare first."
+        echo "❌ VERSION file $version_from_file does not match go.mod $melange_version"
+        git tag -d "$melange_tag"
+        just _restore-replace-directive
         exit 1
     fi
+
+    # Commit version changes
     git add VERSION go.mod go.sum clients/typescript/package.json
     git commit -m "chore(release): $version_from_file"
+
+    # Tag root LOCALLY (don't push yet)
     root_tag="$version_from_file"
-    if git rev-parse -q --verify "refs/tags/$root_tag" >/dev/null; then
-        echo "Tag already exists: $root_tag"
+    if git rev-parse -q --verify "refs/tags/$root_tag" >/dev/null 2>&1; then
+        echo "❌ Tag already exists: $root_tag"
+        git reset --hard HEAD~1
+        git tag -d "$melange_tag"
+        just _restore-replace-directive
         exit 1
     fi
     git tag -a "$root_tag" -m "$root_tag"
-    git push origin "$root_tag"
-    if ! command -v goreleaser >/dev/null 2>&1; then
-        echo "goreleaser is required (https://goreleaser.com/install/)"
-        exit 1
-    fi
+    echo "✓ Created local tag: $root_tag"
+
+    echo ""
+    echo "════════════════════════════════════════════════════════════════"
+    echo "Building and Publishing Release"
+    echo "════════════════════════════════════════════════════════════════"
+
+    # Setup tokens for goreleaser
     if [ -z "${GITHUB_TOKEN:-}" ]; then
         if command -v gh >/dev/null 2>&1; then
             export GITHUB_TOKEN="$(gh auth token)"
         else
-            echo "GITHUB_TOKEN not set and gh cli not found"
+            echo "❌ GITHUB_TOKEN not set and gh cli not found"
+            git reset --hard HEAD~1
+            git tag -d "$melange_tag" "$root_tag"
+            just _restore-replace-directive
             exit 1
         fi
     fi
     if [ -z "${HOMEBREW_TAP_GITHUB_TOKEN:-}" ]; then
-        if command -v gh >/dev/null 2>&1; then
-            export HOMEBREW_TAP_GITHUB_TOKEN="$(gh auth token)"
-        else
-            echo "HOMEBREW_TAP_GITHUB_TOKEN not set and gh cli not found"
-            exit 1
-        fi
+        export HOMEBREW_TAP_GITHUB_TOKEN="$GITHUB_TOKEN"
     fi
-    goreleaser release --clean
+
+    # Run goreleaser (build, sign, publish npm, create GitHub release)
+    if ! goreleaser release --clean; then
+        echo ""
+        echo "❌ goreleaser failed"
+        echo ""
+        echo "To clean up, run:"
+        echo "  git reset --hard HEAD~1"
+        echo "  git tag -d $melange_tag $root_tag"
+        echo "  just _restore-replace-directive"
+        exit 1
+    fi
+
+    echo ""
+    echo "✓ Release artifacts built and published successfully"
+    echo ""
+    echo "════════════════════════════════════════════════════════════════"
+    echo "Pushing Tags (point of no return)"
+    echo "════════════════════════════════════════════════════════════════"
+
+    # NOW push the tags (only after successful build/publish)
+    git push origin "$melange_tag"
+    echo "✓ Pushed tag: $melange_tag"
+
+    git push origin "$root_tag"
+    echo "✓ Pushed tag: $root_tag"
+
     # Restore replace directive for development
     just _restore-replace-directive
     git add go.mod
     git commit -m "chore(release): restore replace directive for development"
     git push
+
+    echo ""
+    echo "════════════════════════════════════════════════════════════════"
+    echo "✓ Release $version Complete!"
+    echo "════════════════════════════════════════════════════════════════"
+    echo ""
+    echo "GitHub Release: https://github.com/pthm/melange/releases/tag/$root_tag"
 
 # Build release snapshot for local testing (no publish)
 [group('Release')]
@@ -149,6 +231,15 @@ release-snapshot: _check-1password
             exit 1
         fi
     fi
+
+    # Test TypeScript build (without publishing)
+    echo "Testing TypeScript client build..."
+    cd clients/typescript
+    pnpm build
+    cd ../..
+    echo "✓ TypeScript build succeeded"
+
+    # Run goreleaser snapshot (builds binaries, signs them, but doesn't publish)
     goreleaser release --snapshot --clean
 
 # Build release locally with GoReleaser (without publishing)
@@ -198,6 +289,71 @@ _restore-replace-directive:
 
 [group('Release')]
 [private]
+[doc('Run all pre-flight checks before release')]
+_preflight-checks:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    echo "Checking release prerequisites..."
+    echo ""
+
+    # Check goreleaser
+    if ! command -v goreleaser >/dev/null 2>&1; then
+        echo "❌ goreleaser is required (https://goreleaser.com/install/)"
+        exit 1
+    fi
+    echo "✓ goreleaser is installed"
+
+    # Check gh CLI
+    if ! command -v gh >/dev/null 2>&1; then
+        echo "❌ gh CLI is required (brew install gh)"
+        exit 1
+    fi
+
+    # Check gh auth
+    if ! gh auth status >/dev/null 2>&1; then
+        echo "❌ GitHub CLI not authenticated. Run: gh auth login"
+        exit 1
+    fi
+    echo "✓ GitHub CLI is authenticated"
+
+    # Check 1Password (macOS only)
+    if [[ "$(uname)" == "Darwin" ]]; then
+        just _check-1password
+    fi
+
+    # Check npm authentication
+    just _check-npm
+
+    echo ""
+    echo "✓ All pre-flight checks passed"
+
+[group('Release')]
+[private]
+[doc('Verify npm is authenticated for publishing')]
+_check-npm:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Check if npm is installed
+    if ! command -v npm &> /dev/null; then
+        echo "❌ npm not found. Install Node.js first."
+        exit 1
+    fi
+
+    # Check npm authentication by trying to view user
+    if ! npm whoami &> /dev/null; then
+        echo "❌ npm not authenticated. Run: npm login"
+        echo ""
+        echo "Make sure to log in with an account that has publish access to @pthm/melange"
+        exit 1
+    fi
+
+    npm_user=$(npm whoami)
+    echo "✓ npm authenticated as: $npm_user"
+
+[group('Release')]
+[private]
 [doc('Verify 1Password CLI is signed in for notarization')]
 _check-1password:
     #!/usr/bin/env bash
@@ -213,7 +369,7 @@ _check-1password:
     fi
     # Check if 1Password CLI is available
     if ! command -v op &> /dev/null; then
-        echo "⚠️  1Password CLI not found. Install it for automatic credential loading:"
+        echo "❌ 1Password CLI not found. Install it for automatic credential loading:"
         echo "   brew install 1password-cli"
         echo ""
         echo "Or set environment variables manually:"
@@ -230,7 +386,33 @@ _check-1password:
         echo "Then run this command again."
         exit 1
     fi
-    echo "✓ 1Password CLI is signed in"
+
+    # Verify we can actually access the credentials (session is active, not expired)
+    OP_VAULT="Developer"
+    OP_P12_ITEM="Apple Developer ID"
+    OP_P8_ITEM="App Store Connect API Key"
+
+    if ! op item get "$OP_P12_ITEM" --vault "$OP_VAULT" &> /dev/null; then
+        echo "❌ 1Password session expired or '$OP_P12_ITEM' not found in '$OP_VAULT' vault"
+        echo ""
+        echo "Sign in to 1Password by running:"
+        echo "   eval \$(op signin)"
+        echo ""
+        echo "Or ensure the following items exist in the '$OP_VAULT' vault:"
+        echo "   - '$OP_P12_ITEM' (with .p12 file and password field)"
+        echo "   - '$OP_P8_ITEM' (with .p8 file, Key ID, and Issuer ID fields)"
+        exit 1
+    fi
+
+    if ! op item get "$OP_P8_ITEM" --vault "$OP_VAULT" &> /dev/null; then
+        echo "❌ '$OP_P8_ITEM' not found in '$OP_VAULT' vault"
+        echo ""
+        echo "Ensure the following item exists in the '$OP_VAULT' vault:"
+        echo "   - '$OP_P8_ITEM' (with .p8 file, Key ID, and Issuer ID fields)"
+        exit 1
+    fi
+
+    echo "✓ 1Password CLI is signed in and credentials are accessible"
 
 [group('Release')]
 [private]
