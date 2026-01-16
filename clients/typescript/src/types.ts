@@ -17,10 +17,12 @@ export type Relation = string;
 
 /**
  * Object represents an authorization object with type and ID.
+ * Optionally includes a relation for userset references (e.g., "group#member").
  */
 export interface MelangeObject {
   readonly type: ObjectType;
   readonly id: string;
+  readonly relation?: Relation;
 }
 
 /**
