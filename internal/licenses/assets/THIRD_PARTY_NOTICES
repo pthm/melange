@@ -19,7 +19,7 @@ Dependencies:
 - github.com/hashicorp/go-multierror - MPL-2.0
 - github.com/lib/pq - MIT
 - github.com/openfga/api/proto - Apache-2.0
-- github.com/openfga/language/pkg/go - Apache-2.0
+- github.com/openfga/language/lib/go - Apache-2.0
 - github.com/pelletier/go-toml/v2 - MIT
 - github.com/sagikazarmark/locafero - MIT
 - github.com/sourcegraph/conc - MIT
@@ -1355,7 +1355,7 @@ FILE: github.com/openfga/api/proto/openfga/v1/LICENSE
    END OF TERMS AND CONDITIONS
 
 ================================================================================
-PACKAGE: github.com/openfga/language/pkg/go
+PACKAGE: github.com/openfga/language/lib/go
 LICENSE: Apache-2.0
 VERSION: v0.2.0-beta.2.0.20251027165255-0f8f255e5f6c
 COPYRIGHT: unknown
@@ -1363,7 +1363,7 @@ FILES: LICENSE
 ================================================================================
 
 --------------------------------------------------------------------------------
-FILE: github.com/openfga/language/pkg/go/LICENSE
+FILE: github.com/openfga/language/lib/go/LICENSE
 --------------------------------------------------------------------------------
 
 

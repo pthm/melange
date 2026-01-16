@@ -7,7 +7,7 @@ This directory contains language-specific runtime clients for Melange.
 | Language   | Directory     | Package          | Status           |
 |------------|---------------|------------------|------------------|
 | Go         | `../melange/` | `melange`        | Implemented      |
-| TypeScript | `typescript/` | `@pthm/melange`  | Placeholder      |
+| TypeScript | `typescript/` | `@pthm/melange`  | Implemented      |
 
 ## Go Client
 
@@ -21,11 +21,9 @@ checker := melange.NewChecker(db)
 decision, err := checker.Check(ctx, subject, relation, object)
 ```
 
-## Future Clients
+## TypeScript Client
 
-### TypeScript
-
-The TypeScript client will provide:
+The TypeScript client provides:
 - Full async/await support
 - Works with any PostgreSQL driver (pg, postgres.js)
 - Type-safe generated code from schemas
@@ -48,7 +46,7 @@ All languages support generating type-safe client code from schemas:
 # Go
 melange generate client --runtime go --schema schema.fga --output ./authz/
 
-# TypeScript (when implemented)
+# TypeScript
 melange generate client --runtime typescript --schema schema.fga --output ./src/authz/
 ```
 

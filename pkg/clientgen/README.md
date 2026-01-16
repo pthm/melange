@@ -44,10 +44,10 @@ type Config struct {
 
 ## Supported Runtimes
 
-| Runtime | Status | Output |
-|---------|--------|--------|
-| `go` | Supported | Type-safe Go code with constants and constructors |
-| `typescript` | Stub | TypeScript types and factory functions (planned) |
+| Runtime      | Status    | Output                                            |
+| ------------ | --------- | ------------------------------------------------- |
+| `go`         | Supported | Type-safe Go code with constants and constructors |
+| `typescript` | Stub      | TypeScript types and factory functions (planned)  |
 
 ## Usage Examples
 

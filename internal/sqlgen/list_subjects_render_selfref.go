@@ -54,7 +54,7 @@ func renderSelfRefUsersetFilterQuery(blocks SelfRefUsersetSubjectsBlockSet) stri
 
 	if blocks.UsersetFilterRecursiveBlock != nil {
 		recursiveBlock := renderTypedQueryBlock(*blocks.UsersetFilterRecursiveBlock)
-		cteBody = appendUnionAll(cteBody, formatQueryBlockSQL(recursiveBlock.Comments, recursiveBlock.Query.SQL()))
+		cteBody = appendUnion(cteBody, formatQueryBlockSQL(recursiveBlock.Comments, recursiveBlock.Query.SQL()))
 	}
 
 	resultBlocks := []QueryBlock{{
@@ -119,5 +119,5 @@ func buildUsersetObjectsCTE(blocks SelfRefUsersetSubjectsBlockSet) string {
 	}
 	recursiveBlock := renderTypedQueryBlock(*blocks.UsersetObjectsRecursiveBlock)
 	recursiveSQL := formatQueryBlockSQL(recursiveBlock.Comments, recursiveBlock.Query.SQL())
-	return baseSQL + "\n            UNION ALL\n" + recursiveSQL
+	return baseSQL + "\n            UNION\n" + recursiveSQL
 }

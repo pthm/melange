@@ -57,7 +57,7 @@ Read more about Melange's architecture and how it works [here](concepts/how-it-w
 Understand the core architecture and design of Melange.
 
 {{< cards >}}
-  {{< card link="concepts/how-it-works" title="How It Works" subtitle="Specialized SQL generation, precomputed closures, and sub-millisecond checks" icon="cog" >}}
+  {{< card link="concepts/how-it-works" title="How It Works" subtitle="Specialized SQL generation, precomputed closures, and constant-time permission checks" icon="cog" >}}
   {{< card link="concepts/modelling" title="Authorization Modelling" subtitle="Write OpenFGA schemas to define your permission model" icon="document-text" >}}
   {{< card link="concepts/tuples-view" title="Tuples View" subtitle="Map your domain tables to authorization tuples" icon="database" >}}
 {{< /cards >}}

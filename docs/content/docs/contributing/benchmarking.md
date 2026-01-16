@@ -102,33 +102,33 @@ Scale benchmarks use a GitHub-like model with organizations, repositories, and p
 
 | Operation            | Description                                  | 1K      | 10K     | 100K    | 1M      | Scaling |
 | -------------------- | -------------------------------------------- | ------- | ------- | ------- | ------- | ------- |
-| Direct Membership    | `user` → `can_read` → `organization`         | ~246 µs | ~196 µs | ~210 µs | ~202 µs | O(1)    |
-| Inherited Permission | `user` → `can_read` → `repository` (via org) | ~319 µs | ~318 µs | ~309 µs | ~307 µs | O(1)    |
-| Exclusion Pattern    | `user` → `can_review` → `pull_request`       | ~391 µs | ~388 µs | ~393 µs | ~392 µs | O(1)    |
-| Denied Permission    | Non-member checking org access               | ~193 µs | ~208 µs | ~235 µs | ~210 µs | O(1)    |
+| Direct Membership    | `user` → `can_read` → `organization`         | 357 µs  | 329 µs  | 296 µs  | 304 µs  | O(1)    |
+| Inherited Permission | `user` → `can_read` → `repository` (via org) | 412 µs  | 410 µs  | 420 µs  | 418 µs  | O(1)    |
+| Exclusion Pattern    | `user` → `can_review` → `pull_request`       | 515 µs  | 520 µs  | 533 µs  | 505 µs  | O(1)    |
+| Denied Permission    | Non-member checking org access               | 275 µs  | 277 µs  | 291 µs  | 281 µs  | O(1)    |
 
-**ListObjects Operations** (performance varies by relation complexity):
+**ListObjects Operations** (performance varies by result count):
 
-| Operation             | Description                          | 1K      | 10K     | 100K    | 1M      | Scaling |
-| --------------------- | ------------------------------------ | ------- | ------- | ------- | ------- | ------- |
-| List Accessible Repos | All repos user can read (via org)    | ~2.9 ms | ~26 ms  | ~102 ms | ~531 ms | O(n)    |
-| List Accessible Orgs  | All orgs user is member of           | ~184 µs | ~200 µs | ~195 µs | ~194 µs | O(1)    |
-| List Accessible PRs   | All PRs user can read (via repo→org) | ~3.2 ms | ~30 ms  | ~113 ms | ~605 ms | O(n)    |
+| Operation             | Description                          | 1K      | 10K     | 100K    | 1M      | Scaling    |
+| --------------------- | ------------------------------------ | ------- | ------- | ------- | ------- | ---------- |
+| List Accessible Repos | All repos user can read (via org)    | 3.9 ms  | 34.1 ms | 133.9 ms| 672 ms  | O(results) |
+| List Accessible Orgs  | All orgs user is member of           | 299 µs  | 300 µs  | 316 µs  | 278 µs  | O(1)       |
+| List Accessible PRs   | All PRs user can read (via repo→org) | 4.1 ms  | 36.8 ms | 153.1 ms| 843 ms  | O(results) |
 
 **ListSubjects Operations** (performance varies by relation complexity):
 
 | Operation         | Description                             | 1K      | 10K     | 100K    | 1M      | Scaling  |
 | ----------------- | --------------------------------------- | ------- | ------- | ------- | ------- | -------- |
-| List Org Members  | All users who can read an org           | ~178 µs | ~203 µs | ~255 µs | ~330 µs | O(log n) |
-| List Repo Readers | All users who can read a repo (via org) | ~6.7 ms | ~27 ms  | ~117 ms | ~682 ms | O(n)     |
-| List Repo Writers | All users who can write to a repo       | ~176 µs | ~184 µs | ~184 µs | ~184 µs | O(1)     |
+| List Org Members  | All users who can read an org           | 288 µs  | 335 µs  | 399 µs  | 480 µs  | O(log n) |
+| List Repo Readers | All users who can read a repo (via org) | 413 µs  | 346 µs  | 346 µs  | 339 µs  | O(1)     |
+| List Repo Writers | All users who can write to a repo       | 269 µs  | 333 µs  | 266 µs  | 259 µs  | O(1)     |
 
 **Parallel Check Operations**:
 
-| Operation                | Time per Op |
-| ------------------------ | ----------- |
-| Parallel Direct Check    | ~55 µs      |
-| Parallel Inherited Check | ~70 µs      |
+| Operation                | Time per Op | Speedup vs Sequential |
+| ------------------------ | ----------- | --------------------- |
+| Parallel Direct Check    | 89 µs       | ~3.7x                 |
+| Parallel Inherited Check | 143 µs      | ~2.9x                 |
 
 ### Caching Benchmark
 
@@ -151,8 +151,8 @@ func BenchmarkCacheHit(b *testing.B) {
 
 Expected results:
 
-- Cold cache: ~336 µs
-- Warm cache: ~79 ns (~4,250x faster)
+- Cold cache: 422 µs
+- Warm cache: 83 ns (~5,000x faster)
 
 ## Profiling
 

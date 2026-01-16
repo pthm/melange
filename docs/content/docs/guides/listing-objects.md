@@ -386,16 +386,17 @@ const result: RepoWithPermissions[] = repos.map(repo => ({
 
 ## Performance Characteristics
 
-ListObjects uses a recursive CTE that walks the permission graph in a single query:
+ListObjects uses a recursive CTE that walks the permission graph in a single query. Performance depends primarily on the **number of accessible objects (results)**, not total tuple count:
 
-| Tuple Count | Latency |
-|-------------|---------|
-| 1K tuples   | ~2.3ms  |
-| 10K tuples  | ~23ms   |
-| 100K tuples | ~192ms  |
-| 1M tuples   | ~1.5s   |
+| Result Count | Typical Latency |
+|--------------|-----------------|
+| <10 objects  | 300-500 μs      |
+| 10-100       | 1-10 ms         |
+| 100-1K       | 10-50 ms        |
+| 1K-10K       | 30-200 ms       |
+| 10K+         | 200-1000 ms     |
 
-Performance scales linearly with the number of tuples. For large datasets:
+Performance scales with result set size. For large datasets:
 
 1. **Use pagination** - Use `p_limit` to control result size and avoid loading unbounded data
 2. **Pre-filter candidates** - If you know the user only cares about certain objects, filter at the application layer first

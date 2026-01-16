@@ -112,7 +112,7 @@ Pass temporary tuples with a check request without storing them in the database.
 
 ```go
 // Check with contextual tuples
-allowed, err := checker.CheckWithContext(ctx, user, "can_read", doc, []melange.Tuple{
+allowed, err := checker.CheckWithContextualTuples(ctx, user, "can_read", doc, []melange.ContextualTuple{
     {Subject: user, Relation: "temp_access", Object: doc},
 })
 ```

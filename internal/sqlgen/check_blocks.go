@@ -411,6 +411,27 @@ func buildIntersectionGroups(plan CheckPlan) []IntersectionGroupCheck {
 	return groups
 }
 
+// buildSimpleRelationCheck builds an inline EXISTS query for a simple relation check.
+// Simple relations have no userset, recursion, exclusion, or intersection logic,
+// so they can be checked with a direct tuple lookup instead of a function call.
+func buildSimpleRelationCheck(objectType, relation string) Expr {
+	q := Tuples("t").
+		ObjectType(objectType).
+		Relations(relation).
+		Where(
+			Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
+			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
+			Or(
+				Eq{Left: Col{Table: "t", Column: "subject_id"}, Right: SubjectID},
+				IsWildcard{Source: Col{Table: "t", Column: "subject_id"}},
+			),
+		).
+		Select("1").
+		Limit(1)
+
+	return Exists{Query: q}
+}
+
 func buildIntersectionPartCheck(plan CheckPlan, part IntersectionPart, visitedWithKey Expr) IntersectionPartCheck {
 	pc := IntersectionPartCheck{
 		Relation:         part.Relation,
@@ -427,6 +448,10 @@ func buildIntersectionPartCheck(plan CheckPlan, part IntersectionPart, visitedWi
 	case part.IsThis:
 		pc.Check = buildThisCheck(plan, part)
 
+	case part.IsSimple:
+		// Optimization: inline simple relations as EXISTS instead of function calls
+		pc.Check = buildSimpleRelationCheck(plan.ObjectType, part.Relation)
+
 	default:
 		pc.Check = CheckPermission{
 			Subject:     SubjectParams(),
@@ -438,12 +463,18 @@ func buildIntersectionPartCheck(plan CheckPlan, part IntersectionPart, visitedWi
 	}
 
 	if part.ExcludedRelation != "" {
-		exclusionCheck := CheckPermission{
-			Subject:     SubjectParams(),
-			Relation:    part.ExcludedRelation,
-			Object:      LiteralObject(plan.ObjectType, ObjectID),
-			Visited:     visitedWithKey,
-			ExpectAllow: false,
+		var exclusionCheck Expr
+		if part.IsExcludedSimple {
+			// Optimization: inline simple exclusions as NOT EXISTS
+			exclusionCheck = Not(buildSimpleRelationCheck(plan.ObjectType, part.ExcludedRelation))
+		} else {
+			exclusionCheck = CheckPermission{
+				Subject:     SubjectParams(),
+				Relation:    part.ExcludedRelation,
+				Object:      LiteralObject(plan.ObjectType, ObjectID),
+				Visited:     visitedWithKey,
+				ExpectAllow: false,
+			}
 		}
 		pc.Check = And(pc.Check, exclusionCheck)
 	}

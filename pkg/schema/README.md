@@ -185,14 +185,14 @@ for _, m := range models {
 
 The schema package understands these OpenFGA patterns:
 
-| Pattern | Rule Fields Set | Example |
-|---------|-----------------|---------|
-| Direct | `SubjectType` | `[user]` |
-| Implied | `ImpliedBy` | `viewer: owner` |
-| Parent (TTU) | `ParentRelation`, `SubjectType` | `viewer from org` |
-| Exclusion | `ExcludedRelation` | `but not author` |
-| Userset | `SubjectType`, `SubjectRelation` | `[group#member]` |
-| Intersection | `RuleGroupID`, `RuleGroupMode` | `a and b` |
+| Pattern      | Rule Fields Set                  | Example           |
+| ------------ | -------------------------------- | ----------------- |
+| Direct       | `SubjectType`                    | `[user]`          |
+| Implied      | `ImpliedBy`                      | `viewer: owner`   |
+| Parent (TTU) | `ParentRelation`, `SubjectType`  | `viewer from org` |
+| Exclusion    | `ExcludedRelation`               | `but not author`  |
+| Userset      | `SubjectType`, `SubjectRelation` | `[group#member]`  |
+| Intersection | `RuleGroupID`, `RuleGroupMode`   | `a and b`         |
 
 ## Dependency Information
 

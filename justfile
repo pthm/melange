@@ -280,6 +280,26 @@ test-unit:
 test-integration:
     cd {{TEST}} && {{GO_TEST}} -timeout 5m ./...
 
+# Run all integration tests (Go + TypeScript) with shared database
+[group('Test')]
+test-integration-all:
+    ./scripts/integration-test-runner.sh
+
+# Run TypeScript tests (requires pnpm and database)
+[group('Test')]
+test-ts:
+    cd clients/typescript && pnpm install && pnpm test
+
+# Run TypeScript tests in watch mode
+[group('Test')]
+test-ts-watch:
+    cd clients/typescript && pnpm install && pnpm test:watch
+
+# Run TypeScript tests with coverage
+[group('Test')]
+test-ts-coverage:
+    cd clients/typescript && pnpm install && pnpm test:coverage
+
 # Run benchmarks (requires Docker)
 # Use SCALE to limit to a specific scale: just bench SCALE=1K
 [group('Test')]
@@ -551,6 +571,36 @@ dump-inventory: build-dumpinventory
 [group('OpenFGA Inspect')]
 dump-inventory-summary: build-dumpinventory
     ./bin/dumpinventory -summary
+
+# Build the explaintest utility
+[group('OpenFGA Inspect')]
+build-explaintest:
+    cd {{TEST}} && go build -o ../bin/explaintest ./cmd/explaintest
+
+# Run EXPLAIN ANALYZE for a specific test
+[group('OpenFGA Inspect')]
+explain-test NAME: build-explaintest
+    ./bin/explaintest "{{NAME}}"
+
+# Run EXPLAIN ANALYZE with JSON output
+[group('OpenFGA Inspect')]
+explain-test-json NAME: build-explaintest
+    ./bin/explaintest --format json "{{NAME}}"
+
+# Run EXPLAIN ANALYZE for a single assertion
+[group('OpenFGA Inspect')]
+explain-test-assertion NAME INDEX: build-explaintest
+    ./bin/explaintest --assertion {{INDEX}} "{{NAME}}"
+
+# Run EXPLAIN ANALYZE summary across all tests
+[group('OpenFGA Inspect')]
+explain-summary: build-explaintest
+    ./bin/explaintest --summary ".*"
+
+# Run EXPLAIN ANALYZE summary for pattern
+[group('OpenFGA Inspect')]
+explain-summary-pattern PATTERN: build-explaintest
+    ./bin/explaintest --summary "{{PATTERN}}"
 
 # Show only list function codegen inventory
 [group('OpenFGA Inspect')]

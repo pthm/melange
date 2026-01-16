@@ -223,12 +223,12 @@ func ListSubjectsArgs() []FuncArg {
 
 // ListObjectsReturns returns the standard RETURNS clause for list_objects.
 func ListObjectsReturns() string {
-	return "TABLE(object_id TEXT, next_cursor TEXT)"
+	return "TABLE(object_id TEXT, next_cursor TEXT) ROWS 100"
 }
 
 // ListSubjectsReturns returns the standard RETURNS clause for list_subjects.
 func ListSubjectsReturns() string {
-	return "TABLE(subject_id TEXT, next_cursor TEXT)"
+	return "TABLE(subject_id TEXT, next_cursor TEXT) ROWS 100"
 }
 
 // ListObjectsFunctionHeader creates header comments for a list_objects function.

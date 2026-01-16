@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/pthm/melange/melange"
 	"github.com/pthm/melange/test/authz"
@@ -27,6 +29,9 @@ var benchmarkScales = []BenchmarkScale{
 	{Name: "10K", Users: 500, Orgs: 10, ReposPerOrg: 50, MembersPerOrg: 50, PRsPerRepo: 20},
 	{Name: "100K", Users: 2000, Orgs: 20, ReposPerOrg: 100, MembersPerOrg: 100, PRsPerRepo: 50},
 	{Name: "1M", Users: 10000, Orgs: 50, ReposPerOrg: 200, MembersPerOrg: 200, PRsPerRepo: 100},
+	{Name: "10M", Users: 50000, Orgs: 100, ReposPerOrg: 500, MembersPerOrg: 1000, PRsPerRepo: 200},
+	{Name: "50M", Users: 150000, Orgs: 200, ReposPerOrg: 1000, MembersPerOrg: 2500, PRsPerRepo: 200},
+	{Name: "100M", Users: 250000, Orgs: 300, ReposPerOrg: 1500, MembersPerOrg: 3500, PRsPerRepo: 300},
 }
 
 // benchmarkData holds references to created test data for benchmarks.
@@ -40,13 +45,43 @@ type benchmarkData struct {
 	tupleCount int
 }
 
+// estimateTuples estimates the total number of tuples for a given scale.
+func estimateTuples(scale BenchmarkScale) int {
+	// Org members + repo relationships + PR relationships (repo + author)
+	return scale.Orgs*scale.MembersPerOrg +
+		scale.Orgs*scale.ReposPerOrg +
+		scale.Orgs*scale.ReposPerOrg*scale.PRsPerRepo*2
+}
+
 // setupBenchmarkData creates test data at the specified scale.
 func setupBenchmarkData(b *testing.B, scale BenchmarkScale) *benchmarkData {
 	b.Helper()
 
+	// Estimate tuple count and check for large scale guards
+	estimatedTuples := estimateTuples(scale)
+	if estimatedTuples > 10_000_000 {
+		b.Logf("WARNING: Large scale (%s) with ~%d tuples - requires ~%d GB disk and ~%d minutes setup",
+			scale.Name, estimatedTuples, estimatedTuples/2_000_000, estimatedTuples/1_000_000)
+
+		if os.Getenv("MELANGE_BENCH_LARGE_SCALE") != "1" {
+			b.Skipf("Large scale benchmarks require MELANGE_BENCH_LARGE_SCALE=1 (scale: %s, ~%d tuples)", scale.Name, estimatedTuples)
+		}
+	}
+
 	db := testutil.DB(b)
 	ctx := context.Background()
-	fixtures := testutil.NewFixtures(ctx, db)
+
+	// Use BulkFixtures for faster data loading (10-100x faster than batch INSERT)
+	fixtures := testutil.NewBulkFixtures(ctx, db)
+
+	// For very large scales, increase connection pool
+	if estimatedTuples > 10_000_000 {
+		db.SetMaxOpenConns(100)
+		db.SetMaxIdleConns(50)
+	}
+
+	b.Logf("Creating %s scale dataset (estimated %d tuples)...", scale.Name, estimatedTuples)
+	startTime := time.Now()
 
 	// Create users
 	users, err := fixtures.CreateUsers(scale.Users)
@@ -109,6 +144,10 @@ func setupBenchmarkData(b *testing.B, scale BenchmarkScale) *benchmarkData {
 		b.Fatalf("get tuple count: %v", err)
 	}
 
+	setupDuration := time.Since(startTime)
+	b.Logf("Setup complete: %d tuples in %v (%.0f tuples/sec)",
+		tupleCount, setupDuration, float64(tupleCount)/setupDuration.Seconds())
+
 	return &benchmarkData{
 		db:         db,
 		checker:    melange.NewChecker(db),
@@ -118,6 +157,12 @@ func setupBenchmarkData(b *testing.B, scale BenchmarkScale) *benchmarkData {
 		prs:        allPRs,
 		tupleCount: tupleCount,
 	}
+}
+
+// PaginationSample represents a specific page to test in pagination benchmarks.
+type PaginationSample struct {
+	Name   string
+	Offset int
 }
 
 // BenchmarkCheck benchmarks the Check function across different scales.
@@ -212,6 +257,7 @@ func BenchmarkListObjects(b *testing.B) {
 			b.Logf("Setup complete: %d tuples, %d repos", data.tupleCount, len(data.repos))
 
 			ctx := context.Background()
+			estimatedTuples := estimateTuples(scale)
 
 			for _, pageSize := range pageSizes {
 				b.Run(fmt.Sprintf("ListAccessibleRepos_Page%d", pageSize), func(b *testing.B) {
@@ -268,28 +314,32 @@ func BenchmarkListObjects(b *testing.B) {
 				})
 			}
 
-			// Benchmark pagination: fetching all results by walking through pages
-			b.Run("ListAccessibleRepos_PaginateAll", func(b *testing.B) {
-				user := authz.User(data.users[0])
+			// Skip full pagination for large scales (use representative sampling instead)
+			if estimatedTuples <= 10_000_000 {
+				b.Run("ListAccessibleRepos_PaginateAll", func(b *testing.B) {
+					user := authz.User(data.users[0])
 
-				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
-					var allIDs []string
-					var cursor *string
-					for {
-						ids, next, err := data.checker.ListObjects(ctx, user, authz.RelCanRead, authz.TypeRepository, melange.PageOptions{Limit: 100, After: cursor})
-						if err != nil {
-							b.Fatal(err)
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						var allIDs []string
+						var cursor *string
+						for {
+							ids, next, err := data.checker.ListObjects(ctx, user, authz.RelCanRead, authz.TypeRepository, melange.PageOptions{Limit: 100, After: cursor})
+							if err != nil {
+								b.Fatal(err)
+							}
+							allIDs = append(allIDs, ids...)
+							if next == nil {
+								break
+							}
+							cursor = next
 						}
-						allIDs = append(allIDs, ids...)
-						if next == nil {
-							break
-						}
-						cursor = next
+						_ = allIDs
 					}
-					_ = allIDs
-				}
-			})
+				})
+			} else {
+				b.Logf("Skipping PaginateAll for large scale %s (~%d tuples)", scale.Name, estimatedTuples)
+			}
 		})
 	}
 }
@@ -308,6 +358,7 @@ func BenchmarkListSubjects(b *testing.B) {
 			b.Logf("Setup complete: %d tuples, %d users", data.tupleCount, len(data.users))
 
 			ctx := context.Background()
+			estimatedTuples := estimateTuples(scale)
 
 			for _, pageSize := range pageSizes {
 				b.Run(fmt.Sprintf("ListOrgMembers_Page%d", pageSize), func(b *testing.B) {
@@ -360,28 +411,32 @@ func BenchmarkListSubjects(b *testing.B) {
 				})
 			}
 
-			// Benchmark pagination: fetching all results by walking through pages
-			b.Run("ListRepoReaders_PaginateAll", func(b *testing.B) {
-				repo := authz.Repository(data.repos[0])
+			// Skip full pagination for large scales (use representative sampling instead)
+			if estimatedTuples <= 10_000_000 {
+				b.Run("ListRepoReaders_PaginateAll", func(b *testing.B) {
+					repo := authz.Repository(data.repos[0])
 
-				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
-					var allIDs []string
-					var cursor *string
-					for {
-						ids, next, err := data.checker.ListSubjects(ctx, repo, authz.RelCanRead, authz.TypeUser, melange.PageOptions{Limit: 100, After: cursor})
-						if err != nil {
-							b.Fatal(err)
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						var allIDs []string
+						var cursor *string
+						for {
+							ids, next, err := data.checker.ListSubjects(ctx, repo, authz.RelCanRead, authz.TypeUser, melange.PageOptions{Limit: 100, After: cursor})
+							if err != nil {
+								b.Fatal(err)
+							}
+							allIDs = append(allIDs, ids...)
+							if next == nil {
+								break
+							}
+							cursor = next
 						}
-						allIDs = append(allIDs, ids...)
-						if next == nil {
-							break
-						}
-						cursor = next
+						_ = allIDs
 					}
-					_ = allIDs
-				}
-			})
+				})
+			} else {
+				b.Logf("Skipping PaginateAll for large scale %s (~%d tuples)", scale.Name, estimatedTuples)
+			}
 		})
 	}
 }

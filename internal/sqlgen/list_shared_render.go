@@ -54,6 +54,11 @@ func appendUnionAll(base, additional string) string {
 	return joinUnionAllBlocksSQL([]string{base, additional})
 }
 
+// appendUnion joins two SQL strings with UNION (deduplicates).
+func appendUnion(base, additional string) string {
+	return joinUnionBlocksSQL([]string{base, additional})
+}
+
 // buildDepthCheckSQLForRender builds the depth check SQL for recursive functions.
 func buildDepthCheckSQLForRender(objectType string, linkingRelations []string) string {
 	if len(linkingRelations) == 0 {

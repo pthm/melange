@@ -167,6 +167,7 @@ type ParentRelationInfo struct {
 	Relation            string   // Relation to check on parent (e.g., "viewer")
 	LinkingRelation     string   // Relation that links to parent (e.g., "parent")
 	AllowedLinkingTypes []string // Types allowed for linking relation (e.g., ["folder", "org"])
+	SourceRelation      string   // For closure patterns: the relation this TTU was inherited from (e.g., "reader" in "can_read: reader")
 }
 
 // IntersectionPart represents one part of an intersection check.
@@ -177,7 +178,9 @@ type IntersectionPart struct {
 	IsThis           bool                // [user] - direct assignment check on the same relation
 	HasWildcard      bool                // For IsThis parts: whether direct assignment allows wildcards
 	Relation         string              // Relation to check
+	IsSimple         bool                // True if this relation is simply resolvable (can use inline EXISTS)
 	ExcludedRelation string              // For nested exclusions like "editor but not owner"
+	IsExcludedSimple bool                // True if excluded relation is simply resolvable
 	ParentRelation   *ParentRelationInfo // For tuple-to-userset in intersection
 }
 
@@ -920,6 +923,37 @@ func getLinkingTypes(lookup map[string]map[string]*RelationAnalysis, objectType,
 	return linkingAnalysis.DirectSubjectTypes
 }
 
+// isRelationSimple returns true if a relation can use inline EXISTS instead of a function call.
+// A relation is simple if it:
+// 1. Has no complex features (userset, recursion, exclusion, intersection)
+// 2. Has at most one satisfying relation (no closure expansion needed)
+func isRelationSimple(lookup map[string]map[string]*RelationAnalysis, objectType, relation string) bool {
+	analysis, ok := lookup[objectType][relation]
+	if !ok {
+		return false
+	}
+	return analysis.Features.IsSimplyResolvable() && len(analysis.SatisfyingRelations) <= 1
+}
+
+// classifyIntersectionParts sets IsSimple and IsExcludedSimple flags on intersection parts.
+// Simple parts can be inlined as EXISTS queries; complex parts require function calls.
+func classifyIntersectionParts(objectType string, groups []IntersectionGroupInfo, lookup map[string]map[string]*RelationAnalysis) {
+	for gi := range groups {
+		for pi := range groups[gi].Parts {
+			part := &groups[gi].Parts[pi]
+
+			// Skip parts that use special handling (IsThis or ParentRelation)
+			if part.Relation != "" && !part.IsThis && part.ParentRelation == nil {
+				part.IsSimple = isRelationSimple(lookup, objectType, part.Relation)
+			}
+
+			if part.ExcludedRelation != "" {
+				part.IsExcludedSimple = isRelationSimple(lookup, objectType, part.ExcludedRelation)
+			}
+		}
+	}
+}
+
 // ComputeCanGenerate walks the dependency graph and sets Capabilities on each analysis.
 // It determines generation eligibility and populates derived data used by code generation.
 //
@@ -1019,6 +1053,12 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 			a.ExcludedParentRelations[i].AllowedLinkingTypes = getLinkingTypes(lookup, a.ObjectType, a.ExcludedParentRelations[i].LinkingRelation)
 		}
 
+		// Classify intersection parts as simple or complex for optimization.
+		// Simple relations can be inlined as EXISTS queries instead of function calls.
+		// A relation is simple if it has no complex features (userset, recursion, etc.)
+		// AND has at most one satisfying relation (so closure lookup is trivial).
+		classifyIntersectionParts(a.ObjectType, a.IntersectionGroups, lookup)
+
 		// Propagate AllowedSubjectTypes from intersection group parts.
 		for _, group := range a.IntersectionGroups {
 			for _, part := range group.Parts {
@@ -1112,19 +1152,14 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 			}
 			seenExcluded[excludedRel] = true
 
-			excludedAnalysis, ok := lookup[a.ObjectType][excludedRel]
-			if !ok {
+			if _, ok := lookup[a.ObjectType][excludedRel]; !ok {
 				// Unknown excluded relation - fall back to generic
 				canGenerate = false
 				cannotGenerateReason = "unknown excluded relation: " + excludedRel
 				return false
 			}
-			// Classify excluded relation as simple or complex:
-			// Simple: can use direct tuple lookup (simply resolvable AND no implied closure)
-			// Complex: needs check_permission_internal call
-			isSimple := excludedAnalysis.Features.IsSimplyResolvable() &&
-				len(excludedAnalysis.SatisfyingRelations) <= 1
-			if isSimple {
+			// Simple exclusions use direct tuple lookup; complex ones need function calls.
+			if isRelationSimple(lookup, a.ObjectType, excludedRel) {
 				simpleExcluded = append(simpleExcluded, excludedRel)
 			} else {
 				complexExcluded = append(complexExcluded, excludedRel)
@@ -1298,7 +1333,11 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 					key := parent.LinkingRelation + "->" + parent.Relation
 					if !seenParent[key] {
 						seenParent[key] = true
-						closureParentRelations = append(closureParentRelations, parent)
+						// Copy the parent and set SourceRelation to the closure relation
+						// so list functions know this TTU was inherited and must verify through source relation
+						parentCopy := parent
+						parentCopy.SourceRelation = rel
+						closureParentRelations = append(closureParentRelations, parentCopy)
 					}
 				}
 			}

@@ -157,7 +157,6 @@ func buildSelfRefUsersetFilterRecursiveBlock() *TypedQueryBlock {
 	return &TypedQueryBlock{
 		Comments: []string{"-- Recursive userset expansion for filter path"},
 		Query: SelectStmt{
-			Distinct: true,
 			ColumnExprs: []Expr{
 				Raw("split_part(t.subject_id, '#', 1) AS userset_object_id"),
 				Raw("ue.depth + 1 AS depth"),
@@ -167,17 +166,15 @@ func buildSelfRefUsersetFilterRecursiveBlock() *TypedQueryBlock {
 				Type:  "INNER",
 				Table: "melange_tuples",
 				Alias: "t",
-				On:    Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "ue", Column: "userset_object_id"}},
+				On: And(
+					Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Raw("v_filter_type")},
+					Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "ue", Column: "userset_object_id"}},
+					Eq{Left: Col{Table: "t", Column: "relation"}, Right: Raw("v_filter_relation")},
+					Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Raw("v_filter_type")},
+					Like{Expr: Col{Table: "t", Column: "subject_id"}, Pattern: Raw("'%#' || v_filter_relation")},
+				),
 			}},
-			Where: And(
-				Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Raw("v_filter_type")},
-				Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "ue", Column: "userset_object_id"}},
-				Eq{Left: Col{Table: "t", Column: "relation"}, Right: Raw("v_filter_relation")},
-				Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Raw("v_filter_type")},
-				HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
-				Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Raw("v_filter_relation")},
-				Raw("ue.depth < 25"),
-			),
+			Where: Raw("ue.depth < 25"),
 		},
 	}
 }
@@ -212,7 +209,7 @@ func buildSelfRefUsersetRegularDirectBlock(plan ListPlan, exclusions ExclusionCo
 		Distinct()
 
 	applyWildcardExclusion(q, plan, "t")
-	applyExclusionPredicates(q, exclusions)
+	applyExclusionPredicates(q, exclusions, plan.UseCTEExclusion)
 
 	return TypedQueryBlock{
 		Comments: []string{"-- Path 1: Direct tuple lookup on the object itself"},
@@ -245,7 +242,7 @@ func buildSelfRefUsersetRegularComplexClosureBlocks(plan ListPlan, exclusions Ex
 			Distinct()
 
 		applyWildcardExclusion(q, plan, "t")
-		applyExclusionPredicates(q, exclusions)
+		applyExclusionPredicates(q, exclusions, plan.UseCTEExclusion)
 
 		blocks = append(blocks, TypedQueryBlock{
 			Comments: []string{fmt.Sprintf("-- Complex closure relation: %s", rel)},
@@ -449,9 +446,7 @@ func buildSelfRefUsersetObjectsBaseBlock(plan ListPlan) *TypedQueryBlock {
 		Select("split_part(t.subject_id, '#', 1) AS userset_object_id", "0 AS depth").
 		WhereObjectID(ObjectID).
 		Where(Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(plan.ObjectType)}).
-		WhereHasUserset().
-		WhereUsersetRelation(plan.Relation).
-		Distinct()
+		WhereUsersetRelationLike(plan.Relation)
 
 	return &TypedQueryBlock{
 		Comments: []string{"-- Base case: find initial userset references"},
@@ -463,7 +458,6 @@ func buildSelfRefUsersetObjectsRecursiveBlock(plan ListPlan) *TypedQueryBlock {
 	return &TypedQueryBlock{
 		Comments: []string{"-- Recursive case: expand self-referential userset references"},
 		Query: SelectStmt{
-			Distinct: true,
 			ColumnExprs: []Expr{
 				Raw("split_part(t.subject_id, '#', 1) AS userset_object_id"),
 				Raw("uo.depth + 1 AS depth"),
@@ -473,17 +467,15 @@ func buildSelfRefUsersetObjectsRecursiveBlock(plan ListPlan) *TypedQueryBlock {
 				Type:  "INNER",
 				Table: "melange_tuples",
 				Alias: "t",
-				On:    Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "uo", Column: "userset_object_id"}},
+				On: And(
+					Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+					Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "uo", Column: "userset_object_id"}},
+					Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(plan.Relation)},
+					Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(plan.ObjectType)},
+					Like{Expr: Col{Table: "t", Column: "subject_id"}, Pattern: Lit("%#" + plan.Relation)},
+				),
 			}},
-			Where: And(
-				Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
-				Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "uo", Column: "userset_object_id"}},
-				Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(plan.Relation)},
-				Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(plan.ObjectType)},
-				HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
-				Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(plan.Relation)},
-				Raw("uo.depth < 25"),
-			),
+			Where: Raw("uo.depth < 25"),
 		},
 	}
 }

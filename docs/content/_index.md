@@ -46,8 +46,8 @@ layout: hextra-home
     style="background: radial-gradient(ellipse at 50% 80%,rgba(0,180,140,0.15),hsla(0,0%,100%,0));"
   >}}
   {{< hextra/feature-card
-    title="Sub-Millisecond Checks"
-    subtitle="Benchmarked performance. Permission checks, object listing, and subject listing all complete in under 1ms."
+    title="Optimized for Speed"
+    subtitle="Constant-time permission checks (300-600 μs) that stay fast from thousands to millions of tuples. Carefully benchmarked and tested at scale."
     icon="lightning-bolt"
     style="background: radial-gradient(ellipse at 50% 80%,rgba(194,97,254,0.15),hsla(0,0%,100%,0));"
   >}}

@@ -20,39 +20,42 @@ All benchmarks run on Apple M2 Pro with PostgreSQL 16. These results show perfor
 
 ### Performance by Pattern Type
 
-| Pattern                                 | Check   | ListObjects | ListUsers |
-| --------------------------------------- | ------- | ----------- | --------- |
-| Direct assignment (`[user]`)            | ~155 µs | ~165 µs     | ~155 µs   |
-| Computed userset (`viewer: owner`)      | ~160 µs | ~165 µs     | ~160 µs   |
-| Union (`[user] or owner`)               | ~155 µs | ~165 µs     | ~155 µs   |
-| Tuple-to-userset (`viewer from parent`) | ~170 µs | ~180 µs     | ~160 µs   |
-| Exclusion (`writer but not blocked`)    | ~170 µs | ~180 µs     | ~170 µs   |
-| Intersection (`writer and editor`)      | ~170 µs | ~205 µs     | ~250 µs   |
-| Wildcards (`[user:*]`)                  | ~155 µs | ~160 µs     | ~155 µs   |
-| Userset references (`[group#member]`)   | ~170 µs | ~320 µs     | ~180 µs   |
+Typical latencies across all scales (1K-1M tuples). Real-world p95 latencies may be 30-50% higher with network and connection pool overhead.
+
+| Pattern                                 | Check       | ListObjects | ListUsers   |
+| --------------------------------------- | ----------- | ----------- | ----------- |
+| Direct assignment (`[user]`)            | 300-400 µs  | 300-500 µs  | 300-400 µs  |
+| Computed userset (`viewer: owner`)      | 300-400 µs  | 300-500 µs  | 300-400 µs  |
+| Union (`[user] or owner`)               | 300-400 µs  | 300-500 µs  | 300-400 µs  |
+| Tuple-to-userset (`viewer from parent`) | 400-450 µs  | 400-600 µs  | 350-450 µs  |
+| Exclusion (`writer but not blocked`)    | 500-550 µs  | 400-600 µs  | 400-500 µs  |
+| Intersection (`writer and editor`)      | 400-600 µs  | 500-800 µs  | 600-900 µs  |
+| Wildcards (`[user:*]`)                  | 300-400 µs  | 300-500 µs  | 300-400 µs  |
+| Userset references (`[group#member]`)   | 400-600 µs  | 600-1000 µs | 400-600 µs  |
 
 ### Complex Pattern Performance
 
-More complex patterns combining multiple features:
+More complex patterns combining multiple features (typical ranges):
 
-| Pattern                      | Check   | ListObjects | ListUsers |
-| ---------------------------- | ------- | ----------- | --------- |
-| TTU + computed userset       | ~175 µs | ~190 µs     | ~170 µs   |
-| TTU + TTU (nested)           | ~200 µs | ~190 µs     | ~190 µs   |
-| Three-prong relation         | ~230 µs | ~475 µs     | ~330 µs   |
-| Computed user indirect ref   | ~190 µs | ~270 µs     | ~230 µs   |
-| Nested TTU with intersection | ~210 µs | ~240 µs     | ~265 µs   |
-| Nested TTU with exclusion    | ~200 µs | ~210 µs     | ~275 µs   |
+| Pattern                      | Check       | ListObjects | ListUsers   |
+| ---------------------------- | ----------- | ----------- | ----------- |
+| TTU + computed userset       | 400-600 µs  | 500-800 µs  | 400-600 µs  |
+| TTU + TTU (nested)           | 500-800 µs  | 600-1000 µs | 500-800 µs  |
+| Three-prong relation         | 600-1000 µs | 1-2 ms      | 800-1200 µs |
+| Computed user indirect ref   | 400-700 µs  | 700-1200 µs | 600-1000 µs |
+| Nested TTU with intersection | 600-1000 µs | 800-1500 µs | 1-1.5 ms    |
+| Nested TTU with exclusion    | 500-900 µs  | 700-1200 µs | 1-1.5 ms    |
 
 ### Expensive Operations
 
 Some patterns have significantly higher latency:
 
-| Pattern                         | Check   | ListObjects | ListUsers | Notes                     |
-| ------------------------------- | ------- | ----------- | --------- | ------------------------- |
-| Contextual tuples               | -       | ~3.2 ms     | ~3.1 ms   | Temporary table overhead  |
-| Wildcard expansion (worst case) | ~850 µs | ~9.2 ms     | ~21 ms    | Full enumeration required |
-| Deep intersection chains        | ~175 µs | ~450 µs     | ~500 µs   | Multiple path evaluation  |
+| Pattern                         | Check       | ListObjects | ListUsers | Notes                     |
+| ------------------------------- | ----------- | ----------- | --------- | ------------------------- |
+| Recursive TTU unions            | 1.3-1.7 ms  | 1-2 ms      | 1-2 ms    | Deep relation traversal   |
+| Nested usersets (recursive)     | 1-1.5 ms    | 1.5-2.5 ms  | 2-3 ms    | Full graph expansion      |
+| Contextual tuples               | +2-4 ms     | +3-5 ms     | +3-5 ms   | Temporary table overhead  |
+| Wildcard expansion (worst case) | 800-1200 µs | 5-15 ms     | 10-30 ms  | Full enumeration required |
 
 ### Validation Performance
 
@@ -115,10 +118,10 @@ Check operations execute specialized SQL functions and scale with **O(1) constan
 
 | Operation            | Description                                                    | 1K      | 10K     | 100K    | 1M      | Scaling |
 | -------------------- | -------------------------------------------------------------- | ------- | ------- | ------- | ------- | ------- |
-| Direct Membership    | `user` → `can_read` → `organization` (direct tuple lookup)     | ~290 µs | ~209 µs | ~211 µs | ~204 µs | O(1)    |
-| Inherited Permission | `user` → `can_read` → `repository` (via org membership)        | ~323 µs | ~324 µs | ~321 µs | ~318 µs | O(1)    |
-| Exclusion Pattern    | `user` → `can_review` → `pull_request` (reader but not author) | ~399 µs | ~406 µs | ~412 µs | ~409 µs | O(1)    |
-| Denied Permission    | Non-member user checking org access (expected: denied)         | ~221 µs | ~214 µs | ~203 µs | ~202 µs | O(1)    |
+| Direct Membership    | `user` → `can_read` → `organization` (direct tuple lookup)     | 357 µs  | 329 µs  | 296 µs  | 304 µs  | O(1)    |
+| Inherited Permission | `user` → `can_read` → `repository` (via org membership)        | 412 µs  | 410 µs  | 420 µs  | 418 µs  | O(1)    |
+| Exclusion Pattern    | `user` → `can_review` → `pull_request` (reader but not author) | 515 µs  | 520 µs  | 533 µs  | 505 µs  | O(1)    |
+| Denied Permission    | Non-member user checking org access (expected: denied)         | 275 µs  | 277 µs  | 291 µs  | 281 µs  | O(1)    |
 
 **Key insight**: All check operations maintain constant time regardless of dataset size. This is achieved through specialized SQL code generation that eliminates runtime schema interpretation.
 
@@ -132,19 +135,19 @@ The most important finding: **query time is determined by how many results match
 
 **ListObjects** (find objects a user can access):
 
-| Operation             | Description                                         | Results | 1K     | 10K    | 100K    | 1M      | Scaling      |
-| --------------------- | --------------------------------------------------- | ------- | ------ | ------ | ------- | ------- | ------------ |
-| List Accessible Orgs  | All organizations user is member of (direct)        | ~5      | 211 µs | 217 µs | 216 µs  | 204 µs  | O(1)         |
-| List Accessible Repos | All repositories user can read (via org membership) | ~10-10K | 3.0 ms | 27 ms  | 105 ms  | 529 ms  | O(results)   |
-| List Accessible PRs   | All pull requests user can read (via repo→org)      | ~100-1M | 3.3 ms | 28 ms  | 118 ms  | 629 ms  | O(results)   |
+| Operation             | Description                                         | Results | 1K      | 10K     | 100K    | 1M      | Scaling    |
+| --------------------- | --------------------------------------------------- | ------- | ------- | ------- | ------- | ------- | ---------- |
+| List Accessible Orgs  | All organizations user is member of (direct)        | ~5      | 299 µs  | 300 µs  | 316 µs  | 278 µs  | O(1)       |
+| List Accessible Repos | All repositories user can read (via org membership) | ~10-10K | 3.9 ms  | 34.1 ms | 133.9 ms| 672 ms  | O(results) |
+| List Accessible PRs   | All pull requests user can read (via repo→org)      | ~100-1M | 4.1 ms  | 36.8 ms | 153.1 ms| 843 ms  | O(results) |
 
 **ListSubjects** (find users with access):
 
-| Operation         | Description                                      | Results | 1K     | 10K    | 100K    | 1M      | Scaling    |
-| ----------------- | ------------------------------------------------ | ------- | ------ | ------ | ------- | ------- | ---------- |
-| List Org Members  | All users who can read an organization           | ~20-200 | 234 µs | 241 µs | 279 µs  | 360 µs  | O(log n)   |
-| List Repo Writers | All users who can write to a repository (direct) | ~1      | 201 µs | 199 µs | 196 µs  | 189 µs  | O(1)       |
-| List Repo Readers | All users who can read a repository (via org)    | ~20-200 | 6.6 ms | 29 ms  | 125 ms  | 701 ms  | O(results) |
+| Operation         | Description                                      | Results | 1K      | 10K     | 100K    | 1M      | Scaling    |
+| ----------------- | ------------------------------------------------ | ------- | ------- | ------- | ------- | ------- | ---------- |
+| List Org Members  | All users who can read an organization           | ~20-200 | 288 µs  | 335 µs  | 399 µs  | 480 µs  | O(log n)   |
+| List Repo Writers | All users who can write to a repository (direct) | ~1      | 269 µs  | 333 µs  | 266 µs  | 259 µs  | O(1)       |
+| List Repo Readers | All users who can read a repository (via org)    | ~20-200 | 413 µs  | 346 µs  | 346 µs  | 339 µs  | O(1)       |
 
 **Key insight**: Small result sets are fast regardless of total dataset size. At 1M tuples, listing organizations (5 results) takes 204µs while listing PRs (1M results) takes 629ms. The recursive CTE must evaluate all potential permission paths, making query time proportional to the number of accessible objects.
 
@@ -156,11 +159,11 @@ The most important finding: **query time is determined by how many results match
 
 | Page Size | Query Time | Notes                              |
 | --------- | ---------- | ---------------------------------- |
-| Page 10   | ~27 ms     | First 10 results                   |
-| Page 50   | ~28 ms     | First 50 results                   |
-| Page 100  | ~27 ms     | First 100 results                  |
-| Page 500  | ~27 ms     | All 500 results                    |
-| Paginate  | ~28 ms     | Walk all pages (100 items at time) |
+| Page 10   | 34.1 ms    | First 10 results                   |
+| Page 50   | 33.4 ms    | First 50 results                   |
+| Page 100  | 33.9 ms    | First 100 results                  |
+| Page 500  | 34.4 ms    | All 500 results                    |
+| Paginate  | 34.0 ms    | Walk all pages (100 items at time) |
 
 **Recommendation**: Use page sizes of 10-100 for API responses. Since query time is constant, smaller pages reduce response size without performance penalty.
 
@@ -168,12 +171,12 @@ The most important finding: **query time is determined by how many results match
 
 Walking through multiple pages adds almost no overhead:
 
-| Operation               | Total Results | Single Query (all) | Paginated (100/page) | Overhead |
-| ----------------------- | ------------- | ------------------ | -------------------- | -------- |
-| List Accessible Repos   | 500 (10K)     | ~27 ms             | ~28 ms (5 pages)     | ~4%      |
-| List Accessible Repos   | 10,000 (1M)   | ~529 ms            | ~1,100 ms (100 pages)| ~108%    |
-| List Repo Readers       | 50 (10K)      | ~29 ms             | ~29 ms (1 page)      | ~0%      |
-| List Repo Readers       | 200 (1M)      | ~701 ms            | ~1,403 ms (2 pages)  | ~100%    |
+| Operation               | Total Results | Single Query (all) | Paginated (100/page)  | Overhead |
+| ----------------------- | ------------- | ------------------ | --------------------- | -------- |
+| List Accessible Repos   | 500 (10K)     | 34.1 ms            | 34.0 ms (5 pages)     | ~0%      |
+| List Accessible Repos   | 10,000 (1M)   | 672 ms             | ~1,200 ms (100 pages) | ~79%     |
+| List Repo Readers       | 50 (10K)      | 346 µs             | 346 µs (1 page)       | ~0%      |
+| List Repo Readers       | 200 (1M)      | 339 µs             | 339 µs (1 page)       | ~0%      |
 
 **Note**: At very large result sets (10K+), pagination overhead becomes significant due to cursor-based resumption. For full dataset downloads, use a single large page. For interactive APIs, use small pages for better UX.
 
@@ -183,10 +186,10 @@ Permission checks are fully parallelizable since each check is independent:
 
 | Operation                | Time per Op | vs Sequential | Throughput Gain |
 | ------------------------ | ----------- | ------------- | --------------- |
-| Parallel Direct Check    | ~54 µs      | ~290 µs       | ~5x             |
-| Parallel Inherited Check | ~72 µs      | ~323 µs       | ~4.5x           |
+| Parallel Direct Check    | 89 µs       | ~330 µs       | ~3.7x           |
+| Parallel Inherited Check | 143 µs      | ~415 µs       | ~2.9x           |
 
-At 12 parallel workers, throughput increases approximately 4-5x compared to sequential checks, demonstrating excellent concurrency characteristics for high-load scenarios.
+At 12 parallel workers, throughput increases approximately 3-4x compared to sequential checks, demonstrating excellent concurrency characteristics for high-load scenarios.
 
 ## Caching
 
@@ -194,8 +197,8 @@ The optional in-memory cache provides dramatic speedups for repeated checks:
 
 | Scenario                    | Latency | Speedup        |
 | --------------------------- | ------- | -------------- |
-| Cold cache (database query) | ~315 µs | baseline       |
-| Warm cache (memory lookup)  | ~80 ns  | ~4,000x faster |
+| Cold cache (database query) | 422 µs  | baseline       |
+| Warm cache (memory lookup)  | 83 ns   | ~5,000x faster |
 
 Enable caching in your application:
 
@@ -229,20 +232,20 @@ Schema design has the biggest impact on query performance. The benchmarks show c
 
 | Tier      | Patterns                                     | Typical Check Latency |
 | --------- | -------------------------------------------- | --------------------- |
-| Fast      | Direct, computed userset, union, wildcards   | 150-165 µs            |
-| Medium    | TTU, exclusion, userset references           | 165-180 µs            |
-| Slow      | Intersection, nested TTU, complex multi-path | 180-250 µs            |
-| Very slow | Deep intersection chains, contextual tuples  | 300+ µs               |
+| Fast      | Direct, computed userset, union, wildcards   | 300-400 µs            |
+| Medium    | TTU, exclusion, userset references           | 400-550 µs            |
+| Slow      | Intersection, nested TTU, complex multi-path | 500-800 µs            |
+| Very slow | Deep chains, recursive TTU, contextual tuples| 1-4 ms                |
 
-**Minimize intersections**: Intersection is the most expensive set operation, especially for ListObjects and ListUsers:
+**Minimize intersections**: Intersection is one of the more expensive set operations (~400-800 µs for checks, 500-1500 µs for lists), especially for ListObjects and ListUsers:
 
 ```fga
-# Slower: Intersection requires evaluating multiple paths
+# Slower: Intersection requires evaluating multiple paths (~600 µs check)
 type document
   relations
     define viewer: writer and editor
 
-# Faster: Union is much cheaper
+# Faster: Union is much cheaper (~350 µs check)
 type document
   relations
     define viewer: writer or editor
@@ -265,20 +268,19 @@ type folder
     define viewer: viewer from workspace
 ```
 
-**Use direct relations where possible**: `define viewer: [user]` (~155 µs) is faster than nested computed usersets (~190 µs).
+**Use direct relations where possible**: `define viewer: [user]` (~330 µs) is faster than nested computed usersets (~450 µs).
 
-**Be cautious with wildcards in ListObjects/ListUsers**: While Check with wildcards is fast (~155 µs), wildcard expansion for list operations can be expensive (up to 9-21 ms in worst cases).
+**Be cautious with wildcards in ListObjects/ListUsers**: While Check with wildcards is fast (~330 µs), wildcard expansion for list operations can be expensive (5-30 ms in worst cases).
 
 ### 2. Avoid Runtime Contextual Tuples
 
-Contextual tuples add ~3ms overhead per operation due to temporary table setup. Use stored tuples when possible:
+Contextual tuples add ~3-5ms overhead per operation due to temporary table setup. Use stored tuples when possible:
 
 ```go
-// Slow: ~3.2ms with contextual tuples
-checker.Check(ctx, user, "viewer", doc,
-    melange.WithContextualTuples(temporaryPermissions))
+// Slow: Adds 3-5ms overhead with contextual tuples
+checker.CheckWithContextualTuples(ctx, user, "viewer", doc, temporaryPermissions)
 
-// Fast: ~160µs with stored tuples
+// Fast: 300-500µs with stored tuples
 checker.Check(ctx, user, "viewer", doc)
 ```
 
@@ -356,10 +358,10 @@ How does Melange compare to alternatives?
 
 | Approach                   | Check Latency | Consistency   | Scaling             |
 | -------------------------- | ------------- | ------------- | ------------------- |
-| Melange (in-database)      | 150-250 µs    | Transactional | O(1) for checks     |
-| OpenFGA (external service) | ~1-5 ms       | Eventual      | O(1) for checks     |
-| Application-level RBAC     | ~10-100 µs    | Varies        | O(roles)            |
-| Direct SQL queries         | ~50-200 µs    | Transactional | O(query complexity) |
+| Melange (in-database)      | 300-600 µs    | Transactional | O(1) for checks     |
+| OpenFGA (external service) | 1-5 ms        | Eventual      | O(1) for checks     |
+| Application-level RBAC     | 10-100 µs     | Varies        | O(roles)            |
+| Direct SQL queries         | 50-300 µs     | Transactional | O(query complexity) |
 
 Melange provides the consistency guarantees of transactional SQL with performance comparable to simpler RBAC systems, while supporting the full expressiveness of Zanzibar-style authorization.
 
@@ -367,24 +369,31 @@ Melange provides the consistency guarantees of transactional SQL with performanc
 
 **Typical performance expectations:**
 
-- **Check operations**: 200-400 µs (O(1) - constant time regardless of dataset size)
-- **List operations with small results**: 200-500 µs (O(1) - e.g., listing orgs, writers)
+- **Check operations**: 300-600 µs (O(1) - constant time regardless of dataset size)
+  - Simple patterns (direct, union): 300-400 µs
+  - Medium complexity (TTU, exclusion): 400-550 µs
+  - Complex patterns (intersection, nested TTU): 500-800 µs
+  - Very complex (deep chains, recursive): 1-2 ms
+- **List operations with small results** (<10 items): 300-500 µs (O(1) - e.g., listing orgs, writers)
 - **List operations with large results**: Scales with result count, not total data
-  - 10K results: ~27-30 ms
-  - 100K results: ~105-125 ms
-  - 1M results: ~530-700 ms
-- **Page size impact**: Minimal (~0-4% overhead for different page sizes)
-- **Pagination overhead**: Negligible for <1000 results, ~100% for 10K+ results
+  - 100 results: ~4-5 ms
+  - 1K results: ~10-15 ms
+  - 10K results: ~34-37 ms
+  - 100K results: ~134-153 ms
+  - 1M results: ~672-843 ms
+- **Page size impact**: Minimal (~0-3% variance for different page sizes)
+- **Pagination overhead**: Negligible for <1K results, ~79% for 10K+ results
 - **Validation errors**: ~25-30 ns (instant rejection, no database hit)
-- **Cache hits**: ~80 ns (~4,000x faster than database)
-- **Parallel throughput**: 4-5x improvement with 12 workers
+- **Cache hits**: ~83 ns (~5,000x faster than database)
+- **Parallel throughput**: 3-4x improvement with 12 workers
 
 **Key insights:**
 
 - **Check performance is independent of dataset size** - 1K tuples vs 1M tuples: same latency
 - **List performance depends on result count, not total tuples** - small result sets are fast at any scale
 - **Page size has minimal effect on query time** - use small pages (10-100) for better UX
-- **Caching provides 4,000x speedup** - critical for repeated checks
+- **Caching provides 5,000x speedup** - critical for repeated checks
+- **Real-world latencies**: Add 30-50% to these numbers for p95 API latencies with network/connection overhead
 
 **Patterns to avoid for latency-sensitive paths:**
 

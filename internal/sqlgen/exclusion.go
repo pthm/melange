@@ -53,6 +53,23 @@ func (c ExclusionConfig) HasExclusions() bool {
 		len(c.ExcludedIntersection) > 0
 }
 
+// CanUseCTEOptimization returns true if exclusions can use CTE-based optimization.
+//
+// Eligible when:
+//   - Has simple exclusions (direct tuple lookups)
+//   - No complex exclusions (require check_permission calls)
+//   - No TTU exclusions (require parent traversal)
+//   - No intersection exclusions (require AND logic)
+//
+// The optimization materializes excluded subjects once in a CTE, then uses a single
+// LEFT JOIN...WHERE IS NULL instead of repeated NOT EXISTS predicates.
+func (c ExclusionConfig) CanUseCTEOptimization() bool {
+	return len(c.SimpleExcludedRelations) > 0 &&
+		len(c.ComplexExcludedRelations) == 0 &&
+		len(c.ExcludedParentRelations) == 0 &&
+		len(c.ExcludedIntersection) == 0
+}
+
 func (c ExclusionConfig) subjectRef() SubjectRef {
 	return SubjectRef{Type: c.SubjectTypeExpr, ID: c.SubjectIDExpr}
 }
@@ -175,4 +192,38 @@ func simpleExclusionQuery(objectType, relation string, objectID, subjectType, su
 // Wildcards are handled: if a wildcard tuple exists for the excluded relation, access is denied.
 func SimpleExclusion(objectType, relation string, objectID, subjectType, subjectID Expr) Expr {
 	return simpleExclusionQuery(objectType, relation, objectID, subjectType, subjectID)
+}
+
+// BuildExclusionCTE builds a CTE that materializes all excluded subjects.
+// Used for CTE-based exclusion optimization to precompute exclusions once
+// instead of checking via NOT EXISTS for each result row.
+//
+// Returns a SELECT statement producing a single column: subject_id
+//
+// Example for "but not restricted" where restricted: [user]:
+//
+//	SELECT subject_id FROM melange_tuples
+//	WHERE object_type = 'document'
+//	  AND relation IN ('restricted')
+//	  AND object_id = p_object_id
+//
+// Result is used in anti-join pattern:
+//
+//	LEFT JOIN excluded_subjects ON excluded_subjects.subject_id = candidate.subject_id
+//	                              OR excluded_subjects.subject_id = '*'
+//	WHERE excluded_subjects.subject_id IS NULL
+func (c ExclusionConfig) BuildExclusionCTE() string {
+	if len(c.SimpleExcludedRelations) == 0 {
+		return "SELECT NULL::TEXT AS subject_id WHERE FALSE"
+	}
+
+	q := Tuples("").
+		ObjectType(c.ObjectType).
+		Relations(c.SimpleExcludedRelations...).
+		Where(
+			Eq{Left: Col{Column: "object_id"}, Right: c.ObjectIDExpr},
+		).
+		Select("subject_id")
+
+	return q.Build().SQL()
 }

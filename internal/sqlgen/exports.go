@@ -42,6 +42,8 @@ type (
 	Sub       = sqldsl.Sub
 	In        = sqldsl.In
 	NotIn     = sqldsl.NotIn
+	Like      = sqldsl.Like
+	NotLike   = sqldsl.NotLike
 	AndExpr   = sqldsl.AndExpr
 	OrExpr    = sqldsl.OrExpr
 	NotExpr   = sqldsl.NotExpr
@@ -232,4 +234,8 @@ func wrapWithPagination(query, idColumn string) string {
 
 func wrapWithPaginationWildcardFirst(query string) string {
 	return sqldsl.WrapWithPaginationWildcardFirst(query)
+}
+
+func wrapWithExclusionCTEAndPagination(query, exclusionCTE string) string {
+	return sqldsl.WrapWithExclusionCTEAndPagination(query, exclusionCTE)
 }

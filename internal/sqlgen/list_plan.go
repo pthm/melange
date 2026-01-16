@@ -36,11 +36,33 @@ type ListPlan struct {
 	HasUsersetPatterns  bool // Has userset patterns to expand
 	HasComplexUsersets  bool // Has userset patterns requiring check_permission calls
 	HasStandaloneAccess bool // Has standalone access paths (not constrained by intersection)
+
+	// Optimization flags
+	UseCTEExclusion bool // Use CTE-based exclusion optimization (precompute + anti-join)
+
+	// Analysis lookup for checking parent relation complexity (TTU optimization)
+	// Maps "objectType.relation" -> *RelationAnalysis
+	// Used by TTU block generation to determine if parent relations are simple or complex
+	AnalysisLookup map[string]*RelationAnalysis
 }
 
 // BuildListObjectsPlan creates a plan for generating a list_objects function.
 func BuildListObjectsPlan(a RelationAnalysis, inline InlineSQLData) ListPlan {
-	plan := buildBasePlan(a, inline, listObjectsFunctionName(a.ObjectType, a.Relation))
+	plan := buildBasePlan(a, inline, listObjectsFunctionName(a.ObjectType, a.Relation), nil)
+	if a.Features.HasExclusion {
+		plan.Exclusions = buildExclusionInput(
+			a,
+			Col{Table: "t", Column: "object_id"},
+			SubjectType,
+			SubjectID,
+		)
+	}
+	return plan
+}
+
+// BuildListObjectsPlanWithLookup creates a plan with analysis lookup for TTU optimization.
+func BuildListObjectsPlanWithLookup(a RelationAnalysis, inline InlineSQLData, lookup map[string]*RelationAnalysis) ListPlan {
+	plan := buildBasePlan(a, inline, listObjectsFunctionName(a.ObjectType, a.Relation), lookup)
 	if a.Features.HasExclusion {
 		plan.Exclusions = buildExclusionInput(
 			a,
@@ -54,7 +76,7 @@ func BuildListObjectsPlan(a RelationAnalysis, inline InlineSQLData) ListPlan {
 
 // BuildListSubjectsPlan creates a plan for generating a list_subjects function.
 func BuildListSubjectsPlan(a RelationAnalysis, inline InlineSQLData) ListPlan {
-	plan := buildBasePlan(a, inline, listSubjectsFunctionName(a.ObjectType, a.Relation))
+	plan := buildBasePlan(a, inline, listSubjectsFunctionName(a.ObjectType, a.Relation), nil)
 	if a.Features.HasExclusion {
 		plan.Exclusions = buildExclusionInput(
 			a,
@@ -62,11 +84,31 @@ func BuildListSubjectsPlan(a RelationAnalysis, inline InlineSQLData) ListPlan {
 			Col{Table: "t", Column: "subject_type"},
 			Col{Table: "t", Column: "subject_id"},
 		)
+		// Enable CTE optimization when eligible and relation has userset patterns
+		// (JOIN expansion benefits from precomputed exclusions)
+		plan.UseCTEExclusion = plan.Exclusions.CanUseCTEOptimization() && a.Features.HasUserset
 	}
 	return plan
 }
 
-func buildBasePlan(a RelationAnalysis, inline InlineSQLData, functionName string) ListPlan {
+// BuildListSubjectsPlanWithLookup creates a plan with analysis lookup for TTU optimization.
+func BuildListSubjectsPlanWithLookup(a RelationAnalysis, inline InlineSQLData, lookup map[string]*RelationAnalysis) ListPlan {
+	plan := buildBasePlan(a, inline, listSubjectsFunctionName(a.ObjectType, a.Relation), lookup)
+	if a.Features.HasExclusion {
+		plan.Exclusions = buildExclusionInput(
+			a,
+			ObjectID,
+			Col{Table: "t", Column: "subject_type"},
+			Col{Table: "t", Column: "subject_id"},
+		)
+		// Enable CTE optimization when eligible and relation has userset patterns
+		// (JOIN expansion benefits from precomputed exclusions)
+		plan.UseCTEExclusion = plan.Exclusions.CanUseCTEOptimization() && a.Features.HasUserset
+	}
+	return plan
+}
+
+func buildBasePlan(a RelationAnalysis, inline InlineSQLData, functionName string, lookup map[string]*RelationAnalysis) ListPlan {
 	return ListPlan{
 		Analysis:     a,
 		Inline:       inline,
@@ -93,6 +135,8 @@ func buildBasePlan(a RelationAnalysis, inline InlineSQLData, functionName string
 		HasUsersetPatterns:  len(buildListUsersetPatternInputs(a)) > 0,
 		HasComplexUsersets:  a.HasComplexUsersetPatterns,
 		HasStandaloneAccess: computeHasStandaloneAccess(a),
+
+		AnalysisLookup: lookup,
 	}
 }
 

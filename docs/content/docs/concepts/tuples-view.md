@@ -402,7 +402,7 @@ checker := melange.NewChecker(db, melange.WithCache(cache))
 
 This provides:
 
-- Sub-microsecond repeated checks (~79ns vs ~1ms)
+- Sub-microsecond repeated checks (~83ns vs ~422μs)
 - Reduced database load
 - Configurable TTL for freshness requirements
 

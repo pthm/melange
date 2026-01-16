@@ -166,6 +166,10 @@ func recursiveCheckDecls(plan CheckPlan) []Decl {
 }
 
 func buildUsersetSubjectStmts(plan CheckPlan, blocks CheckBlocks) []Stmt {
+	// Quick Win #3: Early exit if no userset patterns exist
+	// When UsersetRows is empty, the computed check will never match due to NULL VALUES
+	hasUsersetPatterns := len(plan.Inline.UsersetRows) > 0
+
 	var exclusionStmts []Stmt
 	if plan.HasExclusion && blocks.ExclusionCheck != nil {
 		exclusionStmts = []Stmt{
@@ -199,23 +203,31 @@ func buildUsersetSubjectStmts(plan CheckPlan, blocks CheckBlocks) []Stmt {
 		},
 	}
 
-	case2SelectInto := SelectInto{Query: blocks.UsersetSubjectComputedCheck, Variable: "v_userset_check"}
-	case2ResultCheck := If{
-		Cond: Eq{Left: Raw("v_userset_check"), Right: Int(1)},
-		Then: append(exclusionStmts, ReturnInt{Value: 1}),
+	// Build the Then clause for the outer IF
+	thenStmts := []Stmt{
+		Comment{Text: "Case 1: Self-referential userset check"},
+		If{Cond: selfRefCond, Then: case1Body},
+	}
+
+	// Only include Case 2 (computed userset matching) if userset patterns exist
+	if hasUsersetPatterns {
+		case2SelectInto := SelectInto{Query: blocks.UsersetSubjectComputedCheck, Variable: "v_userset_check"}
+		case2ResultCheck := If{
+			Cond: Eq{Left: Raw("v_userset_check"), Right: Int(1)},
+			Then: append(exclusionStmts, ReturnInt{Value: 1}),
+		}
+		thenStmts = append(thenStmts,
+			Comment{Text: "Case 2: Computed userset matching"},
+			case2SelectInto,
+			case2ResultCheck,
+		)
 	}
 
 	return []Stmt{
 		Comment{Text: "Userset subject handling"},
 		If{
 			Cond: Gt{Left: Position{Needle: Lit("#"), Haystack: SubjectID}, Right: Int(0)},
-			Then: []Stmt{
-				Comment{Text: "Case 1: Self-referential userset check"},
-				If{Cond: selfRefCond, Then: case1Body},
-				Comment{Text: "Case 2: Computed userset matching"},
-				case2SelectInto,
-				case2ResultCheck,
-			},
+			Then: thenStmts,
 		},
 	}
 }
