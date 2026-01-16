@@ -82,7 +82,7 @@ release:
   name_template: "{{.ProjectName}} v{{.Version}}"
 
 changelog:
-  use: github
+  use: git
   sort: asc
   filters:
     exclude:
