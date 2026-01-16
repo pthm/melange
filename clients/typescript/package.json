@@ -1,6 +1,6 @@
 {
   "name": "@pthm/melange",
-  "version": "0.5.1",
+  "version": "0.6.1",
   "description": "TypeScript client for Melange PostgreSQL authorization",
   "keywords": [
     "authorization",
