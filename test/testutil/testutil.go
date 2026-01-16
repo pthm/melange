@@ -51,6 +51,9 @@ var (
 
 	codegenOnce sync.Once
 	codegenErr  error
+
+	remoteDBOnce sync.Once
+	remoteDBErr  error
 )
 
 // ensureSingleton lazily initializes the singleton PostgreSQL container.
@@ -232,15 +235,39 @@ func DB(tb testing.TB) *sql.DB {
 	return db
 }
 
+// ensureRemoteDBMigrated ensures migrations are applied to remote database exactly once.
+// Safe for concurrent access via sync.Once.
+func ensureRemoteDBMigrated(config DatabaseConfig) error {
+	remoteDBOnce.Do(func() {
+		// First, ensure code generation is done
+		if err := ensureCodegen(); err != nil {
+			remoteDBErr = fmt.Errorf("code generation failed: %w", err)
+			return
+		}
+
+		// Apply migrations to remote database once
+		remoteDBErr = applyMelangeMigrations(config.URL)
+		if remoteDBErr != nil {
+			remoteDBErr = fmt.Errorf("failed to apply migrations to remote database: %w", remoteDBErr)
+		}
+	})
+	return remoteDBErr
+}
+
 // remoteDB connects to a remote database for testing.
 // Instead of creating/dropping databases, it truncates tables for cleanup.
 func remoteDB(tb testing.TB, config DatabaseConfig) *sql.DB {
 	tb.Helper()
 	ctx := context.Background()
 
+	// Ensure migrations are applied once across all tests
+	err := ensureRemoteDBMigrated(config)
+	if err != nil {
+		tb.Fatalf("failed to initialize remote database: %v", err)
+	}
+
 	// Connect with retry logic
 	var db *sql.DB
-	var err error
 	maxRetries := 5
 
 	for i := 0; i < maxRetries; i++ {
@@ -272,13 +299,6 @@ func remoteDB(tb testing.TB, config DatabaseConfig) *sql.DB {
 			tb.Fatalf("failed to ping remote database after %d retries: %v\nEnsure DATABASE_URL is correct and database is accessible", maxRetries, err)
 		}
 		time.Sleep(time.Duration(i+1) * time.Second)
-	}
-
-	// Apply migrations to remote database
-	err = applyMelangeMigrations(config.URL)
-	if err != nil {
-		_ = db.Close()
-		tb.Fatalf("failed to apply migrations to remote database: %v", err)
 	}
 
 	// Register cleanup (truncate tables, not drop database)

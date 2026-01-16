@@ -109,7 +109,7 @@ jobs:
 
       - name: Run Go integration tests
         working-directory: test
-        run: go test -timeout 5m -race ./...
+        run: go test -timeout 5m -race -parallel 1 ./...
 
       - name: Run TypeScript integration tests
         working-directory: clients/typescript
