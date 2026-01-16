@@ -59,7 +59,7 @@ jobs:
         run: go test -short -race ./...
 
   integration-tests:
-    name: Integration Tests
+    name: Integration Tests (Go + TypeScript)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -70,9 +70,27 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - name: Generate test authz package
         run: go run ./cmd/melange generate client --runtime go --schema test/testutil/testdata/schema.fga --output test/authz/ --package authz --id-type int64
 
-      - name: Run integration tests
+      - name: Install TypeScript dependencies
+        working-directory: clients/typescript
+        run: pnpm install
+
+      - name: Run Go integration tests
         working-directory: test
         run: go test -timeout 5m -race ./...
+
+      - name: Run TypeScript integration tests
+        working-directory: clients/typescript
+        run: pnpm test

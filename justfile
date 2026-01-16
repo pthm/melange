@@ -280,6 +280,26 @@ test-unit:
 test-integration:
     cd {{TEST}} && {{GO_TEST}} -timeout 5m ./...
 
+# Run all integration tests (Go + TypeScript) with shared database
+[group('Test')]
+test-integration-all:
+    ./scripts/integration-test-runner.sh
+
+# Run TypeScript tests (requires pnpm and database)
+[group('Test')]
+test-ts:
+    cd clients/typescript && pnpm install && pnpm test
+
+# Run TypeScript tests in watch mode
+[group('Test')]
+test-ts-watch:
+    cd clients/typescript && pnpm install && pnpm test:watch
+
+# Run TypeScript tests with coverage
+[group('Test')]
+test-ts-coverage:
+    cd clients/typescript && pnpm install && pnpm test:coverage
+
 # Run benchmarks (requires Docker)
 # Use SCALE to limit to a specific scale: just bench SCALE=1K
 [group('Test')]

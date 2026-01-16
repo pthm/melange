@@ -231,7 +231,7 @@ export class Checker {
     const after = options?.after;
 
     const result = await this.db.query<{ object_id: string; cursor: string }>(
-      'SELECT * FROM list_objects($1, $2, $3, $4, $5, $6)',
+      'SELECT * FROM list_accessible_objects($1, $2, $3, $4, $5, $6)',
       [subject.type, subject.id, relation, objectType, limit, after ?? null]
     );
 
@@ -287,8 +287,8 @@ export class Checker {
     const after = options?.after;
 
     const result = await this.db.query<{ subject_id: string; cursor: string }>(
-      'SELECT * FROM list_subjects($1, $2, $3, $4, $5, $6)',
-      [subjectType, relation, object.type, object.id, limit, after ?? null]
+      'SELECT * FROM list_accessible_subjects($1, $2, $3, $4, $5, $6)',
+      [object.type, object.id, relation, subjectType, limit, after ?? null]
     );
 
     const items = result.rows.map((row) => row.subject_id);
