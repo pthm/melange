@@ -1,22 +1,41 @@
 # Melange
 
-[![Go Reference](https://.go.dev/badge/github.com/pthm/melange.svg)](https://pkg.go.dev/github.com/pthm/melange)
+[![Go Reference](https://pkg.go.dev/badge/github.com/pthm/melange.svg)](https://pkg.go.dev/github.com/pthm/melange)
 [![Go Report Card](https://goreportcard.com/badge/github.com/pthm/melange)](https://goreportcard.com/report/github.com/pthm/melange)
 
 <img align="right" width="300" src="assets/mascot.png">
 
-**Fine-grained authorization for PostgreSQL applications.**
+**An OpenFGA-to-PostgreSQL authorization compiler.**
 
-Melange brings [Zanzibar](https://research.google/pubs/pub48190/)-style relationship-based access control directly into your PostgreSQL database. Define authorization schemas using the [OpenFGA DSL](https://openfga.dev/docs/configuration-language), and Melange runs permission checks as efficient SQL queries against your existing data.
+Melange compiles [OpenFGA](https://openfga.dev) authorization schemas into specialized PL/pgSQL functions that run directly in your PostgreSQL database. Like [Protocol Buffers](https://protobuf.dev/) compiles `.proto` files into serialization code, Melange compiles `.fga` files into optimized SQL functions for [Zanzibar](https://research.google/pubs/pub48190/)-style relationship-based access control.
+
+The generated functions query a `melange_tuples` view you define over your existing domain tables—no separate tuple storage or synchronization required.
 
 ## Why Melange?
 
-Traditional authorization systems require syncing your application data to a separate service. Melange takes a different approach: **permissions are derived from views over your existing tables**. This means:
+Traditional authorization systems require syncing your application data to a separate service. Melange takes a different approach: **it's a compiler, not a runtime service**.
 
-- **Always in sync** — No replication lag or eventual consistency
-- **Transaction-aware** — Permission checks see uncommitted changes
-- **Zero runtime deps** — Core library is pure Go stdlib
-- **Single query** — No recursive lookups at runtime
+### How it works
+
+**Compile time** — When you run `melange migrate`, the compiler:
+- Parses your OpenFGA schema
+- Analyzes relation patterns (direct, union, exclusion, etc.)
+- Computes transitive closures for role hierarchies
+- Generates specialized SQL functions for each relation
+- Installs the functions into PostgreSQL
+
+**Runtime** — Permission checks are simple SQL function calls:
+- `check_permission()` executes the generated functions
+- Functions query a `melange_tuples` view you define over your domain tables
+- PostgreSQL's query planner optimizes the specialized functions
+
+This compilation model gives you:
+
+- **Always in sync** — Permissions query your tables directly, no replication lag
+- **Transaction-aware** — Permission checks see uncommitted changes in the same transaction
+- **Language-agnostic** — Use from any language that can call SQL (Go, TypeScript, Python, Ruby, etc.)
+- **Optional runtime libraries** — Convenience clients for Go and TypeScript, or use raw SQL
+- **Single query** — Role hierarchies resolved at compile time, no recursive lookups at runtime
 
 Inspired by [OpenFGA](https://openfga.dev) and built on ideas from [pgFGA](https://github.com/rover-app/pgfga).
 
@@ -33,11 +52,13 @@ Inspired by [OpenFGA](https://openfga.dev) and built on ideas from [pgFGA](https
 ### CLI
 
 **Homebrew (macOS and Linux):**
+
 ```bash
 brew install pthm/tap/melange
 ```
 
 **Go install:**
+
 ```bash
 go install github.com/pthm/melange/cmd/melange@latest
 ```
@@ -46,6 +67,7 @@ go install github.com/pthm/melange/cmd/melange@latest
 Download from [GitHub Releases](https://github.com/pthm/melange/releases) (macOS binaries are code-signed)
 
 **Updating:**
+
 ```bash
 # Homebrew
 brew upgrade melange
@@ -56,7 +78,9 @@ go install github.com/pthm/melange/cmd/melange@latest
 
 Melange automatically checks for updates and notifies you when a new version is available. Use `--no-update-check` to disable.
 
-### Go Runtime
+### Optional: Go Runtime Library
+
+If you want to use the Go convenience library instead of raw SQL:
 
 ```bash
 go get github.com/pthm/melange/melange
@@ -83,49 +107,80 @@ type repository
     define can_read: reader
 ```
 
-### 2. Generate Type-Safe Code
+### 2. Compile Schema into SQL Functions
+
+Run the migration to generate specialized PL/pgSQL functions:
+
+```bash
+melange migrate --db postgres://localhost/mydb --schemas-dir ./schemas/
+```
+
+This generates optimized SQL functions like `check_permission()`, `list_objects()`, and specialized check functions for each relation.
+
+### 3. Define Your Tuples View
+
+Create a `melange_tuples` view that exposes your authorization data:
+
+```sql
+CREATE VIEW melange_tuples AS
+SELECT
+  'user' AS subject_type,
+  user_id::text AS subject_id,
+  'owner' AS relation,
+  'repository' AS object_type,
+  repo_id::text AS object_id
+FROM repository_owners
+UNION ALL
+SELECT 'user', user_id::text, 'reader', 'repository', repo_id::text
+FROM repository_readers;
+```
+
+### 4. Check Permissions
+
+**With Go runtime (optional):**
+
+```go
+import "github.com/pthm/melange/melange"
+
+checker := melange.NewChecker(db)
+decision, err := checker.Check(ctx,
+    melange.Object{Type: "user", ID: "alice"},
+    "can_read",
+    melange.Object{Type: "repository", ID: "my-repo"},
+)
+if !decision.Allowed {
+    return ErrForbidden
+}
+```
+
+**Or use raw SQL from any language:**
+
+```sql
+SELECT check_permission(
+  'user', 'alice',
+  'can_read',
+  'repository', 'my-repo'
+);
+-- Returns: true/false
+```
+
+### 5. (Optional) Generate Type-Safe Client Code
+
+For better type safety, generate constants and constructors:
 
 ```bash
 melange generate client --runtime go --schema schema.fga --output ./authz/
 ```
 
-This generates constants and constructors for your schema:
-
 ```go
-package authz
-
-// Generated type constants
-const TypeUser melange.ObjectType = "user"
-const TypeRepository melange.ObjectType = "repository"
-
-// Generated relation constants
-const RelOwner melange.Relation = "owner"
-const RelCanRead melange.Relation = "can_read"
-
-// Generated constructors
-func User(id string) melange.Object { ... }
-func Repository(id string) melange.Object { ... }
-```
-
-### 3. Check Permissions
-
-```go
-import (
-    "github.com/pthm/melange/melange"
-    "yourapp/authz"
-)
+import "yourapp/authz"
 
 checker := melange.NewChecker(db)
-
-// Check if user can read the repository
 decision, err := checker.Check(ctx,
     authz.User("alice"),
     authz.RelCanRead,
     authz.Repository("my-repo"),
 )
-if !decision.Allowed {
-    return ErrForbidden
-}
 ```
 
 ## CLI Reference
@@ -192,16 +247,44 @@ melange doctor --db postgres://localhost/mydb --verbose
 
 ---
 
-## Multi-Language Support
+## Using from Any Language
 
-Melange supports generating client code for multiple languages:
+Melange generates standard PostgreSQL functions, so you can use it from **any language** that can execute SQL:
 
-| Language   | Runtime Package                        | CLI Flag              | Status      |
-|------------|----------------------------------------|-----------------------|-------------|
-| Go         | `github.com/pthm/melange/melange`      | `--runtime go`        | Implemented |
-| TypeScript | `@pthm/melange`                        | `--runtime typescript`| Planned     |
+```python
+# Python
+cursor.execute(
+    "SELECT check_permission(%s, %s, %s, %s, %s)",
+    ('user', 'alice', 'can_read', 'repository', 'my-repo')
+)
+```
 
-See [`clients/`](clients/) for language-specific runtime implementations.
+```ruby
+# Ruby
+DB.fetch(
+  "SELECT check_permission(?, ?, ?, ?, ?)",
+  'user', 'alice', 'can_read', 'repository', 'my-repo'
+).first
+```
+
+```typescript
+// TypeScript (with pg or any SQL client)
+const result = await db.query(
+  'SELECT check_permission($1, $2, $3, $4, $5)',
+  ['user', 'alice', 'can_read', 'repository', 'my-repo']
+);
+```
+
+### Optional Runtime Libraries
+
+For convenience, Melange provides type-safe runtime clients:
+
+| Language   | Runtime Package                   | CLI Flag               | Status      |
+| ---------- | --------------------------------- | ---------------------- | ----------- |
+| Go         | `github.com/pthm/melange/melange` | `--runtime go`         | Implemented |
+| TypeScript | `@pthm/melange`                   | `--runtime typescript` | Planned     |
+
+These libraries provide a nicer API but are completely optional. See [`clients/`](clients/) for language-specific implementations.
 
 ---
 
