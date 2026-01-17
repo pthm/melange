@@ -1,5 +1,7 @@
 # Melange
 
+![GitHub License](https://img.shields.io/github/license/pthm/melange)
+![GitHub Release](https://img.shields.io/github/v/release/pthm/melange)
 [![Go Reference](https://pkg.go.dev/badge/github.com/pthm/melange.svg)](https://pkg.go.dev/github.com/pthm/melange)
 [![Go Report Card](https://goreportcard.com/badge/github.com/pthm/melange)](https://goreportcard.com/report/github.com/pthm/melange)
 
@@ -18,6 +20,7 @@ Traditional authorization systems require syncing your application data to a sep
 ### How it works
 
 **Compile time** — When you run `melange migrate`, the compiler:
+
 - Parses your OpenFGA schema
 - Analyzes relation patterns (direct, union, exclusion, etc.)
 - Computes transitive closures for role hierarchies
@@ -25,6 +28,7 @@ Traditional authorization systems require syncing your application data to a sep
 - Installs the functions into PostgreSQL
 
 **Runtime** — Permission checks are simple SQL function calls:
+
 - `check_permission()` executes the generated functions
 - Functions query a `melange_tuples` view you define over your domain tables
 - PostgreSQL's query planner optimizes the specialized functions
@@ -41,8 +45,8 @@ Inspired by [OpenFGA](https://openfga.dev) and built on ideas from [pgFGA](https
 
 ---
 
+> [!NOTE]
 > **📚 Full Documentation**
->
 > Visit **[melange.sh](https://melange.sh)** for comprehensive guides, API reference, and examples.
 
 ---
@@ -269,10 +273,13 @@ DB.fetch(
 
 ```typescript
 // TypeScript (with pg or any SQL client)
-const result = await db.query(
-  'SELECT check_permission($1, $2, $3, $4, $5)',
-  ['user', 'alice', 'can_read', 'repository', 'my-repo']
-);
+const result = await db.query("SELECT check_permission($1, $2, $3, $4, $5)", [
+  "user",
+  "alice",
+  "can_read",
+  "repository",
+  "my-repo",
+]);
 ```
 
 ### Optional Runtime Libraries
