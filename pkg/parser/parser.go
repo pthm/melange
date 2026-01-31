@@ -281,9 +281,10 @@ func expandIntersection(intersection *openfgav1.Usersets, relationName string) [
 		case *openfgav1.Userset_Union:
 			// Union within intersection: apply distributive law
 			// For "a and (b or c)", if groups = [[a]], expand to [[a,b], [a,c]]
-			unionRels := extractUnionRelations(cv.Union)
-			if len(unionRels) > 0 {
-				groups = distributeUnion(groups, unionRels)
+			// For "a and (b from parent or c from parent)", expand with parent relations
+			contents := extractUnionContents(cv.Union)
+			if len(contents.Relations) > 0 || len(contents.ParentRelations) > 0 {
+				groups = distributeUnionContents(groups, contents)
 			}
 
 		case *openfgav1.Userset_Intersection:
@@ -291,19 +292,14 @@ func expandIntersection(intersection *openfgav1.Usersets, relationName string) [
 			nestedGroups := expandIntersection(cv.Intersection, relationName)
 			// If nested has multiple groups (due to its own unions), we'd need
 			// to cross-product. For now, just flatten the first group.
-			if len(nestedGroups) > 0 {
-				for i := range groups {
-					groups[i].Relations = append(groups[i].Relations, nestedGroups[0].Relations...)
-					// Merge exclusions from nested groups
-					if nestedGroups[0].Exclusions != nil {
-						if groups[i].Exclusions == nil {
-							groups[i].Exclusions = make(map[string][]string)
-						}
-						for k, v := range nestedGroups[0].Exclusions {
-							groups[i].Exclusions[k] = append(groups[i].Exclusions[k], v...)
-						}
-					}
-				}
+			if len(nestedGroups) == 0 {
+				continue
+			}
+			first := nestedGroups[0]
+			for i := range groups {
+				groups[i].Relations = append(groups[i].Relations, first.Relations...)
+				groups[i].ParentRelations = append(groups[i].ParentRelations, first.ParentRelations...)
+				mergeExclusions(&groups[i], first.Exclusions)
 			}
 
 		case *openfgav1.Userset_Difference:
@@ -361,47 +357,145 @@ func extractBaseRelationFromDifference(diff *openfgav1.Difference) string {
 	}
 }
 
-// extractUnionRelations extracts relation names from a union node.
-// For simple unions like "a or b", returns ["a", "b"].
-// For nested structures, flattens computed usersets only.
-func extractUnionRelations(union *openfgav1.Usersets) []string {
-	var rels []string
+// unionContents holds the extracted contents from a union node.
+//
+// When applying the distributive law for intersections containing unions
+// (A ∧ (B ∨ C) = (A ∧ B) ∨ (A ∧ C)), we need to handle both simple relations
+// and tuple-to-userset (TTU) patterns. OpenFGA allows mixing these in unions:
+//
+//	"viewer and (editor or member from group)"
+//
+// This struct separates the two pattern types so distributeUnionContents can
+// create proper IntersectionGroup instances for each distributed term.
+type unionContents struct {
+	Relations       []string                     // Simple computed usersets like "viewer"
+	ParentRelations []schema.ParentRelationCheck // Tuple-to-userset patterns like "member from group"
+}
+
+// extractUnionContents extracts both relation names and parent relations from a union node.
+//
+// OpenFGA unions can contain:
+//   - Simple relations: "a or b" → Relations: ["a", "b"]
+//   - TTU patterns: "member from group or owner from group" → ParentRelations
+//   - Mixed: "viewer or member from group" → both fields populated
+//   - Nested unions: "(a or b) or c" → flattened recursively
+//
+// The separation into Relations vs ParentRelations preserves the semantic difference
+// between direct relation checks and parent inheritance lookups. Nested unions are
+// flattened because union is associative: (A ∨ B) ∨ C ≡ A ∨ B ∨ C.
+func extractUnionContents(union *openfgav1.Usersets) unionContents {
+	var contents unionContents
 	for _, child := range union.GetChild() {
 		switch cv := child.Userset.(type) {
 		case *openfgav1.Userset_ComputedUserset:
-			rels = append(rels, cv.ComputedUserset.GetRelation())
+			contents.Relations = append(contents.Relations, cv.ComputedUserset.GetRelation())
+		case *openfgav1.Userset_TupleToUserset:
+			// Extract tuple-to-userset pattern like "member from group"
+			rel := cv.TupleToUserset.GetComputedUserset().GetRelation()
+			linkingRel := cv.TupleToUserset.GetTupleset().GetRelation()
+			contents.ParentRelations = append(contents.ParentRelations, schema.ParentRelationCheck{
+				Relation:        rel,
+				LinkingRelation: linkingRel,
+			})
 		case *openfgav1.Userset_Union:
 			// Nested union: flatten
-			rels = append(rels, extractUnionRelations(cv.Union)...)
+			nested := extractUnionContents(cv.Union)
+			contents.Relations = append(contents.Relations, nested.Relations...)
+			contents.ParentRelations = append(contents.ParentRelations, nested.ParentRelations...)
 		}
 	}
-	return rels
+	return contents
 }
 
-// distributeUnion applies the distributive law: each existing group gets
-// expanded for each union member.
-// E.g., groups=[[a]], unionRels=[b,c] → [[a,b], [a,c]]
-func distributeUnion(groups []schema.IntersectionGroup, unionRels []string) []schema.IntersectionGroup {
-	expanded := make([]schema.IntersectionGroup, 0, len(groups)*len(unionRels))
+// distributeUnionContents applies the distributive law for union contents that may
+// contain both simple relations and parent relations (TTU patterns).
+//
+// Given existing groups and union contents, creates a cross-product where each
+// existing group is combined with each union member:
+//
+//	groups=[[a]], contents={Relations:[b], ParentRelations:[{c,parent}]}
+//	→ [[a,b], [a + parentRel(c,parent)]]
+//
+// This implements A ∧ (B ∨ C) = (A ∧ B) ∨ (A ∧ C). Each resulting group represents
+// an AND (all conditions must match), while multiple groups represent OR (any group
+// can match). Groups are deep-copied to avoid shared slice mutations.
+func distributeUnionContents(groups []schema.IntersectionGroup, contents unionContents) []schema.IntersectionGroup {
+	totalMembers := len(contents.Relations) + len(contents.ParentRelations)
+	if totalMembers == 0 {
+		return groups
+	}
+
+	expanded := make([]schema.IntersectionGroup, 0, len(groups)*totalMembers)
+
 	for _, g := range groups {
-		for _, rel := range unionRels {
-			// Clone the group and add this union member
-			newGroup := schema.IntersectionGroup{
-				Relations: make([]string, len(g.Relations), len(g.Relations)+1),
-			}
-			copy(newGroup.Relations, g.Relations)
-			newGroup.Relations = append(newGroup.Relations, rel)
-			// Copy exclusions
-			if g.Exclusions != nil {
-				newGroup.Exclusions = make(map[string][]string)
-				for k, v := range g.Exclusions {
-					newGroup.Exclusions[k] = append([]string{}, v...)
-				}
-			}
-			expanded = append(expanded, newGroup)
+		// Distribute simple relations
+		for _, rel := range contents.Relations {
+			ng := cloneIntersectionGroup(g)
+			ng.Relations = append(ng.Relations, rel)
+			expanded = append(expanded, ng)
+		}
+		// Distribute parent relations (TTU patterns)
+		for _, parentRel := range contents.ParentRelations {
+			ng := cloneIntersectionGroup(g)
+			ng.ParentRelations = append(ng.ParentRelations, parentRel)
+			expanded = append(expanded, ng)
 		}
 	}
 	return expanded
+}
+
+// cloneIntersectionGroup creates a deep copy of an IntersectionGroup.
+//
+// Deep cloning is required during distributive expansion to prevent mutation
+// conflicts. When distributing "a and (b or c)", we start with group [[a]]
+// and create two outputs: [[a,b], [a,c]]. Without deep cloning, appending "b"
+// to the first output would corrupt the second output via shared slice storage.
+func cloneIntersectionGroup(g schema.IntersectionGroup) schema.IntersectionGroup {
+	newGroup := schema.IntersectionGroup{
+		Relations: append([]string{}, g.Relations...),
+	}
+	if len(g.ParentRelations) > 0 {
+		newGroup.ParentRelations = append([]schema.ParentRelationCheck{}, g.ParentRelations...)
+	}
+	newGroup.Exclusions = copyExclusions(g.Exclusions)
+	return newGroup
+}
+
+// copyExclusions creates a deep copy of an exclusion map.
+//
+// Copies both the map structure and the string slices within it. The nested
+// cloning is necessary because distributeUnionContents appends to exclusion
+// lists, and shared slice storage would cause mutations to leak across groups.
+func copyExclusions(src map[string][]string) map[string][]string {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string][]string, len(src))
+	for k, v := range src {
+		dst[k] = append([]string{}, v...)
+	}
+	return dst
+}
+
+// mergeExclusions merges source exclusions into a group's exclusion map.
+//
+// For each relation in src, appends its exclusions to the group's list for that
+// relation. This is an append-merge, not a replacement:
+//
+//	existing: {"a": ["b"]}, src: {"a": ["c"]} → result: {"a": ["b", "c"]}
+//
+// Used when flattening nested intersections that already have exclusions.
+// Creates the group's Exclusions map lazily on first merge.
+func mergeExclusions(g *schema.IntersectionGroup, src map[string][]string) {
+	if src == nil {
+		return
+	}
+	if g.Exclusions == nil {
+		g.Exclusions = make(map[string][]string, len(src))
+	}
+	for k, v := range src {
+		g.Exclusions[k] = append(g.Exclusions[k], v...)
+	}
 }
 
 // extractSubtractRelations extracts all relation names from a subtract userset,
