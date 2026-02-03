@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pthm/melange/internal/clientgen"
-	"github.com/pthm/melange/internal/clientgen/typescript"
+	"github.com/pthm/melange/lib/clientgen"
+	"github.com/pthm/melange/lib/clientgen/typescript"
 	"github.com/pthm/melange/pkg/schema"
 )
 

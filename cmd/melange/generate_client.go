@@ -8,8 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/pthm/melange/internal/cli"
-	"github.com/pthm/melange/internal/version"
+	"github.com/pthm/melange/lib/cli"
+	"github.com/pthm/melange/lib/version"
 	"github.com/pthm/melange/pkg/clientgen"
 	"github.com/pthm/melange/pkg/parser"
 )

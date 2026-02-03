@@ -8,8 +8,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/pthm/melange/internal/cli"
-	"github.com/pthm/melange/internal/update"
+	"github.com/pthm/melange/lib/cli"
+	"github.com/pthm/melange/lib/update"
 )
 
 var (

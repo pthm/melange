@@ -29,9 +29,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/pthm/melange/internal/clientgen"
-	_ "github.com/pthm/melange/internal/clientgen/go"         // Register Go generator
-	_ "github.com/pthm/melange/internal/clientgen/typescript" // Register TypeScript generator (stub)
+	"github.com/pthm/melange/lib/clientgen"
+	_ "github.com/pthm/melange/lib/clientgen/go"         // Register Go generator
+	_ "github.com/pthm/melange/lib/clientgen/typescript" // Register TypeScript generator (stub)
 	"github.com/pthm/melange/pkg/schema"
 )
 

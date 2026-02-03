@@ -652,7 +652,7 @@ if skipped {
 ```go
 import (
     "os"
-    "github.com/pthm/melange/internal/doctor"
+    "github.com/pthm/melange/lib/doctor"
 )
 
 d := doctor.New(db, "schemas/schema.fga")

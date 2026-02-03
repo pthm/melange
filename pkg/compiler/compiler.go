@@ -6,7 +6,7 @@
 package compiler
 
 import (
-	"github.com/pthm/melange/internal/sqlgen"
+	"github.com/pthm/melange/lib/sqlgen"
 )
 
 // GeneratedSQL contains all SQL generated from a schema for check functions.

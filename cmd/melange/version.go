@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"runtime/debug"
 
-	"github.com/pthm/melange/internal/version"
+	"github.com/pthm/melange/lib/version"
 	"github.com/spf13/cobra"
 )
 

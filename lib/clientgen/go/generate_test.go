@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pthm/melange/internal/clientgen"
-	gogen "github.com/pthm/melange/internal/clientgen/go"
+	"github.com/pthm/melange/lib/clientgen"
+	gogen "github.com/pthm/melange/lib/clientgen/go"
 	"github.com/pthm/melange/pkg/schema"
 )
 

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/pthm/melange/internal/licenses"
+	"github.com/pthm/melange/lib/licenses"
 	"github.com/spf13/cobra"
 )
 

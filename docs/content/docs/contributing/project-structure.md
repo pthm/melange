@@ -17,8 +17,8 @@ melange/
 ├── clients/
 │   └── typescript/        # TypeScript client (future)
 ├── pkg/                   # Public packages
-├── internal/              # Internal packages
-├── cmd/melange/           # CLI (part of root module)
+├── lib/                   # Library packages (non-public API)
+├── cmd/melange/           # CLI (separate module)
 └── test/                  # Tests (part of root module)
 ```
 
@@ -98,10 +98,10 @@ pkg/
 - `Generate(runtime, types, cfg)` - Generate client code
 - `ListRuntimes()` - Available generators
 
-### Internal Packages (`internal/`)
+### Library Packages (`lib/`)
 
 ```
-internal/
+lib/
 ├── clientgen/         # Generator registry and implementations
 │   ├── generator.go   # Generator interface
 │   ├── go/            # Go generator
@@ -112,10 +112,10 @@ internal/
 
 ## SQL Generation
 
-SQL is generated from the internal sqlgen package:
+SQL is generated from the lib/sqlgen package:
 
 ```
-internal/sqlgen/
+lib/sqlgen/
 ├── sql.go             # SQL DSL core
 ├── expr.go            # Expression types
 ├── query.go           # Query builders
@@ -228,12 +228,12 @@ docs/
 
 1. **Runtime changes** go in `melange/`
 2. **Parser changes** go in `pkg/parser/`
-3. **SQL generation** changes go in `internal/sqlgen/`
+3. **SQL generation** changes go in `lib/sqlgen/`
 4. **Tests** go in `test/` or the appropriate `*_test.go` file
 
 ### SQL Generation Changes
 
-When modifying SQL generation in `internal/sqlgen/`:
+When modifying SQL generation in `lib/sqlgen/`:
 
 1. Update the query builder
 2. Run `just test-openfga` to verify compatibility
@@ -241,7 +241,7 @@ When modifying SQL generation in `internal/sqlgen/`:
 
 ### Adding a Language Generator
 
-1. Create `internal/clientgen/<language>/generate.go`
+1. Create `lib/clientgen/<language>/generate.go`
 2. Implement the `Generator` interface
 3. Register in `init()` function
 4. Import in `pkg/clientgen/api.go`

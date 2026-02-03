@@ -4,11 +4,11 @@
 package sqlgen
 
 import (
-	"github.com/pthm/melange/internal/sqlgen/analysis"
-	"github.com/pthm/melange/internal/sqlgen/inline"
-	"github.com/pthm/melange/internal/sqlgen/plpgsql"
-	"github.com/pthm/melange/internal/sqlgen/sqldsl"
-	"github.com/pthm/melange/internal/sqlgen/tuples"
+	"github.com/pthm/melange/lib/sqlgen/analysis"
+	"github.com/pthm/melange/lib/sqlgen/inline"
+	"github.com/pthm/melange/lib/sqlgen/plpgsql"
+	"github.com/pthm/melange/lib/sqlgen/sqldsl"
+	"github.com/pthm/melange/lib/sqlgen/tuples"
 )
 
 // sqldsl types

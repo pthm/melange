@@ -249,7 +249,7 @@ This package imports:
 - `github.com/lib/pq` - PostgreSQL driver for array handling
 - `github.com/pthm/melange/pkg/parser` - Schema parsing
 - `github.com/pthm/melange/pkg/schema` - Schema types
-- `github.com/pthm/melange/internal/sqlgen` - SQL generation
+- `github.com/pthm/melange/lib/sqlgen` - SQL generation
 
 ## Execer Interface
 

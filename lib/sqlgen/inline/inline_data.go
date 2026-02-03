@@ -4,8 +4,8 @@ package inline
 import (
 	"sort"
 
-	"github.com/pthm/melange/internal/sqlgen/analysis"
-	"github.com/pthm/melange/internal/sqlgen/sqldsl"
+	"github.com/pthm/melange/lib/sqlgen/analysis"
+	"github.com/pthm/melange/lib/sqlgen/sqldsl"
 )
 
 // InlineSQLData contains SQL VALUES payloads that replace database-backed model tables.

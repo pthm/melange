@@ -25,9 +25,9 @@ builds:
       - arm64
     ldflags:
       - -s -w
-      - -X github.com/pthm/melange/internal/version.Version={{.Version}}
-      - -X github.com/pthm/melange/internal/version.Commit={{.Commit}}
-      - -X github.com/pthm/melange/internal/version.Date={{.Date}}
+      - -X github.com/pthm/melange/lib/version.Version={{.Version}}
+      - -X github.com/pthm/melange/lib/version.Commit={{.Commit}}
+      - -X github.com/pthm/melange/lib/version.Date={{.Date}}
 
   # Darwin builds with code signing
   - id: melange-darwin
@@ -42,9 +42,9 @@ builds:
       - arm64
     ldflags:
       - -s -w
-      - -X github.com/pthm/melange/internal/version.Version={{.Version}}
-      - -X github.com/pthm/melange/internal/version.Commit={{.Commit}}
-      - -X github.com/pthm/melange/internal/version.Date={{.Date}}
+      - -X github.com/pthm/melange/lib/version.Version={{.Version}}
+      - -X github.com/pthm/melange/lib/version.Commit={{.Commit}}
+      - -X github.com/pthm/melange/lib/version.Date={{.Date}}
     hooks:
       post:
         - cmd: ./scripts/sign-macos.sh "{{ .Path }}" --notarize

@@ -2,7 +2,7 @@
 package tuples
 
 import (
-	"github.com/pthm/melange/internal/sqlgen/sqldsl"
+	"github.com/pthm/melange/lib/sqlgen/sqldsl"
 )
 
 // TupleQuery is a fluent builder for queries against melange_tuples.

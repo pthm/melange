@@ -208,7 +208,7 @@ go tool trace trace.out
 
 ### Key Areas to Benchmark
 
-- **SQL generation changes** (`internal/sqlgen/*.go`): Run full benchmark suite
+- **SQL generation changes** (`lib/sqlgen/*.go`): Run full benchmark suite
 - **Parser changes** (`pkg/parser/parser.go`): Run schema load benchmarks
 - **Runtime changes** (`melange/checker.go`): Run check operation benchmarks
 - **Cache changes** (`melange/cache.go`): Run cache-specific benchmarks

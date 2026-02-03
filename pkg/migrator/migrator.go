@@ -13,7 +13,7 @@ import (
 
 	"github.com/lib/pq"
 
-	"github.com/pthm/melange/internal/sqlgen"
+	"github.com/pthm/melange/lib/sqlgen"
 	"github.com/pthm/melange/pkg/schema"
 )
 

@@ -9,8 +9,8 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/spf13/cobra"
 
-	"github.com/pthm/melange/internal/cli"
-	"github.com/pthm/melange/internal/doctor"
+	"github.com/pthm/melange/lib/cli"
+	"github.com/pthm/melange/lib/doctor"
 )
 
 var (

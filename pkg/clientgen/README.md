@@ -214,7 +214,7 @@ func DefaultGenerateConfig() *GenerateConfig
 
 This package imports:
 
-- `github.com/pthm/melange/internal/clientgen` - Generator registry
-- `github.com/pthm/melange/internal/clientgen/go` - Go generator (via init)
-- `github.com/pthm/melange/internal/clientgen/typescript` - TypeScript generator (via init)
+- `github.com/pthm/melange/lib/clientgen` - Generator registry
+- `github.com/pthm/melange/lib/clientgen/go` - Go generator (via init)
+- `github.com/pthm/melange/lib/clientgen/typescript` - TypeScript generator (via init)
 - `github.com/pthm/melange/pkg/schema` - Schema types

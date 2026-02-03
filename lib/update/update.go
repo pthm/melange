@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/pthm/melange/internal/version"
+	"github.com/pthm/melange/lib/version"
 )
 
 const (

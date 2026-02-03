@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/pthm/melange/internal/sqlgen/sqldsl"
+	"github.com/pthm/melange/lib/sqlgen/sqldsl"
 )
 
 // =============================================================================

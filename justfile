@@ -157,7 +157,7 @@ release VERSION="" ALLOW_DIRTY="":
     git add VERSION go.mod go.sum clients/typescript/package.json
     git commit -m "chore(release): $version_from_file"
 
-    # Tag root and cmd/melange LOCALLY (don't push yet - these are the critical ones)
+    # Tag root LOCALLY (don't push yet - this is the critical one)
     root_tag="$version_from_file"
     cmd_tag="cmd/melange/$version_from_file"
     if git rev-parse -q --verify "refs/tags/$root_tag" >/dev/null 2>&1; then
@@ -168,17 +168,8 @@ release VERSION="" ALLOW_DIRTY="":
         echo "  git push origin --delete $melange_tag"
         exit 1
     fi
-    if git rev-parse -q --verify "refs/tags/$cmd_tag" >/dev/null 2>&1; then
-        echo "❌ Tag already exists: $cmd_tag"
-        echo ""
-        echo "To clean up:"
-        echo "  git reset --hard HEAD~1"
-        echo "  git push origin --delete $melange_tag"
-        exit 1
-    fi
     git tag -a "$root_tag" -m "$root_tag"
-    git tag -a "$cmd_tag" -m "$cmd_tag"
-    echo "✓ Created local tags: $root_tag, $cmd_tag (not pushed yet)"
+    echo "✓ Created local tag: $root_tag (not pushed yet)"
 
     echo ""
     echo "════════════════════════════════════════════════════════════════"
@@ -194,7 +185,7 @@ release VERSION="" ALLOW_DIRTY="":
             echo ""
             echo "To clean up:"
             echo "  git reset --hard HEAD~1"
-            echo "  git tag -d $root_tag $cmd_tag"
+            echo "  git tag -d $root_tag"
             echo "  git push origin --delete $melange_tag"
             exit 1
         fi
@@ -210,7 +201,7 @@ release VERSION="" ALLOW_DIRTY="":
         echo ""
         echo "To clean up, run:"
         echo "  git reset --hard HEAD~1"
-        echo "  git tag -d $root_tag $cmd_tag"
+        echo "  git tag -d $root_tag"
         echo "  git push origin --delete $melange_tag"
         echo ""
         echo "Note: melange tag $melange_tag was already pushed (safe to leave or delete)"
@@ -234,7 +225,7 @@ release VERSION="" ALLOW_DIRTY="":
         echo ""
         echo "To clean up, run:"
         echo "  git reset --hard HEAD~1"
-        echo "  git tag -d $root_tag $cmd_tag"
+        echo "  git tag -d $root_tag"
         echo "  gh release delete $root_tag -y"
         echo "  git push origin --delete $melange_tag"
         exit 1
@@ -255,10 +246,6 @@ release VERSION="" ALLOW_DIRTY="":
         echo "✓ Pushed tag: $root_tag"
     fi
 
-    # Push cmd/melange tag (needed for go install github.com/pthm/melange/cmd/melange@latest)
-    git push origin "$cmd_tag"
-    echo "✓ Pushed tag: $cmd_tag"
-
     # Return to the original branch if goreleaser left us in detached HEAD
     current_branch="$(git rev-parse --abbrev-ref HEAD)"
     if [ "$current_branch" = "HEAD" ]; then
@@ -269,6 +256,46 @@ release VERSION="" ALLOW_DIRTY="":
     fi
 
     git push origin "$original_branch"
+
+    echo ""
+    echo "════════════════════════════════════════════════════════════════"
+    echo "Publishing cmd/melange sub-module"
+    echo "════════════════════════════════════════════════════════════════"
+
+    # Wait for Go proxy to index the root module
+    echo "Waiting for Go proxy to index root module..."
+    for i in $(seq 1 12); do
+        if GOPROXY=https://proxy.golang.org go list -m "github.com/pthm/melange@$version_from_file" >/dev/null 2>&1; then
+            echo "✓ Root module $version_from_file available on Go proxy"
+            break
+        fi
+        if [ "$i" -eq 12 ]; then
+            echo "⚠️  Go proxy hasn't indexed $version_from_file yet"
+            echo "You can manually release cmd/melange later:"
+            echo "  go mod edit -require=github.com/pthm/melange@$version_from_file cmd/melange/go.mod"
+            echo "  GOPROXY=direct go mod tidy -C cmd/melange"
+            echo "  git add cmd/melange/go.mod cmd/melange/go.sum"
+            echo "  git commit -m 'chore(release): cmd/melange $version_from_file'"
+            echo "  git tag -a $cmd_tag -m $cmd_tag && git push origin $cmd_tag"
+            echo "  git push origin $original_branch"
+            break
+        fi
+        sleep 5
+    done
+
+    # Update cmd/melange to require the published root module version
+    if git rev-parse -q --verify "refs/tags/$cmd_tag" >/dev/null 2>&1; then
+        echo "❌ Tag already exists: $cmd_tag (skipping cmd/melange release)"
+    elif GOPROXY=https://proxy.golang.org go list -m "github.com/pthm/melange@$version_from_file" >/dev/null 2>&1; then
+        go mod edit -require="github.com/pthm/melange@$version_from_file" cmd/melange/go.mod
+        GOPROXY=direct GONOSUMDB=github.com/pthm/melange GOWORK=off go mod tidy -C cmd/melange
+        git add cmd/melange/go.mod cmd/melange/go.sum
+        git commit -m "chore(release): cmd/melange $version_from_file"
+        git tag -a "$cmd_tag" -m "$cmd_tag"
+        git push origin "$cmd_tag"
+        git push origin "$original_branch"
+        echo "✓ Published cmd/melange $version_from_file"
+    fi
 
     echo ""
     echo "════════════════════════════════════════════════════════════════"
@@ -552,7 +579,7 @@ build:
     version=$(cat VERSION 2>/dev/null || echo "dev")
     commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
     date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    go build -ldflags "-X github.com/pthm/melange/internal/version.Version=$version -X github.com/pthm/melange/internal/version.Commit=$commit -X github.com/pthm/melange/internal/version.Date=$date" -o bin/melange ./cmd/melange
+    go build -ldflags "-X github.com/pthm/melange/lib/version.Version=$version -X github.com/pthm/melange/lib/version.Commit=$commit -X github.com/pthm/melange/lib/version.Date=$date" -o bin/melange ./cmd/melange
 
 # Build the CLI without version info (faster for development)
 [group('Build')]
@@ -573,7 +600,7 @@ build-notarized: _check-1password build
 [group('Release')]
 [doc('Generate THIRD_PARTY_NOTICES from go-licenses data')]
 licenses:
-    go generate ./internal/licenses
+    go generate ./lib/licenses
 
 # Install the CLI locally
 [group('Build')]
@@ -583,7 +610,7 @@ install:
     version=$(cat VERSION 2>/dev/null || echo "dev")
     commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
     date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    go install -ldflags "-X github.com/pthm/melange/internal/version.Version=$version -X github.com/pthm/melange/internal/version.Commit=$commit -X github.com/pthm/melange/internal/version.Date=$date" ./cmd/melange
+    go install -ldflags "-X github.com/pthm/melange/lib/version.Version=$version -X github.com/pthm/melange/lib/version.Commit=$commit -X github.com/pthm/melange/lib/version.Date=$date" ./cmd/melange
 
 # =============================================================================
 # Linting and Formatting

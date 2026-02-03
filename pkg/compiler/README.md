@@ -162,7 +162,7 @@ The compiler package sits between schema analysis and database migration, provid
 
 ## Dependency Information
 
-This package re-exports types from `internal/sqlgen`. It depends on:
+This package re-exports types from `lib/sqlgen`. It depends on:
 
-- `github.com/pthm/melange/internal/sqlgen` - SQL generation implementation
+- `github.com/pthm/melange/lib/sqlgen` - SQL generation implementation
 - `github.com/pthm/melange/pkg/schema` - Schema types (via sqlgen)

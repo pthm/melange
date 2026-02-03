@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pthm/melange/internal/sqlgen"
+	"github.com/pthm/melange/lib/sqlgen"
 )
 
 // This file demonstrates the DSL query patterns.

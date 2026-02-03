@@ -13,7 +13,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/pthm/melange/internal/clientgen"
+	"github.com/pthm/melange/lib/clientgen"
 	"github.com/pthm/melange/pkg/schema"
 )
 
