@@ -69,6 +69,15 @@ func (b *BulkCheckBuilder) AddWithID(id string, subject SubjectLike, relation Re
 	return b
 }
 
+// AddMany appends checks for one subject+relation across multiple objects.
+// Each check gets an auto-generated ID.
+func (b *BulkCheckBuilder) AddMany(subject SubjectLike, relation RelationLike, objects ...ObjectLike) *BulkCheckBuilder {
+	for _, obj := range objects {
+		b.Add(subject, relation, obj)
+	}
+	return b
+}
+
 // WithContextualTuples attaches contextual tuples to this bulk check.
 // They are installed once before the SQL call and torn down afterwards.
 func (b *BulkCheckBuilder) WithContextualTuples(tuples ...ContextualTuple) *BulkCheckBuilder {

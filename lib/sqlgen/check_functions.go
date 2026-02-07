@@ -1,9 +1,6 @@
 package sqlgen
 
-import (
-	"fmt"
-	"strings"
-)
+import "fmt"
 
 func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, noWildcard bool) (string, error) {
 	plan := BuildCheckPlan(a, inline, noWildcard)
@@ -33,13 +30,25 @@ func buildDispatcherCases(analyses []RelationAnalysis, noWildcard bool) []Dispat
 		if !a.Capabilities.CheckAllowed {
 			continue
 		}
-		cases = append(cases, DispatcherCase{
+		inlineable := isInlineable(a.Features)
+		dc := DispatcherCase{
 			ObjectType:        a.ObjectType,
 			Relation:          a.Relation,
 			CheckFunctionName: functionNameForDispatcher(a, noWildcard),
-		})
+			Inlineable:        inlineable,
+		}
+		if inlineable {
+			dc.DirectSubjectTypes = a.DirectSubjectTypes
+			dc.SatisfyingRelations = a.SatisfyingRelations
+		}
+		cases = append(cases, dc)
 	}
 	return cases
+}
+
+func isInlineable(f RelationFeatures) bool {
+	return f.HasDirect && !f.HasImplied && !f.HasWildcard &&
+		!f.HasUserset && !f.HasRecursive && !f.HasExclusion && !f.HasIntersection
 }
 
 func renderDispatcherWithCases(fnName string, cases []DispatcherCase) string {
@@ -140,33 +149,91 @@ func renderBulkDispatcherWithCases(cases []DispatcherCase) string {
 
 // buildBulkDispatcherBody constructs the CTE + UNION ALL query body for the bulk dispatcher.
 func buildBulkDispatcherBody(cases []DispatcherCase) string {
-	var sb strings.Builder
-
-	sb.WriteString("WITH requests AS MATERIALIZED (\n")
-	sb.WriteString("    SELECT t.* FROM UNNEST(p_subject_types, p_subject_ids, p_relations, p_object_types, p_object_ids)\n")
-	sb.WriteString("        WITH ORDINALITY AS t(subject_type, subject_id, relation, object_type, object_id, idx)\n")
-	sb.WriteString(")\n")
+	rSubjectType := Col{Table: "r", Column: "subject_type"}
+	rSubjectID := Col{Table: "r", Column: "subject_id"}
+	rObjectType := Col{Table: "r", Column: "object_type"}
+	rObjectID := Col{Table: "r", Column: "object_id"}
+	rRelation := Col{Table: "r", Column: "relation"}
+	rIdx := Cast{Expr: Col{Table: "r", Column: "idx"}, Type: "INTEGER"}
+	requestsTable := TableRef{Name: "requests", Alias: "r"}
 
 	// One UNION ALL branch per (object_type, relation) pair, plus a fallback for unknown pairs.
-	notInPairs := make([]string, 0, len(cases))
-	for i, c := range cases {
-		if i > 0 {
-			sb.WriteString("UNION ALL\n")
+	branches := make([]SQLer, 0, len(cases)+1)
+	notInPairs := make([][]string, 0, len(cases))
+
+	for _, c := range cases {
+		whereClause := And(
+			Eq{Left: rObjectType, Right: Lit(c.ObjectType)},
+			Eq{Left: rRelation, Right: Lit(c.Relation)},
+		)
+
+		var allowedExpr Expr
+		if c.Inlineable {
+			// Inline check for simple direct-assignment relations (avoids function call overhead).
+			allowedExpr = CaseExpr{
+				Whens: []CaseWhen{
+					{
+						// Self-referential userset: subject is objectType:objectId#satisfyingRelation
+						Cond: And(
+							Eq{Left: rSubjectType, Right: Lit(c.ObjectType)},
+							HasUserset{Source: rSubjectID},
+							Eq{Left: UsersetObjectID{Source: rSubjectID}, Right: rObjectID},
+							In{Expr: SubstringUsersetRelation{Source: rSubjectID}, Values: c.SatisfyingRelations},
+						),
+						Result: Int(1),
+					},
+					{
+						// Direct tuple check with subject type restriction
+						Cond: Exists{Query: SelectStmt{
+							ColumnExprs: []Expr{Int(1)},
+							FromExpr:    TableRef{Name: "melange_tuples", Alias: "t"},
+							Where: And(
+								Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: rSubjectType},
+								Eq{Left: Col{Table: "t", Column: "subject_id"}, Right: rSubjectID},
+								Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(c.Relation)},
+								Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(c.ObjectType)},
+								Eq{Left: Col{Table: "t", Column: "object_id"}, Right: rObjectID},
+								In{Expr: rSubjectType, Values: c.DirectSubjectTypes},
+							),
+						}},
+						Result: Int(1),
+					},
+				},
+				Else: Int(0),
+			}
+		} else {
+			allowedExpr = Func{Name: c.CheckFunctionName, Args: []Expr{rSubjectType, rSubjectID, rObjectID, EmptyArray{}}}
 		}
-		objLit := Lit(c.ObjectType).SQL()
-		relLit := Lit(c.Relation).SQL()
-		fmt.Fprintf(&sb, "SELECT r.idx::INTEGER, %s(r.subject_type, r.subject_id, r.object_id, ARRAY[]::TEXT[])\n",
-			c.CheckFunctionName)
-		fmt.Fprintf(&sb, "FROM requests r WHERE r.object_type = %s AND r.relation = %s\n", objLit, relLit)
-		notInPairs = append(notInPairs, fmt.Sprintf("(%s,%s)", objLit, relLit))
+
+		branch := SelectStmt{
+			ColumnExprs: []Expr{rIdx, allowedExpr},
+			FromExpr:    requestsTable,
+			Where:       whereClause,
+		}
+
+		branches = append(branches, branch)
+		notInPairs = append(notInPairs, []string{c.ObjectType, c.Relation})
 	}
 
-	sb.WriteString("UNION ALL\n")
-	sb.WriteString("SELECT r.idx::INTEGER, 0\n")
-	fmt.Fprintf(&sb, "FROM requests r WHERE (r.object_type, r.relation) NOT IN (%s)",
-		strings.Join(notInPairs, ", "))
+	// Fallback branch: return 0 for unknown (object_type, relation) pairs.
+	branches = append(branches, SelectStmt{
+		ColumnExprs: []Expr{rIdx, Int(0)},
+		FromExpr:    requestsTable,
+		Where: TupleNotIn{
+			Exprs: []Expr{rObjectType, rRelation},
+			Pairs: notInPairs,
+		},
+	})
 
-	return sb.String()
+	return WithCTE{
+		CTEs: []CTEDef{{
+			Name:         "requests",
+			Materialized: true,
+			Query: Raw("SELECT t.* FROM UNNEST(p_subject_types, p_subject_ids, p_relations, p_object_types, p_object_ids)\n" +
+				"    WITH ORDINALITY AS t(subject_type, subject_id, relation, object_type, object_id, idx)"),
+		}},
+		Query: UnionAll{Queries: branches},
+	}.SQL()
 }
 
 func functionNameForDispatcher(a RelationAnalysis, noWildcard bool) string {
@@ -222,3 +289,4 @@ func dispatcherInternalArgs() []FuncArg {
 		{Name: "p_visited", Type: "TEXT []", Default: EmptyArray{}},
 	}
 }
+

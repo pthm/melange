@@ -606,6 +606,141 @@ func printScale(b *testing.B, scale BenchmarkScale) {
 		scale.Orgs*scale.ReposPerOrg*scale.PRsPerRepo)
 }
 
+// BenchmarkBulkCheck compares sequential Check() calls vs a single bulk Execute().
+func BenchmarkBulkCheck(b *testing.B) {
+	if testing.Short() {
+		b.Skip("skipping benchmark in short mode")
+	}
+
+	for _, scale := range benchmarkScales {
+		b.Run(scale.Name, func(b *testing.B) {
+			data := setupBenchmarkData(b, scale)
+			b.Logf("Setup complete: %d tuples", data.tupleCount)
+
+			ctx := context.Background()
+
+			// --- Sequential baselines ---
+			for _, n := range []int{10, 100} {
+				b.Run(fmt.Sprintf("Sequential_N%d", n), func(b *testing.B) {
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						for j := 0; j < n; j++ {
+							user := authz.User(data.users[j%len(data.users)])
+							repo := authz.Repository(data.repos[j%len(data.repos)])
+							_, err := data.checker.Check(ctx, user, authz.RelCanRead, repo)
+							if err != nil {
+								b.Fatal(err)
+							}
+						}
+					}
+				})
+			}
+
+			// --- Bulk homogeneous (same relation, different objects) ---
+			for _, n := range []int{10, 100, 500} {
+				b.Run(fmt.Sprintf("Bulk_N%d", n), func(b *testing.B) {
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						user := authz.User(data.users[0])
+						bulk := data.checker.NewBulkCheck(ctx)
+						for j := 0; j < n; j++ {
+							repo := authz.Repository(data.repos[j%len(data.repos)])
+							bulk.Add(user, authz.RelCanRead, repo)
+						}
+						_, err := bulk.Execute()
+						if err != nil {
+							b.Fatal(err)
+						}
+					}
+				})
+			}
+
+			// --- Bulk with ~50% duplicate checks ---
+			b.Run("Bulk_Dedup50", func(b *testing.B) {
+				const n = 100
+				// Build a pool of 50 unique objects, then repeat them.
+				poolSize := n / 2
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					user := authz.User(data.users[0])
+					bulk := data.checker.NewBulkCheck(ctx)
+					for j := 0; j < n; j++ {
+						repo := authz.Repository(data.repos[j%poolSize%len(data.repos)])
+						bulk.Add(user, authz.RelCanRead, repo)
+					}
+					_, err := bulk.Execute()
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+
+			// --- Bulk with pre-warmed cache ---
+			b.Run("Bulk_Cached", func(b *testing.B) {
+				const n = 100
+				cache := melange.NewCache()
+				checker := melange.NewChecker(data.db, melange.WithCache(cache))
+
+				// Warm the cache with a first execution.
+				user := authz.User(data.users[0])
+				warmup := checker.NewBulkCheck(ctx)
+				for j := 0; j < n; j++ {
+					repo := authz.Repository(data.repos[j%len(data.repos)])
+					warmup.Add(user, authz.RelCanRead, repo)
+				}
+				if _, err := warmup.Execute(); err != nil {
+					b.Fatal(err)
+				}
+
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					bulk := checker.NewBulkCheck(ctx)
+					for j := 0; j < n; j++ {
+						repo := authz.Repository(data.repos[j%len(data.repos)])
+						bulk.Add(user, authz.RelCanRead, repo)
+					}
+					_, err := bulk.Execute()
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+
+			// --- Bulk heterogeneous (mixed types and relations) ---
+			b.Run("Bulk_Heterogeneous", func(b *testing.B) {
+				const n = 100
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					user := authz.User(data.users[0])
+					bulk := data.checker.NewBulkCheck(ctx)
+					for j := 0; j < n; j++ {
+						switch j % 3 {
+						case 0:
+							org := authz.Organization(data.orgs[j%len(data.orgs)])
+							bulk.Add(user, authz.RelCanRead, org)
+						case 1:
+							repo := authz.Repository(data.repos[j%len(data.repos)])
+							bulk.Add(user, authz.RelCanRead, repo)
+						case 2:
+							if len(data.prs) > 0 {
+								pr := authz.PullRequest(data.prs[j%len(data.prs)])
+								bulk.Add(user, authz.RelCanRead, pr)
+							} else {
+								repo := authz.Repository(data.repos[j%len(data.repos)])
+								bulk.Add(user, authz.RelCanWrite, repo)
+							}
+						}
+					}
+					_, err := bulk.Execute()
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+			})
+		})
+	}
+}
+
 // BenchmarkScaleVerification verifies that the scales produce expected tuple counts.
 func BenchmarkScaleVerification(b *testing.B) {
 	if testing.Short() {

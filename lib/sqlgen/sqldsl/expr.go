@@ -195,6 +195,17 @@ func (s Substring) SQL() string {
 	return "substring(" + s.Source.SQL() + " from " + s.From.SQL() + " for " + s.For.SQL() + ")"
 }
 
+// Cast represents a PostgreSQL type cast (expr::type).
+type Cast struct {
+	Expr Expr
+	Type string
+}
+
+// SQL renders the cast expression.
+func (c Cast) SQL() string {
+	return c.Expr.SQL() + "::" + c.Type
+}
+
 // SelectAs creates an aliased column expression (expr AS alias).
 // Shorthand for Alias{Expr: expr, Name: alias}.
 func SelectAs(expr Expr, alias string) Alias {

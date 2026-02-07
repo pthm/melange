@@ -5,9 +5,10 @@ import "strings"
 // CTEDef represents a single Common Table Expression definition.
 // Used within WithCTE to define named subqueries.
 type CTEDef struct {
-	Name    string   // CTE name (e.g., "accessible", "base_results")
-	Columns []string // Optional column names (e.g., ["object_id", "depth"])
-	Query   SQLer    // The CTE query body
+	Name         string   // CTE name (e.g., "accessible", "base_results")
+	Columns      []string // Optional column names (e.g., ["object_id", "depth"])
+	Materialized bool     // If true, renders "AS MATERIALIZED" (PostgreSQL 12+)
+	Query        SQLer    // The CTE query body
 }
 
 // SQL renders the CTE definition as "name [(columns)] AS (query)".
@@ -19,7 +20,11 @@ func (c CTEDef) SQL() string {
 		sb.WriteString(strings.Join(c.Columns, ", "))
 		sb.WriteString(")")
 	}
-	sb.WriteString(" AS (\n")
+	if c.Materialized {
+		sb.WriteString(" AS MATERIALIZED (\n")
+	} else {
+		sb.WriteString(" AS (\n")
+	}
 	sb.WriteString(IndentLines(c.Query.SQL(), "    "))
 	sb.WriteString("\n)")
 	return sb.String()

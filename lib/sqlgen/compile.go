@@ -158,9 +158,12 @@ type DispatcherData struct {
 // DispatcherCase represents a single CASE WHEN branch in the dispatcher.
 // Each case routes a specific (object_type, relation) pair to its specialized function.
 type DispatcherCase struct {
-	ObjectType        string
-	Relation          string
-	CheckFunctionName string
+	ObjectType           string
+	Relation             string
+	CheckFunctionName    string
+	Inlineable           bool     // true if simple direct-assignment only (bulk dispatcher can inline EXISTS)
+	DirectSubjectTypes   []string // subject types allowed for direct tuples (used in inline)
+	SatisfyingRelations  []string // relations in closure that satisfy this one (used in inline userset check)
 }
 
 // CollectFunctionNames returns all function names that will be generated for the given analyses.

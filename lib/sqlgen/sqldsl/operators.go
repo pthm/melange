@@ -107,6 +107,28 @@ func (n NotIn) SQL() string {
 	return n.Expr.SQL() + " NOT IN (" + quoteValues(n.Values) + ")"
 }
 
+// TupleNotIn represents a composite NOT IN clause for multiple columns.
+// Renders (expr1, expr2) NOT IN (('a','b'), ('c','d')).
+type TupleNotIn struct {
+	Exprs []Expr     // Column expressions (e.g., object_type, relation)
+	Pairs [][]string // Pairs of literal values to exclude
+}
+
+func (t TupleNotIn) SQL() string {
+	if len(t.Pairs) == 0 {
+		return "TRUE"
+	}
+	exprs := make([]string, len(t.Exprs))
+	for i, e := range t.Exprs {
+		exprs[i] = e.SQL()
+	}
+	tuples := make([]string, len(t.Pairs))
+	for i, pair := range t.Pairs {
+		tuples[i] = "(" + quoteValues(pair) + ")"
+	}
+	return "(" + strings.Join(exprs, ", ") + ") NOT IN (" + strings.Join(tuples, ", ") + ")"
+}
+
 // Like represents a LIKE pattern match.
 type Like struct {
 	Expr    Expr

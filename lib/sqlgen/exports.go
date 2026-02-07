@@ -29,30 +29,32 @@ type (
 	Concat            = sqldsl.Concat
 	Position          = sqldsl.Position
 	Substring         = sqldsl.Substring
+	Cast              = sqldsl.Cast
 	UsersetNormalized = sqldsl.UsersetNormalized
 
 	// Operators
-	Eq        = sqldsl.Eq
-	Ne        = sqldsl.Ne
-	Lt        = sqldsl.Lt
-	Gt        = sqldsl.Gt
-	Lte       = sqldsl.Lte
-	Gte       = sqldsl.Gte
-	Add       = sqldsl.Add
-	Sub       = sqldsl.Sub
-	In        = sqldsl.In
-	NotIn     = sqldsl.NotIn
-	Like      = sqldsl.Like
-	NotLike   = sqldsl.NotLike
-	AndExpr   = sqldsl.AndExpr
-	OrExpr    = sqldsl.OrExpr
-	NotExpr   = sqldsl.NotExpr
-	Exists    = sqldsl.Exists
-	NotExists = sqldsl.NotExists
-	IsNull    = sqldsl.IsNull
-	IsNotNull = sqldsl.IsNotNull
-	CaseWhen  = sqldsl.CaseWhen
-	CaseExpr  = sqldsl.CaseExpr
+	Eq         = sqldsl.Eq
+	Ne         = sqldsl.Ne
+	Lt         = sqldsl.Lt
+	Gt         = sqldsl.Gt
+	Lte        = sqldsl.Lte
+	Gte        = sqldsl.Gte
+	Add        = sqldsl.Add
+	Sub        = sqldsl.Sub
+	In         = sqldsl.In
+	NotIn      = sqldsl.NotIn
+	TupleNotIn = sqldsl.TupleNotIn
+	Like       = sqldsl.Like
+	NotLike    = sqldsl.NotLike
+	AndExpr    = sqldsl.AndExpr
+	OrExpr     = sqldsl.OrExpr
+	NotExpr    = sqldsl.NotExpr
+	Exists     = sqldsl.Exists
+	NotExists  = sqldsl.NotExists
+	IsNull     = sqldsl.IsNull
+	IsNotNull  = sqldsl.IsNotNull
+	CaseWhen   = sqldsl.CaseWhen
+	CaseExpr   = sqldsl.CaseExpr
 
 	// Table expressions
 	TableExpr        = sqldsl.TableExpr
