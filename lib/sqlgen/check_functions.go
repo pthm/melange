@@ -120,25 +120,25 @@ func generateBulkDispatcher(analyses []RelationAnalysis) string {
 }
 
 func renderEmptyBulkDispatcher() string {
-	fn := SqlFunction{
+	fn := PlpgsqlFunction{
 		Name:    "check_permission_bulk",
 		Args:    bulkDispatcherArgs(),
 		Returns: "TABLE(idx INTEGER, allowed INTEGER)",
-		Body:    Raw("SELECT NULL::INTEGER, NULL::INTEGER WHERE false"),
+		Body:    []Stmt{ReturnQuery{Query: "SELECT NULL::INTEGER, NULL::INTEGER WHERE false"}},
 		Header: []string{
 			"Generated bulk dispatcher for check_permission_bulk (no relations defined)",
-			"Returns 0 (deny) for all requests",
+			"Returns no rows (caller treats missing results as deny)",
 		},
 	}
 	return fn.SQL() + "\n"
 }
 
 func renderBulkDispatcherWithCases(cases []DispatcherCase) string {
-	fn := SqlFunction{
+	fn := PlpgsqlFunction{
 		Name:    "check_permission_bulk",
 		Args:    bulkDispatcherArgs(),
 		Returns: "TABLE(idx INTEGER, allowed INTEGER)",
-		Body:    Raw(buildBulkDispatcherBody(cases)),
+		Body:    []Stmt{ReturnQuery{Query: buildBulkDispatcherBody(cases)}},
 		Header: []string{
 			"Generated bulk dispatcher for check_permission_bulk",
 			fmt.Sprintf("Routes %d (object_type, relation) pairs to specialized check functions", len(cases)),
