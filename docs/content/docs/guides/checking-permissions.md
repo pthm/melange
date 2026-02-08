@@ -39,29 +39,23 @@ The Checker accepts any type implementing the `Querier` interface:
 {{< tab >}}
 ```typescript
 import { Pool } from 'pg';
+import { Checker } from '@pthm/melange';
 
 const pool = new Pool({ connectionString: 'postgresql://localhost/mydb' });
+const checker = new Checker(pool);
 
-async function checkPermission(
-  subjectType: string,
-  subjectId: string,
-  relation: string,
-  objectType: string,
-  objectId: string
-): Promise<boolean> {
-  const { rows } = await pool.query(
-    'SELECT check_permission($1, $2, $3, $4, $5)',
-    [subjectType, subjectId, relation, objectType, objectId]
-  );
-  return rows[0].check_permission === 1;
-}
+// Define subject and object
+const user = { type: 'user', id: '123' };
+const repo = { type: 'repository', id: '456' };
 
 // Check permission
-const allowed = await checkPermission('user', '123', 'can_read', 'repository', '456');
-if (!allowed) {
+const decision = await checker.check(user, 'can_read', repo);
+if (!decision.allowed) {
   throw new ForbiddenError();
 }
 ```
+
+The Checker accepts any object implementing the `Queryable` interface. The `pg` Pool and Client both satisfy this. Use adapters for other drivers.
 {{< /tab >}}
 
 {{< tab >}}
@@ -126,9 +120,11 @@ allowed, err := checker.Check(ctx,
 {{< /tab >}}
 
 {{< tab >}}
-Create factory functions or use generated code:
+Create factory functions for cleaner code:
 
 ```typescript
+import { Checker } from '@pthm/melange';
+
 // Define object factories
 function User(id: string) {
   return { type: 'user' as const, id };
@@ -140,23 +136,9 @@ function Repository(id: string) {
 
 const RelCanRead = 'can_read';
 
-// Type-safe check function
-async function check(
-  subject: { type: string; id: string },
-  relation: string,
-  object: { type: string; id: string }
-): Promise<boolean> {
-  return checkPermission(
-    subject.type,
-    subject.id,
-    relation,
-    object.type,
-    object.id
-  );
-}
-
-// Use with factories
-const allowed = await check(
+// Use with Checker
+const checker = new Checker(pool);
+const decision = await checker.check(
   User('123'),
   RelCanRead,
   Repository('456')
@@ -250,73 +232,49 @@ func (c *RedisCache) Get(subject Object, relation Relation, object Object) (bool
 
 {{< tab >}}
 ```typescript
-import { LRUCache } from 'lru-cache';
+import { Checker, MemoryCache } from '@pthm/melange';
 
-// Create cache
-const cache = new LRUCache<string, boolean>({
-  max: 10000,
-  ttl: 60 * 1000, // 1 minute
-});
+const cache = new MemoryCache(60000); // 60 second TTL
+const checker = new Checker(pool, { cache });
 
-async function checkPermissionCached(
-  subjectType: string,
-  subjectId: string,
-  relation: string,
-  objectType: string,
-  objectId: string
-): Promise<boolean> {
-  const key = `${subjectType}:${subjectId}:${relation}:${objectType}:${objectId}`;
+// First check hits the database
+const decision1 = await checker.check(user, 'can_read', repo);
 
-  const cached = cache.get(key);
-  if (cached !== undefined) {
-    return cached;
-  }
-
-  const allowed = await checkPermission(
-    subjectType,
-    subjectId,
-    relation,
-    objectType,
-    objectId
-  );
-
-  cache.set(key, allowed);
-  return allowed;
-}
+// Subsequent checks hit the cache
+const decision2 = await checker.check(user, 'can_read', repo);
 ```
 
-For distributed caching, use Redis:
+Cache characteristics:
+- In-memory, process-local
+- Caches both allowed and denied results
+- Configurable TTL
+
+### Custom Cache Implementation
+
+Implement the `Cache` interface for distributed caches:
 
 ```typescript
-import { Redis } from 'ioredis';
+import type { Cache, Decision } from '@pthm/melange';
 
-const redis = new Redis();
+class RedisCache implements Cache {
+  constructor(private redis: Redis, private ttlSeconds = 60) {}
 
-async function checkPermissionRedis(
-  subjectType: string,
-  subjectId: string,
-  relation: string,
-  objectType: string,
-  objectId: string
-): Promise<boolean> {
-  const key = `perm:${subjectType}:${subjectId}:${relation}:${objectType}:${objectId}`;
-
-  const cached = await redis.get(key);
-  if (cached !== null) {
-    return cached === '1';
+  async get(key: string): Promise<Decision | undefined> {
+    const val = await this.redis.get(key);
+    if (val === null) return undefined;
+    return { allowed: val === '1' };
   }
 
-  const allowed = await checkPermission(
-    subjectType,
-    subjectId,
-    relation,
-    objectType,
-    objectId
-  );
+  async set(key: string, value: Decision): Promise<void> {
+    await this.redis.setex(key, this.ttlSeconds, value.allowed ? '1' : '0');
+  }
 
-  await redis.setex(key, 60, allowed ? '1' : '0');
-  return allowed;
+  async clear(): Promise<void> {
+    // Clear melange keys or flush
+  }
 }
+
+const checker = new Checker(pool, { cache: new RedisCache(redis) });
 ```
 {{< /tab >}}
 
@@ -361,31 +319,24 @@ Decision precedence (when `WithContextDecision` is enabled):
 
 {{< tab >}}
 ```typescript
-// For admin users or testing, wrap the check function
-function createChecker(options?: { alwaysAllow?: boolean; alwaysDeny?: boolean }) {
-  return async function check(
-    subjectType: string,
-    subjectId: string,
-    relation: string,
-    objectType: string,
-    objectId: string
-  ): Promise<boolean> {
-    if (options?.alwaysAllow) return true;
-    if (options?.alwaysDeny) return false;
+import { Checker, DecisionAllow, DecisionDeny } from '@pthm/melange';
 
-    return checkPermission(subjectType, subjectId, relation, objectType, objectId);
-  };
-}
+// Always allow — for admin tools or testing authorized paths
+const allowChecker = new Checker(pool, { decision: DecisionAllow });
 
-// For testing
-const testChecker = createChecker({ alwaysAllow: true });
+// Always deny — for testing unauthorized paths
+const denyChecker = new Checker(pool, { decision: DecisionDeny });
+```
 
-// For admin middleware
+When a decision override is set, no database query is performed. This works with both `check()` and `newBulkCheck()`.
+
+```typescript
+// In middleware — create request-scoped checker
 function authMiddleware(req, res, next) {
   if (req.user.isAdmin) {
-    req.check = createChecker({ alwaysAllow: true });
+    req.checker = new Checker(pool, { decision: DecisionAllow });
   } else {
-    req.check = createChecker();
+    req.checker = new Checker(pool);
   }
   next();
 }
@@ -430,6 +381,8 @@ if err := tx.Commit(); err != nil {
 
 {{< tab >}}
 ```typescript
+import { Checker } from '@pthm/melange';
+
 const client = await pool.connect();
 
 try {
@@ -441,13 +394,14 @@ try {
     [userId, orgId, 'member']
   );
 
-  // Permission check sees the uncommitted row
-  const { rows } = await client.query(
-    'SELECT check_permission($1, $2, $3, $4, $5)',
-    ['user', userId, 'member', 'organization', orgId]
+  // Create Checker on the transaction client to see uncommitted rows
+  const txChecker = new Checker(client);
+  const decision = await txChecker.check(
+    { type: 'user', id: userId },
+    'member',
+    { type: 'organization', id: orgId }
   );
-  const allowed = rows[0].check_permission === 1;
-  // allowed == true, even before commit
+  // decision.allowed == true, even before commit
 
   await client.query('COMMIT');
 } catch (e) {
@@ -531,41 +485,39 @@ Prefer `Check` for user-facing authorization. Use `Must` when:
 
 {{< tab >}}
 ```typescript
-// Handle database errors
+import { Checker, MelangeError, ValidationError } from '@pthm/melange';
+
+const checker = new Checker(pool);
+
 try {
-  const allowed = await checkPermission('user', '123', 'can_read', 'repository', '456');
+  const decision = await checker.check(user, 'can_read', repo);
 } catch (error) {
-  if (error.code === '42P01') {
-    // Relation does not exist - melange_tuples view missing
-    console.error('Authorization not configured: missing melange_tuples view');
-  } else if (error.code === '42883') {
-    // Function does not exist - need to run migrations
-    console.error("Authorization not configured: run 'melange migrate'");
+  if (error instanceof ValidationError) {
+    // Invalid input (empty type, missing ID, etc.)
+    console.error('Invalid check request:', error.message);
+  } else if (error instanceof MelangeError) {
+    // Other melange errors
+    console.error('Authorization error:', error.message);
   }
   throw error;
 }
 ```
 
-For throwing on unauthorized access:
+For guard-style checks with bulk operations, use `allOrError`:
 
 ```typescript
-async function mustCheck(
-  subjectType: string,
-  subjectId: string,
-  relation: string,
-  objectType: string,
-  objectId: string
-): Promise<void> {
-  const allowed = await checkPermission(
-    subjectType,
-    subjectId,
-    relation,
-    objectType,
-    objectId
-  );
-  if (!allowed) {
-    throw new ForbiddenError(`${subjectType}:${subjectId} does not have ${relation} on ${objectType}:${objectId}`);
-  }
+import { BulkCheckDeniedError, isBulkCheckDeniedError } from '@pthm/melange';
+
+const results = await checker.newBulkCheck()
+  .add(user, 'can_read', repo)
+  .add(user, 'can_write', repo)
+  .execute();
+
+const err = results.allOrError();
+if (err) {
+  // err is a BulkCheckDeniedError with subject, relation, object, index, total
+  console.error(`Denied: ${err.message}`);
+  throw err;
 }
 ```
 {{< /tab >}}
@@ -614,37 +566,30 @@ func authMiddleware(next http.Handler) http.Handler {
 
 {{< tab >}}
 ```typescript
-// Express middleware
+import { Checker, MemoryCache } from '@pthm/melange';
+
+// Express middleware — fresh cache per request
 function authMiddleware(req, res, next) {
-  // Fresh cache per request
-  req.permissionCache = new Map<string, boolean>();
+  const cache = new MemoryCache(); // Fresh cache per request
+  req.checker = new Checker(pool, { cache });
   next();
 }
 
-async function checkWithRequestCache(
-  req: Request,
-  subjectType: string,
-  subjectId: string,
-  relation: string,
-  objectType: string,
-  objectId: string
-): Promise<boolean> {
-  const key = `${subjectType}:${subjectId}:${relation}:${objectType}:${objectId}`;
+// In a handler — repeated checks are cached automatically
+async function handleRequest(req) {
+  const user = { type: 'user', id: req.userId };
 
-  if (req.permissionCache.has(key)) {
-    return req.permissionCache.get(key)!;
-  }
+  // First check hits the database
+  await req.checker.check(user, 'can_read', repo);
 
-  const allowed = await checkPermission(
-    subjectType,
-    subjectId,
-    relation,
-    objectType,
-    objectId
-  );
+  // Same check later in the request uses cache
+  await req.checker.check(user, 'can_read', repo);
 
-  req.permissionCache.set(key, allowed);
-  return allowed;
+  // Or batch multiple checks for efficiency
+  const results = await req.checker.newBulkCheck()
+    .add(user, 'can_read', repo1)
+    .add(user, 'can_write', repo1)
+    .execute();
 }
 ```
 {{< /tab >}}
@@ -715,20 +660,49 @@ if r := results.GetByID("write-repo"); r != nil && r.IsAllowed() {
 
 {{< tab >}}
 ```typescript
-// Check multiple permissions in one call
-const { rows } = await pool.query(
-  'SELECT idx, allowed FROM check_permission_bulk($1, $2, $3, $4, $5)',
-  [
-    ['user', 'user', 'user'],           // subject types
-    ['123', '123', '123'],               // subject IDs
-    ['viewer', 'editor', 'admin'],       // relations
-    ['document', 'document', 'document'],// object types
-    ['456', '456', '456'],               // object IDs
-  ]
-);
+import { Checker } from '@pthm/melange';
 
-for (const row of rows) {
-  console.log(`Check ${row.idx}: ${row.allowed === 1 ? 'allowed' : 'denied'}`);
+const checker = new Checker(pool);
+
+const results = await checker.newBulkCheck()
+  .add(user, 'can_read', repo1)
+  .add(user, 'can_read', repo2)
+  .addMany(user, 'can_write', repo1, repo2)
+  .execute();
+
+// Check aggregate results
+if (results.all()) {
+  // Every check was allowed
+}
+if (results.any()) {
+  // At least one check was allowed
+}
+
+// Iterate individual results
+for (const r of results.allowed()) {
+  console.log(`${r.object.type}:${r.object.id} is accessible`);
+}
+
+// Use allOrError for guard-style checks
+const err = results.allOrError();
+if (err) {
+  throw err; // BulkCheckDeniedError with details
+}
+```
+
+Use `addWithId` to tag checks with meaningful identifiers:
+
+```typescript
+const results = await checker.newBulkCheck()
+  .addWithId('read-repo', user, 'can_read', repo)
+  .addWithId('write-repo', user, 'can_write', repo)
+  .addWithId('admin-repo', user, 'admin', repo)
+  .execute();
+
+// Look up results by ID
+const writeResult = results.getById('write-repo');
+if (writeResult?.allowed) {
+  // User can write
 }
 ```
 {{< /tab >}}
@@ -754,7 +728,7 @@ FROM check_permission_bulk(
 {{< /callout >}}
 
 {{< callout type="warning" >}}
-**Size limit**: A single bulk check supports up to 10,000 checks (`MaxBulkCheckSize`). The builder panics if this limit is exceeded.
+**Size limit**: A single bulk check supports up to 10,000 checks (`MaxBulkCheckSize` in Go, `MAX_BULK_CHECK_SIZE` in TypeScript). Exceeding this limit returns an error.
 {{< /callout >}}
 
 ### 3. Use ListObjects for Filtering
@@ -788,20 +762,21 @@ for _, repo := range repos {
 
 {{< tab >}}
 ```typescript
+import { Checker } from '@pthm/melange';
+
+const checker = new Checker(pool);
+const user = { type: 'user', id: userId };
+
 // Inefficient: N database queries
 const visible = [];
 for (const repo of repos) {
-  if (await checkPermission('user', userId, 'can_read', 'repository', repo.id)) {
-    visible.push(repo);
-  }
+  const d = await checker.check(user, 'can_read', { type: 'repository', id: repo.id });
+  if (d.allowed) visible.push(repo);
 }
 
 // Efficient: 1 database query
-const { rows } = await pool.query(
-  'SELECT * FROM list_accessible_objects($1, $2, $3, $4)',
-  ['user', userId, 'can_read', 'repository']
-);
-const accessibleIds = new Set(rows.map(r => r.object_id));
+const result = await checker.listObjects(user, 'can_read', 'repository');
+const accessibleIds = new Set(result.items);
 
 const visible = repos.filter(repo => accessibleIds.has(repo.id));
 ```
