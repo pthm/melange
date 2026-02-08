@@ -291,7 +291,7 @@ func buildBulkUnknownTypeFallback(cases []DispatcherCase) ReturnQuery {
 
 	query := SelectStmt{
 		ColumnExprs: []Expr{rIdx, Int(0)},
-		From: bulkUnnestExpr,
+		From:        bulkUnnestExpr,
 		Where: TupleNotIn{
 			Exprs: []Expr{rObjectType, rRelation},
 			Pairs: notInPairs,
