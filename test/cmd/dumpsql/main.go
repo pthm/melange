@@ -223,6 +223,13 @@ func dumpSQL(tc TestCase, opts dumpOptions) {
 			fmt.Println(generatedSQL.DispatcherNoWildcard)
 		}
 
+		// Show bulk dispatcher
+		if generatedSQL.BulkDispatcher != "" {
+			fmt.Println("\n## BULK DISPATCHER (check_permission_bulk)")
+			fmt.Println()
+			fmt.Println(generatedSQL.BulkDispatcher)
+		}
+
 		// Generate list functions
 		listSQL, err := compiler.GenerateListSQL(analyses, inline)
 		if err != nil {

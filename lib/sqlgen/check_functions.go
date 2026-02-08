@@ -1,6 +1,9 @@
 package sqlgen
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
 
 func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, noWildcard bool) (string, error) {
 	plan := BuildCheckPlan(a, inline, noWildcard)
@@ -133,107 +136,168 @@ func renderEmptyBulkDispatcher() string {
 	return fn.SQL() + "\n"
 }
 
+// bulkUnnestExpr is the shared UNNEST expression used to expand bulk request arrays
+// into rows with an ordinality index.
+const bulkUnnestExpr = "UNNEST(p_subject_types, p_subject_ids, p_relations, p_object_types, p_object_ids)\n" +
+	"    WITH ORDINALITY AS t(subject_type, subject_id, relation, object_type, object_id, idx)"
+
+// typeGroup groups dispatcher cases by object type for the bulk dispatcher.
+type typeGroup struct {
+	ObjectType string
+	Cases      []DispatcherCase
+}
+
+// groupCasesByObjectType groups dispatcher cases by ObjectType, returning sorted groups.
+func groupCasesByObjectType(cases []DispatcherCase) []typeGroup {
+	byType := make(map[string][]DispatcherCase)
+	for _, c := range cases {
+		byType[c.ObjectType] = append(byType[c.ObjectType], c)
+	}
+	groups := make([]typeGroup, 0, len(byType))
+	for ot, grouped := range byType {
+		groups = append(groups, typeGroup{ObjectType: ot, Cases: grouped})
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		return groups[i].ObjectType < groups[j].ObjectType
+	})
+	return groups
+}
+
 func renderBulkDispatcherWithCases(cases []DispatcherCase) string {
+	groups := groupCasesByObjectType(cases)
+
+	// Build one IF block per object type + a final fallback RETURN QUERY.
+	body := make([]Stmt, 0, len(groups)+1)
+	for _, g := range groups {
+		body = append(body, buildBulkTypeGroupIf(g))
+	}
+	body = append(body, buildBulkUnknownTypeFallback(cases))
+
 	fn := PlpgsqlFunction{
 		Name:    "check_permission_bulk",
 		Args:    bulkDispatcherArgs(),
 		Returns: "TABLE(idx INTEGER, allowed INTEGER)",
-		Body:    []Stmt{ReturnQuery{Query: buildBulkDispatcherBody(cases)}},
+		Body:    body,
 		Header: []string{
 			"Generated bulk dispatcher for check_permission_bulk",
-			fmt.Sprintf("Routes %d (object_type, relation) pairs to specialized check functions", len(cases)),
+			fmt.Sprintf("Routes %d (object_type, relation) pairs across %d object types", len(cases), len(groups)),
+			"Uses separate IF blocks to execute only branches for object types present in the batch",
 		},
 	}
 	return fn.SQL() + "\n"
 }
 
-// buildBulkDispatcherBody constructs the CTE + UNION ALL query body for the bulk dispatcher.
-func buildBulkDispatcherBody(cases []DispatcherCase) string {
+// buildBulkTypeGroupIf builds an IF block for a single object type group.
+// The condition checks if the object type is present in p_object_types,
+// then executes a RETURN QUERY with a CTE filtered to that type.
+func buildBulkTypeGroupIf(g typeGroup) If {
 	rSubjectType := Col{Table: "r", Column: "subject_type"}
 	rSubjectID := Col{Table: "r", Column: "subject_id"}
-	rObjectType := Col{Table: "r", Column: "object_type"}
 	rObjectID := Col{Table: "r", Column: "object_id"}
 	rRelation := Col{Table: "r", Column: "relation"}
 	rIdx := Cast{Expr: Col{Table: "r", Column: "idx"}, Type: "INTEGER"}
 	requestsTable := TableRef{Name: "requests", Alias: "r"}
 
-	// One UNION ALL branch per (object_type, relation) pair, plus a fallback for unknown pairs.
-	branches := make([]SQLer, 0, len(cases)+1)
-	notInPairs := make([][]string, 0, len(cases))
+	// Build UNION ALL branches for each relation of this object type.
+	branches := make([]SQLer, 0, len(g.Cases)+1)
+	knownRelations := make([]string, 0, len(g.Cases))
 
-	for _, c := range cases {
-		whereClause := And(
-			Eq{Left: rObjectType, Right: Lit(c.ObjectType)},
-			Eq{Left: rRelation, Right: Lit(c.Relation)},
-		)
-
-		var allowedExpr Expr
-		if c.Inlineable {
-			// Inline check for simple direct-assignment relations (avoids function call overhead).
-			allowedExpr = CaseExpr{
-				Whens: []CaseWhen{
-					{
-						// Self-referential userset: subject is objectType:objectId#satisfyingRelation
-						Cond: And(
-							Eq{Left: rSubjectType, Right: Lit(c.ObjectType)},
-							HasUserset{Source: rSubjectID},
-							Eq{Left: UsersetObjectID{Source: rSubjectID}, Right: rObjectID},
-							In{Expr: SubstringUsersetRelation{Source: rSubjectID}, Values: c.SatisfyingRelations},
-						),
-						Result: Int(1),
-					},
-					{
-						// Direct tuple check with subject type restriction
-						Cond: Exists{Query: SelectStmt{
-							ColumnExprs: []Expr{Int(1)},
-							FromExpr:    TableRef{Name: "melange_tuples", Alias: "t"},
-							Where: And(
-								Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: rSubjectType},
-								Eq{Left: Col{Table: "t", Column: "subject_id"}, Right: rSubjectID},
-								Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(c.Relation)},
-								Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(c.ObjectType)},
-								Eq{Left: Col{Table: "t", Column: "object_id"}, Right: rObjectID},
-								In{Expr: rSubjectType, Values: c.DirectSubjectTypes},
-							),
-						}},
-						Result: Int(1),
-					},
-				},
-				Else: Int(0),
-			}
-		} else {
-			allowedExpr = Func{Name: c.CheckFunctionName, Args: []Expr{rSubjectType, rSubjectID, rObjectID, EmptyArray{}}}
-		}
-
+	for _, c := range g.Cases {
+		allowedExpr := buildInlineCheckExpr(c, rSubjectType, rSubjectID, rObjectID)
 		branch := SelectStmt{
 			ColumnExprs: []Expr{rIdx, allowedExpr},
 			FromExpr:    requestsTable,
-			Where:       whereClause,
+			Where:       Eq{Left: rRelation, Right: Lit(c.Relation)},
 		}
-
 		branches = append(branches, branch)
-		notInPairs = append(notInPairs, []string{c.ObjectType, c.Relation})
+		knownRelations = append(knownRelations, c.Relation)
 	}
 
-	// Fallback branch: return 0 for unknown (object_type, relation) pairs.
+	// Per-group fallback: unknown relations for this known type return 0.
 	branches = append(branches, SelectStmt{
 		ColumnExprs: []Expr{rIdx, Int(0)},
 		FromExpr:    requestsTable,
+		Where:       NotIn{Expr: rRelation, Values: knownRelations},
+	})
+
+	// The CTE filters requests to only this object type.
+	query := WithCTE{
+		CTEs: []CTEDef{{
+			Name:         "requests",
+			Materialized: true,
+			Query: Raw("SELECT t.* FROM " + bulkUnnestExpr + "\n" +
+				"    WHERE t.object_type = " + Lit(g.ObjectType).SQL()),
+		}},
+		Query: UnionAll{Queries: branches},
+	}
+
+	return If{
+		Cond: ArrayContains{Value: Lit(g.ObjectType), Array: Param("p_object_types")},
+		Then: []Stmt{ReturnQuery{Query: query.SQL()}},
+	}
+}
+
+// buildInlineCheckExpr builds the allowed expression for a single dispatcher case.
+// For inlineable relations, it generates a CASE/EXISTS expression.
+// For non-inlineable relations, it generates a function call.
+func buildInlineCheckExpr(c DispatcherCase, rSubjectType, rSubjectID, rObjectID Expr) Expr {
+	if !c.Inlineable {
+		return Func{Name: c.CheckFunctionName, Args: []Expr{rSubjectType, rSubjectID, rObjectID, EmptyArray{}}}
+	}
+	return CaseExpr{
+		Whens: []CaseWhen{
+			{
+				// Self-referential userset: subject is objectType:objectId#satisfyingRelation
+				Cond: And(
+					Eq{Left: rSubjectType, Right: Lit(c.ObjectType)},
+					HasUserset{Source: rSubjectID},
+					Eq{Left: UsersetObjectID{Source: rSubjectID}, Right: rObjectID},
+					In{Expr: SubstringUsersetRelation{Source: rSubjectID}, Values: c.SatisfyingRelations},
+				),
+				Result: Int(1),
+			},
+			{
+				// Direct tuple check with subject type restriction
+				Cond: Exists{Query: SelectStmt{
+					ColumnExprs: []Expr{Int(1)},
+					FromExpr:    TableRef{Name: "melange_tuples", Alias: "t"},
+					Where: And(
+						Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: rSubjectType},
+						Eq{Left: Col{Table: "t", Column: "subject_id"}, Right: rSubjectID},
+						Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(c.Relation)},
+						Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(c.ObjectType)},
+						Eq{Left: Col{Table: "t", Column: "object_id"}, Right: rObjectID},
+						In{Expr: rSubjectType, Values: c.DirectSubjectTypes},
+					),
+				}},
+				Result: Int(1),
+			},
+		},
+		Else: Int(0),
+	}
+}
+
+// buildBulkUnknownTypeFallback builds the final RETURN QUERY statement that handles
+// (object_type, relation) pairs not covered by any IF block.
+func buildBulkUnknownTypeFallback(cases []DispatcherCase) ReturnQuery {
+	notInPairs := make([][]string, 0, len(cases))
+	for _, c := range cases {
+		notInPairs = append(notInPairs, []string{c.ObjectType, c.Relation})
+	}
+
+	rObjectType := Col{Table: "t", Column: "object_type"}
+	rRelation := Col{Table: "t", Column: "relation"}
+	rIdx := Cast{Expr: Col{Table: "t", Column: "idx"}, Type: "INTEGER"}
+
+	query := SelectStmt{
+		ColumnExprs: []Expr{rIdx, Int(0)},
+		From:        bulkUnnestExpr,
 		Where: TupleNotIn{
 			Exprs: []Expr{rObjectType, rRelation},
 			Pairs: notInPairs,
 		},
-	})
-
-	return WithCTE{
-		CTEs: []CTEDef{{
-			Name:         "requests",
-			Materialized: true,
-			Query: Raw("SELECT t.* FROM UNNEST(p_subject_types, p_subject_ids, p_relations, p_object_types, p_object_ids)\n" +
-				"    WITH ORDINALITY AS t(subject_type, subject_id, relation, object_type, object_id, idx)"),
-		}},
-		Query: UnionAll{Queries: branches},
-	}.SQL()
+	}
+	return ReturnQuery{Query: query.SQL()}
 }
 
 func functionNameForDispatcher(a RelationAnalysis, noWildcard bool) string {
