@@ -182,7 +182,7 @@ func TestBulkCheck_AddMany_Integration(t *testing.T) {
 	_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'member')`, orgID, userID)
 	require.NoError(t, err)
 
-	var repos []melange.ObjectLike
+	repos := make([]melange.ObjectLike, 0, 5)
 	for i := range 5 {
 		var repoID int64
 		err = db.QueryRowContext(ctx, `INSERT INTO repositories (organization_id, name) VALUES ($1, $2) RETURNING id`,
@@ -418,7 +418,7 @@ func TestBulkCheck_ResultOrdering(t *testing.T) {
 	_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'admin')`, orgID, userID)
 	require.NoError(t, err)
 
-	var repoIDs []int64
+	repoIDs := make([]int64, 0, 5)
 	for i := range 5 {
 		var repoID int64
 		err = db.QueryRowContext(ctx, `INSERT INTO repositories (organization_id, name) VALUES ($1, $2) RETURNING id`,
@@ -496,7 +496,7 @@ func TestBulkCheck_LargeBatch(t *testing.T) {
 	user := authz.User(userID)
 
 	// Create 100 repos and collect IDs
-	var repoIDs []int64
+	repoIDs := make([]int64, 0, 100)
 	for i := range 100 {
 		var repoID int64
 		err = db.QueryRowContext(ctx, `INSERT INTO repositories (organization_id, name) VALUES ($1, $2) RETURNING id`,
@@ -542,11 +542,11 @@ func TestBulkCheck_DirectSQL(t *testing.T) {
 
 	rows, err := db.QueryContext(ctx,
 		`SELECT idx, allowed FROM check_permission_bulk($1, $2, $3, $4, $5)`,
-		`{user,user}`,                                         // subject_types
-		fmt.Sprintf("{%s,%s}", memberIDStr, outsiderIDStr),    // subject_ids
-		`{can_read,can_read}`,                                 // relations
-		`{organization,organization}`,                         // object_types
-		fmt.Sprintf("{%s,%s}", orgIDStr, orgIDStr),            // object_ids
+		`{user,user}`, // subject_types
+		fmt.Sprintf("{%s,%s}", memberIDStr, outsiderIDStr), // subject_ids
+		`{can_read,can_read}`,                              // relations
+		`{organization,organization}`,                      // object_types
+		fmt.Sprintf("{%s,%s}", orgIDStr, orgIDStr),         // object_ids
 	)
 	require.NoError(t, err)
 	defer rows.Close()

@@ -86,7 +86,7 @@ func (b *BulkCheckBuilder) WithContextualTuples(tuples ...ContextualTuple) *Bulk
 }
 
 // Execute runs all accumulated checks in a single SQL call to
-// check_permission_bulk. Results honour decision overrides, caching,
+// check_permission_bulk. Results honor decision overrides, caching,
 // deduplication, and contextual tuples.
 func (b *BulkCheckBuilder) Execute() (*BulkCheckResults, error) {
 	c := b.checker
@@ -235,13 +235,15 @@ func (b *BulkCheckBuilder) Execute() (*BulkCheckResults, error) {
 		// 9. Cache store for DB results.
 		if c.cache != nil {
 			for _, zeroIdx := range uncachedKeys {
-				if hit, ok := uniqueResults[zeroIdx]; ok {
-					key := unique[zeroIdx]
-					subj := Object{Type: ObjectType(key.subjectType), ID: key.subjectID}
-					rel := Relation(key.relation)
-					obj := Object{Type: ObjectType(key.objectType), ID: key.objectID}
-					c.cache.Set(subj, rel, obj, hit.allowed, nil)
+				hit, ok := uniqueResults[zeroIdx]
+				if !ok {
+					continue
 				}
+				key := unique[zeroIdx]
+				subj := Object{Type: ObjectType(key.subjectType), ID: key.subjectID}
+				rel := Relation(key.relation)
+				obj := Object{Type: ObjectType(key.objectType), ID: key.objectID}
+				c.cache.Set(subj, rel, obj, hit.allowed, nil)
 			}
 		}
 	}

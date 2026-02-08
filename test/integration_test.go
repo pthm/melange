@@ -1328,12 +1328,11 @@ func TestListObjectsAll_Aggregates(t *testing.T) {
 	_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'member')`, orgID, userID)
 	require.NoError(t, err)
 
-	// Create 1000 repositories (will require 2 pages internally)
-	for i := 0; i < 1000; i++ {
-		_, err = db.ExecContext(ctx, `INSERT INTO repositories (organization_id, name) VALUES ($1, $2)`,
-			orgID, fmt.Sprintf("all_pagination_repo_%04d", i))
-		require.NoError(t, err)
-	}
+	// Create 1000 repositories in a single statement (will require 2 pages internally)
+	_, err = db.ExecContext(ctx, `INSERT INTO repositories (organization_id, name)
+		SELECT $1, 'all_pagination_repo_' || LPAD(g::text, 4, '0')
+		FROM generate_series(0, 999) g`, orgID)
+	require.NoError(t, err)
 
 	checker := melange.NewChecker(db)
 	user := authz.User(userID)

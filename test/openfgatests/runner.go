@@ -379,7 +379,7 @@ func BenchTest(b *testing.B, tc TestCase) {
 
 	// Benchmark BulkCheck operations
 	if len(checkOps) > 0 {
-		var allCheckAssertions []*CheckAssertion
+		allCheckAssertions := make([]*CheckAssertion, 0, len(checkOps))
 		for _, op := range checkOps {
 			allCheckAssertions = append(allCheckAssertions, op.assertion)
 		}

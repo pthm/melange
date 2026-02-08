@@ -24,6 +24,10 @@ func TestBulkFixtures_CreateUsers(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Cleanup(func() {
+				_, _ = db.ExecContext(ctx, "TRUNCATE TABLE users CASCADE")
+			})
+
 			ids, err := bf.CreateUsers(tt.count)
 			require.NoError(t, err)
 
@@ -46,10 +50,6 @@ func TestBulkFixtures_CreateUsers(t *testing.T) {
 			err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM users").Scan(&count)
 			require.NoError(t, err)
 			require.Equal(t, tt.count, count)
-
-			// Cleanup
-			_, err = db.ExecContext(ctx, "TRUNCATE TABLE users CASCADE")
-			require.NoError(t, err)
 		})
 	}
 }
@@ -71,6 +71,10 @@ func TestBulkFixtures_CreateOrganizations(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Cleanup(func() {
+				_, _ = db.ExecContext(ctx, "TRUNCATE TABLE organizations CASCADE")
+			})
+
 			ids, err := bf.CreateOrganizations(tt.count)
 			require.NoError(t, err)
 
@@ -93,10 +97,6 @@ func TestBulkFixtures_CreateOrganizations(t *testing.T) {
 			err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM organizations").Scan(&count)
 			require.NoError(t, err)
 			require.Equal(t, tt.count, count)
-
-			// Cleanup
-			_, err = db.ExecContext(ctx, "TRUNCATE TABLE organizations CASCADE")
-			require.NoError(t, err)
 		})
 	}
 }
@@ -124,6 +124,10 @@ func TestBulkFixtures_CreateRepositories(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Cleanup(func() {
+				_, _ = db.ExecContext(ctx, "DELETE FROM repositories WHERE organization_id = $1", orgID)
+			})
+
 			ids, err := bf.CreateRepositories(orgID, tt.count)
 			require.NoError(t, err)
 
@@ -146,10 +150,6 @@ func TestBulkFixtures_CreateRepositories(t *testing.T) {
 			err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM repositories WHERE organization_id = $1", orgID).Scan(&count)
 			require.NoError(t, err)
 			require.Equal(t, tt.count, count)
-
-			// Cleanup repos only
-			_, err = db.ExecContext(ctx, "DELETE FROM repositories WHERE organization_id = $1", orgID)
-			require.NoError(t, err)
 		})
 	}
 }
@@ -184,6 +184,10 @@ func TestBulkFixtures_AddOrganizationMembers(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Cleanup(func() {
+				_, _ = db.ExecContext(ctx, "DELETE FROM organization_members WHERE organization_id = $1", orgID)
+			})
+
 			err := bf.AddOrganizationMembers(orgID, tt.userIDs, tt.role)
 			require.NoError(t, err)
 
@@ -194,10 +198,6 @@ func TestBulkFixtures_AddOrganizationMembers(t *testing.T) {
 				orgID).Scan(&count)
 			require.NoError(t, err)
 			require.Equal(t, tt.expected, count)
-
-			// Cleanup members only
-			_, err = db.ExecContext(ctx, "DELETE FROM organization_members WHERE organization_id = $1", orgID)
-			require.NoError(t, err)
 		})
 	}
 }
@@ -232,6 +232,10 @@ func TestBulkFixtures_CreatePullRequests(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Cleanup(func() {
+				_, _ = db.ExecContext(ctx, "DELETE FROM pull_requests WHERE repository_id = $1", repoID)
+			})
+
 			ids, err := bf.CreatePullRequests(repoID, users, tt.count)
 			require.NoError(t, err)
 
@@ -254,10 +258,6 @@ func TestBulkFixtures_CreatePullRequests(t *testing.T) {
 			err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM pull_requests WHERE repository_id = $1", repoID).Scan(&count)
 			require.NoError(t, err)
 			require.Equal(t, tt.count, count)
-
-			// Cleanup PRs only
-			_, err = db.ExecContext(ctx, "DELETE FROM pull_requests WHERE repository_id = $1", repoID)
-			require.NoError(t, err)
 		})
 	}
 }

@@ -289,4 +289,3 @@ func dispatcherInternalArgs() []FuncArg {
 		{Name: "p_visited", Type: "TEXT []", Default: EmptyArray{}},
 	}
 }
-

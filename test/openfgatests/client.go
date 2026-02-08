@@ -664,7 +664,7 @@ func (c *Client) CheckBulk(ctx context.Context, storeID string, assertions []*Ch
 	if err != nil {
 		return nil, fmt.Errorf("check_permission_bulk query: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	results := make(map[int]bool, n)
 	for rows.Next() {
