@@ -191,6 +191,39 @@ func ensureTemplate(adminDSN string) (string, error) {
 	return templateName, templateErr
 }
 
+// DSN returns the connection string for an isolated test database.
+// Unlike DB(), it returns the raw DSN so callers can open with any driver.
+// The database is automatically cleaned up when the test completes.
+func DSN(tb testing.TB) string {
+	tb.Helper()
+
+	adminDSN, err := ensureSingleton()
+	require.NoError(tb, err, "failed to start PostgreSQL container")
+
+	tmpl, err := ensureTemplate(adminDSN)
+	require.NoError(tb, err, "failed to create template database")
+
+	// Generate unique database name
+	dbName := uniqueDBName("test")
+
+	// Create database from template
+	err = createDatabaseFromTemplate(adminDSN, dbName, tmpl)
+	require.NoError(tb, err, "failed to create test database from template")
+
+	dsn := replaceDBName(adminDSN, dbName)
+
+	// Register cleanup to drop the database when the test completes
+	tb.Cleanup(func() {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = dropDatabase(ctx, adminDSN, dbName)
+		}()
+	})
+
+	return dsn
+}
+
 // DB returns a fully migrated database connection for testing.
 // Each call creates a new isolated database copied from the template.
 // The database is automatically cleaned up when the test completes.

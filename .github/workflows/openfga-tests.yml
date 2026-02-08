@@ -23,8 +23,11 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Setup Go workspace
+        run: go work init . ./cmd/melange ./docs ./melange
+
       - name: Run OpenFGA feature tests
         working-directory: test
         run: |
-          go test -count=1 -timeout 5m -v \
+          go test -count=1 -timeout 5m -race -v \
             -run "TestOpenFGA_" ./openfgatests/...

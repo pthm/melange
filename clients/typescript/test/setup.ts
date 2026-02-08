@@ -7,6 +7,7 @@
  */
 
 import { Pool, type PoolConfig } from 'pg';
+import type { Queryable } from '../src/database.js';
 
 /**
  * GetDatabaseURL returns the database connection string for tests.
@@ -114,6 +115,30 @@ export async function verifyTestDatabase(pool: Pool): Promise<void> {
 
   if (!tuplesExists.rows[0].exists) {
     throw new Error('melange_tuples not found - database may not have melange schema installed');
+  }
+}
+
+/**
+ * Verifies the test database has required melange schema using any Queryable.
+ *
+ * This is useful for testing non-pg drivers (e.g., postgres.js via adapter).
+ *
+ * @param db - Any Queryable instance
+ * @throws Error if required schema is missing
+ */
+export async function verifyTestDatabaseWithQueryable(db: Queryable): Promise<void> {
+  const checks = [
+    { name: 'check_permission', query: `SELECT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE p.proname = 'check_permission' AND n.nspname = current_schema()) as exists` },
+    { name: 'list_accessible_objects', query: `SELECT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE p.proname = 'list_accessible_objects' AND n.nspname = current_schema()) as exists` },
+    { name: 'list_accessible_subjects', query: `SELECT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE p.proname = 'list_accessible_subjects' AND n.nspname = current_schema()) as exists` },
+    { name: 'melange_tuples', query: `SELECT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relname = 'melange_tuples' AND n.nspname = current_schema() AND c.relkind IN ('r', 'v', 'm')) as exists` },
+  ];
+
+  for (const check of checks) {
+    const result = await db.query<{ exists: boolean }>(check.query);
+    if (!result.rows[0].exists) {
+      throw new Error(`${check.name} not found - database may not have melange schema installed`);
+    }
   }
 }
 

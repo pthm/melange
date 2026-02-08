@@ -55,6 +55,16 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
       - name: Setup Go workspace
         run: go work init . ./cmd/melange ./docs ./melange
 
@@ -71,6 +81,14 @@ jobs:
       - name: Run unit tests (cmd/melange module)
         working-directory: cmd/melange
         run: go test -short -race ./...
+
+      - name: Install TypeScript dependencies
+        working-directory: clients/typescript
+        run: pnpm install
+
+      - name: Run TypeScript unit tests
+        working-directory: clients/typescript
+        run: pnpm test:unit
 
   integration-tests:
     name: Integration Tests (Go + TypeScript)

@@ -3,6 +3,7 @@
 
 ROOT := "."
 TEST := "test"
+GO_MODULES := ". cmd/melange melange test"
 
 GO_TEST := "go test"
 GO_TEST_JSON := "go test -json -count=1"
@@ -534,6 +535,21 @@ test-integration:
 test-integration-all:
     ./scripts/integration-test-runner.sh
 
+# Run Go driver compatibility tests (requires Docker)
+[group('Test')]
+test-drivers:
+    cd {{TEST}} && {{GO_TEST}} -timeout 5m -run TestDriverCompatibility ./...
+
+# Run TypeScript driver compatibility tests (requires pnpm and database)
+[group('Test')]
+test-ts-drivers:
+    cd clients/typescript && pnpm install && pnpm test -- --grep "Driver Compatibility"
+
+# Run TypeScript unit tests only (no database required)
+[group('Test')]
+test-ts-unit:
+    cd clients/typescript && pnpm install && pnpm test:unit
+
 # Run TypeScript tests (requires pnpm and database)
 [group('Test')]
 test-ts:
@@ -568,8 +584,7 @@ bench-save FILE="benchmark_results.txt":
 # Run tests with race detection
 [group('Test')]
 test-race:
-    for dir in {{ROOT}}; do (cd "$dir" && {{GO_TEST}} -race -short ./...); done
-    cd {{TEST}} && {{GO_TEST}} -race -timeout 5m ./...
+    for dir in {{GO_MODULES}}; do (cd "$dir" && {{GO_TEST}} -race -short ./...); done
 
 # Build the CLI
 [group('Build')]
@@ -623,7 +638,7 @@ fmt: fmt-go
 # Format Go code with gofumpt
 [group('Lint')]
 fmt-go:
-    for dir in {{ROOT}} {{TEST}}; do (cd "$dir" && go tool gofumpt -w .); done
+    for dir in {{GO_MODULES}}; do (cd "$dir" && go tool gofumpt -w .); done
 
 
 # Lint all code (Go)
@@ -633,7 +648,7 @@ lint: lint-go
 # Lint Go code with golangci-lint
 [group('Lint')]
 lint-go:
-    for dir in {{ROOT}} {{TEST}}; do (cd "$dir" && go tool golangci-lint run ./...); done
+    for dir in {{GO_MODULES}}; do (cd "$dir" && go tool golangci-lint run ./...); done
 
 # Install linting and formatting tools
 [group('Lint')]
@@ -644,12 +659,12 @@ install-tools:
 # Run go vet on all packages (included in lint-go via golangci-lint)
 [group('Lint')]
 vet:
-    for dir in {{ROOT}} {{TEST}}; do (cd "$dir" && go vet ./...); done
+    for dir in {{GO_MODULES}}; do (cd "$dir" && go vet ./...); done
 
 # Tidy all go.mod files
 [group('Lint')]
 tidy:
-    for dir in {{ROOT}} {{TEST}}; do (cd "$dir" && go mod tidy); done
+    for dir in {{GO_MODULES}}; do (cd "$dir" && go mod tidy); done
 
 # Generate test authz package from schema
 [group('Generate')]
