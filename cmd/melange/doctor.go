@@ -14,9 +14,10 @@ import (
 )
 
 var (
-	doctorDB      string
-	doctorSchema  string
-	doctorVerbose bool
+	doctorDB              string
+	doctorSchema          string
+	doctorVerbose         bool
+	doctorSkipPerformance bool
 )
 
 var doctorCmd = &cobra.Command{
@@ -31,13 +32,14 @@ var doctorCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		schemaPath := resolveString(doctorSchema, cfg.Schema)
 		verboseFlag := resolveBool(doctorVerbose, cfg.Doctor.Verbose)
+		skipPerf := resolveBool(doctorSkipPerformance, cfg.Doctor.SkipPerformance)
 
 		dsn, err := resolveDSN(doctorDB)
 		if err != nil {
 			return err
 		}
 
-		return runDoctor(dsn, schemaPath, verboseFlag)
+		return runDoctor(dsn, schemaPath, verboseFlag, skipPerf)
 	},
 }
 
@@ -46,9 +48,10 @@ func init() {
 	f.StringVar(&doctorDB, "db", "", "database URL")
 	f.StringVar(&doctorSchema, "schema", "", "path to schema.fga file")
 	f.BoolVar(&doctorVerbose, "verbose", false, "show detailed output")
+	f.BoolVar(&doctorSkipPerformance, "skip-performance", false, "skip performance checks")
 }
 
-func runDoctor(dsn, schemaPath string, verboseFlag bool) error {
+func runDoctor(dsn, schemaPath string, verboseFlag, skipPerformance bool) error {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return cli.DBConnectError("connecting to database", err)
@@ -61,7 +64,7 @@ func runDoctor(dsn, schemaPath string, verboseFlag bool) error {
 		fmt.Println("melange doctor - Health Check")
 	}
 
-	d := doctor.New(db, schemaPath)
+	d := doctor.New(db, schemaPath, doctor.Options{SkipPerformance: skipPerformance})
 	report, err := d.Run(ctx)
 	if err != nil {
 		return cli.GeneralError("running doctor", err)
