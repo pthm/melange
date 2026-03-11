@@ -228,17 +228,21 @@ export class Checker {
       }
     }
 
-    const limit = options?.limit ?? 0;
+    let limit = options?.limit ?? null;
+    if (typeof limit === 'number' && limit <= 0) {
+      limit = null;
+    }
+
     const after = options?.after;
 
-    const result = await this.db.query<{ object_id: string; cursor: string }>(
+    const result = await this.db.query<{ object_id: string; next_cursor: string }>(
       'SELECT * FROM list_accessible_objects($1, $2, $3, $4, $5, $6)',
       [subject.type, subject.id, relation, objectType, limit, after ?? null]
     );
 
     const items = result.rows.map((row) => row.object_id);
     const nextCursor = result.rows.length > 0
-      ? result.rows[result.rows.length - 1].cursor
+      ? result.rows[result.rows.length - 1].next_cursor
       : undefined;
 
     return { items, nextCursor };
@@ -284,17 +288,21 @@ export class Checker {
       validateObject(object, 'object');
     }
 
-    const limit = options?.limit ?? 0;
+    let limit = options?.limit ?? null;
+    if (typeof limit === 'number' && limit <= 0) {
+      limit = null;
+    }
+
     const after = options?.after;
 
-    const result = await this.db.query<{ subject_id: string; cursor: string }>(
+    const result = await this.db.query<{ subject_id: string; next_cursor: string }>(
       'SELECT * FROM list_accessible_subjects($1, $2, $3, $4, $5, $6)',
       [object.type, object.id, relation, subjectType, limit, after ?? null]
     );
 
     const items = result.rows.map((row) => row.subject_id);
     const nextCursor = result.rows.length > 0
-      ? result.rows[result.rows.length - 1].cursor
+      ? result.rows[result.rows.length - 1].next_cursor
       : undefined;
 
     return { items, nextCursor };

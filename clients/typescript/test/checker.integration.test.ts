@@ -215,18 +215,25 @@ describe('Checker Integration Tests', () => {
   });
 
   describe('List Operations', () => {
-    let userId: number;
+    let user1Id: number;
+    let user2Id: number;
     let org1Id: number;
     let org2Id: number;
     let repo1Id: number;
     let repo2Id: number;
+    let repo3Id: number;
 
     beforeAll(async () => {
-      // Create user
-      const userResult = await pool.query(
-        "INSERT INTO users (username) VALUES ('ts_list_user') RETURNING id"
+      // Create two users
+      const user1Result = await pool.query(
+        "INSERT INTO users (username) VALUES ('ts_list_user1') RETURNING id"
       );
-      userId = userResult.rows[0].id;
+      user1Id = user1Result.rows[0].id;
+
+      const user2Result = await pool.query(
+        "INSERT INTO users (username) VALUES ('ts_list_user2') RETURNING id"
+      );
+      user2Id = user2Result.rows[0].id;
 
       // Create two organizations
       const org1Result = await pool.query(
@@ -239,13 +246,24 @@ describe('Checker Integration Tests', () => {
       );
       org2Id = org2Result.rows[0].id;
 
-      // Add user as member of org1 only
+      // Add user1 as member of org1 only
       await pool.query(
         'INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, $3)',
-        [org1Id, userId, 'member']
+        [org1Id, user1Id, 'member']
       );
 
-      // Create repositories in both organizations
+      // Add user2 as member of both organizations
+      await pool.query(
+        'INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, $3)',
+        [org1Id, user2Id, 'member']
+      );
+
+      await pool.query(
+        'INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, $3)',
+        [org2Id, user2Id, 'member']
+      );
+
+      // Create two repositories in org1 and one in org2
       const repo1Result = await pool.query(
         'INSERT INTO repositories (name, organization_id) VALUES ($1, $2) RETURNING id',
         ['ts_list_repo1', org1Id]
@@ -254,54 +272,126 @@ describe('Checker Integration Tests', () => {
 
       const repo2Result = await pool.query(
         'INSERT INTO repositories (name, organization_id) VALUES ($1, $2) RETURNING id',
-        ['ts_list_repo2', org2Id]
+        ['ts_list_repo2', org1Id]
       );
       repo2Id = repo2Result.rows[0].id;
+
+      const repo3Result = await pool.query(
+        'INSERT INTO repositories (name, organization_id) VALUES ($1, $2) RETURNING id',
+        ['ts_list_repo3', org2Id]
+      );
+      repo3Id = repo3Result.rows[0].id;
     });
 
     test('listObjects returns accessible repositories', async () => {
-      const user = { type: 'user', id: String(userId) };
+      const user = { type: 'user', id: String(user1Id) };
 
       const result = await checker.listObjects(user, 'can_read', 'repository', {
         limit: 100,
       });
 
-      // User should have access to repo1 via org1 membership
+      // User should have access to repo1 and repo2 via org1 membership
       expect(result.items).toContain(String(repo1Id));
+      expect(result.items).toContain(String(repo2Id));
 
-      // User should NOT have access to repo2
-      expect(result.items).not.toContain(String(repo2Id));
-    });
-
-    test('listSubjects returns users with access', async () => {
-      const repo = { type: 'repository', id: String(repo1Id) };
-
-      const result = await checker.listSubjects('user', 'can_read', repo, {
-        limit: 100,
-      });
-
-      // listSubjects should return successfully with proper structure
-      // Note: The result may be empty depending on how the implementation
-      // handles tuple-to-userset relationships (e.g., "can_read from org")
-      expect(result).toHaveProperty('items');
-      expect(result).toHaveProperty('nextCursor');
-      expect(Array.isArray(result.items)).toBe(true);
+      // User should NOT have access to repo3
+      expect(result.items).not.toContain(String(repo3Id));
     });
 
     test('listObjects respects pagination', async () => {
-      const user = { type: 'user', id: String(userId) };
+      const user = { type: 'user', id: String(user1Id) };
 
       // Request with limit
       const result = await checker.listObjects(user, 'can_read', 'repository', {
         limit: 1,
       });
 
-      // Should return at most 1 item
-      expect(result.items.length).toBeLessThanOrEqual(1);
+      // One repository is returned
+      expect(result.items).toHaveLength(1);
 
-      // Pagination returns results (may or may not have nextCursor depending on total count)
-      expect(result).toHaveProperty('items');
-      expect(result).toHaveProperty('nextCursor');
+      // There is a nextCursor because two repositories are accessible
+      expect(result.nextCursor).toBeTruthy();
+    });
+
+    test('listObjects returns accessible repositories with no limit', async () => {
+      const user = { type: 'user', id: String(user1Id) };
+
+      const result = await checker.listObjects(user, 'can_read', 'repository');
+
+      // Accessible repositories are returned
+      expect(result.items).not.toHaveLength(0);
+
+      // There is no nextCursor because we loaded all pages
+      expect(result.nextCursor).toBeFalsy();
+    });
+
+    test('listObjects returns accessible repositories with invalid limit', async () => {
+      const user = { type: 'user', id: String(user1Id) };
+
+      const result = await checker.listObjects(user, 'can_read', 'repository', {
+        limit: 0
+      });
+
+      // Accessible repositories are returned
+      expect(result.items).not.toHaveLength(0);
+
+      // There is no nextCursor because we loaded all pages
+      expect(result.nextCursor).toBeFalsy();
+    });
+
+    test('listSubjects returns users with access', async () => {
+      const org = { type: 'organization', id: String(org2Id) };
+
+      const result = await checker.listSubjects('user', 'can_read', org, {
+        limit: 100,
+      });
+
+      // User2 should have access
+      expect(result.items).toContain(String(user2Id));
+
+      // User1 should not have access
+      expect(result.items).not.toContain(String(user1Id));
+    });
+
+    test('listSubjects respects pagination', async () => {
+      const org = { type: 'organization', id: String(org1Id) };
+
+      // Request with limit
+      const result = await checker.listSubjects('user', 'can_read', org, {
+        limit: 1,
+      });
+
+      // One user is returned
+      expect(result.items).toHaveLength(1);
+
+      // There is a nextCursor because two users have access
+      expect(result.nextCursor).toBeTruthy();
+    });
+
+    test('listSubjects returns users with access with no limit', async () => {
+      const org = { type: 'organization', id: String(org1Id) };
+
+      const result = await checker.listSubjects('user', 'can_read', org);
+
+      // Users with access are returned
+      expect(result.items).not.toHaveLength(0);
+
+      // There is no nextCursor because we loaded all pages
+      expect(result.nextCursor).toBeFalsy();
+    });
+
+    test('listSubjects returns users with access with invalid limit', async () => {
+      const org = { type: 'organization', id: String(org1Id) };
+
+      const result = await checker.listSubjects('user', 'can_read', org, {
+        limit: 0
+      });
+
+      // Users with access are returned
+      expect(result.items).not.toHaveLength(0);
+
+      // There is no nextCursor because we loaded all pages
+      expect(result.nextCursor).toBeFalsy();
     });
   });
 
