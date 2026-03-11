@@ -313,6 +313,32 @@ describe('Checker Integration Tests', () => {
       expect(result.nextCursor).toBeTruthy();
     });
 
+    test('listObjects pagination fetches all pages via cursor', async () => {
+      const user = { type: 'user', id: String(user1Id) };
+
+      // Fetch page 1
+      const page1 = await checker.listObjects(user, 'can_read', 'repository', {
+        limit: 1,
+      });
+
+      expect(page1.items).toHaveLength(1);
+      expect(page1.nextCursor).toBeTruthy();
+
+      // Fetch page 2 using cursor from page 1
+      const page2 = await checker.listObjects(user, 'can_read', 'repository', {
+        limit: 1,
+        after: page1.nextCursor,
+      });
+
+      expect(page2.items).toHaveLength(1);
+      // No more pages
+      expect(page2.nextCursor).toBeFalsy();
+
+      // Union of both pages should contain both accessible repos
+      const allItems = [...page1.items, ...page2.items].sort();
+      expect(allItems).toEqual([String(repo1Id), String(repo2Id)].sort());
+    });
+
     test('listObjects returns accessible repositories with no limit', async () => {
       const user = { type: 'user', id: String(user1Id) };
 
@@ -366,6 +392,32 @@ describe('Checker Integration Tests', () => {
 
       // There is a nextCursor because two users have access
       expect(result.nextCursor).toBeTruthy();
+    });
+
+    test('listSubjects pagination fetches all pages via cursor', async () => {
+      const org = { type: 'organization', id: String(org1Id) };
+
+      // Fetch page 1
+      const page1 = await checker.listSubjects('user', 'can_read', org, {
+        limit: 1,
+      });
+
+      expect(page1.items).toHaveLength(1);
+      expect(page1.nextCursor).toBeTruthy();
+
+      // Fetch page 2 using cursor from page 1
+      const page2 = await checker.listSubjects('user', 'can_read', org, {
+        limit: 1,
+        after: page1.nextCursor,
+      });
+
+      expect(page2.items).toHaveLength(1);
+      // No more pages
+      expect(page2.nextCursor).toBeFalsy();
+
+      // Union of both pages should contain both users with access
+      const allItems = [...page1.items, ...page2.items].sort();
+      expect(allItems).toEqual([String(user1Id), String(user2Id)].sort());
     });
 
     test('listSubjects returns users with access with no limit', async () => {
