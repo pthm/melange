@@ -137,10 +137,16 @@ func (r *Report) HasErrors() bool {
 	return r.Errors > 0
 }
 
+// Options configures doctor behavior.
+type Options struct {
+	SkipPerformance bool
+}
+
 // Doctor performs health checks on the melange authorization infrastructure.
 type Doctor struct {
 	db         *sql.DB
 	schemaPath string
+	opts       Options
 
 	// Cached data from checks (populated during Run)
 	parsedTypes   []schema.TypeDefinition
@@ -149,6 +155,7 @@ type Doctor struct {
 	expectedFuncs []string
 	currentFuncs  []string
 	tuplesInfo    *TuplesInfo
+	viewDef       *ViewDefinition
 }
 
 // TuplesInfo contains information about the melange_tuples relation.
@@ -161,10 +168,15 @@ type TuplesInfo struct {
 }
 
 // New creates a new Doctor instance.
-func New(db *sql.DB, schemaPath string) *Doctor {
+func New(db *sql.DB, schemaPath string, opts ...Options) *Doctor {
+	var o Options
+	if len(opts) > 0 {
+		o = opts[0]
+	}
 	return &Doctor{
 		db:         db,
 		schemaPath: schemaPath,
+		opts:       o,
 	}
 }
 
@@ -185,6 +197,16 @@ func (d *Doctor) Run(ctx context.Context) (*Report, error) {
 	}
 	if err := d.checkDataHealth(ctx, report); err != nil {
 		return nil, fmt.Errorf("checking data health: %w", err)
+	}
+
+	// Performance checks (only for views, skip if disabled)
+	if !d.opts.SkipPerformance && d.tuplesInfo != nil && d.tuplesInfo.Exists && d.tuplesInfo.RelKind == "v" {
+		if err := d.checkViewDefinition(ctx, report); err != nil {
+			return nil, fmt.Errorf("checking view definition: %w", err)
+		}
+		if err := d.checkExpressionIndexes(ctx, report); err != nil {
+			return nil, fmt.Errorf("checking expression indexes: %w", err)
+		}
 	}
 
 	return report, nil

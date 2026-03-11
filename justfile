@@ -535,6 +535,11 @@ test-integration:
 test-integration-all:
     ./scripts/integration-test-runner.sh
 
+# Run doctor integration tests
+[group('Test')]
+test-doctor:
+    cd {{TEST}} && {{GO_TEST}} -count=1 -timeout 2m -run "TestDoctor_" ./...
+
 # Run Go driver compatibility tests (requires Docker)
 [group('Test')]
 test-drivers:

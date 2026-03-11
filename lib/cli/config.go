@@ -62,7 +62,8 @@ type MigrateConfig struct {
 
 // DoctorConfig holds doctor command settings.
 type DoctorConfig struct {
-	Verbose bool `mapstructure:"verbose"`
+	Verbose         bool `mapstructure:"verbose"`
+	SkipPerformance bool `mapstructure:"skip_performance"`
 }
 
 // LoadConfig discovers and loads configuration with proper precedence:
@@ -130,6 +131,7 @@ func setDefaults(v *viper.Viper) {
 
 	// Doctor defaults
 	v.SetDefault("doctor.verbose", false)
+	v.SetDefault("doctor.skip_performance", false)
 }
 
 // findConfigFile finds the config file to use.
