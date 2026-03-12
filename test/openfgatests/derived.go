@@ -49,7 +49,7 @@ func isDerivable(a *CheckAssertion) bool {
 }
 
 // splitTypeID splits "type:id" into (type, id). Returns empty strings on invalid input.
-func splitTypeID(s string) (string, string) {
+func splitTypeID(s string) (typeName, id string) {
 	idx := strings.Index(s, ":")
 	if idx == -1 {
 		return "", ""
