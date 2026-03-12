@@ -1,0 +1,461 @@
+# Melange-specific tests that supplement the official OpenFGA test suite.
+# These cover patterns discovered during development that are not (or not fully)
+# covered by the upstream consolidated_1_1_tests.yaml.
+#
+# Test names are prefixed with "melange/" by the loader to avoid collisions
+# with official test names.
+
+tests:
+  # ---------------------------------------------------------------------------
+  # subtract_difference_exclusion
+  # Pattern: writer but not (editor but not owner)
+  # A "difference inside a difference" — the excluded set is itself an exclusion.
+  # ---------------------------------------------------------------------------
+  - name: subtract_difference_exclusion
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type document
+            relations
+              define writer: [user]
+              define editor: [user]
+              define owner: [user]
+              define viewer: writer but not (editor but not owner)
+        tuples:
+          # aardvark: writer + editor + owner on doc:1
+          - user: user:aardvark
+            relation: writer
+            object: document:1
+          - user: user:aardvark
+            relation: editor
+            object: document:1
+          - user: user:aardvark
+            relation: owner
+            object: document:1
+          # badger: writer + editor (no owner) on doc:2
+          - user: user:badger
+            relation: writer
+            object: document:2
+          - user: user:badger
+            relation: editor
+            object: document:2
+          # cheetah: writer + owner (no editor) on doc:3
+          - user: user:cheetah
+            relation: writer
+            object: document:3
+          - user: user:cheetah
+            relation: owner
+            object: document:3
+        checkAssertions:
+          - name: aardvark_allowed_editor_but_not_owner_is_false
+            tuple:
+              user: user:aardvark
+              relation: viewer
+              object: document:1
+            expectation: true
+          - name: badger_excluded_editor_but_not_owner_is_true
+            tuple:
+              user: user:badger
+              relation: viewer
+              object: document:2
+            expectation: false
+          - name: cheetah_allowed_not_editor
+            tuple:
+              user: user:cheetah
+              relation: viewer
+              object: document:3
+            expectation: true
+
+  # ---------------------------------------------------------------------------
+  # basic_intersection
+  # Pattern: writer and editor
+  # Both relations must be satisfied.
+  # ---------------------------------------------------------------------------
+  - name: basic_intersection
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type document
+            relations
+              define writer: [user]
+              define editor: [user]
+              define viewer: writer and editor
+        tuples:
+          - user: user:aardvark
+            relation: writer
+            object: document:1
+          - user: user:aardvark
+            relation: editor
+            object: document:1
+          - user: user:badger
+            relation: writer
+            object: document:2
+          - user: user:cheetah
+            relation: editor
+            object: document:3
+        checkAssertions:
+          - name: aardvark_has_both
+            tuple:
+              user: user:aardvark
+              relation: viewer
+              object: document:1
+            expectation: true
+          - name: badger_only_writer
+            tuple:
+              user: user:badger
+              relation: viewer
+              object: document:2
+            expectation: false
+          - name: cheetah_only_editor
+            tuple:
+              user: user:cheetah
+              relation: viewer
+              object: document:3
+            expectation: false
+
+  # ---------------------------------------------------------------------------
+  # intersection_exclusion_in_subtract
+  # Pattern: writer but not (editor and owner)
+  # The excluded set is an intersection.
+  # ---------------------------------------------------------------------------
+  - name: intersection_exclusion_in_subtract
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type document
+            relations
+              define writer: [user]
+              define editor: [user]
+              define owner: [user]
+              define viewer: writer but not (editor and owner)
+        tuples:
+          # aardvark: writer + editor + owner on doc:1
+          - user: user:aardvark
+            relation: writer
+            object: document:1
+          - user: user:aardvark
+            relation: editor
+            object: document:1
+          - user: user:aardvark
+            relation: owner
+            object: document:1
+          # badger: writer + editor (no owner) on doc:2
+          - user: user:badger
+            relation: writer
+            object: document:2
+          - user: user:badger
+            relation: editor
+            object: document:2
+          # cheetah: writer + owner (no editor) on doc:3
+          - user: user:cheetah
+            relation: writer
+            object: document:3
+          - user: user:cheetah
+            relation: owner
+            object: document:3
+          # duck: writer only on doc:4
+          - user: user:duck
+            relation: writer
+            object: document:4
+        checkAssertions:
+          - name: aardvark_excluded_by_editor_and_owner
+            tuple:
+              user: user:aardvark
+              relation: viewer
+              object: document:1
+            expectation: false
+          - name: badger_allowed_only_editor_not_owner
+            tuple:
+              user: user:badger
+              relation: viewer
+              object: document:2
+            expectation: true
+          - name: cheetah_allowed_only_owner_not_editor
+            tuple:
+              user: user:cheetah
+              relation: viewer
+              object: document:3
+            expectation: true
+          - name: duck_allowed_writer_only
+            tuple:
+              user: user:duck
+              relation: viewer
+              object: document:4
+            expectation: true
+
+  # ---------------------------------------------------------------------------
+  # intersection_wildcard_in_computed
+  # Pattern: [user:*] and allowed, then can_view: viewer (computed)
+  # Wildcard in an intersection, accessed through a computed relation.
+  # ---------------------------------------------------------------------------
+  - name: intersection_wildcard_in_computed
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type document
+            relations
+              define allowed: [user]
+              define viewer: [user:*] and allowed
+              define can_view: viewer
+        tuples:
+          - user: user:jon
+            relation: allowed
+            object: document:1
+          - user: user:*
+            relation: viewer
+            object: document:1
+          - user: user:*
+            relation: viewer
+            object: document:2
+        checkAssertions:
+          - name: jon_can_view_doc1_allowed_and_wildcard
+            tuple:
+              user: user:jon
+              relation: can_view
+              object: document:1
+            expectation: true
+          - name: bob_denied_doc2_not_allowed
+            tuple:
+              user: user:bob
+              relation: can_view
+              object: document:2
+            expectation: false
+          - name: jon_denied_doc2_not_allowed
+            tuple:
+              user: user:jon
+              relation: can_view
+              object: document:2
+            expectation: false
+        listUsersAssertions:
+          - request:
+              object: document:1
+              relation: can_view
+              filters:
+                - user
+            expectation:
+              - user:jon
+
+  # ---------------------------------------------------------------------------
+  # this_and_intersection
+  # Pattern: [user] and writer
+  # Direct tuple assignment combined with intersection.
+  # ---------------------------------------------------------------------------
+  - name: this_and_intersection
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type document
+            relations
+              define writer: [user]
+              define viewer: [user] and writer
+        tuples:
+          # aardvark: both viewer tuple and writer
+          - user: user:aardvark
+            relation: viewer
+            object: document:1
+          - user: user:aardvark
+            relation: writer
+            object: document:1
+          # badger: only viewer tuple (no writer)
+          - user: user:badger
+            relation: viewer
+            object: document:2
+          # cheetah: only writer (no viewer tuple)
+          - user: user:cheetah
+            relation: writer
+            object: document:3
+        checkAssertions:
+          - name: aardvark_has_both_viewer_and_writer
+            tuple:
+              user: user:aardvark
+              relation: viewer
+              object: document:1
+            expectation: true
+          - name: badger_only_viewer_missing_writer
+            tuple:
+              user: user:badger
+              relation: viewer
+              object: document:2
+            expectation: false
+          - name: cheetah_only_writer_missing_viewer
+            tuple:
+              user: user:cheetah
+              relation: viewer
+              object: document:3
+            expectation: false
+
+  # ---------------------------------------------------------------------------
+  # intersection_with_ttu_union
+  # Pattern: viewer and (member from group or owner from group)
+  # Intersection where one operand is a union of TTU patterns.
+  # ---------------------------------------------------------------------------
+  - name: intersection_with_ttu_union
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type group
+            relations
+              define owner: [user]
+              define member: [user]
+
+          type folder
+            relations
+              define group: [group]
+              define viewer: [user]
+              define can_view: viewer and (member from group or owner from group)
+        tuples:
+          # Group membership
+          - user: user:alice
+            relation: member
+            object: group:engineering
+          - user: user:bob
+            relation: owner
+            object: group:engineering
+          # Folder -> Group link
+          - user: group:engineering
+            relation: group
+            object: folder:docs
+          # Viewer relations on folder
+          - user: user:alice
+            relation: viewer
+            object: folder:docs
+          - user: user:bob
+            relation: viewer
+            object: folder:docs
+          - user: user:charlie
+            relation: viewer
+            object: folder:docs
+          # Diana is member of group but NOT viewer of folder
+          - user: user:diana
+            relation: member
+            object: group:engineering
+        checkAssertions:
+          - name: alice_allowed_viewer_and_member
+            tuple:
+              user: user:alice
+              relation: can_view
+              object: folder:docs
+            expectation: true
+          - name: bob_allowed_viewer_and_owner
+            tuple:
+              user: user:bob
+              relation: can_view
+              object: folder:docs
+            expectation: true
+          - name: charlie_denied_viewer_but_not_in_group
+            tuple:
+              user: user:charlie
+              relation: can_view
+              object: folder:docs
+            expectation: false
+          - name: diana_denied_member_but_not_viewer
+            tuple:
+              user: user:diana
+              relation: can_view
+              object: folder:docs
+            expectation: false
+          - name: unknown_denied_no_relations
+            tuple:
+              user: user:unknown
+              relation: can_view
+              object: folder:docs
+            expectation: false
+
+  # ---------------------------------------------------------------------------
+  # intersection_with_mixed_union
+  # Pattern: editor and (admin or owner from org)
+  # Intersection where one operand mixes a direct relation and a TTU.
+  # ---------------------------------------------------------------------------
+  - name: intersection_with_mixed_union
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type org
+            relations
+              define owner: [user]
+
+          type document
+            relations
+              define org: [org]
+              define editor: [user]
+              define admin: [user]
+              define can_edit: editor and (admin or owner from org)
+        tuples:
+          # Org ownership
+          - user: user:ceo
+            relation: owner
+            object: org:acme
+          # Document -> Org link
+          - user: org:acme
+            relation: org
+            object: document:report
+          # Editor relations
+          - user: user:alice
+            relation: editor
+            object: document:report
+          - user: user:bob
+            relation: editor
+            object: document:report
+          - user: user:ceo
+            relation: editor
+            object: document:report
+          - user: user:charlie
+            relation: editor
+            object: document:report
+          # Admin relation (direct)
+          - user: user:alice
+            relation: admin
+            object: document:report
+        checkAssertions:
+          - name: alice_allowed_via_admin
+            tuple:
+              user: user:alice
+              relation: can_edit
+              object: document:report
+            expectation: true
+          - name: ceo_allowed_via_org_owner
+            tuple:
+              user: user:ceo
+              relation: can_edit
+              object: document:report
+            expectation: true
+          - name: bob_denied_not_admin_not_org_owner
+            tuple:
+              user: user:bob
+              relation: can_edit
+              object: document:report
+            expectation: false
+          - name: charlie_denied_not_admin_not_org_owner
+            tuple:
+              user: user:charlie
+              relation: can_edit
+              object: document:report
+            expectation: false

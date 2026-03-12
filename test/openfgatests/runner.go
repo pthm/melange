@@ -2,9 +2,11 @@ package openfgatests
 
 import (
 	"context"
+	"embed"
 	"fmt"
 	"math"
 	"regexp"
+	"strings"
 	"testing"
 
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
@@ -15,6 +17,9 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 	"sigs.k8s.io/yaml"
 )
+
+//go:embed testdata/*.yaml
+var localTests embed.FS
 
 const writeMaxChunkSize = 40
 
@@ -91,27 +96,63 @@ type testFile struct {
 	Tests []TestCase `json:"tests"`
 }
 
-// LoadTests loads all test cases from the embedded OpenFGA test files.
+// loadTestsFrom reads a YAML test file from fs and returns its test cases.
+// If prefix is non-empty, each test name is prefixed with it.
+func loadTestsFrom(fs embed.FS, path, prefix string) ([]TestCase, error) {
+	b, err := fs.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+
+	var tf testFile
+	if err := yaml.Unmarshal(b, &tf); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	}
+
+	if prefix != "" {
+		for i := range tf.Tests {
+			tf.Tests[i].Name = prefix + tf.Tests[i].Name
+		}
+	}
+
+	return tf.Tests, nil
+}
+
+// LoadTests loads all test cases from the embedded OpenFGA test files
+// and any local melange-specific YAML test files in testdata/.
 func LoadTests() ([]TestCase, error) {
-	files := []string{
+	// 1. Official OpenFGA tests
+	officialFiles := []string{
 		"tests/consolidated_1_1_tests.yaml",
 		// "tests/abac_tests.yaml", // We do not support ABAC tests yet so this remains commented out
 	}
 
 	var allTests []TestCase
 
-	for _, file := range files {
-		b, err := assets.EmbedTests.ReadFile(file)
+	for _, file := range officialFiles {
+		tests, err := loadTestsFrom(assets.EmbedTests, file, "")
 		if err != nil {
-			return nil, fmt.Errorf("reading %s: %w", file, err)
+			return nil, err
+		}
+		allTests = append(allTests, tests...)
+	}
+
+	// 2. Local melange-specific tests (prefixed with "melange/")
+	localEntries, err := localTests.ReadDir("testdata")
+	if err != nil {
+		return nil, fmt.Errorf("reading local testdata: %w", err)
+	}
+
+	for _, entry := range localEntries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".yaml") {
+			continue
 		}
 
-		var tf testFile
-		if err := yaml.Unmarshal(b, &tf); err != nil {
-			return nil, fmt.Errorf("parsing %s: %w", file, err)
+		tests, err := loadTestsFrom(localTests, "testdata/"+entry.Name(), "melange/")
+		if err != nil {
+			return nil, err
 		}
-
-		allTests = append(allTests, tf.Tests...)
+		allTests = append(allTests, tests...)
 	}
 
 	return allTests, nil
