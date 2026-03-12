@@ -112,11 +112,11 @@ func GenerateSQL(analyses []RelationAnalysis, inline InlineSQLData) (GeneratedSQ
 
 // functionName returns the name for a specialized check function.
 func functionName(objectType, relation string) string {
-	return fmt.Sprintf("check_%s_%s", sanitizeIdentifier(objectType), sanitizeIdentifier(relation))
+	return strings.ToLower(fmt.Sprintf("check_%s_%s", sanitizeIdentifier(objectType), sanitizeIdentifier(relation)))
 }
 
 func functionNameNoWildcard(objectType, relation string) string {
-	return fmt.Sprintf("check_%s_%s_no_wildcard", sanitizeIdentifier(objectType), sanitizeIdentifier(relation))
+	return strings.ToLower(fmt.Sprintf("check_%s_%s_no_wildcard", sanitizeIdentifier(objectType), sanitizeIdentifier(relation)))
 }
 
 // sanitizeIdentifier converts a type/relation name to a valid SQL identifier.

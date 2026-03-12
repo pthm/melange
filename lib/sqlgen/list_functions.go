@@ -1,6 +1,9 @@
 package sqlgen
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // ListGeneratedSQL contains all SQL generated for list functions.
 // This is separate from check function generation to keep concerns isolated.
@@ -87,11 +90,11 @@ func buildAnalysisLookup(analyses []RelationAnalysis) map[string]*RelationAnalys
 }
 
 func listObjectsFunctionName(objectType, relation string) string {
-	return ListObjectsFunctionName(objectType, relation)
+	return strings.ToLower(ListObjectsFunctionName(objectType, relation))
 }
 
 func listSubjectsFunctionName(objectType, relation string) string {
-	return ListSubjectsFunctionName(objectType, relation)
+	return strings.ToLower(ListSubjectsFunctionName(objectType, relation))
 }
 
 // generateListObjectsFunctionWithLookup generates a list_objects function with analysis lookup for TTU optimization.
