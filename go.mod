@@ -18,7 +18,7 @@ require (
 	github.com/openfga/api/proto v0.0.0-20260122164422-25e22cb1875b
 	github.com/openfga/language/pkg/go v0.2.0-beta.2.0.20251027165255-0f8f255e5f6c
 	github.com/openfga/openfga v1.11.3
-	github.com/pthm/melange/melange v0.7.0
+	github.com/pthm/melange/melange v0.7.1
 	github.com/spf13/viper v1.20.1
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.40.0
