@@ -667,6 +667,12 @@ func RunTest(t *testing.T, _ *Client, tc TestCase) {
 						}
 					})
 				}
+
+				// Run derived list objects assertions (generated from check assertions)
+				runDerivedListObjectsAssertions(t, ctx, client, storeID, modelID, stage.CheckAssertions)
+
+				// Run derived list users assertions (generated from check assertions)
+				runDerivedListUsersAssertions(t, ctx, client, storeID, modelID, stage.CheckAssertions)
 			})
 		}
 	})

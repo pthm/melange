@@ -314,16 +314,52 @@ func isParentRelationComplex(plan ListPlan, parent ListParentRelationData) bool 
 	return false
 }
 
+// collectParentSatisfyingRelations collects all satisfying relations for the parent relation
+// across all parent types. For implied relations like "can_read: member" on organization,
+// this returns ["can_read", "member"] so that tuple lookups match actual tuples.
+func collectParentSatisfyingRelations(plan ListPlan, parent ListParentRelationData) []string {
+	if plan.AnalysisLookup == nil || len(parent.AllowedLinkingTypesSlice) == 0 {
+		return []string{parent.Relation}
+	}
+
+	seen := make(map[string]bool)
+	var result []string
+
+	for _, parentType := range parent.AllowedLinkingTypesSlice {
+		key := parentType + "." + parent.Relation
+		analysis := plan.AnalysisLookup[key]
+
+		rels := []string{parent.Relation}
+		if analysis != nil && len(analysis.SatisfyingRelations) > 0 {
+			rels = analysis.SatisfyingRelations
+		}
+
+		for _, rel := range rels {
+			if !seen[rel] {
+				seen[rel] = true
+				result = append(result, rel)
+			}
+		}
+	}
+
+	return result
+}
+
 // buildListSubjectsRecursiveTTUBlockParentClosure builds a TTU block using parent closure optimization.
 // This scans for direct grants on parent ancestors - only correct for simple parent relations.
 func buildListSubjectsRecursiveTTUBlockParentClosure(plan ListPlan, parent ListParentRelationData) TypedQueryBlock {
 	exclusions := buildExclusionInput(plan.Analysis, ObjectID, SubjectType, Col{Table: "t", Column: "subject_id"})
 
+	// Collect satisfying relations for the parent relation across all parent types.
+	// For implied relations like "can_read: member", we need to look up tuples with
+	// any relation that satisfies "can_read" (e.g., "member"), not just "can_read" itself.
+	satisfyingRelations := collectParentSatisfyingRelations(plan, parent)
+
 	// Build query that scans for grants on parent ancestors
 	// parent_closure CTE returns (subject_type, subject_id, depth) where subject is the parent object
 	whereConditions := []Expr{
 		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
-		Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(parent.Relation)},
+		In{Expr: Col{Table: "t", Column: "relation"}, Values: satisfyingRelations},
 		NoUserset{Source: Col{Table: "t", Column: "subject_id"}},
 	}
 
