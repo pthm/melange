@@ -375,13 +375,17 @@ func UsersetTable(rows []ValuesRow, alias string) TableExpr {
 // =============================================================================
 
 // Ident sanitizes an identifier for use in SQL.
-// Replaces non-alphanumeric characters with underscores.
+// Replaces non-alphanumeric characters with underscores and folds to lowercase
+// to match PostgreSQL's behavior with unquoted identifiers.
 func Ident(name string) string {
 	var result strings.Builder
 	for _, r := range name {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_':
 			result.WriteRune(r)
-		} else {
+		case r >= 'A' && r <= 'Z':
+			result.WriteRune(r + ('a' - 'A'))
+		default:
 			result.WriteRune('_')
 		}
 	}
