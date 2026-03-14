@@ -1302,7 +1302,7 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 					continue
 				}
 				for _, pattern := range relAnalysis.UsersetPatterns {
-					key := pattern.SubjectType + "#" + pattern.SubjectRelation
+					key := rel + "::" + pattern.SubjectType + "#" + pattern.SubjectRelation
 					if !seen[key] {
 						seen[key] = true
 						// Copy the pattern and set SourceRelation to the closure relation
