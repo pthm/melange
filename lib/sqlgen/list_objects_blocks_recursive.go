@@ -25,7 +25,11 @@ func BuildListObjectsRecursiveBlocks(plan ListPlan) (RecursiveBlockSet, error) {
 	selfRefSQL := buildSelfReferentialLinkingRelations(parentRelations)
 	selfRefLinkingRelations := dequoteLinkingRelations(selfRefSQL)
 
-	baseBlocks, err := buildRecursiveBaseBlocks(plan, parentRelations)
+	// Compute which relations should propagate through the recursive step.
+	// Only relations that satisfy a self-referential TTU target should propagate.
+	propagatableRelations := computePropagatableRelations(plan, parentRelations)
+
+	baseBlocks, err := buildRecursiveBaseBlocks(plan, parentRelations, propagatableRelations)
 	if err != nil {
 		return RecursiveBlockSet{}, err
 	}
@@ -43,14 +47,81 @@ func BuildListObjectsRecursiveBlocks(plan ListPlan) (RecursiveBlockSet, error) {
 	return result, nil
 }
 
+// computePropagatableRelations returns the set of relations whose results should
+// seed the recursive step. A relation is propagatable if it satisfies any relation
+// that has a self-referential TTU pattern. For example, with "can_view: viewer or
+// folder_viewer" where viewer has "viewer from parent", the propagatable set is
+// {viewer, editor, manager} — relations that satisfy "viewer". folder_viewer is
+// excluded because it does not satisfy any TTU-bearing relation.
+func computePropagatableRelations(plan ListPlan, parentRelations []ListParentRelationData) map[string]bool {
+	result := make(map[string]bool)
+
+	for _, p := range parentRelations {
+		if !p.IsSelfReferential {
+			continue
+		}
+		ttuRelation := p.Relation // e.g., "viewer"
+
+		if plan.AnalysisLookup != nil {
+			key := plan.ObjectType + "." + ttuRelation
+			if relAnalysis, ok := plan.AnalysisLookup[key]; ok {
+				for _, sat := range relAnalysis.SatisfyingRelations {
+					result[sat] = true
+				}
+			}
+		}
+
+		result[ttuRelation] = true
+	}
+
+	return result
+}
+
+// anyRelationPropagatable checks if any relation in the list is in the propagatable set.
+func anyRelationPropagatable(relations []string, propagatable map[string]bool) bool {
+	for _, r := range relations {
+		if propagatable[r] {
+			return true
+		}
+	}
+	return false
+}
+
 // buildRecursiveBaseBlocks builds the base case blocks for the recursive CTE.
-func buildRecursiveBaseBlocks(plan ListPlan, parentRelations []ListParentRelationData) ([]TypedQueryBlock, error) {
+// Each block is tagged with Propagatable based on whether its source relation
+// satisfies a self-referential TTU target.
+func buildRecursiveBaseBlocks(plan ListPlan, parentRelations []ListParentRelationData, propagatable map[string]bool) ([]TypedQueryBlock, error) {
 	blocks := make([]TypedQueryBlock, 0, 8)
 
-	blocks = append(blocks, buildRecursiveDirectBlock(plan))
-	blocks = append(blocks, buildRecursiveComplexClosureBlocks(plan)...)
-	blocks = append(blocks, buildRecursiveIntersectionClosureBlocks(plan)...)
-	blocks = append(blocks, buildRecursiveUsersetPatternBlocks(plan)...)
+	directBlock := buildRecursiveDirectBlock(plan)
+	directBlock.Propagatable = anyRelationPropagatable(plan.RelationList, propagatable)
+	blocks = append(blocks, directBlock)
+
+	for _, rel := range plan.ComplexClosure {
+		block := buildRecursiveComplexClosureBlock(plan, rel)
+		block.Propagatable = propagatable[rel]
+		blocks = append(blocks, block)
+	}
+
+	for _, rel := range plan.Analysis.IntersectionClosureRelations {
+		block := buildRecursiveIntersectionClosureBlock(plan, rel)
+		block.Propagatable = propagatable[rel]
+		blocks = append(blocks, block)
+	}
+
+	patterns := buildListUsersetPatternInputs(plan.Analysis)
+	for _, pattern := range patterns {
+		var block TypedQueryBlock
+		if pattern.IsComplex {
+			block = buildRecursiveComplexUsersetBlock(plan, pattern)
+		} else {
+			block = buildRecursiveSimpleUsersetBlock(plan, pattern)
+		}
+		block.Propagatable = anyRelationPropagatable(pattern.SourceRelations, propagatable)
+		blocks = append(blocks, block)
+	}
+
+	// Cross-type TTU blocks are non-propagatable (one-hop, not self-referential).
 	blocks = append(blocks, buildCrossTypeTTUBlocks(plan, parentRelations)...)
 
 	return blocks, nil
@@ -79,88 +150,51 @@ func buildRecursiveDirectBlock(plan ListPlan) TypedQueryBlock {
 	}
 }
 
-// buildRecursiveComplexClosureBlocks builds blocks for complex closure relations.
-func buildRecursiveComplexClosureBlocks(plan ListPlan) []TypedQueryBlock {
-	if len(plan.ComplexClosure) == 0 {
-		return nil
-	}
-
-	var blocks []TypedQueryBlock
-	for _, rel := range plan.ComplexClosure {
-		q := Tuples("t").
-			ObjectType(plan.ObjectType).
-			Relations(rel).
-			Where(
-				Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
-				In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
-				SubjectIDMatch(Col{Table: "t", Column: "subject_id"}, SubjectID, plan.AllowWildcard),
-				CheckPermission{
-					Subject:     SubjectParams(),
-					Relation:    rel,
-					Object:      LiteralObject(plan.ObjectType, Col{Table: "t", Column: "object_id"}),
-					ExpectAllow: true,
-				},
-			).
-			SelectCol("object_id").
-			Distinct()
-
-		for _, pred := range plan.Exclusions.BuildPredicates() {
-			q.Where(pred)
-		}
-
-		blocks = append(blocks, TypedQueryBlock{
-			Comments: []string{fmt.Sprintf("-- Complex closure relation: %s", rel)},
-			Query:    q.Build(),
-		})
-	}
-
-	return blocks
-}
-
-// buildRecursiveIntersectionClosureBlocks builds blocks for intersection closure relations.
-func buildRecursiveIntersectionClosureBlocks(plan ListPlan) []TypedQueryBlock {
-	if len(plan.Analysis.IntersectionClosureRelations) == 0 {
-		return nil
-	}
-
-	var blocks []TypedQueryBlock
-	for _, rel := range plan.Analysis.IntersectionClosureRelations {
-		funcName := listObjectsFunctionName(plan.ObjectType, rel)
-		stmt := SelectStmt{
-			ColumnExprs: []Expr{Col{Table: "icr", Column: "object_id"}},
-			FromExpr: FunctionCallExpr{
-				Name:  funcName,
-				Args:  []Expr{SubjectType, SubjectID, Null{}, Null{}},
-				Alias: "icr",
+// buildRecursiveComplexClosureBlock builds a block for a single complex closure relation.
+func buildRecursiveComplexClosureBlock(plan ListPlan, rel string) TypedQueryBlock {
+	q := Tuples("t").
+		ObjectType(plan.ObjectType).
+		Relations(rel).
+		Where(
+			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
+			In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
+			SubjectIDMatch(Col{Table: "t", Column: "subject_id"}, SubjectID, plan.AllowWildcard),
+			CheckPermission{
+				Subject:     SubjectParams(),
+				Relation:    rel,
+				Object:      LiteralObject(plan.ObjectType, Col{Table: "t", Column: "object_id"}),
+				ExpectAllow: true,
 			},
-		}
+		).
+		SelectCol("object_id").
+		Distinct()
 
-		blocks = append(blocks, TypedQueryBlock{
-			Comments: []string{fmt.Sprintf("-- Intersection closure: %s", rel)},
-			Query:    stmt,
-		})
+	for _, pred := range plan.Exclusions.BuildPredicates() {
+		q.Where(pred)
 	}
 
-	return blocks
+	return TypedQueryBlock{
+		Comments: []string{fmt.Sprintf("-- Complex closure relation: %s", rel)},
+		Query:    q.Build(),
+	}
 }
 
-// buildRecursiveUsersetPatternBlocks builds blocks for userset patterns.
-func buildRecursiveUsersetPatternBlocks(plan ListPlan) []TypedQueryBlock {
-	patterns := buildListUsersetPatternInputs(plan.Analysis)
-	if len(patterns) == 0 {
-		return nil
+// buildRecursiveIntersectionClosureBlock builds a block for a single intersection closure relation.
+func buildRecursiveIntersectionClosureBlock(plan ListPlan, rel string) TypedQueryBlock {
+	funcName := listObjectsFunctionName(plan.ObjectType, rel)
+	stmt := SelectStmt{
+		ColumnExprs: []Expr{Col{Table: "icr", Column: "object_id"}},
+		FromExpr: FunctionCallExpr{
+			Name:  funcName,
+			Args:  []Expr{SubjectType, SubjectID, Null{}, Null{}},
+			Alias: "icr",
+		},
 	}
 
-	var blocks []TypedQueryBlock
-	for _, pattern := range patterns {
-		if pattern.IsComplex {
-			blocks = append(blocks, buildRecursiveComplexUsersetBlock(plan, pattern))
-		} else {
-			blocks = append(blocks, buildRecursiveSimpleUsersetBlock(plan, pattern))
-		}
+	return TypedQueryBlock{
+		Comments: []string{fmt.Sprintf("-- Intersection closure: %s", rel)},
+		Query:    stmt,
 	}
-
-	return blocks
 }
 
 // buildRecursiveComplexUsersetBlock builds a block for complex userset patterns.
@@ -284,6 +318,8 @@ func buildCrossTypeTTUBlocks(plan ListPlan, parentRelations []ListParentRelation
 }
 
 // buildRecursiveTTUBlock builds the recursive term block for self-referential TTU.
+// Filters on a.propagatable to ensure only results from TTU-bearing relations
+// seed the recursive step (e.g., folder_viewer results do NOT propagate).
 func buildRecursiveTTUBlock(plan ListPlan, linkingRelations []string) *TypedQueryBlock {
 	exclusions := buildExclusionInput(
 		plan.Analysis,
@@ -294,7 +330,7 @@ func buildRecursiveTTUBlock(plan ListPlan, linkingRelations []string) *TypedQuer
 
 	stmt := SelectStmt{
 		Distinct: true,
-		Columns:  []string{"child.object_id", "a.depth + 1 AS depth"},
+		Columns:  []string{"child.object_id", "a.depth + 1 AS depth", "TRUE AS propagatable"},
 		From:     "accessible",
 		Alias:    "a",
 		Joins: []JoinClause{
@@ -310,7 +346,10 @@ func buildRecursiveTTUBlock(plan ListPlan, linkingRelations []string) *TypedQuer
 				),
 			},
 		},
-		Where: Lt{Left: Col{Table: "a", Column: "depth"}, Right: Int(25)},
+		Where: And(
+			Col{Table: "a", Column: "propagatable"},
+			Lt{Left: Col{Table: "a", Column: "depth"}, Right: Int(25)},
+		),
 	}
 
 	if predicates := exclusions.BuildPredicates(); len(predicates) > 0 {
