@@ -459,3 +459,72 @@ tests:
               relation: can_edit
               object: document:report
             expectation: false
+
+  # ---------------------------------------------------------------------------
+  # closure_userset_all_relations
+  # Pattern: can_view: editor, editor: [user, group#member] or manager,
+  #          manager: [user, group#member]
+  # Verifies that list_objects expands group#member usersets for ALL relations
+  # in a computed permission's closure, not just the first one encountered.
+  # Regression test for: group#member userset expansion was deduplicated by
+  # subject pattern alone, causing list_objects to miss grant tuples on
+  # implied relations (e.g. manager) when a closer relation (e.g. editor)
+  # shared the same userset pattern.
+  # ---------------------------------------------------------------------------
+  - name: closure_userset_all_relations
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type group
+            relations
+              define member: [user, group#member]
+
+          type document
+            relations
+              define manager: [user, group#member]
+              define editor: [user, group#member] or manager
+              define can_view: editor
+        tuples:
+          # alice is a member of the engineering group
+          - user: user:alice
+            relation: member
+            object: group:engineering
+          # engineering group has MANAGER on doc1
+          - user: group:engineering#member
+            relation: manager
+            object: document:doc1
+          # engineering group has EDITOR on doc2
+          - user: group:engineering#member
+            relation: editor
+            object: document:doc2
+        checkAssertions:
+          - name: alice_can_view_doc1_via_manager
+            tuple:
+              user: user:alice
+              relation: can_view
+              object: document:doc1
+            expectation: true
+          - name: alice_can_view_doc2_via_editor
+            tuple:
+              user: user:alice
+              relation: can_view
+              object: document:doc2
+            expectation: true
+          - name: alice_cannot_view_doc3
+            tuple:
+              user: user:alice
+              relation: can_view
+              object: document:doc3
+            expectation: false
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: document
+              relation: can_view
+            expectation:
+              - document:doc1
+              - document:doc2
