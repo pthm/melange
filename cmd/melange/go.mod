@@ -10,7 +10,7 @@ retract (
 
 require (
 	github.com/lib/pq v1.10.9
-	github.com/pthm/melange v0.7.1
+	github.com/pthm/melange v0.7.2
 	github.com/spf13/cobra v1.10.2
 	sigs.k8s.io/yaml v1.6.0
 )
@@ -27,7 +27,7 @@ require (
 	github.com/openfga/api/proto v0.0.0-20260122164422-25e22cb1875b // indirect
 	github.com/openfga/language/pkg/go v0.2.0-beta.2.0.20251027165255-0f8f255e5f6c // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
-	github.com/pthm/melange/melange v0.7.0 // indirect
+	github.com/pthm/melange/melange v0.7.1 // indirect
 	github.com/sagikazarmark/locafero v0.9.0 // indirect
 	github.com/sourcegraph/conc v0.3.0 // indirect
 	github.com/spf13/afero v1.15.0 // indirect
