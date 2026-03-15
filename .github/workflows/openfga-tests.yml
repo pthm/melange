@@ -30,4 +30,14 @@ jobs:
         working-directory: test
         run: |
           go test -count=1 -timeout 5m -race -v \
+            -coverprofile=coverage-openfga.out -covermode=atomic \
+            -coverpkg=github.com/pthm/melange/... \
             -run "TestOpenFGA_" ./openfgatests/...
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./test/coverage-openfga.out
+          flags: integration
+          fail_ci_if_error: false

@@ -4,6 +4,7 @@
 ![GitHub Release](https://img.shields.io/github/v/release/pthm/melange)
 [![Go Reference](https://pkg.go.dev/badge/github.com/pthm/melange.svg)](https://pkg.go.dev/github.com/pthm/melange)
 [![Go Report Card](https://goreportcard.com/badge/github.com/pthm/melange)](https://goreportcard.com/report/github.com/pthm/melange)
+[![codecov](https://codecov.io/gh/pthm/melange/graph/badge.svg)](https://codecov.io/gh/pthm/melange)
 
 <img align="right" width="300" src="assets/mascot.png">
 

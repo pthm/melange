@@ -72,15 +72,15 @@ jobs:
         run: go run ./cmd/melange generate client --runtime go --schema test/testutil/testdata/schema.fga --output test/authz/ --package authz --id-type int64
 
       - name: Run unit tests (root module)
-        run: go test -short -race ./...
+        run: go test -short -race -coverprofile=coverage-root.out -covermode=atomic ./...
 
       - name: Run unit tests (melange core module)
         working-directory: melange
-        run: go test -short -race ./...
+        run: go test -short -race -coverprofile=coverage-runtime.out -covermode=atomic ./...
 
       - name: Run unit tests (cmd/melange module)
         working-directory: cmd/melange
-        run: go test -short -race ./...
+        run: go test -short -race -coverprofile=coverage-cmd.out -covermode=atomic ./...
 
       - name: Install TypeScript dependencies
         working-directory: clients/typescript
@@ -89,6 +89,14 @@ jobs:
       - name: Run TypeScript unit tests
         working-directory: clients/typescript
         run: pnpm test:unit
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./coverage-root.out,./melange/coverage-runtime.out,./cmd/melange/coverage-cmd.out
+          flags: unit
+          fail_ci_if_error: false
 
   integration-tests:
     name: Integration Tests (Go + TypeScript)
@@ -141,8 +149,16 @@ jobs:
 
       - name: Run Go integration tests
         working-directory: test
-        run: go test -timeout 5m -race -p 1 -parallel 1 ./...
+        run: go test -timeout 5m -race -p 1 -parallel 1 -coverprofile=coverage-integration.out -covermode=atomic -coverpkg=github.com/pthm/melange/... ./...
 
       - name: Run TypeScript integration tests
         working-directory: clients/typescript
         run: pnpm test
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v5
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          files: ./test/coverage-integration.out
+          flags: integration
+          fail_ci_if_error: false

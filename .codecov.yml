@@ -1,0 +1,47 @@
+codecov:
+  require_ci_to_pass: true
+
+coverage:
+  precision: 2
+  round: down
+  range: "50...90"
+
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 2%
+    patch:
+      default:
+        target: 80%
+
+comment:
+  layout: "reach,diff,flags,files"
+  behavior: default
+  require_changes: true
+
+ignore:
+  - "test/**"
+  - "docs/**"
+  - "clients/**"
+  - "cmd/melange/**"
+  - "bin/**"
+  - "scripts/**"
+  - "**/*_test.go"
+
+flags:
+  unit:
+    paths:
+      - "!test/"
+      - "!docs/"
+      - "!clients/"
+    carryforward: true
+  integration:
+    paths:
+      - "!docs/"
+      - "!clients/"
+    carryforward: true
+  runtime:
+    paths:
+      - "melange/"
+    carryforward: true
