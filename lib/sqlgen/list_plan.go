@@ -46,20 +46,6 @@ type ListPlan struct {
 	AnalysisLookup map[string]*RelationAnalysis
 }
 
-// BuildListObjectsPlan creates a plan for generating a list_objects function.
-func BuildListObjectsPlan(a RelationAnalysis, inline InlineSQLData) ListPlan {
-	plan := buildBasePlan(a, inline, listObjectsFunctionName(a.ObjectType, a.Relation), nil)
-	if a.Features.HasExclusion {
-		plan.Exclusions = buildExclusionInput(
-			a,
-			Col{Table: "t", Column: "object_id"},
-			SubjectType,
-			SubjectID,
-		)
-	}
-	return plan
-}
-
 // BuildListObjectsPlanWithLookup creates a plan with analysis lookup for TTU optimization.
 func BuildListObjectsPlanWithLookup(a RelationAnalysis, inline InlineSQLData, lookup map[string]*RelationAnalysis) ListPlan {
 	plan := buildBasePlan(a, inline, listObjectsFunctionName(a.ObjectType, a.Relation), lookup)
@@ -70,23 +56,6 @@ func BuildListObjectsPlanWithLookup(a RelationAnalysis, inline InlineSQLData, lo
 			SubjectType,
 			SubjectID,
 		)
-	}
-	return plan
-}
-
-// BuildListSubjectsPlan creates a plan for generating a list_subjects function.
-func BuildListSubjectsPlan(a RelationAnalysis, inline InlineSQLData) ListPlan {
-	plan := buildBasePlan(a, inline, listSubjectsFunctionName(a.ObjectType, a.Relation), nil)
-	if a.Features.HasExclusion {
-		plan.Exclusions = buildExclusionInput(
-			a,
-			ObjectID,
-			Col{Table: "t", Column: "subject_type"},
-			Col{Table: "t", Column: "subject_id"},
-		)
-		// Enable CTE optimization when eligible and relation has userset patterns
-		// (JOIN expansion benefits from precomputed exclusions)
-		plan.UseCTEExclusion = plan.Exclusions.CanUseCTEOptimization() && a.Features.HasUserset
 	}
 	return plan
 }

@@ -432,49 +432,6 @@ func (c *Client) ListUsers(ctx context.Context, req *openfgav1.ListUsersRequest,
 	}, nil
 }
 
-// StreamedListObjects returns a stream of objects. For testing purposes,
-// this returns a mock stream that yields results from ListObjects.
-func (c *Client) StreamedListObjects(ctx context.Context, req *openfgav1.StreamedListObjectsRequest, opts ...grpc.CallOption) (openfgav1.OpenFGAService_StreamedListObjectsClient, error) {
-	// Convert to regular ListObjectsRequest
-	listReq := &openfgav1.ListObjectsRequest{
-		StoreId:              req.GetStoreId(),
-		AuthorizationModelId: req.GetAuthorizationModelId(),
-		Type:                 req.GetType(),
-		Relation:             req.GetRelation(),
-		User:                 req.GetUser(),
-		ContextualTuples:     req.GetContextualTuples(),
-		Context:              req.GetContext(),
-	}
-
-	resp, err := c.ListObjects(ctx, listReq)
-	if err != nil {
-		return nil, err
-	}
-
-	return &streamedListObjectsClient{
-		objects: resp.Objects,
-		index:   0,
-	}, nil
-}
-
-// streamedListObjectsClient is a mock implementation of the streaming interface.
-type streamedListObjectsClient struct {
-	grpc.ClientStream
-	objects []string
-	index   int
-}
-
-func (s *streamedListObjectsClient) Recv() (*openfgav1.StreamedListObjectsResponse, error) {
-	if s.index >= len(s.objects) {
-		return nil, nil // EOF
-	}
-	obj := s.objects[s.index]
-	s.index++
-	return &openfgav1.StreamedListObjectsResponse{
-		Object: obj,
-	}, nil
-}
-
 // loadModel loads a model's type definitions into the database using the Migrator.
 func (c *Client) loadModel(ctx context.Context, db *sql.DB, m *model) error {
 	if m == nil {
@@ -690,13 +647,7 @@ var _ interface {
 	Check(context.Context, *openfgav1.CheckRequest, ...grpc.CallOption) (*openfgav1.CheckResponse, error)
 	ListUsers(context.Context, *openfgav1.ListUsersRequest, ...grpc.CallOption) (*openfgav1.ListUsersResponse, error)
 	ListObjects(context.Context, *openfgav1.ListObjectsRequest, ...grpc.CallOption) (*openfgav1.ListObjectsResponse, error)
-	StreamedListObjects(context.Context, *openfgav1.StreamedListObjectsRequest, ...grpc.CallOption) (openfgav1.OpenFGAService_StreamedListObjectsClient, error)
 } = (*Client)(nil)
-
-// DB returns the underlying database connection.
-func (c *Client) DB() *sql.DB {
-	return c.sharedDB
-}
 
 func (c *Client) storeDB() (*sql.DB, error) {
 	if c.sharedDB != nil {

@@ -21,7 +21,6 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/pthm/melange/melange"
 	"github.com/pthm/melange/pkg/clientgen"
 	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/pkg/parser"
@@ -545,21 +544,6 @@ func replaceDBName(dsn, newDB string) string {
 		}
 	}
 	return dsn
-}
-
-// Checker returns a new Checker connected to the given database.
-func Checker(db *sql.DB) *melange.Checker {
-	return melange.NewChecker(db)
-}
-
-// SchemaFGA returns the embedded FGA schema used for tests.
-func SchemaFGA() string {
-	return schemaFGA
-}
-
-// DomainTablesSQL returns the embedded SQL for creating domain tables.
-func DomainTablesSQL() string {
-	return domainTablesSQL
 }
 
 // TuplesViewSQL returns the embedded SQL for creating the tuples view.

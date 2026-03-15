@@ -13,11 +13,6 @@ type RecursiveBlockSet struct {
 	SelfRefLinkingRelations []string
 }
 
-// HasRecursive returns true if there is a recursive block.
-func (r RecursiveBlockSet) HasRecursive() bool {
-	return r.RecursiveBlock != nil
-}
-
 // BuildListObjectsRecursiveBlocks builds blocks for a recursive list_objects function.
 // This handles TTU patterns with depth tracking and recursive CTEs.
 func BuildListObjectsRecursiveBlocks(plan ListPlan) (RecursiveBlockSet, error) {

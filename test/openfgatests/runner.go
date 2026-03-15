@@ -204,28 +204,6 @@ func RunTestsByPattern(t *testing.T, client *Client, pattern string) {
 	}
 }
 
-// RunTestsByNegativePattern runs tests whose names do NOT match the given regex pattern.
-func RunTestsByNegativePattern(t *testing.T, client *Client, pattern string) {
-	re, err := regexp.Compile(pattern)
-	require.NoError(t, err, "invalid pattern")
-
-	tests, err := LoadTests()
-	require.NoError(t, err, "loading tests")
-
-	var matched int
-	for _, tc := range tests {
-		if !re.MatchString(tc.Name) {
-			matched++
-			RunTest(t, client, tc)
-		}
-	}
-
-	if matched == 0 {
-		t.Logf("no tests matched negative pattern %q", pattern)
-	} else {
-		t.Logf("ran %d tests not matching pattern %q", matched, pattern)
-	}
-}
 
 // RunTestByName runs a specific test by exact name.
 func RunTestByName(t *testing.T, client *Client, name string) {

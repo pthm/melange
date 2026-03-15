@@ -15,11 +15,6 @@ type SelfRefUsersetBlockSet struct {
 	SelfCandidateBlock *TypedQueryBlock
 }
 
-// HasRecursive returns true if there is a recursive block.
-func (s SelfRefUsersetBlockSet) HasRecursive() bool {
-	return s.RecursiveBlock != nil
-}
-
 // BuildListObjectsSelfRefUsersetBlocks builds blocks for a self-referential userset list_objects function.
 func BuildListObjectsSelfRefUsersetBlocks(plan ListPlan) (SelfRefUsersetBlockSet, error) {
 	baseBlocks, err := buildSelfRefUsersetBaseBlocks(plan)
