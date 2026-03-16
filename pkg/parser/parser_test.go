@@ -2,6 +2,8 @@ package parser
 
 import (
 	"testing"
+
+	"github.com/pthm/melange/pkg/schema"
 )
 
 func TestExpandIntersection_TTUUnion(t *testing.T) {
@@ -31,31 +33,7 @@ type folder
 		t.Fatalf("failed to parse schema: %v", err)
 	}
 
-	// Find folder type
-	folderTypeIdx := -1
-	for i := range types {
-		if types[i].Name == "folder" {
-			folderTypeIdx = i
-			break
-		}
-	}
-	if folderTypeIdx < 0 {
-		t.Fatal("folder type not found")
-	}
-	folderType := types[folderTypeIdx]
-
-	// Find can_view relation
-	canViewRelIdx := -1
-	for i := range folderType.Relations {
-		if folderType.Relations[i].Name == "can_view" {
-			canViewRelIdx = i
-			break
-		}
-	}
-	if canViewRelIdx < 0 {
-		t.Fatal("can_view relation not found")
-	}
-	canViewRel := folderType.Relations[canViewRelIdx]
+	canViewRel := findRelation(t, types, "folder", "can_view")
 
 	// Verify intersection groups exist
 	if len(canViewRel.IntersectionGroups) == 0 {
@@ -276,4 +254,251 @@ type doc
 	if !hasWriter || !hasEditor {
 		t.Errorf("missing expected relations: writer=%v, editor=%v, got %v", hasWriter, hasEditor, g.Relations)
 	}
+}
+
+func TestExpandIntersection_DifferenceInIntersection(t *testing.T) {
+	// Pattern: viewer: writer and (editor but not owner)
+	// This should create an intersection group where one part has an exclusion.
+	schemaStr := `model
+  schema 1.1
+
+type user
+
+type doc
+  relations
+    define writer: [user]
+    define editor: [user]
+    define owner: [user]
+    define viewer: writer and (editor but not owner)`
+
+	types, err := ParseSchemaString(schemaStr)
+	if err != nil {
+		t.Fatalf("failed to parse schema: %v", err)
+	}
+
+	rel := findRelation(t, types, "doc", "viewer")
+
+	if len(rel.IntersectionGroups) != 1 {
+		t.Fatalf("expected 1 intersection group, got %d", len(rel.IntersectionGroups))
+	}
+
+	g := rel.IntersectionGroups[0]
+	if len(g.Relations) != 2 {
+		t.Errorf("expected 2 relations in group, got %d: %v", len(g.Relations), g.Relations)
+	}
+
+	// The "editor but not owner" part should create an exclusion entry
+	if g.Exclusions == nil || len(g.Exclusions["editor"]) == 0 {
+		t.Errorf("expected exclusion on editor, got Exclusions=%v", g.Exclusions)
+	}
+	if g.Exclusions != nil && len(g.Exclusions["editor"]) > 0 && g.Exclusions["editor"][0] != "owner" {
+		t.Errorf("expected editor excluded by owner, got %v", g.Exclusions["editor"])
+	}
+}
+
+func TestExpandIntersection_TTUDirect(t *testing.T) {
+	// Pattern: viewer: writer and (member from group)
+	// Intersection with a direct TTU (not in a union).
+	schemaStr := `model
+  schema 1.1
+
+type user
+
+type group
+  relations
+    define member: [user]
+
+type doc
+  relations
+    define group: [group]
+    define writer: [user]
+    define viewer: writer and member from group`
+
+	types, err := ParseSchemaString(schemaStr)
+	if err != nil {
+		t.Fatalf("failed to parse schema: %v", err)
+	}
+
+	rel := findRelation(t, types, "doc", "viewer")
+
+	if len(rel.IntersectionGroups) != 1 {
+		t.Fatalf("expected 1 intersection group, got %d", len(rel.IntersectionGroups))
+	}
+
+	g := rel.IntersectionGroups[0]
+	// Should have writer as a relation and member from group as a parent relation
+	if len(g.Relations) != 1 || g.Relations[0] != "writer" {
+		t.Errorf("expected [writer] relation, got %v", g.Relations)
+	}
+	if len(g.ParentRelations) != 1 {
+		t.Fatalf("expected 1 parent relation, got %d", len(g.ParentRelations))
+	}
+	if g.ParentRelations[0].Relation != "member" || g.ParentRelations[0].LinkingRelation != "group" {
+		t.Errorf("expected member from group, got %s from %s",
+			g.ParentRelations[0].Relation, g.ParentRelations[0].LinkingRelation)
+	}
+}
+
+func TestParseSchemaString_SubtractWithTTU(t *testing.T) {
+	// Pattern: viewer: reader but not (admin from parent)
+	// Exercises TTU in subtract (extractSubtractRelations).
+	schemaStr := `model
+  schema 1.1
+
+type user
+
+type folder
+  relations
+    define admin: [user]
+
+type doc
+  relations
+    define parent: [folder]
+    define reader: [user]
+    define viewer: reader but not admin from parent`
+
+	types, err := ParseSchemaString(schemaStr)
+	if err != nil {
+		t.Fatalf("failed to parse schema: %v", err)
+	}
+
+	rel := findRelation(t, types, "doc", "viewer")
+
+	// Should have excluded parent relation
+	if len(rel.ExcludedParentRelations) == 0 {
+		t.Error("expected excluded parent relation for 'admin from parent'")
+	}
+	if len(rel.ExcludedParentRelations) > 0 {
+		ep := rel.ExcludedParentRelations[0]
+		if ep.Relation != "admin" || ep.LinkingRelation != "parent" {
+			t.Errorf("expected admin from parent, got %s from %s", ep.Relation, ep.LinkingRelation)
+		}
+	}
+}
+
+func TestParseSchemaString_UnionFlattening(t *testing.T) {
+	// Pattern: viewer: [user] or editor or owner
+	// Multiple OR branches should all resolve.
+	schemaStr := `model
+  schema 1.1
+
+type user
+
+type doc
+  relations
+    define editor: [user]
+    define owner: [user]
+    define viewer: [user] or editor or owner`
+
+	types, err := ParseSchemaString(schemaStr)
+	if err != nil {
+		t.Fatalf("failed to parse schema: %v", err)
+	}
+
+	rel := findRelation(t, types, "doc", "viewer")
+
+	// viewer should have direct subject type refs and implied relations
+	if len(rel.SubjectTypeRefs) == 0 {
+		t.Error("expected direct subject type refs for viewer")
+	}
+	if len(rel.ImpliedBy) < 2 {
+		t.Errorf("expected at least 2 implied relations, got %d", len(rel.ImpliedBy))
+	}
+}
+
+func TestParseSchemaString_ErrorOnInvalid(t *testing.T) {
+	_, err := ParseSchemaString("not a valid schema")
+	if err == nil {
+		t.Error("expected error for invalid schema")
+	}
+}
+
+func TestParseSchemaString_EmptySchema(t *testing.T) {
+	schemaStr := `model
+  schema 1.1
+
+type user`
+
+	types, err := ParseSchemaString(schemaStr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(types) != 1 || types[0].Name != "user" {
+		t.Errorf("expected single 'user' type, got %v", types)
+	}
+}
+
+func TestParseSchemaString_WildcardSubject(t *testing.T) {
+	schemaStr := `model
+  schema 1.1
+
+type user
+
+type doc
+  relations
+    define public: [user:*]`
+
+	types, err := ParseSchemaString(schemaStr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rel := findRelation(t, types, "doc", "public")
+	hasWildcard := false
+	for _, ref := range rel.SubjectTypeRefs {
+		if ref.Wildcard {
+			hasWildcard = true
+		}
+	}
+	if !hasWildcard {
+		t.Error("expected wildcard subject type ref for [user:*]")
+	}
+}
+
+func TestParseSchemaString_UsersetSubjectType(t *testing.T) {
+	schemaStr := `model
+  schema 1.1
+
+type user
+
+type group
+  relations
+    define member: [user]
+
+type doc
+  relations
+    define viewer: [group#member]`
+
+	types, err := ParseSchemaString(schemaStr)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	rel := findRelation(t, types, "doc", "viewer")
+	found := false
+	for _, ref := range rel.SubjectTypeRefs {
+		if ref.Type == "group" && ref.Relation == "member" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected group#member in subject type refs, got %v", rel.SubjectTypeRefs)
+	}
+}
+
+// findRelation is a test helper that locates a relation by type and name.
+func findRelation(t *testing.T, types []schema.TypeDefinition, typeName, relName string) schema.RelationDefinition {
+	t.Helper()
+	for _, td := range types {
+		if td.Name == typeName {
+			for _, rel := range td.Relations {
+				if rel.Name == relName {
+					return rel
+				}
+			}
+			t.Fatalf("relation %s not found in type %s", relName, typeName)
+		}
+	}
+	t.Fatalf("type %s not found", typeName)
+	return schema.RelationDefinition{}
 }
