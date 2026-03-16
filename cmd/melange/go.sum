@@ -106,10 +106,10 @@ github.com/pelletier/go-toml/v2 v2.2.4 h1:mye9XuhQ6gvn5h28+VilKrrPoQVanw5PMw/TB0
 github.com/pelletier/go-toml/v2 v2.2.4/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8t9Stt+h56mCY=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRIccs7FGNTlIRMkT8wgtp5eCXdBlqhYGL6U=
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
-github.com/pthm/melange v0.7.2 h1:Grto0lpHlwqc3a5njBa/g1oeHxtdnMIMVauBtUiCpTg=
-github.com/pthm/melange v0.7.2/go.mod h1:lZh87J+0UcBDukdT1GKlDfW3IwAurDu2HRU+PErx7vw=
-github.com/pthm/melange/melange v0.7.1 h1:crZjbd2Z6cIxBQk+qgNMz1rw0VUrvAffqbY1fO3Cxv0=
-github.com/pthm/melange/melange v0.7.1/go.mod h1:yOlmfUhombY/H9Pg3iQaO9zV5ypJf/swiSd/M0N4eNc=
+github.com/pthm/melange v0.7.3 h1:0PrsnYl2v/vOxj/FdK6abNJ9uajRfzU0nSGWFFSQvsA=
+github.com/pthm/melange v0.7.3/go.mod h1:v3ioLy7AOHgiFfpRLqTrGSL7mih1ja1a6OOmreLLuzs=
+github.com/pthm/melange/melange v0.7.2 h1:7jT08Wa+LEWEarFIIO0nt0CX1Te8D62Z4sSeRUs3JWY=
+github.com/pthm/melange/melange v0.7.2/go.mod h1:yOlmfUhombY/H9Pg3iQaO9zV5ypJf/swiSd/M0N4eNc=
 github.com/rivo/uniseg v0.2.0/go.mod h1:J6wj4VEh+S6ZtnVlnTBMWIodfgj8LQOQFoIToxlJtxc=
 github.com/rivo/uniseg v0.4.7 h1:WUdvkW8uEhrYfLC4ZzdpI2ztxP1I582+49Oc5Mq64VQ=
 github.com/rivo/uniseg v0.4.7/go.mod h1:FN3SvrM+Zdj16jyLfmOkMNblXMcoc8DfTHruCPUcx88=
