@@ -1,0 +1,521 @@
+# Melange-specific tests: Multi-level organizational hierarchies
+# Adapted from Authzed examples (github, superuser schemas).
+# These test deep permission inheritance through type hierarchies,
+# layered roles, and combined TTU + userset patterns.
+#
+# Test names are prefixed with "melange/" by the loader.
+
+tests:
+  # ---------------------------------------------------------------------------
+  # layered_role_hierarchy
+  # Pattern: admin implies writer implies reader
+  # A three-level role chain using computed relations. Tests that the
+  # transitive closure correctly expands all implied permissions.
+  # Adapted from: basic-rebac (view = reader + edit)
+  # ---------------------------------------------------------------------------
+  - name: layered_role_hierarchy
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type document
+            relations
+              define admin: [user]
+              define writer: [user] or admin
+              define reader: [user] or writer
+        tuples:
+          - user: user:alice
+            relation: admin
+            object: document:report
+          - user: user:bob
+            relation: writer
+            object: document:report
+          - user: user:charlie
+            relation: reader
+            object: document:report
+        checkAssertions:
+          # alice (admin) gets all three roles
+          - name: admin_has_admin
+            tuple:
+              user: user:alice
+              relation: admin
+              object: document:report
+            expectation: true
+          - name: admin_implies_writer
+            tuple:
+              user: user:alice
+              relation: writer
+              object: document:report
+            expectation: true
+          - name: admin_implies_reader
+            tuple:
+              user: user:alice
+              relation: reader
+              object: document:report
+            expectation: true
+          # bob (writer) gets writer and reader, not admin
+          - name: writer_has_writer
+            tuple:
+              user: user:bob
+              relation: writer
+              object: document:report
+            expectation: true
+          - name: writer_implies_reader
+            tuple:
+              user: user:bob
+              relation: reader
+              object: document:report
+            expectation: true
+          - name: writer_not_admin
+            tuple:
+              user: user:bob
+              relation: admin
+              object: document:report
+            expectation: false
+          # charlie (reader) gets reader only
+          - name: reader_has_reader
+            tuple:
+              user: user:charlie
+              relation: reader
+              object: document:report
+            expectation: true
+          - name: reader_not_writer
+            tuple:
+              user: user:charlie
+              relation: writer
+              object: document:report
+            expectation: false
+          - name: reader_not_admin
+            tuple:
+              user: user:charlie
+              relation: admin
+              object: document:report
+            expectation: false
+          # diana has nothing
+          - name: no_access_not_reader
+            tuple:
+              user: user:diana
+              relation: reader
+              object: document:report
+            expectation: false
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: document
+              relation: reader
+            expectation:
+              - document:report
+          - request:
+              user: user:diana
+              type: document
+              relation: reader
+            expectation: []
+        listUsersAssertions:
+          - request:
+              object: document:report
+              relation: reader
+              filters:
+                - user
+            expectation:
+              - user:alice
+              - user:bob
+              - user:charlie
+          - request:
+              object: document:report
+              relation: admin
+              filters:
+                - user
+            expectation:
+              - user:alice
+
+  # ---------------------------------------------------------------------------
+  # org_team_repo
+  # Pattern: GitHub-style organization / team / repository hierarchy
+  # Org owners get admin on all repos. Team members can be granted writer.
+  # Admin implies writer implies reader.
+  # Adapted from: github schema
+  # ---------------------------------------------------------------------------
+  - name: org_team_repo
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type organization
+            relations
+              define owner: [user]
+              define member: [user] or owner
+
+          type team
+            relations
+              define member: [user]
+
+          type repository
+            relations
+              define org: [organization]
+              define admin: [user] or owner from org
+              define writer: [user, team#member] or admin
+              define reader: [user, team#member] or writer
+        tuples:
+          # Org ownership
+          - user: user:alice
+            relation: owner
+            object: organization:acme
+          # Team membership
+          - user: user:bob
+            relation: member
+            object: team:backend
+          - user: user:eve
+            relation: member
+            object: team:backend
+          # Repo -> Org link
+          - user: organization:acme
+            relation: org
+            object: repository:api
+          # Team userset grant: backend team members are writers
+          - user: team:backend#member
+            relation: writer
+            object: repository:api
+          # Direct grants
+          - user: user:charlie
+            relation: reader
+            object: repository:api
+          - user: user:diana
+            relation: admin
+            object: repository:api
+        checkAssertions:
+          # alice (org owner) gets admin via TTU, writer via admin, reader via writer
+          - name: org_owner_is_admin
+            tuple:
+              user: user:alice
+              relation: admin
+              object: repository:api
+            expectation: true
+          - name: org_owner_is_writer
+            tuple:
+              user: user:alice
+              relation: writer
+              object: repository:api
+            expectation: true
+          - name: org_owner_is_reader
+            tuple:
+              user: user:alice
+              relation: reader
+              object: repository:api
+            expectation: true
+          # bob (team member) is writer via userset, reader via writer, not admin
+          - name: team_member_is_writer
+            tuple:
+              user: user:bob
+              relation: writer
+              object: repository:api
+            expectation: true
+          - name: team_member_is_reader
+            tuple:
+              user: user:bob
+              relation: reader
+              object: repository:api
+            expectation: true
+          - name: team_member_not_admin
+            tuple:
+              user: user:bob
+              relation: admin
+              object: repository:api
+            expectation: false
+          # eve (also team member, same as bob)
+          - name: eve_team_member_is_writer
+            tuple:
+              user: user:eve
+              relation: writer
+              object: repository:api
+            expectation: true
+          # charlie (direct reader) is reader only
+          - name: direct_reader_is_reader
+            tuple:
+              user: user:charlie
+              relation: reader
+              object: repository:api
+            expectation: true
+          - name: direct_reader_not_writer
+            tuple:
+              user: user:charlie
+              relation: writer
+              object: repository:api
+            expectation: false
+          # diana (direct admin) gets all roles
+          - name: direct_admin_is_admin
+            tuple:
+              user: user:diana
+              relation: admin
+              object: repository:api
+            expectation: true
+          - name: direct_admin_is_reader
+            tuple:
+              user: user:diana
+              relation: reader
+              object: repository:api
+            expectation: true
+          # frank has nothing
+          - name: no_access_not_reader
+            tuple:
+              user: user:frank
+              relation: reader
+              object: repository:api
+            expectation: false
+        listObjectsAssertions:
+          - request:
+              user: user:bob
+              type: repository
+              relation: writer
+            expectation:
+              - repository:api
+          - request:
+              user: user:frank
+              type: repository
+              relation: reader
+            expectation: []
+        listUsersAssertions:
+          - request:
+              object: repository:api
+              relation: admin
+              filters:
+                - user
+            expectation:
+              - user:alice
+              - user:diana
+
+  # ---------------------------------------------------------------------------
+  # platform_superuser
+  # Pattern: platform admin overrides org and document permissions
+  # 3-level TTU chain: document -> organization -> platform
+  # Adapted from: superuser schema
+  # ---------------------------------------------------------------------------
+  - name: platform_superuser
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type platform
+            relations
+              define administrator: [user]
+              define super_admin: administrator
+
+          type organization
+            relations
+              define platform: [platform]
+              define owner: [user]
+              define admin: owner or super_admin from platform
+
+          type document
+            relations
+              define org: [organization]
+              define writer: [user]
+              define viewer: writer or admin from org
+        tuples:
+          # Platform admin
+          - user: user:superadmin
+            relation: administrator
+            object: platform:main
+          # Org -> Platform link
+          - user: platform:main
+            relation: platform
+            object: organization:acme
+          # Org owner
+          - user: user:alice
+            relation: owner
+            object: organization:acme
+          # Document -> Org link
+          - user: organization:acme
+            relation: org
+            object: document:secret
+          # Direct writer
+          - user: user:bob
+            relation: writer
+            object: document:secret
+        checkAssertions:
+          # superadmin can view document via: document -> org -> platform -> administrator
+          - name: superadmin_can_view_via_platform
+            tuple:
+              user: user:superadmin
+              relation: viewer
+              object: document:secret
+            expectation: true
+          # alice can view via: document -> org -> owner
+          - name: org_owner_can_view
+            tuple:
+              user: user:alice
+              relation: viewer
+              object: document:secret
+            expectation: true
+          # bob can view via direct writer grant
+          - name: writer_can_view
+            tuple:
+              user: user:bob
+              relation: viewer
+              object: document:secret
+            expectation: true
+          # superadmin is also org admin
+          - name: superadmin_is_org_admin
+            tuple:
+              user: user:superadmin
+              relation: admin
+              object: organization:acme
+            expectation: true
+          # charlie has no access
+          - name: no_access
+            tuple:
+              user: user:charlie
+              relation: viewer
+              object: document:secret
+            expectation: false
+          # superadmin can't view docs in orgs not on the platform
+          - name: superadmin_no_access_unlinked_org
+            tuple:
+              user: user:superadmin
+              relation: viewer
+              object: document:orphan
+            expectation: false
+        listObjectsAssertions:
+          - request:
+              user: user:superadmin
+              type: document
+              relation: viewer
+            expectation:
+              - document:secret
+          - request:
+              user: user:superadmin
+              type: organization
+              relation: admin
+            expectation:
+              - organization:acme
+
+  # ---------------------------------------------------------------------------
+  # multi_hop_ttu_distinct_types
+  # Pattern: 3-level TTU across distinct types: document -> folder -> org
+  # Each level adds its own direct grants, testing that TTU resolution
+  # correctly chains through the full hierarchy.
+  # Adapted from: google-iam (project -> instance -> database)
+  # ---------------------------------------------------------------------------
+  - name: multi_hop_ttu_distinct_types
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type org
+            relations
+              define member: [user]
+
+          type folder
+            relations
+              define org: [org]
+              define editor: [user] or member from org
+
+          type document
+            relations
+              define folder: [folder]
+              define viewer: [user] or editor from folder
+        tuples:
+          # Org members
+          - user: user:alice
+            relation: member
+            object: org:acme
+          # Folder -> Org link
+          - user: org:acme
+            relation: org
+            object: folder:shared
+          # Direct folder editor
+          - user: user:bob
+            relation: editor
+            object: folder:shared
+          # Document -> Folder link
+          - user: folder:shared
+            relation: folder
+            object: document:readme
+          # Direct document viewer
+          - user: user:charlie
+            relation: viewer
+            object: document:readme
+          # Second document in same folder
+          - user: folder:shared
+            relation: folder
+            object: document:changelog
+        checkAssertions:
+          # alice can view document via: document -> folder -> org -> member
+          - name: org_member_views_doc_via_three_hops
+            tuple:
+              user: user:alice
+              relation: viewer
+              object: document:readme
+            expectation: true
+          - name: org_member_views_second_doc
+            tuple:
+              user: user:alice
+              relation: viewer
+              object: document:changelog
+            expectation: true
+          # alice is also folder editor via org membership
+          - name: org_member_is_folder_editor
+            tuple:
+              user: user:alice
+              relation: editor
+              object: folder:shared
+            expectation: true
+          # bob can view document via: document -> folder -> editor (direct)
+          - name: folder_editor_views_doc
+            tuple:
+              user: user:bob
+              relation: viewer
+              object: document:readme
+            expectation: true
+          # charlie can view only via direct grant
+          - name: direct_viewer_sees_doc
+            tuple:
+              user: user:charlie
+              relation: viewer
+              object: document:readme
+            expectation: true
+          - name: direct_viewer_not_on_other_doc
+            tuple:
+              user: user:charlie
+              relation: viewer
+              object: document:changelog
+            expectation: false
+          # diana has nothing
+          - name: no_access
+            tuple:
+              user: user:diana
+              relation: viewer
+              object: document:readme
+            expectation: false
+          # orphan document (no folder) — nobody can view via TTU
+          - name: orphan_doc_no_ttu_access
+            tuple:
+              user: user:alice
+              relation: viewer
+              object: document:orphan
+            expectation: false
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: document
+              relation: viewer
+            expectation:
+              - document:readme
+              - document:changelog
+          - request:
+              user: user:charlie
+              type: document
+              relation: viewer
+            expectation:
+              - document:readme

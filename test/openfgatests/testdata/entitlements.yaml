@@ -1,0 +1,306 @@
+# Melange-specific tests: Entitlement and role-binding patterns
+# Adapted from Authzed examples (entitlements, google-iam schemas).
+# These test indirect permission chains through intermediary types like
+# entitlements and roles that bundle users and grant access to resources.
+#
+# Test names are prefixed with "melange/" by the loader.
+
+tests:
+  # ---------------------------------------------------------------------------
+  # entitlement_feature_gating
+  # Pattern: feature -> entitlement -> organization -> member
+  # A 3-hop TTU chain modeling SaaS feature gating through entitlement
+  # subscriptions. Tests that deep TTU resolution works correctly.
+  # Adapted from: entitlements schema
+  # ---------------------------------------------------------------------------
+  - name: entitlement_feature_gating
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type organization
+            relations
+              define member: [user]
+
+          type entitlement
+            relations
+              define org: [organization]
+              define subscriber: member from org
+
+          type feature
+            relations
+              define entitlement: [entitlement]
+              define access: subscriber from entitlement
+        tuples:
+          # Org members
+          - user: user:alice
+            relation: member
+            object: organization:acme
+          - user: user:bob
+            relation: member
+            object: organization:acme
+          - user: user:charlie
+            relation: member
+            object: organization:globex
+          # Entitlement -> Org links
+          - user: organization:acme
+            relation: org
+            object: entitlement:premium
+          - user: organization:globex
+            relation: org
+            object: entitlement:basic
+          # Feature -> Entitlement links
+          - user: entitlement:premium
+            relation: entitlement
+            object: feature:advanced_analytics
+          - user: entitlement:premium
+            relation: entitlement
+            object: feature:basic_reports
+          - user: entitlement:basic
+            relation: entitlement
+            object: feature:basic_reports
+        checkAssertions:
+          # alice (acme member, premium entitlement) can access both features
+          - name: acme_member_accesses_advanced_analytics
+            tuple:
+              user: user:alice
+              relation: access
+              object: feature:advanced_analytics
+            expectation: true
+          - name: acme_member_accesses_basic_reports
+            tuple:
+              user: user:alice
+              relation: access
+              object: feature:basic_reports
+            expectation: true
+          # bob (also acme member) has same access
+          - name: bob_acme_member_accesses_advanced
+            tuple:
+              user: user:bob
+              relation: access
+              object: feature:advanced_analytics
+            expectation: true
+          # charlie (globex member, basic entitlement) can access basic only
+          - name: globex_member_accesses_basic_reports
+            tuple:
+              user: user:charlie
+              relation: access
+              object: feature:basic_reports
+            expectation: true
+          - name: globex_member_denied_advanced_analytics
+            tuple:
+              user: user:charlie
+              relation: access
+              object: feature:advanced_analytics
+            expectation: false
+          # diana (no org) has no access
+          - name: no_org_no_access
+            tuple:
+              user: user:diana
+              relation: access
+              object: feature:basic_reports
+            expectation: false
+          # entitlement subscriber check (intermediate hop)
+          - name: alice_is_subscriber_of_premium
+            tuple:
+              user: user:alice
+              relation: subscriber
+              object: entitlement:premium
+            expectation: true
+          - name: charlie_not_subscriber_of_premium
+            tuple:
+              user: user:charlie
+              relation: subscriber
+              object: entitlement:premium
+            expectation: false
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: feature
+              relation: access
+            expectation:
+              - feature:advanced_analytics
+              - feature:basic_reports
+          - request:
+              user: user:charlie
+              type: feature
+              relation: access
+            expectation:
+              - feature:basic_reports
+          - request:
+              user: user:diana
+              type: feature
+              relation: access
+            expectation: []
+
+  # ---------------------------------------------------------------------------
+  # role_binding_intermediary
+  # Pattern: role type bundles users and is bound to resources at specific levels
+  # Users are assigned to roles. Roles are bound to resources. Permissions
+  # flow through the role intermediary via TTU. Combined with layered
+  # computed relations (admin -> editor -> viewer).
+  # Adapted from: google-iam role binding pattern
+  # ---------------------------------------------------------------------------
+  - name: role_binding_intermediary
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type role
+            relations
+              define assignee: [user]
+
+          type resource
+            relations
+              define admin_role: [role]
+              define editor_role: [role]
+              define viewer_role: [role]
+              define admin: assignee from admin_role
+              define editor: assignee from editor_role or admin
+              define viewer: assignee from viewer_role or editor
+        tuples:
+          # Role assignments
+          - user: user:alice
+            relation: assignee
+            object: role:admin_role_1
+          - user: user:bob
+            relation: assignee
+            object: role:editor_role_1
+          - user: user:charlie
+            relation: assignee
+            object: role:viewer_role_1
+          - user: user:diana
+            relation: assignee
+            object: role:viewer_role_1
+          # Role -> Resource bindings
+          - user: role:admin_role_1
+            relation: admin_role
+            object: resource:database
+          - user: role:editor_role_1
+            relation: editor_role
+            object: resource:database
+          - user: role:viewer_role_1
+            relation: viewer_role
+            object: resource:database
+          # Second resource with only viewer role bound
+          - user: role:viewer_role_1
+            relation: viewer_role
+            object: resource:cache
+        checkAssertions:
+          # alice (admin role) gets all three levels
+          - name: admin_role_gives_admin
+            tuple:
+              user: user:alice
+              relation: admin
+              object: resource:database
+            expectation: true
+          - name: admin_role_gives_editor
+            tuple:
+              user: user:alice
+              relation: editor
+              object: resource:database
+            expectation: true
+          - name: admin_role_gives_viewer
+            tuple:
+              user: user:alice
+              relation: viewer
+              object: resource:database
+            expectation: true
+          # bob (editor role) gets editor and viewer, not admin
+          - name: editor_role_gives_editor
+            tuple:
+              user: user:bob
+              relation: editor
+              object: resource:database
+            expectation: true
+          - name: editor_role_gives_viewer
+            tuple:
+              user: user:bob
+              relation: viewer
+              object: resource:database
+            expectation: true
+          - name: editor_role_not_admin
+            tuple:
+              user: user:bob
+              relation: admin
+              object: resource:database
+            expectation: false
+          # charlie (viewer role) gets viewer only
+          - name: viewer_role_gives_viewer
+            tuple:
+              user: user:charlie
+              relation: viewer
+              object: resource:database
+            expectation: true
+          - name: viewer_role_not_editor
+            tuple:
+              user: user:charlie
+              relation: editor
+              object: resource:database
+            expectation: false
+          # diana shares viewer role with charlie
+          - name: diana_viewer_role_gives_viewer
+            tuple:
+              user: user:diana
+              relation: viewer
+              object: resource:database
+            expectation: true
+          # alice has no role bound to cache, so no admin/editor there
+          - name: admin_no_access_to_unbound_resource
+            tuple:
+              user: user:alice
+              relation: admin
+              object: resource:cache
+            expectation: false
+          # charlie/diana have viewer on cache via viewer_role_1
+          - name: viewer_role_on_cache
+            tuple:
+              user: user:charlie
+              relation: viewer
+              object: resource:cache
+            expectation: true
+          # eve has no role
+          - name: no_role_no_access
+            tuple:
+              user: user:eve
+              relation: viewer
+              object: resource:database
+            expectation: false
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: resource
+              relation: viewer
+            expectation:
+              - resource:database
+          - request:
+              user: user:charlie
+              type: resource
+              relation: viewer
+            expectation:
+              - resource:database
+              - resource:cache
+        listUsersAssertions:
+          - request:
+              object: resource:database
+              relation: viewer
+              filters:
+                - user
+            expectation:
+              - user:alice
+              - user:bob
+              - user:charlie
+              - user:diana
+          - request:
+              object: resource:database
+              relation: admin
+              filters:
+                - user
+            expectation:
+              - user:alice

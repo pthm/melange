@@ -1,6 +1,10 @@
 package sqlgen
 
-import "strings"
+import (
+	"maps"
+	"slices"
+	"strings"
+)
 
 // =============================================================================
 // Recursive List Subjects Render Functions
@@ -124,7 +128,10 @@ func containsParentClosure(sql string) bool {
 
 // buildParentClosureCTESQL builds the recursive parent_closure CTE SQL.
 // This CTE walks the parent chain starting from the target object.
-// Returns (object_type, object_id, depth) for each ancestor in the parent chain.
+// Returns (subject_type, subject_id, depth) for each parent in the chain.
+// When multiple parent relations exist (e.g., viewer_role, editor_role, admin_role
+// from closure, or team + department from a union of TTUs), the CTE includes
+// ALL linking relations so that every TTU path is represented.
 func buildParentClosureCTESQL(plan ListPlan) string {
 	// Get the parent relations info from the plan
 	parentRelations := buildListParentRelations(plan.Analysis)
@@ -132,18 +139,27 @@ func buildParentClosureCTESQL(plan ListPlan) string {
 		return ""
 	}
 
-	// For simplicity, use the first parent relation's linking relation
-	// TODO: Handle multiple different linking relations if needed
-	parent := parentRelations[0]
+	// Collect all unique linking relations and allowed types across every parent relation.
+	linkingRelationSet := make(map[string]bool)
+	allowedTypeSet := make(map[string]bool)
+	for _, parent := range parentRelations {
+		linkingRelationSet[parent.LinkingRelation] = true
+		for _, t := range parent.AllowedLinkingTypesSlice {
+			allowedTypeSet[t] = true
+		}
+	}
+
+	linkingRelations := slices.Sorted(maps.Keys(linkingRelationSet))
+	allowedTypes := slices.Sorted(maps.Keys(allowedTypeSet))
 
 	// Base case: immediate parents (subject becomes the parent object)
 	baseWhere := []Expr{
 		Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 		Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
-		Eq{Left: Col{Table: "link", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
+		In{Expr: Col{Table: "link", Column: "relation"}, Values: linkingRelations},
 	}
-	if len(parent.AllowedLinkingTypesSlice) > 0 {
-		baseWhere = append(baseWhere, In{Expr: Col{Table: "link", Column: "subject_type"}, Values: parent.AllowedLinkingTypesSlice})
+	if len(allowedTypes) > 0 {
+		baseWhere = append(baseWhere, In{Expr: Col{Table: "link", Column: "subject_type"}, Values: allowedTypes})
 	}
 
 	baseQuery := SelectStmt{
@@ -175,7 +191,7 @@ func buildParentClosureCTESQL(plan ListPlan) string {
 			),
 		}},
 		Where: And(
-			Eq{Left: Col{Table: "link", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
+			In{Expr: Col{Table: "link", Column: "relation"}, Values: linkingRelations},
 			Lt{Left: Col{Table: "p", Column: "depth"}, Right: Int(25)},
 		),
 	}

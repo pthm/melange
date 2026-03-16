@@ -1,0 +1,362 @@
+# Melange-specific tests: Complex operator combinations
+# Adapted from Authzed examples (user-defined-roles schema).
+# These test patterns that combine intersection, exclusion, union, and TTU
+# in a single permission expression.
+#
+# Test names are prefixed with "melange/" by the loader.
+
+tests:
+  # ---------------------------------------------------------------------------
+  # intersection_union_combined
+  # Pattern: (can_resolve and assigned) or any_resolver
+  # A permission that requires BOTH a project-level grant AND direct assignment
+  # (intersection), OR a blanket project-level override (union).
+  # Tests the (A and B) or C pattern.
+  # Adapted from: user-defined-roles (issue resolve permission)
+  # ---------------------------------------------------------------------------
+  - name: intersection_union_combined
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type project
+            relations
+              define assigned_resolver: [user]
+              define any_resolver: [user]
+
+          type issue
+            relations
+              define project: [project]
+              define assigned: [user]
+              define can_resolve_when_assigned: assigned_resolver from project and assigned
+              define resolver: can_resolve_when_assigned or any_resolver from project
+        tuples:
+          # Project roles
+          - user: user:alice
+            relation: assigned_resolver
+            object: project:alpha
+          - user: user:bob
+            relation: assigned_resolver
+            object: project:alpha
+          - user: user:charlie
+            relation: any_resolver
+            object: project:alpha
+          # Issue assignments
+          - user: user:alice
+            relation: assigned
+            object: issue:bug1
+          - user: user:diana
+            relation: assigned
+            object: issue:bug2
+          # Issue -> Project links
+          - user: project:alpha
+            relation: project
+            object: issue:bug1
+          - user: project:alpha
+            relation: project
+            object: issue:bug2
+        checkAssertions:
+          # alice: assigned_resolver AND assigned to bug1 -> can resolve
+          - name: assigned_resolver_and_assigned_can_resolve
+            tuple:
+              user: user:alice
+              relation: resolver
+              object: issue:bug1
+            expectation: true
+          # alice: assigned_resolver but NOT assigned to bug2 -> denied
+          - name: assigned_resolver_not_assigned_denied
+            tuple:
+              user: user:alice
+              relation: resolver
+              object: issue:bug2
+            expectation: false
+          # bob: assigned_resolver but NOT assigned to bug1 -> denied
+          - name: bob_assigned_resolver_not_assigned_denied
+            tuple:
+              user: user:bob
+              relation: resolver
+              object: issue:bug1
+            expectation: false
+          # charlie: any_resolver -> can resolve any issue regardless of assignment
+          - name: any_resolver_resolves_bug1
+            tuple:
+              user: user:charlie
+              relation: resolver
+              object: issue:bug1
+            expectation: true
+          - name: any_resolver_resolves_bug2
+            tuple:
+              user: user:charlie
+              relation: resolver
+              object: issue:bug2
+            expectation: true
+          # diana: assigned to bug2 but NOT an assigned_resolver -> denied
+          - name: assigned_but_not_resolver_denied
+            tuple:
+              user: user:diana
+              relation: resolver
+              object: issue:bug2
+            expectation: false
+          # eve: no relations at all -> denied
+          - name: no_access
+            tuple:
+              user: user:eve
+              relation: resolver
+              object: issue:bug1
+            expectation: false
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: issue
+              relation: resolver
+            expectation:
+              - issue:bug1
+          - request:
+              user: user:charlie
+              type: issue
+              relation: resolver
+            expectation:
+              - issue:bug1
+              - issue:bug2
+
+  # ---------------------------------------------------------------------------
+  # exclusion_on_computed_ttu
+  # Pattern: can_delete: manager_via_project but not manager_via_builtin
+  # Both sides of the exclusion are computed relations that resolve through
+  # TTU. Tests that exclusion predicates work when both operands are indirect.
+  # Adapted from: user-defined-roles (role deletion protection)
+  # ---------------------------------------------------------------------------
+  - name: exclusion_on_computed_ttu
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type project
+            relations
+              define role_manager: [user]
+
+          type role
+            relations
+              define project: [project]
+              define built_in: [project]
+              define manager_via_project: role_manager from project
+              define manager_via_builtin: role_manager from built_in
+              define can_delete: manager_via_project but not manager_via_builtin
+        tuples:
+          # alice manages roles for project:alpha
+          - user: user:alice
+            relation: role_manager
+            object: project:alpha
+          # bob manages roles for project:alpha too
+          - user: user:bob
+            relation: role_manager
+            object: project:alpha
+          # custom_role belongs to project:alpha (not built-in)
+          - user: project:alpha
+            relation: project
+            object: role:custom_role
+          # builtin_role belongs to project:alpha AND is marked built-in
+          - user: project:alpha
+            relation: project
+            object: role:builtin_role
+          - user: project:alpha
+            relation: built_in
+            object: role:builtin_role
+        checkAssertions:
+          # alice can delete custom_role (manager_via_project, not built_in)
+          - name: manager_can_delete_custom_role
+            tuple:
+              user: user:alice
+              relation: can_delete
+              object: role:custom_role
+            expectation: true
+          # alice CANNOT delete builtin_role (excluded by manager_via_builtin)
+          - name: manager_cannot_delete_builtin_role
+            tuple:
+              user: user:alice
+              relation: can_delete
+              object: role:builtin_role
+            expectation: false
+          # bob same as alice
+          - name: bob_can_delete_custom_role
+            tuple:
+              user: user:bob
+              relation: can_delete
+              object: role:custom_role
+            expectation: true
+          - name: bob_cannot_delete_builtin_role
+            tuple:
+              user: user:bob
+              relation: can_delete
+              object: role:builtin_role
+            expectation: false
+          # both are managers via project for both roles
+          - name: alice_is_manager_of_custom
+            tuple:
+              user: user:alice
+              relation: manager_via_project
+              object: role:custom_role
+            expectation: true
+          - name: alice_is_manager_of_builtin
+            tuple:
+              user: user:alice
+              relation: manager_via_project
+              object: role:builtin_role
+            expectation: true
+          # charlie (not a role manager) can't delete anything
+          - name: non_manager_cannot_delete
+            tuple:
+              user: user:charlie
+              relation: can_delete
+              object: role:custom_role
+            expectation: false
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: role
+              relation: can_delete
+            expectation:
+              - role:custom_role
+          - request:
+              user: user:charlie
+              type: role
+              relation: can_delete
+            expectation: []
+
+  # ---------------------------------------------------------------------------
+  # multiple_parent_types_union
+  # Pattern: permission from team OR department parents
+  # A resource can inherit viewers from two completely different parent
+  # hierarchies. Tests that union of TTUs from different types resolves
+  # correctly and list operations return the full set.
+  # ---------------------------------------------------------------------------
+  - name: multiple_parent_types_union
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type team
+            relations
+              define member: [user]
+
+          type department
+            relations
+              define staff: [user]
+
+          type project
+            relations
+              define team: [team]
+              define department: [department]
+              define contributor: [user] or member from team or staff from department
+        tuples:
+          # Team members
+          - user: user:alice
+            relation: member
+            object: team:backend
+          - user: user:bob
+            relation: member
+            object: team:frontend
+          # Department staff
+          - user: user:charlie
+            relation: staff
+            object: department:engineering
+          - user: user:alice
+            relation: staff
+            object: department:engineering
+          # Project links
+          - user: team:backend
+            relation: team
+            object: project:api
+          - user: department:engineering
+            relation: department
+            object: project:api
+          # Direct contributor
+          - user: user:diana
+            relation: contributor
+            object: project:api
+          # Second project with only team link
+          - user: team:frontend
+            relation: team
+            object: project:webapp
+        checkAssertions:
+          # alice: via team:backend member AND department:engineering staff
+          - name: alice_contributor_via_team
+            tuple:
+              user: user:alice
+              relation: contributor
+              object: project:api
+            expectation: true
+          # bob: via team:frontend, but frontend not linked to api project
+          - name: bob_not_contributor_wrong_team
+            tuple:
+              user: user:bob
+              relation: contributor
+              object: project:api
+            expectation: false
+          # bob: via team:frontend on webapp project
+          - name: bob_contributor_via_team_on_webapp
+            tuple:
+              user: user:bob
+              relation: contributor
+              object: project:webapp
+            expectation: true
+          # charlie: via department:engineering staff
+          - name: charlie_contributor_via_department
+            tuple:
+              user: user:charlie
+              relation: contributor
+              object: project:api
+            expectation: true
+          # charlie: engineering not linked to webapp
+          - name: charlie_not_contributor_on_webapp
+            tuple:
+              user: user:charlie
+              relation: contributor
+              object: project:webapp
+            expectation: false
+          # diana: direct contributor
+          - name: diana_direct_contributor
+            tuple:
+              user: user:diana
+              relation: contributor
+              object: project:api
+            expectation: true
+          # eve: no relations
+          - name: no_access
+            tuple:
+              user: user:eve
+              relation: contributor
+              object: project:api
+            expectation: false
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: project
+              relation: contributor
+            expectation:
+              - project:api
+          - request:
+              user: user:bob
+              type: project
+              relation: contributor
+            expectation:
+              - project:webapp
+        listUsersAssertions:
+          - request:
+              object: project:api
+              relation: contributor
+              filters:
+                - user
+            expectation:
+              - user:alice
+              - user:charlie
+              - user:diana
