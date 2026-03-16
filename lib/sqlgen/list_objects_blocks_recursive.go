@@ -72,25 +72,17 @@ func computePropagatableRelations(plan ListPlan, parentRelations []ListParentRel
 	return result
 }
 
-// anyRelationPropagatable checks if any relation in the list is in the propagatable set.
-func anyRelationPropagatable(relations []string, propagatable map[string]bool) bool {
-	for _, r := range relations {
-		if propagatable[r] {
-			return true
-		}
-	}
-	return false
-}
-
 // buildRecursiveBaseBlocks builds the base case blocks for the recursive CTE.
 // Each block is tagged with Propagatable based on whether its source relation
 // satisfies a self-referential TTU target.
 func buildRecursiveBaseBlocks(plan ListPlan, parentRelations []ListParentRelationData, propagatable map[string]bool) ([]TypedQueryBlock, error) {
 	blocks := make([]TypedQueryBlock, 0, 8)
 
-	directBlock := buildRecursiveDirectBlock(plan)
-	directBlock.Propagatable = anyRelationPropagatable(plan.RelationList, propagatable)
-	blocks = append(blocks, directBlock)
+	// Split direct block relations into propagatable and non-propagatable sets.
+	// When a simple closure relation (e.g. editor) satisfies a TTU target (e.g. viewer),
+	// it shares the direct block with non-propagating relations (e.g. folder_viewer).
+	// Emitting separate blocks ensures per-relation propagatability.
+	blocks = append(blocks, buildRecursiveDirectBlocks(plan, propagatable)...)
 
 	for _, rel := range plan.ComplexClosure {
 		block := buildRecursiveComplexClosureBlock(plan, rel)
@@ -106,14 +98,7 @@ func buildRecursiveBaseBlocks(plan ListPlan, parentRelations []ListParentRelatio
 
 	patterns := buildListUsersetPatternInputs(plan.Analysis)
 	for _, pattern := range patterns {
-		var block TypedQueryBlock
-		if pattern.IsComplex {
-			block = buildRecursiveComplexUsersetBlock(plan, pattern)
-		} else {
-			block = buildRecursiveSimpleUsersetBlock(plan, pattern)
-		}
-		block.Propagatable = anyRelationPropagatable(pattern.SourceRelations, propagatable)
-		blocks = append(blocks, block)
+		blocks = append(blocks, buildRecursiveUsersetBlocks(plan, pattern, propagatable)...)
 	}
 
 	// Cross-type TTU blocks are non-propagatable (one-hop, not self-referential).
@@ -122,11 +107,23 @@ func buildRecursiveBaseBlocks(plan ListPlan, parentRelations []ListParentRelatio
 	return blocks, nil
 }
 
-// buildRecursiveDirectBlock builds the direct tuple lookup block for recursive CTEs.
-func buildRecursiveDirectBlock(plan ListPlan) TypedQueryBlock {
+// buildRecursiveDirectBlocks builds direct tuple lookup blocks for recursive CTEs.
+// When RelationList contains a mix of propagatable and non-propagatable relations,
+// two separate blocks are emitted so each gets the correct propagatable tag.
+// This prevents non-propagating relations (e.g. folder_viewer) from incorrectly
+// seeding the recursive step when a simple propagatable relation (e.g. editor
+// satisfying viewer) is in the same relation list.
+func buildRecursiveDirectBlocks(plan ListPlan, propagatable map[string]bool) []TypedQueryBlock {
+	return splitBlocksByPropagation(plan.RelationList, propagatable, func(rels []string) TypedQueryBlock {
+		return buildRecursiveDirectBlock(plan, rels)
+	})
+}
+
+// buildRecursiveDirectBlock builds a single direct tuple lookup block for the given relations.
+func buildRecursiveDirectBlock(plan ListPlan, relations []string) TypedQueryBlock {
 	q := Tuples("t").
 		ObjectType(plan.ObjectType).
-		Relations(plan.RelationList...).
+		Relations(relations...).
 		Where(
 			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
 			In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
@@ -261,6 +258,50 @@ func buildRecursiveSimpleUsersetBlock(plan ListPlan, pattern listUsersetPatternI
 		Comments: []string{fmt.Sprintf("-- Userset: %s#%s (simple)", pattern.SubjectType, pattern.SubjectRelation)},
 		Query:    q.Build(),
 	}
+}
+
+// buildRecursiveUsersetBlocks builds userset pattern blocks, splitting by propagatability
+// when source relations contain a mix of propagatable and non-propagatable relations.
+func buildRecursiveUsersetBlocks(plan ListPlan, pattern listUsersetPatternInput, propagatable map[string]bool) []TypedQueryBlock {
+	return splitBlocksByPropagation(pattern.SourceRelations, propagatable, func(rels []string) TypedQueryBlock {
+		p := pattern
+		p.SourceRelations = rels
+		if p.IsComplex {
+			return buildRecursiveComplexUsersetBlock(plan, p)
+		}
+		return buildRecursiveSimpleUsersetBlock(plan, p)
+	})
+}
+
+// splitBlocksByPropagation partitions relations into propagatable and non-propagatable
+// sets, building one block per set. When all relations share the same propagatability
+// (the common case), a single block is returned. The buildFn receives the relation
+// subset and must return a block without Propagatable set.
+func splitBlocksByPropagation(relations []string, propagatable map[string]bool, buildFn func([]string) TypedQueryBlock) []TypedQueryBlock {
+	var propRels, nonPropRels []string
+	for _, rel := range relations {
+		if propagatable[rel] {
+			propRels = append(propRels, rel)
+		} else {
+			nonPropRels = append(nonPropRels, rel)
+		}
+	}
+
+	// Common case: all relations have the same propagatability -- single block.
+	if len(propRels) == 0 || len(nonPropRels) == 0 {
+		block := buildFn(relations)
+		block.Propagatable = len(propRels) > 0
+		return []TypedQueryBlock{block}
+	}
+
+	// Mixed: emit separate blocks for correct per-relation tagging.
+	nonPropBlock := buildFn(nonPropRels)
+	nonPropBlock.Propagatable = false
+
+	propBlock := buildFn(propRels)
+	propBlock.Propagatable = true
+
+	return []TypedQueryBlock{nonPropBlock, propBlock}
 }
 
 // buildCrossTypeTTUBlocks builds blocks for cross-type TTU patterns.

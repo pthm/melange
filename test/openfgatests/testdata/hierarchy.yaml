@@ -519,3 +519,186 @@ tests:
               relation: viewer
             expectation:
               - document:readme
+
+  # ---------------------------------------------------------------------------
+  # non_propagating_relation_in_recursive_list
+  # Pattern: can_view: viewer or folder_viewer
+  #          viewer: [user] or viewer from parent (propagates)
+  #          folder_viewer: [user]                (does NOT propagate)
+  # Verifies that list_objects does not propagate non-propagating relations
+  # through parent TTU in the recursive CTE.
+  # Regression test for: the recursive step in list_*_objects treats ALL base
+  # results as propagatable parents, so folder_viewer on a parent incorrectly
+  # gives can_view on children.
+  # ---------------------------------------------------------------------------
+  - name: non_propagating_relation_in_recursive_list
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type folder
+            relations
+              define parent: [folder]
+              define viewer: [user] or viewer from parent
+              define folder_viewer: [user]
+              define can_view: viewer or folder_viewer
+        tuples:
+          # folder:child's parent is folder:root
+          - user: folder:root
+            relation: parent
+            object: folder:child
+          # alice has folder_viewer on root (non-propagating)
+          - user: user:alice
+            relation: folder_viewer
+            object: folder:root
+          # bob has viewer on root (propagating)
+          - user: user:bob
+            relation: viewer
+            object: folder:root
+        checkAssertions:
+          - name: alice_can_view_root_via_folder_viewer
+            tuple:
+              user: user:alice
+              relation: can_view
+              object: folder:root
+            expectation: true
+          - name: alice_cannot_view_child_folder_viewer_does_not_propagate
+            tuple:
+              user: user:alice
+              relation: can_view
+              object: folder:child
+            expectation: false
+          - name: bob_can_view_root_via_viewer
+            tuple:
+              user: user:bob
+              relation: can_view
+              object: folder:root
+            expectation: true
+          - name: bob_can_view_child_viewer_propagates
+            tuple:
+              user: user:bob
+              relation: can_view
+              object: folder:child
+            expectation: true
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: folder
+              relation: can_view
+            expectation:
+              - folder:root
+          - request:
+              user: user:bob
+              type: folder
+              relation: can_view
+            expectation:
+              - folder:child
+              - folder:root
+
+  # ---------------------------------------------------------------------------
+  # non_propagating_with_simple_satisfying_relation
+  # Pattern: can_view: viewer or folder_viewer
+  #          editor: [user]                       (simple, satisfies viewer)
+  #          viewer: [user] or editor or viewer from parent (propagates)
+  #          folder_viewer: [user]                (does NOT propagate)
+  # Edge case: editor is closure-compatible (simple) so it lands in the direct
+  # block's RelationList alongside folder_viewer. If the direct block is tagged
+  # propagatable because editor satisfies the TTU target, folder_viewer results
+  # in the same block incorrectly propagate through the parent chain.
+  # ---------------------------------------------------------------------------
+  - name: non_propagating_with_simple_satisfying_relation
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type folder
+            relations
+              define parent: [folder]
+              define editor: [user]
+              define viewer: [user] or editor or viewer from parent
+              define folder_viewer: [user]
+              define can_view: viewer or folder_viewer
+        tuples:
+          # folder:child's parent is folder:root
+          - user: folder:root
+            relation: parent
+            object: folder:child
+          # alice has folder_viewer on root (non-propagating)
+          - user: user:alice
+            relation: folder_viewer
+            object: folder:root
+          # bob has editor on root (simple relation that satisfies viewer, propagates)
+          - user: user:bob
+            relation: editor
+            object: folder:root
+          # charlie has viewer on root (direct propagating)
+          - user: user:charlie
+            relation: viewer
+            object: folder:root
+        checkAssertions:
+          - name: alice_can_view_root_via_folder_viewer
+            tuple:
+              user: user:alice
+              relation: can_view
+              object: folder:root
+            expectation: true
+          - name: alice_cannot_view_child_folder_viewer_does_not_propagate
+            tuple:
+              user: user:alice
+              relation: can_view
+              object: folder:child
+            expectation: false
+          - name: bob_can_view_root_via_editor
+            tuple:
+              user: user:bob
+              relation: can_view
+              object: folder:root
+            expectation: true
+          - name: bob_can_view_child_editor_satisfies_viewer_which_propagates
+            tuple:
+              user: user:bob
+              relation: can_view
+              object: folder:child
+            expectation: true
+          - name: charlie_can_view_root_via_viewer
+            tuple:
+              user: user:charlie
+              relation: can_view
+              object: folder:root
+            expectation: true
+          - name: charlie_can_view_child_viewer_propagates
+            tuple:
+              user: user:charlie
+              relation: can_view
+              object: folder:child
+            expectation: true
+        listObjectsAssertions:
+          # alice: only root (folder_viewer does NOT propagate)
+          - request:
+              user: user:alice
+              type: folder
+              relation: can_view
+            expectation:
+              - folder:root
+          # bob: root + child (editor satisfies viewer which propagates via TTU)
+          - request:
+              user: user:bob
+              type: folder
+              relation: can_view
+            expectation:
+              - folder:child
+              - folder:root
+          # charlie: root + child (viewer propagates via TTU)
+          - request:
+              user: user:charlie
+              type: folder
+              relation: can_view
+            expectation:
+              - folder:child
+              - folder:root
