@@ -61,7 +61,7 @@ Commands are organized into logical groups:
 
 **Schema Commands:** `validate`, `migrate`, `status`, `doctor`
 **Client Commands:** `generate`
-**Utility Commands:** `config`, `version`, `license`
+**Utility Commands:** `init`, `config`, `version`, `license`
 
 ---
 
@@ -417,6 +417,85 @@ func AnyUser() melange.Object {
 
 ## Utility Commands
 
+### init
+
+Initialize a new Melange project with an interactive wizard. Detects your project type (Go or TypeScript) and scaffolds a config file, starter schema, and runtime dependency.
+
+```bash
+melange init
+```
+
+**Flags:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-y`, `--yes` | `false` | Accept all defaults without prompting |
+| `--no-install` | `false` | Skip installing runtime dependencies |
+| `--schema` | `melange/schema.fga` | Schema file path |
+| `--db` | `postgres://localhost:5432/mydb` | Database URL |
+| `--template` | `org-rbac` | Starter model: `org-rbac`, `doc-sharing`, `minimal`, `none` |
+| `--runtime` | (auto-detected) | Client runtime: `go`, `typescript` |
+| `--output` | `internal/authz` (Go) / `src/authz` (TS) | Client output directory |
+| `--package` | `authz` | Client package name (Go only) |
+| `--id-type` | `string` | Client ID type: `string`, `int64`, `uuid.UUID` |
+
+**Project detection:**
+
+Melange inspects the current directory for project files:
+
+| File | Detected Runtime | Default Output |
+|------|-----------------|----------------|
+| `go.mod` | Go | `internal/authz` |
+| `package.json` | TypeScript | `src/authz` |
+
+When a project is detected, client code generation is enabled by default and the runtime dependency is installed automatically (`go get github.com/pthm/melange/melange` for Go, `npm install @pthm/melange` for TypeScript). If both `go.mod` and `package.json` exist, Go takes precedence.
+
+For TypeScript projects, the package manager is auto-detected from lock files: `bun.lockb`/`bun.lock` → bun, `pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn, otherwise npm.
+
+**Starter models:**
+
+| Template | Description |
+|----------|-------------|
+| `org-rbac` | Organization with role hierarchy and repository permissions (default) |
+| `doc-sharing` | Google Docs-style owner/editor/viewer model |
+| `minimal` | Bare-bones model with just `type user` |
+| `none` | Skip schema file creation |
+
+**Directory convention:**
+
+By default, `init` creates a `melange/` directory containing both the config and schema:
+
+```
+myproject/
+├── melange/
+│   ├── config.yaml
+│   └── schema.fga
+└── ...
+```
+
+If the schema path is outside the `melange/` directory (e.g., `--schema schemas/auth.fga`), the config is placed at the project root as `melange.yaml` instead.
+
+**Safety:**
+
+- Refuses to overwrite an existing config file in `--yes` mode (use interactive mode to confirm)
+- Skips schema creation if the file already exists in `--yes` mode
+
+**Examples:**
+
+```bash
+# Interactive wizard
+melange init
+
+# Accept all defaults (in a Go project)
+melange init -y
+
+# Custom schema and database, skip dependency install
+melange init -y --schema melange/auth.fga --db postgres://prod:5432/app --no-install
+
+# Minimal schema with no client generation
+melange init -y --template minimal
+```
+
 ### config show
 
 Display the effective configuration after merging defaults, config file, and environment variables.
@@ -492,24 +571,13 @@ This displays the Melange license and attribution for all embedded third-party d
 
 ### Development Setup
 
-**With configuration file (recommended):**
+**With `melange init` (recommended):**
 
-Create a `melange.yaml`:
-
-```yaml
-schema: schemas/schema.fga
-
-database:
-  url: postgres://localhost/myapp_dev
-
-generate:
-  client:
-    runtime: go
-    output: internal/authz
-    package: authz
+```bash
+melange init
 ```
 
-Then run commands without flags:
+This creates a config file and starter schema. Then run commands without flags:
 
 ```bash
 # Validate schema

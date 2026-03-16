@@ -104,6 +104,10 @@ func LoadConfig(explicitConfigPath string) (*Config, string, error) {
 	return &cfg, configPath, nil
 }
 
+// setDefaults registers the out-of-box values for every config key. These
+// are the lowest-precedence values: env vars, the config file, and any
+// explicit flag values all override them. Keeping defaults here rather than
+// in the Config struct ensures viper's precedence chain works correctly.
 func setDefaults(v *viper.Viper) {
 	// Top-level defaults
 	v.SetDefault("schema", "schemas/schema.fga")
@@ -134,10 +138,14 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("doctor.skip_performance", false)
 }
 
-// findConfigFile finds the config file to use.
-// If explicitPath is provided, it validates the file exists.
-// Otherwise, it walks up from cwd looking for melange.yaml or melange.yml,
-// stopping at a .git directory or after maxWalkDepth levels.
+// findConfigFile locates the config file to load. When explicitPath is given,
+// it is validated and returned directly. Otherwise the function walks upward
+// from the current directory, checking six candidate names at each level:
+// melange.yaml, melange.yml, melange/config.yaml, melange/config.yml,
+// melange/melange.yaml, and melange/melange.yml. The walk stops at a .git
+// boundary or after maxWalkDepth levels. This search order must stay in sync
+// with findExistingConfig in cmd/melange/init.go so that configs written by
+// init are always discovered by other commands.
 func findConfigFile(explicitPath string) (string, error) {
 	if explicitPath != "" {
 		if _, err := os.Stat(explicitPath); err != nil {
@@ -155,7 +163,14 @@ func findConfigFile(explicitPath string) (string, error) {
 	dir := cwd
 	for i := 0; i < maxWalkDepth; i++ {
 		// Try melange.yaml then melange.yml
-		for _, name := range []string{"melange.yaml", "melange.yml"} {
+		for _, name := range []string{
+			"melange.yaml",
+			"melange.yml",
+			filepath.Join("melange", "config.yaml"),
+			filepath.Join("melange", "config.yml"),
+			filepath.Join("melange", "melange.yaml"),
+			filepath.Join("melange", "melange.yml"),
+		} {
 			path := filepath.Join(dir, name)
 			if _, err := os.Stat(path); err == nil {
 				return path, nil
