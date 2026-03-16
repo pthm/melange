@@ -635,97 +635,220 @@ func (d *Doctor) checkDataHealth(ctx context.Context, report *Report) error {
 		})
 	}
 
-	// If we have a schema, validate sample tuples
+	// If we have a schema, validate tuple data against the model.
 	if d.parsedTypes != nil && count > 0 {
-		if err := d.validateSampleTuples(ctx, report); err != nil {
-			return fmt.Errorf("validating sample tuples: %w", err)
+		if err := d.validateTupleData(ctx, report); err != nil {
+			return fmt.Errorf("validating tuple data: %w", err)
 		}
 	}
 
 	return nil
 }
 
-// validateSampleTuples checks that tuples reference valid types and relations.
-func (d *Doctor) validateSampleTuples(ctx context.Context, report *Report) error {
-	// Build valid type and relation sets
+// tupleSignature holds an aggregated (object_type, relation, subject_type) group
+// with its tuple count, used for classifying orphaned tuples.
+type tupleSignature struct {
+	objectType  string
+	relation    string
+	subjectType string
+	count       int64
+}
+
+// validateTupleData checks all tuples against the schema model and reports
+// unknown object types, relations, subject types, and invalid subject type
+// assignments. This replaces the earlier sampling-based check with a
+// comprehensive GROUP BY aggregation.
+func (d *Doctor) validateTupleData(ctx context.Context, report *Report) error {
+	// Build validity maps from parsed schema.
 	validTypes := make(map[string]bool)
-	validRelations := make(map[string]map[string]bool) // type -> relation -> bool
+	validRelations := make(map[string]map[string]bool)
+	// allowedSubjects: objectType -> relation -> set of allowed subject types.
+	// Only populated for relations with explicit SubjectTypeRefs (direct assignments).
+	allowedSubjects := make(map[string]map[string]map[string]bool)
+
 	for _, t := range d.parsedTypes {
 		validTypes[t.Name] = true
-		validRelations[t.Name] = make(map[string]bool)
+		rels := make(map[string]bool, len(t.Relations))
 		for _, r := range t.Relations {
-			validRelations[t.Name][r.Name] = true
+			rels[r.Name] = true
+			if len(r.SubjectTypeRefs) > 0 {
+				allowed := make(map[string]bool, len(r.SubjectTypeRefs))
+				for _, ref := range r.SubjectTypeRefs {
+					allowed[ref.Type] = true
+				}
+				if allowedSubjects[t.Name] == nil {
+					allowedSubjects[t.Name] = make(map[string]map[string]bool)
+				}
+				allowedSubjects[t.Name][r.Name] = allowed
+			}
 		}
+		validRelations[t.Name] = rels
 	}
 
-	// Sample distinct types and relations from tuples
+	// Single aggregation query returns all distinct tuple signatures with counts.
 	rows, err := d.db.QueryContext(ctx, `
-		SELECT DISTINCT object_type, relation
+		SELECT object_type, relation, subject_type, COUNT(*) AS cnt
 		FROM melange_tuples
-		LIMIT 100
+		GROUP BY object_type, relation, subject_type
 	`)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = rows.Close() }()
 
-	var unknownTypes []string
-	var unknownRelations []string
-	seenTypes := make(map[string]bool)
-	seenRelations := make(map[string]bool)
-
+	var sigs []tupleSignature
 	for rows.Next() {
-		var objType, relation string
-		if err := rows.Scan(&objType, &relation); err != nil {
+		var s tupleSignature
+		if err := rows.Scan(&s.objectType, &s.relation, &s.subjectType, &s.count); err != nil {
 			return err
 		}
-
-		if !validTypes[objType] && !seenTypes[objType] {
-			seenTypes[objType] = true
-			unknownTypes = append(unknownTypes, objType)
-		}
-
-		key := objType + ":" + relation
-		if validTypes[objType] && !validRelations[objType][relation] && !seenRelations[key] {
-			seenRelations[key] = true
-			unknownRelations = append(unknownRelations, key)
-		}
+		sigs = append(sigs, s)
 	}
-
 	if err := rows.Err(); err != nil {
 		return err
 	}
 
-	if len(unknownTypes) > 0 {
+	findings := classifyTupleSignatures(sigs, validTypes, validRelations, allowedSubjects)
+	emitTupleFindings(report, findings)
+	return nil
+}
+
+// tupleFindings holds categorized orphaned tuple data.
+type tupleFindings struct {
+	unknownObjectTypes []string // "widget (100 tuples)"
+	unknownRelations   []string // "document:publish (42 tuples)"
+	unknownSubjects    []string // "device (30 tuples)"
+	invalidSubjects    []string // "organization:member subject_type=team (5 tuples)"
+
+	unknownObjectTypeCount int64
+	unknownRelationCount   int64
+	unknownSubjectCount    int64
+	invalidSubjectCount    int64
+}
+
+// classifyTupleSignatures categorizes aggregated tuple signatures against the
+// schema validity maps. This is a pure function for testability.
+func classifyTupleSignatures(
+	sigs []tupleSignature,
+	validTypes map[string]bool,
+	validRelations map[string]map[string]bool,
+	allowedSubjects map[string]map[string]map[string]bool,
+) tupleFindings {
+	var f tupleFindings
+
+	// Accumulate counts per unique key. Multiple signatures can share the same
+	// unknown value (e.g., same unknown object_type with different relations).
+	objTypeCounts := make(map[string]int64)
+	relationCounts := make(map[string]int64)
+	subjectCounts := make(map[string]int64)
+
+	for _, s := range sigs {
+		// Unknown object type.
+		if !validTypes[s.objectType] {
+			objTypeCounts[s.objectType] += s.count
+			f.unknownObjectTypeCount += s.count
+			continue // Skip further checks — relation/subject are meaningless.
+		}
+
+		// Unknown relation for this object type.
+		if !validRelations[s.objectType][s.relation] {
+			key := s.objectType + ":" + s.relation
+			relationCounts[key] += s.count
+			f.unknownRelationCount += s.count
+			continue // Skip subject check — relation is already invalid.
+		}
+
+		// Unknown subject type.
+		if !validTypes[s.subjectType] {
+			subjectCounts[s.subjectType] += s.count
+			f.unknownSubjectCount += s.count
+			continue
+		}
+
+		// Invalid subject type for this relation (only when relation has explicit constraints).
+		if allowed := allowedSubjects[s.objectType][s.relation]; allowed != nil {
+			if !allowed[s.subjectType] {
+				key := fmt.Sprintf("%s:%s subject_type=%s", s.objectType, s.relation, s.subjectType)
+				f.invalidSubjects = append(f.invalidSubjects, fmt.Sprintf("%s (%d tuples)", key, s.count))
+				f.invalidSubjectCount += s.count
+			}
+		}
+	}
+
+	// Build display strings from accumulated counts.
+	for val, count := range objTypeCounts {
+		f.unknownObjectTypes = append(f.unknownObjectTypes, fmt.Sprintf("%s (%d tuples)", val, count))
+	}
+	for val, count := range relationCounts {
+		f.unknownRelations = append(f.unknownRelations, fmt.Sprintf("%s (%d tuples)", val, count))
+	}
+	for val, count := range subjectCounts {
+		f.unknownSubjects = append(f.unknownSubjects, fmt.Sprintf("%s (%d tuples)", val, count))
+	}
+
+	return f
+}
+
+// emitTupleFindings adds check results to the report based on classified findings.
+func emitTupleFindings(report *Report, f tupleFindings) {
+	anyIssue := false
+
+	if len(f.unknownObjectTypes) > 0 {
+		anyIssue = true
 		report.AddCheck(CheckResult{
 			Category: "Data Health",
-			Name:     "types",
+			Name:     "unknown_object_types",
 			Status:   StatusWarn,
-			Message:  fmt.Sprintf("Found %d unknown object types in tuples", len(unknownTypes)),
-			Details:  strings.Join(unknownTypes, ", "),
+			Message:  fmt.Sprintf("Found %d unknown object types affecting %d tuples", len(f.unknownObjectTypes), f.unknownObjectTypeCount),
+			Details:  truncatedJoin(f.unknownObjectTypes, 10),
+			FixHint:  "Update melange_tuples to exclude rows with unknown object types, or add missing types to schema.fga",
 		})
 	}
 
-	if len(unknownRelations) > 0 {
+	if len(f.unknownRelations) > 0 {
+		anyIssue = true
 		report.AddCheck(CheckResult{
 			Category: "Data Health",
-			Name:     "relations",
+			Name:     "unknown_relations",
 			Status:   StatusWarn,
-			Message:  fmt.Sprintf("Found %d unknown relations in tuples", len(unknownRelations)),
-			Details:  strings.Join(unknownRelations, ", "),
+			Message:  fmt.Sprintf("Found %d unknown relations affecting %d tuples", len(f.unknownRelations), f.unknownRelationCount),
+			Details:  truncatedJoin(f.unknownRelations, 10),
+			FixHint:  "Update melange_tuples to exclude rows with unknown relations, or add missing relations to schema.fga",
 		})
 	}
 
-	if len(unknownTypes) == 0 && len(unknownRelations) == 0 {
+	if len(f.unknownSubjects) > 0 {
+		anyIssue = true
+		report.AddCheck(CheckResult{
+			Category: "Data Health",
+			Name:     "unknown_subject_types",
+			Status:   StatusWarn,
+			Message:  fmt.Sprintf("Found %d unknown subject types affecting %d tuples", len(f.unknownSubjects), f.unknownSubjectCount),
+			Details:  truncatedJoin(f.unknownSubjects, 10),
+			FixHint:  "Update melange_tuples to exclude rows with unknown subject types, or add missing types to schema.fga",
+		})
+	}
+
+	if len(f.invalidSubjects) > 0 {
+		anyIssue = true
+		report.AddCheck(CheckResult{
+			Category: "Data Health",
+			Name:     "invalid_subject_types",
+			Status:   StatusWarn,
+			Message:  fmt.Sprintf("Found %d invalid subject type assignments affecting %d tuples", len(f.invalidSubjects), f.invalidSubjectCount),
+			Details:  truncatedJoin(f.invalidSubjects, 10),
+			FixHint:  "These tuples have subject types not allowed by the relation definition in schema.fga",
+		})
+	}
+
+	if !anyIssue {
 		report.AddCheck(CheckResult{
 			Category: "Data Health",
 			Name:     "valid",
 			Status:   StatusPass,
-			Message:  "All sampled tuples reference valid types and relations",
+			Message:  "All tuples reference valid types, relations, and subject types",
 		})
 	}
-
-	return nil
 }
 
 // getCurrentFunctions returns all melange-generated function names.

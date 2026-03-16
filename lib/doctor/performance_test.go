@@ -152,3 +152,28 @@ func TestParseIndexColumns_TrailingComma(t *testing.T) {
 	got := parseIndexColumns("CREATE INDEX idx ON t USING btree (a, b, )")
 	assert.Equal(t, []string{"a", "b"}, got)
 }
+
+func TestIsExpressionIndexed(t *testing.T) {
+	defs := []string{
+		"CREATE INDEX idx_user_text ON org_members ((user_id::text))",
+		"CREATE INDEX idx_org_text ON org_members (((org_id)::text))",
+		"CREATE INDEX idx_name ON org_members (name)",
+	}
+
+	assert.True(t, isExpressionIndexed("user_id", defs))
+	assert.True(t, isExpressionIndexed("org_id", defs))
+	assert.False(t, isExpressionIndexed("team_id", defs))
+	assert.False(t, isExpressionIndexed("name", defs), "plain column index does not match expression pattern")
+}
+
+func TestIsExpressionIndexed_Empty(t *testing.T) {
+	assert.False(t, isExpressionIndexed("col", nil))
+	assert.False(t, isExpressionIndexed("col", []string{}))
+}
+
+func TestUniqueStrings(t *testing.T) {
+	assert.Equal(t, []string{"a", "b", "c"}, uniqueStrings([]string{"a", "b", "c"}))
+	assert.Equal(t, []string{"a", "b", "c"}, uniqueStrings([]string{"a", "b", "a", "c", "b"}))
+	assert.Nil(t, uniqueStrings(nil))
+	assert.Nil(t, uniqueStrings([]string{}))
+}
