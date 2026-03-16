@@ -71,9 +71,71 @@ melange --no-update-check migrate
 
 ## Quick Start
 
-### Step 1: Define Your Authorization Model
+### Step 1: Initialize Your Project
 
-Create a `schemas/schema.fga` file using OpenFGA DSL syntax:
+The fastest way to get started is with `melange init`. It detects your project type, scaffolds a config file and starter schema, and installs the runtime dependency:
+
+```bash
+melange init
+```
+
+The interactive wizard walks you through:
+- **Schema path** — where to put your `.fga` model (default: `melange/schema.fga`)
+- **Starter model** — choose from Organization RBAC, Document sharing, Minimal, or None
+- **Database URL** — your PostgreSQL connection string
+- **Client code generation** — optionally set up type-safe client code for Go or TypeScript
+
+If a `go.mod` or `package.json` is found, Melange auto-detects your runtime and pre-fills sensible defaults (e.g., `internal/authz` for Go, `src/authz` for TypeScript). It also installs the runtime dependency (`go get` or `npm install`) automatically.
+
+To accept all defaults without prompting:
+
+```bash
+melange init -y
+```
+
+This creates a `melange/` directory in your project root:
+
+```
+myproject/
+├── melange/
+│   ├── config.yaml      # melange configuration
+│   └── schema.fga       # authorization model
+├── go.mod
+└── ...
+```
+
+{{< callout type="info" >}}
+You can also place `melange.yaml` at the project root — Melange discovers both conventions automatically. See [Configuration](./reference/configuration.md) for details.
+{{< /callout >}}
+
+#### Customizing the init
+
+You can override individual values with flags:
+
+```bash
+melange init -y --schema melange/auth.fga --db postgres://prod:5432/app
+```
+
+| Flag | Description |
+|------|-------------|
+| `-y`, `--yes` | Accept all defaults without prompting |
+| `--no-install` | Skip installing runtime dependencies |
+| `--schema` | Schema file path |
+| `--db` | Database URL |
+| `--template` | Starter model: `org-rbac`, `doc-sharing`, `minimal`, `none` |
+| `--runtime` | Client runtime: `go`, `typescript` |
+| `--output` | Client output directory |
+| `--package` | Client package name (Go only) |
+| `--id-type` | Client ID type: `string`, `int64`, `uuid.UUID` |
+
+### Step 2: Review Your Authorization Model
+
+If you ran `melange init`, your schema file is already set up with a starter model. Here's what each template looks like:
+
+{{< tabs items="Organization RBAC,Document Sharing,Minimal" >}}
+
+{{< tab >}}
+The default template. Defines organizations with a role hierarchy and repositories with permissions inherited from the parent org.
 
 ```fga
 model
@@ -100,9 +162,48 @@ type repository
 This model defines:
 - **Users** as the primary subject type
 - **Organizations** with a role hierarchy: `owner` > `admin` > `member`
-- **Repositories** owned by organizations, with permissions inherited from the parent org
+- **Repositories** owned by organizations, with permissions inherited from the parent org via `member from org`
+{{< /tab >}}
 
-### Step 2: Create the melange_tuples View
+{{< tab >}}
+A Google Docs-style model where permissions cascade: owners can edit, editors can view.
+
+```fga
+model
+  schema 1.1
+
+type user
+
+type document
+  relations
+    define owner: [user]
+    define editor: [user] or owner
+    define viewer: [user] or editor
+```
+
+This model defines:
+- **Documents** with three levels of access
+- Implied permissions: an `owner` is automatically an `editor`, and an `editor` is automatically a `viewer`
+{{< /tab >}}
+
+{{< tab >}}
+A bare-bones starting point — just a user type. Add your own types and relations from here.
+
+```fga
+model
+  schema 1.1
+
+type user
+```
+{{< /tab >}}
+
+{{< /tabs >}}
+
+Review and customize the model for your application's needs. If you didn't use `melange init`, create your schema file manually (e.g., `melange/schema.fga`) using the [OpenFGA DSL syntax](https://openfga.dev/docs/configuration-language).
+
+See the [Modelling guide](./concepts/modelling.md) for a full walkthrough of relation patterns like exclusions, intersections, and wildcards.
+
+### Step 3: Create the melange_tuples View
 
 Melange reads authorization data from a view called `melange_tuples`. This view maps your existing domain tables into the tuple format Melange expects.
 
@@ -152,48 +253,27 @@ The view must provide these columns:
 | `object_type` | `text` | Type of the object (e.g., `'repository'`) |
 | `object_id` | `text` | ID of the object |
 
-### Step 3: Apply Migrations
+### Step 4: Apply Migrations
 
 Run the Melange CLI to apply the schema to your database:
 
-{{< tabs items="With Config File,With Flags" >}}
-
-{{< tab >}}
-Create a `melange.yaml` in your project root:
-
-```yaml
-schema: schemas/schema.fga
-
-database:
-  url: postgres://localhost/mydb
-
-generate:
-  client:
-    runtime: go
-    output: internal/authz
-    package: authz
-```
-
-Then run:
+If you ran `melange init`, your config is already set up. Just run:
 
 ```bash
 melange migrate
 ```
-{{< /tab >}}
 
-{{< tab >}}
+Or with explicit flags (if you're not using a config file):
+
 ```bash
 melange migrate \
   --db postgres://localhost/mydb \
-  --schema schemas/schema.fga
+  --schema melange/schema.fga
 ```
-{{< /tab >}}
-
-{{< /tabs >}}
 
 This generates and installs specialized SQL permission functions.
 
-### Step 4: Generate Type-Safe Client Code (Optional)
+### Step 5: Generate Type-Safe Client Code (Optional)
 
 Generate constants and helpers for your language of choice:
 
@@ -232,7 +312,7 @@ This creates TypeScript types and factory functions for type-safe permission che
 
 {{< /tabs >}}
 
-### Step 5: Check Permissions
+### Step 6: Check Permissions
 
 With migrations applied, you can check permissions using the generated SQL functions from any language, or use a client library for convenience.
 

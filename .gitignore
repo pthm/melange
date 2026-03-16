@@ -53,3 +53,4 @@ specs/
 dist/
 **/dist/
 **/node_modules/
+cmd/melange/melange

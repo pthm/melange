@@ -36,7 +36,7 @@ Melange is an authorization compiler that generates specialized SQL functions
 from OpenFGA schemas, enabling single-query permission checks in PostgreSQL.`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		// Skip config loading for help/completion/version/license commands
-		if cmd.Name() == "help" || cmd.Name() == "completion" || cmd.Name() == "version" || cmd.Name() == "license" {
+		if cmd.Name() == "help" || cmd.Name() == "completion" || cmd.Name() == "version" || cmd.Name() == "license" || cmd.Name() == "init" {
 			return nil
 		}
 
@@ -99,9 +99,11 @@ func init() {
 	rootCmd.AddCommand(generateCmd)
 
 	// Utility commands
+	initCmd.GroupID = groupUtility
 	configCmd.GroupID = groupUtility
 	versionCmd.GroupID = groupUtility
 	licenseCmd.GroupID = groupUtility
+	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(configCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(licenseCmd)
@@ -136,14 +138,16 @@ func resolveBool(values ...bool) bool {
 	return false
 }
 
-// isCI detects if running in a CI environment
+// isCI reports whether the process is running under a CI system by checking
+// the standard CI environment variable set by most CI providers.
 func isCI() bool {
 	return os.Getenv("CI") != ""
 }
 
-// ShowUpdateNoticeIfAvailable checks for pending update results and displays a notice
-// This should be called after command execution (from main.go) since PersistentPostRun
-// doesn't run when commands return errors.
+// ShowUpdateNoticeIfAvailable displays a version upgrade prompt if the background
+// update check (started in PersistentPreRunE) found a newer release. It must be
+// called after the command completes because PersistentPostRun is skipped when
+// commands return errors.
 func ShowUpdateNoticeIfAvailable() {
 	if updateResult == nil {
 		return
@@ -161,6 +165,9 @@ func ShowUpdateNoticeIfAvailable() {
 	}
 }
 
+// showUpdateNotice prints an upgrade prompt to stderr. It is called only when
+// a newer release is confirmed available, so the caller should always check
+// info.UpdateAvailable before invoking this.
 func showUpdateNotice(info *update.Info) {
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintf(os.Stderr, "* A new version of melange is available: v%s (current: %s)\n",

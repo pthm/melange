@@ -12,11 +12,20 @@ Melange supports configuration via YAML files, environment variables, and comman
 
 ## Configuration File
 
-Melange automatically discovers a configuration file by:
+Melange automatically discovers a configuration file by checking each directory for the following names (in order):
 
-1. Looking for `melange.yaml` or `melange.yml` in the current directory
-2. Walking up parent directories until a `.git` directory is found (repository boundary)
-3. Stopping after 25 parent levels if no repository boundary is found
+1. `melange.yaml`
+2. `melange.yml`
+3. `melange/config.yaml`
+4. `melange/config.yml`
+5. `melange/melange.yaml`
+6. `melange/melange.yml`
+
+The search starts in the current directory and walks up parent directories until a `.git` directory is found (repository boundary) or 25 levels are reached. The first match wins.
+
+{{< callout type="info" >}}
+The `melange/` directory convention is the default when you run `melange init`. Existing `melange.yaml` files at the project root continue to work — both layouts are fully supported.
+{{< /callout >}}
 
 You can override auto-discovery with `--config`:
 
@@ -26,7 +35,7 @@ melange --config /path/to/custom-config.yaml migrate
 
 ## File Format
 
-Create a `melange.yaml` in your project root:
+Create a `melange.yaml` in your project root, or use `melange init` to generate one:
 
 ```yaml
 # Path to OpenFGA schema file (used by all commands)
