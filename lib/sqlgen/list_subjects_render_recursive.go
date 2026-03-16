@@ -116,22 +116,23 @@ func buildSubjectsRecursiveRegularQuery(plan ListPlan, regularBlocks, ttuBlocks 
 	return cteQuery.SQL()
 }
 
-// containsSubjectPool checks if SQL contains reference to subject_pool table.
 func containsSubjectPool(sql string) bool {
 	return strings.Contains(sql, "subject_pool")
 }
 
-// containsParentClosure checks if SQL contains reference to parent_closure table.
 func containsParentClosure(sql string) bool {
 	return strings.Contains(sql, "parent_closure")
 }
 
-// buildParentClosureCTESQL builds the recursive parent_closure CTE SQL.
-// This CTE walks the parent chain starting from the target object.
-// Returns (subject_type, subject_id, depth) for each parent in the chain.
-// When multiple parent relations exist (e.g., viewer_role, editor_role, admin_role
-// from closure, or team + department from a union of TTUs), the CTE includes
-// ALL linking relations so that every TTU path is represented.
+// buildParentClosureCTESQL builds a recursive CTE that pre-computes the transitive
+// closure of parent objects reachable from the target object via TTU linking relations.
+// The caller uses this closure to find subjects that hold the checked relation on any
+// ancestor, without re-traversing the parent graph for each candidate subject.
+//
+// When a relation has multiple TTU paths — from closure expansion (e.g., admin_role,
+// editor_role, viewer_role all satisfy a viewer relation) or from a union of TTUs
+// (e.g., member from team or staff from department) — all linking relations are
+// unioned into a single IN(...) clause so every path is covered in one pass.
 func buildParentClosureCTESQL(plan ListPlan) string {
 	// Get the parent relations info from the plan
 	parentRelations := buildListParentRelations(plan.Analysis)
@@ -200,8 +201,7 @@ func buildParentClosureCTESQL(plan ListPlan) string {
 	return baseQuery.SQL() + "\n        UNION\n        " + recursiveQuery.SQL()
 }
 
-// buildSubjectPoolCTESQL builds the subject_pool CTE SQL.
-// Note: This is deprecated in favor of parent_closure for TTU cases.
+// buildSubjectPoolCTESQL builds the subject_pool CTE SQL for complex parent relations.
 func buildSubjectPoolCTESQL(plan ListPlan) string {
 	excludeWildcard := plan.ExcludeWildcard()
 
@@ -217,8 +217,9 @@ func buildSubjectPoolCTESQL(plan ListPlan) string {
 	return q.SQL()
 }
 
-// buildSubjectsWildcardTailQuery builds the final SELECT with wildcard handling as a typed query.
-// Note: No trailing semicolon - this gets wrapped in pagination CTEs.
+// buildSubjectsWildcardTailQuery builds the final SELECT with wildcard expansion.
+// The returned SQL has no trailing semicolon because it is composed into a larger
+// pagination CTE by the caller.
 func buildSubjectsWildcardTailQuery(plan ListPlan) SQLer {
 	if plan.AllowWildcard {
 		// Build the wildcard handling query with permission check
