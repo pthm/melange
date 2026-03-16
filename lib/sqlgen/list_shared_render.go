@@ -28,6 +28,17 @@ func wrapQueryWithDepthForRender(sql, depthExpr, alias string) string {
 		alias, depthExpr, sql, alias)
 }
 
+// wrapQueryWithDepthAndPropagatable wraps a query to include depth and propagatable columns.
+// The propagatable column controls whether results from this block seed the recursive step.
+func wrapQueryWithDepthAndPropagatable(sql, depthExpr, alias string, propagatable bool) string {
+	propVal := "FALSE"
+	if propagatable {
+		propVal = "TRUE"
+	}
+	return fmt.Sprintf("SELECT DISTINCT %s.object_id, %s AS depth, %s AS propagatable\nFROM (\n%s\n) AS %s",
+		alias, depthExpr, propVal, sql, alias)
+}
+
 // formatQueryBlockSQL formats a query block with comments.
 func formatQueryBlockSQL(comments []string, sql string) string {
 	lines := make([]string, 0, len(comments)+1)

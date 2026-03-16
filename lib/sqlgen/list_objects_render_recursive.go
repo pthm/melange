@@ -25,7 +25,7 @@ func RenderListObjectsRecursiveFunction(plan ListPlan, blocks RecursiveBlockSet)
 		Recursive: true,
 		CTEs: []CTEDef{{
 			Name:    "accessible",
-			Columns: []string{"object_id", "depth"},
+			Columns: []string{"object_id", "depth", "propagatable"},
 			Query:   Raw(cteBody),
 		}},
 		Query: finalStmt,
@@ -66,13 +66,14 @@ func RenderListObjectsRecursiveFunction(plan ListPlan, blocks RecursiveBlockSet)
 func renderRecursiveCTEBody(blocks RecursiveBlockSet) string {
 	baseBlocksSQL := make([]string, 0, len(blocks.BaseBlocks))
 	for _, block := range blocks.BaseBlocks {
-		wrappedSQL := wrapQueryWithDepthForRender(block.Query.SQL(), "0", "base")
+		wrappedSQL := wrapQueryWithDepthAndPropagatable(block.Query.SQL(), "0", "base", block.Propagatable)
 		baseBlocksSQL = append(baseBlocksSQL, formatQueryBlockSQL(block.Comments, wrappedSQL))
 	}
 
 	cteBody := joinUnionBlocksSQL(baseBlocksSQL)
 
 	if blocks.RecursiveBlock != nil {
+		// Recursive block emits its own propagatable column (TRUE) via the Columns field
 		recursiveSQL := formatQueryBlockSQL(blocks.RecursiveBlock.Comments, blocks.RecursiveBlock.Query.SQL())
 		cteBody = appendUnionAll(cteBody, recursiveSQL)
 	}
