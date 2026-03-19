@@ -5,6 +5,7 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/pthm/melange.svg)](https://pkg.go.dev/github.com/pthm/melange)
 [![Go Report Card](https://goreportcard.com/badge/github.com/pthm/melange)](https://goreportcard.com/report/github.com/pthm/melange)
 [![codecov](https://codecov.io/gh/pthm/melange/graph/badge.svg)](https://codecov.io/gh/pthm/melange)
+[![Matrix](https://img.shields.io/badge/Matrix-Join%20Chat-green?logo=matrix)](https://matrix.to/#/#melange:matrix.org)
 
 <img align="right" width="300" src="assets/mascot.png">
 
@@ -298,7 +299,34 @@ These libraries provide a nicer API but are completely optional. See [`clients/`
 
 ## Contributing
 
-Contributions are welcome! Here's how to get started:
+Contributions are welcome! Melange is still evolving and feedback, bug reports, and improvements are greatly appreciated.
+
+### Chat
+
+If you have questions, want to discuss ideas, or need help getting started, join the Matrix room:
+
+[![Matrix](https://img.shields.io/matrix/melange:matrix.org?label=Matrix%20Chat&logo=matrix)](https://matrix.to/#/#melange:matrix.org)
+
+Matrix is the best place for:
+- general discussion about the project
+- design ideas or architecture questions
+- quick help getting set up
+
+### Issues
+
+For **bug reports, feature requests, or design discussions**, please open an issue:
+
+https://github.com/pthm/melange/issues
+
+When reporting a bug, please include:
+- steps to reproduce
+- expected vs actual behavior
+- relevant logs or error messages
+- environment details if applicable
+
+### Pull Requests
+
+Code contributions are very welcome.
 
 1. **Fork the repository** and clone locally
 2. **Create a branch** for your changes
@@ -311,7 +339,7 @@ Please ensure your code:
 - Includes tests for new functionality
 - Follows the existing code style
 
-For bug reports and feature requests, please [open an issue](https://github.com/pthm/melange/issues).
+For larger changes or new features, it's often helpful to **open an issue or start a discussion on Matrix first** so we can align on the approach.
 
 ---
 
