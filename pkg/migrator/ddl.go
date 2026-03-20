@@ -33,3 +33,11 @@ const addMelangeVersionColumn = `
 ALTER TABLE melange_migrations
 ADD COLUMN IF NOT EXISTS melange_version VARCHAR(64) NOT NULL DEFAULT '';
 `
+
+// addFunctionChecksumsColumn adds the function_checksums JSONB column for change detection.
+// Stores a map of function_name → SHA256(sql_body) so that `generate migration --db`
+// can determine which functions actually changed and emit minimal CREATE OR REPLACE statements.
+const addFunctionChecksumsColumn = `
+ALTER TABLE melange_migrations
+ADD COLUMN IF NOT EXISTS function_checksums JSONB NOT NULL DEFAULT '{}';
+`

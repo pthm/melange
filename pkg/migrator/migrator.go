@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -24,6 +25,9 @@ type (
 	ListGeneratedSQL = sqlgen.ListGeneratedSQL
 )
 
+// NamedFunction pairs a function name with its generated SQL body.
+type NamedFunction = sqlgen.NamedFunction
+
 // Function aliases from schema and sqlgen packages.
 var (
 	DetectCycles           = schema.DetectCycles
@@ -34,6 +38,7 @@ var (
 	GenerateSQL            = sqlgen.GenerateSQL
 	GenerateListSQL        = sqlgen.GenerateListSQL
 	CollectFunctionNames   = sqlgen.CollectFunctionNames
+	collectNamedFunctions  = sqlgen.CollectNamedFunctions
 )
 
 // CodegenVersion is incremented when SQL generation templates or logic change.
@@ -74,10 +79,11 @@ type InternalMigrateOptions struct {
 
 // MigrationRecord represents a row in the melange_migrations table.
 type MigrationRecord struct {
-	MelangeVersion string
-	SchemaChecksum string
-	CodegenVersion string
-	FunctionNames  []string
+	MelangeVersion    string
+	SchemaChecksum    string
+	CodegenVersion    string
+	FunctionNames     []string
+	FunctionChecksums map[string]string // function_name → SHA256(sql_body)
 }
 
 // Migrator handles loading authorization schemas into PostgreSQL.
@@ -320,6 +326,18 @@ func ComputeSchemaChecksum(content string) string {
 	return hex.EncodeToString(h[:])
 }
 
+// ComputeFunctionChecksums computes SHA256 hashes for each named function's SQL body.
+// The returned map is stored in the migration record and used by `generate migration --db`
+// to determine which functions have changed and need to be included in the migration.
+func ComputeFunctionChecksums(namedFunctions []NamedFunction) map[string]string {
+	checksums := make(map[string]string, len(namedFunctions))
+	for _, nf := range namedFunctions {
+		h := sha256.Sum256([]byte(nf.SQL))
+		checksums[nf.Name] = hex.EncodeToString(h[:])
+	}
+	return checksums
+}
+
 // GetLastMigration returns the most recent migration record, or nil if none exists.
 // This can be used to check if migration is needed before calling MigrateWithTypesAndOptions.
 func (m *Migrator) GetLastMigration(ctx context.Context) (*MigrationRecord, error) {
@@ -345,18 +363,54 @@ func (m *Migrator) getLastMigration(ctx context.Context, db Execer) (*MigrationR
 		return nil, nil // No migrations table yet
 	}
 
-	var rec MigrationRecord
+	// Check if function_checksums column exists (may be absent on older installations)
+	var hasChecksumsCol bool
 	err = db.QueryRowContext(ctx, `
-		SELECT melange_version, schema_checksum, codegen_version, function_names
-		FROM melange_migrations
-		ORDER BY id DESC
-		LIMIT 1
-	`).Scan(&rec.MelangeVersion, &rec.SchemaChecksum, &rec.CodegenVersion, pq.Array(&rec.FunctionNames))
-	if err == sql.ErrNoRows {
-		return nil, nil // No previous migration
-	}
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_name = 'melange_migrations'
+			AND column_name = 'function_checksums'
+			AND table_schema = current_schema()
+		)
+	`).Scan(&hasChecksumsCol)
 	if err != nil {
-		return nil, fmt.Errorf("querying last migration: %w", err)
+		return nil, fmt.Errorf("checking function_checksums column: %w", err)
+	}
+
+	var rec MigrationRecord
+	if hasChecksumsCol {
+		var checksumsJSON sql.NullString
+		err = db.QueryRowContext(ctx, `
+			SELECT melange_version, schema_checksum, codegen_version, function_names, function_checksums::TEXT
+			FROM melange_migrations
+			ORDER BY id DESC
+			LIMIT 1
+		`).Scan(&rec.MelangeVersion, &rec.SchemaChecksum, &rec.CodegenVersion, pq.Array(&rec.FunctionNames), &checksumsJSON)
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("querying last migration: %w", err)
+		}
+		if checksumsJSON.Valid && checksumsJSON.String != "" {
+			rec.FunctionChecksums = make(map[string]string)
+			if err := json.Unmarshal([]byte(checksumsJSON.String), &rec.FunctionChecksums); err != nil {
+				return nil, fmt.Errorf("unmarshaling function checksums: %w", err)
+			}
+		}
+	} else {
+		err = db.QueryRowContext(ctx, `
+			SELECT melange_version, schema_checksum, codegen_version, function_names
+			FROM melange_migrations
+			ORDER BY id DESC
+			LIMIT 1
+		`).Scan(&rec.MelangeVersion, &rec.SchemaChecksum, &rec.CodegenVersion, pq.Array(&rec.FunctionNames))
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("querying last migration: %w", err)
+		}
 	}
 	return &rec, nil
 }
@@ -427,15 +481,23 @@ func (m *Migrator) applyMigrationsDDL(ctx context.Context, db Execer) error {
 	if _, err := db.ExecContext(ctx, addMelangeVersionColumn); err != nil {
 		return fmt.Errorf("adding melange_version column: %w", err)
 	}
+	// Add function_checksums column if it doesn't exist (for existing tables)
+	if _, err := db.ExecContext(ctx, addFunctionChecksumsColumn); err != nil {
+		return fmt.Errorf("adding function_checksums column: %w", err)
+	}
 	return nil
 }
 
 // insertMigrationRecord records the migration in melange_migrations.
-func (m *Migrator) insertMigrationRecord(ctx context.Context, db Execer, melangeVersion, schemaChecksum string, functionNames []string) error {
-	_, err := db.ExecContext(ctx, `
-		INSERT INTO melange_migrations (melange_version, schema_checksum, codegen_version, function_names)
-		VALUES ($1, $2, $3, $4)
-	`, melangeVersion, schemaChecksum, CodegenVersion, pq.Array(functionNames))
+func (m *Migrator) insertMigrationRecord(ctx context.Context, db Execer, melangeVersion, schemaChecksum string, functionNames []string, functionChecksums map[string]string) error {
+	checksumsJSON, err := json.Marshal(functionChecksums)
+	if err != nil {
+		return fmt.Errorf("marshaling function checksums: %w", err)
+	}
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO melange_migrations (melange_version, schema_checksum, codegen_version, function_names, function_checksums)
+		VALUES ($1, $2, $3, $4, $5)
+	`, melangeVersion, schemaChecksum, CodegenVersion, pq.Array(functionNames), string(checksumsJSON))
 	if err != nil {
 		return fmt.Errorf("inserting migration record: %w", err)
 	}
@@ -488,8 +550,10 @@ func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeD
 		return fmt.Errorf("generating list SQL: %w", err)
 	}
 
-	// 7. Collect expected function names for tracking and orphan detection
+	// 7. Collect expected function names and checksums for tracking
 	expectedFunctions := CollectFunctionNames(analyses)
+	namedFunctions := collectNamedFunctions(generatedSQL, listSQL, analyses)
+	functionChecksums := ComputeFunctionChecksums(namedFunctions)
 
 	// 8. Handle dry-run mode
 	if opts.DryRun != nil {
@@ -535,7 +599,7 @@ func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeD
 
 		// Record migration
 		if schemaChecksum != "" {
-			if err := m.insertMigrationRecord(ctx, tx, opts.Version, schemaChecksum, expectedFunctions); err != nil {
+			if err := m.insertMigrationRecord(ctx, tx, opts.Version, schemaChecksum, expectedFunctions, functionChecksums); err != nil {
 				return err
 			}
 		}
@@ -561,7 +625,7 @@ func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeD
 		return err
 	}
 	if schemaChecksum != "" {
-		if err := m.insertMigrationRecord(ctx, m.db, opts.Version, schemaChecksum, expectedFunctions); err != nil {
+		if err := m.insertMigrationRecord(ctx, m.db, opts.Version, schemaChecksum, expectedFunctions, functionChecksums); err != nil {
 			return err
 		}
 	}

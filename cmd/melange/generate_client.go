@@ -43,7 +43,7 @@ Supported runtimes: ` + strings.Join(clientgen.ListRuntimes(), ", "),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Resolve values: flags > config > defaults
 		runtime := resolveString(genClientRuntime, cfg.Generate.Client.Runtime)
-		schema := resolveString(genClientSchema, cfg.Generate.Client.Schema, cfg.Schema)
+		schema := resolveString(genClientSchema, cfg.Schema)
 		output := resolveString(genClientOutput, cfg.Generate.Client.Output)
 		pkg := resolveString(genClientPackage, cfg.Generate.Client.Package, "authz")
 		filter := resolveString(genClientFilter, cfg.Generate.Client.Filter)

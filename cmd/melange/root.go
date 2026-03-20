@@ -138,6 +138,17 @@ func resolveBool(values ...bool) bool {
 	return false
 }
 
+// boolCount returns the number of true values.
+func boolCount(values ...bool) int {
+	n := 0
+	for _, v := range values {
+		if v {
+			n++
+		}
+	}
+	return n
+}
+
 // isCI reports whether the process is running under a CI system by checking
 // the standard CI environment variable set by most CI providers.
 func isCI() bool {

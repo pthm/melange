@@ -166,6 +166,57 @@ type DispatcherCase struct {
 	SatisfyingRelations []string // relations in closure that satisfy this one (used in inline userset check)
 }
 
+// NamedFunction pairs a function name with its generated SQL body.
+type NamedFunction struct {
+	Name string
+	SQL  string
+}
+
+// CollectNamedFunctions returns all specialized functions paired with their SQL.
+// Dispatchers are excluded — they always change when any relation changes and
+// should be unconditionally included in migrations.
+//
+// The iteration order matches GenerateSQL and GenerateListSQL, so callers can
+// zip generated SQL arrays with the returned names.
+func CollectNamedFunctions(
+	generatedSQL GeneratedSQL,
+	listSQL ListGeneratedSQL,
+	analyses []RelationAnalysis,
+) []NamedFunction {
+	var result []NamedFunction
+	checkIdx, noWildcardIdx := 0, 0
+	listObjIdx, listSubjIdx := 0, 0
+
+	for _, a := range analyses {
+		if a.Capabilities.CheckAllowed {
+			result = append(result, NamedFunction{
+				Name: functionName(a.ObjectType, a.Relation),
+				SQL:  generatedSQL.Functions[checkIdx],
+			})
+			checkIdx++
+			result = append(result, NamedFunction{
+				Name: functionNameNoWildcard(a.ObjectType, a.Relation),
+				SQL:  generatedSQL.NoWildcardFunctions[noWildcardIdx],
+			})
+			noWildcardIdx++
+		}
+		if a.Capabilities.ListAllowed {
+			result = append(result, NamedFunction{
+				Name: listObjectsFunctionName(a.ObjectType, a.Relation),
+				SQL:  listSQL.ListObjectsFunctions[listObjIdx],
+			})
+			listObjIdx++
+			result = append(result, NamedFunction{
+				Name: listSubjectsFunctionName(a.ObjectType, a.Relation),
+				SQL:  listSQL.ListSubjectsFunctions[listSubjIdx],
+			})
+			listSubjIdx++
+		}
+	}
+
+	return result
+}
+
 // CollectFunctionNames returns all function names that will be generated for the given analyses.
 // This is used for migration tracking and orphan detection to identify stale functions
 // that need to be dropped when the schema changes.

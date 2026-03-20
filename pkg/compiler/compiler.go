@@ -36,5 +36,11 @@ var ComputeCanGenerate = sqlgen.ComputeCanGenerate
 // CollectFunctionNames returns all generated function names for tracking.
 var CollectFunctionNames = sqlgen.CollectFunctionNames
 
+// NamedFunction pairs a function name with its generated SQL body.
+type NamedFunction = sqlgen.NamedFunction
+
+// CollectNamedFunctions returns specialized functions paired with their SQL.
+var CollectNamedFunctions = sqlgen.CollectNamedFunctions
+
 // BuildInlineSQLData builds inline SQL data from closure and analyses.
 var BuildInlineSQLData = sqlgen.BuildInlineSQLData

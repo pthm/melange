@@ -35,6 +35,15 @@ var migrateCmd = &cobra.Command{
   # Force re-apply even if schema unchanged
   melange migrate --db postgres://localhost/mydb --force`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		// Warn if generate.migration.output is configured
+		if cfg.Generate.Migration.Output != "" && !quiet {
+			fmt.Fprintln(os.Stderr, "WARNING: generate.migration.output is configured in your melange config.")
+			fmt.Fprintln(os.Stderr, "         This suggests you may be using 'melange generate migration' to produce")
+			fmt.Fprintln(os.Stderr, "         SQL files for an external migration framework. Running 'melange migrate'")
+			fmt.Fprintln(os.Stderr, "         alongside generated migrations can cause state tracking conflicts.")
+			fmt.Fprintln(os.Stderr)
+		}
+
 		// Resolve values
 		schemaPath := resolveString(migrateSchema, cfg.Schema)
 		dryRun := resolveBool(migrateDryRun, cfg.Migrate.DryRun)

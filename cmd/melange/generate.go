@@ -10,4 +10,5 @@ var generateCmd = &cobra.Command{
 
 func init() {
 	generateCmd.AddCommand(generateClientCmd)
+	generateCmd.AddCommand(generateMigrationCmd)
 }

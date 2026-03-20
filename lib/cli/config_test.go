@@ -344,20 +344,26 @@ func TestDSN_MissingUser(t *testing.T) {
 	assert.Contains(t, err.Error(), "database.user is required")
 }
 
-func TestResolvedSchema(t *testing.T) {
-	cfg := &Config{
-		Schema: "top-level.fga",
-		Generate: GenerateConfig{
-			Client: ClientConfig{
-				Schema: "client-specific.fga",
-			},
-		},
-	}
+func TestLoadConfig_MigrateAndGenerateMigrationDefaults(t *testing.T) {
+	root := t.TempDir()
+	err := os.Mkdir(filepath.Join(root, ".git"), 0o755)
+	require.NoError(t, err)
 
-	// Client-specific takes precedence
-	assert.Equal(t, "client-specific.fga", cfg.ResolvedSchema())
+	oldCwd, err := os.Getwd()
+	require.NoError(t, err)
+	defer func() { _ = os.Chdir(oldCwd) }()
+	err = os.Chdir(root)
+	require.NoError(t, err)
 
-	// Falls back to top-level
-	cfg.Generate.Client.Schema = ""
-	assert.Equal(t, "top-level.fga", cfg.ResolvedSchema())
+	cfg, _, err := LoadConfig("")
+	require.NoError(t, err)
+
+	// melange migrate defaults
+	assert.False(t, cfg.Migrate.DryRun)
+	assert.False(t, cfg.Migrate.Force)
+
+	// melange generate migration defaults
+	assert.Equal(t, "melange", cfg.Generate.Migration.Name)
+	assert.Equal(t, "split", cfg.Generate.Migration.Format)
+	assert.Empty(t, cfg.Generate.Migration.Output)
 }
