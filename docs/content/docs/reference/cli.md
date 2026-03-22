@@ -3,7 +3,7 @@ title: CLI Reference
 weight: 1
 ---
 
-The Melange CLI provides commands for validating schemas, generating client code, and applying migrations to your database. Built on Cobra/Viper, it supports [configuration files](configuration.md), environment variables, and command-line flags with consistent precedence.
+The Melange CLI provides commands for validating schemas, generating client code, and applying migrations to your database. Built on Cobra/Viper, it supports [configuration files](../configuration/), environment variables, and command-line flags with consistent precedence.
 
 ## Installation
 
@@ -17,7 +17,7 @@ These flags are available on all commands:
 
 | Flag                | Description                                                                                         |
 | ------------------- | --------------------------------------------------------------------------------------------------- |
-| `--config`          | Path to config file (default: auto-discover `melange.yaml`). See [Configuration](configuration.md). |
+| `--config`          | Path to config file (default: auto-discover `melange.yaml`). See [Configuration](../configuration/). |
 | `-v`, `--verbose`   | Increase verbosity (can be repeated: `-vv`, `-vvv`)                                                 |
 | `-q`, `--quiet`     | Suppress non-error output                                                                           |
 | `--no-update-check` | Disable automatic update checking                                                                   |
@@ -166,7 +166,7 @@ WARNING: melange_tuples view/table does not exist.
          Permission checks will fail until you create it.
 ```
 
-See [Tuples View](../concepts/tuples-view.md) for setup instructions.
+See [Tuples View](../../concepts/tuples-view/) for setup instructions.
 
 ### status
 
@@ -417,7 +417,7 @@ func AnyUser() melange.Object {
 
 Generate versioned SQL migration files for use with external migration frameworks (golang-migrate, Atlas, Flyway, etc.). Instead of applying SQL directly like `melange migrate`, this command produces `.sql` files you commit, review, and apply through your existing workflow.
 
-For a conceptual overview of when to use this versus `melange migrate`, see [Running Migrations](../concepts/migrations.md).
+For a conceptual overview of when to use this versus `melange migrate`, see [Running Migrations](../../concepts/migrations/).
 
 ```bash
 melange generate migration \
@@ -783,7 +783,7 @@ git commit -m "Add editor relation to document type"
 migrate -path db/migrations -database "$DATABASE_URL" up
 ```
 
-See [Running Migrations](../concepts/migrations.md) for guidance on choosing between built-in and external migration strategies.
+See [Running Migrations](../../concepts/migrations/) for guidance on choosing between built-in and external migration strategies.
 
 ### Troubleshooting
 
@@ -896,4 +896,4 @@ for _, check := range report.Checks {
 }
 ```
 
-See [Checking Permissions](../guides/checking-permissions.md) for the full Go API reference.
+See [Checking Permissions](../../guides/checking-permissions/) for the full Go API reference.

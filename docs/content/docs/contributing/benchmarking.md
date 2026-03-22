@@ -85,7 +85,7 @@ just bench-quick
 
 ### Test Schema
 
-Scale benchmarks use a GitHub-like model with organizations, repositories, and pull requests. See [Performance Reference](../reference/performance.md#test-schema) for the full schema.
+Scale benchmarks use a GitHub-like model with organizations, repositories, and pull requests. See [Performance Reference](../../reference/performance/#test-schema) for the full schema.
 
 ### Test Data Configuration
 

@@ -797,7 +797,7 @@ JOIN list_accessible_objects('user', '123', 'viewer', 'document') a
 
 {{< /tabs >}}
 
-See [Listing Objects](./listing-objects.md) for details.
+See [Listing Objects](../listing-objects/) for details.
 
 ## Schema Validation
 

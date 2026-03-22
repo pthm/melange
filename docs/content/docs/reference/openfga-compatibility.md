@@ -231,4 +231,4 @@ just test-openfga-feature Wildcards
 
 The test suite validates behavior against the official OpenFGA specification, ensuring that permission checks return identical results to the OpenFGA server for all supported patterns.
 
-See [Contributing - Testing](../contributing/testing.md) for details on running the compatibility test suite.
+See [Contributing - Testing](../../contributing/testing/) for details on running the compatibility test suite.

@@ -635,4 +635,4 @@ ROLLBACK;
 
 ### Index Recommendations
 
-See [Tuples View](../concepts/tuples-view.md#performance-optimization) for indexing strategies that optimize the SQL functions.
+See [Tuples View](../../concepts/tuples-view/#performance-optimization) for indexing strategies that optimize the SQL functions.

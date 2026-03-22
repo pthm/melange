@@ -43,7 +43,7 @@ Melange connects, generates the SQL functions, and applies them in a single tran
 - **Orphan cleanup**: Functions from removed relations are dropped automatically.
 - **Dry-run**: Use `--dry-run` to preview the SQL without applying it.
 
-See the [CLI Reference](../reference/cli.md#migrate) for the full flag list.
+See the [CLI Reference](../../reference/cli/#migrate) for the full flag list.
 
 ## External Migration Frameworks
 
@@ -202,6 +202,6 @@ melange generate migration \
 
 ## Next Steps
 
-- [CLI Reference — generate migration](../reference/cli.md#generate-migration) — full flag reference and examples
-- [Configuration — generate.migration](../reference/configuration.md#generate-migration-settings) — config file and environment variables
-- [How It Works](./how-it-works.md) — understand what the generated SQL functions do
+- [CLI Reference — generate migration](../../reference/cli/#generate-migration) — full flag reference and examples
+- [Configuration — generate.migration](../../reference/configuration/#generate-migration-settings) — config file and environment variables
+- [How It Works](../how-it-works/) — understand what the generated SQL functions do

@@ -105,7 +105,7 @@ myproject/
 ```
 
 {{< callout type="info" >}}
-You can also place `melange.yaml` at the project root — Melange discovers both conventions automatically. See [Configuration](./reference/configuration.md) for details.
+You can also place `melange.yaml` at the project root — Melange discovers both conventions automatically. See [Configuration](../reference/configuration/) for details.
 {{< /callout >}}
 
 #### Customizing the init
@@ -201,7 +201,7 @@ type user
 
 Review and customize the model for your application's needs. If you didn't use `melange init`, create your schema file manually (e.g., `melange/schema.fga`) using the [OpenFGA DSL syntax](https://openfga.dev/docs/configuration-language).
 
-See the [Modelling guide](./concepts/modelling.md) for a full walkthrough of relation patterns like exclusions, intersections, and wildcards.
+See the [Modelling guide](../concepts/modelling/) for a full walkthrough of relation patterns like exclusions, intersections, and wildcards.
 
 ### Step 3: Create the melange_tuples View
 
@@ -274,7 +274,7 @@ melange migrate \
 This generates and installs specialized SQL permission functions.
 
 {{< callout type="info" >}}
-If you use an external migration framework (golang-migrate, Atlas, Flyway, etc.), use `melange generate migration` instead to produce versioned SQL files that fit into your existing workflow. See [Running Migrations](./concepts/migrations.md) for details.
+If you use an external migration framework (golang-migrate, Atlas, Flyway, etc.), use `melange generate migration` instead to produce versioned SQL files that fit into your existing workflow. See [Running Migrations](../concepts/migrations/) for details.
 {{< /callout >}}
 
 ### Step 5: Generate Type-Safe Client Code (Optional)
@@ -599,10 +599,10 @@ async function checkPermissionCached(
 
 ## Next Steps
 
-- [How It Works](./concepts/how-it-works.md) - Understand specialized SQL generation and performance
-- [Tuples View](./concepts/tuples-view.md) - Detailed guidance on mapping your domain tables
-- [CLI Reference](./reference/cli.md) - Full CLI command documentation
-- [Configuration](./reference/configuration.md) - Configuration files, environment variables, and precedence
-- [Checking Permissions](./guides/checking-permissions.md) - Complete API reference
-- [SQL API](./reference/sql-api.md) - Direct SQL function documentation for any language
-- [OpenFGA Compatibility](./reference/openfga-compatibility.md) - Supported features and migration path
+- [How It Works](../concepts/how-it-works/) - Understand specialized SQL generation and performance
+- [Tuples View](../concepts/tuples-view/) - Detailed guidance on mapping your domain tables
+- [CLI Reference](../reference/cli/) - Full CLI command documentation
+- [Configuration](../reference/configuration/) - Configuration files, environment variables, and precedence
+- [Checking Permissions](../guides/checking-permissions/) - Complete API reference
+- [SQL API](../reference/sql-api/) - Direct SQL function documentation for any language
+- [OpenFGA Compatibility](../reference/openfga-compatibility/) - Supported features and migration path

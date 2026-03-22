@@ -164,7 +164,7 @@ Configure under `generate.migration:`:
 | `format` | string | `split` | Output format: `split` or `single` |
 
 {{< callout type="warning" >}}
-Do not configure both `generate.migration.output` and use `melange migrate` against the same database. The two strategies track state differently and mixing them causes warnings. See [Running Migrations](../concepts/migrations.md) for guidance.
+Do not configure both `generate.migration.output` and use `melange migrate` against the same database. The two strategies track state differently and mixing them causes warnings. See [Running Migrations](../../concepts/migrations/) for guidance.
 {{< /callout >}}
 
 ### Migrate Settings

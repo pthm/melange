@@ -642,5 +642,5 @@ COMMIT;
 
 ## See Also
 
-- [Listing Subjects](./listing-subjects.md) - Find who has access to an object
-- [Checking Permissions](./checking-permissions.md) - Single permission checks
+- [Listing Subjects](../listing-subjects/) - Find who has access to an object
+- [Checking Permissions](../checking-permissions/) - Single permission checks

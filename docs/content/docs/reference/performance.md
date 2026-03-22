@@ -302,7 +302,7 @@ CREATE INDEX idx_org_members_text
 
 **Without expression indexes**, PostgreSQL must perform sequential scans when your view converts integer IDs to text.
 
-See the [Tuples View](../concepts/tuples-view.md#performance-optimization) documentation for complete indexing guidance.
+See the [Tuples View](../../concepts/tuples-view/#performance-optimization) documentation for complete indexing guidance.
 
 ### 4. Use Appropriate Scaling Strategies
 
@@ -313,7 +313,7 @@ See the [Tuples View](../concepts/tuples-view.md#performance-optimization) docum
 | 100K-1M tuples  | Regular view + expression indexes + caching, or materialized view |
 | > 1M tuples     | Dedicated table with trigger sync + caching                       |
 
-See [Tuples View Scaling Strategies](../concepts/tuples-view.md#scaling-strategies) for implementation details.
+See [Tuples View Scaling Strategies](../../concepts/tuples-view/#scaling-strategies) for implementation details.
 
 ### 5. Use Pagination for Large Result Sets
 
@@ -404,6 +404,6 @@ Melange provides the consistency guarantees of transactional SQL with performanc
 
 ## Further Reading
 
-- [Tuples View](../concepts/tuples-view.md) - Detailed indexing and scaling strategies
-- [Contributing: Benchmarking](../contributing/benchmarking.md) - Run benchmarks yourself
-- [How It Works](../concepts/how-it-works.md) - Architecture details explaining performance characteristics
+- [Tuples View](../../concepts/tuples-view/) - Detailed indexing and scaling strategies
+- [Contributing: Benchmarking](../../contributing/benchmarking/) - Run benchmarks yourself
+- [How It Works](../../concepts/how-it-works/) - Architecture details explaining performance characteristics

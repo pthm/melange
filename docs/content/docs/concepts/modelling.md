@@ -266,4 +266,4 @@ define can_review: can_read from repo but not author
 - [OpenFGA Modelling Guide](https://openfga.dev/docs/modeling) - Comprehensive modelling documentation
 - [OpenFGA Playground](https://play.fga.dev) - Interactive schema editor and testing
 - [Building Blocks](https://openfga.dev/docs/modeling/building-blocks) - Detailed explanation of relations
-- [OpenFGA Compatibility](../reference/openfga-compatibility.md) - What features Melange supports
+- [OpenFGA Compatibility](../../reference/openfga-compatibility/) - What features Melange supports
