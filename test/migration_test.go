@@ -503,6 +503,58 @@ func TestMigration_BuiltinForceReapply(t *testing.T) {
 		"force should add a new migration record")
 }
 
+// TestMigration_Phase2SkipOnVersionBump verifies that upgrading the melange version
+// with an identical schema skips re-applying functions (phase 2 skip) but still
+// records the new migration state.
+//
+// To simulate a version upgrade, we apply V1 normally then update the stored
+// codegen_version to an older value. The next migration sees a version mismatch
+// (phase 1 doesn't skip), generates SQL, finds checksums are identical (phase 2
+// skips the apply), and records the new state.
+func TestMigration_Phase2SkipOnVersionBump(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+	m := migrator.NewMigrator(db, "")
+
+	// Apply V1
+	migrateSchema(t, ctx, m, schemaV1, migrator.InternalMigrateOptions{
+		Version: "v0.7.3",
+	})
+	assert.Equal(t, 1, migrationRecordCount(t, ctx, db))
+
+	// Simulate a version upgrade by changing the stored codegen_version
+	// to something different from CodegenVersion(). This makes phase 1
+	// think the melange version has changed.
+	_, err := db.ExecContext(ctx,
+		"UPDATE melange_migrations SET codegen_version = 'v-old'")
+	require.NoError(t, err)
+
+	// Re-apply same schema. Phase 1 won't skip (codegen_version mismatch),
+	// phase 2 should skip (generated SQL is identical) and only record state.
+	migrateSchema(t, ctx, m, schemaV1, migrator.InternalMigrateOptions{
+		Version: "v0.7.4",
+	})
+	assert.Equal(t, 2, migrationRecordCount(t, ctx, db),
+		"phase 2 skip should still record a migration")
+
+	// Functions should still exist and be unchanged
+	assertFunctions(t, ctx, db, map[string]string{
+		"check_permission":      "dispatcher should still exist",
+		"check_document_owner":  "owner should still exist",
+		"check_document_viewer": "viewer should still exist",
+	})
+
+	// The last migration record should reflect the current codegen version
+	rec, err := m.GetLastMigration(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	assert.Equal(t, migrator.ComputeSchemaChecksum(schemaV1), rec.SchemaChecksum)
+}
+
 // TestMigration_DryRun verifies that dry-run mode outputs SQL without applying changes.
 func TestMigration_DryRun(t *testing.T) {
 	if testing.Short() {

@@ -77,10 +77,13 @@ func MigrateFromString(ctx context.Context, db Execer, content string) error {
 // MigrateWithOptions performs migration with control over dry-run and skip behavior.
 // Use this when you need to preview migrations, force re-application, or detect skips.
 //
-// The skip-if-unchanged optimization compares the schema content hash and codegen
-// version against the last successful migration. If both match and Force is false,
-// the migration is skipped (skipped=true). This avoids redundant function regeneration
-// on every application restart when schemas are stable.
+// Skip detection has two phases. Phase 1 compares the schema content hash and
+// melange version against the last migration — if both match, migration is
+// skipped entirely (skipped=true). Phase 2 generates SQL and compares function
+// checksums; if the output is identical to what's already applied, the functions
+// are not re-applied (only the migration record is updated). This avoids
+// redundant function regeneration even across melange version upgrades when the
+// generated SQL hasn't changed.
 //
 // Returns (skipped, error):
 //   - skipped=true if migration was skipped due to unchanged schema (only when Force=false and DryRun=nil)

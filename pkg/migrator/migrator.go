@@ -425,12 +425,45 @@ func (m *Migrator) getLastMigration(ctx context.Context, db Execer) (*MigrationR
 }
 
 // shouldSkipMigration returns true if the schema and codegen version are unchanged.
+// This is the fast-path (phase 1) skip: no SQL generation needed at all.
 func shouldSkipMigration(lastMigration *MigrationRecord, schemaChecksum string) bool {
 	if lastMigration == nil {
 		return false
 	}
 	return lastMigration.SchemaChecksum == schemaChecksum &&
 		lastMigration.CodegenVersion == CodegenVersion()
+}
+
+// shouldSkipApply returns true if the generated SQL is identical to what was
+// last applied. This is the phase 2 skip: SQL was generated (because the schema
+// or melange version changed) but the output is byte-for-byte identical, so
+// there is nothing to apply. Returns true only when there are no orphaned
+// functions and every function checksum matches.
+func shouldSkipApply(lastMigration *MigrationRecord, currentChecksums map[string]string, expectedFunctions []string) bool {
+	if lastMigration == nil || lastMigration.FunctionChecksums == nil {
+		return false
+	}
+
+	// Check for orphaned functions (present in previous but not in current)
+	currentSet := make(map[string]bool, len(expectedFunctions))
+	for _, fn := range expectedFunctions {
+		currentSet[fn] = true
+	}
+	for _, fn := range lastMigration.FunctionNames {
+		if !currentSet[fn] {
+			return false // Orphan exists, must apply
+		}
+	}
+
+	// Check that every current function has an unchanged checksum
+	for name, checksum := range currentChecksums {
+		prevChecksum, existed := lastMigration.FunctionChecksums[name]
+		if !existed || prevChecksum != checksum {
+			return false // New or changed function, must apply
+		}
+	}
+
+	return true
 }
 
 // getCurrentFunctions returns all melange-generated function names from pg_proc.
@@ -497,6 +530,34 @@ func (m *Migrator) applyMigrationsDDL(ctx context.Context, db Execer) error {
 	return nil
 }
 
+// recordMigrationOnly inserts a migration record without re-applying functions.
+// Used when phase 2 skip determines the generated SQL is identical to what's
+// already installed — only the melange version or schema checksum changed.
+func (m *Migrator) recordMigrationOnly(ctx context.Context, melangeVersion, schemaChecksum string, functionNames []string, functionChecksums map[string]string) error {
+	if txer, ok := m.db.(interface {
+		BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
+	}); ok {
+		tx, err := txer.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("starting transaction: %w", err)
+		}
+		defer func() { _ = tx.Rollback() }()
+
+		if err := m.applyMigrationsDDL(ctx, tx); err != nil {
+			return err
+		}
+		if err := m.insertMigrationRecord(ctx, tx, melangeVersion, schemaChecksum, functionNames, functionChecksums); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+
+	if err := m.applyMigrationsDDL(ctx, m.db); err != nil {
+		return err
+	}
+	return m.insertMigrationRecord(ctx, m.db, melangeVersion, schemaChecksum, functionNames, functionChecksums)
+}
+
 // insertMigrationRecord records the migration in melange_migrations.
 func (m *Migrator) insertMigrationRecord(ctx context.Context, db Execer, melangeVersion, schemaChecksum string, functionNames []string, functionChecksums map[string]string) error {
 	checksumsJSON, err := json.Marshal(functionChecksums)
@@ -514,8 +575,16 @@ func (m *Migrator) insertMigrationRecord(ctx context.Context, db Execer, melange
 }
 
 // MigrateWithTypesAndOptions performs database migration with options.
-// This is the full-featured migration method that supports dry-run, skip-if-unchanged,
-// and orphan cleanup.
+// This is the full-featured migration method that supports dry-run, two-phase
+// skip detection, and orphan cleanup.
+//
+// Skip detection has two phases:
+//   - Phase 1: If both the schema checksum and melange version match the last
+//     migration, skip entirely without generating SQL.
+//   - Phase 2: If phase 1 didn't skip (schema or version changed), generate
+//     the SQL and compare function checksums against the last migration. If
+//     every function is identical and no orphans exist, skip applying and
+//     only record the new migration state.
 //
 // See MigrateWithTypes for basic usage without options.
 func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeDefinition, opts InternalMigrateOptions) error {
@@ -530,14 +599,17 @@ func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeD
 		schemaChecksum = ComputeSchemaChecksum(opts.SchemaContent)
 	}
 
-	// 3. Check if we can skip migration (unless force or dry-run)
+	// 3. Fetch last migration record (needed for both skip phases)
+	var lastMigration *MigrationRecord
 	if !opts.Force && opts.DryRun == nil && schemaChecksum != "" {
-		lastMigration, err := m.getLastMigration(ctx, m.db)
+		var err error
+		lastMigration, err = m.getLastMigration(ctx, m.db)
 		if err != nil {
 			return fmt.Errorf("checking last migration: %w", err)
 		}
+		// Phase 1 skip: schema + melange version unchanged → skip entirely
 		if shouldSkipMigration(lastMigration, schemaChecksum) {
-			return nil // Schema unchanged, skip migration
+			return nil
 		}
 	}
 
@@ -570,7 +642,15 @@ func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeD
 		return nil
 	}
 
-	// 9. Apply everything atomically
+	// 9. Phase 2 skip: generated SQL is identical to what's already applied.
+	// The schema or melange version changed (phase 1 didn't skip), but the
+	// generated functions are byte-for-byte identical. Record the new version
+	// but skip re-applying the functions.
+	if !opts.Force && schemaChecksum != "" && shouldSkipApply(lastMigration, functionChecksums, expectedFunctions) {
+		return m.recordMigrationOnly(ctx, opts.Version, schemaChecksum, expectedFunctions, functionChecksums)
+	}
+
+	// 10. Apply everything atomically
 	if txer, ok := m.db.(interface {
 		BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
 	}); ok {

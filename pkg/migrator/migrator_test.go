@@ -136,6 +136,81 @@ func TestShouldSkipMigration(t *testing.T) {
 	})
 }
 
+func TestShouldSkipApply(t *testing.T) {
+	checksums := map[string]string{
+		"check_doc_viewer": "hash_a",
+		"check_doc_owner":  "hash_b",
+	}
+	functions := []string{"check_doc_viewer", "check_doc_owner", "check_permission"}
+
+	t.Run("nil record does not skip", func(t *testing.T) {
+		if shouldSkipApply(nil, checksums, functions) {
+			t.Error("should not skip when no previous migration exists")
+		}
+	})
+
+	t.Run("nil previous checksums does not skip", func(t *testing.T) {
+		rec := &MigrationRecord{
+			FunctionNames:     functions,
+			FunctionChecksums: nil,
+		}
+		if shouldSkipApply(rec, checksums, functions) {
+			t.Error("should not skip when previous checksums are nil")
+		}
+	})
+
+	t.Run("identical checksums and no orphans skips", func(t *testing.T) {
+		rec := &MigrationRecord{
+			FunctionNames:     functions,
+			FunctionChecksums: checksums,
+		}
+		if !shouldSkipApply(rec, checksums, functions) {
+			t.Error("should skip when all checksums match and no orphans")
+		}
+	})
+
+	t.Run("changed checksum does not skip", func(t *testing.T) {
+		rec := &MigrationRecord{
+			FunctionNames: functions,
+			FunctionChecksums: map[string]string{
+				"check_doc_viewer": "old_hash",
+				"check_doc_owner":  "hash_b",
+			},
+		}
+		if shouldSkipApply(rec, checksums, functions) {
+			t.Error("should not skip when a checksum changed")
+		}
+	})
+
+	t.Run("new function does not skip", func(t *testing.T) {
+		rec := &MigrationRecord{
+			FunctionNames:     []string{"check_doc_viewer", "check_permission"},
+			FunctionChecksums: map[string]string{"check_doc_viewer": "hash_a"},
+		}
+		if shouldSkipApply(rec, checksums, functions) {
+			t.Error("should not skip when there are new functions")
+		}
+	})
+
+	t.Run("orphaned function does not skip", func(t *testing.T) {
+		rec := &MigrationRecord{
+			FunctionNames: []string{
+				"check_doc_viewer", "check_doc_owner",
+				"check_old_removed", // orphan
+				"check_permission",
+			},
+			FunctionChecksums: map[string]string{
+				"check_doc_viewer":  "hash_a",
+				"check_doc_owner":   "hash_b",
+				"check_old_removed": "hash_c",
+			},
+		}
+		if shouldSkipApply(rec, checksums, functions) {
+			t.Error("should not skip when there are orphaned functions")
+		}
+	})
+}
+
 func TestOutputDryRun(t *testing.T) {
 	m := NewMigrator(nil, "")
 
