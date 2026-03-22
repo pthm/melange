@@ -60,7 +60,7 @@ The cache respects the `XDG_CACHE_HOME` environment variable if set.
 Commands are organized into logical groups:
 
 **Schema Commands:** `validate`, `migrate`, `status`, `doctor`
-**Client Commands:** `generate`
+**Client Commands:** `generate client`, `generate migration`
 **Utility Commands:** `init`, `config`, `version`, `license`
 
 ---
@@ -413,6 +413,106 @@ func AnyUser() melange.Object {
 | `go`         | Implemented | Type-safe Go code with constants and constructors |
 | `typescript` | Planned     | TypeScript types and factory functions            |
 
+### generate migration
+
+Generate versioned SQL migration files for use with external migration frameworks (golang-migrate, Atlas, Flyway, etc.). Instead of applying SQL directly like `melange migrate`, this command produces `.sql` files you commit, review, and apply through your existing workflow.
+
+For a conceptual overview of when to use this versus `melange migrate`, see [Running Migrations](../concepts/migrations.md).
+
+```bash
+melange generate migration \
+  --schema schemas/schema.fga \
+  --output db/migrations
+```
+
+**Flags:**
+
+| Flag                  | Default              | Description                                                    |
+| --------------------- | -------------------- | -------------------------------------------------------------- |
+| `--schema`            | `schemas/schema.fga` | Path to current `.fga` schema file (required)                  |
+| `--output`            | (stdout)             | Output directory for migration files                           |
+| `--name`              | `melange`            | Migration name suffix used in filenames                        |
+| `--format`            | `split`              | Output format: `split` (`.up.sql`/`.down.sql`) or `single`    |
+| `--up`                | `false`              | Output only the UP migration (stdout mode only)                |
+| `--down`              | `false`              | Output only the DOWN migration (stdout mode only)              |
+| `--db`                | -                    | Database URL — compare against most recent migration record    |
+| `--git-ref`           | -                    | Git ref — compare against schema at that commit/branch/tag     |
+| `--previous-schema`   | -                    | File path — compare against a previous `.fga` file             |
+
+{{< callout type="info" >}}
+The three comparison flags (`--db`, `--git-ref`, `--previous-schema`) are mutually exclusive. When none is specified, a full migration is generated containing all functions.
+{{< /callout >}}
+
+**Output modes:**
+
+When `--output` is specified, timestamped files are written to that directory:
+
+```
+db/migrations/20260322143000_melange.up.sql
+db/migrations/20260322143000_melange.down.sql
+```
+
+When `--output` is omitted (stdout mode), you must specify `--up` or `--down` to select which migration to print. This is useful for piping into other tools:
+
+```bash
+melange generate migration --schema schemas/schema.fga --git-ref main --up | psql "$DATABASE_URL"
+```
+
+**Output formats:**
+
+| Format   | Files                                          | Use case                        |
+| -------- | ---------------------------------------------- | ------------------------------- |
+| `split`  | `TIMESTAMP_NAME.up.sql`, `TIMESTAMP_NAME.down.sql` | golang-migrate, Atlas, most frameworks |
+| `single` | `TIMESTAMP_NAME.sql` with UP and DOWN sections | Flyway, frameworks expecting a single file |
+
+**Comparison modes:**
+
+By default, the UP migration includes every generated function (full mode). To emit only what changed, use one of:
+
+- **`--db`** — Reads the previous function inventory from the `melange_migrations` table. Most precise, but requires database access.
+- **`--git-ref`** — Compiles the schema from a git ref and compares. No database needed — ideal for CI.
+- **`--previous-schema`** — Compiles a previous schema from a local file and compares.
+
+When a comparison mode is active:
+
+- Only functions with changed SQL bodies (or newly added) are included in UP
+- Orphaned functions (removed from schema) get `DROP FUNCTION IF EXISTS` statements
+- Dispatcher functions are always included regardless of changes
+
+**Examples:**
+
+```bash
+# First migration (full — all functions)
+melange generate migration \
+  --schema schemas/schema.fga \
+  --output db/migrations
+
+# Incremental migration comparing against database
+melange generate migration \
+  --schema schemas/schema.fga \
+  --output db/migrations \
+  --db postgres://localhost/mydb
+
+# Incremental migration comparing against git
+melange generate migration \
+  --schema schemas/schema.fga \
+  --output db/migrations \
+  --git-ref main
+
+# Preview changes to stdout
+melange generate migration \
+  --schema schemas/schema.fga \
+  --git-ref HEAD~1 \
+  --up
+
+# Single-file format for Flyway
+melange generate migration \
+  --schema schemas/schema.fga \
+  --output db/migrations \
+  --format single \
+  --git-ref main
+```
+
 ---
 
 ## Utility Commands
@@ -658,6 +758,32 @@ melange validate --schema schemas/schema.fga && \
   melange generate client --runtime go --output internal/authz && \
   melange migrate --db "$DATABASE_URL"
 ```
+
+### External Migration Frameworks
+
+If you use golang-migrate, Atlas, Flyway, or a similar tool, replace `melange migrate` with `melange generate migration`:
+
+```bash
+# First time — generate a full migration
+melange generate migration \
+  --schema schemas/schema.fga \
+  --output db/migrations
+
+# After schema changes — generate an incremental migration
+melange generate migration \
+  --schema schemas/schema.fga \
+  --output db/migrations \
+  --git-ref main
+
+# Commit the schema change and migration together
+git add schemas/schema.fga db/migrations/
+git commit -m "Add editor relation to document type"
+
+# Apply with your framework
+migrate -path db/migrations -database "$DATABASE_URL" up
+```
+
+See [Running Migrations](../concepts/migrations.md) for guidance on choosing between built-in and external migration strategies.
 
 ### Troubleshooting
 

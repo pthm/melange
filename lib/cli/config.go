@@ -54,7 +54,11 @@ type ClientConfig struct {
 	IDType  string `mapstructure:"id_type"`
 }
 
-// MigrationGenConfig holds settings for `melange generate migration`.
+// MigrationGenConfig holds settings for `melange generate migration`, which
+// produces versioned SQL files for use with external migration frameworks.
+// This is distinct from MigrateConfig, which controls `melange migrate` (the
+// built-in apply-to-database workflow). Configuring both for the same database
+// is discouraged; the migrate command warns when generate.migration.output is set.
 type MigrationGenConfig struct {
 	Output string `mapstructure:"output"`
 	Name   string `mapstructure:"name"`

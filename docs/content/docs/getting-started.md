@@ -273,6 +273,10 @@ melange migrate \
 
 This generates and installs specialized SQL permission functions.
 
+{{< callout type="info" >}}
+If you use an external migration framework (golang-migrate, Atlas, Flyway, etc.), use `melange generate migration` instead to produce versioned SQL files that fit into your existing workflow. See [Running Migrations](./concepts/migrations.md) for details.
+{{< /callout >}}
+
 ### Step 5: Generate Type-Safe Client Code (Optional)
 
 Generate constants and helpers for your language of choice:

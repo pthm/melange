@@ -42,13 +42,15 @@ flowchart LR
 
 ### Compile Time
 
-When you run `melange migrate`, the compiler:
+When you run `melange migrate` (or `melange generate migration`), the compiler:
 
 1. **Parses** your OpenFGA schema
 2. **Analyzes** relation patterns (direct, implied, union, intersection, etc.)
 3. **Computes** the transitive closure of role hierarchies
 4. **Generates** specialized SQL functions for each relation
-5. **Installs** the functions into your PostgreSQL database
+5. **Installs** the functions into PostgreSQL (`migrate`) or writes them as versioned SQL files (`generate migration`)
+
+See [Running Migrations](./migrations.md) for guidance on choosing between the two approaches.
 
 ### Runtime
 

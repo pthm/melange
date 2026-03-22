@@ -166,7 +166,10 @@ type DispatcherCase struct {
 	SatisfyingRelations []string // relations in closure that satisfy this one (used in inline userset check)
 }
 
-// NamedFunction pairs a function name with its generated SQL body.
+// NamedFunction pairs a specialized function name with its generated SQL body.
+// Dispatcher functions are excluded from this set; see CollectNamedFunctions.
+// The SQL field is used verbatim for checksum computation and for emitting
+// changed-only migrations.
 type NamedFunction struct {
 	Name string
 	SQL  string
@@ -176,8 +179,10 @@ type NamedFunction struct {
 // Dispatchers are excluded — they always change when any relation changes and
 // should be unconditionally included in migrations.
 //
-// The iteration order matches GenerateSQL and GenerateListSQL, so callers can
-// zip generated SQL arrays with the returned names.
+// The analyses slice must be the same slice, in the same order, passed to
+// GenerateSQL and GenerateListSQL that produced generatedSQL and listSQL.
+// The function walks all three in lockstep; mismatched ordering will silently
+// produce incorrect name-to-SQL pairings.
 func CollectNamedFunctions(
 	generatedSQL GeneratedSQL,
 	listSQL ListGeneratedSQL,

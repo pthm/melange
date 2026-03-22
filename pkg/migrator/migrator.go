@@ -83,7 +83,12 @@ type MigrationRecord struct {
 	SchemaChecksum    string
 	CodegenVersion    string
 	FunctionNames     []string
-	FunctionChecksums map[string]string // function_name → SHA256(sql_body)
+	// FunctionChecksums maps function_name → SHA256(sql_body) for each function
+	// installed by this migration. Populated only when the database schema includes
+	// the function_checksums column (added in v0.7.3). Nil on records written by
+	// older versions; callers should treat nil as "no checksum data available" and
+	// fall back to full-mode generation.
+	FunctionChecksums map[string]string
 }
 
 // Migrator handles loading authorization schemas into PostgreSQL.
@@ -338,8 +343,12 @@ func ComputeFunctionChecksums(namedFunctions []NamedFunction) map[string]string 
 	return checksums
 }
 
-// GetLastMigration returns the most recent migration record, or nil if none exists.
-// This can be used to check if migration is needed before calling MigrateWithTypesAndOptions.
+// GetLastMigration returns the most recent migration record, or nil if none
+// exists. It queries against the migrator's own database connection, making it
+// suitable for external callers such as the generate migration command.
+//
+// Internal migration code uses the private getLastMigration with an explicit
+// Execer to participate in an in-progress transaction.
 func (m *Migrator) GetLastMigration(ctx context.Context) (*MigrationRecord, error) {
 	return m.getLastMigration(ctx, m.db)
 }

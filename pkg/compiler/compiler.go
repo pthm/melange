@@ -1,8 +1,14 @@
 // Package compiler provides public APIs for compiling OpenFGA schemas to SQL.
 //
-// This is a thin wrapper around internal/sqlgen that exposes only the public
-// types and functions needed by external consumers. For migration functionality,
-// use pkg/migrator instead.
+// It is a thin wrapper around lib/sqlgen that exposes only the types and
+// functions needed by external consumers. The package covers two concerns:
+//
+//   - Check and list SQL generation: AnalyzeRelations, GenerateSQL,
+//     GenerateListSQL, CollectFunctionNames, CollectNamedFunctions.
+//   - Migration file generation: GenerateMigrationSQL and MigrationOptions,
+//     which assemble versioned UP/DOWN SQL files from already-compiled output.
+//
+// For applying generated SQL directly to a database, use pkg/migrator instead.
 package compiler
 
 import (

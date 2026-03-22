@@ -8,7 +8,11 @@ import (
 	"strings"
 )
 
-// MigrationSQL holds the generated UP and DOWN SQL.
+// MigrationSQL holds the UP and DOWN SQL for a single versioned migration.
+// UP contains CREATE OR REPLACE statements for all current functions, plus DROP
+// statements for any orphaned functions detected via comparison mode.
+// DOWN drops all functions installed by UP; restoring a prior state requires
+// re-applying that version's UP migration.
 type MigrationSQL struct {
 	Up   string
 	Down string
@@ -28,15 +32,24 @@ type MigrationOptions struct {
 	// e.g., "database", "git:abc1234", "file:old.fga"
 	PreviousSource string
 	// PreviousChecksums maps function_name → SHA256(sql_body) from the previous state.
-	// When set, only functions whose checksums differ (or are new) are included in UP.
-	// Dispatchers are always included since they reference all relations.
+	// When set alongside NamedFunctions, only functions whose SQL body has changed (or
+	// are new) are included in the UP migration. Dispatchers are always included
+	// regardless. If nil, all specialized functions are emitted unconditionally.
 	PreviousChecksums map[string]string
-	// NamedFunctions pairs each specialized function name with its SQL body.
-	// Required for checksum-based change detection.
+	// NamedFunctions pairs each specialized function name with its SQL body for
+	// checksum comparison. Required alongside PreviousChecksums for change detection;
+	// if either is absent, change detection is skipped and all functions are emitted.
 	NamedFunctions []NamedFunction
 }
 
-// GenerateMigrationSQL produces up/down SQL from already-generated function SQL.
+// GenerateMigrationSQL is the terminal step of the generate migration pipeline.
+// It assembles UP and DOWN SQL from functions already compiled by GenerateSQL and
+// GenerateListSQL. Call CollectFunctionNames and CollectNamedFunctions first to
+// populate expectedFunctions and opts.NamedFunctions respectively.
+//
+// When opts.PreviousFunctionNames is nil the output includes every function
+// (full mode). When set, orphaned functions are dropped in UP and checksum-based
+// filtering is applied if opts.PreviousChecksums is also provided.
 func GenerateMigrationSQL(
 	generatedSQL GeneratedSQL,
 	listSQL ListGeneratedSQL,
@@ -58,9 +71,10 @@ func computeCurrentChecksums(namedFunctions []NamedFunction) map[string]string {
 	return checksums
 }
 
-// changedFunctionNames returns function names whose checksums differ from previous,
-// plus any functions that are new (not in previous). Dispatchers are excluded from
-// this comparison since they should always be included.
+// changedFunctionNames returns the names of functions that are new or have a
+// different SQL body compared to previous. Functions removed from the current
+// schema are absent from current and therefore absent from the result — they
+// must be handled separately as orphans via computeOrphans.
 func changedFunctionNames(current, previous map[string]string) map[string]bool {
 	changed := make(map[string]bool)
 	for name, checksum := range current {
@@ -206,8 +220,9 @@ func collectNonEmpty(values ...string) []string {
 	return result
 }
 
-// dispatcherFunctionNames are the well-known dispatcher function names,
-// ordered with specialized functions first, then dispatchers.
+// dispatcherFunctionNames lists the well-known dispatcher functions in the
+// stable order used for DOWN migrations. Specialized functions are handled
+// separately in generateDownSQL.
 var dispatcherFunctionNames = []string{
 	"check_permission",
 	"check_permission_internal",

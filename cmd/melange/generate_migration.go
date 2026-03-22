@@ -248,14 +248,17 @@ func writeFiles(result compiler.MigrationSQL, output, name, format string) error
 	return nil
 }
 
-// previousState holds the function names and checksums from a previous migration.
+// previousState holds the function inventory from a prior migration.
+// It normalises the output of all three comparison modes (--db, --git-ref,
+// --previous-schema) so the caller can handle them uniformly.
 type previousState struct {
 	FunctionNames     []string
 	FunctionChecksums map[string]string
 }
 
-// previousStateFromDB reads function names and checksums from the database.
-// Returns nil if no previous migration exists (fall back to full mode).
+// previousStateFromDB reads function names and checksums from the most recent
+// melange_migrations record. Returns nil without error when no record exists,
+// which causes the caller to omit PreviousFunctionNames and emit a full migration.
 func previousStateFromDB(dsn string) (*previousState, error) {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
@@ -287,11 +290,14 @@ func previousStateFromDB(dsn string) (*previousState, error) {
 	}, nil
 }
 
-// previousStateFromSchema reads a schema (from git or file) and computes function
-// names and checksums by running the full compilation pipeline.
+// previousStateFromSchema compiles a previous schema into a function inventory.
+// Both the git-ref and file comparison modes reduce to the same operation: obtain
+// schema content, run the full compilation pipeline, and collect function names
+// and checksums. The isGitRef flag determines how the content is retrieved.
 //
-// If isGitRef is true, pathOrRef is a git ref and schemaPath is the path within the repo.
-// If isGitRef is false, pathOrRef is a file path and schemaPath is ignored.
+// When isGitRef is true, pathOrRef is a git ref and schemaPath is the repo-relative
+// path to the schema file. When false, pathOrRef is a local file path and
+// schemaPath is unused.
 func previousStateFromSchema(pathOrRef, schemaPath string, isGitRef bool) (*previousState, error) {
 	var content string
 	if isGitRef {

@@ -64,6 +64,12 @@ generate:
     filter: can_
     id_type: string
 
+  # Migration file generation settings (for external frameworks)
+  migration:
+    output: db/migrations
+    name: melange
+    format: split           # "split" or "single"
+
 # Migration settings
 migrate:
   dry_run: false
@@ -147,6 +153,20 @@ Configure under `generate.client:`:
 | `filter` | string | - | Relation prefix filter (e.g., `can_`) |
 | `id_type` | string | `string` | ID type for constructors |
 
+### Generate Migration Settings
+
+Configure under `generate.migration:`:
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `output` | string | `""` (stdout) | Output directory for migration files |
+| `name` | string | `melange` | Migration name suffix in filenames |
+| `format` | string | `split` | Output format: `split` or `single` |
+
+{{< callout type="warning" >}}
+Do not configure both `generate.migration.output` and use `melange migrate` against the same database. The two strategies track state differently and mixing them causes warnings. See [Running Migrations](../concepts/migrations.md) for guidance.
+{{< /callout >}}
+
 ### Migrate Settings
 
 Configure under `migrate:`:
@@ -185,6 +205,9 @@ All configuration options can be set via environment variables with the `MELANGE
 | `MELANGE_GENERATE_CLIENT_PACKAGE` | `generate.client.package` |
 | `MELANGE_GENERATE_CLIENT_FILTER` | `generate.client.filter` |
 | `MELANGE_GENERATE_CLIENT_ID_TYPE` | `generate.client.id_type` |
+| `MELANGE_GENERATE_MIGRATION_OUTPUT` | `generate.migration.output` |
+| `MELANGE_GENERATE_MIGRATION_NAME` | `generate.migration.name` |
+| `MELANGE_GENERATE_MIGRATION_FORMAT` | `generate.migration.format` |
 | `MELANGE_MIGRATE_DRY_RUN` | `migrate.dry_run` |
 | `MELANGE_MIGRATE_FORCE` | `migrate.force` |
 | `MELANGE_DOCTOR_VERBOSE` | `doctor.verbose` |
