@@ -40,6 +40,112 @@ code, pre, kbd {
   display: none !important;
 }
 
+/* Homepage hero */
+.homepage-hero {
+  width: 100%;
+  padding-top: 4rem;
+  padding-bottom: 4rem;
+}
+
+/* Homepage section spacing */
+.homepage-section-gap {
+  margin-top: 8rem;
+}
+
+/* Homepage two-column section spacing */
+.homepage-columns {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 3rem;
+  width: 100%;
+  align-items: start;
+}
+
+@media (min-width: 768px) {
+  .homepage-columns {
+    grid-template-columns: 1fr 1fr;
+    gap: 6rem;
+  }
+}
+
+/* Homepage CTA section */
+.homepage-cta {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 4rem 2rem;
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.dark .homepage-cta {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.homepage-cta .content {
+  max-width: 48rem;
+  text-align: left;
+}
+
+.homepage-cta-buttons {
+  display: flex;
+  gap: 1rem;
+  margin-top: 2rem;
+}
+
+/* Feature card heading weight */
+.hextra-feature-card h3 {
+  font-weight: 600;
+}
+
+/* Mermaid diagram styling */
+.mermaid .node rect,
+.mermaid .node polygon,
+.mermaid .node circle {
+  fill: #f5e6d8 !important;
+  stroke: #c46a1a !important;
+  stroke-width: 1.5px !important;
+}
+
+.mermaid .node .label,
+.mermaid .nodeLabel {
+  color: #1a1a1a !important;
+}
+
+.mermaid .edgePath .path {
+  stroke: #c46a1a !important;
+  stroke-width: 1.5px !important;
+}
+
+.mermaid .arrowheadPath,
+.mermaid marker path {
+  fill: #c46a1a !important;
+  stroke: #c46a1a !important;
+}
+
+.dark .mermaid .node rect,
+.dark .mermaid .node polygon,
+.dark .mermaid .node circle {
+  fill: rgba(196, 106, 26, 0.15) !important;
+  stroke: #d4863a !important;
+}
+
+.dark .mermaid .node .label,
+.dark .mermaid .nodeLabel {
+  color: #e5e5e5 !important;
+}
+
+.dark .mermaid .edgePath .path {
+  stroke: #d4863a !important;
+}
+
+.dark .mermaid .arrowheadPath,
+.dark .mermaid marker path {
+  fill: #d4863a !important;
+  stroke: #d4863a !important;
+}
+
 /* Align custom footer section with the rest of the layout */
 .hextra-custom-footer {
   margin-left: auto;
