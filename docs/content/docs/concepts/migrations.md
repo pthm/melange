@@ -157,6 +157,197 @@ Each generated UP migration includes a comment header with metadata:
 
 This helps you understand at a glance what changed and why the migration was generated.
 
+## Example Output
+
+To make the generated migrations concrete, here's what the UP and DOWN files look like for a simple schema:
+
+```fga
+model
+  schema 1.1
+type user
+
+type document
+  relations
+    define viewer: [user]
+```
+
+### UP migration
+
+The UP migration creates specialized check functions for each relation, then installs dispatchers that route `check_permission(...)` calls to the right function.
+
+```sql
+-- Melange Migration (UP)
+-- Melange version: v0.7.3
+-- Schema checksum: 9f3a...
+-- Codegen version: 1
+
+-- ============================================================
+-- Check Functions (1 functions)
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION check_document_viewer(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_object_id TEXT,
+    p_visited TEXT [] DEFAULT ARRAY[]::TEXT[]
+) RETURNS INTEGER AS $$
+BEGIN
+    -- ... userset subject handling omitted for brevity ...
+
+    IF EXISTS (
+        SELECT 1
+        FROM melange_tuples
+        WHERE object_type = 'document'
+          AND relation IN ('viewer')
+          AND object_id = p_object_id
+          AND subject_type = p_subject_type
+          AND subject_id = p_subject_id
+          AND NOT (subject_id = '*')
+        LIMIT 1
+    ) THEN
+        RETURN 1;
+    ELSE
+        RETURN 0;
+    END IF;
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+-- ============================================================
+-- No-Wildcard Check Functions (1 functions)
+-- ============================================================
+
+-- Same as above but excludes wildcard (type:*) matches
+CREATE OR REPLACE FUNCTION check_document_viewer_no_wildcard(
+    -- ... same signature and body, omitted for brevity ...
+) RETURNS INTEGER AS $$ /* ... */ $$ LANGUAGE plpgsql STABLE;
+
+-- ============================================================
+-- Check Dispatchers
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION check_permission_internal(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_relation TEXT,
+    p_object_type TEXT,
+    p_object_id TEXT,
+    p_visited TEXT [] DEFAULT ARRAY[]::TEXT[]
+) RETURNS INTEGER AS $$
+BEGIN
+    IF array_length(p_visited, 1) >= 25 THEN
+        RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';
+    END IF;
+    RETURN (SELECT CASE
+        WHEN (p_object_type = 'document' AND p_relation = 'viewer')
+            THEN check_document_viewer(p_subject_type, p_subject_id, p_object_id, p_visited)
+        ELSE 0
+    END);
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+-- Public entry point — this is what your application calls
+CREATE OR REPLACE FUNCTION check_permission(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_relation TEXT,
+    p_object_type TEXT,
+    p_object_id TEXT
+) RETURNS INTEGER AS $$
+    SELECT check_permission_internal(
+        p_subject_type, p_subject_id, p_relation,
+        p_object_type, p_object_id, ARRAY[]::TEXT[]);
+$$ LANGUAGE sql STABLE;
+
+-- ... check_permission_no_wildcard, check_permission_bulk,
+--     list_accessible_objects, list_accessible_subjects omitted ...
+```
+
+{{< callout type="info" >}}
+Each relation in your schema produces a specialized function (e.g., `check_document_viewer`). The dispatchers (`check_permission`, `list_accessible_objects`, etc.) are always regenerated because they contain a `CASE` branch for every relation.
+{{< /callout >}}
+
+### DOWN migration
+
+The DOWN migration drops all functions installed by the UP migration. To restore a previous version, apply that version's UP migration after rolling back.
+
+```sql
+-- Melange Migration (DOWN)
+-- To restore a previous version, apply that version's UP migration.
+
+-- Drop specialized functions
+DROP FUNCTION IF EXISTS check_document_viewer CASCADE;
+DROP FUNCTION IF EXISTS check_document_viewer_no_wildcard CASCADE;
+DROP FUNCTION IF EXISTS list_document_viewer_objects CASCADE;
+DROP FUNCTION IF EXISTS list_document_viewer_subjects CASCADE;
+
+-- Drop dispatchers
+DROP FUNCTION IF EXISTS check_permission CASCADE;
+DROP FUNCTION IF EXISTS check_permission_internal CASCADE;
+DROP FUNCTION IF EXISTS check_permission_no_wildcard CASCADE;
+DROP FUNCTION IF EXISTS check_permission_no_wildcard_internal CASCADE;
+DROP FUNCTION IF EXISTS check_permission_bulk CASCADE;
+DROP FUNCTION IF EXISTS list_accessible_objects CASCADE;
+DROP FUNCTION IF EXISTS list_accessible_subjects CASCADE;
+```
+
+### Comparison mode example
+
+When using `--git-ref` or `--db`, only changed functions appear. For example, if you add an `editor` relation to `document`, the UP migration includes only the new functions and any modified dispatchers:
+
+```sql
+-- Melange Migration (UP)
+-- Melange version: v0.7.3
+-- Schema checksum: b7e4...
+-- Codegen version: 1
+-- Previous state: git:main
+-- Changed functions: 2 of 4
+
+-- ============================================================
+-- Changed Functions (2 functions)
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION check_document_editor(
+    -- ... new function for the added relation ...
+) RETURNS INTEGER AS $$ /* ... */ $$ LANGUAGE plpgsql STABLE;
+
+CREATE OR REPLACE FUNCTION check_document_editor_no_wildcard(
+    -- ... no-wildcard variant ...
+) RETURNS INTEGER AS $$ /* ... */ $$ LANGUAGE plpgsql STABLE;
+
+-- ============================================================
+-- Check Dispatchers
+-- ============================================================
+
+-- Dispatchers are always regenerated to include the new CASE branch
+CREATE OR REPLACE FUNCTION check_permission_internal(
+    /* ... */
+) RETURNS INTEGER AS $$
+BEGIN
+    /* ... */
+    RETURN (SELECT CASE
+        WHEN (p_object_type = 'document' AND p_relation = 'editor')
+            THEN check_document_editor(p_subject_type, p_subject_id, p_object_id, p_visited)
+        WHEN (p_object_type = 'document' AND p_relation = 'viewer')
+            THEN check_document_viewer(p_subject_type, p_subject_id, p_object_id, p_visited)
+        ELSE 0
+    END);
+END;
+$$ LANGUAGE plpgsql STABLE;
+
+-- ... remaining dispatchers omitted ...
+```
+
+If you **remove** a relation, the comparison mode also emits `DROP` statements for the orphaned functions:
+
+```sql
+-- ============================================================
+-- Drop removed functions
+-- ============================================================
+
+DROP FUNCTION IF EXISTS check_document_editor CASCADE;
+DROP FUNCTION IF EXISTS check_document_editor_no_wildcard CASCADE;
+```
+
 ## Typical Workflows
 
 ### First-time setup with golang-migrate
