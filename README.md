@@ -6,6 +6,7 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/pthm/melange)](https://goreportcard.com/report/github.com/pthm/melange)
 [![codecov](https://codecov.io/gh/pthm/melange/graph/badge.svg)](https://codecov.io/gh/pthm/melange)
 [![Matrix](https://img.shields.io/badge/Matrix-Join%20Chat-green?logo=matrix)](https://matrix.to/#/#melange:matrix.org)
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fpthm%2Fmelange.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fpthm%2Fmelange?ref=badge_shield)
 
 <img align="right" width="300" src="assets/mascot.png">
 
@@ -355,3 +356,6 @@ For larger changes or new features, it's often helpful to **open an issue or sta
 ## License
 
 MIT License — see [LICENSE](LICENSE) for details.
+
+
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fpthm%2Fmelange.svg?type=large)](https://app.fossa.com/projects/git%2Bgithub.com%2Fpthm%2Fmelange?ref=badge_large)
