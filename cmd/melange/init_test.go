@@ -46,6 +46,10 @@ func resetInitFlags(t *testing.T) {
 		initOutput = ""
 		initPackage = ""
 		initIDType = ""
+		initMigrationStrategy = ""
+		initMigrationOutput = ""
+		initMigrationFormat = ""
+		initMigrationName = ""
 	})
 }
 
@@ -335,15 +339,23 @@ func TestDetectPkgManager_DefaultNpm(t *testing.T) {
 
 // --- Full init flow (non-interactive) ---
 
-func TestRunInit_Defaults_NoProject(t *testing.T) {
+// setupInitTest creates a temp directory, changes into it, resets all init
+// flags, and sets initYes + initNoInstall so the test runs non-interactively.
+// It returns the temp directory path.
+func setupInitTest(t *testing.T) string {
+	t.Helper()
 	dir := t.TempDir()
 	chdir(t, dir)
 	resetInitFlags(t)
 	initYes = true
 	initNoInstall = true
+	return dir
+}
 
-	err := runInit(nil, nil)
-	require.NoError(t, err)
+func TestRunInit_Defaults_NoProject(t *testing.T) {
+	dir := setupInitTest(t)
+
+	require.NoError(t, runInit(nil, nil))
 
 	// Config created in melange/ dir
 	c := readInitConfig(t, filepath.Join(dir, "melange", "config.yaml"))
@@ -358,15 +370,10 @@ func TestRunInit_Defaults_NoProject(t *testing.T) {
 }
 
 func TestRunInit_Defaults_GoProject(t *testing.T) {
-	dir := t.TempDir()
+	dir := setupInitTest(t)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/test"), 0o644))
-	chdir(t, dir)
-	resetInitFlags(t)
-	initYes = true
-	initNoInstall = true
 
-	err := runInit(nil, nil)
-	require.NoError(t, err)
+	require.NoError(t, runInit(nil, nil))
 
 	c := readInitConfig(t, filepath.Join(dir, "melange", "config.yaml"))
 	assert.Equal(t, "go", c.Generate.Client.Runtime)
@@ -375,15 +382,10 @@ func TestRunInit_Defaults_GoProject(t *testing.T) {
 }
 
 func TestRunInit_Defaults_TypeScriptProject(t *testing.T) {
-	dir := t.TempDir()
+	dir := setupInitTest(t)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "package.json"), []byte(`{"name":"test"}`), 0o644))
-	chdir(t, dir)
-	resetInitFlags(t)
-	initYes = true
-	initNoInstall = true
 
-	err := runInit(nil, nil)
-	require.NoError(t, err)
+	require.NoError(t, runInit(nil, nil))
 
 	c := readInitConfig(t, filepath.Join(dir, "melange", "config.yaml"))
 	assert.Equal(t, "typescript", c.Generate.Client.Runtime)
@@ -391,11 +393,7 @@ func TestRunInit_Defaults_TypeScriptProject(t *testing.T) {
 }
 
 func TestRunInit_FlagOverrides(t *testing.T) {
-	dir := t.TempDir()
-	chdir(t, dir)
-	resetInitFlags(t)
-	initYes = true
-	initNoInstall = true
+	dir := setupInitTest(t)
 	initSchema = "custom/auth.fga"
 	initDB = "postgres://prod:5432/app"
 	initTemplate = "minimal"
@@ -404,8 +402,7 @@ func TestRunInit_FlagOverrides(t *testing.T) {
 	initPackage = "perms"
 	initIDType = "int64"
 
-	err := runInit(nil, nil)
-	require.NoError(t, err)
+	require.NoError(t, runInit(nil, nil))
 
 	// Config path should be melange.yaml since schema is not under melange/
 	c := readInitConfig(t, filepath.Join(dir, "melange.yaml"))
@@ -425,18 +422,13 @@ func TestRunInit_FlagOverrides(t *testing.T) {
 }
 
 func TestRunInit_TemplateNone_SkipsSchema(t *testing.T) {
-	dir := t.TempDir()
-	chdir(t, dir)
-	resetInitFlags(t)
-	initYes = true
-	initNoInstall = true
+	dir := setupInitTest(t)
 	initTemplate = "none"
 
-	err := runInit(nil, nil)
-	require.NoError(t, err)
+	require.NoError(t, runInit(nil, nil))
 
 	// Config exists
-	_, err = os.Stat(filepath.Join(dir, "melange", "config.yaml"))
+	_, err := os.Stat(filepath.Join(dir, "melange", "config.yaml"))
 	require.NoError(t, err)
 
 	// Schema does not exist
@@ -445,11 +437,7 @@ func TestRunInit_TemplateNone_SkipsSchema(t *testing.T) {
 }
 
 func TestRunInit_ExistingConfig_Errors(t *testing.T) {
-	dir := t.TempDir()
-	chdir(t, dir)
-	resetInitFlags(t)
-	initYes = true
-	initNoInstall = true
+	setupInitTest(t)
 
 	// Create existing config
 	require.NoError(t, os.MkdirAll("melange", 0o755))
@@ -461,18 +449,13 @@ func TestRunInit_ExistingConfig_Errors(t *testing.T) {
 }
 
 func TestRunInit_ExistingSchema_SkipsInNonInteractive(t *testing.T) {
-	dir := t.TempDir()
-	chdir(t, dir)
-	resetInitFlags(t)
-	initYes = true
-	initNoInstall = true
+	dir := setupInitTest(t)
 
 	// Pre-create the schema file but not the config
 	require.NoError(t, os.MkdirAll("melange", 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join("melange", "schema.fga"), []byte("original content"), 0o644))
 
-	err := runInit(nil, nil)
-	require.NoError(t, err)
+	require.NoError(t, runInit(nil, nil))
 
 	// Schema should NOT be overwritten
 	data, err := os.ReadFile(filepath.Join(dir, "melange", "schema.fga"))
@@ -481,11 +464,7 @@ func TestRunInit_ExistingSchema_SkipsInNonInteractive(t *testing.T) {
 }
 
 func TestRunInit_ConfigDiscoverable_AfterInit(t *testing.T) {
-	dir := t.TempDir()
-	chdir(t, dir)
-	resetInitFlags(t)
-	initYes = true
-	initNoInstall = true
+	dir := setupInitTest(t)
 
 	require.NoError(t, runInit(nil, nil))
 
@@ -498,11 +477,7 @@ func TestRunInit_ConfigDiscoverable_AfterInit(t *testing.T) {
 }
 
 func TestRunInit_SchemaValidatable_AfterInit(t *testing.T) {
-	dir := t.TempDir()
-	chdir(t, dir)
-	resetInitFlags(t)
-	initYes = true
-	initNoInstall = true
+	dir := setupInitTest(t)
 
 	require.NoError(t, runInit(nil, nil))
 
@@ -517,21 +492,176 @@ func TestRunInit_SchemaValidatable_AfterInit(t *testing.T) {
 }
 
 func TestRunInit_CreatesParentDirectories(t *testing.T) {
-	dir := t.TempDir()
-	chdir(t, dir)
-	resetInitFlags(t)
-	initYes = true
-	initNoInstall = true
+	dir := setupInitTest(t)
 	initSchema = "deep/nested/dir/schema.fga"
 
-	err := runInit(nil, nil)
-	require.NoError(t, err)
+	require.NoError(t, runInit(nil, nil))
 
 	// Schema in nested dir
-	_, err = os.Stat(filepath.Join(dir, "deep", "nested", "dir", "schema.fga"))
+	_, err := os.Stat(filepath.Join(dir, "deep", "nested", "dir", "schema.fga"))
 	require.NoError(t, err)
 
 	// Config at root (schema not under melange/)
 	_, err = os.Stat(filepath.Join(dir, "melange.yaml"))
 	require.NoError(t, err)
+}
+
+// --- Migration strategy defaults ---
+
+func TestDefaultAnswers_MigrationStrategy_Builtin(t *testing.T) {
+	a := defaultAnswers(detectedProject{})
+	assert.Equal(t, "builtin", a.MigrationStrategy)
+	assert.Equal(t, "migrations/", a.MigrationOutput)
+	assert.Equal(t, "split", a.MigrationFormat)
+	assert.Equal(t, "melange", a.MigrationName)
+}
+
+// --- Write config: migration strategy ---
+
+func TestWriteConfig_BuiltinMigration_NoMigrationBlock(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	a := &initAnswers{
+		SchemaPath:        "melange/schema.fga",
+		DatabaseURL:       "postgres://localhost:5432/mydb",
+		GenerateCode:      false,
+		MigrationStrategy: "builtin",
+	}
+
+	require.NoError(t, writeConfig(filepath.Join("melange", "config.yaml"), a))
+
+	c := readInitConfig(t, filepath.Join(dir, "melange", "config.yaml"))
+	assert.Nil(t, c.Generate, "generate block should be absent for builtin migration without client gen")
+}
+
+func TestWriteConfig_VersionedMigration(t *testing.T) {
+	tests := []struct {
+		name   string
+		output string
+		format string
+		suffix string
+	}{
+		{"split format", "migrations/", "split", "melange"},
+		{"single format", "db/migrations/", "single", "authz"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			chdir(t, dir)
+
+			a := &initAnswers{
+				SchemaPath:        "melange/schema.fga",
+				DatabaseURL:       "postgres://localhost:5432/mydb",
+				GenerateCode:      false,
+				MigrationStrategy: "versioned",
+				MigrationOutput:   tt.output,
+				MigrationFormat:   tt.format,
+				MigrationName:     tt.suffix,
+			}
+
+			configPath := filepath.Join("melange", "config.yaml")
+			require.NoError(t, writeConfig(configPath, a))
+
+			c := readInitConfig(t, filepath.Join(dir, configPath))
+			require.NotNil(t, c.Generate, "generate block should be present for versioned migration")
+			assert.Nil(t, c.Generate.Client, "client block should be absent when not requested")
+			require.NotNil(t, c.Generate.Migration, "migration block should be present")
+			assert.Equal(t, tt.output, c.Generate.Migration.Output)
+			assert.Equal(t, tt.format, c.Generate.Migration.Format)
+			assert.Equal(t, tt.suffix, c.Generate.Migration.Name)
+		})
+	}
+}
+
+func TestWriteConfig_VersionedMigration_WithClientGen(t *testing.T) {
+	dir := t.TempDir()
+	chdir(t, dir)
+
+	a := &initAnswers{
+		SchemaPath:        "melange/schema.fga",
+		DatabaseURL:       "postgres://localhost:5432/mydb",
+		GenerateCode:      true,
+		ClientRuntime:     "go",
+		ClientOutput:      "internal/authz",
+		ClientPackage:     "authz",
+		ClientIDType:      "string",
+		MigrationStrategy: "versioned",
+		MigrationOutput:   "migrations/",
+		MigrationFormat:   "split",
+		MigrationName:     "melange",
+	}
+
+	configPath := filepath.Join("melange", "config.yaml")
+	require.NoError(t, writeConfig(configPath, a))
+
+	c := readInitConfig(t, filepath.Join(dir, configPath))
+	require.NotNil(t, c.Generate, "generate block should be present")
+	require.NotNil(t, c.Generate.Client, "client block should be present")
+	assert.Equal(t, "go", c.Generate.Client.Runtime)
+	require.NotNil(t, c.Generate.Migration, "migration block should be present")
+	assert.Equal(t, "migrations/", c.Generate.Migration.Output)
+}
+
+// --- Full init flow: migration strategy ---
+
+func TestRunInit_VersionedMigration_Flag(t *testing.T) {
+	dir := setupInitTest(t)
+	initMigrationStrategy = "versioned"
+
+	require.NoError(t, runInit(nil, nil))
+
+	c := readInitConfig(t, filepath.Join(dir, "melange", "config.yaml"))
+	require.NotNil(t, c.Generate, "generate block should be present for versioned strategy")
+	require.NotNil(t, c.Generate.Migration, "migration block should be present")
+	assert.Equal(t, "migrations/", c.Generate.Migration.Output)
+	assert.Equal(t, "split", c.Generate.Migration.Format)
+	assert.Equal(t, "melange", c.Generate.Migration.Name)
+}
+
+func TestRunInit_VersionedMigration_CustomFlags(t *testing.T) {
+	dir := setupInitTest(t)
+	initMigrationStrategy = "versioned"
+	initMigrationOutput = "db/migrate/"
+	initMigrationFormat = "single"
+	initMigrationName = "authz"
+
+	require.NoError(t, runInit(nil, nil))
+
+	c := readInitConfig(t, filepath.Join(dir, "melange", "config.yaml"))
+	require.NotNil(t, c.Generate.Migration)
+	assert.Equal(t, "db/migrate/", c.Generate.Migration.Output)
+	assert.Equal(t, "single", c.Generate.Migration.Format)
+	assert.Equal(t, "authz", c.Generate.Migration.Name)
+}
+
+func TestRunInit_VersionedMigration_WithGoClient(t *testing.T) {
+	dir := setupInitTest(t)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/test"), 0o644))
+	initMigrationStrategy = "versioned"
+
+	require.NoError(t, runInit(nil, nil))
+
+	c := readInitConfig(t, filepath.Join(dir, "melange", "config.yaml"))
+	require.NotNil(t, c.Generate)
+	require.NotNil(t, c.Generate.Client, "client should be auto-configured for Go project")
+	assert.Equal(t, "go", c.Generate.Client.Runtime)
+	require.NotNil(t, c.Generate.Migration, "migration should also be configured")
+	assert.Equal(t, "migrations/", c.Generate.Migration.Output)
+}
+
+func TestRunInit_VersionedMigration_ConfigDiscoverable(t *testing.T) {
+	dir := setupInitTest(t)
+	initMigrationStrategy = "versioned"
+	initMigrationOutput = "migrations/"
+
+	require.NoError(t, runInit(nil, nil))
+
+	// The generated config should be loadable by the config system
+	cfg, configPath, err := cli.LoadConfig(filepath.Join(dir, "melange", "config.yaml"))
+	require.NoError(t, err)
+	assert.NotEmpty(t, configPath)
+	assert.Equal(t, "migrations/", cfg.Generate.Migration.Output)
+	assert.Equal(t, "split", cfg.Generate.Migration.Format)
+	assert.Equal(t, "melange", cfg.Generate.Migration.Name)
 }

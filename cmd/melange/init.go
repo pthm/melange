@@ -543,9 +543,7 @@ func writeConfig(configPath string, a *initAnswers) error {
 	// are requested, keeping the config file minimal.
 	var gen *initGenConfig
 	if a.GenerateCode {
-		if gen == nil {
-			gen = &initGenConfig{}
-		}
+		gen = &initGenConfig{}
 		client := &initClientConfig{
 			Runtime: a.ClientRuntime,
 			Output:  a.ClientOutput,
