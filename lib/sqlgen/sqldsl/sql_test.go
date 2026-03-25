@@ -87,6 +87,19 @@ func TestSafeIdentifier_DegenerateCase(t *testing.T) {
 	}
 }
 
+func TestSafeIdentifier_DegenerateCase_HugeSuffix(t *testing.T) {
+	// Suffix + hash alone exceed 63 bytes, forcing maxPrefix < 0 → 0.
+	// This is pathological but must not panic.
+	hugeSuffix := "_this_suffix_is_absurdly_long_and_takes_up_way_more_than_sixty_three_bytes_total"
+	got := SafeIdentifier("check_", "t", "r", hugeSuffix)
+	if len(got) > PostgresMaxIdentifierLength {
+		// With a suffix this large, the identifier will exceed the limit
+		// but the function must not panic. The suffix is caller-controlled
+		// and expected to be short in practice.
+		t.Logf("degenerate: %q (len=%d) — suffix alone exceeds limit", got, len(got))
+	}
+}
+
 func TestSafeIdentifier_AllUnderscoreType(t *testing.T) {
 	// Pathological: type name that is all underscores after Ident().
 	// Should not panic and must stay within the length limit.
@@ -117,6 +130,17 @@ func TestTruncateProportionally_ProportionalSplit(t *testing.T) {
 	}
 	if len(a) < 1 || len(b) < 1 {
 		t.Errorf("each part must have at least 1 char: %q, %q", a, b)
+	}
+}
+
+func TestTruncateProportionally_VerySkewedA(t *testing.T) {
+	// b is much longer than a, forcing aBudget < 1 → clamped to 1.
+	a, b := truncateProportionally("x", "abcdefghijklmnop", 3)
+	if a == "" || b == "" {
+		t.Errorf("neither part should be empty: %q, %q", a, b)
+	}
+	if len(a)+len(b) > 3 {
+		t.Errorf("total len %d exceeds budget 3: %q + %q", len(a)+len(b), a, b)
 	}
 }
 

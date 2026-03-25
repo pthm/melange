@@ -416,7 +416,7 @@ const PostgresMaxIdentifierLength = 63
 // Examples:
 //
 //	SafeIdentifier("check_", "user", "admin", "_nw")          → "check_user_admin_nw"
-//	SafeIdentifier("check_", "my_group", "<very long>", "_nw") → "check_my_gro_a_really_..._d70fe023_nw"
+//	SafeIdentifier("check_", "my_group", "<very long relation>", "_nw") → "check_my_gro_<truncated>_d70fe023_nw"
 func SafeIdentifier(prefix, objectType, relation, suffix string) string {
 	typePart := Ident(objectType)
 	relPart := Ident(relation)
@@ -461,14 +461,12 @@ func truncateProportionally(a, b string, budget int) (aOut, bOut string) {
 	aBudget := budget * len(a) / total
 	bBudget := budget - aBudget
 
-	// Ensure each part gets at least 1 character.
+	// Ensure each part gets at least 1 character. The caller guarantees
+	// budget >= 2 and since len(a) < total, aBudget < budget, so
+	// bBudget is always >= 1. Only aBudget can round down to 0.
 	if aBudget < 1 {
 		aBudget = 1
 		bBudget = budget - 1
-	}
-	if bBudget < 1 {
-		bBudget = 1
-		aBudget = budget - 1
 	}
 
 	if aBudget < len(a) {
