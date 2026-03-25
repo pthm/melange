@@ -28,29 +28,29 @@ func readManifest(manifestPath string) (*manifestData, error) {
 		return nil, fmt.Errorf("reading manifest: %w", err)
 	}
 
-	modFile, err := transformer.TransformModFile(string(raw))
+	schemaVersion, paths, err := ParseManifestEntries(string(raw))
 	if err != nil {
-		return nil, fmt.Errorf("parsing manifest: %w", err)
+		return nil, err
 	}
 
 	baseDir := filepath.Dir(manifestPath)
-	modules := make([]transformer.ModuleFile, 0, len(modFile.Contents.Value))
+	modules := make([]transformer.ModuleFile, 0, len(paths))
 
-	for _, entry := range modFile.Contents.Value {
-		fullPath := filepath.Join(baseDir, entry.Value)
+	for _, p := range paths {
+		fullPath := filepath.Join(baseDir, p)
 		content, err := os.ReadFile(fullPath) //nolint:gosec // path is from trusted source
 		if err != nil {
-			return nil, fmt.Errorf("reading module %s: %w", entry.Value, err)
+			return nil, fmt.Errorf("reading module %s: %w", p, err)
 		}
 		modules = append(modules, transformer.ModuleFile{
-			Name:     entry.Value,
+			Name:     p,
 			Contents: string(content),
 		})
 	}
 
 	return &manifestData{
 		Raw:           raw,
-		SchemaVersion: modFile.Schema.Value,
+		SchemaVersion: schemaVersion,
 		Modules:       modules,
 	}, nil
 }
@@ -81,6 +81,24 @@ func ParseModularSchemaFromStrings(modules map[string]string, schemaVersion stri
 	}
 
 	return convertModel(model), nil
+}
+
+// ParseManifestEntries parses an fga.mod manifest string and returns the
+// schema version and relative paths of all referenced module files.
+// This enables callers to read a manifest from any source (filesystem, git,
+// etc.) and then fetch module files individually.
+func ParseManifestEntries(manifestContent string) (schemaVersion string, paths []string, err error) {
+	modFile, err := transformer.TransformModFile(manifestContent)
+	if err != nil {
+		return "", nil, fmt.Errorf("parsing manifest: %w", err)
+	}
+
+	paths = make([]string, 0, len(modFile.Contents.Value))
+	for _, entry := range modFile.Contents.Value {
+		paths = append(paths, entry.Value)
+	}
+
+	return modFile.Schema.Value, paths, nil
 }
 
 // ReadManifestContents reads an fga.mod manifest and all referenced module

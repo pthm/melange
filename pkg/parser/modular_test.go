@@ -380,6 +380,35 @@ type document
 	}
 }
 
+func TestParseManifestEntries(t *testing.T) {
+	manifest := `schema: '1.2'
+contents:
+  - core.fga
+  - app.fga
+  - tracker/projects.fga
+`
+	version, paths, err := ParseManifestEntries(manifest)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if version != "1.2" {
+		t.Errorf("expected schema version 1.2, got %s", version)
+	}
+
+	expected := []string{"core.fga", "app.fga", "tracker/projects.fga"}
+	if !slices.Equal(paths, expected) {
+		t.Errorf("expected paths %v, got %v", expected, paths)
+	}
+}
+
+func TestParseManifestEntries_InvalidManifest(t *testing.T) {
+	_, _, err := ParseManifestEntries(`not valid yaml [[[`)
+	if err == nil {
+		t.Fatal("expected error for invalid manifest")
+	}
+}
+
 func TestParseModularSchema_Equivalence(t *testing.T) {
 	// Verify that a modular schema produces the same types as an equivalent single-file schema
 	dir := t.TempDir()

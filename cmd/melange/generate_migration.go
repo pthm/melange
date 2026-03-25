@@ -87,17 +87,17 @@ Three comparison modes determine orphaned functions to drop:
 			return cli.ConfigError("stdout mode requires --up or --down flag", nil)
 		}
 
-		// Parse current schema
+		// Parse current schema (supports both .fga files and fga.mod manifests)
 		if _, err := os.Stat(schemaPath); err != nil {
 			return cli.SchemaParseError(fmt.Sprintf("schema not found: %s", schemaPath), nil)
 		}
 
-		schemaContent, err := os.ReadFile(schemaPath)
+		schemaContent, err := parser.ReadSchemaContent(schemaPath)
 		if err != nil {
-			return cli.GeneralError("reading schema file", err)
+			return cli.GeneralError("reading schema", err)
 		}
 
-		types, err := parser.ParseSchemaString(string(schemaContent))
+		types, err := parser.ParseSchema(schemaPath)
 		if err != nil {
 			return cli.SchemaParseError("parsing schema", err)
 		}
@@ -152,6 +152,9 @@ Three comparison modes determine orphaned functions to drop:
 			opts.PreviousChecksums = prevState.FunctionChecksums
 			opts.PreviousSource = fmt.Sprintf("git:%s", genMigrationGitRef)
 		} else if genMigrationPreviousSchema != "" {
+			if parser.IsModularSchema(genMigrationPreviousSchema) {
+				return cli.ConfigError("--previous-schema does not support modular schemas (fga.mod); use --db or --git-ref instead", nil)
+			}
 			prevState, err := previousStateFromSchema(genMigrationPreviousSchema, "", false)
 			if err != nil {
 				return err
@@ -174,7 +177,7 @@ Three comparison modes determine orphaned functions to drop:
 
 func init() {
 	f := generateMigrationCmd.Flags()
-	f.StringVar(&genMigrationSchema, "schema", "", "path to current .fga file")
+	f.StringVar(&genMigrationSchema, "schema", "", "path to .fga file or fga.mod manifest")
 	f.StringVar(&genMigrationOutput, "output", "", "output directory (default: stdout)")
 	f.StringVar(&genMigrationName, "name", "", "migration name suffix (default: melange)")
 	f.StringVar(&genMigrationFormat, "format", "", `"split" (.up.sql/.down.sql) or "single" (default: split)`)
@@ -182,7 +185,7 @@ func init() {
 	f.BoolVar(&genMigrationDown, "down", false, "output only the DOWN migration")
 	f.StringVar(&genMigrationDB, "db", "", "database URL for comparison (reads previous state)")
 	f.StringVar(&genMigrationGitRef, "git-ref", "", "git ref for comparison (reads previous schema)")
-	f.StringVar(&genMigrationPreviousSchema, "previous-schema", "", "path to previous .fga file for comparison")
+	f.StringVar(&genMigrationPreviousSchema, "previous-schema", "", "path to previous .fga file for comparison (modular schemas not supported)")
 }
 
 func writeStdout(result compiler.MigrationSQL) error {
@@ -299,28 +302,9 @@ func previousStateFromDB(dsn string) (*previousState, error) {
 // path to the schema file. When false, pathOrRef is a local file path and
 // schemaPath is unused.
 func previousStateFromSchema(pathOrRef, schemaPath string, isGitRef bool) (*previousState, error) {
-	var content string
-	if isGitRef {
-		cmd := exec.Command("git", "show", pathOrRef+":"+schemaPath)
-		out, err := cmd.Output()
-		if err != nil {
-			return nil, cli.GeneralError(
-				fmt.Sprintf("reading schema from git ref %q (path: %s)", pathOrRef, schemaPath),
-				fmt.Errorf("%w — ensure the ref exists and the schema path is relative to the repo root", err),
-			)
-		}
-		content = string(out)
-	} else {
-		raw, err := os.ReadFile(pathOrRef)
-		if err != nil {
-			return nil, cli.GeneralError(fmt.Sprintf("reading previous schema: %s", pathOrRef), err)
-		}
-		content = string(raw)
-	}
-
-	types, err := parser.ParseSchemaString(content)
+	types, err := parsePreviousSchema(pathOrRef, schemaPath, isGitRef)
 	if err != nil {
-		return nil, cli.SchemaParseError("parsing previous schema", err)
+		return nil, err
 	}
 
 	closureRows := schema.ComputeRelationClosure(types)
@@ -345,4 +329,85 @@ func previousStateFromSchema(pathOrRef, schemaPath string, isGitRef bool) (*prev
 		FunctionNames:     names,
 		FunctionChecksums: checksums,
 	}, nil
+}
+
+// parsePreviousSchema reads and parses a previous schema from either a git ref
+// or a local file path. Supports both single .fga files and fga.mod manifests
+// (manifests only via git-ref; --previous-schema rejects them earlier).
+func parsePreviousSchema(pathOrRef, schemaPath string, isGitRef bool) ([]schema.TypeDefinition, error) {
+	if isGitRef && parser.IsModularSchema(schemaPath) {
+		return parseModularSchemaFromGit(pathOrRef, schemaPath)
+	}
+
+	var content string
+	if isGitRef {
+		c, err := gitShowFile(pathOrRef, schemaPath)
+		if err != nil {
+			return nil, cli.GeneralError(
+				fmt.Sprintf("reading schema from git ref %q (path: %s)", pathOrRef, schemaPath),
+				fmt.Errorf("%w — ensure the ref exists and the schema path is relative to the repo root", err),
+			)
+		}
+		content = c
+	} else {
+		raw, err := os.ReadFile(pathOrRef) //nolint:gosec // path is from trusted CLI flag
+		if err != nil {
+			return nil, cli.GeneralError(fmt.Sprintf("reading previous schema: %s", pathOrRef), err)
+		}
+		content = string(raw)
+	}
+
+	types, err := parser.ParseSchemaString(content)
+	if err != nil {
+		return nil, cli.SchemaParseError("parsing previous schema", err)
+	}
+	return types, nil
+}
+
+// parseModularSchemaFromGit reads a modular schema (fga.mod + module files)
+// from a git ref by fetching the manifest, parsing its entries, then reading
+// each referenced module file from the same ref.
+func parseModularSchemaFromGit(gitRef, manifestPath string) ([]schema.TypeDefinition, error) {
+	manifestContent, err := gitShowFile(gitRef, manifestPath)
+	if err != nil {
+		return nil, cli.GeneralError(
+			fmt.Sprintf("reading manifest from git ref %q (path: %s)", gitRef, manifestPath),
+			fmt.Errorf("%w — ensure the ref exists and the manifest path is relative to the repo root", err),
+		)
+	}
+
+	schemaVersion, modulePaths, err := parser.ParseManifestEntries(manifestContent)
+	if err != nil {
+		return nil, cli.SchemaParseError("parsing manifest from git ref", err)
+	}
+
+	baseDir := filepath.Dir(manifestPath)
+	modules := make(map[string]string, len(modulePaths))
+	for _, p := range modulePaths {
+		gitPath := filepath.Join(baseDir, p)
+		content, err := gitShowFile(gitRef, gitPath)
+		if err != nil {
+			return nil, cli.GeneralError(
+				fmt.Sprintf("reading module %s from git ref %q", p, gitRef),
+				err,
+			)
+		}
+		modules[p] = content
+	}
+
+	types, err := parser.ParseModularSchemaFromStrings(modules, schemaVersion)
+	if err != nil {
+		return nil, cli.SchemaParseError("parsing modular schema from git ref", err)
+	}
+	return types, nil
+}
+
+// gitShowFile reads a file from a git ref using "git show ref:path".
+func gitShowFile(ref, path string) (string, error) {
+	cmd := exec.Command("git", "show", ref+":"+path) //nolint:gosec // ref and path are from trusted CLI flags
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }
