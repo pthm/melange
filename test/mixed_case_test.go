@@ -53,13 +53,13 @@ type organization
 
 	expectedFunctions := []string{
 		"check_organization_member",
-		"check_organization_member_no_wildcard",
+		"check_organization_member_nw",
 		"check_organization_viewer",
-		"check_organization_viewer_no_wildcard",
-		"list_organization_member_objects",
-		"list_organization_member_subjects",
-		"list_organization_viewer_objects",
-		"list_organization_viewer_subjects",
+		"check_organization_viewer_nw",
+		"list_organization_member_obj",
+		"list_organization_member_sub",
+		"list_organization_viewer_obj",
+		"list_organization_viewer_sub",
 		"check_permission",
 	}
 

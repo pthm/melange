@@ -411,8 +411,8 @@ func (d *Doctor) checkGeneratedFunctions(ctx context.Context, report *Report) er
 	dispatchers := []string{
 		"check_permission",
 		"check_permission_internal",
-		"check_permission_no_wildcard",
-		"check_permission_no_wildcard_internal",
+		"check_permission_nw",
+		"check_permission_nw_internal",
 		"list_accessible_objects",
 		"list_accessible_subjects",
 	}

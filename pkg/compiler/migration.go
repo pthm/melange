@@ -226,8 +226,8 @@ func collectNonEmpty(values ...string) []string {
 var dispatcherFunctionNames = []string{
 	"check_permission",
 	"check_permission_internal",
-	"check_permission_no_wildcard",
-	"check_permission_no_wildcard_internal",
+	"check_permission_nw",
+	"check_permission_nw_internal",
 	"check_permission_bulk",
 	"list_accessible_objects",
 	"list_accessible_subjects",

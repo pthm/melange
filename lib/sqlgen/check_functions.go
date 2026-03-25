@@ -17,7 +17,7 @@ func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, noWildcard 
 func generateDispatcher(analyses []RelationAnalysis, noWildcard bool) (string, error) {
 	fnName := "check_permission"
 	if noWildcard {
-		fnName = "check_permission_no_wildcard"
+		fnName = "check_permission_nw"
 	}
 
 	cases := buildDispatcherCases(analyses, noWildcard)

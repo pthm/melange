@@ -59,10 +59,10 @@ func InternalPermissionCheckCall(relation, objectType string, objectID, visited 
 	}
 }
 
-// NoWildcardPermissionCheckCall creates a check_permission_no_wildcard function call.
+// NoWildcardPermissionCheckCall creates a check_permission_nw function call.
 func NoWildcardPermissionCheckCall(relation, objectType string, subjectID, objectID Expr) FuncCallEq {
 	return FuncCallEq{
-		FuncName: "check_permission_no_wildcard",
+		FuncName: "check_permission_nw",
 		Args: []Expr{
 			SubjectType,
 			subjectID,
@@ -120,13 +120,13 @@ func InternalCheckCall(subjectType, subjectID Expr, relation string, parentType,
 //
 //	InFunctionSelect{
 //	    Expr:       Col{Table: "t", Column: "subject_id"},
-//	    FuncName:   "list_doc_viewer_objects",
+//	    FuncName:   "list_doc_viewer_obj",
 //	    Args:       []Expr{SubjectType, SubjectID, Null{}, Null{}},
 //	    Alias:      "obj",
 //	    SelectCol:  "object_id",
 //	}
 //
-// Renders: t.subject_id IN (SELECT obj.object_id FROM list_doc_viewer_objects(p_subject_type, p_subject_id, NULL, NULL) obj)
+// Renders: t.subject_id IN (SELECT obj.object_id FROM list_doc_viewer_obj(p_subject_type, p_subject_id, NULL, NULL) obj)
 type InFunctionSelect struct {
 	Expr      Expr   // The expression to check (left side of IN)
 	FuncName  string // The function to call
@@ -142,12 +142,12 @@ func (i InFunctionSelect) SQL() string {
 	return i.Expr.SQL() + " IN (" + subquery + ")"
 }
 
-// ListObjectsFunctionName generates a list_TYPE_RELATION_objects function name.
+// ListObjectsFunctionName generates a list_TYPE_RELATION_obj function name.
 func ListObjectsFunctionName(objectType, relation string) string {
-	return "list_" + Ident(objectType) + "_" + Ident(relation) + "_objects"
+	return SafeIdentifier("list_", objectType, relation, "_obj")
 }
 
-// ListSubjectsFunctionName generates a list_TYPE_RELATION_subjects function name.
+// ListSubjectsFunctionName generates a list_TYPE_RELATION_sub function name.
 func ListSubjectsFunctionName(objectType, relation string) string {
-	return "list_" + Ident(objectType) + "_" + Ident(relation) + "_subjects"
+	return SafeIdentifier("list_", objectType, relation, "_sub")
 }

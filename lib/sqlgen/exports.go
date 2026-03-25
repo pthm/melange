@@ -121,6 +121,7 @@ var (
 	ClosureTable                    = sqldsl.ClosureTable
 	UsersetTable                    = sqldsl.UsersetTable
 	Ident                           = sqldsl.Ident
+	SafeIdentifier                  = sqldsl.SafeIdentifier
 	RenderBlocks                    = sqldsl.RenderBlocks
 	RenderUnionBlocks               = sqldsl.RenderUnionBlocks
 	IndentLines                     = sqldsl.IndentLines

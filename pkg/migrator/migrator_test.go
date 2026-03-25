@@ -218,9 +218,9 @@ func TestOutputDryRun(t *testing.T) {
 		var buf bytes.Buffer
 		gen := GeneratedSQL{
 			Functions:            []string{"CREATE FUNCTION check_repo_viewer()"},
-			NoWildcardFunctions:  []string{"CREATE FUNCTION check_repo_viewer_no_wildcard()"},
+			NoWildcardFunctions:  []string{"CREATE FUNCTION check_repo_viewer_nw()"},
 			Dispatcher:           "CREATE FUNCTION check_permission()",
-			DispatcherNoWildcard: "CREATE FUNCTION check_permission_no_wildcard()",
+			DispatcherNoWildcard: "CREATE FUNCTION check_permission_nw()",
 			BulkDispatcher:       "CREATE FUNCTION bulk_check_permission()",
 		}
 		listSQL := ListGeneratedSQL{

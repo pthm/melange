@@ -44,7 +44,7 @@ type GeneratedSQL struct {
 	Functions []string
 
 	// NoWildcardFunctions contains CREATE OR REPLACE FUNCTION statements
-	// for no-wildcard variants (check_{type}_{relation}_no_wildcard).
+	// for no-wildcard variants (check_{type}_{relation}_nw).
 	// These skip wildcard matching for performance-critical paths.
 	NoWildcardFunctions []string
 
@@ -52,7 +52,7 @@ type GeneratedSQL struct {
 	// that routes requests to specialized functions based on object type and relation.
 	Dispatcher string
 
-	// DispatcherNoWildcard contains the check_permission_no_wildcard dispatcher.
+	// DispatcherNoWildcard contains the check_permission_nw dispatcher.
 	DispatcherNoWildcard string
 
 	// BulkDispatcher contains the check_permission_bulk function that evaluates
@@ -112,17 +112,11 @@ func GenerateSQL(analyses []RelationAnalysis, inline InlineSQLData) (GeneratedSQ
 
 // functionName returns the name for a specialized check function.
 func functionName(objectType, relation string) string {
-	return fmt.Sprintf("check_%s_%s", sanitizeIdentifier(objectType), sanitizeIdentifier(relation))
+	return SafeIdentifier("check_", objectType, relation, "")
 }
 
 func functionNameNoWildcard(objectType, relation string) string {
-	return fmt.Sprintf("check_%s_%s_no_wildcard", sanitizeIdentifier(objectType), sanitizeIdentifier(relation))
-}
-
-// sanitizeIdentifier converts a type/relation name to a valid SQL identifier.
-// Delegates to the canonical implementation in sqldsl.
-func sanitizeIdentifier(s string) string {
-	return Ident(s)
+	return SafeIdentifier("check_", objectType, relation, "_nw")
 }
 
 // computeHasStandaloneAccess determines if the relation has access paths outside of intersections.
@@ -228,8 +222,8 @@ func CollectNamedFunctions(
 //
 // The returned list includes:
 //   - Specialized check functions: check_{type}_{relation}
-//   - No-wildcard check variants: check_{type}_{relation}_no_wildcard
-//   - Specialized list functions: list_{type}_{relation}_objects, list_{type}_{relation}_subjects
+//   - No-wildcard check variants: check_{type}_{relation}_nw
+//   - Specialized list functions: list_{type}_{relation}_obj, list_{type}_{relation}_sub
 //   - Dispatcher functions (always included): check_permission, list_accessible_objects, etc.
 func CollectFunctionNames(analyses []RelationAnalysis) []string {
 	var names []string
@@ -253,8 +247,8 @@ func CollectFunctionNames(analyses []RelationAnalysis) []string {
 	names = append(names,
 		"check_permission",
 		"check_permission_internal",
-		"check_permission_no_wildcard",
-		"check_permission_no_wildcard_internal",
+		"check_permission_nw",
+		"check_permission_nw_internal",
 		"check_permission_bulk",
 		"list_accessible_objects",
 		"list_accessible_subjects",

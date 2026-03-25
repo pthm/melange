@@ -262,7 +262,7 @@ func dumpSQL(tc TestCase, opts dumpOptions) {
 
 		// Show no-wildcard dispatcher
 		if generatedSQL.DispatcherNoWildcard != "" {
-			fmt.Println("\n## DISPATCHER NO-WILDCARD (check_permission_no_wildcard)")
+			fmt.Println("\n## DISPATCHER NO-WILDCARD (check_permission_nw)")
 			fmt.Println()
 			fmt.Println(generatedSQL.DispatcherNoWildcard)
 		}

@@ -54,7 +54,7 @@ func BuildCheckPlan(a RelationAnalysis, inline InlineSQLData, noWildcard bool) C
 	internalFn := "check_permission_internal"
 	if noWildcard {
 		funcName = functionNameNoWildcard(a.ObjectType, a.Relation)
-		internalFn = "check_permission_no_wildcard_internal"
+		internalFn = "check_permission_nw_internal"
 	}
 
 	plan := CheckPlan{

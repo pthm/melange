@@ -132,23 +132,23 @@ func TestInFunctionSelect_SQL(t *testing.T) {
 			name: "list objects function",
 			in: InFunctionSelect{
 				Expr:      Col{Table: "t", Column: "subject_id"},
-				FuncName:  "list_doc_viewer_objects",
+				FuncName:  "list_doc_viewer_obj",
 				Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
 				Alias:     "obj",
 				SelectCol: "object_id",
 			},
-			want: "t.subject_id IN (SELECT obj.object_id FROM list_doc_viewer_objects(p_subject_type, p_subject_id, NULL, NULL) obj)",
+			want: "t.subject_id IN (SELECT obj.object_id FROM list_doc_viewer_obj(p_subject_type, p_subject_id, NULL, NULL) obj)",
 		},
 		{
 			name: "split_part expression",
 			in: InFunctionSelect{
 				Expr:      Raw("split_part(t.subject_id, '#', 1)"),
-				FuncName:  "list_group_member_objects",
+				FuncName:  "list_group_member_obj",
 				Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
 				Alias:     "obj",
 				SelectCol: "object_id",
 			},
-			want: "split_part(t.subject_id, '#', 1) IN (SELECT obj.object_id FROM list_group_member_objects(p_subject_type, p_subject_id, NULL, NULL) obj)",
+			want: "split_part(t.subject_id, '#', 1) IN (SELECT obj.object_id FROM list_group_member_obj(p_subject_type, p_subject_id, NULL, NULL) obj)",
 		},
 	}
 
@@ -163,7 +163,7 @@ func TestInFunctionSelect_SQL(t *testing.T) {
 
 func TestListObjectsFunctionName(t *testing.T) {
 	got := ListObjectsFunctionName("document", "viewer")
-	want := "list_document_viewer_objects"
+	want := "list_document_viewer_obj"
 	if got != want {
 		t.Errorf("ListObjectsFunctionName() = %q, want %q", got, want)
 	}
@@ -171,7 +171,7 @@ func TestListObjectsFunctionName(t *testing.T) {
 
 func TestListSubjectsFunctionName(t *testing.T) {
 	got := ListSubjectsFunctionName("document", "viewer")
-	want := "list_document_viewer_subjects"
+	want := "list_document_viewer_sub"
 	if got != want {
 		t.Errorf("ListSubjectsFunctionName() = %q, want %q", got, want)
 	}

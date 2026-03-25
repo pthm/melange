@@ -8,27 +8,27 @@ import (
 func TestGenerateMigrationSQL_FullMode(t *testing.T) {
 	gen := GeneratedSQL{
 		Functions:            []string{"CREATE OR REPLACE FUNCTION check_doc_viewer() ..."},
-		NoWildcardFunctions:  []string{"CREATE OR REPLACE FUNCTION check_doc_viewer_no_wildcard() ..."},
+		NoWildcardFunctions:  []string{"CREATE OR REPLACE FUNCTION check_doc_viewer_nw() ..."},
 		Dispatcher:           "CREATE OR REPLACE FUNCTION check_permission() ...",
-		DispatcherNoWildcard: "CREATE OR REPLACE FUNCTION check_permission_no_wildcard() ...",
+		DispatcherNoWildcard: "CREATE OR REPLACE FUNCTION check_permission_nw() ...",
 		BulkDispatcher:       "CREATE OR REPLACE FUNCTION check_permission_bulk() ...",
 	}
 	listSQL := ListGeneratedSQL{
-		ListObjectsFunctions:   []string{"CREATE OR REPLACE FUNCTION list_doc_viewer_objects() ..."},
-		ListSubjectsFunctions:  []string{"CREATE OR REPLACE FUNCTION list_doc_viewer_subjects() ..."},
+		ListObjectsFunctions:   []string{"CREATE OR REPLACE FUNCTION list_doc_viewer_obj() ..."},
+		ListSubjectsFunctions:  []string{"CREATE OR REPLACE FUNCTION list_doc_viewer_sub() ..."},
 		ListObjectsDispatcher:  "CREATE OR REPLACE FUNCTION list_accessible_objects() ...",
 		ListSubjectsDispatcher: "CREATE OR REPLACE FUNCTION list_accessible_subjects() ...",
 	}
 	functions := []string{
 		"check_doc_viewer",
-		"check_doc_viewer_no_wildcard",
+		"check_doc_viewer_nw",
 		"check_permission",
 		"check_permission_internal",
-		"check_permission_no_wildcard",
-		"check_permission_no_wildcard_internal",
+		"check_permission_nw",
+		"check_permission_nw_internal",
 		"check_permission_bulk",
-		"list_doc_viewer_objects",
-		"list_doc_viewer_subjects",
+		"list_doc_viewer_obj",
+		"list_doc_viewer_sub",
 		"list_accessible_objects",
 		"list_accessible_subjects",
 	}
@@ -59,7 +59,7 @@ func TestGenerateMigrationSQL_FullMode(t *testing.T) {
 	if !strings.Contains(result.Up, "check_permission_bulk()") {
 		t.Error("UP missing bulk dispatcher")
 	}
-	if !strings.Contains(result.Up, "list_doc_viewer_objects()") {
+	if !strings.Contains(result.Up, "list_doc_viewer_obj()") {
 		t.Error("UP missing list objects function")
 	}
 	if !strings.Contains(result.Up, "list_accessible_subjects()") {
@@ -101,11 +101,11 @@ func TestGenerateMigrationSQL_ComparisonWithOrphans(t *testing.T) {
 	listSQL := ListGeneratedSQL{}
 	functions := []string{
 		"check_doc_viewer",
-		"check_doc_viewer_no_wildcard",
+		"check_doc_viewer_nw",
 		"check_permission",
 		"check_permission_internal",
-		"check_permission_no_wildcard",
-		"check_permission_no_wildcard_internal",
+		"check_permission_nw",
+		"check_permission_nw_internal",
 		"check_permission_bulk",
 		"list_accessible_objects",
 		"list_accessible_subjects",
@@ -115,13 +115,13 @@ func TestGenerateMigrationSQL_ComparisonWithOrphans(t *testing.T) {
 		CodegenVersion: "1",
 		PreviousFunctionNames: []string{
 			"check_old_type_old_relation",
-			"check_old_type_old_relation_no_wildcard",
+			"check_old_type_old_relation_nw",
 			"check_doc_viewer",
-			"check_doc_viewer_no_wildcard",
+			"check_doc_viewer_nw",
 			"check_permission",
 			"check_permission_internal",
-			"check_permission_no_wildcard",
-			"check_permission_no_wildcard_internal",
+			"check_permission_nw",
+			"check_permission_nw_internal",
 			"check_permission_bulk",
 			"list_accessible_objects",
 			"list_accessible_subjects",
@@ -138,7 +138,7 @@ func TestGenerateMigrationSQL_ComparisonWithOrphans(t *testing.T) {
 	if !strings.Contains(result.Up, "DROP FUNCTION IF EXISTS check_old_type_old_relation CASCADE") {
 		t.Error("UP missing orphan drop")
 	}
-	if !strings.Contains(result.Up, "DROP FUNCTION IF EXISTS check_old_type_old_relation_no_wildcard CASCADE") {
+	if !strings.Contains(result.Up, "DROP FUNCTION IF EXISTS check_old_type_old_relation_nw CASCADE") {
 		t.Error("UP missing orphan no-wildcard drop")
 	}
 	if !strings.Contains(result.Up, "Previous state: database") {
@@ -172,31 +172,31 @@ func TestGenerateMigrationSQL_ComparisonNoOrphans(t *testing.T) {
 func TestGenerateMigrationSQL_ChangeDetection(t *testing.T) {
 	gen := GeneratedSQL{
 		Functions:            []string{"CREATE OR REPLACE FUNCTION check_doc_viewer() CHANGED_BODY"},
-		NoWildcardFunctions:  []string{"CREATE OR REPLACE FUNCTION check_doc_viewer_no_wildcard() SAME_BODY"},
+		NoWildcardFunctions:  []string{"CREATE OR REPLACE FUNCTION check_doc_viewer_nw() SAME_BODY"},
 		Dispatcher:           "CREATE OR REPLACE FUNCTION check_permission() ...",
-		DispatcherNoWildcard: "CREATE OR REPLACE FUNCTION check_permission_no_wildcard() ...",
+		DispatcherNoWildcard: "CREATE OR REPLACE FUNCTION check_permission_nw() ...",
 	}
 	listSQL := ListGeneratedSQL{}
 
 	// Named functions with their SQL
 	namedFunctions := []NamedFunction{
 		{Name: "check_doc_viewer", SQL: "CREATE OR REPLACE FUNCTION check_doc_viewer() CHANGED_BODY"},
-		{Name: "check_doc_viewer_no_wildcard", SQL: "CREATE OR REPLACE FUNCTION check_doc_viewer_no_wildcard() SAME_BODY"},
+		{Name: "check_doc_viewer_nw", SQL: "CREATE OR REPLACE FUNCTION check_doc_viewer_nw() SAME_BODY"},
 	}
 
 	// Previous checksums: check_doc_viewer has different body, no_wildcard is the same
 	previousChecksums := computeCurrentChecksums([]NamedFunction{
 		{Name: "check_doc_viewer", SQL: "CREATE OR REPLACE FUNCTION check_doc_viewer() OLD_BODY"},
-		{Name: "check_doc_viewer_no_wildcard", SQL: "CREATE OR REPLACE FUNCTION check_doc_viewer_no_wildcard() SAME_BODY"},
+		{Name: "check_doc_viewer_nw", SQL: "CREATE OR REPLACE FUNCTION check_doc_viewer_nw() SAME_BODY"},
 	})
 
 	functions := []string{
 		"check_doc_viewer",
-		"check_doc_viewer_no_wildcard",
+		"check_doc_viewer_nw",
 		"check_permission",
 		"check_permission_internal",
-		"check_permission_no_wildcard",
-		"check_permission_no_wildcard_internal",
+		"check_permission_nw",
+		"check_permission_nw_internal",
 		"check_permission_bulk",
 		"list_accessible_objects",
 		"list_accessible_subjects",
@@ -325,7 +325,7 @@ func TestGenerateMigrationSQL_DeterministicOutput(t *testing.T) {
 	}
 	functions := []string{
 		"check_doc_viewer",
-		"check_doc_viewer_no_wildcard",
+		"check_doc_viewer_nw",
 		"check_permission",
 		"check_permission_internal",
 	}
@@ -334,7 +334,7 @@ func TestGenerateMigrationSQL_DeterministicOutput(t *testing.T) {
 			"check_z_function",
 			"check_a_function",
 			"check_doc_viewer",
-			"check_doc_viewer_no_wildcard",
+			"check_doc_viewer_nw",
 			"check_permission",
 			"check_permission_internal",
 		},

@@ -47,9 +47,9 @@
 // For each relation in the schema, the generator produces:
 //
 //  1. Specialized check function: check_{type}_{relation}(subject_type, subject_id, object_id)
-//  2. No-wildcard variant: check_{type}_{relation}_no_wildcard(...)
-//  3. List objects function: list_{type}_{relation}_objects(subject_type, subject_id, limit, cursor)
-//  4. List subjects function: list_{type}_{relation}_subjects(object_id, subject_type, limit, cursor)
+//  2. No-wildcard variant: check_{type}_{relation}_nw(...)
+//  3. List objects function: list_{type}_{relation}_obj(subject_type, subject_id, limit, cursor)
+//  4. List subjects function: list_{type}_{relation}_sub(object_id, subject_type, limit, cursor)
 //
 // The generator also produces dispatcher functions (check_permission, list_accessible_objects,
 // list_accessible_subjects) that route requests to the appropriate specialized function
