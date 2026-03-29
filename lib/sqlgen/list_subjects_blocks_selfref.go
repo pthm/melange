@@ -46,7 +46,7 @@ func buildSelfRefUsersetFilterBlocks(plan ListPlan) (blocks []TypedQueryBlock, s
 	blocks = append(blocks, buildSelfRefUsersetFilterBaseBlock(plan))
 	blocks = append(blocks, buildSelfRefUsersetFilterIntersectionBlocks(plan)...)
 
-	return blocks, buildSelfRefUsersetFilterSelfBlock(plan), buildSelfRefUsersetFilterRecursiveBlock()
+	return blocks, buildSelfRefUsersetFilterSelfBlock(plan), buildSelfRefUsersetFilterRecursiveBlock(plan)
 }
 
 func buildSelfRefUsersetFilterBaseBlock(plan ListPlan) TypedQueryBlock {
@@ -68,7 +68,7 @@ func buildSelfRefUsersetFilterBaseBlock(plan ListPlan) TypedQueryBlock {
 				Raw("split_part(t.subject_id, '#', 1) AS userset_object_id"),
 				Raw("0 AS depth"),
 			},
-			FromExpr: TableAs("melange_tuples", "t"),
+			FromExpr: TableAs(plan.DatabaseSchema, "melange_tuples", "t"),
 			Where: And(
 				Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 				In{Expr: Col{Table: "t", Column: "relation"}, Values: plan.AllSatisfyingRelations},
@@ -80,6 +80,7 @@ func buildSelfRefUsersetFilterBaseBlock(plan ListPlan) TypedQueryBlock {
 					ExistsExpr(closureExistsStmt),
 				),
 				CheckPermissionExpr(
+					plan.DatabaseSchema,
 					"check_permission",
 					SubjectRef{Type: Param("v_filter_type"), ID: Col{Table: "t", Column: "subject_id"}},
 					plan.Relation,
@@ -110,9 +111,10 @@ func buildSelfRefUsersetFilterIntersectionBlocks(plan ListPlan) []TypedQueryBloc
 					Raw("0 AS depth"),
 				},
 				FromExpr: FunctionCallExpr{
-					Name:  listSubjectsFunctionName(plan.ObjectType, rel),
-					Args:  []Expr{ObjectID, filterUsersetExpr},
-					Alias: "icr",
+					Schema: plan.DatabaseSchema,
+					Name:   listSubjectsFunctionName(plan.ObjectType, rel),
+					Args:   []Expr{ObjectID, filterUsersetExpr},
+					Alias:  "icr",
 				},
 			},
 		})
@@ -153,7 +155,7 @@ func buildSelfRefUsersetFilterSelfBlock(plan ListPlan) *TypedQueryBlock {
 	}
 }
 
-func buildSelfRefUsersetFilterRecursiveBlock() *TypedQueryBlock {
+func buildSelfRefUsersetFilterRecursiveBlock(plan ListPlan) *TypedQueryBlock {
 	return &TypedQueryBlock{
 		Comments: []string{"-- Recursive userset expansion for filter path"},
 		Query: SelectStmt{
@@ -161,11 +163,12 @@ func buildSelfRefUsersetFilterRecursiveBlock() *TypedQueryBlock {
 				Raw("split_part(t.subject_id, '#', 1) AS userset_object_id"),
 				Raw("ue.depth + 1 AS depth"),
 			},
-			FromExpr: TableAs("userset_expansion", "ue"),
+			FromExpr: TableAs("", "userset_expansion", "ue"),
 			Joins: []JoinClause{{
-				Type:  "INNER",
-				Table: "melange_tuples",
-				Alias: "t",
+				Type:   "INNER",
+				Schema: plan.DatabaseSchema,
+				Table:  "melange_tuples",
+				Alias:  "t",
 				On: And(
 					Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Raw("v_filter_type")},
 					Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "ue", Column: "userset_object_id"}},
@@ -183,6 +186,7 @@ func buildSelfRefUsersetFilterRecursiveBlock() *TypedQueryBlock {
 func buildSelfRefUsersetRegularBlocks(plan ListPlan) (blocks []TypedQueryBlock, baseBlock, recursiveBlock *TypedQueryBlock) {
 	exclusions := buildExclusionInput(
 		plan.Analysis,
+		plan.DatabaseSchema,
 		ObjectID,
 		SubjectType,
 		Col{Table: "t", Column: "subject_id"},
@@ -199,7 +203,7 @@ func buildSelfRefUsersetRegularBlocks(plan ListPlan) (blocks []TypedQueryBlock, 
 }
 
 func buildSelfRefUsersetRegularDirectBlock(plan ListPlan, exclusions ExclusionConfig) TypedQueryBlock {
-	q := Tuples("t").
+	q := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
 		Relations(plan.RelationList...).
 		WhereObjectID(ObjectID).
@@ -224,7 +228,7 @@ func buildSelfRefUsersetRegularComplexClosureBlocks(plan ListPlan, exclusions Ex
 
 	blocks := make([]TypedQueryBlock, 0, len(plan.ComplexClosure))
 	for _, rel := range plan.ComplexClosure {
-		q := Tuples("t").
+		q := Tuples(plan.DatabaseSchema, "t").
 			ObjectType(plan.ObjectType).
 			Relations(rel).
 			WhereObjectID(ObjectID).
@@ -232,6 +236,7 @@ func buildSelfRefUsersetRegularComplexClosureBlocks(plan ListPlan, exclusions Ex
 			Where(
 				In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
 				CheckPermissionInternalExpr(
+					plan.DatabaseSchema,
 					SubjectRef{Type: SubjectType, ID: Col{Table: "t", Column: "subject_id"}},
 					rel,
 					ObjectRef{Type: Lit(plan.ObjectType), ID: ObjectID},
@@ -266,9 +271,10 @@ func buildSelfRefUsersetRegularIntersectionClosureBlocks(plan ListPlan) []TypedQ
 			Query: SelectStmt{
 				ColumnExprs: []Expr{Col{Table: "icr", Column: "subject_id"}},
 				FromExpr: FunctionCallExpr{
-					Name:  listSubjectsFunctionName(plan.ObjectType, rel),
-					Args:  []Expr{ObjectID, SubjectType},
-					Alias: "icr",
+					Schema: plan.DatabaseSchema,
+					Name:   listSubjectsFunctionName(plan.ObjectType, rel),
+					Args:   []Expr{ObjectID, SubjectType},
+					Alias:  "icr",
 				},
 			},
 		})
@@ -296,12 +302,13 @@ func buildSelfRefUsersetRegularExpansionBlock(plan ListPlan, exclusions Exclusio
 		Query: SelectStmt{
 			Distinct:    true,
 			ColumnExprs: []Expr{Col{Table: "t", Column: "subject_id"}},
-			FromExpr:    TableAs("userset_objects", "uo"),
+			FromExpr:    TableAs("", "userset_objects", "uo"),
 			Joins: []JoinClause{{
-				Type:  "INNER",
-				Table: "melange_tuples",
-				Alias: "t",
-				On:    Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "uo", Column: "userset_object_id"}},
+				Type:   "INNER",
+				Schema: plan.DatabaseSchema,
+				Table:  "melange_tuples",
+				Alias:  "t",
+				On:     Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "uo", Column: "userset_object_id"}},
 			}},
 			Where: And(conditions...),
 		},
@@ -341,6 +348,7 @@ func buildSelfRefUsersetRegularComplexPatternBlock(plan ListPlan, pattern listUs
 
 	subjectExclusions := buildExclusionInput(
 		plan.Analysis,
+		plan.DatabaseSchema,
 		ObjectID,
 		SubjectType,
 		Col{Table: "s", Column: "subject_id"},
@@ -359,11 +367,12 @@ func buildSelfRefUsersetRegularComplexPatternBlock(plan ListPlan, pattern listUs
 		Query: SelectStmt{
 			Distinct:    true,
 			ColumnExprs: []Expr{Col{Table: "s", Column: "subject_id"}},
-			FromExpr:    TableAs("melange_tuples", "g"),
+			FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "g"),
 			Joins: []JoinClause{{
 				Type: "CROSS",
 				TableExpr: LateralFunction{
-					Name: listSubjectsFunctionName(pattern.SubjectType, pattern.SubjectRelation),
+					Schema: plan.DatabaseSchema,
+					Name:   listSubjectsFunctionName(pattern.SubjectType, pattern.SubjectRelation),
 					Args: []Expr{
 						Func{Name: "split_part", Args: []Expr{Col{Table: "g", Column: "subject_id"}, Lit("#"), Int(1)}},
 						SubjectType,
@@ -381,6 +390,7 @@ func buildSelfRefUsersetRegularComplexPatternBlock(plan ListPlan, pattern listUs
 func buildSelfRefUsersetRegularSimplePatternBlock(plan ListPlan, pattern listUsersetPatternInput) TypedQueryBlock {
 	subjectExclusions := buildExclusionInput(
 		plan.Analysis,
+		plan.DatabaseSchema,
 		ObjectID,
 		SubjectType,
 		Col{Table: "s", Column: "subject_id"},
@@ -409,6 +419,7 @@ func buildSelfRefUsersetRegularSimplePatternBlock(plan ListPlan, pattern listUse
 
 	if pattern.IsClosurePattern {
 		grantConditions = append(grantConditions, CheckPermissionExpr(
+			plan.DatabaseSchema,
 			"check_permission",
 			SubjectRef{Type: SubjectType, ID: Col{Table: "s", Column: "subject_id"}},
 			pattern.SourceRelation,
@@ -427,12 +438,13 @@ func buildSelfRefUsersetRegularSimplePatternBlock(plan ListPlan, pattern listUse
 		Query: SelectStmt{
 			Distinct:    true,
 			ColumnExprs: []Expr{Col{Table: "s", Column: "subject_id"}},
-			FromExpr:    TableAs("melange_tuples", "g"),
+			FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "g"),
 			Joins: []JoinClause{{
-				Type:  "INNER",
-				Table: "melange_tuples",
-				Alias: "s",
-				On:    And(membershipConditions...),
+				Type:   "INNER",
+				Schema: plan.DatabaseSchema,
+				Table:  "melange_tuples",
+				Alias:  "s",
+				On:     And(membershipConditions...),
 			}},
 			Where: And(grantConditions...),
 		},
@@ -440,7 +452,7 @@ func buildSelfRefUsersetRegularSimplePatternBlock(plan ListPlan, pattern listUse
 }
 
 func buildSelfRefUsersetObjectsBaseBlock(plan ListPlan) *TypedQueryBlock {
-	q := Tuples("t").
+	q := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
 		Relations(plan.RelationList...).
 		Select("split_part(t.subject_id, '#', 1) AS userset_object_id", "0 AS depth").
@@ -462,11 +474,12 @@ func buildSelfRefUsersetObjectsRecursiveBlock(plan ListPlan) *TypedQueryBlock {
 				Raw("split_part(t.subject_id, '#', 1) AS userset_object_id"),
 				Raw("uo.depth + 1 AS depth"),
 			},
-			FromExpr: TableAs("userset_objects", "uo"),
+			FromExpr: TableAs("", "userset_objects", "uo"),
 			Joins: []JoinClause{{
-				Type:  "INNER",
-				Table: "melange_tuples",
-				Alias: "t",
+				Type:   "INNER",
+				Schema: plan.DatabaseSchema,
+				Table:  "melange_tuples",
+				Alias:  "t",
 				On: And(
 					Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 					Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "uo", Column: "userset_object_id"}},

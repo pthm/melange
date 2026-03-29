@@ -71,7 +71,7 @@ func appendUnion(base, additional string) string {
 }
 
 // buildDepthCheckSQLForRender builds the depth check SQL for recursive functions.
-func buildDepthCheckSQLForRender(objectType string, linkingRelations []string) string {
+func buildDepthCheckSQLForRender(databaseSchema, objectType string, linkingRelations []string) string {
 	if len(linkingRelations) == 0 {
 		return "    v_max_depth := 0;\n"
 	}
@@ -83,12 +83,13 @@ func buildDepthCheckSQLForRender(objectType string, linkingRelations []string) s
 
 	recursiveCase := SelectStmt{
 		ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}, Add{Left: Col{Table: "d", Column: "depth"}, Right: Int(1)}},
-		FromExpr:    TableAs("depth_check", "d"),
+		FromExpr:    TableAs("", "depth_check", "d"),
 		Joins: []JoinClause{
 			{
-				Type:  "INNER",
-				Table: "melange_tuples",
-				Alias: "t",
+				Type:   "INNER",
+				Schema: databaseSchema,
+				Table:  "melange_tuples",
+				Alias:  "t",
 				On: And(
 					Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(objectType)},
 					In{Expr: Col{Table: "t", Column: "relation"}, Values: linkingRelations},

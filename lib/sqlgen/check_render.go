@@ -15,7 +15,7 @@ func RenderCheckFunction(plan CheckPlan, blocks CheckBlocks) (string, error) {
 
 func renderCheckDirectFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) (string, error) {
 	body := buildUsersetSubjectStmts(plan, blocks)
-	accessExpr := buildAccessCheckExpr(blocks, Visited)
+	accessExpr := buildAccessCheckExpr(blocks, Visited, plan.DatabaseSchema)
 
 	if plan.HasExclusion {
 		exclusionExpr := blocks.ExclusionCheck
@@ -42,6 +42,7 @@ func renderCheckDirectFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) (st
 	}
 
 	fn := PlpgsqlFunction{
+		Schema:  plan.DatabaseSchema,
 		Name:    plan.FunctionName,
 		Args:    checkFunctionArgs(),
 		Returns: "INTEGER",
@@ -57,7 +58,7 @@ func renderCheckIntersectionFunctionFromBlocks(plan CheckPlan, blocks CheckBlock
 	body := buildUsersetSubjectStmts(plan, blocks)
 
 	if blocks.HasStandaloneAccess {
-		accessExpr := buildAccessCheckExpr(blocks, Visited)
+		accessExpr := buildAccessCheckExpr(blocks, Visited, plan.DatabaseSchema)
 		body = append(body,
 			Comment{Text: "Non-intersection access paths"},
 			If{
@@ -72,6 +73,7 @@ func renderCheckIntersectionFunctionFromBlocks(plan CheckPlan, blocks CheckBlock
 	body = append(body, ReturnInt{Value: 0})
 
 	fn := PlpgsqlFunction{
+		Schema:  plan.DatabaseSchema,
 		Name:    plan.FunctionName,
 		Args:    checkFunctionArgs(),
 		Returns: "INTEGER",
@@ -97,6 +99,7 @@ func renderCheckRecursiveFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) 
 	body = append(body, ReturnInt{Value: 0})
 
 	fn := PlpgsqlFunction{
+		Schema:  plan.DatabaseSchema,
 		Name:    plan.FunctionName,
 		Args:    checkFunctionArgs(),
 		Returns: "INTEGER",
@@ -125,6 +128,7 @@ func renderCheckRecursiveIntersectionFunctionFromBlocks(plan CheckPlan, blocks C
 	body = append(body, ReturnInt{Value: 0})
 
 	fn := PlpgsqlFunction{
+		Schema:  plan.DatabaseSchema,
 		Name:    plan.FunctionName,
 		Args:    checkFunctionArgs(),
 		Returns: "INTEGER",
@@ -232,7 +236,7 @@ func buildUsersetSubjectStmts(plan CheckPlan, blocks CheckBlocks) []Stmt {
 	}
 }
 
-func buildAccessCheckExpr(blocks CheckBlocks, visitedExpr Expr) Expr {
+func buildAccessCheckExpr(blocks CheckBlocks, visitedExpr Expr, databaseSchema string) Expr {
 	var parts []Expr
 	if blocks.DirectCheck != nil {
 		parts = append(parts, blocks.DirectCheck)
@@ -241,7 +245,7 @@ func buildAccessCheckExpr(blocks CheckBlocks, visitedExpr Expr) Expr {
 		parts = append(parts, blocks.UsersetCheck)
 	}
 	for _, call := range blocks.ImpliedFunctionCalls {
-		checkCall := SpecializedCheckCall(call.FunctionName, SubjectType, SubjectID, ObjectID, visitedExpr)
+		checkCall := SpecializedCheckCall(databaseSchema, call.FunctionName, SubjectType, SubjectID, ObjectID, visitedExpr)
 		parts = append(parts, Raw(checkCall.SQL()))
 	}
 
@@ -287,7 +291,7 @@ func buildStandaloneAccessPathStmts(plan CheckPlan, blocks CheckBlocks, visitedE
 	}
 
 	for _, call := range blocks.ImpliedFunctionCalls {
-		checkCall := SpecializedCheckCall(call.FunctionName, SubjectType, SubjectID, ObjectID, visitedExpr)
+		checkCall := SpecializedCheckCall(plan.DatabaseSchema, call.FunctionName, SubjectType, SubjectID, ObjectID, visitedExpr)
 		stmts = append(stmts, accessPathCheck("Implied access path via "+call.FunctionName, Raw(checkCall.SQL())))
 	}
 
@@ -315,13 +319,14 @@ func accessPathCheck(comment string, cond Expr) If {
 
 func renderParentRelationExistsFromBlocks(plan CheckPlan, parent ParentRelationBlock, visitedExpr string) string {
 	checkCall := InternalCheckCall(
+		plan.DatabaseSchema,
 		SubjectType, SubjectID, parent.ParentRelation,
 		Col{Table: "link", Column: "subject_type"},
 		Col{Table: "link", Column: "subject_id"},
 		Raw(visitedExpr),
 	)
 
-	q := Tuples("link").
+	q := Tuples(plan.DatabaseSchema, "link").
 		ObjectType(plan.ObjectType).
 		Relations(parent.LinkingRelation).
 		Where(
@@ -388,6 +393,7 @@ func buildIntersectionInnerStmts(plan CheckPlan, parts []IntersectionPartCheck, 
 			continue
 		}
 		checkCall := InternalCheckCall(
+			plan.DatabaseSchema,
 			SubjectType, SubjectID, part.ExcludedRelation,
 			Lit(plan.ObjectType), ObjectID, visitedExpr,
 		)

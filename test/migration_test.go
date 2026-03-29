@@ -49,10 +49,10 @@ func compilePipelineFromTypes(t *testing.T, types []schema.TypeDefinition) compi
 	analyses = compiler.ComputeCanGenerate(analyses)
 	inlineData := compiler.BuildInlineSQLData(closureRows, analyses)
 
-	genSQL, err := compiler.GenerateSQL(analyses, inlineData)
+	genSQL, err := compiler.GenerateSQL(analyses, inlineData, "")
 	require.NoError(t, err, "generating check SQL")
 
-	listSQL, err := compiler.GenerateListSQL(analyses, inlineData)
+	listSQL, err := compiler.GenerateListSQL(analyses, inlineData, "")
 	require.NoError(t, err, "generating list SQL")
 
 	return compiledSchema{

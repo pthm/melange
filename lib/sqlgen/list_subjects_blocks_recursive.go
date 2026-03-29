@@ -57,7 +57,7 @@ func buildListSubjectsRecursiveRegularBlocks(plan ListPlan) ([]TypedQueryBlock, 
 
 // buildListSubjectsRecursiveDirectBlock builds the direct tuple lookup block for recursive list_subjects.
 func buildListSubjectsRecursiveDirectBlock(plan ListPlan) TypedQueryBlock {
-	q := Tuples("t").
+	q := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
 		Relations(plan.RelationList...).
 		Where(
@@ -85,7 +85,7 @@ func buildListSubjectsRecursiveComplexClosureBlocks(plan ListPlan) []TypedQueryB
 
 	blocks := make([]TypedQueryBlock, 0, len(plan.ComplexClosure))
 	for _, rel := range plan.ComplexClosure {
-		q := Tuples("t").
+		q := Tuples(plan.DatabaseSchema, "t").
 			ObjectType(plan.ObjectType).
 			Relations(rel).
 			Where(
@@ -93,6 +93,7 @@ func buildListSubjectsRecursiveComplexClosureBlocks(plan ListPlan) []TypedQueryB
 				Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
 				NoUserset{Source: Col{Table: "t", Column: "subject_id"}},
 				CheckPermission{
+					Schema: plan.DatabaseSchema,
 					Subject: SubjectRef{
 						Type: SubjectType,
 						ID:   Col{Table: "t", Column: "subject_id"},
@@ -140,9 +141,10 @@ func buildListSubjectsRecursiveUsersetPatternBlocks(plan ListPlan) ([]TypedQuery
 func buildListSubjectsRecursiveComplexUsersetBlock(plan ListPlan, pattern listUsersetPatternInput) TypedQueryBlock {
 	const grantAlias, memberAlias = "g", "m"
 
-	memberExclusions := buildExclusionInput(plan.Analysis, ObjectID, Col{Table: memberAlias, Column: "subject_type"}, Col{Table: memberAlias, Column: "subject_id"})
+	memberExclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, Col{Table: memberAlias, Column: "subject_type"}, Col{Table: memberAlias, Column: "subject_id"})
 
 	checkExpr := CheckPermissionInternalExpr(
+		plan.DatabaseSchema,
 		SubjectRef{Type: SubjectType, ID: Col{Table: memberAlias, Column: "subject_id"}},
 		pattern.SubjectRelation,
 		ObjectRef{Type: Lit(pattern.SubjectType), ID: UsersetObjectID{Source: Col{Table: grantAlias, Column: "subject_id"}}},
@@ -174,6 +176,7 @@ func buildListSubjectsRecursiveComplexUsersetBlock(plan ListPlan, pattern listUs
 
 	if pattern.IsClosurePattern {
 		whereConditions = append(whereConditions, CheckPermission{
+			Schema:      plan.DatabaseSchema,
 			Subject:     SubjectRef{Type: SubjectType, ID: Col{Table: memberAlias, Column: "subject_id"}},
 			Relation:    pattern.SourceRelation,
 			Object:      LiteralObject(plan.ObjectType, ObjectID),
@@ -184,12 +187,13 @@ func buildListSubjectsRecursiveComplexUsersetBlock(plan ListPlan, pattern listUs
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: memberAlias, Column: "subject_id"}},
-		FromExpr:    TableAs("melange_tuples", grantAlias),
+		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", grantAlias),
 		Joins: []JoinClause{{
-			Type:  "INNER",
-			Table: "melange_tuples",
-			Alias: memberAlias,
-			On:    joinCond,
+			Type:   "INNER",
+			Schema: plan.DatabaseSchema,
+			Table:  "melange_tuples",
+			Alias:  memberAlias,
+			On:     joinCond,
 		}},
 		Where: And(whereConditions...),
 	}
@@ -204,7 +208,7 @@ func buildListSubjectsRecursiveComplexUsersetBlock(plan ListPlan, pattern listUs
 func buildListSubjectsRecursiveSimpleUsersetBlock(plan ListPlan, pattern listUsersetPatternInput) TypedQueryBlock {
 	const grantAlias, memberAlias = "g", "s"
 
-	memberExclusions := buildExclusionInput(plan.Analysis, ObjectID, Col{Table: memberAlias, Column: "subject_type"}, Col{Table: memberAlias, Column: "subject_id"})
+	memberExclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, Col{Table: memberAlias, Column: "subject_type"}, Col{Table: memberAlias, Column: "subject_id"})
 
 	joinCond := And(
 		Eq{Left: Col{Table: memberAlias, Column: "object_type"}, Right: Lit(pattern.SubjectType)},
@@ -231,6 +235,7 @@ func buildListSubjectsRecursiveSimpleUsersetBlock(plan ListPlan, pattern listUse
 
 	if pattern.IsClosurePattern {
 		whereConditions = append(whereConditions, CheckPermission{
+			Schema:      plan.DatabaseSchema,
 			Subject:     SubjectRef{Type: SubjectType, ID: Col{Table: memberAlias, Column: "subject_id"}},
 			Relation:    pattern.SourceRelation,
 			Object:      LiteralObject(plan.ObjectType, ObjectID),
@@ -241,12 +246,13 @@ func buildListSubjectsRecursiveSimpleUsersetBlock(plan ListPlan, pattern listUse
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: memberAlias, Column: "subject_id"}},
-		FromExpr:    TableAs("melange_tuples", grantAlias),
+		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", grantAlias),
 		Joins: []JoinClause{{
-			Type:  "INNER",
-			Table: "melange_tuples",
-			Alias: memberAlias,
-			On:    joinCond,
+			Type:   "INNER",
+			Schema: plan.DatabaseSchema,
+			Table:  "melange_tuples",
+			Alias:  memberAlias,
+			On:     joinCond,
 		}},
 		Where: And(whereConditions...),
 	}
@@ -348,7 +354,7 @@ func collectParentSatisfyingRelations(plan ListPlan, parent ListParentRelationDa
 // buildListSubjectsRecursiveTTUBlockParentClosure builds a TTU block using parent closure optimization.
 // This scans for direct grants on parent ancestors - only correct for simple parent relations.
 func buildListSubjectsRecursiveTTUBlockParentClosure(plan ListPlan, parent ListParentRelationData) TypedQueryBlock {
-	exclusions := buildExclusionInput(plan.Analysis, ObjectID, SubjectType, Col{Table: "t", Column: "subject_id"})
+	exclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "t", Column: "subject_id"})
 
 	// Collect satisfying relations for the parent relation across all parent types.
 	// For implied relations like "can_read: member", we need to look up tuples with
@@ -371,11 +377,12 @@ func buildListSubjectsRecursiveTTUBlockParentClosure(plan ListPlan, parent ListP
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "t", Column: "subject_id"}},
-		FromExpr:    TableAs("parent_closure", "p"),
+		FromExpr:    TableAs("", "parent_closure", "p"),
 		Joins: []JoinClause{{
-			Type:  "INNER",
-			Table: "melange_tuples",
-			Alias: "t",
+			Type:   "INNER",
+			Schema: plan.DatabaseSchema,
+			Table:  "melange_tuples",
+			Alias:  "t",
 			On: And(
 				Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Col{Table: "p", Column: "subject_type"}},
 				Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "p", Column: "subject_id"}},
@@ -441,11 +448,12 @@ func buildListSubjectsRecursiveTTUBlockSubjectPool(plan ListPlan, parent ListPar
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "sp", Column: "subject_id"}},
-		FromExpr:    TableAs("subject_pool", "sp"),
+		FromExpr:    TableAs("", "subject_pool", "sp"),
 		Joins: []JoinClause{{
-			Type:  "CROSS",
-			Table: "melange_tuples",
-			Alias: "link",
+			Type:   "CROSS",
+			Schema: plan.DatabaseSchema,
+			Table:  "melange_tuples",
+			Alias:  "link",
 		}},
 		Where: And(append(linkWhere, Raw(checkCallSQL))...),
 	}
@@ -476,9 +484,10 @@ func buildSubjectsRecursiveUsersetFilterTypedBlocks(plan ListPlan, parentRelatio
 			Distinct:    true,
 			ColumnExprs: []Expr{Col{Table: "ics", Column: "subject_id"}},
 			FromExpr: FunctionCallExpr{
-				Name:  funcName,
-				Args:  []Expr{ObjectID, filterUsersetExpr},
-				Alias: "ics",
+				Schema: plan.DatabaseSchema,
+				Name:   funcName,
+				Args:   []Expr{ObjectID, filterUsersetExpr},
+				Alias:  "ics",
 			},
 		}
 		blocks = append(blocks, TypedQueryBlock{
@@ -493,6 +502,7 @@ func buildSubjectsRecursiveUsersetFilterTypedBlocks(plan ListPlan, parentRelatio
 // buildListSubjectsRecursiveUsersetFilterDirectBlock builds the direct userset tuples block.
 func buildListSubjectsRecursiveUsersetFilterDirectBlock(plan ListPlan) TypedQueryBlock {
 	checkExpr := CheckPermission{
+		Schema:      plan.DatabaseSchema,
 		Subject:     SubjectRef{Type: Param("v_filter_type"), ID: Col{Table: "t", Column: "subject_id"}},
 		Relation:    plan.Relation,
 		Object:      LiteralObject(plan.ObjectType, Param("p_object_id")),
@@ -521,7 +531,7 @@ func buildListSubjectsRecursiveUsersetFilterDirectBlock(plan ListPlan) TypedQuer
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{subjectExpr},
-		FromExpr:    TableAs("melange_tuples", "t"),
+		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "t"),
 		Where: And(
 			Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 			Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
@@ -581,11 +591,12 @@ func buildListSubjectsRecursiveUsersetFilterTTUBlock(plan ListPlan, parent ListP
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{subjectExpr},
-		FromExpr:    TableAs("melange_tuples", "link"),
+		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "link"),
 		Joins: []JoinClause{{
-			Type:  "INNER",
-			Table: "melange_tuples",
-			Alias: "pt",
+			Type:   "INNER",
+			Schema: plan.DatabaseSchema,
+			Table:  "melange_tuples",
+			Alias:  "pt",
 			On: And(
 				Eq{Left: Col{Table: "pt", Column: "object_type"}, Right: Col{Table: "link", Column: "subject_type"}},
 				Eq{Left: Col{Table: "pt", Column: "object_id"}, Right: Col{Table: "link", Column: "subject_id"}},
@@ -630,7 +641,7 @@ func buildListSubjectsRecursiveUsersetFilterTTUIntermediateBlock(plan ListPlan, 
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{subjectExpr},
-		FromExpr:    TableAs("melange_tuples", "link"),
+		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "link"),
 		Where:       And(whereConditions...),
 	}
 
@@ -643,7 +654,8 @@ func buildListSubjectsRecursiveUsersetFilterTTUIntermediateBlock(plan ListPlan, 
 // buildListSubjectsRecursiveUsersetFilterTTUNestedBlock builds the nested TTU block.
 func buildListSubjectsRecursiveUsersetFilterTTUNestedBlock(plan ListPlan, parent ListParentRelationData) TypedQueryBlock {
 	lateralCall := LateralFunction{
-		Name: "list_accessible_subjects",
+		Schema: plan.DatabaseSchema,
+		Name:   "list_accessible_subjects",
 		Args: []Expr{
 			Col{Table: "link", Column: "subject_type"},
 			Col{Table: "link", Column: "subject_id"},
@@ -665,7 +677,7 @@ func buildListSubjectsRecursiveUsersetFilterTTUNestedBlock(plan ListPlan, parent
 
 	stmt := SelectStmt{
 		ColumnExprs: []Expr{Col{Table: "nested", Column: "subject_id"}},
-		FromExpr:    TableAs("melange_tuples", "link"),
+		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "link"),
 		Joins: []JoinClause{{
 			Type:      "CROSS",
 			TableExpr: lateralCall,

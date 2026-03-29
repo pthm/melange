@@ -7,6 +7,7 @@ func RenderListObjectsFunction(plan ListPlan, blocks BlockSet) (string, error) {
 	paginatedQuery := wrapWithPagination(query, "object_id")
 
 	fn := PlpgsqlFunction{
+		Schema:  plan.DatabaseSchema,
 		Name:    plan.FunctionName,
 		Args:    ListObjectsArgs(),
 		Returns: ListObjectsReturns(),

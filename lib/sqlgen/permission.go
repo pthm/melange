@@ -2,6 +2,7 @@ package sqlgen
 
 // CheckPermission represents a call to check_permission_internal.
 type CheckPermission struct {
+	Schema      string
 	Subject     SubjectRef
 	Relation    string
 	Object      ObjectRef
@@ -15,6 +16,7 @@ func (c CheckPermission) SQL() string {
 		visited = EmptyArray{}
 	}
 	return FuncCallEq{
+		Schema:   c.Schema,
 		FuncName: "check_permission_internal",
 		Args: []Expr{
 			c.Subject.Type,
@@ -29,8 +31,9 @@ func (c CheckPermission) SQL() string {
 }
 
 // CheckAccess creates a CheckPermission that expects access to be allowed.
-func CheckAccess(relation, objectType string, objectID Expr) CheckPermission {
+func CheckAccess(databaseSchema, relation, objectType string, objectID Expr) CheckPermission {
 	return CheckPermission{
+		Schema:      databaseSchema,
 		Subject:     SubjectParams(),
 		Relation:    relation,
 		Object:      LiteralObject(objectType, objectID),
@@ -39,8 +42,9 @@ func CheckAccess(relation, objectType string, objectID Expr) CheckPermission {
 }
 
 // CheckNoAccess creates a CheckPermission that expects access to be denied.
-func CheckNoAccess(relation, objectType string, objectID Expr) CheckPermission {
+func CheckNoAccess(databaseSchema, relation, objectType string, objectID Expr) CheckPermission {
 	return CheckPermission{
+		Schema:      databaseSchema,
 		Subject:     SubjectParams(),
 		Relation:    relation,
 		Object:      LiteralObject(objectType, objectID),
@@ -50,6 +54,7 @@ func CheckNoAccess(relation, objectType string, objectID Expr) CheckPermission {
 
 // CheckPermissionCall represents a call to a specialized permission check function.
 type CheckPermissionCall struct {
+	Schema       string
 	FunctionName string
 	Subject      SubjectRef
 	Relation     string
@@ -59,6 +64,7 @@ type CheckPermissionCall struct {
 
 func (c CheckPermissionCall) SQL() string {
 	return FuncCallEq{
+		Schema:   c.Schema,
 		FuncName: c.FunctionName,
 		Args: []Expr{
 			c.Subject.Type,

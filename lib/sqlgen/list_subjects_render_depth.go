@@ -6,6 +6,7 @@ import "fmt"
 // that exceeds the userset depth limit. The generated function raises M2002 immediately.
 func RenderListSubjectsDepthExceededFunction(plan ListPlan) string {
 	fn := PlpgsqlFunction{
+		Schema:  plan.DatabaseSchema,
 		Name:    plan.FunctionName,
 		Args:    ListSubjectsArgs(),
 		Returns: ListSubjectsReturns(),

@@ -26,7 +26,8 @@ type ExcludedIntersectionGroup struct {
 // ExclusionConfig holds all exclusion rules for a query.
 // It classifies exclusions by complexity and generates appropriate SQL predicates.
 type ExclusionConfig struct {
-	ObjectType string // The object type being checked
+	DatabaseSchema string
+	ObjectType     string // The object type being checked
 
 	ObjectIDExpr    Expr // Expression for the object ID (typically a column or parameter)
 	SubjectTypeExpr Expr // Expression for the subject type
@@ -80,6 +81,7 @@ func (c ExclusionConfig) objectRef() ObjectRef {
 
 func (c ExclusionConfig) checkPermission(relation string, obj ObjectRef, expectAllow bool) CheckPermission {
 	return CheckPermission{
+		Schema:      c.DatabaseSchema,
 		Subject:     c.subjectRef(),
 		Relation:    relation,
 		Object:      obj,
@@ -92,7 +94,7 @@ func (c ExclusionConfig) ttuLinkQuery(rel ExcludedParentRelation) *TupleQuery {
 		Type: Col{Table: "link", Column: "subject_type"},
 		ID:   Col{Table: "link", Column: "subject_id"},
 	}
-	q := Tuples("link").
+	q := Tuples(c.DatabaseSchema, "link").
 		ObjectType(c.ObjectType).
 		Relations(rel.LinkingRelation).
 		Select("1").
@@ -123,7 +125,7 @@ func (c ExclusionConfig) BuildPredicates() []Expr {
 
 	for _, rel := range c.SimpleExcludedRelations {
 		predicates = append(predicates, simpleExclusionQuery(
-			c.ObjectType, rel, c.ObjectIDExpr, c.SubjectTypeExpr, c.SubjectIDExpr,
+			c.DatabaseSchema, c.ObjectType, rel, c.ObjectIDExpr, c.SubjectTypeExpr, c.SubjectIDExpr,
 		))
 	}
 
@@ -171,8 +173,8 @@ func (c ExclusionConfig) buildIntersectionPart(part ExcludedIntersectionPart) Ex
 	)
 }
 
-func simpleExclusionQuery(objectType, relation string, objectID, subjectType, subjectID Expr) NotExists {
-	excl := Tuples("excl").
+func simpleExclusionQuery(databaseSchema, objectType, relation string, objectID, subjectType, subjectID Expr) NotExists {
+	excl := Tuples(databaseSchema, "excl").
 		ObjectType(objectType).
 		Relations(relation).
 		Select("1").
@@ -190,8 +192,8 @@ func simpleExclusionQuery(objectType, relation string, objectID, subjectType, su
 // SimpleExclusion creates a NOT EXISTS exclusion for a simple "but not" rule.
 // This checks for the absence of a tuple granting the excluded relation to the subject.
 // Wildcards are handled: if a wildcard tuple exists for the excluded relation, access is denied.
-func SimpleExclusion(objectType, relation string, objectID, subjectType, subjectID Expr) Expr {
-	return simpleExclusionQuery(objectType, relation, objectID, subjectType, subjectID)
+func SimpleExclusion(databaseSchema, objectType, relation string, objectID, subjectType, subjectID Expr) Expr {
+	return simpleExclusionQuery(databaseSchema, objectType, relation, objectID, subjectType, subjectID)
 }
 
 // BuildExclusionCTE builds a CTE that materializes all excluded subjects.
@@ -217,7 +219,7 @@ func (c ExclusionConfig) BuildExclusionCTE() string {
 		return "SELECT NULL::TEXT AS subject_id WHERE FALSE"
 	}
 
-	q := Tuples("").
+	q := Tuples(c.DatabaseSchema, "").
 		ObjectType(c.ObjectType).
 		Relations(c.SimpleExcludedRelations...).
 		Where(

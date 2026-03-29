@@ -1,7 +1,7 @@
 -- melange_tuples view for integration tests.
 -- This view maps domain tables to FGA tuples for permission evaluation.
 
-CREATE OR REPLACE VIEW melange_tuples AS
+CREATE OR REPLACE VIEW {{ .Ident "melange_tuples" }} AS
 
 -- Organization memberships
 SELECT
@@ -10,7 +10,7 @@ SELECT
     role::text AS relation,
     'organization' AS object_type,
     organization_id::text AS object_id
-FROM organization_members
+FROM {{ .Ident "organization_members" }}
 
 UNION ALL
 
@@ -21,7 +21,7 @@ SELECT
     role::text AS relation,
     'team' AS object_type,
     team_id::text AS object_id
-FROM team_members
+FROM {{ .Ident "team_members" }}
 
 UNION ALL
 
@@ -32,7 +32,7 @@ SELECT
     'org' AS relation,
     'team' AS object_type,
     id::text AS object_id
-FROM teams
+FROM {{ .Ident "teams" }}
 
 UNION ALL
 
@@ -43,7 +43,7 @@ SELECT
     'org' AS relation,
     'repository' AS object_type,
     id::text AS object_id
-FROM repositories
+FROM {{ .Ident "repositories" }}
 WHERE organization_id IS NOT NULL
 
 UNION ALL
@@ -55,7 +55,7 @@ SELECT
     role::text AS relation,
     'repository' AS object_type,
     repository_id::text AS object_id
-FROM repository_collaborators
+FROM {{ .Ident "repository_collaborators" }}
 
 UNION ALL
 
@@ -66,7 +66,7 @@ SELECT
     'repo' AS relation,
     'issue' AS object_type,
     id::text AS object_id
-FROM issues
+FROM {{ .Ident "issues" }}
 
 UNION ALL
 
@@ -77,7 +77,7 @@ SELECT
     'author' AS relation,
     'issue' AS object_type,
     id::text AS object_id
-FROM issues
+FROM {{ .Ident "issues" }}
 
 UNION ALL
 
@@ -88,7 +88,7 @@ SELECT
     'assignee' AS relation,
     'issue' AS object_type,
     id::text AS object_id
-FROM issues
+FROM {{ .Ident "issues" }}
 WHERE assignee_id IS NOT NULL
 
 UNION ALL
@@ -100,7 +100,7 @@ SELECT
     'repo' AS relation,
     'pull_request' AS object_type,
     id::text AS object_id
-FROM pull_requests
+FROM {{ .Ident "pull_requests" }}
 
 UNION ALL
 
@@ -111,7 +111,7 @@ SELECT
     'author' AS relation,
     'pull_request' AS object_type,
     id::text AS object_id
-FROM pull_requests
+FROM {{ .Ident "pull_requests" }}
 
 UNION ALL
 
@@ -122,7 +122,7 @@ SELECT
     'reviewer' AS relation,
     'pull_request' AS object_type,
     pull_request_id::text AS object_id
-FROM pull_request_reviewers
+FROM {{ .Ident "pull_request_reviewers" }}
 
 UNION ALL
 
@@ -133,7 +133,7 @@ SELECT
     'author' AS relation,
     'repository' AS object_type,
     id::text AS object_id
-FROM repositories
+FROM {{ .Ident "repositories" }}
 WHERE owner_id IS NOT NULL
 
 UNION ALL
@@ -148,4 +148,4 @@ SELECT
     'banned' AS relation,
     'repository' AS object_type,
     repository_id::text AS object_id
-FROM repository_bans;
+FROM {{ .Ident "repository_bans" }};

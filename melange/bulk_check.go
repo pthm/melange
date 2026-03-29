@@ -33,6 +33,7 @@ type BulkCheckBuilder struct {
 	requests         []bulkCheckRequest
 	contextualTuples []ContextualTuple
 	ids              map[string]struct{}
+	databaseSchema   string
 }
 
 // Add appends a permission check to the batch with an auto-generated ID
@@ -202,7 +203,7 @@ func (b *BulkCheckBuilder) Execute() (*BulkCheckResults, error) {
 		}
 
 		rows, err := q.QueryContext(ctx,
-			"SELECT idx, allowed FROM check_permission_bulk($1, $2, $3, $4, $5)",
+			fmt.Sprintf("SELECT idx, allowed FROM %s($1, $2, $3, $4, $5)", prefixIdent("check_permission_bulk", c.databaseSchema)),
 			textArray(subjectTypes),
 			textArray(subjectIDs),
 			textArray(relations),

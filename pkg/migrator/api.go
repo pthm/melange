@@ -103,6 +103,7 @@ func MigrateFromString(ctx context.Context, db Execer, content string) error {
 //	})
 func MigrateWithOptions(ctx context.Context, db Execer, schemaPath string, opts MigrateOptions) (skipped bool, err error) {
 	m := NewMigrator(db, schemaPath)
+	m.SetDatabaseSchema(opts.DatabaseSchema)
 
 	if !m.HasSchema() {
 		return false, fmt.Errorf("no schema found at %s", m.SchemaPath())

@@ -13,7 +13,7 @@ func BuildListSubjectsComposedBlocks(plan ListPlan) (ComposedSubjectsBlockSet, e
 	}
 
 	candidateBlocks := buildComposedSubjectsCandidateBlocks(plan, anchor)
-	exclusions := buildSimpleComplexExclusionInput(plan.Analysis, ObjectID, SubjectType, Col{Table: "sc", Column: "subject_id"})
+	exclusions := buildSimpleComplexExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sc", Column: "subject_id"})
 
 	return ComposedSubjectsBlockSet{
 		SelfBlock:           buildComposedSubjectsSelfBlock(plan),
@@ -78,13 +78,14 @@ func buildComposedTTUSubjectsBlock(plan ListPlan, anchor *IndirectAnchorInfo, ta
 		Query: SelectStmt{
 			Distinct:    true,
 			ColumnExprs: []Expr{Col{Table: "s", Column: "subject_id"}},
-			FromExpr:    TableAs("melange_tuples", "link"),
+			FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "link"),
 			Joins: []JoinClause{{
 				Type: "CROSS",
 				TableExpr: LateralFunction{
-					Name:  ListSubjectsFunctionName(targetType, firstStep.TargetRelation),
-					Args:  []Expr{Col{Table: "link", Column: "subject_id"}, SubjectType},
-					Alias: "s",
+					Schema: plan.DatabaseSchema,
+					Name:   ListSubjectsFunctionName(targetType, firstStep.TargetRelation),
+					Args:   []Expr{Col{Table: "link", Column: "subject_id"}, SubjectType},
+					Alias:  "s",
 				},
 			}},
 			Where: And(
@@ -105,13 +106,14 @@ func buildComposedUsersetSubjectsBlock(plan ListPlan, firstStep AnchorPathStep) 
 		Query: SelectStmt{
 			Distinct:    true,
 			ColumnExprs: []Expr{Col{Table: "s", Column: "subject_id"}},
-			FromExpr:    TableAs("melange_tuples", "t"),
+			FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "t"),
 			Joins: []JoinClause{{
 				Type: "CROSS",
 				TableExpr: LateralFunction{
-					Name:  ListSubjectsFunctionName(firstStep.SubjectType, firstStep.SubjectRelation),
-					Args:  []Expr{Raw("split_part(t.subject_id, '#', 1)"), SubjectType},
-					Alias: "s",
+					Schema: plan.DatabaseSchema,
+					Name:   ListSubjectsFunctionName(firstStep.SubjectType, firstStep.SubjectRelation),
+					Args:   []Expr{Raw("split_part(t.subject_id, '#', 1)"), SubjectType},
+					Alias:  "s",
 				},
 			}},
 			Where: And(

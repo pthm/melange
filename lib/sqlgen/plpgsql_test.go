@@ -94,6 +94,7 @@ func TestIfStmt(t *testing.T) {
 func TestPlpgsqlFunction(t *testing.T) {
 	t.Run("simple function", func(t *testing.T) {
 		fn := PlpgsqlFunction{
+			Schema:  "",
 			Name:    "test_function",
 			Args:    []FuncArg{{Name: "p_id", Type: "TEXT"}},
 			Returns: "INT",
@@ -129,7 +130,8 @@ func TestPlpgsqlFunction(t *testing.T) {
 
 	t.Run("function with defaults", func(t *testing.T) {
 		fn := PlpgsqlFunction{
-			Name: "test_function",
+			Schema: "",
+			Name:   "test_function",
 			Args: []FuncArg{
 				{Name: "p_limit", Type: "INT", Default: Null{}},
 				{Name: "p_name", Type: "TEXT", Default: Lit("default")},
@@ -149,6 +151,7 @@ func TestPlpgsqlFunction(t *testing.T) {
 
 	t.Run("function with declarations", func(t *testing.T) {
 		fn := PlpgsqlFunction{
+			Schema:  "",
 			Name:    "test_function",
 			Args:    []FuncArg{{Name: "p_id", Type: "TEXT"}},
 			Returns: "INT",
@@ -173,6 +176,7 @@ func TestPlpgsqlFunction(t *testing.T) {
 
 	t.Run("function with header", func(t *testing.T) {
 		fn := PlpgsqlFunction{
+			Schema:  "",
 			Name:    "test_function",
 			Args:    []FuncArg{{Name: "p_id", Type: "TEXT"}},
 			Returns: "INT",
@@ -194,6 +198,7 @@ func TestPlpgsqlFunction(t *testing.T) {
 
 	t.Run("list objects function pattern", func(t *testing.T) {
 		fn := PlpgsqlFunction{
+			Schema:  "",
 			Name:    "list_document_viewer_objects",
 			Args:    ListObjectsArgs(),
 			Returns: ListObjectsReturns(),

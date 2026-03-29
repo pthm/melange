@@ -78,7 +78,7 @@ func BuildCheckBlocks(plan CheckPlan) (CheckBlocks, error) {
 }
 
 func buildDirectCheck(plan CheckPlan) Expr {
-	q := Tuples("").
+	q := Tuples(plan.DatabaseSchema, "").
 		ObjectType(plan.ObjectType).
 		Relations(plan.RelationList...).
 		Where(
@@ -124,10 +124,11 @@ func buildUsersetPatternCheck(plan CheckPlan, pattern UsersetPattern, visitedWit
 
 	if pattern.IsComplex {
 		// Complex pattern: use check_permission_internal for recursive membership verification
-		q := Tuples("grant_tuple").
+		q := Tuples(plan.DatabaseSchema, "grant_tuple").
 			ObjectType(plan.ObjectType).
 			Relations(plan.Relation).
 			Where(append(baseWhere, CheckPermission{
+				Schema:   plan.DatabaseSchema,
 				Subject:  SubjectParams(),
 				Relation: pattern.SubjectRelation,
 				Object: ObjectRef{
@@ -143,7 +144,7 @@ func buildUsersetPatternCheck(plan CheckPlan, pattern UsersetPattern, visitedWit
 	}
 
 	// Simple pattern: use tuple JOIN for membership lookup
-	q := Tuples("grant_tuple").
+	q := Tuples(plan.DatabaseSchema, "grant_tuple").
 		ObjectType(plan.ObjectType).
 		Relations(plan.Relation).
 		Where(baseWhere...).
@@ -169,7 +170,7 @@ func buildExclusionCheck(plan CheckPlan) Expr {
 
 	// Simple exclusions: EXISTS (excluded tuple)
 	for _, rel := range plan.Exclusions.SimpleExcludedRelations {
-		q := Tuples("excl").
+		q := Tuples(plan.DatabaseSchema, "excl").
 			ObjectType(plan.ObjectType).
 			Relations(rel).
 			Where(
@@ -187,17 +188,17 @@ func buildExclusionCheck(plan CheckPlan) Expr {
 
 	// Complex exclusions: check_permission_internal
 	for _, rel := range plan.Exclusions.ComplexExcludedRelations {
-		checks = append(checks, checkPermissionAllow(rel, obj))
+		checks = append(checks, checkPermissionAllow(plan.DatabaseSchema, rel, obj))
 	}
 
 	// TTU exclusions
 	for _, rel := range plan.Exclusions.ExcludedParentRelations {
-		checks = append(checks, buildTTUExclusionCheck(plan.ObjectType, rel))
+		checks = append(checks, buildTTUExclusionCheck(plan, rel))
 	}
 
 	// Intersection exclusions
 	for _, group := range plan.Exclusions.ExcludedIntersection {
-		if expr := buildIntersectionExclusionCheck(plan.ObjectType, group); expr != nil {
+		if expr := buildIntersectionExclusionCheck(plan, group); expr != nil {
 			checks = append(checks, expr)
 		}
 	}
@@ -205,13 +206,14 @@ func buildExclusionCheck(plan CheckPlan) Expr {
 	return orExprs(checks)
 }
 
-func buildTTUExclusionCheck(objectType string, rel ExcludedParentRelation) Expr {
-	linkQuery := Tuples("link").
-		ObjectType(objectType).
+func buildTTUExclusionCheck(plan CheckPlan, rel ExcludedParentRelation) Expr {
+	linkQuery := Tuples(plan.DatabaseSchema, "link").
+		ObjectType(plan.ObjectType).
 		Relations(rel.LinkingRelation).
 		Where(
 			Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
 			CheckPermission{
+				Schema:   plan.DatabaseSchema,
 				Subject:  SubjectParams(),
 				Relation: rel.Relation,
 				Object: ObjectRef{
@@ -231,21 +233,21 @@ func buildTTUExclusionCheck(objectType string, rel ExcludedParentRelation) Expr 
 	return Exists{Query: linkQuery}
 }
 
-func buildIntersectionExclusionCheck(objectType string, group ExcludedIntersectionGroup) Expr {
-	obj := LiteralObject(objectType, ObjectID)
+func buildIntersectionExclusionCheck(plan CheckPlan, group ExcludedIntersectionGroup) Expr {
+	obj := LiteralObject(plan.ObjectType, ObjectID)
 	parts := make([]Expr, 0, len(group.Parts))
 
 	for _, part := range group.Parts {
 		switch {
 		case part.ParentRelation != nil:
-			parts = append(parts, buildTTUExclusionCheck(objectType, *part.ParentRelation))
+			parts = append(parts, buildTTUExclusionCheck(plan, *part.ParentRelation))
 		case part.ExcludedRelation != "":
 			parts = append(parts, And(
-				checkPermissionAllow(part.Relation, obj),
-				checkPermissionDeny(part.ExcludedRelation, obj),
+				checkPermissionAllow(plan.DatabaseSchema, part.Relation, obj),
+				checkPermissionDeny(plan.DatabaseSchema, part.ExcludedRelation, obj),
 			))
 		default:
-			parts = append(parts, checkPermissionAllow(part.Relation, obj))
+			parts = append(parts, checkPermissionAllow(plan.DatabaseSchema, part.Relation, obj))
 		}
 	}
 
@@ -255,8 +257,9 @@ func buildIntersectionExclusionCheck(objectType string, group ExcludedIntersecti
 	return And(parts...)
 }
 
-func checkPermissionAllow(relation string, obj ObjectRef) CheckPermission {
+func checkPermissionAllow(databaseSchema, relation string, obj ObjectRef) CheckPermission {
 	return CheckPermission{
+		Schema:      databaseSchema,
 		Subject:     SubjectParams(),
 		Relation:    relation,
 		Object:      obj,
@@ -265,8 +268,9 @@ func checkPermissionAllow(relation string, obj ObjectRef) CheckPermission {
 	}
 }
 
-func checkPermissionDeny(relation string, obj ObjectRef) CheckPermission {
+func checkPermissionDeny(databaseSchema, relation string, obj ObjectRef) CheckPermission {
 	return CheckPermission{
+		Schema:      databaseSchema,
 		Subject:     SubjectParams(),
 		Relation:    relation,
 		Object:      obj,
@@ -302,7 +306,7 @@ func buildUsersetSubjectChecks(plan CheckPlan) (selfCheck, computedCheck SelectS
 
 	computedCheck = SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
-		FromExpr:    TableAs("melange_tuples", "t"),
+		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "t"),
 		Joins: []JoinClause{
 			{
 				Type:      "INNER",
@@ -350,7 +354,7 @@ func buildParentRelationBlocks(plan CheckPlan) []ParentRelationBlock {
 	blocks := make([]ParentRelationBlock, 0, len(plan.Analysis.ParentRelations))
 
 	for _, parent := range plan.Analysis.ParentRelations {
-		q := Tuples("link").
+		q := Tuples(plan.DatabaseSchema, "link").
 			ObjectType(plan.ObjectType).
 			Relations(parent.LinkingRelation).
 			Where(Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID}).
@@ -384,6 +388,7 @@ func buildImpliedFunctionCalls(plan CheckPlan) []ImpliedFunctionCheck {
 			Relation:     rel,
 			FunctionName: funcName,
 			Check: CheckPermissionCall{
+				Schema:       plan.DatabaseSchema,
 				FunctionName: funcName,
 				Subject:      SubjectParams(),
 				Relation:     rel,
@@ -414,9 +419,9 @@ func buildIntersectionGroups(plan CheckPlan) []IntersectionGroupCheck {
 // buildSimpleRelationCheck builds an inline EXISTS query for a simple relation check.
 // Simple relations have no userset, recursion, exclusion, or intersection logic,
 // so they can be checked with a direct tuple lookup instead of a function call.
-func buildSimpleRelationCheck(objectType, relation string) Expr {
-	q := Tuples("t").
-		ObjectType(objectType).
+func buildSimpleRelationCheck(plan CheckPlan, relation string) Expr {
+	q := Tuples(plan.DatabaseSchema, "t").
+		ObjectType(plan.ObjectType).
 		Relations(relation).
 		Where(
 			Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
@@ -443,17 +448,18 @@ func buildIntersectionPartCheck(plan CheckPlan, part IntersectionPart, visitedWi
 		pc.IsParent = true
 		pc.ParentRelation = part.ParentRelation.Relation
 		pc.LinkingRelation = part.ParentRelation.LinkingRelation
-		pc.Check = buildParentCheck(plan.ObjectType, part.ParentRelation, visitedWithKey)
+		pc.Check = buildParentCheck(plan, part.ParentRelation, visitedWithKey)
 
 	case part.IsThis:
 		pc.Check = buildThisCheck(plan, part)
 
 	case part.IsSimple:
 		// Optimization: inline simple relations as EXISTS instead of function calls
-		pc.Check = buildSimpleRelationCheck(plan.ObjectType, part.Relation)
+		pc.Check = buildSimpleRelationCheck(plan, part.Relation)
 
 	default:
 		pc.Check = CheckPermission{
+			Schema:      plan.DatabaseSchema,
 			Subject:     SubjectParams(),
 			Relation:    part.Relation,
 			Object:      LiteralObject(plan.ObjectType, ObjectID),
@@ -466,9 +472,10 @@ func buildIntersectionPartCheck(plan CheckPlan, part IntersectionPart, visitedWi
 		var exclusionCheck Expr
 		if part.IsExcludedSimple {
 			// Optimization: inline simple exclusions as NOT EXISTS
-			exclusionCheck = Not(buildSimpleRelationCheck(plan.ObjectType, part.ExcludedRelation))
+			exclusionCheck = Not(buildSimpleRelationCheck(plan, part.ExcludedRelation))
 		} else {
 			exclusionCheck = CheckPermission{
+				Schema:      plan.DatabaseSchema,
 				Subject:     SubjectParams(),
 				Relation:    part.ExcludedRelation,
 				Object:      LiteralObject(plan.ObjectType, ObjectID),
@@ -482,13 +489,14 @@ func buildIntersectionPartCheck(plan CheckPlan, part IntersectionPart, visitedWi
 	return pc
 }
 
-func buildParentCheck(objectType string, parent *ParentRelationInfo, visitedWithKey Expr) Expr {
-	q := Tuples("link").
-		ObjectType(objectType).
+func buildParentCheck(plan CheckPlan, parent *ParentRelationInfo, visitedWithKey Expr) Expr {
+	q := Tuples(plan.DatabaseSchema, "link").
+		ObjectType(plan.ObjectType).
 		Relations(parent.LinkingRelation).
 		Where(
 			Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
 			CheckPermission{
+				Schema:   plan.DatabaseSchema,
 				Subject:  SubjectParams(),
 				Relation: parent.Relation,
 				Object: ObjectRef{
@@ -525,7 +533,7 @@ func buildThisCheck(plan CheckPlan, part IntersectionPart) Expr {
 		)
 	}
 
-	q := Tuples("t").
+	q := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
 		Relations(part.Relation).
 		Where(

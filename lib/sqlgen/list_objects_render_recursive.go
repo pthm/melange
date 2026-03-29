@@ -9,6 +9,7 @@ func RenderListObjectsRecursiveFunction(plan ListPlan, blocks RecursiveBlockSet)
 
 	exclusionConfig := buildExclusionInput(
 		plan.Analysis,
+		plan.DatabaseSchema,
 		Col{Table: "acc", Column: "object_id"},
 		SubjectType,
 		SubjectID,
@@ -17,7 +18,7 @@ func RenderListObjectsRecursiveFunction(plan ListPlan, blocks RecursiveBlockSet)
 	finalStmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "acc", Column: "object_id"}},
-		FromExpr:    TableAs("accessible", "acc"),
+		FromExpr:    TableAs("", "accessible", "acc"),
 		Where:       And(exclusionConfig.BuildPredicates()...),
 	}
 
@@ -37,10 +38,11 @@ func RenderListObjectsRecursiveFunction(plan ListPlan, blocks RecursiveBlockSet)
 		query = joinUnionBlocksSQL([]string{query, selfSQL})
 	}
 
-	depthCheck := buildDepthCheckSQLForRender(plan.ObjectType, blocks.SelfRefLinkingRelations)
+	depthCheck := buildDepthCheckSQLForRender(plan.DatabaseSchema, plan.ObjectType, blocks.SelfRefLinkingRelations)
 	paginatedQuery := wrapWithPagination(query, "object_id")
 
 	fn := PlpgsqlFunction{
+		Schema:  plan.DatabaseSchema,
 		Name:    plan.FunctionName,
 		Args:    ListObjectsArgs(),
 		Returns: ListObjectsReturns(),

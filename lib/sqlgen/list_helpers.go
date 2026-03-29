@@ -2,6 +2,8 @@ package sqlgen
 
 import (
 	"strings"
+
+	"github.com/pthm/melange/lib/sqlgen/sqldsl"
 )
 
 // listUsersetPatternInput contains data for building userset pattern blocks.
@@ -100,8 +102,9 @@ func buildListUsersetPatternInputs(a RelationAnalysis) []listUsersetPatternInput
 
 // buildExclusionInput creates an ExclusionConfig from a RelationAnalysis.
 // This configures exclusion predicates for SQL query generation.
-func buildExclusionInput(a RelationAnalysis, objectIDExpr, subjectTypeExpr, subjectIDExpr Expr) ExclusionConfig {
+func buildExclusionInput(a RelationAnalysis, databaseSchema string, objectIDExpr, subjectTypeExpr, subjectIDExpr Expr) ExclusionConfig {
 	return ExclusionConfig{
+		DatabaseSchema:           databaseSchema,
 		ObjectType:               a.ObjectType,
 		ObjectIDExpr:             objectIDExpr,
 		SubjectTypeExpr:          subjectTypeExpr,
@@ -160,8 +163,9 @@ func convertIntersectionGroups(groups []IntersectionGroupInfo) []ExcludedInterse
 
 // buildSimpleComplexExclusionInput creates an ExclusionConfig with only simple and complex
 // exclusions (no TTU or intersection exclusions).
-func buildSimpleComplexExclusionInput(a RelationAnalysis, objectIDExpr, subjectTypeExpr, subjectIDExpr Expr) ExclusionConfig {
+func buildSimpleComplexExclusionInput(a RelationAnalysis, databaseSchema string, objectIDExpr, subjectTypeExpr, subjectIDExpr Expr) ExclusionConfig {
 	return ExclusionConfig{
+		DatabaseSchema:           databaseSchema,
 		ObjectType:               a.ObjectType,
 		ObjectIDExpr:             objectIDExpr,
 		SubjectTypeExpr:          subjectTypeExpr,
@@ -186,12 +190,12 @@ func buildWhereFromPredicates(predicates []Expr) Expr {
 }
 
 // buildUsersetWildcardTailQuery builds the wildcard handling tail as a typed query for list_subjects functions.
-func buildUsersetWildcardTailQuery(a RelationAnalysis) SQLer {
+func buildUsersetWildcardTailQuery(a RelationAnalysis, databaseSchema string) SQLer {
 	if a.Features.HasWildcard {
 		// Build the wildcard handling query with permission check
 		return SelectStmt{
 			ColumnExprs: []Expr{Col{Table: "br", Column: "subject_id"}},
-			FromExpr:    TableAs("base_results", "br"),
+			FromExpr:    TableAs("", "base_results", "br"),
 			Joins: []JoinClause{
 				{Type: "CROSS", Table: "has_wildcard", Alias: "hw"},
 			},
@@ -200,14 +204,14 @@ func buildUsersetWildcardTailQuery(a RelationAnalysis) SQLer {
 				Eq{Left: Col{Table: "br", Column: "subject_id"}, Right: Lit("*")},
 				And(
 					Ne{Left: Col{Table: "br", Column: "subject_id"}, Right: Lit("*")},
-					NoWildcardPermissionCheckCall(a.Relation, a.ObjectType, Col{Table: "br", Column: "subject_id"}, ObjectID),
+					NoWildcardPermissionCheckCall(databaseSchema, a.Relation, a.ObjectType, Col{Table: "br", Column: "subject_id"}, ObjectID),
 				),
 			),
 		}
 	}
 	return SelectStmt{
 		ColumnExprs: []Expr{Col{Table: "br", Column: "subject_id"}},
-		FromExpr:    TableAs("base_results", "br"),
+		FromExpr:    TableAs("", "base_results", "br"),
 	}
 }
 
@@ -223,7 +227,7 @@ func buildDispatcherBody(cases []ListDispatcherCase, callArgs string) []Stmt {
 					Eq{Left: Param("p_relation"), Right: Lit(c.Relation)},
 				),
 				Then: []Stmt{
-					ReturnQuery{Query: "SELECT * FROM " + c.FunctionName + "(" + callArgs + ")"},
+					ReturnQuery{Query: "SELECT * FROM " + sqldsl.PrefixIdent(c.FunctionName, c.DatabaseSchema) + "(" + callArgs + ")"},
 					Return{},
 				},
 			})
@@ -238,10 +242,11 @@ func buildDispatcherBody(cases []ListDispatcherCase, callArgs string) []Stmt {
 }
 
 // generateListObjectsDispatcher generates the list_accessible_objects dispatcher function.
-func generateListObjectsDispatcher(analyses []RelationAnalysis) (string, error) {
-	cases := collectListDispatcherCases(analyses, listObjectsFunctionName)
+func generateListObjectsDispatcher(analyses []RelationAnalysis, databaseSchema string) (string, error) {
+	cases := collectListDispatcherCases(analyses, listObjectsFunctionName, databaseSchema)
 
 	fn := PlpgsqlFunction{
+		Schema:  databaseSchema,
 		Name:    "list_accessible_objects",
 		Args:    ListObjectsDispatcherArgs(),
 		Returns: "TABLE (object_id TEXT, next_cursor TEXT) ROWS 100",
@@ -255,10 +260,11 @@ func generateListObjectsDispatcher(analyses []RelationAnalysis) (string, error) 
 }
 
 // generateListSubjectsDispatcher generates the list_accessible_subjects dispatcher function.
-func generateListSubjectsDispatcher(analyses []RelationAnalysis) (string, error) {
-	cases := collectListDispatcherCases(analyses, listSubjectsFunctionName)
+func generateListSubjectsDispatcher(analyses []RelationAnalysis, databaseSchema string) (string, error) {
+	cases := collectListDispatcherCases(analyses, listSubjectsFunctionName, databaseSchema)
 
 	fn := PlpgsqlFunction{
+		Schema:  databaseSchema,
 		Name:    "list_accessible_subjects",
 		Args:    ListSubjectsDispatcherArgs(),
 		Returns: "TABLE (subject_id TEXT, next_cursor TEXT) ROWS 100",
@@ -272,16 +278,17 @@ func generateListSubjectsDispatcher(analyses []RelationAnalysis) (string, error)
 }
 
 // collectListDispatcherCases gathers eligible analyses into dispatcher cases.
-func collectListDispatcherCases(analyses []RelationAnalysis, nameFunc func(string, string) string) []ListDispatcherCase {
+func collectListDispatcherCases(analyses []RelationAnalysis, nameFunc func(string, string) string, databaseSchema string) []ListDispatcherCase {
 	var cases []ListDispatcherCase
 	for _, a := range analyses {
 		if !a.Capabilities.ListAllowed {
 			continue
 		}
 		cases = append(cases, ListDispatcherCase{
-			ObjectType:   a.ObjectType,
-			Relation:     a.Relation,
-			FunctionName: nameFunc(a.ObjectType, a.Relation),
+			DatabaseSchema: databaseSchema,
+			ObjectType:     a.ObjectType,
+			Relation:       a.Relation,
+			FunctionName:   nameFunc(a.ObjectType, a.Relation),
 		})
 	}
 	return cases

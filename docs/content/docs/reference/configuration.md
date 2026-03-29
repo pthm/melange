@@ -54,6 +54,8 @@ database:
   # password: secret
   # sslmode: prefer
 
+  schema: myschema
+
 # Code generation settings
 generate:
   client:
@@ -118,6 +120,7 @@ Configure under `database:`:
 | `user` | string | - | Database user |
 | `password` | string | - | Database password |
 | `sslmode` | string | `prefer` | SSL mode for connection |
+| `schema` | string | - | Database schema |
 
 **Connection URL format:**
 ```
@@ -199,6 +202,7 @@ All configuration options can be set via environment variables with the `MELANGE
 | `MELANGE_DATABASE_USER` | `database.user` |
 | `MELANGE_DATABASE_PASSWORD` | `database.password` |
 | `MELANGE_DATABASE_SSLMODE` | `database.sslmode` |
+| `MELANGE_DATABASE_SCHEMA` | `database.schema` |
 | `MELANGE_GENERATE_CLIENT_RUNTIME` | `generate.client.runtime` |
 | `MELANGE_GENERATE_CLIENT_SCHEMA` | `generate.client.schema` |
 | `MELANGE_GENERATE_CLIENT_OUTPUT` | `generate.client.output` |

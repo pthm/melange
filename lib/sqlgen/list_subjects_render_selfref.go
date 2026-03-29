@@ -31,6 +31,7 @@ func RenderListSubjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUsers
 	}
 
 	fn := PlpgsqlFunction{
+		Schema:  plan.DatabaseSchema,
 		Name:    plan.FunctionName,
 		Args:    ListSubjectsArgs(),
 		Returns: ListSubjectsReturns(),
@@ -67,7 +68,7 @@ func renderSelfRefUsersetFilterQuery(blocks SelfRefUsersetSubjectsBlockSet) stri
 					Name: "subject_id",
 				},
 			},
-			FromExpr: TableAs("userset_expansion", "ue"),
+			FromExpr: TableAs("", "userset_expansion", "ue"),
 		},
 	}}
 
@@ -102,7 +103,7 @@ func renderSelfRefUsersetRegularQuery(plan ListPlan, blocks SelfRefUsersetSubjec
 		{Name: "userset_objects", Columns: []string{"userset_object_id", "depth"}, Query: Raw(usersetObjectsCTE)},
 		{Name: "base_results", Query: Raw(baseResultsSQL)},
 		{Name: "has_wildcard", Query: hasWildcardQuery},
-	}, buildUsersetWildcardTailQuery(plan.Analysis))
+	}, buildUsersetWildcardTailQuery(plan.Analysis, plan.DatabaseSchema))
 
 	return cteQuery.SQL()
 }

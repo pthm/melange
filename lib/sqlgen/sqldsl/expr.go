@@ -111,8 +111,9 @@ func (EmptyArray) SQL() string {
 
 // Func represents a SQL function call.
 type Func struct {
-	Name string
-	Args []Expr
+	Schema string
+	Name   string
+	Args   []Expr
 }
 
 // SQL renders the function call.
@@ -121,7 +122,7 @@ func (f Func) SQL() string {
 	for i, arg := range f.Args {
 		args[i] = arg.SQL()
 	}
-	return f.Name + "(" + strings.Join(args, ", ") + ")"
+	return PrefixIdent(f.Name, f.Schema) + "(" + strings.Join(args, ", ") + ")"
 }
 
 // Alias wraps an expression with an alias (expr AS alias).

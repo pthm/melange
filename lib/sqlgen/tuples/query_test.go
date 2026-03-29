@@ -8,7 +8,7 @@ import (
 )
 
 func TestTuples_BasicQuery(t *testing.T) {
-	sql := Tuples("t").
+	sql := Tuples("", "t").
 		ObjectType("document").
 		Relations("viewer").
 		SelectCol("object_id").
@@ -21,14 +21,14 @@ func TestTuples_BasicQuery(t *testing.T) {
 }
 
 func TestTuples_Alias(t *testing.T) {
-	q := Tuples("myalias")
+	q := Tuples("", "myalias")
 	if got := q.Alias(); got != "myalias" {
 		t.Errorf("Alias() = %q, want %q", got, "myalias")
 	}
 }
 
 func TestTuples_MultipleRelations(t *testing.T) {
-	sql := Tuples("t").
+	sql := Tuples("", "t").
 		ObjectType("doc").
 		Relations("viewer", "editor", "owner").
 		SelectCol("object_id").
@@ -38,7 +38,7 @@ func TestTuples_MultipleRelations(t *testing.T) {
 }
 
 func TestTuples_Distinct(t *testing.T) {
-	sql := Tuples("t").
+	sql := Tuples("", "t").
 		ObjectType("doc").
 		SelectCol("object_id").
 		Distinct().
@@ -48,7 +48,7 @@ func TestTuples_Distinct(t *testing.T) {
 }
 
 func TestTuples_WhereSubjectType(t *testing.T) {
-	sql := Tuples("t").
+	sql := Tuples("", "t").
 		ObjectType("doc").
 		WhereSubjectType(sqldsl.Lit("user")).
 		SelectCol("object_id").
@@ -58,7 +58,7 @@ func TestTuples_WhereSubjectType(t *testing.T) {
 }
 
 func TestTuples_WhereSubjectTypeIn(t *testing.T) {
-	sql := Tuples("t").
+	sql := Tuples("", "t").
 		ObjectType("doc").
 		WhereSubjectTypeIn("user", "group").
 		SelectCol("object_id").
@@ -68,7 +68,7 @@ func TestTuples_WhereSubjectTypeIn(t *testing.T) {
 }
 
 func TestTuples_WhereSubject(t *testing.T) {
-	sql := Tuples("t").
+	sql := Tuples("", "t").
 		ObjectType("doc").
 		WhereSubject(sqldsl.SubjectRef{
 			Type: sqldsl.Lit("user"),
@@ -82,7 +82,7 @@ func TestTuples_WhereSubject(t *testing.T) {
 }
 
 func TestTuples_WhereSubjectID(t *testing.T) {
-	sql := Tuples("t").
+	sql := Tuples("", "t").
 		ObjectType("doc").
 		WhereSubjectID(sqldsl.Lit("alice"), false).
 		SelectCol("object_id").
@@ -92,7 +92,7 @@ func TestTuples_WhereSubjectID(t *testing.T) {
 }
 
 func TestTuples_WhereObject(t *testing.T) {
-	sql := Tuples("t").
+	sql := Tuples("", "t").
 		WhereObject(sqldsl.ObjectRef{
 			Type: sqldsl.Lit("document"),
 			ID:   sqldsl.Lit("doc1"),
@@ -105,7 +105,7 @@ func TestTuples_WhereObject(t *testing.T) {
 }
 
 func TestTuples_WhereObjectID(t *testing.T) {
-	sql := Tuples("t").
+	sql := Tuples("", "t").
 		ObjectType("doc").
 		WhereObjectID(sqldsl.Lit("doc1")).
 		SelectCol("subject_id").
@@ -115,7 +115,7 @@ func TestTuples_WhereObjectID(t *testing.T) {
 }
 
 func TestTuples_WhereHasUserset(t *testing.T) {
-	sql := Tuples("t").
+	sql := Tuples("", "t").
 		ObjectType("doc").
 		WhereHasUserset().
 		SelectCol("subject_id").
@@ -125,7 +125,7 @@ func TestTuples_WhereHasUserset(t *testing.T) {
 }
 
 func TestTuples_WhereNoUserset(t *testing.T) {
-	sql := Tuples("t").
+	sql := Tuples("", "t").
 		ObjectType("doc").
 		WhereNoUserset().
 		SelectCol("subject_id").
@@ -135,7 +135,7 @@ func TestTuples_WhereNoUserset(t *testing.T) {
 }
 
 func TestTuples_WhereUsersetRelation(t *testing.T) {
-	sql := Tuples("t").
+	sql := Tuples("", "t").
 		ObjectType("doc").
 		WhereUsersetRelation("member").
 		SelectCol("subject_id").
@@ -145,7 +145,7 @@ func TestTuples_WhereUsersetRelation(t *testing.T) {
 }
 
 func TestTuples_WhereUsersetRelationLike(t *testing.T) {
-	sql := Tuples("t").
+	sql := Tuples("", "t").
 		ObjectType("doc").
 		WhereUsersetRelationLike("member").
 		SelectCol("subject_id").
@@ -155,7 +155,7 @@ func TestTuples_WhereUsersetRelationLike(t *testing.T) {
 }
 
 func TestTuples_WhereNilSkipped(t *testing.T) {
-	q := Tuples("t").ObjectType("doc").SelectCol("object_id")
+	q := Tuples("", "t").ObjectType("doc").SelectCol("object_id")
 	q.Where(nil, sqldsl.Lit("true"), nil)
 	sql := q.SQL()
 
@@ -164,7 +164,7 @@ func TestTuples_WhereNilSkipped(t *testing.T) {
 }
 
 func TestTuples_JoinTuples(t *testing.T) {
-	sql := Tuples("t").
+	sql := Tuples("", "t").
 		ObjectType("doc").
 		JoinTuples("m",
 			sqldsl.Eq{Left: sqldsl.Col{Table: "m", Column: "object_id"}, Right: sqldsl.Lit("x")},
@@ -177,7 +177,7 @@ func TestTuples_JoinTuples(t *testing.T) {
 }
 
 func TestTuples_LeftJoin(t *testing.T) {
-	sql := Tuples("t").
+	sql := Tuples("", "t").
 		ObjectType("doc").
 		LeftJoin("other_table", "o",
 			sqldsl.Eq{Left: sqldsl.Col{Table: "o", Column: "id"}, Right: sqldsl.Col{Table: "t", Column: "object_id"}},
@@ -189,7 +189,7 @@ func TestTuples_LeftJoin(t *testing.T) {
 }
 
 func TestTuples_SelectExpr(t *testing.T) {
-	sql := Tuples("t").
+	sql := Tuples("", "t").
 		ObjectType("doc").
 		SelectExpr(sqldsl.Col{Table: "t", Column: "subject_id"}).
 		SQL()
@@ -198,7 +198,7 @@ func TestTuples_SelectExpr(t *testing.T) {
 }
 
 func TestTuples_Select(t *testing.T) {
-	sql := Tuples("t").
+	sql := Tuples("", "t").
 		ObjectType("doc").
 		Select("t.object_id", "t.subject_id").
 		SQL()
@@ -207,7 +207,7 @@ func TestTuples_Select(t *testing.T) {
 }
 
 func TestTuples_Limit(t *testing.T) {
-	sql := Tuples("t").
+	sql := Tuples("", "t").
 		ObjectType("doc").
 		SelectCol("object_id").
 		Limit(10).
@@ -217,7 +217,7 @@ func TestTuples_Limit(t *testing.T) {
 }
 
 func TestTuples_ExistsSQL(t *testing.T) {
-	sql := Tuples("t").
+	sql := Tuples("", "t").
 		ObjectType("doc").
 		SelectCol("object_id").
 		ExistsSQL()
@@ -228,7 +228,7 @@ func TestTuples_ExistsSQL(t *testing.T) {
 }
 
 func TestTuples_NotExistsSQL(t *testing.T) {
-	sql := Tuples("t").
+	sql := Tuples("", "t").
 		ObjectType("doc").
 		SelectCol("object_id").
 		NotExistsSQL()
@@ -240,21 +240,21 @@ func TestTuples_NotExistsSQL(t *testing.T) {
 
 func TestTuples_Build_NoObjectType(t *testing.T) {
 	// When no object type is set, WHERE should not include it
-	sql := Tuples("t").SelectCol("object_id").SQL()
+	sql := Tuples("", "t").SelectCol("object_id").SQL()
 	if strings.Contains(sql, "object_type") {
 		t.Error("SQL should not contain object_type filter when none set")
 	}
 }
 
 func TestTuples_Build_NoRelations(t *testing.T) {
-	sql := Tuples("t").ObjectType("doc").SelectCol("object_id").SQL()
+	sql := Tuples("", "t").ObjectType("doc").SelectCol("object_id").SQL()
 	if strings.Contains(sql, "relation IN") {
 		t.Error("SQL should not contain relation IN filter when none set")
 	}
 }
 
 func TestTuples_JoinRaw(t *testing.T) {
-	sql := Tuples("t").
+	sql := Tuples("", "t").
 		ObjectType("doc").
 		JoinRaw("CROSS JOIN LATERAL", "some_function('x') AS f",
 			sqldsl.Eq{Left: sqldsl.Col{Table: "f", Column: "id"}, Right: sqldsl.Col{Table: "t", Column: "object_id"}},

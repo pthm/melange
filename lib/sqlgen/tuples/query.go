@@ -7,6 +7,7 @@ import (
 
 // TupleQuery is a fluent builder for queries against melange_tuples.
 type TupleQuery struct {
+	schema      string
 	alias       string
 	objectType  string
 	relations   []string
@@ -19,11 +20,17 @@ type TupleQuery struct {
 }
 
 // Tuples creates a new TupleQuery with the given table alias.
-func Tuples(alias string) *TupleQuery {
+func Tuples(schema, alias string) *TupleQuery {
 	return &TupleQuery{
+		schema:  schema,
 		alias:   alias,
 		columns: []string{}, // Default empty, will be set with Select()
 	}
+}
+
+// Schema returns the query's schema.
+func (q *TupleQuery) Schema() string {
+	return q.schema
 }
 
 // Alias returns the query's table alias.
@@ -173,10 +180,11 @@ func (q *TupleQuery) LeftJoin(table, alias string, on ...sqldsl.Expr) *TupleQuer
 
 func (q *TupleQuery) addJoin(joinType, table, alias string, on []sqldsl.Expr) *TupleQuery {
 	q.joins = append(q.joins, sqldsl.JoinClause{
-		Type:  joinType,
-		Table: table,
-		Alias: alias,
-		On:    sqldsl.And(on...),
+		Type:   joinType,
+		Schema: q.schema,
+		Table:  table,
+		Alias:  alias,
+		On:     sqldsl.And(on...),
 	})
 	return q
 }
@@ -189,10 +197,11 @@ func (q *TupleQuery) JoinTuples(alias string, on ...sqldsl.Expr) *TupleQuery {
 // JoinRaw adds a JOIN with a raw table expression.
 func (q *TupleQuery) JoinRaw(joinType, tableExpr string, on ...sqldsl.Expr) *TupleQuery {
 	q.joins = append(q.joins, sqldsl.JoinClause{
-		Type:  joinType,
-		Table: tableExpr,
-		Alias: "",
-		On:    sqldsl.And(on...),
+		Type:   joinType,
+		Schema: q.schema,
+		Table:  tableExpr,
+		Alias:  "",
+		On:     sqldsl.And(on...),
 	})
 	return q
 }
@@ -213,7 +222,7 @@ func (q *TupleQuery) Build() sqldsl.SelectStmt {
 
 	stmt := sqldsl.SelectStmt{
 		Distinct: q.distinct,
-		FromExpr: sqldsl.TableAs("melange_tuples", q.alias),
+		FromExpr: sqldsl.TableAs(q.schema, "melange_tuples", q.alias),
 		Joins:    q.joins,
 		Where:    whereExpr,
 		Limit:    q.limit,

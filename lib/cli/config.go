@@ -37,6 +37,7 @@ type DatabaseConfig struct {
 	User     string `mapstructure:"user"`
 	Password string `mapstructure:"password"`
 	SSLMode  string `mapstructure:"sslmode"`
+	Schema   string `mapstructure:"schema"`
 }
 
 // GenerateConfig holds code generation settings.
@@ -131,6 +132,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("database.user", "")
 	v.SetDefault("database.password", "")
 	v.SetDefault("database.sslmode", "prefer")
+	v.SetDefault("database.schema", "")
 
 	// Generate client defaults
 	v.SetDefault("generate.client.runtime", "")

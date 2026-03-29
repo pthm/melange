@@ -15,8 +15,9 @@ func RenderListSubjectsComposedFunction(plan ListPlan, blocks ComposedSubjectsBl
 	usersetFilterQuery := buildCandidatesCTE(usersetFilterCandidates, SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "sc", Column: "subject_id"}},
-		FromExpr:    TableAs("subject_candidates", "sc"),
+		FromExpr:    TableAs("", "subject_candidates", "sc"),
 		Where: CheckPermission{
+			Schema:      plan.DatabaseSchema,
 			Subject:     SubjectRef{Type: Param("v_filter_type"), ID: Col{Table: "sc", Column: "subject_id"}},
 			Relation:    plan.Relation,
 			Object:      LiteralObject(plan.ObjectType, ObjectID),
@@ -69,6 +70,7 @@ func RenderListSubjectsComposedFunction(plan ListPlan, blocks ComposedSubjectsBl
 	}
 
 	fn := PlpgsqlFunction{
+		Schema:  plan.DatabaseSchema,
 		Name:    plan.FunctionName,
 		Args:    ListSubjectsArgs(),
 		Returns: ListSubjectsReturns(),
@@ -110,11 +112,11 @@ func buildRegularQueryWithExclusions(plan ListPlan, blocks ComposedSubjectsBlock
 	query := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "sc", Column: "subject_id"}},
-		FromExpr:    TableAs("subject_candidates", "sc"),
+		FromExpr:    TableAs("", "subject_candidates", "sc"),
 	}
 
 	if blocks.HasExclusions {
-		exclusions := buildSimpleComplexExclusionInput(plan.Analysis, ObjectID, SubjectType, Col{Table: "sc", Column: "subject_id"})
+		exclusions := buildSimpleComplexExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sc", Column: "subject_id"})
 		if preds := exclusions.BuildPredicates(); len(preds) > 0 {
 			query.Where = And(preds...)
 		}

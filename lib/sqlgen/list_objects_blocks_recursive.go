@@ -121,7 +121,7 @@ func buildRecursiveDirectBlocks(plan ListPlan, propagatable map[string]bool) []T
 
 // buildRecursiveDirectBlock builds a single direct tuple lookup block for the given relations.
 func buildRecursiveDirectBlock(plan ListPlan, relations []string) TypedQueryBlock {
-	q := Tuples("t").
+	q := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
 		Relations(relations...).
 		Where(
@@ -144,7 +144,7 @@ func buildRecursiveDirectBlock(plan ListPlan, relations []string) TypedQueryBloc
 
 // buildRecursiveComplexClosureBlock builds a block for a single complex closure relation.
 func buildRecursiveComplexClosureBlock(plan ListPlan, rel string) TypedQueryBlock {
-	q := Tuples("t").
+	q := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
 		Relations(rel).
 		Where(
@@ -152,6 +152,7 @@ func buildRecursiveComplexClosureBlock(plan ListPlan, rel string) TypedQueryBloc
 			In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
 			SubjectIDMatch(Col{Table: "t", Column: "subject_id"}, SubjectID, plan.AllowWildcard),
 			CheckPermission{
+				Schema:      plan.DatabaseSchema,
 				Subject:     SubjectParams(),
 				Relation:    rel,
 				Object:      LiteralObject(plan.ObjectType, Col{Table: "t", Column: "object_id"}),
@@ -191,7 +192,7 @@ func buildRecursiveIntersectionClosureBlock(plan ListPlan, rel string) TypedQuer
 
 // buildRecursiveComplexUsersetBlock builds a block for complex userset patterns.
 func buildRecursiveComplexUsersetBlock(plan ListPlan, pattern listUsersetPatternInput) TypedQueryBlock {
-	q := Tuples("t").
+	q := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
 		Relations(pattern.SourceRelations...).
 		Where(
@@ -202,6 +203,7 @@ func buildRecursiveComplexUsersetBlock(plan ListPlan, pattern listUsersetPattern
 				Right: Lit(pattern.SubjectRelation),
 			},
 			CheckPermission{
+				Schema:   plan.DatabaseSchema,
 				Subject:  SubjectParams(),
 				Relation: pattern.SubjectRelation,
 				Object: ObjectRef{
@@ -226,7 +228,7 @@ func buildRecursiveComplexUsersetBlock(plan ListPlan, pattern listUsersetPattern
 
 // buildRecursiveSimpleUsersetBlock builds a block for simple userset patterns.
 func buildRecursiveSimpleUsersetBlock(plan ListPlan, pattern listUsersetPatternInput) TypedQueryBlock {
-	q := Tuples("t").
+	q := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
 		Relations(pattern.SourceRelations...).
 		Where(
@@ -317,17 +319,19 @@ func buildCrossTypeTTUBlocks(plan ListPlan, parentRelations []ListParentRelation
 		crossTypes := dequoteLinkingRelations(parent.CrossTypeLinkingTypes)
 		crossExclusions := buildExclusionInput(
 			plan.Analysis,
+			plan.DatabaseSchema,
 			Col{Table: "child", Column: "object_id"},
 			SubjectType,
 			SubjectID,
 		)
 
-		q := Tuples("child").
+		q := Tuples(plan.DatabaseSchema, "child").
 			ObjectType(plan.ObjectType).
 			Relations(parent.LinkingRelation).
 			Where(
 				In{Expr: Col{Table: "child", Column: "subject_type"}, Values: crossTypes},
 				CheckPermission{
+					Schema:   plan.DatabaseSchema,
 					Subject:  SubjectParams(),
 					Relation: parent.Relation,
 					Object: ObjectRef{
@@ -359,6 +363,7 @@ func buildCrossTypeTTUBlocks(plan ListPlan, parentRelations []ListParentRelation
 func buildRecursiveTTUBlock(plan ListPlan, linkingRelations []string) *TypedQueryBlock {
 	exclusions := buildExclusionInput(
 		plan.Analysis,
+		plan.DatabaseSchema,
 		Col{Table: "child", Column: "object_id"},
 		SubjectType,
 		SubjectID,
@@ -371,9 +376,10 @@ func buildRecursiveTTUBlock(plan ListPlan, linkingRelations []string) *TypedQuer
 		Alias:    "a",
 		Joins: []JoinClause{
 			{
-				Type:  "INNER",
-				Table: "melange_tuples",
-				Alias: "child",
+				Type:   "INNER",
+				Schema: plan.DatabaseSchema,
+				Table:  "melange_tuples",
+				Alias:  "child",
 				On: And(
 					Eq{Left: Col{Table: "child", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 					In{Expr: Col{Table: "child", Column: "relation"}, Values: linkingRelations},

@@ -90,7 +90,7 @@ func buildListSubjectsUsersetFilterDirectBlock(plan ListPlan) TypedQueryBlock {
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{subjectExpr},
-		FromExpr:    TableAs("melange_tuples", "t"),
+		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "t"),
 		Where: And(
 			Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 			In{Expr: Col{Table: "t", Column: "relation"}, Values: plan.AllSatisfyingRelations},
@@ -102,6 +102,7 @@ func buildListSubjectsUsersetFilterDirectBlock(plan ListPlan) TypedQueryBlock {
 				ExistsExpr(closureExistsStmt),
 			),
 			CheckPermissionCall{
+				Schema:       plan.DatabaseSchema,
 				FunctionName: "check_permission",
 				Subject:      SubjectRef{Type: Param("v_filter_type"), ID: Col{Table: "t", Column: "subject_id"}},
 				Relation:     plan.Relation,
@@ -182,7 +183,7 @@ func buildListSubjectsRegularBlocks(plan ListPlan) ([]TypedQueryBlock, error) {
 
 // buildListSubjectsDirectBlock builds the direct tuple lookup block for list_subjects.
 func buildListSubjectsDirectBlock(plan ListPlan) TypedQueryBlock {
-	q := Tuples("t").
+	q := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
 		Relations(plan.RelationList...).
 		Where(
@@ -210,7 +211,7 @@ func buildTypedListSubjectsComplexClosureBlocks(plan ListPlan) []TypedQueryBlock
 
 	blocks := make([]TypedQueryBlock, 0, len(plan.ComplexClosure))
 	for _, rel := range plan.ComplexClosure {
-		q := Tuples("t").
+		q := Tuples(plan.DatabaseSchema, "t").
 			ObjectType(plan.ObjectType).
 			Relations(rel).
 			Where(
@@ -218,6 +219,7 @@ func buildTypedListSubjectsComplexClosureBlocks(plan ListPlan) []TypedQueryBlock
 				Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Param("p_subject_type")},
 				NoUserset{Source: Col{Table: "t", Column: "subject_id"}},
 				CheckPermission{
+					Schema: plan.DatabaseSchema,
 					Subject: SubjectRef{
 						Type: Param("p_subject_type"),
 						ID:   Col{Table: "t", Column: "subject_id"},
@@ -253,9 +255,10 @@ func buildListSubjectsIntersectionClosureBlocks(plan ListPlan, subjectTypeExpr, 
 	blocks := make([]TypedQueryBlock, 0, len(plan.Analysis.IntersectionClosureRelations))
 	for _, rel := range plan.Analysis.IntersectionClosureRelations {
 		funcCall := FunctionCallExpr{
-			Name:  listSubjectsFunctionName(plan.ObjectType, rel),
-			Args:  []Expr{ObjectID, Raw(subjectTypeExpr)},
-			Alias: "ics",
+			Schema: plan.DatabaseSchema,
+			Name:   listSubjectsFunctionName(plan.ObjectType, rel),
+			Args:   []Expr{ObjectID, Raw(subjectTypeExpr)},
+			Alias:  "ics",
 		}
 
 		stmt := SelectStmt{
@@ -266,6 +269,7 @@ func buildListSubjectsIntersectionClosureBlocks(plan ListPlan, subjectTypeExpr, 
 		if validate && checkSubjectTypeExpr != "" {
 			stmt.Distinct = true
 			stmt.Where = CheckPermissionCall{
+				Schema:       plan.DatabaseSchema,
 				FunctionName: "check_permission",
 				Subject:      SubjectRef{Type: Raw(checkSubjectTypeExpr), ID: Col{Table: "ics", Column: "subject_id"}},
 				Relation:     plan.Relation,
@@ -328,6 +332,7 @@ func buildListSubjectsComplexUsersetBlock(plan ListPlan, pattern listUsersetPatt
 	if !plan.UseCTEExclusion && plan.HasExclusion {
 		resultExclusions := buildSimpleComplexExclusionInput(
 			plan.Analysis,
+			plan.DatabaseSchema,
 			ObjectID,
 			Param("p_subject_type"),
 			Col{Table: "ls", Column: "subject_id"},
@@ -338,11 +343,12 @@ func buildListSubjectsComplexUsersetBlock(plan ListPlan, pattern listUsersetPatt
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "ls", Column: "subject_id"}},
-		FromExpr:    TableAs("melange_tuples", "t"),
+		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "t"),
 		Joins: []JoinClause{{
 			Type: "CROSS JOIN LATERAL",
 			TableExpr: FunctionCallExpr{
-				Name: funcName,
+				Schema: plan.DatabaseSchema,
+				Name:   funcName,
 				Args: []Expr{
 					UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}},
 					Param("p_subject_type"),
@@ -366,7 +372,7 @@ func buildListSubjectsComplexUsersetBlock(plan ListPlan, pattern listUsersetPatt
 // buildListSubjectsSimpleUsersetBlock builds a block for simple userset patterns.
 // Uses JOIN with membership tuples to expand group membership.
 func buildListSubjectsSimpleUsersetBlock(plan ListPlan, pattern listUsersetPatternInput) TypedQueryBlock {
-	q := Tuples("t").
+	q := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
 		Relations(pattern.SourceRelations...).
 		Where(
@@ -395,6 +401,7 @@ func buildListSubjectsSimpleUsersetBlock(plan ListPlan, pattern listUsersetPatte
 
 	if pattern.IsClosurePattern && pattern.SourceRelation != "" {
 		q.Where(CheckPermission{
+			Schema: plan.DatabaseSchema,
 			Subject: SubjectRef{
 				Type: Param("p_subject_type"),
 				ID:   Col{Table: "m", Column: "subject_id"},

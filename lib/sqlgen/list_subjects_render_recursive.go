@@ -28,6 +28,7 @@ func RenderListSubjectsRecursiveFunction(plan ListPlan, blocks SubjectsRecursive
 	}
 
 	fn := PlpgsqlFunction{
+		Schema:  plan.DatabaseSchema,
 		Name:    plan.FunctionName,
 		Args:    ListSubjectsArgs(),
 		Returns: ListSubjectsReturns(),
@@ -169,7 +170,7 @@ func buildParentClosureCTESQL(plan ListPlan) string {
 			Col{Table: "link", Column: "subject_id"},
 			Raw("0 AS depth"),
 		},
-		FromExpr: TableAs("melange_tuples", "link"),
+		FromExpr: TableAs(plan.DatabaseSchema, "melange_tuples", "link"),
 		Where:    And(baseWhere...),
 	}
 
@@ -181,11 +182,12 @@ func buildParentClosureCTESQL(plan ListPlan) string {
 			Col{Table: "link", Column: "subject_id"},
 			Raw("p.depth + 1 AS depth"),
 		},
-		FromExpr: TableAs("parent_closure", "p"),
+		FromExpr: TableAs("", "parent_closure", "p"),
 		Joins: []JoinClause{{
-			Type:  "INNER",
-			Table: "melange_tuples",
-			Alias: "link",
+			Type:   "INNER",
+			Schema: plan.DatabaseSchema,
+			Table:  "melange_tuples",
+			Alias:  "link",
 			On: And(
 				Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Col{Table: "p", Column: "subject_type"}},
 				Eq{Left: Col{Table: "link", Column: "object_id"}, Right: Col{Table: "p", Column: "subject_id"}},
@@ -205,7 +207,7 @@ func buildParentClosureCTESQL(plan ListPlan) string {
 func buildSubjectPoolCTESQL(plan ListPlan) string {
 	excludeWildcard := plan.ExcludeWildcard()
 
-	q := Tuples("t").
+	q := Tuples(plan.DatabaseSchema, "t").
 		Select("t.subject_id").
 		WhereSubjectType(SubjectType).
 		Where(In{Expr: SubjectType, Values: plan.AllowedSubjectTypes}).
@@ -225,7 +227,7 @@ func buildSubjectsWildcardTailQuery(plan ListPlan) SQLer {
 		// Build the wildcard handling query with permission check
 		return SelectStmt{
 			ColumnExprs: []Expr{Col{Table: "br", Column: "subject_id"}},
-			FromExpr:    TableAs("base_results", "br"),
+			FromExpr:    TableAs("", "base_results", "br"),
 			Joins: []JoinClause{
 				{Type: "CROSS", Table: "has_wildcard", Alias: "hw"},
 			},
@@ -234,13 +236,13 @@ func buildSubjectsWildcardTailQuery(plan ListPlan) SQLer {
 				Eq{Left: Col{Table: "br", Column: "subject_id"}, Right: Lit("*")},
 				And(
 					Ne{Left: Col{Table: "br", Column: "subject_id"}, Right: Lit("*")},
-					NoWildcardPermissionCheckCall(plan.Relation, plan.ObjectType, Col{Table: "br", Column: "subject_id"}, ObjectID),
+					NoWildcardPermissionCheckCall(plan.DatabaseSchema, plan.Relation, plan.ObjectType, Col{Table: "br", Column: "subject_id"}, ObjectID),
 				),
 			),
 		}
 	}
 	return SelectStmt{
 		ColumnExprs: []Expr{Col{Table: "br", Column: "subject_id"}},
-		FromExpr:    TableAs("base_results", "br"),
+		FromExpr:    TableAs("", "base_results", "br"),
 	}
 }

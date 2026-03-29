@@ -1,7 +1,17 @@
 package migrator
 
-// migrationsDDL defines the melange_migrations table for tracking migration state.
-const migrationsDDL = `-- Melange migrations tracking table
+import (
+	"fmt"
+
+	"github.com/pthm/melange/lib/sqlgen/sqldsl"
+)
+
+// migrationsDDL returns a query that defines the melange_migrations table for
+// tracking migration state.
+func migrationsDDL(databaseSchema string) string {
+	table := sqldsl.PrefixIdent("melange_migrations", databaseSchema)
+
+	return fmt.Sprintf(`-- Melange migrations tracking table
 -- Stores migration history for change detection and orphan cleanup.
 --
 -- Each row represents a completed migration:
@@ -14,7 +24,7 @@ const migrationsDDL = `-- Melange migrations tracking table
 -- is needed. If both checksum and codegen_version match, migration is skipped
 -- unless --force is specified.
 
-CREATE TABLE IF NOT EXISTS melange_migrations (
+CREATE TABLE IF NOT EXISTS %[1]s (
     id SERIAL PRIMARY KEY,
     migrated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     melange_version VARCHAR(64) NOT NULL DEFAULT '',
@@ -25,23 +35,33 @@ CREATE TABLE IF NOT EXISTS melange_migrations (
 
 -- Lookup by checksum for change detection
 CREATE INDEX IF NOT EXISTS idx_melange_migrations_checksum
-ON melange_migrations (schema_checksum, codegen_version);
-`
+ON %[1]s (schema_checksum, codegen_version);
+`, table)
+}
 
-// addMelangeVersionColumn is a migration to add the melange_version column to existing tables.
-const addMelangeVersionColumn = `
-ALTER TABLE melange_migrations
+// addMelangeVersionColumn return a query to add the melange_version column
+// to existing tables.
+func addMelangeVersionColumn(databaseSchema string) string {
+	table := sqldsl.PrefixIdent("melange_migrations", databaseSchema)
+
+	return fmt.Sprintf(`
+ALTER TABLE %s
 ADD COLUMN IF NOT EXISTS melange_version VARCHAR(64) NOT NULL DEFAULT '';
-`
+`, table)
+}
 
-// addFunctionChecksumsColumn adds function_checksums to existing melange_migrations
+// addFunctionChecksumsColumn return a query to add function_checksums to existing melange_migrations
 // tables. The column was not present in the original DDL, so it is applied
 // separately via ADD COLUMN IF NOT EXISTS to preserve compatibility with databases
 // migrated by earlier versions.
 //
 // The column stores function_name → SHA256(sql_body) pairs. The generate
 // migration --db comparison mode reads this to emit only changed functions.
-const addFunctionChecksumsColumn = `
-ALTER TABLE melange_migrations
+func addFunctionChecksumsColumn(databaseSchema string) string {
+	table := sqldsl.PrefixIdent("melange_migrations", databaseSchema)
+
+	return fmt.Sprintf(`
+ALTER TABLE %s
 ADD COLUMN IF NOT EXISTS function_checksums JSONB NOT NULL DEFAULT '{}';
-`
+`, table)
+}

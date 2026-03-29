@@ -73,7 +73,7 @@ type GeneratedSQL struct {
 //
 // Returns an error if any function fails to generate, though this is rare
 // as the analysis phase validates generation feasibility.
-func GenerateSQL(analyses []RelationAnalysis, inline InlineSQLData) (GeneratedSQL, error) {
+func GenerateSQL(analyses []RelationAnalysis, inline InlineSQLData, databaseSchema string) (GeneratedSQL, error) {
 	var result GeneratedSQL
 
 	// Generate specialized function for each relation
@@ -81,12 +81,12 @@ func GenerateSQL(analyses []RelationAnalysis, inline InlineSQLData) (GeneratedSQ
 		if !a.Capabilities.CheckAllowed {
 			continue
 		}
-		fn, err := generateCheckFunction(a, inline, false)
+		fn, err := generateCheckFunction(a, inline, databaseSchema, false)
 		if err != nil {
 			return GeneratedSQL{}, fmt.Errorf("generating check function: %w", err)
 		}
 		result.Functions = append(result.Functions, fn)
-		noWildcardFn, err := generateCheckFunction(a, inline, true)
+		noWildcardFn, err := generateCheckFunction(a, inline, databaseSchema, true)
 		if err != nil {
 			return GeneratedSQL{}, fmt.Errorf("generating no-wildcard check function: %w", err)
 		}
@@ -95,17 +95,17 @@ func GenerateSQL(analyses []RelationAnalysis, inline InlineSQLData) (GeneratedSQ
 
 	// Generate dispatchers
 	var err error
-	result.Dispatcher, err = generateDispatcher(analyses, false)
+	result.Dispatcher, err = generateDispatcher(analyses, databaseSchema, false)
 	if err != nil {
 		return GeneratedSQL{}, fmt.Errorf("generating dispatcher: %w", err)
 	}
-	result.DispatcherNoWildcard, err = generateDispatcher(analyses, true)
+	result.DispatcherNoWildcard, err = generateDispatcher(analyses, databaseSchema, true)
 	if err != nil {
 		return GeneratedSQL{}, fmt.Errorf("generating no-wildcard dispatcher: %w", err)
 	}
 
 	// Generate bulk dispatcher
-	result.BulkDispatcher = generateBulkDispatcher(analyses)
+	result.BulkDispatcher = generateBulkDispatcher(analyses, databaseSchema)
 
 	return result, nil
 }
@@ -152,6 +152,7 @@ type DispatcherData struct {
 // DispatcherCase represents a single CASE WHEN branch in the dispatcher.
 // Each case routes a specific (object_type, relation) pair to its specialized function.
 type DispatcherCase struct {
+	DatabaseSchema      string
 	ObjectType          string
 	Relation            string
 	CheckFunctionName   string

@@ -326,6 +326,7 @@ func TestHelpers(t *testing.T) {
 
 func TestCheckPermission(t *testing.T) {
 	check := CheckPermission{
+		Schema:      "",
 		Subject:     SubjectParams(),
 		Relation:    "viewer",
 		Object:      LiteralObject("document", Col{Table: "t", Column: "object_id"}),
@@ -346,13 +347,13 @@ func TestCheckPermission(t *testing.T) {
 }
 
 func TestCheckAccessHelpers(t *testing.T) {
-	access := CheckAccess("viewer", "document", ObjectID)
+	access := CheckAccess("", "viewer", "document", ObjectID)
 	got := access.SQL()
 	if !strings.Contains(got, "'viewer'") || !strings.Contains(got, "'document'") || !strings.Contains(got, "= 1") {
 		t.Errorf("CheckAccess() = %q, missing expected parts", got)
 	}
 
-	noAccess := CheckNoAccess("blocked", "document", ObjectID)
+	noAccess := CheckNoAccess("", "blocked", "document", ObjectID)
 	got = noAccess.SQL()
 	if !strings.Contains(got, "'blocked'") || !strings.Contains(got, "= 0") {
 		t.Errorf("CheckNoAccess() = %q, missing expected parts", got)
@@ -360,7 +361,7 @@ func TestCheckAccessHelpers(t *testing.T) {
 }
 
 func TestTupleQueryBasic(t *testing.T) {
-	q := Tuples("t").
+	q := Tuples("", "t").
 		ObjectType("document").
 		Relations("viewer", "editor").
 		Select("t.object_id").
@@ -384,7 +385,7 @@ func TestTupleQueryBasic(t *testing.T) {
 }
 
 func TestTupleQueryWithSubjectFilters(t *testing.T) {
-	q := Tuples("t").
+	q := Tuples("", "t").
 		ObjectType("document").
 		Relations("viewer").
 		WhereSubjectType(SubjectType).
@@ -408,7 +409,7 @@ func TestTupleQueryWithSubjectFilters(t *testing.T) {
 }
 
 func TestTupleQueryWithJoin(t *testing.T) {
-	q := Tuples("t").
+	q := Tuples("", "t").
 		ObjectType("document").
 		Select("t.object_id").
 		JoinTuples("m",
@@ -431,7 +432,7 @@ func TestTupleQueryWithJoin(t *testing.T) {
 }
 
 func TestTupleQueryWithUserset(t *testing.T) {
-	q := Tuples("t").
+	q := Tuples("", "t").
 		ObjectType("document").
 		Relations("viewer").
 		WhereHasUserset().
@@ -452,7 +453,7 @@ func TestTupleQueryWithUserset(t *testing.T) {
 }
 
 func TestExistsNotExists(t *testing.T) {
-	q := Tuples("excl").
+	q := Tuples("", "excl").
 		ObjectType("document").
 		Relations("blocked").
 		Select("1")
@@ -495,10 +496,11 @@ func TestSelectStmt(t *testing.T) {
 
 func TestJoinClause(t *testing.T) {
 	join := JoinClause{
-		Type:  "LEFT",
-		Table: "orders",
-		Alias: "o",
-		On:    Eq{Left: Col{Table: "o", Column: "user_id"}, Right: Col{Table: "u", Column: "id"}},
+		Type:   "LEFT",
+		Schema: "",
+		Table:  "orders",
+		Alias:  "o",
+		On:     Eq{Left: Col{Table: "o", Column: "user_id"}, Right: Col{Table: "u", Column: "id"}},
 	}
 
 	sql := join.SQL()

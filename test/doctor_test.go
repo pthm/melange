@@ -567,7 +567,7 @@ func restoreView(t *testing.T, db *sql.DB) {
 	t.Helper()
 	ctx := context.Background()
 	_, _ = db.ExecContext(ctx, `DROP VIEW IF EXISTS melange_tuples`)
-	_, err := db.ExecContext(ctx, testutil.TuplesViewSQL())
+	_, err := db.ExecContext(ctx, testutil.TuplesViewSQL(""))
 	if err != nil {
 		t.Logf("warning: failed to restore melange_tuples view: %v", err)
 	}

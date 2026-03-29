@@ -10,6 +10,7 @@ func RenderListObjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUserse
 
 	exclusionConfig := buildExclusionInput(
 		plan.Analysis,
+		plan.DatabaseSchema,
 		Col{Table: "me", Column: "object_id"},
 		SubjectType,
 		SubjectID,
@@ -18,7 +19,7 @@ func RenderListObjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUserse
 	finalStmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "me", Column: "object_id"}},
-		FromExpr:    TableAs("member_expansion", "me"),
+		FromExpr:    TableAs("", "member_expansion", "me"),
 		Where:       buildWhereFromPredicates(exclusionConfig.BuildPredicates()),
 	}
 
@@ -39,6 +40,7 @@ func RenderListObjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUserse
 	}
 
 	fn := PlpgsqlFunction{
+		Schema:  plan.DatabaseSchema,
 		Name:    plan.FunctionName,
 		Args:    ListObjectsArgs(),
 		Returns: ListObjectsReturns(),

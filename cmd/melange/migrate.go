@@ -16,10 +16,11 @@ import (
 )
 
 var (
-	migrateDB     string
-	migrateSchema string
-	migrateDryRun bool
-	migrateForce  bool
+	migrateDB       string
+	migrateDBSchema string
+	migrateSchema   string
+	migrateDryRun   bool
+	migrateForce    bool
 )
 
 var migrateCmd = &cobra.Command{
@@ -28,6 +29,9 @@ var migrateCmd = &cobra.Command{
 	Long:  `Apply authorization schema to PostgreSQL database.`,
 	Example: `  # Apply schema to database
   melange migrate --db postgres://localhost/mydb
+
+  # Use a different database schema
+  melange migrate --db postgres://localhost/mydb --db-schema myschema
 
   # Preview migration without applying
   melange migrate --db postgres://localhost/mydb --dry-run
@@ -45,6 +49,7 @@ var migrateCmd = &cobra.Command{
 		}
 
 		// Resolve values
+		databaseSchema := resolveString(migrateDBSchema, cfg.Database.Schema)
 		schemaPath := resolveString(migrateSchema, cfg.Schema)
 		dryRun := resolveBool(migrateDryRun, cfg.Migrate.DryRun)
 		force := resolveBool(migrateForce, cfg.Migrate.Force)
@@ -55,13 +60,14 @@ var migrateCmd = &cobra.Command{
 			return err
 		}
 
-		return runMigrate(dsn, schemaPath, dryRun, force)
+		return runMigrate(dsn, schemaPath, dryRun, force, databaseSchema)
 	},
 }
 
 func init() {
 	f := migrateCmd.Flags()
 	f.StringVar(&migrateDB, "db", "", "database URL")
+	f.StringVar(&migrateDBSchema, "db-schema", "", "database schema")
 	f.StringVar(&migrateSchema, "schema", "", "path to schema.fga or fga.mod file")
 	f.BoolVar(&migrateDryRun, "dry-run", false, "output migration SQL without applying")
 	f.BoolVar(&migrateForce, "force", false, "force migration even if schema unchanged")
@@ -83,7 +89,7 @@ func resolveDSN(flagDSN string) (string, error) {
 	return dsn, nil
 }
 
-func runMigrate(dsn, schemaPath string, dryRun, force bool) error {
+func runMigrate(dsn, schemaPath string, dryRun, force bool, databaseSchema string) error {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return cli.DBConnectError("connecting to database", err)
@@ -93,8 +99,9 @@ func runMigrate(dsn, schemaPath string, dryRun, force bool) error {
 	ctx := context.Background()
 
 	opts := migrator.MigrateOptions{
-		Force:   force,
-		Version: version.Version,
+		Force:          force,
+		Version:        version.Version,
+		DatabaseSchema: databaseSchema,
 	}
 
 	if dryRun {
@@ -132,6 +139,8 @@ func runMigrate(dsn, schemaPath string, dryRun, force bool) error {
 
 	// Check for melange_tuples warning
 	m := migrator.NewMigrator(db, schemaPath)
+	m.SetDatabaseSchema(databaseSchema)
+
 	status, err := m.GetStatus(ctx)
 	if err == nil && !status.TuplesExists && !quiet {
 		fmt.Println()

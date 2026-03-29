@@ -11,16 +11,20 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
+	"text/template"
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"github.com/pthm/melange/lib/sqlgen/sqldsl"
 	"github.com/pthm/melange/pkg/clientgen"
 	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/pkg/parser"
@@ -31,12 +35,21 @@ var (
 	//go:embed testdata/schema.fga
 	schemaFGA string
 
-	//go:embed testdata/domain_tables.sql
-	domainTablesSQL string
+	//go:embed testdata/domain_tables.sql.tmpl
+	domainTablesSQLTemplate string
 
-	//go:embed testdata/tuples_view.sql
-	tuplesViewSQL string
+	//go:embed testdata/tuples_view.sql.tmpl
+	tuplesViewSQLTemplate string
 )
+
+type templateState struct {
+	template string
+	err      error
+}
+
+type remoteDBState struct {
+	err error
+}
 
 // Singleton container state
 var (
@@ -44,15 +57,14 @@ var (
 	singletonDSN  string
 	singletonErr  error
 
-	templateOnce sync.Once
-	templateName string
-	templateErr  error
+	templateMutex  sync.Mutex
+	templateStates map[string]*templateState
 
 	codegenOnce sync.Once
 	codegenErr  error
 
-	remoteDBOnce sync.Once
-	remoteDBErr  error
+	remoteDBMutex  sync.Mutex
+	remoteDBStates map[string]*remoteDBState
 )
 
 // ensureSingleton lazily initializes the singleton PostgreSQL container.
@@ -156,38 +168,56 @@ func packageDir() string {
 }
 
 // ensureTemplate creates the template database with migrations applied.
-// Safe for concurrent access via sync.Once.
-func ensureTemplate(adminDSN string) (string, error) {
-	templateOnce.Do(func() {
-		templateName = "melange_template"
+// Safe for concurrent access via sync.Mutex.
+func ensureTemplate(adminDSN, databaseSchema string) (string, error) {
+	templateMutex.Lock()
+	defer templateMutex.Unlock()
 
-		// First, ensure code generation is done
-		if err := ensureCodegen(); err != nil {
-			templateErr = fmt.Errorf("code generation failed: %w", err)
-			return
-		}
+	state, ok := templateStates[databaseSchema]
+	if ok {
+		return state.template, state.err
+	}
 
-		// Create template database
-		if err := createDatabase(adminDSN, templateName); err != nil {
-			templateErr = fmt.Errorf("failed to create template database: %w", err)
-			return
-		}
+	name := "melange_template"
+	if databaseSchema != "" {
+		name += "_" + databaseSchema
+	}
 
-		// Build DSN for template database
-		templateDSN := replaceDBName(adminDSN, templateName)
+	state = &templateState{
+		template: name,
+	}
 
-		// Apply melange schema migrations
-		if err := applyMelangeMigrations(templateDSN); err != nil {
-			templateErr = fmt.Errorf("failed to apply melange migrations: %w", err)
-			return
-		}
+	if templateStates == nil {
+		templateStates = make(map[string]*templateState)
+	}
 
-		// Mark database as template for faster copying
-		// Non-fatal if this fails: copying still works without template flag
-		_ = markAsTemplate(adminDSN, templateName)
-	})
+	templateStates[databaseSchema] = state
 
-	return templateName, templateErr
+	// First, ensure code generation is done
+	if err := ensureCodegen(); err != nil {
+		state.err = fmt.Errorf("code generation failed: %w", err)
+		return state.template, state.err
+	}
+
+	// Create template database
+	if err := createDatabase(adminDSN, state.template); err != nil {
+		state.err = fmt.Errorf("failed to create template database: %w", err)
+		return state.template, state.err
+	}
+
+	// Build DSN for template database
+	templateDSN := replaceDBName(adminDSN, state.template)
+
+	// Apply melange schema migrations
+	if err := applyMelangeMigrations(templateDSN, databaseSchema); err != nil {
+		state.err = fmt.Errorf("failed to apply melange migrations: %w", err)
+		return state.template, state.err
+	}
+
+	// Mark database as template for faster copying
+	// Non-fatal if this fails: copying still works without template flag
+	_ = markAsTemplate(adminDSN, state.template)
+	return state.template, state.err
 }
 
 // DSN returns the connection string for an isolated test database.
@@ -196,10 +226,16 @@ func ensureTemplate(adminDSN string) (string, error) {
 func DSN(tb testing.TB) string {
 	tb.Helper()
 
+	return DSNWithDatabaseSchema(tb, "")
+}
+
+func DSNWithDatabaseSchema(tb testing.TB, databaseSchema string) string {
+	tb.Helper()
+
 	adminDSN, err := ensureSingleton()
 	require.NoError(tb, err, "failed to start PostgreSQL container")
 
-	tmpl, err := ensureTemplate(adminDSN)
+	tmpl, err := ensureTemplate(adminDSN, databaseSchema)
 	require.NoError(tb, err, "failed to create template database")
 
 	// Generate unique database name
@@ -232,17 +268,23 @@ func DSN(tb testing.TB) string {
 func DB(tb testing.TB) *sql.DB {
 	tb.Helper()
 
+	return DBWithDatabaseSchema(tb, "")
+}
+
+func DBWithDatabaseSchema(tb testing.TB, databaseSchema string) *sql.DB {
+	tb.Helper()
+
 	// Check for remote database configuration
 	config := GetDatabaseConfig()
 	if config.URL != "" {
-		return remoteDB(tb, config)
+		return remoteDB(tb, config, databaseSchema)
 	}
 
 	// Local testcontainers mode (existing behavior)
 	adminDSN, err := ensureSingleton()
 	require.NoError(tb, err, "failed to start PostgreSQL container")
 
-	tmpl, err := ensureTemplate(adminDSN)
+	tmpl, err := ensureTemplate(adminDSN, databaseSchema)
 	require.NoError(tb, err, "failed to create template database")
 
 	// Generate unique database name
@@ -268,32 +310,53 @@ func DB(tb testing.TB) *sql.DB {
 }
 
 // ensureRemoteDBMigrated ensures migrations are applied to remote database exactly once.
-// Safe for concurrent access via sync.Once.
-func ensureRemoteDBMigrated(config DatabaseConfig) error {
-	remoteDBOnce.Do(func() {
-		// First, ensure code generation is done
-		if err := ensureCodegen(); err != nil {
-			remoteDBErr = fmt.Errorf("code generation failed: %w", err)
-			return
-		}
+// Safe for concurrent access via sync.Mutex.
+func ensureRemoteDBMigrated(config DatabaseConfig, databaseSchema string) error {
+	remoteDBMutex.Lock()
+	defer remoteDBMutex.Unlock()
 
-		// Apply migrations to remote database once
-		remoteDBErr = applyMelangeMigrations(config.URL)
-		if remoteDBErr != nil {
-			remoteDBErr = fmt.Errorf("failed to apply migrations to remote database: %w", remoteDBErr)
-		}
-	})
-	return remoteDBErr
+	state, ok := remoteDBStates[databaseSchema]
+	if ok {
+		return state.err
+	}
+
+	state = &remoteDBState{}
+
+	if remoteDBStates == nil {
+		remoteDBStates = make(map[string]*remoteDBState)
+	}
+
+	remoteDBStates[databaseSchema] = state
+
+	// First, ensure code generation is done
+	if err := ensureCodegen(); err != nil {
+		state.err = fmt.Errorf("code generation failed: %w", err)
+		return state.err
+	}
+
+	// Apply migrations to remote database once
+	if err := applyMelangeMigrations(config.URL, databaseSchema); err != nil {
+		state.err = fmt.Errorf("failed to apply migrations to remote database: %w", err)
+		return state.err
+	}
+
+	// Apply migrations to remote database once
+	if err := applyMelangeMigrations(config.URL, databaseSchema); err != nil {
+		state.err = fmt.Errorf("failed to apply migrations to remote database2: %w", err)
+		return state.err
+	}
+
+	return state.err
 }
 
 // remoteDB connects to a remote database for testing.
 // Instead of creating/dropping databases, it truncates tables for cleanup.
-func remoteDB(tb testing.TB, config DatabaseConfig) *sql.DB {
+func remoteDB(tb testing.TB, config DatabaseConfig, databaseSchema string) *sql.DB {
 	tb.Helper()
 	ctx := context.Background()
 
 	// Ensure migrations are applied once across all tests
-	err := ensureRemoteDBMigrated(config)
+	err := ensureRemoteDBMigrated(config, databaseSchema)
 	if err != nil {
 		tb.Fatalf("failed to initialize remote database: %v", err)
 	}
@@ -335,7 +398,7 @@ func remoteDB(tb testing.TB, config DatabaseConfig) *sql.DB {
 
 	// Register cleanup (truncate tables, not drop database)
 	tb.Cleanup(func() {
-		cleanupRemoteDB(db)
+		cleanupRemoteDB(db, databaseSchema)
 		_ = db.Close()
 	})
 
@@ -344,7 +407,7 @@ func remoteDB(tb testing.TB, config DatabaseConfig) *sql.DB {
 
 // cleanupRemoteDB truncates all tables in the remote database.
 // This is used instead of dropping the database for remote connections.
-func cleanupRemoteDB(db *sql.DB) {
+func cleanupRemoteDB(db *sql.DB, databaseSchema string) {
 	ctx := context.Background()
 
 	// List of tables to truncate (in dependency order, CASCADE handles dependencies)
@@ -364,7 +427,7 @@ func cleanupRemoteDB(db *sql.DB) {
 
 	// Truncate all tables
 	for _, table := range tables {
-		_, _ = db.ExecContext(ctx, fmt.Sprintf("TRUNCATE TABLE %s CASCADE", table))
+		_, _ = db.ExecContext(ctx, fmt.Sprintf("TRUNCATE TABLE %s CASCADE", sqldsl.PrefixIdent(table, databaseSchema)))
 		// Ignore errors - table might not exist
 	}
 }
@@ -437,7 +500,7 @@ func createDatabase(adminDSN, name string) error {
 }
 
 // createDatabaseFromTemplate creates a new database from a template.
-func createDatabaseFromTemplate(adminDSN, name, template string) error {
+func createDatabaseFromTemplate(adminDSN, name, tmpl string) error {
 	db, err := sql.Open("pgx", adminDSN)
 	if err != nil {
 		return err
@@ -449,9 +512,9 @@ func createDatabaseFromTemplate(adminDSN, name, template string) error {
 		SELECT pg_terminate_backend(pid)
 		FROM pg_stat_activity
 		WHERE datname = '%s' AND pid <> pg_backend_pid()
-	`, template))
+	`, tmpl))
 
-	_, err = db.Exec(fmt.Sprintf("CREATE DATABASE %s WITH TEMPLATE %s", name, template))
+	_, err = db.Exec(fmt.Sprintf("CREATE DATABASE %s WITH TEMPLATE %s", name, tmpl))
 	return err
 }
 
@@ -494,7 +557,7 @@ func dropDatabase(ctx context.Context, adminDSN, name string) error {
 }
 
 // applyMelangeMigrations applies the melange schema to the database.
-func applyMelangeMigrations(dsn string) error {
+func applyMelangeMigrations(dsn, databaseSchema string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -505,19 +568,27 @@ func applyMelangeMigrations(dsn string) error {
 	defer func() { _ = db.Close() }()
 
 	// Apply melange DDL and schema from embedded file
-	err = migrator.MigrateFromString(ctx, db, schemaFGA)
+	types, err := parser.ParseSchemaString(schemaFGA)
+	if err != nil {
+		return fmt.Errorf("parse schema: %w", err)
+	}
+
+	m := migrator.NewMigrator(db, "")
+	m.SetDatabaseSchema(databaseSchema)
+
+	err = m.MigrateWithTypes(ctx, types)
 	if err != nil {
 		return fmt.Errorf("apply melange migration: %w", err)
 	}
 
 	// Create the domain tables for testing (must be before tuples view)
-	_, err = db.ExecContext(ctx, domainTablesSQL)
+	_, err = db.ExecContext(ctx, DomainTablesSQL(databaseSchema))
 	if err != nil {
 		return fmt.Errorf("create domain tables: %w", err)
 	}
 
 	// Create the melange_tuples view for testing (references domain tables)
-	_, err = db.ExecContext(ctx, tuplesViewSQL)
+	_, err = db.ExecContext(ctx, TuplesViewSQL(databaseSchema))
 	if err != nil {
 		return fmt.Errorf("create tuples view: %w", err)
 	}
@@ -546,7 +617,46 @@ func replaceDBName(dsn, newDB string) string {
 	return dsn
 }
 
+// DomainTablesSQL returns the embedded SQL for creating domain tables.
+func DomainTablesSQL(databaseSchema string) string {
+	tmpl := template.Must(template.New("domain_tables").Parse(domainTablesSQLTemplate))
+
+	return executeTemplate(tmpl, databaseSchema)
+}
+
 // TuplesViewSQL returns the embedded SQL for creating the tuples view.
-func TuplesViewSQL() string {
-	return tuplesViewSQL
+func TuplesViewSQL(databaseSchema string) string {
+	tmpl := template.Must(template.New("tuples_view").Parse(tuplesViewSQLTemplate))
+
+	return executeTemplate(tmpl, databaseSchema)
+}
+
+type templateData struct {
+	DatabaseSchema string
+}
+
+func (d *templateData) Ident(name string) string {
+	return sqldsl.PrefixIdent(name, d.DatabaseSchema)
+}
+
+func executeTemplate(tmpl *template.Template, databaseSchema string) string {
+	var buf strings.Builder
+
+	err := tmpl.Execute(&buf, &templateData{
+		DatabaseSchema: databaseSchema,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("failed to execute template %s: %s", tmpl.Name(), err.Error()))
+	}
+
+	return buf.String()
+}
+
+// PostgresSchema returns a literal with the schema name or "current_schema()" if empty.
+func PostgresSchema(schema string) string {
+	if schema == "" {
+		return "current_schema()"
+	}
+
+	return pq.QuoteLiteral(schema)
 }
