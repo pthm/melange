@@ -160,19 +160,6 @@ func (m *Migrator) ApplyDDL(ctx context.Context) error {
 	return nil
 }
 
-// createSchema creates the database schema if necessary.
-func (m *Migrator) createSchema(ctx context.Context, db Execer) error {
-	if m.databaseSchema == "" {
-		return nil
-	}
-
-	if _, err := db.ExecContext(ctx, fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s;", sqldsl.QuoteIdent(m.databaseSchema))); err != nil {
-		return fmt.Errorf("creating schema: %w", err)
-	}
-
-	return nil
-}
-
 // applyGeneratedSQL applies generated specialized functions and dispatcher.
 func (m *Migrator) applyGeneratedSQL(ctx context.Context, db Execer, gen GeneratedSQL) error {
 	// Apply specialized check functions first (dispatcher depends on them)
@@ -292,11 +279,6 @@ func (m *Migrator) MigrateWithTypes(ctx context.Context, types []TypeDefinition)
 		}
 		defer func() { _ = tx.Rollback() }()
 
-		// Create database schema if necessary
-		if err := m.createSchema(ctx, tx); err != nil {
-			return err
-		}
-
 		// Apply generated specialized check functions
 		if err := m.applyGeneratedSQL(ctx, tx, generatedSQL); err != nil {
 			return err
@@ -311,9 +293,6 @@ func (m *Migrator) MigrateWithTypes(ctx context.Context, types []TypeDefinition)
 	}
 
 	// Fall back to non-transactional (for *sql.Conn)
-	if err := m.createSchema(ctx, m.db); err != nil {
-		return err
-	}
 	if err := m.applyGeneratedSQL(ctx, m.db, generatedSQL); err != nil {
 		return err
 	}
@@ -716,11 +695,6 @@ func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeD
 		}
 		defer func() { _ = tx.Rollback() }()
 
-		// Create database schema if necessary
-		if err := m.createSchema(ctx, tx); err != nil {
-			return err
-		}
-
 		// Apply migrations DDL (creates tracking table)
 		if err := m.applyMigrationsDDL(ctx, tx); err != nil {
 			return err
@@ -758,9 +732,6 @@ func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeD
 	}
 
 	// Fall back to non-transactional (for *sql.Conn)
-	if err := m.createSchema(ctx, m.db); err != nil {
-		return err
-	}
 	if err := m.applyMigrationsDDL(ctx, m.db); err != nil {
 		return err
 	}
@@ -799,9 +770,10 @@ func (m *Migrator) outputDryRun(w io.Writer, melangeVersion, schemaChecksum stri
 	// Database schema
 	if m.databaseSchema != "" {
 		_, _ = fmt.Fprintf(w, "-- ============================================================\n")
-		_, _ = fmt.Fprintf(w, "-- Database schema\n")
+		_, _ = fmt.Fprintf(w, "-- Database schema: %s\n", m.databaseSchema)
+		_, _ = fmt.Fprintf(w, "-- NOTE: You must create this schema before running the migration:\n")
+		_, _ = fmt.Fprintf(w, "--   CREATE SCHEMA IF NOT EXISTS %s;\n", sqldsl.QuoteIdent(m.databaseSchema))
 		_, _ = fmt.Fprintf(w, "-- ============================================================\n\n")
-		_, _ = fmt.Fprintf(w, "CREATE SCHEMA IF NOT EXISTS %s;\n\n", sqldsl.QuoteIdent(m.databaseSchema))
 	}
 
 	// Migrations DDL

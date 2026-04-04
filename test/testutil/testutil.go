@@ -340,12 +340,6 @@ func ensureRemoteDBMigrated(config DatabaseConfig, databaseSchema string) error 
 		return state.err
 	}
 
-	// Apply migrations to remote database once
-	if err := applyMelangeMigrations(config.URL, databaseSchema); err != nil {
-		state.err = fmt.Errorf("failed to apply migrations to remote database2: %w", err)
-		return state.err
-	}
-
 	return state.err
 }
 
@@ -566,6 +560,14 @@ func applyMelangeMigrations(dsn, databaseSchema string) error {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer func() { _ = db.Close() }()
+
+	// Create target schema if configured (user responsibility in production,
+	// but tests need to set it up)
+	if databaseSchema != "" {
+		if _, err := db.ExecContext(ctx, fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s", sqldsl.QuoteIdent(databaseSchema))); err != nil {
+			return fmt.Errorf("create schema: %w", err)
+		}
+	}
 
 	// Apply melange DDL and schema from embedded file
 	types, err := parser.ParseSchemaString(schemaFGA)

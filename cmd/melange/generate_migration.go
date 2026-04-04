@@ -62,7 +62,7 @@ Three comparison modes determine orphaned functions to drop:
   melange generate migration --schema schema.fga --output migrations/ --previous-schema old.fga`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Resolve values: flags > config > defaults
-		databaseSchema := resolveString(genMigrationSchema, cfg.Database.Schema)
+		databaseSchema := resolveString(genMigrationDBSchema, cfg.Database.Schema)
 		schemaPath := resolveString(genMigrationSchema, cfg.Schema)
 		output := resolveString(genMigrationOutput, cfg.Generate.Migration.Output)
 		name := resolveString(genMigrationName, cfg.Generate.Migration.Name, "melange")
