@@ -18,7 +18,6 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
-	"github.com/lib/pq"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
@@ -655,9 +654,5 @@ func executeTemplate(tmpl *template.Template, databaseSchema string) string {
 
 // PostgresSchema returns a literal with the schema name or "current_schema()" if empty.
 func PostgresSchema(schema string) string {
-	if schema == "" {
-		return "current_schema()"
-	}
-
-	return pq.QuoteLiteral(schema)
+	return sqldsl.PostgresSchemaExpr(schema)
 }

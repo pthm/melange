@@ -22,7 +22,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/lib/pq"
 	"github.com/pthm/melange/lib/sqlgen"
 	"github.com/pthm/melange/lib/sqlgen/sqldsl"
 	"github.com/pthm/melange/pkg/migrator"
@@ -994,9 +993,5 @@ func (d *Doctor) prefixIdent(identifier string) string {
 }
 
 func (d *Doctor) postgresSchema() string {
-	if d.databaseSchema == "" {
-		return "current_schema()"
-	}
-
-	return pq.QuoteLiteral(d.databaseSchema)
+	return sqldsl.PostgresSchemaExpr(d.databaseSchema)
 }

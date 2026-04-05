@@ -863,9 +863,5 @@ func (m *Migrator) prefixIdent(identifier string) string {
 }
 
 func (m *Migrator) postgresSchema() string {
-	if m.databaseSchema == "" {
-		return "current_schema()"
-	}
-
-	return pq.QuoteLiteral(m.databaseSchema)
+	return sqldsl.PostgresSchemaExpr(m.databaseSchema)
 }
