@@ -30,7 +30,7 @@ import (
 //	)
 func TestListObjectsDirectQuery(t *testing.T) {
 	// DSL version
-	q := sqlgen.Tuples("t").
+	q := sqlgen.Tuples("", "t").
 		ObjectType("document").
 		Relations("viewer", "editor").
 		WhereSubjectType(sqlgen.SubjectType).
@@ -70,7 +70,7 @@ func TestListObjectsDirectQuery(t *testing.T) {
 //	return existsSQL(query)
 func TestDirectCheck(t *testing.T) {
 	// DSL version
-	q := sqlgen.Tuples("").
+	q := sqlgen.Tuples("", "").
 		ObjectType("document").
 		Relations("viewer", "editor").
 		Where(
@@ -116,7 +116,7 @@ func TestUsersetCheck(t *testing.T) {
 	satisfyingRelations := []string{"member", "admin"}
 
 	// DSL version
-	q := sqlgen.Tuples("grant_tuple").
+	q := sqlgen.Tuples("", "grant_tuple").
 		ObjectType("document").
 		Relations("viewer").
 		Where(
@@ -182,7 +182,7 @@ func TestExclusionPattern(t *testing.T) {
 	objectIDExpr := sqlgen.Col{Table: "t", Column: "object_id"}
 
 	// DSL version - using SimpleExclusion helper
-	excl := sqlgen.SimpleExclusion("document", "blocked", objectIDExpr, sqlgen.SubjectType, sqlgen.SubjectID)
+	excl := sqlgen.SimpleExclusion("", "document", "blocked", objectIDExpr, sqlgen.SubjectType, sqlgen.SubjectID)
 
 	sql := excl.SQL()
 
@@ -215,6 +215,7 @@ func TestExclusionPattern(t *testing.T) {
 func TestCheckPermissionInternal(t *testing.T) {
 	// DSL version
 	check := sqlgen.CheckPermission{
+		Schema:   "",
 		Subject:  sqlgen.SubjectParams(),
 		Relation: "viewer",
 		Object: sqlgen.ObjectRef{
@@ -249,7 +250,7 @@ func TestListObjectsUsersetPatternSimple(t *testing.T) {
 	allowWildcard := true
 
 	// DSL version
-	q := sqlgen.Tuples("t").
+	q := sqlgen.Tuples("", "t").
 		ObjectType(objectType).
 		Relations(sourceRelations...).
 		Where(

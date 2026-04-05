@@ -73,7 +73,7 @@ func buildStandaloneAccessBlocks(plan ListPlan) ([]TypedQueryBlock, error) {
 
 // buildListObjectsDirectBlock builds the direct tuple lookup query block.
 func buildListObjectsDirectBlock(plan ListPlan) (TypedQueryBlock, error) {
-	q := Tuples("t").
+	q := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
 		Relations(plan.RelationList...).
 		Where(
@@ -123,7 +123,7 @@ func buildListObjectsUsersetSubjectBlock(plan ListPlan) (TypedQueryBlock, error)
 		),
 	)
 
-	q := Tuples("t").
+	q := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
 		Relations(plan.RelationList...).
 		Where(
@@ -157,7 +157,7 @@ func buildTypedListObjectsComplexClosureBlocks(plan ListPlan) ([]TypedQueryBlock
 
 	var blocks []TypedQueryBlock
 	for _, rel := range plan.ComplexClosure {
-		q := Tuples("t").
+		q := Tuples(plan.DatabaseSchema, "t").
 			ObjectType(plan.ObjectType).
 			Relations(rel).
 			Where(
@@ -165,6 +165,7 @@ func buildTypedListObjectsComplexClosureBlocks(plan ListPlan) ([]TypedQueryBlock
 				In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
 				SubjectIDMatch(Col{Table: "t", Column: "subject_id"}, SubjectID, plan.AllowWildcard),
 				CheckPermission{
+					Schema:      plan.DatabaseSchema,
 					Subject:     SubjectParams(),
 					Relation:    rel,
 					Object:      LiteralObject(plan.ObjectType, Col{Table: "t", Column: "object_id"}),
@@ -203,9 +204,10 @@ func buildListObjectsIntersectionClosureBlocks(plan ListPlan) ([]TypedQueryBlock
 		stmt := SelectStmt{
 			ColumnExprs: []Expr{Col{Table: "icr", Column: "object_id"}},
 			FromExpr: FunctionCallExpr{
-				Name:  funcName,
-				Args:  []Expr{SubjectType, SubjectID, Null{}, Null{}},
-				Alias: "icr",
+				Schema: plan.DatabaseSchema,
+				Name:   funcName,
+				Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
+				Alias:  "icr",
 			},
 		}
 
@@ -215,6 +217,7 @@ func buildListObjectsIntersectionClosureBlocks(plan ListPlan) ([]TypedQueryBlock
 		if plan.HasExclusion {
 			exclusionConfig := buildExclusionInput(
 				plan.Analysis,
+				plan.DatabaseSchema,
 				Col{Table: "icr", Column: "object_id"},
 				SubjectType,
 				SubjectID,
@@ -283,6 +286,7 @@ func buildIntersectionGroupBlock(plan ListPlan, idx int, group IntersectionGroup
 	if plan.HasExclusion {
 		exclusionConfig := buildExclusionInput(
 			plan.Analysis,
+			plan.DatabaseSchema,
 			Col{Table: "ig", Column: "object_id"}, // Use ig.object_id for intersection result
 			SubjectType,
 			SubjectID,
@@ -308,7 +312,7 @@ func buildIntersectionPartQuery(plan ListPlan, part IntersectionPart) SelectStmt
 
 	switch {
 	case part.IsThis:
-		q = Tuples(alias).
+		q = Tuples(plan.DatabaseSchema, alias).
 			ObjectType(plan.ObjectType).
 			Relations(plan.Relation).
 			SelectCol("object_id").
@@ -321,11 +325,12 @@ func buildIntersectionPartQuery(plan ListPlan, part IntersectionPart) SelectStmt
 
 	case part.ParentRelation != nil:
 		alias = "child"
-		q = Tuples(alias).
+		q = Tuples(plan.DatabaseSchema, alias).
 			ObjectType(plan.ObjectType).
 			Relations(part.ParentRelation.LinkingRelation).
 			SelectCol("object_id").
 			Where(CheckPermission{
+				Schema:   plan.DatabaseSchema,
 				Subject:  SubjectParams(),
 				Relation: part.ParentRelation.Relation,
 				Object: ObjectRef{
@@ -337,10 +342,11 @@ func buildIntersectionPartQuery(plan ListPlan, part IntersectionPart) SelectStmt
 			Distinct()
 
 	default:
-		q = Tuples(alias).
+		q = Tuples(plan.DatabaseSchema, alias).
 			ObjectType(plan.ObjectType).
 			SelectCol("object_id").
 			Where(CheckPermission{
+				Schema:      plan.DatabaseSchema,
 				Subject:     SubjectParams(),
 				Relation:    part.Relation,
 				Object:      LiteralObject(plan.ObjectType, Col{Table: alias, Column: "object_id"}),
@@ -351,6 +357,7 @@ func buildIntersectionPartQuery(plan ListPlan, part IntersectionPart) SelectStmt
 
 	if part.ExcludedRelation != "" {
 		q.Where(CheckPermission{
+			Schema:      plan.DatabaseSchema,
 			Subject:     SubjectParams(),
 			Relation:    part.ExcludedRelation,
 			Object:      LiteralObject(plan.ObjectType, Col{Table: alias, Column: "object_id"}),
@@ -392,7 +399,7 @@ func buildListObjectsUsersetPatternBlocks(plan ListPlan) ([]TypedQueryBlock, err
 
 // buildListObjectsComplexUsersetBlock builds a block for complex userset patterns.
 func buildListObjectsComplexUsersetBlock(plan ListPlan, pattern listUsersetPatternInput) (TypedQueryBlock, error) {
-	q := Tuples("t").
+	q := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
 		Relations(pattern.SourceRelations...).
 		Where(
@@ -403,6 +410,7 @@ func buildListObjectsComplexUsersetBlock(plan ListPlan, pattern listUsersetPatte
 				Right: Lit(pattern.SubjectRelation),
 			},
 			CheckPermission{
+				Schema:   plan.DatabaseSchema,
 				Subject:  SubjectParams(),
 				Relation: pattern.SubjectRelation,
 				Object: ObjectRef{
@@ -429,7 +437,7 @@ func buildListObjectsComplexUsersetBlock(plan ListPlan, pattern listUsersetPatte
 
 // buildListObjectsSimpleUsersetBlock builds a block for simple userset patterns.
 func buildListObjectsSimpleUsersetBlock(plan ListPlan, pattern listUsersetPatternInput) (TypedQueryBlock, error) {
-	q := Tuples("t").
+	q := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
 		Relations(pattern.SourceRelations...).
 		Where(

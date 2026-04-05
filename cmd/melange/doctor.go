@@ -15,6 +15,7 @@ import (
 
 var (
 	doctorDB              string
+	doctorDBSchema        string
 	doctorSchema          string
 	doctorVerbose         bool
 	doctorSkipPerformance bool
@@ -27,9 +28,13 @@ var doctorCmd = &cobra.Command{
 	Example: `  # Run health checks
   melange doctor --db postgres://localhost/mydb
 
+  # Use a different database schema
+  melange doctor --db postgres://localhost/mydb --db-schema myschema
+
   # Run with verbose output
   melange doctor --db postgres://localhost/mydb --verbose`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		databaseSchema := resolveString(doctorDBSchema, cfg.Database.Schema)
 		schemaPath := resolveString(doctorSchema, cfg.Schema)
 		verboseFlag := resolveBool(doctorVerbose, cfg.Doctor.Verbose)
 		skipPerf := resolveBool(doctorSkipPerformance, cfg.Doctor.SkipPerformance)
@@ -39,19 +44,20 @@ var doctorCmd = &cobra.Command{
 			return err
 		}
 
-		return runDoctor(dsn, schemaPath, verboseFlag, skipPerf)
+		return runDoctor(dsn, databaseSchema, schemaPath, verboseFlag, skipPerf)
 	},
 }
 
 func init() {
 	f := doctorCmd.Flags()
 	f.StringVar(&doctorDB, "db", "", "database URL")
+	f.StringVar(&doctorDBSchema, "db-schema", "", "database schema")
 	f.StringVar(&doctorSchema, "schema", "", "path to schema.fga or fga.mod file")
 	f.BoolVar(&doctorVerbose, "verbose", false, "show detailed output")
 	f.BoolVar(&doctorSkipPerformance, "skip-performance", false, "skip performance checks")
 }
 
-func runDoctor(dsn, schemaPath string, verboseFlag, skipPerformance bool) error {
+func runDoctor(dsn, databaseSchema, schemaPath string, verboseFlag, skipPerformance bool) error {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return cli.DBConnectError("connecting to database", err)
@@ -65,6 +71,7 @@ func runDoctor(dsn, schemaPath string, verboseFlag, skipPerformance bool) error 
 	}
 
 	d := doctor.New(db, schemaPath, doctor.Options{SkipPerformance: skipPerformance})
+	d.SetDatabaseSchema(databaseSchema)
 	report, err := d.Run(ctx)
 	if err != nil {
 		return cli.GeneralError("running doctor", err)

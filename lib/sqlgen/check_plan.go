@@ -5,8 +5,9 @@ package sqlgen
 // Unlike CheckFunctionData, this contains no pre-rendered SQL fragments.
 type CheckPlan struct {
 	// Input data
-	Analysis RelationAnalysis
-	Inline   InlineSQLData
+	Analysis       RelationAnalysis
+	Inline         InlineSQLData
+	DatabaseSchema string
 
 	// Function identity
 	FunctionName              string
@@ -46,7 +47,7 @@ type CheckPlan struct {
 
 // BuildCheckPlan creates a plan for generating a check function.
 // Set noWildcard to true to generate a no-wildcard variant.
-func BuildCheckPlan(a RelationAnalysis, inline InlineSQLData, noWildcard bool) CheckPlan {
+func BuildCheckPlan(a RelationAnalysis, inline InlineSQLData, databaseSchema string, noWildcard bool) CheckPlan {
 	hasWildcard := a.Features.HasWildcard && !noWildcard
 
 	// Determine function names
@@ -60,6 +61,7 @@ func BuildCheckPlan(a RelationAnalysis, inline InlineSQLData, noWildcard bool) C
 	plan := CheckPlan{
 		Analysis:                  a,
 		Inline:                    inline,
+		DatabaseSchema:            databaseSchema,
 		FunctionName:              funcName,
 		InternalCheckFunctionName: internalFn,
 		ObjectType:                a.ObjectType,
@@ -98,6 +100,7 @@ func BuildCheckPlan(a RelationAnalysis, inline InlineSQLData, noWildcard bool) C
 	if a.Features.HasExclusion {
 		plan.Exclusions = buildExclusionInput(
 			a,
+			databaseSchema,
 			ObjectID, // p_object_id parameter
 			SubjectType,
 			SubjectID,

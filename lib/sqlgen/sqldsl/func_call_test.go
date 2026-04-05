@@ -14,6 +14,7 @@ func TestFuncCallEq_SQL(t *testing.T) {
 		{
 			name: "simple check function",
 			fc: FuncCallEq{
+				Schema:   "",
 				FuncName: "check_doc_viewer",
 				Args:     []Expr{SubjectType, SubjectID, ObjectID, Visited},
 				Value:    Int(1),
@@ -23,6 +24,7 @@ func TestFuncCallEq_SQL(t *testing.T) {
 		{
 			name: "with literal args",
 			fc: FuncCallEq{
+				Schema:   "",
 				FuncName: "check_permission_internal",
 				Args:     []Expr{SubjectType, SubjectID, Lit("viewer"), Lit("document"), ObjectID, Visited},
 				Value:    Int(1),
@@ -32,6 +34,7 @@ func TestFuncCallEq_SQL(t *testing.T) {
 		{
 			name: "compare to zero",
 			fc: FuncCallEq{
+				Schema:   "",
 				FuncName: "my_func",
 				Args:     []Expr{Lit("test")},
 				Value:    Int(0),
@@ -51,6 +54,7 @@ func TestFuncCallEq_SQL(t *testing.T) {
 
 func TestFuncCallNe_SQL(t *testing.T) {
 	fc := FuncCallNe{
+		Schema:   "",
 		FuncName: "check_permission",
 		Args:     []Expr{SubjectType, SubjectID, Lit("admin"), Lit("system"), ObjectID},
 		Value:    Int(1),
@@ -63,7 +67,7 @@ func TestFuncCallNe_SQL(t *testing.T) {
 }
 
 func TestInternalPermissionCheckCall(t *testing.T) {
-	fc := InternalPermissionCheckCall("viewer", "document", Col{Table: "t", Column: "object_id"}, Visited)
+	fc := InternalPermissionCheckCall("", "viewer", "document", Col{Table: "t", Column: "object_id"}, Visited)
 	got := fc.SQL()
 
 	expected := []string{
@@ -85,7 +89,7 @@ func TestInternalPermissionCheckCall(t *testing.T) {
 }
 
 func TestSpecializedCheckCall(t *testing.T) {
-	fc := SpecializedCheckCall("check_doc_owner", SubjectType, SubjectID, ObjectID, Visited)
+	fc := SpecializedCheckCall("", "check_doc_owner", SubjectType, SubjectID, ObjectID, Visited)
 	got := fc.SQL()
 
 	if got != "check_doc_owner(p_subject_type, p_subject_id, p_object_id, p_visited) = 1" {
@@ -95,6 +99,7 @@ func TestSpecializedCheckCall(t *testing.T) {
 
 func TestInternalCheckCall(t *testing.T) {
 	fc := InternalCheckCall(
+		"",
 		SubjectType,
 		SubjectID,
 		"viewer",
@@ -132,6 +137,7 @@ func TestInFunctionSelect_SQL(t *testing.T) {
 			name: "list objects function",
 			in: InFunctionSelect{
 				Expr:      Col{Table: "t", Column: "subject_id"},
+				Schema:    "",
 				FuncName:  "list_doc_viewer_obj",
 				Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
 				Alias:     "obj",
@@ -143,6 +149,7 @@ func TestInFunctionSelect_SQL(t *testing.T) {
 			name: "split_part expression",
 			in: InFunctionSelect{
 				Expr:      Raw("split_part(t.subject_id, '#', 1)"),
+				Schema:    "",
 				FuncName:  "list_group_member_obj",
 				Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
 				Alias:     "obj",

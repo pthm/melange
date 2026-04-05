@@ -12,32 +12,33 @@ type SubjectsIntersectionBlockSet struct {
 }
 
 // buildDirectSubjectSelectStmt creates a SELECT DISTINCT subject_id FROM melange_tuples t.
-func buildDirectSubjectSelectStmt(conditions []Expr) SelectStmt {
+func buildDirectSubjectSelectStmt(databaseSchema string, conditions []Expr) SelectStmt {
 	return SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "t", Column: "subject_id"}},
-		FromExpr:    TableAs("melange_tuples", "t"),
+		FromExpr:    TableAs(databaseSchema, "melange_tuples", "t"),
 		Where:       And(conditions...),
 	}
 }
 
 // buildTTUSubjectSelectStmt creates a TTU join query selecting subject_id from pt.
-func buildTTUSubjectSelectStmt(conditions []Expr) SelectStmt {
+func buildTTUSubjectSelectStmt(databaseSchema string, conditions []Expr) SelectStmt {
 	return SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "pt", Column: "subject_id"}},
-		FromExpr:    TableAs("melange_tuples", "link"),
-		Joins:       []JoinClause{ttuJoin()},
+		FromExpr:    TableAs(databaseSchema, "melange_tuples", "link"),
+		Joins:       []JoinClause{ttuJoin(databaseSchema)},
 		Where:       And(conditions...),
 	}
 }
 
 // ttuJoin returns the standard TTU join clause.
-func ttuJoin() JoinClause {
+func ttuJoin(databaseSchema string) JoinClause {
 	return JoinClause{
-		Type:  "INNER",
-		Table: "melange_tuples",
-		Alias: "pt",
+		Type:   "INNER",
+		Schema: databaseSchema,
+		Table:  "melange_tuples",
+		Alias:  "pt",
 		On: And(
 			Eq{Left: Col{Table: "pt", Column: "object_type"}, Right: Col{Table: "link", Column: "subject_type"}},
 			Eq{Left: Col{Table: "pt", Column: "object_id"}, Right: Col{Table: "link", Column: "subject_id"}},
@@ -46,12 +47,12 @@ func ttuJoin() JoinClause {
 }
 
 // buildUsersetFilterTTUSelectStmt creates a userset filter TTU query.
-func buildUsersetFilterTTUSelectStmt(objectType, linkingRelation string, subjectExpr, relationMatch Expr) SelectStmt {
+func buildUsersetFilterTTUSelectStmt(databaseSchema, objectType, linkingRelation string, subjectExpr, relationMatch Expr) SelectStmt {
 	return SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{subjectExpr},
-		FromExpr:    TableAs("melange_tuples", "link"),
-		Joins:       []JoinClause{ttuJoin()},
+		FromExpr:    TableAs(databaseSchema, "melange_tuples", "link"),
+		Joins:       []JoinClause{ttuJoin(databaseSchema)},
 		Where: And(
 			Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(objectType)},
 			Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
@@ -98,7 +99,7 @@ func buildListSubjectsIntersectionBaseBlock(plan ListPlan, excludeWildcard bool)
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "t", Column: "subject_id"}},
-		FromExpr:    TableAs("melange_tuples", "t"),
+		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "t"),
 		Where:       And(conditions...),
 	}
 
@@ -135,7 +136,7 @@ func buildListSubjectsIntersectionPartBlock(plan ListPlan, part IntersectionPart
 
 		return TypedQueryBlock{
 			Comments: []string{fmt.Sprintf("-- Intersection part: via %s", part.ParentRelation.LinkingRelation)},
-			Query:    buildTTUSubjectSelectStmt(conditions),
+			Query:    buildTTUSubjectSelectStmt(plan.DatabaseSchema, conditions),
 		}
 	}
 
@@ -151,7 +152,7 @@ func buildListSubjectsIntersectionPartBlock(plan ListPlan, part IntersectionPart
 
 	return TypedQueryBlock{
 		Comments: []string{fmt.Sprintf("-- Intersection part: %s", part.Relation)},
-		Query:    buildDirectSubjectSelectStmt(conditions),
+		Query:    buildDirectSubjectSelectStmt(plan.DatabaseSchema, conditions),
 	}
 }
 
@@ -198,12 +199,13 @@ func buildListSubjectsIntersectionUsersetPatternBlock(plan ListPlan, pattern lis
 		Query: SelectStmt{
 			Distinct:    true,
 			ColumnExprs: []Expr{Col{Table: memberAlias, Column: "subject_id"}},
-			FromExpr:    TableAs("melange_tuples", grantAlias),
+			FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", grantAlias),
 			Joins: []JoinClause{{
-				Type:  "INNER",
-				Table: "melange_tuples",
-				Alias: memberAlias,
-				On:    joinCond,
+				Type:   "INNER",
+				Schema: plan.DatabaseSchema,
+				Table:  "melange_tuples",
+				Alias:  memberAlias,
+				On:     joinCond,
 			}},
 			Where: And(whereConditions...),
 		},
@@ -239,7 +241,7 @@ func buildListSubjectsIntersectionTTUBlock(plan ListPlan, parent ListParentRelat
 
 	return TypedQueryBlock{
 		Comments: []string{fmt.Sprintf("-- TTU: subjects via %s -> %s", parent.LinkingRelation, parent.Relation)},
-		Query:    buildTTUSubjectSelectStmt(conditions),
+		Query:    buildTTUSubjectSelectStmt(plan.DatabaseSchema, conditions),
 	}
 }
 
@@ -253,7 +255,7 @@ func buildListSubjectsIntersectionPoolBlock(plan ListPlan, excludeWildcard bool)
 
 	return TypedQueryBlock{
 		Comments: []string{"-- Subject pool: all subjects of requested type"},
-		Query:    buildDirectSubjectSelectStmt(conditions),
+		Query:    buildDirectSubjectSelectStmt(plan.DatabaseSchema, conditions),
 	}
 }
 
@@ -274,7 +276,7 @@ func buildListSubjectsIntersectionUsersetFilterBaseBlock(plan ListPlan) TypedQue
 		Query: SelectStmt{
 			Distinct:    true,
 			ColumnExprs: []Expr{subjectExpr},
-			FromExpr:    TableAs("melange_tuples", "t"),
+			FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "t"),
 			Where: And(
 				Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 				Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
@@ -324,7 +326,7 @@ func buildListSubjectsIntersectionUsersetFilterPartBlock(plan ListPlan, part Int
 
 		return TypedQueryBlock{
 			Comments: []string{fmt.Sprintf("-- Userset filter intersection part: via %s", part.ParentRelation.LinkingRelation)},
-			Query:    buildUsersetFilterTTUSelectStmt(plan.ObjectType, part.ParentRelation.LinkingRelation, subjectExpr, relationMatch),
+			Query:    buildUsersetFilterTTUSelectStmt(plan.DatabaseSchema, plan.ObjectType, part.ParentRelation.LinkingRelation, subjectExpr, relationMatch),
 		}
 	}
 
@@ -336,7 +338,7 @@ func buildListSubjectsIntersectionUsersetFilterPartBlock(plan ListPlan, part Int
 		Query: SelectStmt{
 			Distinct:    true,
 			ColumnExprs: []Expr{subjectExpr},
-			FromExpr:    TableAs("melange_tuples", "t"),
+			FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "t"),
 			Where: And(
 				Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 				Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
@@ -366,7 +368,7 @@ func buildListSubjectsIntersectionUsersetFilterTTUBlock(plan ListPlan, parent Li
 	relationMatch := buildUsersetFilterRelationMatchExpr(plan.Inline.ClosureRows, "pt.subject_id")
 	subjectExpr := Raw("substring(pt.subject_id from 1 for position('#' in pt.subject_id) - 1) || '#' || v_filter_relation AS subject_id")
 
-	stmt := buildUsersetFilterTTUSelectStmt(plan.ObjectType, parent.LinkingRelation, subjectExpr, relationMatch)
+	stmt := buildUsersetFilterTTUSelectStmt(plan.DatabaseSchema, plan.ObjectType, parent.LinkingRelation, subjectExpr, relationMatch)
 	if len(parent.AllowedLinkingTypesSlice) > 0 {
 		// Add type restriction to existing WHERE clause
 		stmt.Where = And(stmt.Where, In{Expr: Col{Table: "link", Column: "subject_type"}, Values: parent.AllowedLinkingTypesSlice})

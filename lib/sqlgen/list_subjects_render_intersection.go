@@ -39,6 +39,7 @@ func RenderListSubjectsIntersectionFunction(plan ListPlan, blocks SubjectsInters
 	}
 
 	fn := PlpgsqlFunction{
+		Schema:  plan.DatabaseSchema,
 		Name:    plan.FunctionName,
 		Args:    ListSubjectsArgs(),
 		Returns: ListSubjectsReturns(),
@@ -63,8 +64,9 @@ func buildIntersectionRegularQuery(plan ListPlan, candidatesSQL string) string {
 	filteredCandidatesQuery := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "c", Column: "subject_id"}},
-		FromExpr:    TableAs("subject_candidates", "c"),
+		FromExpr:    TableAs("", "subject_candidates", "c"),
 		Where: CheckPermissionExpr(
+			plan.DatabaseSchema,
 			"check_permission",
 			SubjectRef{Type: SubjectType, ID: Col{Table: "c", Column: "subject_id"}},
 			plan.Relation,
@@ -76,7 +78,7 @@ func buildIntersectionRegularQuery(plan ListPlan, candidatesSQL string) string {
 	// Build the final query that selects from filtered_candidates
 	finalQuery := SelectStmt{
 		ColumnExprs: []Expr{Col{Table: "fc", Column: "subject_id"}},
-		FromExpr:    TableAs("filtered_candidates", "fc"),
+		FromExpr:    TableAs("", "filtered_candidates", "fc"),
 	}
 
 	// Build the full CTE query using MultiCTE
@@ -94,8 +96,9 @@ func buildIntersectionUsersetFilterQuery(plan ListPlan, candidatesSQL string, se
 	mainQuery := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "c", Column: "subject_id"}},
-		FromExpr:    TableAs("userset_candidates", "c"),
+		FromExpr:    TableAs("", "userset_candidates", "c"),
 		Where: CheckPermissionExpr(
+			plan.DatabaseSchema,
 			"check_permission",
 			SubjectRef{Type: Param("v_filter_type"), ID: Col{Table: "c", Column: "subject_id"}},
 			plan.Relation,

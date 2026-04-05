@@ -13,8 +13,9 @@ import (
 )
 
 var (
-	statusDB     string
-	statusSchema string
+	statusDB       string
+	statusDBSchema string
+	statusSchema   string
 )
 
 var statusCmd = &cobra.Command{
@@ -22,8 +23,12 @@ var statusCmd = &cobra.Command{
 	Short: "Show current schema status",
 	Long:  `Show current schema and migration status.`,
 	Example: `  # Check status
-  melange status --db postgres://localhost/mydb`,
+  melange status --db postgres://localhost/mydb
+
+  # Use a different database schema
+  melange status --db postgres://localhost/mydb --db-schema myschema`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		databaseSchema := resolveString(statusDBSchema, cfg.Database.Schema)
 		schemaPath := resolveString(statusSchema, cfg.Schema)
 
 		dsn, err := resolveDSN(statusDB)
@@ -31,17 +36,18 @@ var statusCmd = &cobra.Command{
 			return err
 		}
 
-		return runStatus(dsn, schemaPath)
+		return runStatus(dsn, databaseSchema, schemaPath)
 	},
 }
 
 func init() {
 	f := statusCmd.Flags()
 	f.StringVar(&statusDB, "db", "", "database URL")
+	f.StringVar(&statusDBSchema, "db-schema", "", "database schema")
 	f.StringVar(&statusSchema, "schema", "", "path to schema.fga or fga.mod file")
 }
 
-func runStatus(dsn, schemaPath string) error {
+func runStatus(dsn, databaseSchema, schemaPath string) error {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return cli.DBConnectError("connecting to database", err)
@@ -50,6 +56,7 @@ func runStatus(dsn, schemaPath string) error {
 
 	ctx := context.Background()
 	m := migrator.NewMigrator(db, schemaPath)
+	m.SetDatabaseSchema(databaseSchema)
 
 	s, err := m.GetStatus(ctx)
 	if err != nil {

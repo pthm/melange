@@ -65,7 +65,7 @@ func BuildListObjectsComposedBlocks(plan ListPlan) (ComposedObjectsBlockSet, err
 
 	// Build main composed query blocks
 	firstStep := anchor.Path[0]
-	exclusions := buildSimpleComplexExclusionInput(plan.Analysis, Col{Table: "t", Column: "object_id"}, SubjectType, SubjectID)
+	exclusions := buildSimpleComplexExclusionInput(plan.Analysis, plan.DatabaseSchema, Col{Table: "t", Column: "object_id"}, SubjectType, SubjectID)
 
 	switch firstStep.Type {
 	case "ttu":
@@ -134,6 +134,7 @@ func buildComposedTTUObjectsBlock(plan ListPlan, anchor *IndirectAnchorInfo, tar
 	// Build subquery for list function call using typed DSL
 	inSubquery := InFunctionSelect{
 		Expr:      Col{Table: "t", Column: "subject_id"},
+		Schema:    plan.DatabaseSchema,
 		FuncName:  ListObjectsFunctionName(targetType, anchor.Path[0].TargetRelation),
 		Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
 		Alias:     "obj",
@@ -152,7 +153,7 @@ func buildComposedTTUObjectsBlock(plan ListPlan, anchor *IndirectAnchorInfo, tar
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}},
-		FromExpr:    TableAs("melange_tuples", "t"),
+		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "t"),
 		Where:       And(conditions...),
 	}
 
@@ -173,14 +174,14 @@ func buildComposedRecursiveTTUObjectsBlock(plan ListPlan, anchor *IndirectAnchor
 		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 		Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(anchor.Path[0].LinkingRelation)},
 		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(recursiveType)},
-		CheckPermissionInternalExpr(SubjectParams(), anchor.Path[0].TargetRelation, ObjectRef{Type: Lit(recursiveType), ID: Col{Table: "t", Column: "subject_id"}}, true),
+		CheckPermissionInternalExpr(plan.DatabaseSchema, SubjectParams(), anchor.Path[0].TargetRelation, ObjectRef{Type: Lit(recursiveType), ID: Col{Table: "t", Column: "subject_id"}}, true),
 	)
 	conditions = append(conditions, exclusionPreds...)
 
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}},
-		FromExpr:    TableAs("melange_tuples", "t"),
+		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "t"),
 		Where:       And(conditions...),
 	}
 
@@ -201,6 +202,7 @@ func buildComposedUsersetObjectsBlock(plan ListPlan, firstStep AnchorPathStep, e
 	usersetObjectID := Raw("split_part(t.subject_id, '#', 1)")
 	inSubquery := InFunctionSelect{
 		Expr:      usersetObjectID,
+		Schema:    plan.DatabaseSchema,
 		FuncName:  ListObjectsFunctionName(firstStep.SubjectType, firstStep.SubjectRelation),
 		Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
 		Alias:     "obj",
@@ -216,7 +218,7 @@ func buildComposedUsersetObjectsBlock(plan ListPlan, firstStep AnchorPathStep, e
 		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(firstStep.SubjectRelation)},
 		Or(
 			inSubquery,
-			CheckPermissionInternalExpr(SubjectParams(), firstStep.SubjectRelation, ObjectRef{Type: Lit(firstStep.SubjectType), ID: usersetObjectID}, true),
+			CheckPermissionInternalExpr(plan.DatabaseSchema, SubjectParams(), firstStep.SubjectRelation, ObjectRef{Type: Lit(firstStep.SubjectType), ID: usersetObjectID}, true),
 		),
 	)
 	conditions = append(conditions, exclusionPreds...)
@@ -224,7 +226,7 @@ func buildComposedUsersetObjectsBlock(plan ListPlan, firstStep AnchorPathStep, e
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}},
-		FromExpr:    TableAs("melange_tuples", "t"),
+		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "t"),
 		Where:       And(conditions...),
 	}
 

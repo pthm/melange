@@ -19,6 +19,7 @@ import { Cache, NoopCache } from './cache.js';
 import { validateObject, validateRelation } from './validator.js';
 import { MelangeError } from './errors.js';
 import { BulkCheckBuilder } from './bulk-check.js';
+import { prefixIdent } from './identifier.js';
 
 /**
  * CheckerOptions configures a Checker instance.
@@ -50,6 +51,11 @@ export interface CheckerOptions {
    * Default: true
    */
   validateUserset?: boolean;
+
+  /**
+   * Sets the database schema where melange objects live.
+   */
+  databaseSchema?: string;
 }
 
 /**
@@ -86,6 +92,7 @@ export class Checker {
   private readonly decision?: Decision;
   private readonly validateRequest: boolean;
   private readonly validateUserset: boolean;
+  private readonly databaseSchema: string;
 
   /**
    * Creates a new Checker instance.
@@ -99,6 +106,7 @@ export class Checker {
     this.decision = options.decision;
     this.validateRequest = options.validateRequest ?? true;
     this.validateUserset = options.validateUserset ?? true;
+    this.databaseSchema = options.databaseSchema ?? '';
   }
 
   /**
@@ -155,10 +163,12 @@ export class Checker {
       }
     }
 
+    const func = prefixIdent('check_permission', this.databaseSchema);
+
     // Execute check_permission
     // TODO: Support contextual tuples when implemented in PostgreSQL functions
     const result = await this.db.query<{ allowed: number }>(
-      'SELECT check_permission($1, $2, $3, $4, $5) as allowed',
+      `SELECT ${func}($1, $2, $3, $4, $5) as allowed`,
       [subject.type, subject.id, relation, object.type, object.id]
     );
 
@@ -235,8 +245,10 @@ export class Checker {
 
     const after = options?.after;
 
+    const func = prefixIdent('list_accessible_objects', this.databaseSchema);
+
     const result = await this.db.query<{ object_id: string; next_cursor: string }>(
-      'SELECT * FROM list_accessible_objects($1, $2, $3, $4, $5, $6)',
+      `SELECT * FROM ${func}($1, $2, $3, $4, $5, $6)`,
       [subject.type, subject.id, relation, objectType, limit, after ?? null]
     );
 
@@ -295,8 +307,10 @@ export class Checker {
 
     const after = options?.after;
 
+    const func = prefixIdent('list_accessible_subjects', this.databaseSchema);
+
     const result = await this.db.query<{ subject_id: string; next_cursor: string }>(
-      'SELECT * FROM list_accessible_subjects($1, $2, $3, $4, $5, $6)',
+      `SELECT * FROM ${func}($1, $2, $3, $4, $5, $6)`,
       [object.type, object.id, relation, subjectType, limit, after ?? null]
     );
 
@@ -368,6 +382,7 @@ export class Checker {
       cache: this.cache,
       decision: this.decision,
       shouldValidate: this.validateRequest,
+      databaseSchema: this.databaseSchema,
       cacheKey: this.cacheKey.bind(this),
     });
   }

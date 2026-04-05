@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/pthm/melange/lib/sqlgen"
+	"github.com/pthm/melange/lib/sqlgen/sqldsl"
 	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/pkg/parser"
 	"github.com/pthm/melange/pkg/schema"
@@ -144,9 +145,10 @@ type Options struct {
 
 // Doctor performs health checks on the melange authorization infrastructure.
 type Doctor struct {
-	db         *sql.DB
-	schemaPath string
-	opts       Options
+	db             *sql.DB
+	databaseSchema string
+	schemaPath     string
+	opts           Options
 
 	// Cached data from checks (populated during Run)
 	parsedTypes   []schema.TypeDefinition
@@ -178,6 +180,16 @@ func New(db *sql.DB, schemaPath string, opts ...Options) *Doctor {
 		schemaPath: schemaPath,
 		opts:       o,
 	}
+}
+
+// SetDatabaseSchema sets the PostgreSQL schema for melange objects.
+func (d *Doctor) SetDatabaseSchema(databaseSchema string) {
+	d.databaseSchema = databaseSchema
+}
+
+// DatabaseSchema returns the database schema.
+func (d *Doctor) DatabaseSchema() string {
+	return d.databaseSchema
 }
 
 // Run executes all health checks and returns a report.
@@ -222,6 +234,8 @@ func (d *Doctor) Run(ctx context.Context) (*Report, error) {
 // checkSchemaFile validates the schema file exists and is valid.
 func (d *Doctor) checkSchemaFile(report *Report) {
 	m := migrator.NewMigrator(d.db, d.schemaPath)
+	m.SetDatabaseSchema(d.databaseSchema)
+
 	schemaPath := m.SchemaPath()
 
 	// Check file exists
@@ -296,17 +310,21 @@ func (d *Doctor) checkSchemaFile(report *Report) {
 // checkMigrationState validates the migration tracking table and state.
 func (d *Doctor) checkMigrationState(ctx context.Context, report *Report) error {
 	m := migrator.NewMigrator(d.db, d.schemaPath)
+	m.SetDatabaseSchema(d.databaseSchema)
 
 	// Check if migrations table exists
 	var tableExists bool
-	err := d.db.QueryRowContext(ctx, `
-		SELECT EXISTS (
-			SELECT 1 FROM pg_class c
-			JOIN pg_namespace n ON n.oid = c.relnamespace
-			WHERE c.relname = 'melange_migrations'
-			AND n.nspname = current_schema()
-		)
-	`).Scan(&tableExists)
+	err := d.db.QueryRowContext(ctx, fmt.Sprintf(
+		`
+			SELECT EXISTS (
+				SELECT 1 FROM pg_class c
+				JOIN pg_namespace n ON n.oid = c.relnamespace
+				WHERE c.relname = 'melange_migrations'
+				AND n.nspname = %s
+			)
+		`,
+		d.postgresSchema(),
+	)).Scan(&tableExists)
 	if err != nil {
 		return fmt.Errorf("checking migrations table: %w", err)
 	}
@@ -605,7 +623,7 @@ func (d *Doctor) checkDataHealth(ctx context.Context, report *Report) error {
 
 	// Check if there's any data
 	var count int64
-	err := d.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM melange_tuples`).Scan(&count)
+	err := d.db.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s`, d.prefixIdent("melange_tuples"))).Scan(&count)
 	if err != nil {
 		// May fail if columns are wrong - just skip
 		report.AddCheck(CheckResult{
@@ -686,11 +704,14 @@ func (d *Doctor) validateTupleData(ctx context.Context, report *Report) error {
 	}
 
 	// Single aggregation query returns all distinct tuple signatures with counts.
-	rows, err := d.db.QueryContext(ctx, `
-		SELECT object_type, relation, subject_type, COUNT(*) AS cnt
-		FROM melange_tuples
-		GROUP BY object_type, relation, subject_type
-	`)
+	rows, err := d.db.QueryContext(ctx, fmt.Sprintf(
+		`
+			SELECT object_type, relation, subject_type, COUNT(*) AS cnt
+			FROM %s
+			GROUP BY object_type, relation, subject_type
+		`,
+		d.prefixIdent("melange_tuples"),
+	))
 	if err != nil {
 		return err
 	}
@@ -853,16 +874,19 @@ func emitTupleFindings(report *Report, f tupleFindings) {
 
 // getCurrentFunctions returns all melange-generated function names.
 func (d *Doctor) getCurrentFunctions(ctx context.Context) ([]string, error) {
-	rows, err := d.db.QueryContext(ctx, `
-		SELECT p.proname
-		FROM pg_proc p
-		JOIN pg_namespace n ON p.pronamespace = n.oid
-		WHERE n.nspname = current_schema()
-		AND (
-			p.proname LIKE 'check_%'
-			OR p.proname LIKE 'list_%'
-		)
-	`)
+	rows, err := d.db.QueryContext(ctx, fmt.Sprintf(
+		`
+			SELECT p.proname
+			FROM pg_proc p
+			JOIN pg_namespace n ON p.pronamespace = n.oid
+			WHERE n.nspname = %s
+			AND (
+				p.proname LIKE 'check_%%'
+				OR p.proname LIKE 'list_%%'
+			)
+		`,
+		d.postgresSchema(),
+	))
 	if err != nil {
 		return nil, err
 	}
@@ -885,14 +909,17 @@ func (d *Doctor) getTuplesInfo(ctx context.Context) (*TuplesInfo, error) {
 
 	// Check if relation exists and get type
 	var relKind string
-	err := d.db.QueryRowContext(ctx, `
-		SELECT c.relkind
-		FROM pg_class c
-		JOIN pg_namespace n ON n.oid = c.relnamespace
-		WHERE c.relname = 'melange_tuples'
-		AND n.nspname = current_schema()
-		AND c.relkind IN ('r', 'v', 'm')
-	`).Scan(&relKind)
+	err := d.db.QueryRowContext(ctx, fmt.Sprintf(
+		`
+			SELECT c.relkind
+			FROM pg_class c
+			JOIN pg_namespace n ON n.oid = c.relnamespace
+			WHERE c.relname = 'melange_tuples'
+			AND n.nspname = %s
+			AND c.relkind IN ('r', 'v', 'm')
+		`,
+		d.postgresSchema(),
+	)).Scan(&relKind)
 
 	if err == sql.ErrNoRows {
 		return info, nil
@@ -913,17 +940,20 @@ func (d *Doctor) getTuplesInfo(ctx context.Context) (*TuplesInfo, error) {
 	}
 
 	// Get columns
-	rows, err := d.db.QueryContext(ctx, `
-		SELECT a.attname
-		FROM pg_attribute a
-		JOIN pg_class c ON a.attrelid = c.oid
-		JOIN pg_namespace n ON c.relnamespace = n.oid
-		WHERE c.relname = 'melange_tuples'
-		AND n.nspname = current_schema()
-		AND a.attnum > 0
-		AND NOT a.attisdropped
-		ORDER BY a.attnum
-	`)
+	rows, err := d.db.QueryContext(ctx, fmt.Sprintf(
+		`
+			SELECT a.attname
+			FROM pg_attribute a
+			JOIN pg_class c ON a.attrelid = c.oid
+			JOIN pg_namespace n ON c.relnamespace = n.oid
+			WHERE c.relname = 'melange_tuples'
+			AND n.nspname = %s
+			AND a.attnum > 0
+			AND NOT a.attisdropped
+			ORDER BY a.attnum
+		`,
+		d.postgresSchema(),
+	))
 	if err != nil {
 		return nil, err
 	}
@@ -956,4 +986,12 @@ func readFileContent(path string) (string, error) {
 		return "", err
 	}
 	return string(content), nil
+}
+
+func (d *Doctor) prefixIdent(identifier string) string {
+	return sqldsl.PrefixIdent(identifier, d.databaseSchema)
+}
+
+func (d *Doctor) postgresSchema() string {
+	return sqldsl.PostgresSchemaExpr(d.databaseSchema)
 }

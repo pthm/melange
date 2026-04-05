@@ -19,6 +19,7 @@ The TypeScript runtime client is in development. This page will be expanded when
 - Decision overrides
 - Contextual tuples
 - Error types (`ValidationError`, `BulkCheckDeniedError`)
+- Custom database schema (`databaseSchema` option)
 
 ## Using SQL Directly
 

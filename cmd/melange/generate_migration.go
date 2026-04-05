@@ -28,6 +28,7 @@ var (
 	genMigrationUp             bool
 	genMigrationDown           bool
 	genMigrationDB             string
+	genMigrationDBSchema       string
 	genMigrationGitRef         string
 	genMigrationPreviousSchema string
 )
@@ -61,6 +62,7 @@ Three comparison modes determine orphaned functions to drop:
   melange generate migration --schema schema.fga --output migrations/ --previous-schema old.fga`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Resolve values: flags > config > defaults
+		databaseSchema := resolveString(genMigrationDBSchema, cfg.Database.Schema)
 		schemaPath := resolveString(genMigrationSchema, cfg.Schema)
 		output := resolveString(genMigrationOutput, cfg.Generate.Migration.Output)
 		name := resolveString(genMigrationName, cfg.Generate.Migration.Name, "melange")
@@ -112,12 +114,12 @@ Three comparison modes determine orphaned functions to drop:
 		analyses = compiler.ComputeCanGenerate(analyses)
 		inlineData := compiler.BuildInlineSQLData(closureRows, analyses)
 
-		generatedSQL, err := compiler.GenerateSQL(analyses, inlineData)
+		generatedSQL, err := compiler.GenerateSQL(analyses, inlineData, databaseSchema)
 		if err != nil {
 			return cli.GeneralError("generating check SQL", err)
 		}
 
-		listSQL, err := compiler.GenerateListSQL(analyses, inlineData)
+		listSQL, err := compiler.GenerateListSQL(analyses, inlineData, databaseSchema)
 		if err != nil {
 			return cli.GeneralError("generating list SQL", err)
 		}
@@ -127,6 +129,7 @@ Three comparison modes determine orphaned functions to drop:
 
 		// Resolve previous state
 		opts := compiler.MigrationOptions{
+			DatabaseSchema: databaseSchema,
 			Version:        version.Version,
 			SchemaChecksum: migrator.ComputeSchemaChecksum(string(schemaContent)),
 			CodegenVersion: migrator.CodegenVersion(),
@@ -134,7 +137,7 @@ Three comparison modes determine orphaned functions to drop:
 		}
 
 		if genMigrationDB != "" {
-			prevState, err := previousStateFromDB(genMigrationDB)
+			prevState, err := previousStateFromDB(genMigrationDB, databaseSchema)
 			if err != nil {
 				return err
 			}
@@ -144,7 +147,7 @@ Three comparison modes determine orphaned functions to drop:
 				opts.PreviousSource = "database"
 			}
 		} else if genMigrationGitRef != "" {
-			prevState, err := previousStateFromSchema(genMigrationGitRef, schemaPath, true)
+			prevState, err := previousStateFromSchema(genMigrationGitRef, schemaPath, databaseSchema, true)
 			if err != nil {
 				return err
 			}
@@ -155,7 +158,7 @@ Three comparison modes determine orphaned functions to drop:
 			if parser.IsModularSchema(genMigrationPreviousSchema) {
 				return cli.ConfigError("--previous-schema does not support modular schemas (fga.mod); use --db or --git-ref instead", nil)
 			}
-			prevState, err := previousStateFromSchema(genMigrationPreviousSchema, "", false)
+			prevState, err := previousStateFromSchema(genMigrationPreviousSchema, "", databaseSchema, false)
 			if err != nil {
 				return err
 			}
@@ -184,6 +187,7 @@ func init() {
 	f.BoolVar(&genMigrationUp, "up", false, "output only the UP migration")
 	f.BoolVar(&genMigrationDown, "down", false, "output only the DOWN migration")
 	f.StringVar(&genMigrationDB, "db", "", "database URL for comparison (reads previous state)")
+	f.StringVar(&genMigrationDBSchema, "db-schema", "", "database schema")
 	f.StringVar(&genMigrationGitRef, "git-ref", "", "git ref for comparison (reads previous schema)")
 	f.StringVar(&genMigrationPreviousSchema, "previous-schema", "", "path to previous .fga file for comparison (modular schemas not supported)")
 }
@@ -262,7 +266,7 @@ type previousState struct {
 // previousStateFromDB reads function names and checksums from the most recent
 // melange_migrations record. Returns nil without error when no record exists,
 // which causes the caller to omit PreviousFunctionNames and emit a full migration.
-func previousStateFromDB(dsn string) (*previousState, error) {
+func previousStateFromDB(dsn, databaseSchema string) (*previousState, error) {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, cli.DBConnectError("connecting to database", err)
@@ -271,6 +275,7 @@ func previousStateFromDB(dsn string) (*previousState, error) {
 
 	ctx := context.Background()
 	m := migrator.NewMigrator(db, "")
+	m.SetDatabaseSchema(databaseSchema)
 	rec, err := m.GetLastMigration(ctx)
 	if err != nil {
 		return nil, cli.GeneralError("reading last migration from database", err)
@@ -301,7 +306,7 @@ func previousStateFromDB(dsn string) (*previousState, error) {
 // When isGitRef is true, pathOrRef is a git ref and schemaPath is the repo-relative
 // path to the schema file. When false, pathOrRef is a local file path and
 // schemaPath is unused.
-func previousStateFromSchema(pathOrRef, schemaPath string, isGitRef bool) (*previousState, error) {
+func previousStateFromSchema(pathOrRef, schemaPath, databaseSchema string, isGitRef bool) (*previousState, error) {
 	types, err := parsePreviousSchema(pathOrRef, schemaPath, isGitRef)
 	if err != nil {
 		return nil, err
@@ -312,11 +317,11 @@ func previousStateFromSchema(pathOrRef, schemaPath string, isGitRef bool) (*prev
 	analyses = compiler.ComputeCanGenerate(analyses)
 	inlineData := compiler.BuildInlineSQLData(closureRows, analyses)
 
-	genSQL, err := compiler.GenerateSQL(analyses, inlineData)
+	genSQL, err := compiler.GenerateSQL(analyses, inlineData, databaseSchema)
 	if err != nil {
 		return nil, cli.GeneralError("generating check SQL for previous schema", err)
 	}
-	listSQL, err := compiler.GenerateListSQL(analyses, inlineData)
+	listSQL, err := compiler.GenerateListSQL(analyses, inlineData, databaseSchema)
 	if err != nil {
 		return nil, cli.GeneralError("generating list SQL for previous schema", err)
 	}

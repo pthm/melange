@@ -27,6 +27,7 @@ func RenderListSubjectsFunction(plan ListPlan, blocks BlockSet) (string, error) 
 	}
 
 	fn := PlpgsqlFunction{
+		Schema:  plan.DatabaseSchema,
 		Name:    plan.FunctionName,
 		Args:    ListSubjectsArgs(),
 		Returns: ListSubjectsReturns(),

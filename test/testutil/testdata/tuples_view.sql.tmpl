@@ -1,7 +1,9 @@
 -- melange_tuples view for integration tests.
 -- This view maps domain tables to FGA tuples for permission evaluation.
+-- The view is created in the configured schema, but references domain
+-- tables in the public schema.
 
-CREATE OR REPLACE VIEW melange_tuples AS
+CREATE OR REPLACE VIEW {{ .Ident "melange_tuples" }} AS
 
 -- Organization memberships
 SELECT

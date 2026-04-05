@@ -54,6 +54,9 @@ database:
   # password: secret
   # sslmode: prefer
 
+  # Optional: install melange objects in a specific PostgreSQL schema
+  # schema: authz
+
 # Code generation settings
 generate:
   client:
@@ -118,6 +121,7 @@ Configure under `database:`:
 | `user` | string | - | Database user |
 | `password` | string | - | Database password |
 | `sslmode` | string | `prefer` | SSL mode for connection |
+| `schema` | string | - | PostgreSQL schema for melange objects (see [Custom Database Schema](#custom-database-schema)) |
 
 **Connection URL format:**
 ```
@@ -185,6 +189,86 @@ Configure under `doctor:`:
 | `verbose` | bool | `false` | Show detailed output |
 | `skip_performance` | bool | `false` | Skip performance checks (view analysis) |
 
+## Custom Database Schema
+
+By default, melange installs all its objects into the connection's current schema (usually `public`). The `database.schema` option places them in a specific PostgreSQL schema instead.
+
+Objects affected by this setting:
+
+- Generated check functions (`check_permission`, `check_document_viewer`, etc.)
+- Generated list functions (`list_accessible_objects`, `list_accessible_subjects`, etc.)
+- The `melange_migrations` tracking table
+- The `melange_tuples` view (you create this yourself, but it should be in the target schema)
+
+Your application tables are not affected. They remain wherever you have them. The tuples view in the target schema can query tables in any other schema.
+
+### Prerequisites
+
+You must create the schema before running `melange migrate`:
+
+```sql
+CREATE SCHEMA IF NOT EXISTS authz;
+```
+
+The schema must be on your connection's `search_path` for permission checks to work at runtime. Most PostgreSQL configurations include `public` by default, but a custom schema needs to be added:
+
+```sql
+ALTER ROLE myuser SET search_path TO authz, public;
+```
+
+Or set it per-connection in your application's connection string or pool configuration.
+
+### Configuration
+
+```yaml
+database:
+  url: postgres://localhost/mydb
+  schema: authz
+```
+
+Or via environment variable:
+
+```bash
+export MELANGE_DATABASE_SCHEMA=authz
+```
+
+Or via CLI flag:
+
+```bash
+melange migrate --db postgres://localhost/mydb --db-schema authz
+```
+
+### Tuples view setup
+
+Create your `melange_tuples` view in the target schema. The view itself lives in the custom schema but can reference tables in any schema:
+
+```sql
+CREATE OR REPLACE VIEW authz.melange_tuples AS
+SELECT
+    'user' AS subject_type,
+    user_id::text AS subject_id,
+    role AS relation,
+    'organization' AS object_type,
+    organization_id::text AS object_id
+FROM public.organization_members;
+```
+
+### Runtime client configuration
+
+When using a custom schema, configure your runtime client to match:
+
+**Go:**
+
+```go
+checker := melange.NewChecker(db, melange.WithDatabaseSchema("authz"))
+```
+
+**TypeScript:**
+
+```typescript
+const checker = new Checker({ db, databaseSchema: 'authz' });
+```
+
 ## Environment Variables
 
 All configuration options can be set via environment variables with the `MELANGE_` prefix. Use underscores to separate nested keys:
@@ -199,6 +283,7 @@ All configuration options can be set via environment variables with the `MELANGE
 | `MELANGE_DATABASE_USER` | `database.user` |
 | `MELANGE_DATABASE_PASSWORD` | `database.password` |
 | `MELANGE_DATABASE_SSLMODE` | `database.sslmode` |
+| `MELANGE_DATABASE_SCHEMA` | `database.schema` |
 | `MELANGE_GENERATE_CLIENT_RUNTIME` | `generate.client.runtime` |
 | `MELANGE_GENERATE_CLIENT_SCHEMA` | `generate.client.schema` |
 | `MELANGE_GENERATE_CLIENT_OUTPUT` | `generate.client.output` |

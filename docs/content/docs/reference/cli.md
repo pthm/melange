@@ -106,12 +106,13 @@ melange migrate \
 
 **Flags:**
 
-| Flag        | Default              | Description                                   |
-| ----------- | -------------------- | --------------------------------------------- |
-| `--db`      | (from config)        | PostgreSQL connection string                  |
-| `--schema`  | `schemas/schema.fga` | Path to schema.fga file                       |
-| `--dry-run` | `false`              | Output SQL to stdout without applying changes |
-| `--force`   | `false`              | Force migration even if schema is unchanged   |
+| Flag          | Default              | Description                                   |
+| ------------- | -------------------- | --------------------------------------------- |
+| `--db`        | (from config)        | PostgreSQL connection string                  |
+| `--db-schema` | `""`                 | PostgreSQL schema for melange objects          |
+| `--schema`    | `schemas/schema.fga` | Path to schema.fga file                       |
+| `--dry-run`   | `false`              | Output SQL to stdout without applying changes |
+| `--force`     | `false`              | Force migration even if schema is unchanged   |
 
 This command:
 
@@ -180,10 +181,11 @@ melange status \
 
 **Flags:**
 
-| Flag       | Default              | Description                  |
-| ---------- | -------------------- | ---------------------------- |
-| `--db`     | (from config)        | PostgreSQL connection string |
-| `--schema` | `schemas/schema.fga` | Path to schema.fga file      |
+| Flag          | Default              | Description                  |
+| ------------- | -------------------- | ---------------------------- |
+| `--db`        | (from config)        | PostgreSQL connection string |
+| `--db-schema` | `""`                 | Database schema              |
+| `--schema`    | `schemas/schema.fga` | Path to schema.fga file      |
 
 **Output:**
 
@@ -212,6 +214,7 @@ melange doctor \
 | Flag                 | Default              | Description                                  |
 | -------------------- | -------------------- | -------------------------------------------- |
 | `--db`               | (from config)        | PostgreSQL connection string                 |
+| `--db-schema`        | `""`                 | Database schema                              |
 | `--schema`           | `schemas/schema.fga` | Path to schema.fga file                      |
 | `--verbose`          | `false`              | Show detailed output with additional context |
 | `--skip-performance` | `false`              | Skip performance checks (view analysis)      |
@@ -430,6 +433,7 @@ melange generate migration \
 | Flag                  | Default              | Description                                                    |
 | --------------------- | -------------------- | -------------------------------------------------------------- |
 | `--schema`            | `schemas/schema.fga` | Path to current `.fga` schema file (required)                  |
+| `--db-schema`         | `""`                 | PostgreSQL schema for melange objects                          |
 | `--output`            | (stdout)             | Output directory for migration files                           |
 | `--name`              | `melange`            | Migration name suffix used in filenames                        |
 | `--format`            | `split`              | Output format: `split` (`.up.sql`/`.down.sql`) or `single`    |

@@ -3,10 +3,12 @@ package sqlgen
 import (
 	"fmt"
 	"sort"
+
+	"github.com/pthm/melange/lib/sqlgen/sqldsl"
 )
 
-func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, noWildcard bool) (string, error) {
-	plan := BuildCheckPlan(a, inline, noWildcard)
+func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, databaseSchema string, noWildcard bool) (string, error) {
+	plan := BuildCheckPlan(a, inline, databaseSchema, noWildcard)
 	blocks, err := BuildCheckBlocks(plan)
 	if err != nil {
 		return "", fmt.Errorf("building check blocks for %s.%s: %w", a.ObjectType, a.Relation, err)
@@ -14,20 +16,20 @@ func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, noWildcard 
 	return RenderCheckFunction(plan, blocks)
 }
 
-func generateDispatcher(analyses []RelationAnalysis, noWildcard bool) (string, error) {
+func generateDispatcher(analyses []RelationAnalysis, databaseSchema string, noWildcard bool) (string, error) {
 	fnName := "check_permission"
 	if noWildcard {
 		fnName = "check_permission_nw"
 	}
 
-	cases := buildDispatcherCases(analyses, noWildcard)
+	cases := buildDispatcherCases(analyses, databaseSchema, noWildcard)
 	if len(cases) == 0 {
-		return renderEmptyDispatcher(fnName), nil
+		return renderEmptyDispatcher(databaseSchema, fnName), nil
 	}
-	return renderDispatcherWithCases(fnName, cases), nil
+	return renderDispatcherWithCases(databaseSchema, fnName, cases), nil
 }
 
-func buildDispatcherCases(analyses []RelationAnalysis, noWildcard bool) []DispatcherCase {
+func buildDispatcherCases(analyses []RelationAnalysis, databaseSchema string, noWildcard bool) []DispatcherCase {
 	var cases []DispatcherCase
 	for _, a := range analyses {
 		if !a.Capabilities.CheckAllowed {
@@ -35,6 +37,7 @@ func buildDispatcherCases(analyses []RelationAnalysis, noWildcard bool) []Dispat
 		}
 		inlineable := isInlineable(a.Features)
 		dc := DispatcherCase{
+			DatabaseSchema:    databaseSchema,
 			ObjectType:        a.ObjectType,
 			Relation:          a.Relation,
 			CheckFunctionName: functionNameForDispatcher(a, noWildcard),
@@ -54,11 +57,14 @@ func isInlineable(f RelationFeatures) bool {
 		!f.HasUserset && !f.HasRecursive && !f.HasExclusion && !f.HasIntersection
 }
 
-func renderDispatcherWithCases(fnName string, cases []DispatcherCase) string {
+func renderDispatcherWithCases(databaseSchema, fnName string, cases []DispatcherCase) string {
 	caseExpr := buildDispatcherCaseExpr(cases)
 
+	internalName := fnName + "_internal"
+
 	internalFn := PlpgsqlFunction{
-		Name:    fnName + "_internal",
+		Schema:  databaseSchema,
+		Name:    internalName,
 		Args:    dispatcherInternalArgs(),
 		Returns: "INTEGER",
 		Body: []Stmt{
@@ -71,7 +77,7 @@ func renderDispatcherWithCases(fnName string, cases []DispatcherCase) string {
 			ReturnValue{Value: Raw("(SELECT " + caseExpr.SQL() + ")")},
 		},
 		Header: []string{
-			"Generated internal dispatcher for " + fnName + "_internal",
+			"Generated internal dispatcher for " + internalName,
 			"Routes to specialized functions with p_visited for cycle detection in TTU patterns",
 			"Enforces depth limit of 25 to prevent stack overflow from deep permission chains",
 			"Phase 5: All relations use specialized functions - no generic fallback",
@@ -79,10 +85,11 @@ func renderDispatcherWithCases(fnName string, cases []DispatcherCase) string {
 	}
 
 	publicFn := SqlFunction{
+		Schema:  databaseSchema,
 		Name:    fnName,
 		Args:    dispatcherPublicArgs(),
 		Returns: "INTEGER",
-		Body:    Raw("SELECT " + fnName + "_internal(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, ARRAY[]::TEXT[])"),
+		Body:    Raw("SELECT " + sqldsl.PrefixIdent(internalName, databaseSchema) + "(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, ARRAY[]::TEXT[])"),
 		Header: []string{
 			"Generated dispatcher for " + fnName,
 			"Routes to specialized functions for all known type/relation pairs",
@@ -92,8 +99,9 @@ func renderDispatcherWithCases(fnName string, cases []DispatcherCase) string {
 	return internalFn.SQL() + "\n\n" + publicFn.SQL() + "\n"
 }
 
-func renderEmptyDispatcher(fnName string) string {
+func renderEmptyDispatcher(databaseSchema, fnName string) string {
 	internalFn := SqlFunction{
+		Schema:  databaseSchema,
 		Name:    fnName + "_internal",
 		Args:    dispatcherInternalArgs(),
 		Returns: "INTEGER",
@@ -105,6 +113,7 @@ func renderEmptyDispatcher(fnName string) string {
 	}
 
 	publicFn := SqlFunction{
+		Schema:  databaseSchema,
 		Name:    fnName,
 		Args:    dispatcherPublicArgs(),
 		Returns: "INTEGER",
@@ -114,16 +123,17 @@ func renderEmptyDispatcher(fnName string) string {
 	return internalFn.SQL() + "\n\n" + publicFn.SQL() + "\n"
 }
 
-func generateBulkDispatcher(analyses []RelationAnalysis) string {
-	cases := buildDispatcherCases(analyses, false)
+func generateBulkDispatcher(analyses []RelationAnalysis, databaseSchema string) string {
+	cases := buildDispatcherCases(analyses, databaseSchema, false)
 	if len(cases) == 0 {
-		return renderEmptyBulkDispatcher()
+		return renderEmptyBulkDispatcher(databaseSchema)
 	}
-	return renderBulkDispatcherWithCases(cases)
+	return renderBulkDispatcherWithCases(cases, databaseSchema)
 }
 
-func renderEmptyBulkDispatcher() string {
+func renderEmptyBulkDispatcher(databaseSchema string) string {
 	fn := PlpgsqlFunction{
+		Schema:  databaseSchema,
 		Name:    "check_permission_bulk",
 		Args:    bulkDispatcherArgs(),
 		Returns: "TABLE(idx INTEGER, allowed INTEGER)",
@@ -163,7 +173,7 @@ func groupCasesByObjectType(cases []DispatcherCase) []typeGroup {
 	return groups
 }
 
-func renderBulkDispatcherWithCases(cases []DispatcherCase) string {
+func renderBulkDispatcherWithCases(cases []DispatcherCase, databaseSchema string) string {
 	groups := groupCasesByObjectType(cases)
 
 	// Build one IF block per object type + a final fallback RETURN QUERY.
@@ -174,6 +184,7 @@ func renderBulkDispatcherWithCases(cases []DispatcherCase) string {
 	body = append(body, buildBulkUnknownTypeFallback(cases))
 
 	fn := PlpgsqlFunction{
+		Schema:  databaseSchema,
 		Name:    "check_permission_bulk",
 		Args:    bulkDispatcherArgs(),
 		Returns: "TABLE(idx INTEGER, allowed INTEGER)",
@@ -242,7 +253,7 @@ func buildBulkTypeGroupIf(g typeGroup) If {
 // For non-inlineable relations, it generates a function call.
 func buildInlineCheckExpr(c DispatcherCase, rSubjectType, rSubjectID, rObjectID Expr) Expr {
 	if !c.Inlineable {
-		return Func{Name: c.CheckFunctionName, Args: []Expr{rSubjectType, rSubjectID, rObjectID, EmptyArray{}}}
+		return Func{Schema: c.DatabaseSchema, Name: c.CheckFunctionName, Args: []Expr{rSubjectType, rSubjectID, rObjectID, EmptyArray{}}}
 	}
 	return CaseExpr{
 		Whens: []CaseWhen{
@@ -315,8 +326,9 @@ func buildDispatcherCaseExpr(cases []DispatcherCase) CaseExpr {
 			Eq{Left: Raw("p_relation"), Right: Lit(c.Relation)},
 		}}
 		result := Func{
-			Name: c.CheckFunctionName,
-			Args: []Expr{SubjectType, SubjectID, ObjectID, Visited},
+			Schema: c.DatabaseSchema,
+			Name:   c.CheckFunctionName,
+			Args:   []Expr{SubjectType, SubjectID, ObjectID, Visited},
 		}
 		whens = append(whens, CaseWhen{Cond: cond, Result: result})
 	}

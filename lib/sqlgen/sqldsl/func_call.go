@@ -13,6 +13,7 @@ package sqldsl
 //
 // Renders: check_doc_viewer(p_subject_type, p_subject_id, p_object_id, p_visited) = 1
 type FuncCallEq struct {
+	Schema   string
 	FuncName string
 	Args     []Expr
 	Value    Expr // The value to compare against (typically Int(1) or Int(0))
@@ -20,12 +21,13 @@ type FuncCallEq struct {
 
 // SQL renders the function call comparison.
 func (f FuncCallEq) SQL() string {
-	return Eq{Left: Func{Name: f.FuncName, Args: f.Args}, Right: f.Value}.SQL()
+	return Eq{Left: Func{Schema: f.Schema, Name: f.FuncName, Args: f.Args}, Right: f.Value}.SQL()
 }
 
 // FuncCallNe compares a function call result for inequality.
 // Used for negative authorization checks like "check_permission(...) <> 1".
 type FuncCallNe struct {
+	Schema   string
 	FuncName string
 	Args     []Expr
 	Value    Expr
@@ -33,7 +35,7 @@ type FuncCallNe struct {
 
 // SQL renders the function call not-equal comparison.
 func (f FuncCallNe) SQL() string {
-	return Ne{Left: Func{Name: f.FuncName, Args: f.Args}, Right: f.Value}.SQL()
+	return Ne{Left: Func{Schema: f.Schema, Name: f.FuncName, Args: f.Args}, Right: f.Value}.SQL()
 }
 
 // InternalPermissionCheckCall creates a check_permission_internal function call comparison.
@@ -44,8 +46,9 @@ func (f FuncCallNe) SQL() string {
 //	InternalPermissionCheckCall("viewer", "document", Col{Table: "t", Column: "object_id"}, Visited)
 //
 // Renders: check_permission_internal(p_subject_type, p_subject_id, 'viewer', 'document', t.object_id, p_visited) = 1
-func InternalPermissionCheckCall(relation, objectType string, objectID, visited Expr) FuncCallEq {
+func InternalPermissionCheckCall(schema, relation, objectType string, objectID, visited Expr) FuncCallEq {
 	return FuncCallEq{
+		Schema:   schema,
 		FuncName: "check_permission_internal",
 		Args: []Expr{
 			SubjectType,
@@ -60,8 +63,9 @@ func InternalPermissionCheckCall(relation, objectType string, objectID, visited 
 }
 
 // NoWildcardPermissionCheckCall creates a check_permission_nw function call.
-func NoWildcardPermissionCheckCall(relation, objectType string, subjectID, objectID Expr) FuncCallEq {
+func NoWildcardPermissionCheckCall(schema, relation, objectType string, subjectID, objectID Expr) FuncCallEq {
 	return FuncCallEq{
+		Schema:   schema,
 		FuncName: "check_permission_nw",
 		Args: []Expr{
 			SubjectType,
@@ -82,8 +86,9 @@ func NoWildcardPermissionCheckCall(relation, objectType string, subjectID, objec
 //	SpecializedCheckCall("check_doc_owner", SubjectType, SubjectID, ObjectID, Visited)
 //
 // Renders: check_doc_owner(p_subject_type, p_subject_id, p_object_id, p_visited) = 1
-func SpecializedCheckCall(funcName string, subjectType, subjectID, objectID, visited Expr) FuncCallEq {
+func SpecializedCheckCall(schema, funcName string, subjectType, subjectID, objectID, visited Expr) FuncCallEq {
 	return FuncCallEq{
+		Schema:   schema,
 		FuncName: funcName,
 		Args:     []Expr{subjectType, subjectID, objectID, visited},
 		Value:    Int(1),
@@ -98,8 +103,9 @@ func SpecializedCheckCall(funcName string, subjectType, subjectID, objectID, vis
 //	InternalCheckCall(SubjectType, SubjectID, "viewer", Col{Table: "link", Column: "subject_type"}, Col{Table: "link", Column: "subject_id"}, visited)
 //
 // Renders: check_permission_internal(p_subject_type, p_subject_id, 'viewer', link.subject_type, link.subject_id, <visited>) = 1
-func InternalCheckCall(subjectType, subjectID Expr, relation string, parentType, parentID, visited Expr) FuncCallEq {
+func InternalCheckCall(schema string, subjectType, subjectID Expr, relation string, parentType, parentID, visited Expr) FuncCallEq {
 	return FuncCallEq{
+		Schema:   schema,
 		FuncName: "check_permission_internal",
 		Args: []Expr{
 			subjectType,
@@ -120,6 +126,7 @@ func InternalCheckCall(subjectType, subjectID Expr, relation string, parentType,
 //
 //	InFunctionSelect{
 //	    Expr:       Col{Table: "t", Column: "subject_id"},
+//	    Schema:     "public",
 //	    FuncName:   "list_doc_viewer_obj",
 //	    Args:       []Expr{SubjectType, SubjectID, Null{}, Null{}},
 //	    Alias:      "obj",
@@ -128,7 +135,8 @@ func InternalCheckCall(subjectType, subjectID Expr, relation string, parentType,
 //
 // Renders: t.subject_id IN (SELECT obj.object_id FROM list_doc_viewer_obj(p_subject_type, p_subject_id, NULL, NULL) obj)
 type InFunctionSelect struct {
-	Expr      Expr   // The expression to check (left side of IN)
+	Expr      Expr // The expression to check (left side of IN)
+	Schema    string
 	FuncName  string // The function to call
 	Args      []Expr // Function arguments
 	Alias     string // Alias for the function result
@@ -137,7 +145,7 @@ type InFunctionSelect struct {
 
 // SQL renders the IN subquery expression.
 func (i InFunctionSelect) SQL() string {
-	funcCall := Func{Name: i.FuncName, Args: i.Args}.SQL()
+	funcCall := Func{Schema: i.Schema, Name: i.FuncName, Args: i.Args}.SQL()
 	subquery := "SELECT " + i.Alias + "." + i.SelectCol + " FROM " + funcCall + " " + i.Alias
 	return i.Expr.SQL() + " IN (" + subquery + ")"
 }

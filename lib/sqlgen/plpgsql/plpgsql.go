@@ -157,6 +157,7 @@ func (c Comment) StmtSQL() string {
 
 // PlpgsqlFunction represents a complete PL/pgSQL function definition.
 type PlpgsqlFunction struct {
+	Schema  string
 	Name    string
 	Args    []FuncArg
 	Returns string
@@ -170,7 +171,7 @@ func (f PlpgsqlFunction) SQL() string {
 	var sb strings.Builder
 
 	writeHeader(&sb, f.Header)
-	writeSignature(&sb, f.Name, f.Args, f.Returns)
+	writeSignature(&sb, f.Schema, f.Name, f.Args, f.Returns)
 
 	if len(f.Decls) > 0 {
 		sb.WriteString("DECLARE\n")
@@ -278,6 +279,7 @@ func ListSubjectsDispatcherArgs() []FuncArg {
 // SqlFunction represents a simple SQL function (LANGUAGE sql).
 // Unlike PlpgsqlFunction, this renders a single SELECT expression as the body.
 type SqlFunction struct {
+	Schema  string
 	Name    string
 	Args    []FuncArg
 	Returns string
@@ -290,7 +292,7 @@ func (f SqlFunction) SQL() string {
 	var sb strings.Builder
 
 	writeHeader(&sb, f.Header)
-	writeSignature(&sb, f.Name, f.Args, f.Returns)
+	writeSignature(&sb, f.Schema, f.Name, f.Args, f.Returns)
 
 	sb.WriteString("    ")
 	sb.WriteString(f.Body.SQL())
@@ -310,9 +312,15 @@ func writeHeader(sb *strings.Builder, header []string) {
 }
 
 // writeSignature writes CREATE OR REPLACE FUNCTION ... AS $$ to the builder.
-func writeSignature(sb *strings.Builder, name string, args []FuncArg, returns string) {
+func writeSignature(sb *strings.Builder, schema, name string, args []FuncArg, returns string) {
 	sb.WriteString("CREATE OR REPLACE FUNCTION ")
-	sb.WriteString(name)
+	if schema != "" {
+		sb.WriteString(sqldsl.QuoteIdent(schema))
+		sb.WriteString(".")
+		sb.WriteString(sqldsl.QuoteIdent(name))
+	} else {
+		sb.WriteString(name)
+	}
 	sb.WriteString("(\n")
 
 	for i, arg := range args {

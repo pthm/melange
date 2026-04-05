@@ -9,39 +9,51 @@ import (
 	"sync"
 )
 
-// schemaValidation holds the process-wide validation state.
-// Validation runs once per process on the first NewChecker call.
+// schemaValidation tracks which database schemas have been validated.
+// Validation runs once per unique schema value on the first NewChecker call
+// for that schema.
 var schemaValidation struct {
-	once sync.Once
-	done bool
+	mu        sync.Mutex
+	validated map[string]bool
 }
 
-// validateSchema performs one-time schema validation on first Checker creation.
+// validateSchema performs one-time-per-schema validation on Checker creation.
 // It checks for common configuration issues and logs warnings (does not fail).
 // This helps catch setup problems early without blocking application startup.
 //
 // Validated conditions:
 //   - check_permission function exists
-func validateSchema(q Querier) {
-	schemaValidation.once.Do(func() {
-		ctx := context.Background()
+func validateSchema(q Querier, databaseSchema string) {
+	schemaValidation.mu.Lock()
+	if schemaValidation.validated == nil {
+		schemaValidation.validated = make(map[string]bool)
+	}
+	if schemaValidation.validated[databaseSchema] {
+		schemaValidation.mu.Unlock()
+		return
+	}
+	schemaValidation.validated[databaseSchema] = true
+	schemaValidation.mu.Unlock()
 
-		// Check check_permission function exists by calling with invalid args
-		// (will return 0 but won't error if function exists)
-		var result int
-		err := q.QueryRowContext(ctx,
-			"SELECT check_permission('__test__', '__test__', '__test__', '__test__', '__test__')",
-		).Scan(&result)
-		if err != nil {
-			code := sqlState(err)
-			if code == pgUndefinedFunction {
+	ctx := context.Background()
+
+	// Check check_permission function exists by calling with invalid args
+	// (will return 0 but won't error if function exists)
+	var result int
+	err := q.QueryRowContext(ctx,
+		fmt.Sprintf("SELECT %s('__test__', '__test__', '__test__', '__test__', '__test__')", prefixIdent("check_permission", databaseSchema)),
+	).Scan(&result)
+	if err != nil {
+		code := sqlState(err)
+		if code == pgUndefinedFunction {
+			if databaseSchema != "" {
+				log.Printf("[melange] WARNING: check_permission function not found in schema %q. Run 'melange migrate' to create it.", databaseSchema)
+			} else {
 				log.Printf("[melange] WARNING: check_permission function not found. Run 'melange migrate' to create it.")
 			}
-			// Other errors might be transient, don't warn
 		}
-
-		schemaValidation.done = true
-	})
+		// Other errors might be transient, don't warn
+	}
 }
 
 // Checker performs authorization checks against PostgreSQL.
@@ -65,6 +77,7 @@ type Checker struct {
 	validateUserset    bool
 	validateRequest    bool
 	validator          Validator
+	databaseSchema     string
 }
 
 // Option configures a Checker.
@@ -138,6 +151,13 @@ func WithRequestValidation() Option {
 	}
 }
 
+// WithDatabaseSchema sets the database schema where melange objects live.
+func WithDatabaseSchema(databaseSchema string) Option {
+	return func(ch *Checker) {
+		ch.databaseSchema = databaseSchema
+	}
+}
+
 // NewChecker creates a checker that works with *sql.DB, *sql.Tx, or *sql.Conn.
 // Options allow callers to enable caching or decision overrides.
 //
@@ -160,7 +180,7 @@ func NewChecker(q Querier, opts ...Option) *Checker {
 
 	// Validate schema once per process (non-blocking, logs warnings)
 	if q != nil {
-		validateSchema(q)
+		validateSchema(q, c.databaseSchema)
 	}
 
 	return c
@@ -228,7 +248,12 @@ func (c *Checker) Check(ctx context.Context, subject SubjectLike, relation Relat
 // Add checks with Add/AddWithID, then call Execute to run them all in a single
 // SQL call using check_permission_bulk. Results are cached and deduplicated.
 func (c *Checker) NewBulkCheck(ctx context.Context) *BulkCheckBuilder {
-	return &BulkCheckBuilder{checker: c, ctx: ctx, ids: make(map[string]struct{})}
+	return &BulkCheckBuilder{
+		checker:        c,
+		ctx:            ctx,
+		ids:            make(map[string]struct{}),
+		databaseSchema: c.databaseSchema,
+	}
 }
 
 // CheckWithContextualTuples returns true if subject has the relation on object,
@@ -301,7 +326,7 @@ func (c *Checker) checkPermissionWithQuerier(ctx context.Context, q Querier, sub
 	var result int
 
 	err := q.QueryRowContext(ctx,
-		"SELECT check_permission($1, $2, $3, $4, $5)",
+		fmt.Sprintf("SELECT %s($1, $2, $3, $4, $5)", prefixIdent("check_permission", c.databaseSchema)),
 		subject.Type, subject.ID, relation, object.Type, object.ID,
 	).Scan(&result)
 	if err != nil {
@@ -463,7 +488,7 @@ func (c *Checker) ListObjects(ctx context.Context, subject SubjectLike, relation
 	}
 
 	rows, err := c.q.QueryContext(ctx,
-		"SELECT object_id, next_cursor FROM list_accessible_objects($1, $2, $3, $4, $5, $6)",
+		fmt.Sprintf("SELECT object_id, next_cursor FROM %s($1, $2, $3, $4, $5, $6)", prefixIdent("list_accessible_objects", c.databaseSchema)),
 		subject.FGASubject().Type, subject.FGASubject().ID, relation.FGARelation(), objectType, limit, page.After,
 	)
 	if err != nil {
@@ -567,7 +592,7 @@ func (c *Checker) ListObjectsWithContextualTuples(
 	}
 
 	rows, err := execer.QueryContext(ctx,
-		"SELECT object_id, next_cursor FROM list_accessible_objects($1, $2, $3, $4, $5, $6)",
+		fmt.Sprintf("SELECT object_id, next_cursor FROM %s($1, $2, $3, $4, $5, $6)", prefixIdent("list_accessible_objects", c.databaseSchema)),
 		subject.FGASubject().Type, subject.FGASubject().ID, relation.FGARelation(), objectType, limit, page.After,
 	)
 	if err != nil {
@@ -635,7 +660,7 @@ func (c *Checker) ListSubjects(ctx context.Context, object ObjectLike, relation 
 	}
 
 	rows, err := c.q.QueryContext(ctx,
-		"SELECT subject_id, next_cursor FROM list_accessible_subjects($1, $2, $3, $4, $5, $6)",
+		fmt.Sprintf("SELECT subject_id, next_cursor FROM %s($1, $2, $3, $4, $5, $6)", prefixIdent("list_accessible_subjects", c.databaseSchema)),
 		object.FGAObject().Type, object.FGAObject().ID, relation.FGARelation(), subjectType, limit, page.After,
 	)
 	if err != nil {
@@ -733,7 +758,7 @@ func (c *Checker) ListSubjectsWithContextualTuples(
 	}
 
 	rows, err := execer.QueryContext(ctx,
-		"SELECT subject_id, next_cursor FROM list_accessible_subjects($1, $2, $3, $4, $5, $6)",
+		fmt.Sprintf("SELECT subject_id, next_cursor FROM %s($1, $2, $3, $4, $5, $6)", prefixIdent("list_accessible_subjects", c.databaseSchema)),
 		object.FGAObject().Type, object.FGAObject().ID, relation.FGARelation(), subjectType, limit, page.After,
 	)
 	if err != nil {
@@ -928,6 +953,16 @@ func (c *Checker) lookupTuplesSchema(ctx context.Context, q Querier) (string, er
 // constructing schema-qualified relation names in UNION queries.
 func quoteIdent(ident string) string {
 	return `"` + strings.ReplaceAll(ident, `"`, `""`) + `"`
+}
+
+// prefixIdent prefixes the identifier with the schema if it is not empty.
+// Both the schema and identifier are quoted for consistency.
+func prefixIdent(identifier, schema string) string {
+	if schema == "" {
+		return identifier
+	}
+
+	return quoteIdent(schema) + "." + quoteIdent(identifier)
 }
 
 // Must panics if the permission check fails or errors.

@@ -54,6 +54,7 @@ type Stage struct {
 
 func main() {
 	analysisOnly := flag.Bool("analysis", false, "Only show relation analysis, not generated SQL")
+	databaseSchema := flag.String("db-schema", "", "Database schema")
 	flag.Parse()
 
 	tests, err := loadTests()
@@ -68,12 +69,14 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Dump the generated SQL for an OpenFGA test case.\n\n")
 		fmt.Fprintf(os.Stderr, "Options:\n")
 		fmt.Fprintf(os.Stderr, "  -analysis    Only show relation analysis (features, patterns)\n\n")
+		fmt.Fprintf(os.Stderr, "  -db-schema   Database schema\n\n")
 		fmt.Fprintf(os.Stderr, "Use 'dumptest' to list available test names.\n")
 		os.Exit(1)
 	}
 
 	opts := dumpOptions{
-		analysisOnly: *analysisOnly,
+		analysisOnly:   *analysisOnly,
+		databaseSchema: *databaseSchema,
 	}
 
 	// Dump specific test by name
@@ -172,7 +175,8 @@ func loadLocalTests() ([]TestCase, error) {
 }
 
 type dumpOptions struct {
-	analysisOnly bool
+	analysisOnly   bool
+	databaseSchema string
 }
 
 func dumpSQL(tc TestCase, opts dumpOptions) {
@@ -217,7 +221,7 @@ func dumpSQL(tc TestCase, opts dumpOptions) {
 		}
 
 		// Generate SQL
-		generatedSQL, err := compiler.GenerateSQL(analyses, inline)
+		generatedSQL, err := compiler.GenerateSQL(analyses, inline, opts.databaseSchema)
 		if err != nil {
 			fmt.Printf("\n⚠️  SQL generation error: %v\n", err)
 			continue
@@ -275,7 +279,7 @@ func dumpSQL(tc TestCase, opts dumpOptions) {
 		}
 
 		// Generate list functions
-		listSQL, err := compiler.GenerateListSQL(analyses, inline)
+		listSQL, err := compiler.GenerateListSQL(analyses, inline, opts.databaseSchema)
 		if err != nil {
 			fmt.Printf("\n⚠️  List SQL generation error: %v\n", err)
 			continue

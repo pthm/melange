@@ -10,6 +10,7 @@ import type { Queryable } from './database.js';
 import type { Cache } from './cache.js';
 import { MelangeError, BulkCheckDeniedError } from './errors.js';
 import { validateObject, validateRelation } from './validator.js';
+import { prefixIdent } from './identifier.js';
 
 /**
  * Maximum number of checks allowed in a single bulk operation.
@@ -31,6 +32,7 @@ export interface CheckerInternals {
   cache: Cache;
   decision?: Decision;
   shouldValidate: boolean;
+  databaseSchema: string;
   cacheKey(subject: MelangeObject, relation: Relation, object: MelangeObject): string;
 }
 
@@ -108,7 +110,7 @@ export class BulkCheckBuilder {
    * Results honour decision overrides, caching, and deduplication.
    */
   async execute(): Promise<BulkCheckResults> {
-    const { db, cache, decision, shouldValidate, cacheKey } = this.internals;
+    const { db, cache, decision, shouldValidate, databaseSchema, cacheKey } = this.internals;
 
     // 1. Decision override -- return all-same results without DB call.
     if (decision) {
@@ -182,8 +184,10 @@ export class BulkCheckBuilder {
         objectIds.push(r.object.id);
       }
 
+      const func = prefixIdent('check_permission_bulk', databaseSchema);
+
       const result = await db.query<{ idx: number; allowed: number }>(
-        'SELECT idx, allowed FROM check_permission_bulk($1, $2, $3, $4, $5)',
+        `SELECT idx, allowed FROM ${func}($1, $2, $3, $4, $5)`,
         [subjectTypes, subjectIds, relations, objectTypes, objectIds],
       );
 

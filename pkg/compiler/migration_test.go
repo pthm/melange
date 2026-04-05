@@ -410,3 +410,72 @@ func TestChangedFunctionNames(t *testing.T) {
 		t.Error("fn_removed should not appear in changed (not in current)")
 	}
 }
+
+func TestGenerateMigrationSQL_DatabaseSchema_DownDrops(t *testing.T) {
+	gen := GeneratedSQL{
+		Functions:  []string{"CREATE OR REPLACE FUNCTION \"myschema\".check_doc_viewer() ..."},
+		Dispatcher: "CREATE OR REPLACE FUNCTION \"myschema\".check_permission() ...",
+	}
+	functions := []string{
+		"check_doc_viewer",
+		"check_doc_viewer_nw",
+		"check_permission",
+		"check_permission_internal",
+		"check_permission_nw",
+		"check_permission_nw_internal",
+		"check_permission_bulk",
+		"list_accessible_objects",
+		"list_accessible_subjects",
+	}
+	opts := MigrationOptions{
+		DatabaseSchema: "myschema",
+	}
+
+	result := GenerateMigrationSQL(gen, ListGeneratedSQL{}, functions, opts)
+
+	// DOWN should schema-qualify DROP statements
+	if !strings.Contains(result.Down, `DROP FUNCTION IF EXISTS "myschema"."check_doc_viewer" CASCADE`) {
+		t.Errorf("DOWN should schema-qualify specialized drops, got:\n%s", result.Down)
+	}
+	if !strings.Contains(result.Down, `DROP FUNCTION IF EXISTS "myschema"."check_permission" CASCADE`) {
+		t.Errorf("DOWN should schema-qualify dispatcher drops, got:\n%s", result.Down)
+	}
+}
+
+func TestGenerateMigrationSQL_DatabaseSchema_OrphanDrops(t *testing.T) {
+	gen := GeneratedSQL{
+		Functions: []string{"CREATE OR REPLACE FUNCTION \"myschema\".check_doc_viewer() ..."},
+	}
+	functions := []string{"check_doc_viewer", "check_permission"}
+	opts := MigrationOptions{
+		DatabaseSchema:        "myschema",
+		PreviousFunctionNames: []string{"check_old_function", "check_doc_viewer", "check_permission"},
+		PreviousSource:        "database",
+	}
+
+	result := GenerateMigrationSQL(gen, ListGeneratedSQL{}, functions, opts)
+
+	// Orphan drops should be schema-qualified
+	if !strings.Contains(result.Up, `DROP FUNCTION IF EXISTS "myschema"."check_old_function" CASCADE`) {
+		t.Errorf("UP orphan drops should be schema-qualified, got:\n%s", result.Up)
+	}
+}
+
+func TestGenerateMigrationSQL_EmptyDatabaseSchema_NoQualification(t *testing.T) {
+	gen := GeneratedSQL{
+		Functions: []string{"CREATE OR REPLACE FUNCTION check_doc_viewer() ..."},
+	}
+	functions := []string{"check_doc_viewer", "check_permission"}
+	opts := MigrationOptions{}
+
+	result := GenerateMigrationSQL(gen, ListGeneratedSQL{}, functions, opts)
+
+	// Without schema, drops should be unqualified (backward compatible)
+	if !strings.Contains(result.Down, "DROP FUNCTION IF EXISTS check_doc_viewer CASCADE") {
+		t.Errorf("DOWN without schema should use unqualified names, got:\n%s", result.Down)
+	}
+	// Should NOT contain any quoted schema prefix
+	if strings.Contains(result.Down, `"."`) {
+		t.Error("DOWN without schema should not contain schema qualification")
+	}
+}
