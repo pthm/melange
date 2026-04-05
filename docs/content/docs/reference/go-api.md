@@ -166,6 +166,7 @@ Options:
 | `WithUsersetValidation()` | Validate userset subjects before checking |
 | `WithRequestValidation()` | Validate all check requests before executing |
 | `WithValidator(v Validator)` | Supply a schema-aware validator |
+| `WithDatabaseSchema(s string)` | Set the PostgreSQL schema where melange objects live (see [Custom Database Schema](../configuration/#custom-database-schema)) |
 
 ### Permission Checks
 
