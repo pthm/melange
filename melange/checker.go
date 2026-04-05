@@ -9,39 +9,51 @@ import (
 	"sync"
 )
 
-// schemaValidation holds the process-wide validation state.
-// Validation runs once per process on the first NewChecker call.
+// schemaValidation tracks which database schemas have been validated.
+// Validation runs once per unique schema value on the first NewChecker call
+// for that schema.
 var schemaValidation struct {
-	once sync.Once
-	done bool
+	mu        sync.Mutex
+	validated map[string]bool
 }
 
-// validateSchema performs one-time schema validation on first Checker creation.
+// validateSchema performs one-time-per-schema validation on Checker creation.
 // It checks for common configuration issues and logs warnings (does not fail).
 // This helps catch setup problems early without blocking application startup.
 //
 // Validated conditions:
 //   - check_permission function exists
 func validateSchema(q Querier, databaseSchema string) {
-	schemaValidation.once.Do(func() {
-		ctx := context.Background()
+	schemaValidation.mu.Lock()
+	if schemaValidation.validated == nil {
+		schemaValidation.validated = make(map[string]bool)
+	}
+	if schemaValidation.validated[databaseSchema] {
+		schemaValidation.mu.Unlock()
+		return
+	}
+	schemaValidation.validated[databaseSchema] = true
+	schemaValidation.mu.Unlock()
 
-		// Check check_permission function exists by calling with invalid args
-		// (will return 0 but won't error if function exists)
-		var result int
-		err := q.QueryRowContext(ctx,
-			fmt.Sprintf("SELECT %s('__test__', '__test__', '__test__', '__test__', '__test__')", prefixIdent("check_permission", databaseSchema)),
-		).Scan(&result)
-		if err != nil {
-			code := sqlState(err)
-			if code == pgUndefinedFunction {
+	ctx := context.Background()
+
+	// Check check_permission function exists by calling with invalid args
+	// (will return 0 but won't error if function exists)
+	var result int
+	err := q.QueryRowContext(ctx,
+		fmt.Sprintf("SELECT %s('__test__', '__test__', '__test__', '__test__', '__test__')", prefixIdent("check_permission", databaseSchema)),
+	).Scan(&result)
+	if err != nil {
+		code := sqlState(err)
+		if code == pgUndefinedFunction {
+			if databaseSchema != "" {
+				log.Printf("[melange] WARNING: check_permission function not found in schema %q. Run 'melange migrate' to create it.", databaseSchema)
+			} else {
 				log.Printf("[melange] WARNING: check_permission function not found. Run 'melange migrate' to create it.")
 			}
-			// Other errors might be transient, don't warn
 		}
-
-		schemaValidation.done = true
-	})
+		// Other errors might be transient, don't warn
+	}
 }
 
 // Checker performs authorization checks against PostgreSQL.

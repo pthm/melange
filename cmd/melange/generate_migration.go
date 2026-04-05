@@ -129,6 +129,7 @@ Three comparison modes determine orphaned functions to drop:
 
 		// Resolve previous state
 		opts := compiler.MigrationOptions{
+			DatabaseSchema: databaseSchema,
 			Version:        version.Version,
 			SchemaChecksum: migrator.ComputeSchemaChecksum(string(schemaContent)),
 			CodegenVersion: migrator.CodegenVersion(),

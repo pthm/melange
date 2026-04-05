@@ -251,3 +251,54 @@ func TestListSubjectsHelpers(t *testing.T) {
 		t.Errorf("ListSubjectsReturns() = %q", returns)
 	}
 }
+
+func TestPlpgsqlFunction_SchemaQualifiedName(t *testing.T) {
+	fn := PlpgsqlFunction{
+		Schema:  "myschema",
+		Name:    "check_doc_viewer",
+		Args:    []FuncArg{{Name: "p_id", Type: "TEXT"}},
+		Returns: "INT",
+		Body:    []Stmt{ReturnInt{Value: 1}},
+	}
+	got := fn.SQL()
+
+	// Function name should be quoted when schema is set for consistency
+	// with PrefixIdent which quotes both parts
+	if !strings.Contains(got, `CREATE OR REPLACE FUNCTION "myschema"."check_doc_viewer"(`) {
+		t.Errorf("schema-qualified function should quote both schema and name, got:\n%s", got)
+	}
+}
+
+func TestSqlFunction_SchemaQualifiedName(t *testing.T) {
+	fn := SqlFunction{
+		Schema:  "myschema",
+		Name:    "check_permission",
+		Args:    []FuncArg{{Name: "p_id", Type: "TEXT"}},
+		Returns: "INT",
+		Body:    Raw("SELECT 1"),
+	}
+	got := fn.SQL()
+
+	if !strings.Contains(got, `CREATE OR REPLACE FUNCTION "myschema"."check_permission"(`) {
+		t.Errorf("schema-qualified function should quote both schema and name, got:\n%s", got)
+	}
+}
+
+func TestPlpgsqlFunction_NoSchema_UnquotedName(t *testing.T) {
+	fn := PlpgsqlFunction{
+		Schema:  "",
+		Name:    "check_doc_viewer",
+		Args:    []FuncArg{{Name: "p_id", Type: "TEXT"}},
+		Returns: "INT",
+		Body:    []Stmt{ReturnInt{Value: 1}},
+	}
+	got := fn.SQL()
+
+	// Without schema, function name should remain unquoted (backward compatible)
+	if !strings.Contains(got, "CREATE OR REPLACE FUNCTION check_doc_viewer(") {
+		t.Errorf("function without schema should have unquoted name, got:\n%s", got)
+	}
+	if strings.Contains(got, `"check_doc_viewer"`) {
+		t.Error("function without schema should not quote the name")
+	}
+}

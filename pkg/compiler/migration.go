@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/pthm/melange/lib/sqlgen/sqldsl"
 )
 
 // MigrationSQL holds the UP and DOWN SQL for a single versioned migration.
@@ -20,6 +22,9 @@ type MigrationSQL struct {
 
 // MigrationOptions controls migration SQL generation.
 type MigrationOptions struct {
+	// DatabaseSchema is the PostgreSQL schema for melange objects.
+	// When set, DROP FUNCTION statements are schema-qualified.
+	DatabaseSchema string
 	// Version is the melange CLI/library version (e.g., "v0.7.3").
 	Version string
 	// SchemaChecksum is the SHA256 of the current schema content.
@@ -57,7 +62,7 @@ func GenerateMigrationSQL(
 	opts MigrationOptions,
 ) MigrationSQL {
 	up := generateUpSQL(generatedSQL, listSQL, expectedFunctions, opts)
-	down := generateDownSQL(expectedFunctions)
+	down := generateDownSQL(expectedFunctions, opts.DatabaseSchema)
 	return MigrationSQL{Up: up, Down: down}
 }
 
@@ -126,7 +131,7 @@ func generateUpSQL(
 		if len(orphans) > 0 {
 			writeSectionHeader(&b, "Drop removed functions")
 			for _, fn := range orphans {
-				fmt.Fprintf(&b, "DROP FUNCTION IF EXISTS %s CASCADE;\n", fn)
+				fmt.Fprintf(&b, "DROP FUNCTION IF EXISTS %s CASCADE;\n", sqldsl.PrefixIdent(fn, opts.DatabaseSchema))
 			}
 			b.WriteString("\n")
 		}
@@ -233,7 +238,7 @@ var dispatcherFunctionNames = []string{
 	"list_accessible_subjects",
 }
 
-func generateDownSQL(expectedFunctions []string) string {
+func generateDownSQL(expectedFunctions []string, databaseSchema string) string {
 	var b strings.Builder
 
 	b.WriteString("-- Melange Migration (DOWN)\n")
@@ -271,7 +276,7 @@ func generateDownSQL(expectedFunctions []string) string {
 	if len(specialized) > 0 {
 		b.WriteString("-- Drop specialized functions\n")
 		for _, fn := range specialized {
-			fmt.Fprintf(&b, "DROP FUNCTION IF EXISTS %s CASCADE;\n", fn)
+			fmt.Fprintf(&b, "DROP FUNCTION IF EXISTS %s CASCADE;\n", sqldsl.PrefixIdent(fn, databaseSchema))
 		}
 		b.WriteString("\n")
 	}
@@ -279,7 +284,7 @@ func generateDownSQL(expectedFunctions []string) string {
 	if len(sortedDispatchers) > 0 {
 		b.WriteString("-- Drop dispatchers\n")
 		for _, fn := range sortedDispatchers {
-			fmt.Fprintf(&b, "DROP FUNCTION IF EXISTS %s CASCADE;\n", fn)
+			fmt.Fprintf(&b, "DROP FUNCTION IF EXISTS %s CASCADE;\n", sqldsl.PrefixIdent(fn, databaseSchema))
 		}
 		b.WriteString("\n")
 	}

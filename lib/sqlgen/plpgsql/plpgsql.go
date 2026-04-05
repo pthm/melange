@@ -317,8 +317,10 @@ func writeSignature(sb *strings.Builder, schema, name string, args []FuncArg, re
 	if schema != "" {
 		sb.WriteString(sqldsl.QuoteIdent(schema))
 		sb.WriteString(".")
+		sb.WriteString(sqldsl.QuoteIdent(name))
+	} else {
+		sb.WriteString(name)
 	}
-	sb.WriteString(name)
 	sb.WriteString("(\n")
 
 	for i, arg := range args {
