@@ -13,11 +13,12 @@ export function quoteIdent(ident: string) {
 
 /**
  * Prefixes the identifier with the schema if it is not empty.
+ * Both the schema and identifier are quoted for consistency.
  */
 export function prefixIdent(identifier: string, schema: string): string {
   if (!schema) {
     return identifier
   }
 
-  return quoteIdent(schema) + '.' + identifier
+  return quoteIdent(schema) + '.' + quoteIdent(identifier)
 }

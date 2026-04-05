@@ -944,12 +944,13 @@ func quoteIdent(ident string) string {
 }
 
 // prefixIdent prefixes the identifier with the schema if it is not empty.
+// Both the schema and identifier are quoted for consistency.
 func prefixIdent(identifier, schema string) string {
 	if schema == "" {
 		return identifier
 	}
 
-	return quoteIdent(schema) + "." + identifier
+	return quoteIdent(schema) + "." + quoteIdent(identifier)
 }
 
 // Must panics if the permission check fails or errors.

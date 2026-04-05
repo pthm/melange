@@ -35,8 +35,8 @@ var (
 	//go:embed testdata/schema.fga
 	schemaFGA string
 
-	//go:embed testdata/domain_tables.sql.tmpl
-	domainTablesSQLTemplate string
+	//go:embed testdata/domain_tables.sql
+	domainTablesSQL string
 
 	//go:embed testdata/tuples_view.sql.tmpl
 	tuplesViewSQLTemplate string
@@ -392,7 +392,7 @@ func remoteDB(tb testing.TB, config DatabaseConfig, databaseSchema string) *sql.
 
 	// Register cleanup (truncate tables, not drop database)
 	tb.Cleanup(func() {
-		cleanupRemoteDB(db, databaseSchema)
+		cleanupRemoteDB(db)
 		_ = db.Close()
 	})
 
@@ -401,7 +401,7 @@ func remoteDB(tb testing.TB, config DatabaseConfig, databaseSchema string) *sql.
 
 // cleanupRemoteDB truncates all tables in the remote database.
 // This is used instead of dropping the database for remote connections.
-func cleanupRemoteDB(db *sql.DB, databaseSchema string) {
+func cleanupRemoteDB(db *sql.DB) {
 	ctx := context.Background()
 
 	// List of tables to truncate (in dependency order, CASCADE handles dependencies)
@@ -421,7 +421,7 @@ func cleanupRemoteDB(db *sql.DB, databaseSchema string) {
 
 	// Truncate all tables
 	for _, table := range tables {
-		_, _ = db.ExecContext(ctx, fmt.Sprintf("TRUNCATE TABLE %s CASCADE", sqldsl.PrefixIdent(table, databaseSchema)))
+		_, _ = db.ExecContext(ctx, fmt.Sprintf("TRUNCATE TABLE %s CASCADE", table))
 		// Ignore errors - table might not exist
 	}
 }
@@ -583,8 +583,8 @@ func applyMelangeMigrations(dsn, databaseSchema string) error {
 		return fmt.Errorf("apply melange migration: %w", err)
 	}
 
-	// Create the domain tables for testing (must be before tuples view)
-	_, err = db.ExecContext(ctx, DomainTablesSQL(databaseSchema))
+	// Create the domain tables for testing (always in public schema, must be before tuples view)
+	_, err = db.ExecContext(ctx, DomainTablesSQL())
 	if err != nil {
 		return fmt.Errorf("create domain tables: %w", err)
 	}
@@ -620,10 +620,9 @@ func replaceDBName(dsn, newDB string) string {
 }
 
 // DomainTablesSQL returns the embedded SQL for creating domain tables.
-func DomainTablesSQL(databaseSchema string) string {
-	tmpl := template.Must(template.New("domain_tables").Parse(domainTablesSQLTemplate))
-
-	return executeTemplate(tmpl, databaseSchema)
+// Domain tables always live in the public schema.
+func DomainTablesSQL() string {
+	return domainTablesSQL
 }
 
 // TuplesViewSQL returns the embedded SQL for creating the tuples view.

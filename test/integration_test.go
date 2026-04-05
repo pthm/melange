@@ -36,19 +36,19 @@ func TestDB_Integration(t *testing.T) {
 		).Scan(&result)
 		require.NoError(t, err)
 
-		// Verify domain tables exist
+		// Verify domain tables exist (always in public schema)
 		tables := []string{"users", "organizations", "repositories", "issues", "pull_requests"}
 		for _, table := range tables {
 			var exists bool
-			err := db.QueryRowContext(ctx, fmt.Sprintf(`
+			err := db.QueryRowContext(ctx, `
 				SELECT EXISTS (
 					SELECT 1 FROM pg_class c
 					JOIN pg_namespace n ON n.oid = c.relnamespace
 					WHERE c.relname = $1
-					AND n.nspname = %s
+					AND n.nspname = current_schema()
 					AND c.relkind = 'r'
 				)
-			`, testutil.PostgresSchema(databaseSchema)), table).Scan(&exists)
+			`, table).Scan(&exists)
 			require.NoError(t, err)
 			assert.True(t, exists, "table %s should exist", table)
 		}
@@ -104,44 +104,23 @@ func TestOrganization_Permissions(t *testing.T) {
 		var orgID, ownerID, adminID, memberID int64
 
 		// Create users
-		err := db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('org_owner') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&ownerID)
+		err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('org_owner') RETURNING id`).Scan(&ownerID)
 		require.NoError(t, err)
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('org_admin') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&adminID)
+		err = db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('org_admin') RETURNING id`).Scan(&adminID)
 		require.NoError(t, err)
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('org_member') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&memberID)
+		err = db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('org_member') RETURNING id`).Scan(&memberID)
 		require.NoError(t, err)
 
 		// Create organization
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (name) VALUES ('acme') RETURNING id`,
-			sqldsl.PrefixIdent("organizations", databaseSchema),
-		)).Scan(&orgID)
+		err = db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('acme') RETURNING id`).Scan(&orgID)
 		require.NoError(t, err)
 
 		// Add members with different roles
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, user_id, role) VALUES ($1, $2, 'owner')`,
-			sqldsl.PrefixIdent("organization_members", databaseSchema),
-		), orgID, ownerID)
+		_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'owner')`, orgID, ownerID)
 		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, user_id, role) VALUES ($1, $2, 'admin')`,
-			sqldsl.PrefixIdent("organization_members", databaseSchema),
-		), orgID, adminID)
+		_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'admin')`, orgID, adminID)
 		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, user_id, role) VALUES ($1, $2, 'member')`,
-			sqldsl.PrefixIdent("organization_members", databaseSchema),
-		), orgID, memberID)
+		_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'member')`, orgID, memberID)
 		require.NoError(t, err)
 
 		// Create checker using generated types
@@ -213,46 +192,25 @@ func TestRepository_InheritedPermissions(t *testing.T) {
 		var orgID, repoID, orgMemberID, repoWriterID, outsiderID int64
 
 		// Create users
-		err := db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('org_member') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&orgMemberID)
+		err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('org_member') RETURNING id`).Scan(&orgMemberID)
 		require.NoError(t, err)
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('repo_writer') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&repoWriterID)
+		err = db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('repo_writer') RETURNING id`).Scan(&repoWriterID)
 		require.NoError(t, err)
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('outsider') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&outsiderID)
+		err = db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('outsider') RETURNING id`).Scan(&outsiderID)
 		require.NoError(t, err)
 
 		// Create organization and add member
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (name) VALUES ('org1') RETURNING id`,
-			sqldsl.PrefixIdent("organizations", databaseSchema),
-		)).Scan(&orgID)
+		err = db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('org1') RETURNING id`).Scan(&orgID)
 		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, user_id, role) VALUES ($1, $2, 'member')`,
-			sqldsl.PrefixIdent("organization_members", databaseSchema),
-		), orgID, orgMemberID)
+		_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'member')`, orgID, orgMemberID)
 		require.NoError(t, err)
 
 		// Create repository under organization
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, name) VALUES ($1, 'repo1') RETURNING id`,
-			sqldsl.PrefixIdent("repositories", databaseSchema),
-		), orgID).Scan(&repoID)
+		err = db.QueryRowContext(ctx, `INSERT INTO repositories (organization_id, name) VALUES ($1, 'repo1') RETURNING id`, orgID).Scan(&repoID)
 		require.NoError(t, err)
 
 		// Add direct collaborator
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (repository_id, user_id, role) VALUES ($1, $2, 'writer')`,
-			sqldsl.PrefixIdent("repository_collaborators", databaseSchema),
-		), repoID, repoWriterID)
+		_, err = db.ExecContext(ctx, `INSERT INTO repository_collaborators (repository_id, user_id, role) VALUES ($1, $2, 'writer')`, repoID, repoWriterID)
 		require.NoError(t, err)
 
 		// Create checker using generated types
@@ -309,52 +267,31 @@ func TestPullRequest_ExclusionPattern(t *testing.T) {
 		var orgID, repoID, prID, authorID, reviewerID int64
 
 		// Create users
-		err := db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('pr_author') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&authorID)
+		err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('pr_author') RETURNING id`).Scan(&authorID)
 		require.NoError(t, err)
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('pr_reviewer') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&reviewerID)
+		err = db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('pr_reviewer') RETURNING id`).Scan(&reviewerID)
 		require.NoError(t, err)
 
 		// Create organization
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (name) VALUES ('org2') RETURNING id`,
-			sqldsl.PrefixIdent("organizations", databaseSchema),
-		)).Scan(&orgID)
+		err = db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('org2') RETURNING id`).Scan(&orgID)
 		require.NoError(t, err)
 
 		// Add both users as org members (so they can read the repo)
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, user_id, role) VALUES ($1, $2, 'member')`,
-			sqldsl.PrefixIdent("organization_members", databaseSchema),
-		), orgID, authorID)
+		_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'member')`, orgID, authorID)
 		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, user_id, role) VALUES ($1, $2, 'member')`,
-			sqldsl.PrefixIdent("organization_members", databaseSchema),
-		), orgID, reviewerID)
+		_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'member')`, orgID, reviewerID)
 		require.NoError(t, err)
 
 		// Create repository
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, name) VALUES ($1, 'repo2') RETURNING id`,
-			sqldsl.PrefixIdent("repositories", databaseSchema),
-		), orgID).Scan(&repoID)
+		err = db.QueryRowContext(ctx, `INSERT INTO repositories (organization_id, name) VALUES ($1, 'repo2') RETURNING id`, orgID).Scan(&repoID)
 		require.NoError(t, err)
 
 		// Create pull request
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`
-				INSERT INTO %s (repository_id, author_id, title, source_branch)
+		err = db.QueryRowContext(ctx, `
+				INSERT INTO pull_requests (repository_id, author_id, title, source_branch)
 				VALUES ($1, $2, 'Test PR', 'feature-branch')
 				RETURNING id
-			`,
-			sqldsl.PrefixIdent("pull_requests", databaseSchema),
-		), repoID, authorID).Scan(&prID)
+			`, repoID, authorID).Scan(&prID)
 		require.NoError(t, err)
 
 		// Create checker using generated types
@@ -403,44 +340,23 @@ func TestListObjects(t *testing.T) {
 		var orgID, repo1ID, repo2ID, repo3ID, userID, outsiderID int64
 
 		// Create users
-		err := db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('list_user') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&userID)
+		err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('list_user') RETURNING id`).Scan(&userID)
 		require.NoError(t, err)
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('list_outsider') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&outsiderID)
+		err = db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('list_outsider') RETURNING id`).Scan(&outsiderID)
 		require.NoError(t, err)
 
 		// Create organization and add user
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (name) VALUES ('list_org') RETURNING id`,
-			sqldsl.PrefixIdent("organizations", databaseSchema),
-		)).Scan(&orgID)
+		err = db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('list_org') RETURNING id`).Scan(&orgID)
 		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, user_id, role) VALUES ($1, $2, 'member')`,
-			sqldsl.PrefixIdent("organization_members", databaseSchema),
-		), orgID, userID)
+		_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'member')`, orgID, userID)
 		require.NoError(t, err)
 
 		// Create 3 repositories under the organization
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, name) VALUES ($1, 'list_repo1') RETURNING id`,
-			sqldsl.PrefixIdent("repositories", databaseSchema),
-		), orgID).Scan(&repo1ID)
+		err = db.QueryRowContext(ctx, `INSERT INTO repositories (organization_id, name) VALUES ($1, 'list_repo1') RETURNING id`, orgID).Scan(&repo1ID)
 		require.NoError(t, err)
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, name) VALUES ($1, 'list_repo2') RETURNING id`,
-			sqldsl.PrefixIdent("repositories", databaseSchema),
-		), orgID).Scan(&repo2ID)
+		err = db.QueryRowContext(ctx, `INSERT INTO repositories (organization_id, name) VALUES ($1, 'list_repo2') RETURNING id`, orgID).Scan(&repo2ID)
 		require.NoError(t, err)
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, name) VALUES ($1, 'list_repo3') RETURNING id`,
-			sqldsl.PrefixIdent("repositories", databaseSchema),
-		), orgID).Scan(&repo3ID)
+		err = db.QueryRowContext(ctx, `INSERT INTO repositories (organization_id, name) VALUES ($1, 'list_repo3') RETURNING id`, orgID).Scan(&repo3ID)
 		require.NoError(t, err)
 
 		// Create checker using generated types
@@ -479,44 +395,23 @@ func TestListSubjects(t *testing.T) {
 		var orgID, user1ID, user2ID, user3ID int64
 
 		// Create users
-		err := db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('subj_user1') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&user1ID)
+		err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('subj_user1') RETURNING id`).Scan(&user1ID)
 		require.NoError(t, err)
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('subj_user2') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&user2ID)
+		err = db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('subj_user2') RETURNING id`).Scan(&user2ID)
 		require.NoError(t, err)
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('subj_user3') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&user3ID)
+		err = db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('subj_user3') RETURNING id`).Scan(&user3ID)
 		require.NoError(t, err)
 
 		// Create organization
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (name) VALUES ('subj_org') RETURNING id`,
-			sqldsl.PrefixIdent("organizations", databaseSchema),
-		)).Scan(&orgID)
+		err = db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('subj_org') RETURNING id`).Scan(&orgID)
 		require.NoError(t, err)
 
 		// Add users with different roles
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, user_id, role) VALUES ($1, $2, 'owner')`,
-			sqldsl.PrefixIdent("organization_members", databaseSchema),
-		), orgID, user1ID)
+		_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'owner')`, orgID, user1ID)
 		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, user_id, role) VALUES ($1, $2, 'admin')`,
-			sqldsl.PrefixIdent("organization_members", databaseSchema),
-		), orgID, user2ID)
+		_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'admin')`, orgID, user2ID)
 		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, user_id, role) VALUES ($1, $2, 'member')`,
-			sqldsl.PrefixIdent("organization_members", databaseSchema),
-		), orgID, user3ID)
+		_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'member')`, orgID, user3ID)
 		require.NoError(t, err)
 
 		// Create checker using generated types
@@ -562,15 +457,9 @@ func TestTransaction_SeeUncommittedChanges(t *testing.T) {
 
 		// Create a user and organization outside the transaction
 		var userID, orgID int64
-		err := db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('tx_user') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&userID)
+		err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('tx_user') RETURNING id`).Scan(&userID)
 		require.NoError(t, err)
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (name) VALUES ('tx_org') RETURNING id`,
-			sqldsl.PrefixIdent("organizations", databaseSchema),
-		)).Scan(&orgID)
+		err = db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('tx_org') RETURNING id`).Scan(&orgID)
 		require.NoError(t, err)
 
 		user := authz.User(userID)
@@ -590,10 +479,7 @@ func TestTransaction_SeeUncommittedChanges(t *testing.T) {
 		assert.False(t, ok, "user should NOT have access before membership")
 
 		// Add membership within the transaction
-		_, err = tx.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, user_id, role) VALUES ($1, $2, 'member')`,
-			sqldsl.PrefixIdent("organization_members", databaseSchema),
-		), orgID, userID)
+		_, err = tx.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'member')`, orgID, userID)
 		require.NoError(t, err)
 
 		// Now user should have access (uncommitted changes visible)
@@ -627,18 +513,12 @@ func TestDatabaseIsolation(t *testing.T) {
 			ctx := context.Background()
 
 			// Insert a user
-			_, err := db.ExecContext(ctx, fmt.Sprintf(
-				`INSERT INTO %s (username) VALUES ('isolation_test_1')`,
-				sqldsl.PrefixIdent("users", databaseSchema),
-			))
+			_, err := db.ExecContext(ctx, `INSERT INTO users (username) VALUES ('isolation_test_1')`)
 			require.NoError(t, err)
 
 			// Count users - should be exactly 1
 			var count int
-			err = db.QueryRowContext(ctx, fmt.Sprintf(
-				`SELECT COUNT(*) FROM %s`,
-				sqldsl.PrefixIdent("users", databaseSchema),
-			)).Scan(&count)
+			err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&count)
 			require.NoError(t, err)
 			assert.Equal(t, 1, count, "db1 should have exactly 1 user")
 		})
@@ -649,18 +529,12 @@ func TestDatabaseIsolation(t *testing.T) {
 			ctx := context.Background()
 
 			// Insert a different user
-			_, err := db.ExecContext(ctx, fmt.Sprintf(
-				`INSERT INTO %s (username) VALUES ('isolation_test_2')`,
-				sqldsl.PrefixIdent("users", databaseSchema),
-			))
+			_, err := db.ExecContext(ctx, `INSERT INTO users (username) VALUES ('isolation_test_2')`)
 			require.NoError(t, err)
 
 			// Count users - should be exactly 1 (not 2!)
 			var count int
-			err = db.QueryRowContext(ctx, fmt.Sprintf(
-				`SELECT COUNT(*) FROM %s`,
-				sqldsl.PrefixIdent("users", databaseSchema),
-			)).Scan(&count)
+			err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM users`).Scan(&count)
 			require.NoError(t, err)
 			assert.Equal(t, 1, count, "db2 should have exactly 1 user (isolated from db1)")
 		})
@@ -746,22 +620,13 @@ func TestExclusionViaImpliedBy(t *testing.T) {
 		var orgID, repoID, ownerID, readerID int64
 
 		// Create users
-		err := db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('implied_owner') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&ownerID)
+		err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('implied_owner') RETURNING id`).Scan(&ownerID)
 		require.NoError(t, err)
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('implied_reader') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&readerID)
+		err = db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('implied_reader') RETURNING id`).Scan(&readerID)
 		require.NoError(t, err)
 
 		// Create organization
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (name) VALUES ('implied_org') RETURNING id`,
-			sqldsl.PrefixIdent("organizations", databaseSchema),
-		)).Scan(&orgID)
+		err = db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('implied_org') RETURNING id`).Scan(&orgID)
 		require.NoError(t, err)
 
 		// NOTE: We deliberately do NOT add users as org members here.
@@ -770,24 +635,15 @@ func TestExclusionViaImpliedBy(t *testing.T) {
 		// This test specifically verifies that exclusions work on direct tuple matches.
 
 		// Create repository (needs org for schema validity)
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, name) VALUES ($1, 'implied_repo') RETURNING id`,
-			sqldsl.PrefixIdent("repositories", databaseSchema),
-		), orgID).Scan(&repoID)
+		err = db.QueryRowContext(ctx, `INSERT INTO repositories (organization_id, name) VALUES ($1, 'implied_repo') RETURNING id`, orgID).Scan(&repoID)
 		require.NoError(t, err)
 
 		// Add owner as repository owner (implies author via closure, also implies can_read)
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (repository_id, user_id, role) VALUES ($1, $2, 'owner')`,
-			sqldsl.PrefixIdent("repository_collaborators", databaseSchema),
-		), repoID, ownerID)
+		_, err = db.ExecContext(ctx, `INSERT INTO repository_collaborators (repository_id, user_id, role) VALUES ($1, $2, 'owner')`, repoID, ownerID)
 		require.NoError(t, err)
 
 		// Add reader as repository reader
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (repository_id, user_id, role) VALUES ($1, $2, 'reader')`,
-			sqldsl.PrefixIdent("repository_collaborators", databaseSchema),
-		), repoID, readerID)
+		_, err = db.ExecContext(ctx, `INSERT INTO repository_collaborators (repository_id, user_id, role) VALUES ($1, $2, 'reader')`, repoID, readerID)
 		require.NoError(t, err)
 
 		checker := melange.NewChecker(db, melange.WithDatabaseSchema(databaseSchema))
@@ -859,36 +715,21 @@ func TestParentRelationMismatch(t *testing.T) {
 		var orgID, repoID, adminID, outsiderID int64
 
 		// Create users
-		err := db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('deploy_admin') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&adminID)
+		err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('deploy_admin') RETURNING id`).Scan(&adminID)
 		require.NoError(t, err)
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('deploy_outsider') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&outsiderID)
+		err = db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('deploy_outsider') RETURNING id`).Scan(&outsiderID)
 		require.NoError(t, err)
 
 		// Create organization
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (name) VALUES ('deploy_org') RETURNING id`,
-			sqldsl.PrefixIdent("organizations", databaseSchema),
-		)).Scan(&orgID)
+		err = db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('deploy_org') RETURNING id`).Scan(&orgID)
 		require.NoError(t, err)
 
 		// Add admin to org as admin (implies can_admin on org)
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, user_id, role) VALUES ($1, $2, 'admin')`,
-			sqldsl.PrefixIdent("organization_members", databaseSchema),
-		), orgID, adminID)
+		_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'admin')`, orgID, adminID)
 		require.NoError(t, err)
 
 		// Create repository under org
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, name) VALUES ($1, 'deploy_repo') RETURNING id`,
-			sqldsl.PrefixIdent("repositories", databaseSchema),
-		), orgID).Scan(&repoID)
+		err = db.QueryRowContext(ctx, `INSERT INTO repositories (organization_id, name) VALUES ($1, 'deploy_repo') RETURNING id`, orgID).Scan(&repoID)
 		require.NoError(t, err)
 
 		checker := melange.NewChecker(db, melange.WithDatabaseSchema(databaseSchema))
@@ -951,43 +792,25 @@ func TestDirectAccessExclusionParity(t *testing.T) {
 		var orgID, repoID, authorUserID, readerUserID int64
 
 		// Create users
-		err := db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('direct_author') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&authorUserID)
+		err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('direct_author') RETURNING id`).Scan(&authorUserID)
 		require.NoError(t, err)
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('direct_reader') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&readerUserID)
+		err = db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('direct_reader') RETURNING id`).Scan(&readerUserID)
 		require.NoError(t, err)
 
 		// Create organization
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (name) VALUES ('direct_org') RETURNING id`,
-			sqldsl.PrefixIdent("organizations", databaseSchema),
-		)).Scan(&orgID)
+		err = db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('direct_org') RETURNING id`).Scan(&orgID)
 		require.NoError(t, err)
 
 		// Create repository with owner_id set (this creates an author tuple)
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, owner_id, name) VALUES ($1, $2, 'direct_repo') RETURNING id`,
-			sqldsl.PrefixIdent("repositories", databaseSchema),
-		), orgID, authorUserID).Scan(&repoID)
+		err = db.QueryRowContext(ctx, `INSERT INTO repositories (organization_id, owner_id, name) VALUES ($1, $2, 'direct_repo') RETURNING id`, orgID, authorUserID).Scan(&repoID)
 		require.NoError(t, err)
 
 		// Add author as repository reader (so they have can_read directly)
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (repository_id, user_id, role) VALUES ($1, $2, 'reader')`,
-			sqldsl.PrefixIdent("repository_collaborators", databaseSchema),
-		), repoID, authorUserID)
+		_, err = db.ExecContext(ctx, `INSERT INTO repository_collaborators (repository_id, user_id, role) VALUES ($1, $2, 'reader')`, repoID, authorUserID)
 		require.NoError(t, err)
 
 		// Add reader as repository reader
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (repository_id, user_id, role) VALUES ($1, $2, 'reader')`,
-			sqldsl.PrefixIdent("repository_collaborators", databaseSchema),
-		), repoID, readerUserID)
+		_, err = db.ExecContext(ctx, `INSERT INTO repository_collaborators (repository_id, user_id, role) VALUES ($1, $2, 'reader')`, repoID, readerUserID)
 		require.NoError(t, err)
 
 		checker := melange.NewChecker(db, melange.WithDatabaseSchema(databaseSchema))
@@ -1055,41 +878,26 @@ func TestWildcardExclusion(t *testing.T) {
 		var orgID, repoID, userID int64
 
 		// Create user
-		err := db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('wildcard_user') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&userID)
+		err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('wildcard_user') RETURNING id`).Scan(&userID)
 		require.NoError(t, err)
 
 		// Create organization
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (name) VALUES ('wildcard_org') RETURNING id`,
-			sqldsl.PrefixIdent("organizations", databaseSchema),
-		)).Scan(&orgID)
+		err = db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('wildcard_org') RETURNING id`).Scan(&orgID)
 		require.NoError(t, err)
 
 		// NOTE: Don't add user as org member to avoid org inheritance path.
 		// The user will get can_read directly from repository_collaborators.
 
 		// Create repository
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, name) VALUES ($1, 'wildcard_repo') RETURNING id`,
-			sqldsl.PrefixIdent("repositories", databaseSchema),
-		), orgID).Scan(&repoID)
+		err = db.QueryRowContext(ctx, `INSERT INTO repositories (organization_id, name) VALUES ($1, 'wildcard_repo') RETURNING id`, orgID).Scan(&repoID)
 		require.NoError(t, err)
 
 		// Add user as repository reader (so they have direct can_read)
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (repository_id, user_id, role) VALUES ($1, $2, 'reader')`,
-			sqldsl.PrefixIdent("repository_collaborators", databaseSchema),
-		), repoID, userID)
+		_, err = db.ExecContext(ctx, `INSERT INTO repository_collaborators (repository_id, user_id, role) VALUES ($1, $2, 'reader')`, repoID, userID)
 		require.NoError(t, err)
 
 		// Add wildcard ban (all users banned)
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (repository_id, user_id, banned_all) VALUES ($1, NULL, true)`,
-			sqldsl.PrefixIdent("repository_bans", databaseSchema),
-		), repoID)
+		_, err = db.ExecContext(ctx, `INSERT INTO repository_bans (repository_id, user_id, banned_all) VALUES ($1, NULL, true)`, repoID)
 		require.NoError(t, err)
 
 		checker := melange.NewChecker(db, melange.WithDatabaseSchema(databaseSchema))
@@ -1148,58 +956,37 @@ func TestParentLevelExclusions(t *testing.T) {
 		var orgID, repoID, prID, adminID, readerID int64
 
 		// Create users
-		err := db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('parent_admin') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&adminID)
+		err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('parent_admin') RETURNING id`).Scan(&adminID)
 		require.NoError(t, err)
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('parent_reader') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&readerID)
+		err = db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('parent_reader') RETURNING id`).Scan(&readerID)
 		require.NoError(t, err)
 
 		// Create organization
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (name) VALUES ('parent_org') RETURNING id`,
-			sqldsl.PrefixIdent("organizations", databaseSchema),
-		)).Scan(&orgID)
+		err = db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('parent_org') RETURNING id`).Scan(&orgID)
 		require.NoError(t, err)
 
 		// NOTE: Don't add users as org members to avoid org inheritance path complexity.
 		// Users get their access directly from repository_collaborators.
 
 		// Create repository
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, name) VALUES ($1, 'parent_repo') RETURNING id`,
-			sqldsl.PrefixIdent("repositories", databaseSchema),
-		), orgID).Scan(&repoID)
+		err = db.QueryRowContext(ctx, `INSERT INTO repositories (organization_id, name) VALUES ($1, 'parent_repo') RETURNING id`, orgID).Scan(&repoID)
 		require.NoError(t, err)
 
 		// Add admin as repository admin (implies can_admin, which implies banned on PRs)
 		// Admin also gets can_read via admin -> maintainer -> writer -> reader
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (repository_id, user_id, role) VALUES ($1, $2, 'admin')`,
-			sqldsl.PrefixIdent("repository_collaborators", databaseSchema),
-		), repoID, adminID)
+		_, err = db.ExecContext(ctx, `INSERT INTO repository_collaborators (repository_id, user_id, role) VALUES ($1, $2, 'admin')`, repoID, adminID)
 		require.NoError(t, err)
 
 		// Add reader as repository reader (so they have can_read but not can_admin)
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (repository_id, user_id, role) VALUES ($1, $2, 'reader')`,
-			sqldsl.PrefixIdent("repository_collaborators", databaseSchema),
-		), repoID, readerID)
+		_, err = db.ExecContext(ctx, `INSERT INTO repository_collaborators (repository_id, user_id, role) VALUES ($1, $2, 'reader')`, repoID, readerID)
 		require.NoError(t, err)
 
 		// Create pull request
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`
-				INSERT INTO %s (repository_id, author_id, title, source_branch)
+		err = db.QueryRowContext(ctx, `
+				INSERT INTO pull_requests (repository_id, author_id, title, source_branch)
 				VALUES ($1, $2, 'Parent Test PR', 'feature')
 				RETURNING id
-			`,
-			sqldsl.PrefixIdent("pull_requests", databaseSchema),
-		), repoID, readerID).Scan(&prID)
+			`, repoID, readerID).Scan(&prID)
 		require.NoError(t, err)
 
 		checker := melange.NewChecker(db, melange.WithDatabaseSchema(databaseSchema))
@@ -1274,60 +1061,33 @@ func TestListCheckParityProperty(t *testing.T) {
 		var user1ID, user2ID, user3ID int64
 
 		// Create users
-		err := db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('parity_user1') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&user1ID)
+		err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('parity_user1') RETURNING id`).Scan(&user1ID)
 		require.NoError(t, err)
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('parity_user2') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&user2ID)
+		err = db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('parity_user2') RETURNING id`).Scan(&user2ID)
 		require.NoError(t, err)
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('parity_user3') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&user3ID)
+		err = db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('parity_user3') RETURNING id`).Scan(&user3ID)
 		require.NoError(t, err)
 
 		// Create organization
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (name) VALUES ('parity_org') RETURNING id`,
-			sqldsl.PrefixIdent("organizations", databaseSchema),
-		)).Scan(&orgID)
+		err = db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('parity_org') RETURNING id`).Scan(&orgID)
 		require.NoError(t, err)
 
 		// User1: org admin (has can_admin on org, can_deploy on repos)
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, user_id, role) VALUES ($1, $2, 'admin')`,
-			sqldsl.PrefixIdent("organization_members", databaseSchema),
-		), orgID, user1ID)
+		_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'admin')`, orgID, user1ID)
 		require.NoError(t, err)
 
 		// User2: org member (has can_read on org and repos)
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, user_id, role) VALUES ($1, $2, 'member')`,
-			sqldsl.PrefixIdent("organization_members", databaseSchema),
-		), orgID, user2ID)
+		_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'member')`, orgID, user2ID)
 		require.NoError(t, err)
 
 		// User3: org member
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, user_id, role) VALUES ($1, $2, 'member')`,
-			sqldsl.PrefixIdent("organization_members", databaseSchema),
-		), orgID, user3ID)
+		_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'member')`, orgID, user3ID)
 		require.NoError(t, err)
 
 		// Create repos
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, owner_id, name) VALUES ($1, $2, 'parity_repo1') RETURNING id`,
-			sqldsl.PrefixIdent("repositories", databaseSchema),
-		), orgID, user2ID).Scan(&repo1ID)
+		err = db.QueryRowContext(ctx, `INSERT INTO repositories (organization_id, owner_id, name) VALUES ($1, $2, 'parity_repo1') RETURNING id`, orgID, user2ID).Scan(&repo1ID)
 		require.NoError(t, err)
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, name) VALUES ($1, 'parity_repo2') RETURNING id`,
-			sqldsl.PrefixIdent("repositories", databaseSchema),
-		), orgID).Scan(&repo2ID)
+		err = db.QueryRowContext(ctx, `INSERT INTO repositories (organization_id, name) VALUES ($1, 'parity_repo2') RETURNING id`, orgID).Scan(&repo2ID)
 		require.NoError(t, err)
 
 		checker := melange.NewChecker(db, melange.WithDatabaseSchema(databaseSchema))
@@ -1396,30 +1156,18 @@ func TestListObjects_Pagination(t *testing.T) {
 		repoIDs := make([]int64, 25)
 
 		// Create user
-		err := db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('pagination_user') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&userID)
+		err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('pagination_user') RETURNING id`).Scan(&userID)
 		require.NoError(t, err)
 
 		// Create organization and add user
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (name) VALUES ('pagination_org') RETURNING id`,
-			sqldsl.PrefixIdent("organizations", databaseSchema),
-		)).Scan(&orgID)
+		err = db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('pagination_org') RETURNING id`).Scan(&orgID)
 		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, user_id, role) VALUES ($1, $2, 'member')`,
-			sqldsl.PrefixIdent("organization_members", databaseSchema),
-		), orgID, userID)
+		_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'member')`, orgID, userID)
 		require.NoError(t, err)
 
 		// Create 25 repositories under the organization
 		for i := 0; i < 25; i++ {
-			err = db.QueryRowContext(ctx, fmt.Sprintf(
-				`INSERT INTO %s (organization_id, name) VALUES ($1, $2) RETURNING id`,
-				sqldsl.PrefixIdent("repositories", databaseSchema),
-			), orgID, fmt.Sprintf("pagination_repo_%02d", i)).Scan(&repoIDs[i])
+			err = db.QueryRowContext(ctx, `INSERT INTO repositories (organization_id, name) VALUES ($1, $2) RETURNING id`, orgID, fmt.Sprintf("pagination_repo_%02d", i)).Scan(&repoIDs[i])
 			require.NoError(t, err)
 		}
 
@@ -1526,23 +1274,14 @@ func TestListSubjects_Pagination(t *testing.T) {
 		userIDs := make([]int64, 25)
 
 		// Create organization
-		err := db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (name) VALUES ('subj_pagination_org') RETURNING id`,
-			sqldsl.PrefixIdent("organizations", databaseSchema),
-		)).Scan(&orgID)
+		err := db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('subj_pagination_org') RETURNING id`).Scan(&orgID)
 		require.NoError(t, err)
 
 		// Create 25 users and add them to the organization
 		for i := 0; i < 25; i++ {
-			err = db.QueryRowContext(ctx, fmt.Sprintf(
-				`INSERT INTO %s (username) VALUES ($1) RETURNING id`,
-				sqldsl.PrefixIdent("users", databaseSchema),
-			), fmt.Sprintf("subj_pagination_user_%02d", i)).Scan(&userIDs[i])
+			err = db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ($1) RETURNING id`, fmt.Sprintf("subj_pagination_user_%02d", i)).Scan(&userIDs[i])
 			require.NoError(t, err)
-			_, err = db.ExecContext(ctx, fmt.Sprintf(
-				`INSERT INTO %s (organization_id, user_id, role) VALUES ($1, $2, 'member')`,
-				sqldsl.PrefixIdent("organization_members", databaseSchema),
-			), orgID, userIDs[i])
+			_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'member')`, orgID, userIDs[i])
 			require.NoError(t, err)
 		}
 
@@ -1620,33 +1359,21 @@ func TestListObjectsAll_Aggregates(t *testing.T) {
 		var orgID, userID int64
 
 		// Create user
-		err := db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('all_pagination_user') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&userID)
+		err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('all_pagination_user') RETURNING id`).Scan(&userID)
 		require.NoError(t, err)
 
 		// Create organization and add user
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (name) VALUES ('all_pagination_org') RETURNING id`,
-			sqldsl.PrefixIdent("organizations", databaseSchema),
-		)).Scan(&orgID)
+		err = db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('all_pagination_org') RETURNING id`).Scan(&orgID)
 		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, user_id, role) VALUES ($1, $2, 'member')`,
-			sqldsl.PrefixIdent("organization_members", databaseSchema),
-		), orgID, userID)
+		_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'member')`, orgID, userID)
 		require.NoError(t, err)
 
 		// Create 1000 repositories in a single statement (will require 2 pages internally)
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`
-				INSERT INTO %s (organization_id, name)
+		_, err = db.ExecContext(ctx, `
+				INSERT INTO repositories (organization_id, name)
 				SELECT $1, 'all_pagination_repo_' || LPAD(g::text, 4, '0')
 				FROM generate_series(0, 999) g
-			`,
-			sqldsl.PrefixIdent("repositories", databaseSchema),
-		), orgID)
+			`, orgID)
 		require.NoError(t, err)
 
 		checker := melange.NewChecker(db, melange.WithDatabaseSchema(databaseSchema))
@@ -1680,10 +1407,7 @@ func TestPagination_EmptyResults(t *testing.T) {
 
 		// Create a user with no permissions
 		var userID int64
-		err := db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('empty_pagination_user') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&userID)
+		err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('empty_pagination_user') RETURNING id`).Scan(&userID)
 		require.NoError(t, err)
 
 		checker := melange.NewChecker(db, melange.WithDatabaseSchema(databaseSchema))
@@ -1717,28 +1441,16 @@ func TestPagination_InvalidCursor(t *testing.T) {
 
 		// Create minimal test data
 		var orgID, userID int64
-		err := db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (username) VALUES ('cursor_test_user') RETURNING id`,
-			sqldsl.PrefixIdent("users", databaseSchema),
-		)).Scan(&userID)
+		err := db.QueryRowContext(ctx, `INSERT INTO users (username) VALUES ('cursor_test_user') RETURNING id`).Scan(&userID)
 		require.NoError(t, err)
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (name) VALUES ('cursor_test_org') RETURNING id`,
-			sqldsl.PrefixIdent("organizations", databaseSchema),
-		)).Scan(&orgID)
+		err = db.QueryRowContext(ctx, `INSERT INTO organizations (name) VALUES ('cursor_test_org') RETURNING id`).Scan(&orgID)
 		require.NoError(t, err)
-		_, err = db.ExecContext(ctx, fmt.Sprintf(
-			`INSERT INTO %s (organization_id, user_id, role) VALUES ($1, $2, 'member')`,
-			sqldsl.PrefixIdent("organization_members", databaseSchema),
-		), orgID, userID)
+		_, err = db.ExecContext(ctx, `INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'member')`, orgID, userID)
 		require.NoError(t, err)
 
 		// Create a few repos
 		for i := 0; i < 5; i++ {
-			_, err = db.ExecContext(ctx, fmt.Sprintf(
-				`INSERT INTO %s (organization_id, name) VALUES ($1, $2)`,
-				sqldsl.PrefixIdent("repositories", databaseSchema),
-			), orgID, fmt.Sprintf("cursor_repo_%d", i))
+			_, err = db.ExecContext(ctx, `INSERT INTO repositories (organization_id, name) VALUES ($1, $2)`, orgID, fmt.Sprintf("cursor_repo_%d", i))
 			require.NoError(t, err)
 		}
 
