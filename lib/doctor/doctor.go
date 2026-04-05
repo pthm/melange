@@ -183,7 +183,7 @@ func New(db *sql.DB, schemaPath string, opts ...Options) *Doctor {
 	}
 }
 
-// SetDatabaseSchema returns the path to the schema file.
+// SetDatabaseSchema sets the PostgreSQL schema for melange objects.
 func (d *Doctor) SetDatabaseSchema(databaseSchema string) {
 	d.databaseSchema = databaseSchema
 }

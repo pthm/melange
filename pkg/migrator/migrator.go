@@ -137,7 +137,7 @@ func (m *Migrator) SchemaPath() string {
 	return m.schemaPath
 }
 
-// SetDatabaseSchema returns the path to the schema file.
+// SetDatabaseSchema sets the PostgreSQL schema for melange objects.
 func (m *Migrator) SetDatabaseSchema(databaseSchema string) {
 	m.databaseSchema = databaseSchema
 }

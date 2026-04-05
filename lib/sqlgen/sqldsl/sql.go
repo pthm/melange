@@ -54,7 +54,7 @@ func Optf(cond bool, format string, args ...any) string {
 // JoinClause represents a SQL JOIN clause.
 type JoinClause struct {
 	Type      string    // "INNER", "LEFT", etc.
-	Schema    string    // Deprecated: use TableExpr instead
+	Schema    string    // Schema prefix for Table (empty = unqualified)
 	Table     string    // Deprecated: use TableExpr instead
 	TableExpr TableExpr // Preferred: typed table expression
 	Alias     string    // Deprecated: use TableExpr's alias instead
