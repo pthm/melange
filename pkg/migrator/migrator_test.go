@@ -331,6 +331,93 @@ func TestMigrateNoSchemaFile(t *testing.T) {
 	})
 }
 
+func TestMigrationsDDL(t *testing.T) {
+	t.Run("no schema uses unqualified table name", func(t *testing.T) {
+		sql := migrationsDDL("")
+		if !strings.Contains(sql, "CREATE TABLE IF NOT EXISTS melange_migrations") {
+			t.Error("should use unqualified table name")
+		}
+		if strings.Contains(sql, `"."`) {
+			t.Error("should not contain schema qualification")
+		}
+	})
+
+	t.Run("with schema qualifies table name", func(t *testing.T) {
+		sql := migrationsDDL("authz")
+		if !strings.Contains(sql, `CREATE TABLE IF NOT EXISTS "authz"."melange_migrations"`) {
+			t.Errorf("should schema-qualify table name, got:\n%s", sql)
+		}
+		if !strings.Contains(sql, `ON "authz"."melange_migrations"`) {
+			t.Errorf("should schema-qualify index target, got:\n%s", sql)
+		}
+	})
+}
+
+func TestAddMelangeVersionColumn(t *testing.T) {
+	t.Run("no schema", func(t *testing.T) {
+		sql := addMelangeVersionColumn("")
+		if !strings.Contains(sql, "ALTER TABLE melange_migrations") {
+			t.Error("should use unqualified table name")
+		}
+	})
+
+	t.Run("with schema", func(t *testing.T) {
+		sql := addMelangeVersionColumn("authz")
+		if !strings.Contains(sql, `ALTER TABLE "authz"."melange_migrations"`) {
+			t.Errorf("should schema-qualify table name, got:\n%s", sql)
+		}
+	})
+}
+
+func TestAddFunctionChecksumsColumn(t *testing.T) {
+	t.Run("no schema", func(t *testing.T) {
+		sql := addFunctionChecksumsColumn("")
+		if !strings.Contains(sql, "ALTER TABLE melange_migrations") {
+			t.Error("should use unqualified table name")
+		}
+	})
+
+	t.Run("with schema", func(t *testing.T) {
+		sql := addFunctionChecksumsColumn("authz")
+		if !strings.Contains(sql, `ALTER TABLE "authz"."melange_migrations"`) {
+			t.Errorf("should schema-qualify table name, got:\n%s", sql)
+		}
+	})
+}
+
+func TestOutputDryRun_DatabaseSchema(t *testing.T) {
+	t.Run("with schema shows hint comment", func(t *testing.T) {
+		m := NewMigrator(nil, "")
+		m.SetDatabaseSchema("authz")
+
+		var buf bytes.Buffer
+		m.outputDryRun(&buf, "", "abc", GeneratedSQL{}, ListGeneratedSQL{}, nil)
+		output := buf.String()
+
+		if !strings.Contains(output, "Database schema: authz") {
+			t.Error("should mention the configured schema")
+		}
+		if !strings.Contains(output, `CREATE SCHEMA IF NOT EXISTS "authz"`) {
+			t.Error("should show CREATE SCHEMA hint")
+		}
+		if !strings.Contains(output, `"authz"."melange_migrations"`) {
+			t.Error("DDL should use schema-qualified table name")
+		}
+	})
+
+	t.Run("without schema omits schema section", func(t *testing.T) {
+		m := NewMigrator(nil, "")
+
+		var buf bytes.Buffer
+		m.outputDryRun(&buf, "", "abc", GeneratedSQL{}, ListGeneratedSQL{}, nil)
+		output := buf.String()
+
+		if strings.Contains(output, "Database schema") {
+			t.Error("should not have schema section when no schema configured")
+		}
+	})
+}
+
 func TestMigrateFromString_InvalidSchema(t *testing.T) {
 	err := MigrateFromString(context.Background(), nil, "this is not valid OpenFGA")
 	if err == nil {
