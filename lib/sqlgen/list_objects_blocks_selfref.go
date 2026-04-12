@@ -260,7 +260,7 @@ func buildSelfRefUsersetRecursiveBlock(plan ListPlan) *TypedQueryBlock {
 		Query: SelectStmt{
 			Distinct:    true,
 			ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}, Raw("me.depth + 1 AS depth")},
-			FromExpr:    TableAs(plan.DatabaseSchema, "member_expansion", "me"),
+			FromExpr:    TableAs("", "member_expansion", "me"),
 			Joins: []JoinClause{{
 				Type:   "INNER",
 				Schema: plan.DatabaseSchema,

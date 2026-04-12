@@ -9,6 +9,24 @@ import (
 	"github.com/pthm/melange/test/openfgatests"
 )
 
+// runWithSchema runs fn twice: once with the default (public) schema and once
+// with a custom "melange" schema, matching the pattern in test/integration_test.go.
+func runWithSchema(t *testing.T, fn func(t *testing.T, client *openfgatests.Client)) {
+	t.Helper()
+
+	for _, databaseSchema := range []string{"", "melange"} {
+		name := "no-schema"
+		if databaseSchema != "" {
+			name = "schema-" + databaseSchema
+		}
+
+		t.Run(name, func(t *testing.T) {
+			client := openfgatests.NewClientWithSchema(t, databaseSchema)
+			fn(t, client)
+		})
+	}
+}
+
 // =============================================================================
 // Supported Feature Tests
 // These test patterns cover features that Melange fully supports.
@@ -19,8 +37,9 @@ func TestOpenFGA_All(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	client := openfgatests.NewClient(t)
-	openfgatests.RunAll(t, client)
+	runWithSchema(t, func(t *testing.T, client *openfgatests.Client) {
+		openfgatests.RunAll(t, client)
+	})
 }
 
 // TestOpenFGA_DirectAssignment tests direct relation assignment [user].
@@ -29,8 +48,9 @@ func TestOpenFGA_DirectAssignment(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	client := openfgatests.NewClient(t)
-	openfgatests.RunTestsByPattern(t, client, "this")
+	runWithSchema(t, func(t *testing.T, client *openfgatests.Client) {
+		openfgatests.RunTestsByPattern(t, client, "this")
+	})
 }
 
 // TestOpenFGA_ComputedUserset tests computed relations (role hierarchy via implied_by).
@@ -39,8 +59,9 @@ func TestOpenFGA_ComputedUserset(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	client := openfgatests.NewClient(t)
-	openfgatests.RunTestsByPattern(t, client, "computed_userset|computeduserset")
+	runWithSchema(t, func(t *testing.T, client *openfgatests.Client) {
+		openfgatests.RunTestsByPattern(t, client, "computed_userset|computeduserset")
+	})
 }
 
 // TestOpenFGA_TupleToUserset tests parent inheritance (FROM pattern).
@@ -49,8 +70,9 @@ func TestOpenFGA_TupleToUserset(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	client := openfgatests.NewClient(t)
-	openfgatests.RunTestsByPattern(t, client, "tuple_to_userset|ttu_")
+	runWithSchema(t, func(t *testing.T, client *openfgatests.Client) {
+		openfgatests.RunTestsByPattern(t, client, "tuple_to_userset|ttu_")
+	})
 }
 
 // TestOpenFGA_Wildcards tests public access via wildcards [user:*].
@@ -59,8 +81,9 @@ func TestOpenFGA_Wildcards(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	client := openfgatests.NewClient(t)
-	openfgatests.RunTestsByPattern(t, client, "wildcard|public")
+	runWithSchema(t, func(t *testing.T, client *openfgatests.Client) {
+		openfgatests.RunTestsByPattern(t, client, "wildcard|public")
+	})
 }
 
 // TestOpenFGA_Exclusion tests the BUT NOT pattern.
@@ -69,8 +92,9 @@ func TestOpenFGA_Exclusion(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	client := openfgatests.NewClient(t)
-	openfgatests.RunTestsByPattern(t, client, "exclusion|butnot|but_not")
+	runWithSchema(t, func(t *testing.T, client *openfgatests.Client) {
+		openfgatests.RunTestsByPattern(t, client, "exclusion|butnot|but_not")
+	})
 }
 
 // TestOpenFGA_Union tests the OR pattern.
@@ -79,8 +103,9 @@ func TestOpenFGA_Union(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	client := openfgatests.NewClient(t)
-	openfgatests.RunTestsByPattern(t, client, "union")
+	runWithSchema(t, func(t *testing.T, client *openfgatests.Client) {
+		openfgatests.RunTestsByPattern(t, client, "union")
+	})
 }
 
 // TestOpenFGA_Intersection tests the AND pattern.
@@ -89,8 +114,9 @@ func TestOpenFGA_Intersection(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	client := openfgatests.NewClient(t)
-	openfgatests.RunTestsByPattern(t, client, "intersection")
+	runWithSchema(t, func(t *testing.T, client *openfgatests.Client) {
+		openfgatests.RunTestsByPattern(t, client, "intersection")
+	})
 }
 
 // TestOpenFGA_UsersetReferences tests userset references [type#relation].
@@ -99,8 +125,9 @@ func TestOpenFGA_UsersetReferences(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	client := openfgatests.NewClient(t)
-	openfgatests.RunTestsByPattern(t, client, "userset")
+	runWithSchema(t, func(t *testing.T, client *openfgatests.Client) {
+		openfgatests.RunTestsByPattern(t, client, "userset")
+	})
 }
 
 // TestOpenFGA_CycleHandling tests that cycles are handled correctly.
@@ -108,8 +135,9 @@ func TestOpenFGA_CycleHandling(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	client := openfgatests.NewClient(t)
-	openfgatests.RunTestsByPattern(t, client, "cycle|recursive")
+	runWithSchema(t, func(t *testing.T, client *openfgatests.Client) {
+		openfgatests.RunTestsByPattern(t, client, "cycle|recursive")
+	})
 }
 
 // TestOpenFGA_ContextualTuples tests contextual tuples (temporary tuples in requests).
@@ -118,8 +146,9 @@ func TestOpenFGA_ContextualTuples(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	client := openfgatests.NewClient(t)
-	openfgatests.RunTestsByPattern(t, client, "contextual")
+	runWithSchema(t, func(t *testing.T, client *openfgatests.Client) {
+		openfgatests.RunTestsByPattern(t, client, "contextual")
+	})
 }
 
 // TestOpenFGA_Validation tests validation of policies.
@@ -127,8 +156,9 @@ func TestOpenFGA_Validation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	client := openfgatests.NewClient(t)
-	openfgatests.RunTestsByPattern(t, client, "validation|invalid|error|err_")
+	runWithSchema(t, func(t *testing.T, client *openfgatests.Client) {
+		openfgatests.RunTestsByPattern(t, client, "validation|invalid|error|err_")
+	})
 }
 
 // =============================================================================
@@ -146,8 +176,9 @@ func TestOpenFGAByName(t *testing.T) {
 	if name == "" {
 		name = "this" // default test
 	}
-	client := openfgatests.NewClient(t)
-	openfgatests.RunTestByName(t, client, name)
+	runWithSchema(t, func(t *testing.T, client *openfgatests.Client) {
+		openfgatests.RunTestByName(t, client, name)
+	})
 }
 
 // TestOpenFGAByPattern runs tests matching a regex pattern.
@@ -161,8 +192,9 @@ func TestOpenFGAByPattern(t *testing.T) {
 	if pattern == "" {
 		pattern = "^computed_userset$" // default pattern
 	}
-	client := openfgatests.NewClient(t)
-	openfgatests.RunTestsByPattern(t, client, pattern)
+	runWithSchema(t, func(t *testing.T, client *openfgatests.Client) {
+		openfgatests.RunTestsByPattern(t, client, pattern)
+	})
 }
 
 // TestOpenFGAListAvailableTests prints all available test names (useful for discovery).

@@ -178,9 +178,10 @@ func buildRecursiveIntersectionClosureBlock(plan ListPlan, rel string) TypedQuer
 	stmt := SelectStmt{
 		ColumnExprs: []Expr{Col{Table: "icr", Column: "object_id"}},
 		FromExpr: FunctionCallExpr{
-			Name:  funcName,
-			Args:  []Expr{SubjectType, SubjectID, Null{}, Null{}},
-			Alias: "icr",
+			Schema: plan.DatabaseSchema,
+			Name:   funcName,
+			Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
+			Alias:  "icr",
 		},
 	}
 

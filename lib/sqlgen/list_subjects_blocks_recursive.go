@@ -1,6 +1,10 @@
 package sqlgen
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/pthm/melange/lib/sqlgen/sqldsl"
+)
 
 // SubjectsRecursiveBlockSet contains blocks for a recursive list_subjects function.
 type SubjectsRecursiveBlockSet struct {
@@ -422,7 +426,8 @@ func buildListSubjectsRecursiveTTUBlockSubjectPool(plan ListPlan, parent ListPar
 		// Example: can_read->owner->repo_admin should verify "reader" on the target object (repo)
 		// to honor "reader: repo_admin from owner but not restricted"
 		checkCallSQL = fmt.Sprintf(
-			"check_permission_internal(%s, %s, %s, %s, %s) = 1",
+			"%s(%s, %s, %s, %s, %s) = 1",
+			sqldsl.PrefixIdent("check_permission_internal", plan.DatabaseSchema),
 			SubjectType.SQL(), // subject_type (param)
 			Col{Table: "sp", Column: "subject_id"}.SQL(), // subject_id (from subject_pool)
 			Lit(parent.SourceRelation).SQL(),             // relation to check (SOURCE relation like "reader")
@@ -434,7 +439,8 @@ func buildListSubjectsRecursiveTTUBlockSubjectPool(plan ListPlan, parent ListPar
 		// Direct parent pattern: verify the parent relation on the parent object
 		// check_permission_internal(subject_type, subject_id, relation, object_type, object_id)
 		checkCallSQL = fmt.Sprintf(
-			"check_permission_internal(%s, %s, %s, %s, %s) = 1",
+			"%s(%s, %s, %s, %s, %s) = 1",
+			sqldsl.PrefixIdent("check_permission_internal", plan.DatabaseSchema),
 			SubjectType.SQL(), // subject_type (param)
 			Col{Table: "sp", Column: "subject_id"}.SQL(),     // subject_id (from subject_pool)
 			Lit(parent.Relation).SQL(),                       // relation to check on parent
