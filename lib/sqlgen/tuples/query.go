@@ -168,12 +168,16 @@ func (q *TupleQuery) WhereUsersetRelationLike(rel string) *TupleQuery {
 	return q
 }
 
-// InnerJoin adds an INNER JOIN clause.
+// InnerJoin adds an INNER JOIN clause with the query's schema.
+// For melange_tuples joins use JoinTuples instead — it keeps the reference
+// unqualified so pg_temp can shadow it for contextual tuples.
 func (q *TupleQuery) InnerJoin(table, alias string, on ...sqldsl.Expr) *TupleQuery {
 	return q.addJoin("INNER", table, alias, on)
 }
 
-// LeftJoin adds a LEFT JOIN clause.
+// LeftJoin adds a LEFT JOIN clause with the query's schema.
+// For melange_tuples joins use JoinTuples instead — it keeps the reference
+// unqualified so pg_temp can shadow it for contextual tuples.
 func (q *TupleQuery) LeftJoin(table, alias string, on ...sqldsl.Expr) *TupleQuery {
 	return q.addJoin("LEFT", table, alias, on)
 }

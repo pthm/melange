@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+
+	"github.com/pthm/melange/lib/sqlgen/sqldsl"
 )
 
 // checkViewDefinition parses the melange_tuples view and emits checks for
@@ -12,7 +14,7 @@ import (
 func (d *Doctor) checkViewDefinition(ctx context.Context, report *Report) error { //nolint:unparam // error return kept for consistent checker interface
 	var viewSQL string
 	err := d.db.QueryRowContext(ctx,
-		fmt.Sprintf(`SELECT pg_get_viewdef('%s'::regclass, true)`, d.prefixIdent("melange_tuples")),
+		fmt.Sprintf(`SELECT pg_get_viewdef(%s::regclass, true)`, sqldsl.QuoteLiteral(d.prefixIdent("melange_tuples"))),
 	).Scan(&viewSQL)
 	if err != nil {
 		report.AddCheck(CheckResult{

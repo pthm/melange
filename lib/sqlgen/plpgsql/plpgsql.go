@@ -309,17 +309,17 @@ func (f SqlFunction) SQL() string {
 }
 
 // writeSearchPath appends a SET search_path clause to the function definition.
-// If searchPath is empty, it defaults to schema (since generated functions always
-// need their schema in the search path for unqualified melange_tuples resolution).
+// If searchPath is empty, it defaults to schema — generated functions always
+// need their schema in the search path so that unqualified melange_tuples
+// references resolve correctly (and pg_temp can shadow them for contextual tuples).
 func writeSearchPath(sb *strings.Builder, searchPath, schema string) {
 	sp := searchPath
 	if sp == "" {
 		sp = schema
 	}
 	if sp != "" {
-		sb.WriteString("\nSET search_path = '")
-		sb.WriteString(sp)
-		sb.WriteString("'")
+		sb.WriteString("\nSET search_path = ")
+		sb.WriteString(sqldsl.QuoteLiteral(sp))
 	}
 }
 
