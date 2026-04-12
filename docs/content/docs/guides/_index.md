@@ -8,6 +8,7 @@ sidebar:
 Task-oriented guides for using Melange's client libraries, SQL functions, and operational patterns. Each guide includes examples in Go, TypeScript, and SQL where applicable. For direct SQL function signatures, see the [SQL API reference](../reference/sql-api).
 
 {{< cards >}}
+{{< card link="modelling-guide" title="Modelling Guide" subtitle="Build an authorization model from scratch with end-to-end examples" icon="document-text" >}}
 {{< card link="checking-permissions" title="Checking Permissions" subtitle="Validate access using the Checker API" icon="shield-check" >}}
 {{< card link="listing-objects" title="Listing Objects" subtitle="Find all objects a subject can access" icon="collection" >}}
 {{< card link="listing-subjects" title="Listing Subjects" subtitle="Find all subjects with access to an object" icon="users" >}}

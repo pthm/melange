@@ -3,7 +3,7 @@ title: Authorization Modelling
 weight: 3
 ---
 
-Melange uses [OpenFGA](https://openfga.dev)'s DSL syntax to define authorization models. This page covers the basics - for comprehensive modelling guidance, see the [OpenFGA documentation](https://openfga.dev/docs/modeling).
+Melange uses [OpenFGA](https://openfga.dev)'s DSL syntax to define authorization models. This page covers the DSL syntax. For a step-by-step walkthrough with end-to-end examples, see the [Modelling Guide](../../guides/modelling-guide/). For comprehensive modelling guidance, see the [OpenFGA documentation](https://openfga.dev/docs/modeling).
 
 ## Schema Structure
 
