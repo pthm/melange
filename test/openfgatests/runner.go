@@ -500,12 +500,14 @@ func BenchAllTests(b *testing.B) {
 
 // RunTest runs a single test case with its own isolated database.
 // Each test gets a fresh database to enable parallel execution.
-func RunTest(t *testing.T, _ *Client, tc TestCase) {
+// The passed client's DatabaseSchema is propagated to the per-test client.
+func RunTest(t *testing.T, parent *Client, tc TestCase) {
 	t.Run(tc.Name, func(t *testing.T) {
 		t.Parallel()
 
-		// Create a new client with its own isolated database for this test
-		client := NewClient(t)
+		// Create a new client with its own isolated database for this test,
+		// preserving the schema configuration from the parent client.
+		client := NewClientWithSchema(t, parent.DatabaseSchema())
 		ctx := context.Background()
 
 		resp, err := client.CreateStore(ctx, &openfgav1.CreateStoreRequest{Name: tc.Name})

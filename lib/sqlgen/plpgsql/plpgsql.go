@@ -157,13 +157,14 @@ func (c Comment) StmtSQL() string {
 
 // PlpgsqlFunction represents a complete PL/pgSQL function definition.
 type PlpgsqlFunction struct {
-	Schema  string
-	Name    string
-	Args    []FuncArg
-	Returns string
-	Decls   []Decl
-	Body    []Stmt
-	Header  []string // Comment lines at the top of the function (without -- prefix)
+	Schema     string
+	Name       string
+	Args       []FuncArg
+	Returns    string
+	Decls      []Decl
+	Body       []Stmt
+	Header     []string // Comment lines at the top of the function (without -- prefix)
+	SearchPath string   // If set, appends SET search_path = '<value>' to the function definition
 }
 
 // SQL renders the complete CREATE OR REPLACE FUNCTION statement.
@@ -193,7 +194,9 @@ func (f PlpgsqlFunction) SQL() string {
 		}
 	}
 	sb.WriteString("END;\n")
-	sb.WriteString("$$ LANGUAGE plpgsql STABLE;")
+	sb.WriteString("$$ LANGUAGE plpgsql STABLE")
+	writeSearchPath(&sb, f.SearchPath, f.Schema)
+	sb.WriteString(";")
 
 	return sb.String()
 }
@@ -279,12 +282,13 @@ func ListSubjectsDispatcherArgs() []FuncArg {
 // SqlFunction represents a simple SQL function (LANGUAGE sql).
 // Unlike PlpgsqlFunction, this renders a single SELECT expression as the body.
 type SqlFunction struct {
-	Schema  string
-	Name    string
-	Args    []FuncArg
-	Returns string
-	Body    sqldsl.SQLer // The body expression (e.g., a SelectStmt or function call)
-	Header  []string     // Comment lines at the top of the function (without -- prefix)
+	Schema     string
+	Name       string
+	Args       []FuncArg
+	Returns    string
+	Body       sqldsl.SQLer // The body expression (e.g., a SelectStmt or function call)
+	Header     []string     // Comment lines at the top of the function (without -- prefix)
+	SearchPath string       // If set, appends SET search_path = '<value>' to the function definition
 }
 
 // SQL renders the complete CREATE OR REPLACE FUNCTION statement as LANGUAGE sql.
@@ -297,9 +301,26 @@ func (f SqlFunction) SQL() string {
 	sb.WriteString("    ")
 	sb.WriteString(f.Body.SQL())
 	sb.WriteString(";\n")
-	sb.WriteString("$$ LANGUAGE sql STABLE;")
+	sb.WriteString("$$ LANGUAGE sql STABLE")
+	writeSearchPath(&sb, f.SearchPath, f.Schema)
+	sb.WriteString(";")
 
 	return sb.String()
+}
+
+// writeSearchPath appends a SET search_path clause to the function definition.
+// If searchPath is empty, it defaults to schema — generated functions always
+// need their schema in the search path so that unqualified melange_tuples
+// references resolve correctly (and pg_temp can shadow them for contextual tuples).
+func writeSearchPath(sb *strings.Builder, searchPath, schema string) {
+	sp := searchPath
+	if sp == "" {
+		sp = schema
+	}
+	if sp != "" {
+		sb.WriteString("\nSET search_path = ")
+		sb.WriteString(sqldsl.QuoteLiteral(sp))
+	}
 }
 
 // writeHeader writes SQL comment lines to the builder.

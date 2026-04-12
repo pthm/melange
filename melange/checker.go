@@ -171,8 +171,9 @@ func WithDatabaseSchema(databaseSchema string) Option {
 // authorization schema is not yet fully configured.
 func NewChecker(q Querier, opts ...Option) *Checker {
 	c := &Checker{
-		q:        q,
-		decision: DecisionUnset,
+		q:              q,
+		decision:       DecisionUnset,
+		databaseSchema: "public",
 	}
 	for _, opt := range opts {
 		opt(c)

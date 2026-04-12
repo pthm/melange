@@ -273,8 +273,8 @@ func TestOutputDryRun(t *testing.T) {
 			t.Error("should contain list objects dispatcher")
 		}
 
-		// Migration record
-		if !strings.Contains(output, "INSERT INTO melange_migrations") {
+		// Migration record (schema-qualified with default "public")
+		if !strings.Contains(output, "INSERT INTO") || !strings.Contains(output, "melange_migrations") {
 			t.Error("should contain migration record INSERT")
 		}
 	})
@@ -405,15 +405,15 @@ func TestOutputDryRun_DatabaseSchema(t *testing.T) {
 		}
 	})
 
-	t.Run("without schema omits schema section", func(t *testing.T) {
+	t.Run("default schema shows public", func(t *testing.T) {
 		m := NewMigrator(nil, "")
 
 		var buf bytes.Buffer
 		m.outputDryRun(&buf, "", "abc", GeneratedSQL{}, ListGeneratedSQL{}, nil)
 		output := buf.String()
 
-		if strings.Contains(output, "Database schema") {
-			t.Error("should not have schema section when no schema configured")
+		if !strings.Contains(output, "public") {
+			t.Error("should show public as default schema")
 		}
 	})
 }

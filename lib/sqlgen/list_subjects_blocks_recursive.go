@@ -1,6 +1,10 @@
 package sqlgen
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/pthm/melange/lib/sqlgen/sqldsl"
+)
 
 // SubjectsRecursiveBlockSet contains blocks for a recursive list_subjects function.
 type SubjectsRecursiveBlockSet struct {
@@ -187,10 +191,10 @@ func buildListSubjectsRecursiveComplexUsersetBlock(plan ListPlan, pattern listUs
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: memberAlias, Column: "subject_id"}},
-		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", grantAlias),
+		FromExpr:    TableAs("", "melange_tuples", grantAlias),
 		Joins: []JoinClause{{
 			Type:   "INNER",
-			Schema: plan.DatabaseSchema,
+			Schema: "",
 			Table:  "melange_tuples",
 			Alias:  memberAlias,
 			On:     joinCond,
@@ -246,10 +250,10 @@ func buildListSubjectsRecursiveSimpleUsersetBlock(plan ListPlan, pattern listUse
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: memberAlias, Column: "subject_id"}},
-		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", grantAlias),
+		FromExpr:    TableAs("", "melange_tuples", grantAlias),
 		Joins: []JoinClause{{
 			Type:   "INNER",
-			Schema: plan.DatabaseSchema,
+			Schema: "",
 			Table:  "melange_tuples",
 			Alias:  memberAlias,
 			On:     joinCond,
@@ -380,7 +384,7 @@ func buildListSubjectsRecursiveTTUBlockParentClosure(plan ListPlan, parent ListP
 		FromExpr:    TableAs("", "parent_closure", "p"),
 		Joins: []JoinClause{{
 			Type:   "INNER",
-			Schema: plan.DatabaseSchema,
+			Schema: "",
 			Table:  "melange_tuples",
 			Alias:  "t",
 			On: And(
@@ -422,7 +426,8 @@ func buildListSubjectsRecursiveTTUBlockSubjectPool(plan ListPlan, parent ListPar
 		// Example: can_read->owner->repo_admin should verify "reader" on the target object (repo)
 		// to honor "reader: repo_admin from owner but not restricted"
 		checkCallSQL = fmt.Sprintf(
-			"check_permission_internal(%s, %s, %s, %s, %s) = 1",
+			"%s(%s, %s, %s, %s, %s) = 1",
+			sqldsl.PrefixIdent("check_permission_internal", plan.DatabaseSchema),
 			SubjectType.SQL(), // subject_type (param)
 			Col{Table: "sp", Column: "subject_id"}.SQL(), // subject_id (from subject_pool)
 			Lit(parent.SourceRelation).SQL(),             // relation to check (SOURCE relation like "reader")
@@ -434,7 +439,8 @@ func buildListSubjectsRecursiveTTUBlockSubjectPool(plan ListPlan, parent ListPar
 		// Direct parent pattern: verify the parent relation on the parent object
 		// check_permission_internal(subject_type, subject_id, relation, object_type, object_id)
 		checkCallSQL = fmt.Sprintf(
-			"check_permission_internal(%s, %s, %s, %s, %s) = 1",
+			"%s(%s, %s, %s, %s, %s) = 1",
+			sqldsl.PrefixIdent("check_permission_internal", plan.DatabaseSchema),
 			SubjectType.SQL(), // subject_type (param)
 			Col{Table: "sp", Column: "subject_id"}.SQL(),     // subject_id (from subject_pool)
 			Lit(parent.Relation).SQL(),                       // relation to check on parent
@@ -451,7 +457,7 @@ func buildListSubjectsRecursiveTTUBlockSubjectPool(plan ListPlan, parent ListPar
 		FromExpr:    TableAs("", "subject_pool", "sp"),
 		Joins: []JoinClause{{
 			Type:   "CROSS",
-			Schema: plan.DatabaseSchema,
+			Schema: "",
 			Table:  "melange_tuples",
 			Alias:  "link",
 		}},
@@ -531,7 +537,7 @@ func buildListSubjectsRecursiveUsersetFilterDirectBlock(plan ListPlan) TypedQuer
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{subjectExpr},
-		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "t"),
+		FromExpr:    TableAs("", "melange_tuples", "t"),
 		Where: And(
 			Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 			Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
@@ -591,10 +597,10 @@ func buildListSubjectsRecursiveUsersetFilterTTUBlock(plan ListPlan, parent ListP
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{subjectExpr},
-		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "link"),
+		FromExpr:    TableAs("", "melange_tuples", "link"),
 		Joins: []JoinClause{{
 			Type:   "INNER",
-			Schema: plan.DatabaseSchema,
+			Schema: "",
 			Table:  "melange_tuples",
 			Alias:  "pt",
 			On: And(
@@ -641,7 +647,7 @@ func buildListSubjectsRecursiveUsersetFilterTTUIntermediateBlock(plan ListPlan, 
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{subjectExpr},
-		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "link"),
+		FromExpr:    TableAs("", "melange_tuples", "link"),
 		Where:       And(whereConditions...),
 	}
 
@@ -677,7 +683,7 @@ func buildListSubjectsRecursiveUsersetFilterTTUNestedBlock(plan ListPlan, parent
 
 	stmt := SelectStmt{
 		ColumnExprs: []Expr{Col{Table: "nested", Column: "subject_id"}},
-		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "link"),
+		FromExpr:    TableAs("", "melange_tuples", "link"),
 		Joins: []JoinClause{{
 			Type:      "CROSS",
 			TableExpr: lateralCall,

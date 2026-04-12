@@ -29,6 +29,7 @@ import (
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"google.golang.org/grpc"
 
+	"github.com/pthm/melange/lib/sqlgen/sqldsl"
 	"github.com/pthm/melange/melange"
 	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/pkg/parser"
@@ -40,8 +41,9 @@ import (
 // It manages stores, authorization models, and tuples in PostgreSQL, routing
 // permission checks through melange's Checker.
 type Client struct {
-	sharedDB *sql.DB
-	tb       testing.TB
+	sharedDB       *sql.DB
+	tb             testing.TB
+	databaseSchema string
 
 	mu     sync.RWMutex
 	stores map[string]*store
@@ -82,6 +84,23 @@ func NewClient(tb testing.TB) *Client {
 	}
 }
 
+// NewClientWithSchema creates a test client that installs melange objects
+// in the given Postgres schema. An empty string uses the default (public) schema.
+func NewClientWithSchema(tb testing.TB, databaseSchema string) *Client {
+	tb.Helper()
+
+	return &Client{
+		tb:             tb,
+		databaseSchema: databaseSchema,
+		stores:         make(map[string]*store),
+	}
+}
+
+// DatabaseSchema returns the configured database schema.
+func (c *Client) DatabaseSchema() string {
+	return c.databaseSchema
+}
+
 // NewClientWithDB creates a test client with an existing database connection.
 // Use this when you need more control over the database setup.
 func NewClientWithDB(db *sql.DB) *Client {
@@ -115,12 +134,12 @@ func (c *Client) debugUserset(
 	tb.Logf("debug userset: object=%s:%s relation=%s filters=%v", objectType, objectID, relation, filters)
 	tb.Logf("debug userset: inline schema data enabled (no model tables to query)")
 
-	rows, err := store.db.QueryContext(ctx, `
+	rows, err := store.db.QueryContext(ctx, fmt.Sprintf(`
 		SELECT subject_type, subject_id, relation
-		FROM melange_tuples
+		FROM %s
 		WHERE object_type = $1 AND object_id = $2
 		ORDER BY relation, subject_type, subject_id
-	`, objectType, objectID)
+	`, sqldsl.PrefixIdent("melange_tuples", c.databaseSchema)), objectType, objectID)
 	if err != nil {
 		tb.Logf("debug tuples error: %v", err)
 		return
@@ -137,10 +156,17 @@ func (c *Client) debugUserset(
 }
 
 // initializeMelangeSchema applies the melange DDL without domain-specific tables.
-func initializeMelangeSchema(db *sql.DB) error {
+func initializeMelangeSchema(db *sql.DB, databaseSchema string) error {
 	ctx := context.Background()
 
-	// Use migrator.MigrateFromString with a minimal schema to set up infrastructure
+	// Create target schema if configured
+	if databaseSchema != "" {
+		if _, err := db.ExecContext(ctx, fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s", sqldsl.QuoteIdent(databaseSchema))); err != nil {
+			return fmt.Errorf("create schema: %w", err)
+		}
+	}
+
+	// Use migrator with schema support to set up infrastructure
 	// We use a minimal schema because OpenFGA tests provide their own models
 	minimalSchema := `
 model
@@ -148,30 +174,39 @@ model
 
 type user
 `
-	if err := migrator.MigrateFromString(ctx, db, minimalSchema); err != nil {
+	types, err := parser.ParseSchemaString(minimalSchema)
+	if err != nil {
+		return fmt.Errorf("parsing minimal schema: %w", err)
+	}
+	mig := migrator.NewMigrator(db, "")
+	mig.SetDatabaseSchema(databaseSchema)
+	if err := mig.MigrateWithTypes(ctx, types); err != nil {
 		return fmt.Errorf("apply melange migration: %w", err)
 	}
 
+	tableName := sqldsl.PrefixIdent("melange_test_tuples", databaseSchema)
+	viewName := sqldsl.PrefixIdent("melange_tuples", databaseSchema)
+
 	// Create an empty tuples table and view so that checks work even before Write is called
 	// This is needed because Check queries the melange_tuples view
-	_, err := db.ExecContext(ctx, `
-		CREATE TABLE IF NOT EXISTS melange_test_tuples (
+	_, err = db.ExecContext(ctx, fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS %s (
 			subject_type TEXT NOT NULL,
 			subject_id TEXT NOT NULL,
 			relation TEXT NOT NULL,
 			object_type TEXT NOT NULL,
 			object_id TEXT NOT NULL
 		)
-	`)
+	`, tableName))
 	if err != nil {
 		return fmt.Errorf("creating test tuples table: %w", err)
 	}
 
-	_, err = db.ExecContext(ctx, `
-		CREATE OR REPLACE VIEW melange_tuples AS
+	_, err = db.ExecContext(ctx, fmt.Sprintf(`
+		CREATE OR REPLACE VIEW %s AS
 		SELECT subject_type, subject_id, relation, object_type, object_id
-		FROM melange_test_tuples
-	`)
+		FROM %s
+	`, viewName, tableName))
 	if err != nil {
 		return fmt.Errorf("creating tuples view: %w", err)
 	}
@@ -300,6 +335,7 @@ func (c *Client) Check(ctx context.Context, req *openfgav1.CheckRequest, opts ..
 		melange.WithUsersetValidation(),
 		melange.WithRequestValidation(),
 		melange.WithValidator(validator),
+		melange.WithDatabaseSchema(c.databaseSchema),
 	)
 	contextualTuples, err := contextualTuplesFromKeys(req.GetContextualTuples().GetTupleKeys())
 	if err != nil {
@@ -341,6 +377,7 @@ func (c *Client) ListObjects(ctx context.Context, req *openfgav1.ListObjectsRequ
 		melange.WithUsersetValidation(),
 		melange.WithRequestValidation(),
 		melange.WithValidator(validator),
+		melange.WithDatabaseSchema(c.databaseSchema),
 	)
 	contextualTuples, err := contextualTuplesFromKeys(req.GetContextualTuples().GetTupleKeys())
 	if err != nil {
@@ -400,6 +437,7 @@ func (c *Client) ListUsers(ctx context.Context, req *openfgav1.ListUsersRequest,
 			melange.WithUsersetValidation(),
 			melange.WithRequestValidation(),
 			melange.WithValidator(validator),
+			melange.WithDatabaseSchema(c.databaseSchema),
 		)
 		contextualTuples, err := contextualTuplesFromKeys(req.GetContextualTuples())
 		if err != nil {
@@ -441,27 +479,31 @@ func (c *Client) loadModel(ctx context.Context, db *sql.DB, m *model) error {
 	// Use the Migrator to apply generated SQL for this model
 	// The empty string for schemasDir is fine since we're using MigrateWithTypes directly
 	mig := migrator.NewMigrator(db, "")
+	mig.SetDatabaseSchema(c.databaseSchema)
 	return mig.MigrateWithTypes(ctx, m.types)
 }
 
 // refreshTuples updates the melange_tuples view with the current store tuples.
 func (c *Client) refreshTuples(ctx context.Context, db *sql.DB, s *store) error {
+	tableName := sqldsl.PrefixIdent("melange_test_tuples", c.databaseSchema)
+	viewName := sqldsl.PrefixIdent("melange_tuples", c.databaseSchema)
+
 	// Drop existing test tuples table if it exists
-	_, err := db.ExecContext(ctx, "DROP TABLE IF EXISTS melange_test_tuples CASCADE")
+	_, err := db.ExecContext(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s CASCADE", tableName))
 	if err != nil {
 		return fmt.Errorf("dropping test tuples: %w", err)
 	}
 
 	// Create test tuples table
-	_, err = db.ExecContext(ctx, `
-		CREATE TABLE melange_test_tuples (
+	_, err = db.ExecContext(ctx, fmt.Sprintf(`
+		CREATE TABLE %s (
 			subject_type TEXT NOT NULL,
 			subject_id TEXT NOT NULL,
 			relation TEXT NOT NULL,
 			object_type TEXT NOT NULL,
 			object_id TEXT NOT NULL
 		)
-	`)
+	`, tableName))
 	if err != nil {
 		return fmt.Errorf("creating test tuples table: %w", err)
 	}
@@ -477,21 +519,21 @@ func (c *Client) refreshTuples(ctx context.Context, db *sql.DB, s *store) error 
 			return fmt.Errorf("parsing tuple object: %w", err)
 		}
 
-		_, err = db.ExecContext(ctx, `
-			INSERT INTO melange_test_tuples (subject_type, subject_id, relation, object_type, object_id)
+		_, err = db.ExecContext(ctx, fmt.Sprintf(`
+			INSERT INTO %s (subject_type, subject_id, relation, object_type, object_id)
 			VALUES ($1, $2, $3, $4, $5)
-		`, subject.Type, subject.ID, tk.GetRelation(), object.Type, object.ID)
+		`, tableName), subject.Type, subject.ID, tk.GetRelation(), object.Type, object.ID)
 		if err != nil {
 			return fmt.Errorf("inserting tuple: %w", err)
 		}
 	}
 
 	// Create or replace the melange_tuples view
-	_, err = db.ExecContext(ctx, `
-		CREATE OR REPLACE VIEW melange_tuples AS
+	_, err = db.ExecContext(ctx, fmt.Sprintf(`
+		CREATE OR REPLACE VIEW %s AS
 		SELECT subject_type, subject_id, relation, object_type, object_id
-		FROM melange_test_tuples
-	`)
+		FROM %s
+	`, viewName, tableName))
 	if err != nil {
 		return fmt.Errorf("creating tuples view: %w", err)
 	}
@@ -613,8 +655,9 @@ func (c *Client) CheckBulk(ctx context.Context, storeID string, assertions []*Ch
 		objectIDs[i] = object.ID
 	}
 
+	funcName := sqldsl.PrefixIdent("check_permission_bulk", c.databaseSchema)
 	rows, err := store.db.QueryContext(ctx,
-		"SELECT idx, allowed FROM check_permission_bulk($1, $2, $3, $4, $5)",
+		fmt.Sprintf("SELECT idx, allowed FROM %s($1, $2, $3, $4, $5)", funcName),
 		pq.Array(subjectTypes), pq.Array(subjectIDs), pq.Array(relations),
 		pq.Array(objectTypes), pq.Array(objectIDs),
 	)
@@ -652,7 +695,7 @@ var _ interface {
 func (c *Client) storeDB() (*sql.DB, error) {
 	if c.sharedDB != nil {
 		c.sharedDBOnce.Do(func() {
-			c.sharedDBInitErr = initializeMelangeSchema(c.sharedDB)
+			c.sharedDBInitErr = initializeMelangeSchema(c.sharedDB, c.databaseSchema)
 		})
 		if c.sharedDBInitErr != nil {
 			return nil, fmt.Errorf("init shared db: %w", c.sharedDBInitErr)
@@ -667,7 +710,7 @@ func (c *Client) storeDB() (*sql.DB, error) {
 	defer c.dbCreateMu.Unlock()
 
 	db := testutil.EmptyDB(c.tb)
-	if err := initializeMelangeSchema(db); err != nil {
+	if err := initializeMelangeSchema(db, c.databaseSchema); err != nil {
 		return nil, fmt.Errorf("init store db: %w", err)
 	}
 	return db, nil

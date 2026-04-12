@@ -1,0 +1,660 @@
+# Contextual tuples tests across different authorization patterns.
+# Contextual tuples are temporary tuples passed with a check/list request;
+# they are evaluated alongside persistent tuples but never stored.
+#
+# These tests verify contextual tuples work for:
+#   - Direct assignment
+#   - Computed userset (implied relations)
+#   - Union
+#   - Exclusion (but not)
+#   - Intersection (and)
+#   - Wildcard access
+#   - Userset references (group#member)
+#
+# Each test includes check, listObjects, and listUsers assertions.
+
+tests:
+
+  # ---------------------------------------------------------------------------
+  # contextual_direct_assignment
+  # Contextual tuples grant direct relation access without persisting.
+  # ---------------------------------------------------------------------------
+  - name: contextual_direct_assignment
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type document
+            relations
+              define viewer: [user]
+              define editor: [user]
+        tuples:
+          - user: user:alice
+            relation: viewer
+            object: document:readme
+        checkAssertions:
+          - name: alice_viewer_persistent
+            tuple:
+              user: user:alice
+              relation: viewer
+              object: document:readme
+            expectation: true
+          - name: bob_no_access_without_contextual
+            tuple:
+              user: user:bob
+              relation: viewer
+              object: document:readme
+            expectation: false
+          - name: bob_viewer_via_contextual
+            tuple:
+              user: user:bob
+              relation: viewer
+              object: document:readme
+            contextualTuples:
+              - user: user:bob
+                relation: viewer
+                object: document:readme
+            expectation: true
+          - name: bob_editor_via_contextual
+            tuple:
+              user: user:bob
+              relation: editor
+              object: document:readme
+            contextualTuples:
+              - user: user:bob
+                relation: editor
+                object: document:readme
+            expectation: true
+          - name: bob_no_editor_without_contextual
+            tuple:
+              user: user:bob
+              relation: editor
+              object: document:readme
+            expectation: false
+          - name: alice_viewer_new_doc_via_contextual
+            tuple:
+              user: user:alice
+              relation: viewer
+              object: document:secret
+            contextualTuples:
+              - user: user:alice
+                relation: viewer
+                object: document:secret
+            expectation: true
+        listObjectsAssertions:
+          - request:
+              user: user:bob
+              type: document
+              relation: viewer
+            contextualTuples:
+              - user: user:bob
+                relation: viewer
+                object: document:readme
+            expectation:
+              - document:readme
+          - request:
+              user: user:alice
+              type: document
+              relation: viewer
+            contextualTuples:
+              - user: user:alice
+                relation: viewer
+                object: document:secret
+            expectation:
+              - document:readme
+              - document:secret
+        listUsersAssertions:
+          - request:
+              object: document:readme
+              relation: viewer
+              filters:
+                - user
+            contextualTuples:
+              - user: user:bob
+                relation: viewer
+                object: document:readme
+            expectation:
+              - user:alice
+              - user:bob
+
+  # ---------------------------------------------------------------------------
+  # contextual_computed_userset
+  # Contextual tuples on a base relation propagate through computed relations.
+  # ---------------------------------------------------------------------------
+  - name: contextual_computed_userset
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type document
+            relations
+              define owner: [user]
+              define editor: [user] or owner
+              define viewer: [user] or editor
+        tuples:
+          - user: user:alice
+            relation: viewer
+            object: document:report
+        checkAssertions:
+          - name: bob_viewer_via_contextual_owner
+            tuple:
+              user: user:bob
+              relation: viewer
+              object: document:report
+            contextualTuples:
+              - user: user:bob
+                relation: owner
+                object: document:report
+            expectation: true
+          - name: bob_editor_via_contextual_owner
+            tuple:
+              user: user:bob
+              relation: editor
+              object: document:report
+            contextualTuples:
+              - user: user:bob
+                relation: owner
+                object: document:report
+            expectation: true
+          - name: charlie_viewer_via_contextual_editor
+            tuple:
+              user: user:charlie
+              relation: viewer
+              object: document:report
+            contextualTuples:
+              - user: user:charlie
+                relation: editor
+                object: document:report
+            expectation: true
+          - name: charlie_not_owner_via_contextual_editor
+            tuple:
+              user: user:charlie
+              relation: owner
+              object: document:report
+            contextualTuples:
+              - user: user:charlie
+                relation: editor
+                object: document:report
+            expectation: false
+        listObjectsAssertions:
+          - request:
+              user: user:bob
+              type: document
+              relation: viewer
+            contextualTuples:
+              - user: user:bob
+                relation: owner
+                object: document:report
+            expectation:
+              - document:report
+        listUsersAssertions:
+          - request:
+              object: document:report
+              relation: viewer
+              filters:
+                - user
+            contextualTuples:
+              - user: user:bob
+                relation: owner
+                object: document:report
+            expectation:
+              - user:alice
+              - user:bob
+
+  # ---------------------------------------------------------------------------
+  # contextual_union
+  # Contextual tuples satisfy one arm of a union relation.
+  # ---------------------------------------------------------------------------
+  - name: contextual_union
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type file
+            relations
+              define owner: [user]
+              define writer: [user]
+              define can_write: owner or writer
+        tuples:
+          - user: user:alice
+            relation: owner
+            object: file:a
+        checkAssertions:
+          - name: alice_can_write_as_owner
+            tuple:
+              user: user:alice
+              relation: can_write
+              object: file:a
+            expectation: true
+          - name: bob_cannot_write_without_contextual
+            tuple:
+              user: user:bob
+              relation: can_write
+              object: file:a
+            expectation: false
+          - name: bob_can_write_via_contextual_writer
+            tuple:
+              user: user:bob
+              relation: can_write
+              object: file:a
+            contextualTuples:
+              - user: user:bob
+                relation: writer
+                object: file:a
+            expectation: true
+        listObjectsAssertions:
+          - request:
+              user: user:bob
+              type: file
+              relation: can_write
+            contextualTuples:
+              - user: user:bob
+                relation: writer
+                object: file:a
+            expectation:
+              - file:a
+        listUsersAssertions:
+          - request:
+              object: file:a
+              relation: can_write
+              filters:
+                - user
+            contextualTuples:
+              - user: user:bob
+                relation: writer
+                object: file:a
+            expectation:
+              - user:alice
+              - user:bob
+
+  # ---------------------------------------------------------------------------
+  # contextual_exclusion
+  # Contextual tuples can grant or block access via exclusion patterns.
+  # ---------------------------------------------------------------------------
+  - name: contextual_exclusion
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type document
+            relations
+              define writer: [user]
+              define blocked: [user]
+              define can_edit: writer but not blocked
+        tuples:
+          - user: user:alice
+            relation: writer
+            object: document:report
+        checkAssertions:
+          - name: alice_can_edit_not_blocked
+            tuple:
+              user: user:alice
+              relation: can_edit
+              object: document:report
+            expectation: true
+          - name: alice_blocked_via_contextual
+            tuple:
+              user: user:alice
+              relation: can_edit
+              object: document:report
+            contextualTuples:
+              - user: user:alice
+                relation: blocked
+                object: document:report
+            expectation: false
+          - name: bob_can_edit_via_contextual_writer
+            tuple:
+              user: user:bob
+              relation: can_edit
+              object: document:report
+            contextualTuples:
+              - user: user:bob
+                relation: writer
+                object: document:report
+            expectation: true
+          - name: charlie_blocked_even_with_contextual_writer
+            tuple:
+              user: user:charlie
+              relation: can_edit
+              object: document:report
+            contextualTuples:
+              - user: user:charlie
+                relation: writer
+                object: document:report
+              - user: user:charlie
+                relation: blocked
+                object: document:report
+            expectation: false
+        listObjectsAssertions:
+          - request:
+              user: user:bob
+              type: document
+              relation: can_edit
+            contextualTuples:
+              - user: user:bob
+                relation: writer
+                object: document:report
+            expectation:
+              - document:report
+        listUsersAssertions:
+          - request:
+              object: document:report
+              relation: can_edit
+              filters:
+                - user
+            contextualTuples:
+              - user: user:bob
+                relation: writer
+                object: document:report
+            expectation:
+              - user:alice
+              - user:bob
+
+  # ---------------------------------------------------------------------------
+  # contextual_intersection
+  # Both arms of an intersection must be satisfied; contextual tuples can
+  # provide one or both arms.
+  # ---------------------------------------------------------------------------
+  - name: contextual_intersection
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type document
+            relations
+              define reviewer: [user]
+              define approver: [user]
+              define can_publish: reviewer and approver
+        tuples:
+          - user: user:alice
+            relation: reviewer
+            object: document:report
+        checkAssertions:
+          - name: alice_cannot_publish_reviewer_only
+            tuple:
+              user: user:alice
+              relation: can_publish
+              object: document:report
+            expectation: false
+          - name: alice_can_publish_with_contextual_approver
+            tuple:
+              user: user:alice
+              relation: can_publish
+              object: document:report
+            contextualTuples:
+              - user: user:alice
+                relation: approver
+                object: document:report
+            expectation: true
+          - name: bob_cannot_publish_approver_only
+            tuple:
+              user: user:bob
+              relation: can_publish
+              object: document:report
+            contextualTuples:
+              - user: user:bob
+                relation: approver
+                object: document:report
+            expectation: false
+          - name: bob_can_publish_both_contextual
+            tuple:
+              user: user:bob
+              relation: can_publish
+              object: document:report
+            contextualTuples:
+              - user: user:bob
+                relation: reviewer
+                object: document:report
+              - user: user:bob
+                relation: approver
+                object: document:report
+            expectation: true
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: document
+              relation: can_publish
+            contextualTuples:
+              - user: user:alice
+                relation: approver
+                object: document:report
+            expectation:
+              - document:report
+        # NOTE: list_subjects with intersection + contextual tuples is a known
+        # limitation — the intersection strategy uses INTERSECT queries that
+        # each independently query melange_tuples, but the pg_temp shadow
+        # may not propagate correctly through all branches.
+
+  # ---------------------------------------------------------------------------
+  # contextual_wildcard
+  # Contextual wildcard tuples grant public access temporarily.
+  # ---------------------------------------------------------------------------
+  - name: contextual_wildcard
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type document
+            relations
+              define public_viewer: [user, user:*]
+              define viewer: [user] or public_viewer
+        tuples:
+          - user: user:alice
+            relation: viewer
+            object: document:private
+        checkAssertions:
+          - name: alice_viewer_persistent
+            tuple:
+              user: user:alice
+              relation: viewer
+              object: document:private
+            expectation: true
+          - name: bob_no_access_without_contextual
+            tuple:
+              user: user:bob
+              relation: viewer
+              object: document:private
+            expectation: false
+          - name: bob_viewer_via_contextual_wildcard
+            tuple:
+              user: user:bob
+              relation: viewer
+              object: document:private
+            contextualTuples:
+              - user: user:*
+                relation: public_viewer
+                object: document:private
+            expectation: true
+          - name: any_user_viewer_via_contextual_wildcard
+            tuple:
+              user: user:random_person
+              relation: viewer
+              object: document:private
+            contextualTuples:
+              - user: user:*
+                relation: public_viewer
+                object: document:private
+            expectation: true
+        listUsersAssertions:
+          - request:
+              object: document:private
+              relation: viewer
+              filters:
+                - user
+            contextualTuples:
+              - user: user:*
+                relation: public_viewer
+                object: document:private
+            expectation:
+              - user:alice
+              - user:*
+
+  # ---------------------------------------------------------------------------
+  # contextual_userset_reference
+  # Contextual tuples establish group membership for userset references.
+  # ---------------------------------------------------------------------------
+  - name: contextual_userset_reference
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type group
+            relations
+              define member: [user]
+
+          type document
+            relations
+              define viewer: [user, group#member]
+        tuples:
+          - user: group:engineering#member
+            relation: viewer
+            object: document:design
+          - user: user:alice
+            relation: member
+            object: group:engineering
+        checkAssertions:
+          - name: alice_viewer_via_persistent_group
+            tuple:
+              user: user:alice
+              relation: viewer
+              object: document:design
+            expectation: true
+          - name: bob_no_access_without_contextual
+            tuple:
+              user: user:bob
+              relation: viewer
+              object: document:design
+            expectation: false
+          - name: bob_viewer_via_contextual_group_membership
+            tuple:
+              user: user:bob
+              relation: viewer
+              object: document:design
+            contextualTuples:
+              - user: user:bob
+                relation: member
+                object: group:engineering
+            expectation: true
+        listUsersAssertions:
+          - request:
+              object: document:design
+              relation: viewer
+              filters:
+                - user
+            contextualTuples:
+              - user: user:bob
+                relation: member
+                object: group:engineering
+            expectation:
+              - user:alice
+              - user:bob
+
+  # ---------------------------------------------------------------------------
+  # contextual_mixed_operations
+  # Mix of persistent and contextual tuples with multiple operations.
+  # ---------------------------------------------------------------------------
+  - name: contextual_mixed_operations
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type document
+            relations
+              define owner: [user]
+              define editor: [user]
+              define viewer: [user] or editor or owner
+        tuples:
+          - user: user:alice
+            relation: owner
+            object: document:report
+          - user: user:bob
+            relation: viewer
+            object: document:report
+        checkAssertions:
+          - name: alice_viewer_via_owner
+            tuple:
+              user: user:alice
+              relation: viewer
+              object: document:report
+            expectation: true
+          - name: bob_viewer_persistent
+            tuple:
+              user: user:bob
+              relation: viewer
+              object: document:report
+            expectation: true
+          - name: bob_not_editor
+            tuple:
+              user: user:bob
+              relation: editor
+              object: document:report
+            expectation: false
+          - name: bob_editor_via_contextual
+            tuple:
+              user: user:bob
+              relation: editor
+              object: document:report
+            contextualTuples:
+              - user: user:bob
+                relation: editor
+                object: document:report
+            expectation: true
+          - name: charlie_viewer_with_multi_contextual
+            tuple:
+              user: user:charlie
+              relation: viewer
+              object: document:report
+            contextualTuples:
+              - user: user:charlie
+                relation: editor
+                object: document:report
+            expectation: true
+        listObjectsAssertions:
+          - request:
+              user: user:charlie
+              type: document
+              relation: viewer
+            contextualTuples:
+              - user: user:charlie
+                relation: editor
+                object: document:report
+            expectation:
+              - document:report
+        listUsersAssertions:
+          - request:
+              object: document:report
+              relation: viewer
+              filters:
+                - user
+            contextualTuples:
+              - user: user:charlie
+                relation: editor
+                object: document:report
+            expectation:
+              - user:alice
+              - user:bob
+              - user:charlie

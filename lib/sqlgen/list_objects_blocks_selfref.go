@@ -226,10 +226,10 @@ func buildSelfRefUsersetSimplePatternBlock(plan ListPlan, pattern listUsersetPat
 		Query: SelectStmt{
 			Distinct:    true,
 			ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}},
-			FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "t"),
+			FromExpr:    TableAs("", "melange_tuples", "t"),
 			Joins: []JoinClause{{
 				Type:   "INNER",
-				Schema: plan.DatabaseSchema,
+				Schema: "",
 				Table:  "melange_tuples",
 				Alias:  "m",
 				On:     And(membershipConditions...),
@@ -260,10 +260,10 @@ func buildSelfRefUsersetRecursiveBlock(plan ListPlan) *TypedQueryBlock {
 		Query: SelectStmt{
 			Distinct:    true,
 			ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}, Raw("me.depth + 1 AS depth")},
-			FromExpr:    TableAs(plan.DatabaseSchema, "member_expansion", "me"),
+			FromExpr:    TableAs("", "member_expansion", "me"),
 			Joins: []JoinClause{{
 				Type:   "INNER",
-				Schema: plan.DatabaseSchema,
+				Schema: "",
 				Table:  "melange_tuples",
 				Alias:  "t",
 				On:     Eq{Left: UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}}, Right: Col{Table: "me", Column: "object_id"}},

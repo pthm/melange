@@ -43,7 +43,7 @@ var statusCmd = &cobra.Command{
 func init() {
 	f := statusCmd.Flags()
 	f.StringVar(&statusDB, "db", "", "database URL")
-	f.StringVar(&statusDBSchema, "db-schema", "", "database schema")
+	f.StringVar(&statusDBSchema, "db-schema", "public", "database schema")
 	f.StringVar(&statusSchema, "schema", "", "path to schema.fga or fga.mod file")
 }
 

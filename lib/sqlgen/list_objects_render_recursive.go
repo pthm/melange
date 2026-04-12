@@ -38,7 +38,7 @@ func RenderListObjectsRecursiveFunction(plan ListPlan, blocks RecursiveBlockSet)
 		query = joinUnionBlocksSQL([]string{query, selfSQL})
 	}
 
-	depthCheck := buildDepthCheckSQLForRender(plan.DatabaseSchema, plan.ObjectType, blocks.SelfRefLinkingRelations)
+	depthCheck := buildDepthCheckSQLForRender(plan.ObjectType, blocks.SelfRefLinkingRelations)
 	paginatedQuery := wrapWithPagination(query, "object_id")
 
 	fn := PlpgsqlFunction{
