@@ -930,3 +930,52 @@ func TestBuildUsersetTypedRows(t *testing.T) {
 		}
 	})
 }
+
+func TestBuildInlineCheckExpr_SchemaQualification(t *testing.T) {
+	rSubjectType := Col{Table: "r", Column: "subject_type"}
+	rSubjectID := Col{Table: "r", Column: "subject_id"}
+	rObjectID := Col{Table: "r", Column: "object_id"}
+
+	t.Run("default schema", func(t *testing.T) {
+		c := DispatcherCase{
+			ObjectType:         "document",
+			Relation:           "viewer",
+			Inlineable:         true,
+			DirectSubjectTypes: []string{"user"},
+			SatisfyingRelations: []string{"viewer"},
+		}
+		sql := buildInlineCheckExpr(c, rSubjectType, rSubjectID, rObjectID).SQL()
+		if !strings.Contains(sql, "FROM melange_tuples AS t") {
+			t.Errorf("expected unqualified melange_tuples, got:\n%s", sql)
+		}
+	})
+
+	t.Run("custom schema", func(t *testing.T) {
+		c := DispatcherCase{
+			DatabaseSchema:     "authz",
+			ObjectType:         "document",
+			Relation:           "viewer",
+			Inlineable:         true,
+			DirectSubjectTypes: []string{"user"},
+			SatisfyingRelations: []string{"viewer"},
+		}
+		sql := buildInlineCheckExpr(c, rSubjectType, rSubjectID, rObjectID).SQL()
+		if !strings.Contains(sql, `"authz"."melange_tuples" AS t`) {
+			t.Errorf("expected schema-qualified melange_tuples, got:\n%s", sql)
+		}
+	})
+
+	t.Run("non-inlineable uses schema for function call", func(t *testing.T) {
+		c := DispatcherCase{
+			DatabaseSchema:    "authz",
+			ObjectType:        "document",
+			Relation:          "viewer",
+			CheckFunctionName: "check_document_viewer",
+			Inlineable:        false,
+		}
+		sql := buildInlineCheckExpr(c, rSubjectType, rSubjectID, rObjectID).SQL()
+		if !strings.Contains(sql, `"authz"."check_document_viewer"`) {
+			t.Errorf("expected schema-qualified function call, got:\n%s", sql)
+		}
+	})
+}
