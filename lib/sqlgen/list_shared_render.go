@@ -71,7 +71,7 @@ func appendUnion(base, additional string) string {
 }
 
 // buildDepthCheckSQLForRender builds the depth check SQL for recursive functions.
-func buildDepthCheckSQLForRender(databaseSchema, objectType string, linkingRelations []string) string {
+func buildDepthCheckSQLForRender(objectType string, linkingRelations []string) string {
 	if len(linkingRelations) == 0 {
 		return "    v_max_depth := 0;\n"
 	}
@@ -87,7 +87,7 @@ func buildDepthCheckSQLForRender(databaseSchema, objectType string, linkingRelat
 		Joins: []JoinClause{
 			{
 				Type:   "INNER",
-				Schema: databaseSchema,
+				Schema: "",
 				Table:  "melange_tuples",
 				Alias:  "t",
 				On: And(

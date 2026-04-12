@@ -378,7 +378,7 @@ func buildRecursiveTTUBlock(plan ListPlan, linkingRelations []string) *TypedQuer
 		Joins: []JoinClause{
 			{
 				Type:   "INNER",
-				Schema: plan.DatabaseSchema,
+				Schema: "",
 				Table:  "melange_tuples",
 				Alias:  "child",
 				On: And(

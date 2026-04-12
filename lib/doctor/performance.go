@@ -183,12 +183,12 @@ func (d *Doctor) checkExpressionIndexes(ctx context.Context, report *Report) err
 
 // getTableIndexDefs returns all index definitions for a table.
 func (d *Doctor) getTableIndexDefs(ctx context.Context, table string) ([]string, error) {
-	rows, err := d.db.QueryContext(ctx, `
+	rows, err := d.db.QueryContext(ctx, fmt.Sprintf(`
 		SELECT indexdef
 		FROM pg_indexes
-		WHERE schemaname = current_schema()
+		WHERE schemaname = %s
 		  AND tablename = $1
-	`, table)
+	`, d.postgresSchema()), table)
 	if err != nil {
 		return nil, err
 	}
@@ -208,12 +208,12 @@ func (d *Doctor) getTableIndexDefs(ctx context.Context, table string) ([]string,
 // getTableRowCount returns the approximate row count from pg_class.reltuples.
 func (d *Doctor) getTableRowCount(ctx context.Context, table string) (int64, error) {
 	var count float64
-	err := d.db.QueryRowContext(ctx, `
+	err := d.db.QueryRowContext(ctx, fmt.Sprintf(`
 		SELECT COALESCE(reltuples, 0)::float8
 		FROM pg_class
 		WHERE relname = $1
-		  AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = current_schema())
-	`, table).Scan(&count)
+		  AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = %s)
+	`, d.postgresSchema()), table).Scan(&count)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return 0, nil

@@ -609,13 +609,6 @@ func RunTest(t *testing.T, parent *Client, tc TestCase) {
 					assertionName := fmt.Sprintf("listobjects_%d", i)
 
 					t.Run(assertionName, func(t *testing.T) {
-						// Contextual tuples with list operations are not supported with custom schemas:
-						// generated SQL functions use schema-qualified melange_tuples references,
-						// which bypass the temp view shadow created by contextual tuples.
-						if len(assertion.ContextualTuples) > 0 && client.DatabaseSchema() != "" {
-							t.Skipf("contextual tuples with list operations not supported with custom schema %q", client.DatabaseSchema())
-						}
-
 						resp, err := client.ListObjects(ctx, &openfgav1.ListObjectsRequest{
 							StoreId:              storeID,
 							AuthorizationModelId: modelID,
@@ -654,13 +647,6 @@ func RunTest(t *testing.T, parent *Client, tc TestCase) {
 								objID = assertion.Request.Object[j+1:]
 								break
 							}
-						}
-
-						// Contextual tuples with list operations are not supported with custom schemas:
-						// generated SQL functions use schema-qualified melange_tuples references,
-						// which bypass the temp view shadow created by contextual tuples.
-						if len(assertion.ContextualTuples) > 0 && client.DatabaseSchema() != "" {
-							t.Skipf("contextual tuples with list operations not supported with custom schema %q", client.DatabaseSchema())
 						}
 
 						// Convert filters to UserTypeFilter

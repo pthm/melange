@@ -938,10 +938,10 @@ func TestBuildInlineCheckExpr_SchemaQualification(t *testing.T) {
 
 	t.Run("default schema", func(t *testing.T) {
 		c := DispatcherCase{
-			ObjectType:         "document",
-			Relation:           "viewer",
-			Inlineable:         true,
-			DirectSubjectTypes: []string{"user"},
+			ObjectType:          "document",
+			Relation:            "viewer",
+			Inlineable:          true,
+			DirectSubjectTypes:  []string{"user"},
 			SatisfyingRelations: []string{"viewer"},
 		}
 		sql := buildInlineCheckExpr(c, rSubjectType, rSubjectID, rObjectID).SQL()
@@ -950,18 +950,19 @@ func TestBuildInlineCheckExpr_SchemaQualification(t *testing.T) {
 		}
 	})
 
-	t.Run("custom schema", func(t *testing.T) {
+	t.Run("custom schema uses unqualified melange_tuples", func(t *testing.T) {
 		c := DispatcherCase{
-			DatabaseSchema:     "authz",
-			ObjectType:         "document",
-			Relation:           "viewer",
-			Inlineable:         true,
-			DirectSubjectTypes: []string{"user"},
+			DatabaseSchema:      "authz",
+			ObjectType:          "document",
+			Relation:            "viewer",
+			Inlineable:          true,
+			DirectSubjectTypes:  []string{"user"},
 			SatisfyingRelations: []string{"viewer"},
 		}
 		sql := buildInlineCheckExpr(c, rSubjectType, rSubjectID, rObjectID).SQL()
-		if !strings.Contains(sql, `"authz"."melange_tuples" AS t`) {
-			t.Errorf("expected schema-qualified melange_tuples, got:\n%s", sql)
+		// melange_tuples must be unqualified so pg_temp can shadow it for contextual tuples
+		if !strings.Contains(sql, "FROM melange_tuples AS t") {
+			t.Errorf("expected unqualified melange_tuples (for pg_temp shadow), got:\n%s", sql)
 		}
 	})
 

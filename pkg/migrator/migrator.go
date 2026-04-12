@@ -129,7 +129,7 @@ type Migrator struct {
 // The schemaPath should point to an OpenFGA DSL schema file (e.g., "schemas/schema.fga").
 // The Execer is typically *sql.DB but can be *sql.Tx for testing.
 func NewMigrator(db Execer, schemaPath string) *Migrator {
-	return &Migrator{db: db, schemaPath: schemaPath}
+	return &Migrator{db: db, schemaPath: schemaPath, databaseSchema: "public"}
 }
 
 // SchemaPath returns the path to the schema file.

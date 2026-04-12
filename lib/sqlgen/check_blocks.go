@@ -306,7 +306,7 @@ func buildUsersetSubjectChecks(plan CheckPlan) (selfCheck, computedCheck SelectS
 
 	computedCheck = SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
-		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "t"),
+		FromExpr:    TableAs("", "melange_tuples", "t"),
 		Joins: []JoinClause{
 			{
 				Type:      "INNER",

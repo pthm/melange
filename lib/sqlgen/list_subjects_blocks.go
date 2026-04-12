@@ -90,7 +90,7 @@ func buildListSubjectsUsersetFilterDirectBlock(plan ListPlan) TypedQueryBlock {
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{subjectExpr},
-		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "t"),
+		FromExpr:    TableAs("", "melange_tuples", "t"),
 		Where: And(
 			Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 			In{Expr: Col{Table: "t", Column: "relation"}, Values: plan.AllSatisfyingRelations},
@@ -343,7 +343,7 @@ func buildListSubjectsComplexUsersetBlock(plan ListPlan, pattern listUsersetPatt
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "ls", Column: "subject_id"}},
-		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "t"),
+		FromExpr:    TableAs("", "melange_tuples", "t"),
 		Joins: []JoinClause{{
 			Type: "CROSS JOIN LATERAL",
 			TableExpr: FunctionCallExpr{

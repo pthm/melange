@@ -190,8 +190,15 @@ func (q *TupleQuery) addJoin(joinType, table, alias string, on []sqldsl.Expr) *T
 }
 
 // JoinTuples adds an INNER JOIN to melange_tuples with the given alias.
+// melange_tuples is always unqualified so that pg_temp can shadow it for contextual tuples.
 func (q *TupleQuery) JoinTuples(alias string, on ...sqldsl.Expr) *TupleQuery {
-	return q.InnerJoin("melange_tuples", alias, on...)
+	q.joins = append(q.joins, sqldsl.JoinClause{
+		Type:  "INNER",
+		Table: "melange_tuples",
+		Alias: alias,
+		On:    sqldsl.And(on...),
+	})
+	return q
 }
 
 // JoinRaw adds a JOIN with a raw table expression.
@@ -222,7 +229,7 @@ func (q *TupleQuery) Build() sqldsl.SelectStmt {
 
 	stmt := sqldsl.SelectStmt{
 		Distinct: q.distinct,
-		FromExpr: sqldsl.TableAs(q.schema, "melange_tuples", q.alias),
+		FromExpr: sqldsl.TableAs("", "melange_tuples", q.alias),
 		Joins:    q.joins,
 		Where:    whereExpr,
 		Limit:    q.limit,

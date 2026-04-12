@@ -78,7 +78,7 @@ func buildComposedTTUSubjectsBlock(plan ListPlan, anchor *IndirectAnchorInfo, ta
 		Query: SelectStmt{
 			Distinct:    true,
 			ColumnExprs: []Expr{Col{Table: "s", Column: "subject_id"}},
-			FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "link"),
+			FromExpr:    TableAs("", "melange_tuples", "link"),
 			Joins: []JoinClause{{
 				Type: "CROSS",
 				TableExpr: LateralFunction{
@@ -106,7 +106,7 @@ func buildComposedUsersetSubjectsBlock(plan ListPlan, firstStep AnchorPathStep) 
 		Query: SelectStmt{
 			Distinct:    true,
 			ColumnExprs: []Expr{Col{Table: "s", Column: "subject_id"}},
-			FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "t"),
+			FromExpr:    TableAs("", "melange_tuples", "t"),
 			Joins: []JoinClause{{
 				Type: "CROSS",
 				TableExpr: LateralFunction{

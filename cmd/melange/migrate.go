@@ -67,7 +67,7 @@ var migrateCmd = &cobra.Command{
 func init() {
 	f := migrateCmd.Flags()
 	f.StringVar(&migrateDB, "db", "", "database URL")
-	f.StringVar(&migrateDBSchema, "db-schema", "", "database schema")
+	f.StringVar(&migrateDBSchema, "db-schema", "public", "database schema")
 	f.StringVar(&migrateSchema, "schema", "", "path to schema.fga or fga.mod file")
 	f.BoolVar(&migrateDryRun, "dry-run", false, "output migration SQL without applying")
 	f.BoolVar(&migrateForce, "force", false, "force migration even if schema unchanged")

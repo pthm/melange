@@ -54,7 +54,7 @@ type Stage struct {
 
 func main() {
 	analysisOnly := flag.Bool("analysis", false, "Only show relation analysis, not generated SQL")
-	databaseSchema := flag.String("db-schema", "", "Database schema")
+	databaseSchema := flag.String("db-schema", "public", "Database schema")
 	flag.Parse()
 
 	tests, err := loadTests()

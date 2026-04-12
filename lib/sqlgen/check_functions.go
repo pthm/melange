@@ -271,7 +271,7 @@ func buildInlineCheckExpr(c DispatcherCase, rSubjectType, rSubjectID, rObjectID 
 				// Direct tuple check with subject type restriction
 				Cond: Exists{Query: SelectStmt{
 					ColumnExprs: []Expr{Int(1)},
-					FromExpr:    TableRef{Schema: c.DatabaseSchema, Name: "melange_tuples", Alias: "t"},
+					FromExpr:    TableRef{Name: "melange_tuples", Alias: "t"},
 					Where: And(
 						Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: rSubjectType},
 						Eq{Left: Col{Table: "t", Column: "subject_id"}, Right: rSubjectID},

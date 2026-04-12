@@ -1472,13 +1472,8 @@ func TestPagination_InvalidCursor(t *testing.T) {
 func runTestWithSchema(t *testing.T, fn func(t *testing.T, databaseSchema string)) {
 	t.Helper()
 
-	for _, databaseSchema := range []string{"", "foo"} {
-		name := "no-schema"
-		if databaseSchema != "" {
-			name = "schema-" + databaseSchema
-		}
-
-		t.Run(name, func(t *testing.T) {
+	for _, databaseSchema := range []string{"public", "melange"} {
+		t.Run("schema-"+databaseSchema, func(t *testing.T) {
 			t.Helper()
 
 			fn(t, databaseSchema)

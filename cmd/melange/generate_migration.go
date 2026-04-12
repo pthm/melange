@@ -187,7 +187,7 @@ func init() {
 	f.BoolVar(&genMigrationUp, "up", false, "output only the UP migration")
 	f.BoolVar(&genMigrationDown, "down", false, "output only the DOWN migration")
 	f.StringVar(&genMigrationDB, "db", "", "database URL for comparison (reads previous state)")
-	f.StringVar(&genMigrationDBSchema, "db-schema", "", "database schema")
+	f.StringVar(&genMigrationDBSchema, "db-schema", "public", "database schema")
 	f.StringVar(&genMigrationGitRef, "git-ref", "", "git ref for comparison (reads previous schema)")
 	f.StringVar(&genMigrationPreviousSchema, "previous-schema", "", "path to previous .fga file for comparison (modular schemas not supported)")
 }

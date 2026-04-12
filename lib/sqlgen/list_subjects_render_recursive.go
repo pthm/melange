@@ -170,7 +170,7 @@ func buildParentClosureCTESQL(plan ListPlan) string {
 			Col{Table: "link", Column: "subject_id"},
 			Raw("0 AS depth"),
 		},
-		FromExpr: TableAs(plan.DatabaseSchema, "melange_tuples", "link"),
+		FromExpr: TableAs("", "melange_tuples", "link"),
 		Where:    And(baseWhere...),
 	}
 
@@ -185,7 +185,7 @@ func buildParentClosureCTESQL(plan ListPlan) string {
 		FromExpr: TableAs("", "parent_closure", "p"),
 		Joins: []JoinClause{{
 			Type:   "INNER",
-			Schema: plan.DatabaseSchema,
+			Schema: "",
 			Table:  "melange_tuples",
 			Alias:  "link",
 			On: And(

@@ -191,10 +191,10 @@ func buildListSubjectsRecursiveComplexUsersetBlock(plan ListPlan, pattern listUs
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: memberAlias, Column: "subject_id"}},
-		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", grantAlias),
+		FromExpr:    TableAs("", "melange_tuples", grantAlias),
 		Joins: []JoinClause{{
 			Type:   "INNER",
-			Schema: plan.DatabaseSchema,
+			Schema: "",
 			Table:  "melange_tuples",
 			Alias:  memberAlias,
 			On:     joinCond,
@@ -250,10 +250,10 @@ func buildListSubjectsRecursiveSimpleUsersetBlock(plan ListPlan, pattern listUse
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: memberAlias, Column: "subject_id"}},
-		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", grantAlias),
+		FromExpr:    TableAs("", "melange_tuples", grantAlias),
 		Joins: []JoinClause{{
 			Type:   "INNER",
-			Schema: plan.DatabaseSchema,
+			Schema: "",
 			Table:  "melange_tuples",
 			Alias:  memberAlias,
 			On:     joinCond,
@@ -384,7 +384,7 @@ func buildListSubjectsRecursiveTTUBlockParentClosure(plan ListPlan, parent ListP
 		FromExpr:    TableAs("", "parent_closure", "p"),
 		Joins: []JoinClause{{
 			Type:   "INNER",
-			Schema: plan.DatabaseSchema,
+			Schema: "",
 			Table:  "melange_tuples",
 			Alias:  "t",
 			On: And(
@@ -457,7 +457,7 @@ func buildListSubjectsRecursiveTTUBlockSubjectPool(plan ListPlan, parent ListPar
 		FromExpr:    TableAs("", "subject_pool", "sp"),
 		Joins: []JoinClause{{
 			Type:   "CROSS",
-			Schema: plan.DatabaseSchema,
+			Schema: "",
 			Table:  "melange_tuples",
 			Alias:  "link",
 		}},
@@ -537,7 +537,7 @@ func buildListSubjectsRecursiveUsersetFilterDirectBlock(plan ListPlan) TypedQuer
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{subjectExpr},
-		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "t"),
+		FromExpr:    TableAs("", "melange_tuples", "t"),
 		Where: And(
 			Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 			Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
@@ -597,10 +597,10 @@ func buildListSubjectsRecursiveUsersetFilterTTUBlock(plan ListPlan, parent ListP
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{subjectExpr},
-		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "link"),
+		FromExpr:    TableAs("", "melange_tuples", "link"),
 		Joins: []JoinClause{{
 			Type:   "INNER",
-			Schema: plan.DatabaseSchema,
+			Schema: "",
 			Table:  "melange_tuples",
 			Alias:  "pt",
 			On: And(
@@ -647,7 +647,7 @@ func buildListSubjectsRecursiveUsersetFilterTTUIntermediateBlock(plan ListPlan, 
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{subjectExpr},
-		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "link"),
+		FromExpr:    TableAs("", "melange_tuples", "link"),
 		Where:       And(whereConditions...),
 	}
 
@@ -683,7 +683,7 @@ func buildListSubjectsRecursiveUsersetFilterTTUNestedBlock(plan ListPlan, parent
 
 	stmt := SelectStmt{
 		ColumnExprs: []Expr{Col{Table: "nested", Column: "subject_id"}},
-		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "link"),
+		FromExpr:    TableAs("", "melange_tuples", "link"),
 		Joins: []JoinClause{{
 			Type:      "CROSS",
 			TableExpr: lateralCall,

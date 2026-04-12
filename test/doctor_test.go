@@ -573,6 +573,49 @@ func restoreView(t *testing.T, db *sql.DB) {
 	}
 }
 
+// TestDoctor_CustomSchema verifies that all doctor checks work when melange objects
+// live in a custom schema instead of public.
+func TestDoctor_CustomSchema(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	databaseSchema := "melange"
+	db := testutil.DBWithDatabaseSchema(t, databaseSchema)
+	ctx := context.Background()
+
+	d := doctor.New(db, "testutil/testdata/schema.fga")
+	d.SetDatabaseSchema(databaseSchema)
+	report, err := d.Run(ctx)
+	require.NoError(t, err)
+
+	// Schema file checks
+	schemaFileChecks := filterCategory(report, "Schema File")
+	assert.NotEmpty(t, schemaFileChecks, "should have schema file checks")
+	assertCheck(t, schemaFileChecks, "exists", doctor.StatusPass)
+	assertCheck(t, schemaFileChecks, "valid", doctor.StatusPass)
+
+	// Generated functions should be found in custom schema
+	funcChecks := filterCategory(report, "Generated Functions")
+	assert.NotEmpty(t, funcChecks, "should have function checks")
+	assertCheck(t, funcChecks, "dispatchers", doctor.StatusPass)
+	assertCheck(t, funcChecks, "complete", doctor.StatusPass)
+
+	// Tuples source should be found in custom schema
+	tuplesChecks := filterCategory(report, "Tuples Source")
+	assert.NotEmpty(t, tuplesChecks, "should have tuples source checks")
+	assertCheck(t, tuplesChecks, "exists", doctor.StatusPass)
+	assertCheck(t, tuplesChecks, "columns", doctor.StatusPass)
+
+	// Performance checks should work with custom schema —
+	// view_parsed proves pg_get_viewdef works with the schema-qualified regclass
+	perfChecks := filterCategory(report, "Performance")
+	assert.NotEmpty(t, perfChecks, "should have performance checks")
+	assertCheck(t, perfChecks, "view_parsed", doctor.StatusPass)
+	assertCheck(t, perfChecks, "union_all", doctor.StatusPass)
+	assertCheck(t, perfChecks, "source_tables", doctor.StatusPass)
+}
+
 // restoreIndexes re-creates expression indexes that doctor tests may have dropped.
 func restoreIndexes(t *testing.T, db *sql.DB) {
 	t.Helper()

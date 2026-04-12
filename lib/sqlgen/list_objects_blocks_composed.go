@@ -153,7 +153,7 @@ func buildComposedTTUObjectsBlock(plan ListPlan, anchor *IndirectAnchorInfo, tar
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}},
-		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "t"),
+		FromExpr:    TableAs("", "melange_tuples", "t"),
 		Where:       And(conditions...),
 	}
 
@@ -181,7 +181,7 @@ func buildComposedRecursiveTTUObjectsBlock(plan ListPlan, anchor *IndirectAnchor
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}},
-		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "t"),
+		FromExpr:    TableAs("", "melange_tuples", "t"),
 		Where:       And(conditions...),
 	}
 
@@ -226,7 +226,7 @@ func buildComposedUsersetObjectsBlock(plan ListPlan, firstStep AnchorPathStep, e
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}},
-		FromExpr:    TableAs(plan.DatabaseSchema, "melange_tuples", "t"),
+		FromExpr:    TableAs("", "melange_tuples", "t"),
 		Where:       And(conditions...),
 	}
 
