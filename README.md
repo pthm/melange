@@ -9,7 +9,7 @@
 ![GitHub License](https://img.shields.io/github/license/pthm/melange)
 ![GitHub Release](https://img.shields.io/github/v/release/pthm/melange)
 [![Go Reference](https://pkg.go.dev/badge/github.com/pthm/melange.svg)](https://pkg.go.dev/github.com/pthm/melange)
-[![Go Report Card](https://goreportcard.com/badge/github.com/pthm/melange)](https://goreportcard.com/report/github.com/pthm/melange)
+[![Go Report Card](https://goreportcard.com/badge/github.com/pthm/melange/melange)](https://goreportcard.com/report/github.com/pthm/melange/melange)
 [![codecov](https://codecov.io/gh/pthm/melange/graph/badge.svg)](https://codecov.io/gh/pthm/melange)
 [![Matrix](https://img.shields.io/badge/Matrix-Join%20Chat-green?logo=matrix)](https://matrix.to/#/#melange:matrix.org)
 
