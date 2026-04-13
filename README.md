@@ -1,3 +1,9 @@
+<p align="center">
+  <img src="assets/repo-header.png" alt="Melange">
+</p>
+
+---
+
 # Melange
 
 ![GitHub License](https://img.shields.io/github/license/pthm/melange)
@@ -6,8 +12,6 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/pthm/melange)](https://goreportcard.com/report/github.com/pthm/melange)
 [![codecov](https://codecov.io/gh/pthm/melange/graph/badge.svg)](https://codecov.io/gh/pthm/melange)
 [![Matrix](https://img.shields.io/badge/Matrix-Join%20Chat-green?logo=matrix)](https://matrix.to/#/#melange:matrix.org)
-
-<img align="right" width="300" src="assets/mascot.png">
 
 **An OpenFGA-to-PostgreSQL authorization compiler.**
 
@@ -308,6 +312,7 @@ If you have questions, want to discuss ideas, or need help getting started, join
 [![Matrix](https://img.shields.io/matrix/melange:matrix.org?label=Matrix%20Chat&logo=matrix)](https://matrix.to/#/#melange:matrix.org)
 
 Matrix is the best place for:
+
 - general discussion about the project
 - design ideas or architecture questions
 - quick help getting set up
@@ -319,6 +324,7 @@ For **bug reports, feature requests, or design discussions**, please open an iss
 https://github.com/pthm/melange/issues
 
 When reporting a bug, please include:
+
 - steps to reproduce
 - expected vs actual behavior
 - relevant logs or error messages
