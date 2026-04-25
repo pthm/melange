@@ -305,6 +305,36 @@ release VERSION="" ALLOW_DIRTY="":
     echo ""
     echo "GitHub Release: https://github.com/pthm/melange/releases/tag/$root_tag"
 
+# Verify release configs locally without minting versions or publishing.
+# Note: release-please dry-run is intentionally not part of this — it requires
+# the config to live on the default branch of origin, so it's first exercisable
+# once the release-please foundation lands on main (the workflow itself will
+# catch any config-shape problems on the next push).
+[group('Release')]
+[doc('Validate goreleaser and npm release configs locally (no network mutations)')]
+release-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    echo "════════════════════════════════════════════════════════════════"
+    echo "1/2 goreleaser: snapshot build (no publish, no signing)"
+    echo "════════════════════════════════════════════════════════════════"
+    # MELANGE_SKIP_SIGN bypasses the per-build macOS sign+notarize hook;
+    # --skip=sign would only skip the `signs:` block (which we don't have).
+    MELANGE_SKIP_SIGN=1 goreleaser release --snapshot --clean --skip=publish,sign
+
+    echo ""
+    echo "════════════════════════════════════════════════════════════════"
+    echo "2/2 npm: pack the TypeScript client"
+    echo "════════════════════════════════════════════════════════════════"
+    cd clients/typescript
+    pnpm install --frozen-lockfile
+    pnpm build
+    pnpm pack
+    echo ""
+    echo "✓ Tarball written to clients/typescript/*.tgz — inspect contents with:"
+    echo "    tar -tzf clients/typescript/pthm-melange-*.tgz"
+
 # Build release snapshot for local testing (no publish)
 [group('Release')]
 [doc('Build release artifacts locally without publishing')]
