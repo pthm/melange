@@ -79,6 +79,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # go.work is gitignored (each contributor owns theirs) but goreleaser
+      # builds cmd/melange, which lives in a separate module. Synthesize a
+      # workspace so cross-module builds resolve.
+      - name: Setup Go workspace
+        run: go work init . ./cmd/melange ./docs ./melange
+
       # mise.toml pins goreleaser, node, pnpm, and quill (via ubi backend) — one
       # source of truth for tooling between local dev and CI.
       - uses: jdx/mise-action@v2
