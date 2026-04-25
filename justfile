@@ -38,7 +38,7 @@ release-prepare VERSION ALLOW_DIRTY="":
         version="v$version"
     fi
     just _assert-clean ALLOW_DIRTY={{ALLOW_DIRTY}}
-    printf "%s\n" "$version" > VERSION
+    printf "%s # x-release-please-version\n" "$version" > VERSION
     npm_version="${version#v}"
     NPM_VERSION="$npm_version" node -e "
       const fs = require('fs');
@@ -126,7 +126,7 @@ release VERSION="" ALLOW_DIRTY="":
     GOPROXY=direct GONOSUMDB=github.com/pthm/melange go mod tidy
 
     # Validate version consistency
-    version_from_file="$(tr -d '[:space:]' < VERSION)"
+    version_from_file="$(awk '{print $1}' VERSION)"
     if [ -z "$version_from_file" ]; then
         echo "❌ VERSION file is empty"
         echo ""
@@ -304,6 +304,36 @@ release VERSION="" ALLOW_DIRTY="":
     echo "════════════════════════════════════════════════════════════════"
     echo ""
     echo "GitHub Release: https://github.com/pthm/melange/releases/tag/$root_tag"
+
+# Verify release configs locally without minting versions or publishing.
+# Note: release-please dry-run is intentionally not part of this — it requires
+# the config to live on the default branch of origin, so it's first exercisable
+# once the release-please foundation lands on main (the workflow itself will
+# catch any config-shape problems on the next push).
+[group('Release')]
+[doc('Validate goreleaser and npm release configs locally (no network mutations)')]
+release-check:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    echo "════════════════════════════════════════════════════════════════"
+    echo "1/2 goreleaser: snapshot build (no publish, no signing)"
+    echo "════════════════════════════════════════════════════════════════"
+    # MELANGE_SKIP_SIGN bypasses the per-build macOS sign+notarize hook;
+    # --skip=sign would only skip the `signs:` block (which we don't have).
+    MELANGE_SKIP_SIGN=1 goreleaser release --snapshot --clean --skip=publish,sign
+
+    echo ""
+    echo "════════════════════════════════════════════════════════════════"
+    echo "2/2 npm: pack the TypeScript client"
+    echo "════════════════════════════════════════════════════════════════"
+    cd clients/typescript
+    pnpm install --frozen-lockfile
+    pnpm build
+    pnpm pack
+    echo ""
+    echo "✓ Tarball written to clients/typescript/*.tgz — inspect contents with:"
+    echo "    tar -tzf clients/typescript/pthm-melange-*.tgz"
 
 # Build release snapshot for local testing (no publish)
 [group('Release')]

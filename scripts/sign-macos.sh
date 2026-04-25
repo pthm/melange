@@ -28,6 +28,12 @@ if [[ ! -f "$BINARY" ]]; then
     exit 1
 fi
 
+# Bypass for snapshot builds and CI dry-runs that don't have signing creds.
+if [[ -n "${MELANGE_SKIP_SIGN:-}" ]]; then
+    echo "Skipping signing: MELANGE_SKIP_SIGN is set"
+    exit 0
+fi
+
 # Check if we're on macOS
 if [[ "$(uname)" != "Darwin" ]]; then
     echo "Skipping signing: not on macOS"

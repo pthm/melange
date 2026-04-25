@@ -5,6 +5,14 @@ version: 2
 
 project_name: melange
 
+# The repo has three tag prefixes — `vX.Y.Z` (root), `melange/vX.Y.Z` (runtime),
+# and `cmd/melange/vX.Y.Z` (CLI). Only the root tag should drive goreleaser's
+# .Version; the others contain slashes and would break docker tag rendering.
+git:
+  ignore_tags:
+    - "melange/v*"
+    - "cmd/melange/v*"
+
 before:
   hooks:
     - ./scripts/verify-release.sh
@@ -81,16 +89,50 @@ release:
   mode: replace
   name_template: "{{.ProjectName}} v{{.Version}}"
 
+# Release notes are owned by release-please; passed in via `--release-notes`.
+# Goreleaser's own changelog is disabled to avoid two competing sources of truth.
 changelog:
-  use: git
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
-      - "^chore:"
-      - Merge pull request
-      - Merge branch
+  disable: true
+
+nfpms:
+  - id: packages
+    package_name: melange
+    ids:
+      - melange-linux-windows
+    homepage: "https://github.com/pthm/melange"
+    description: "PostgreSQL Fine-Grained Authorization - OpenFGA to SQL compiler"
+    maintainer: "Patt-tom McDonnell <pthm@users.noreply.github.com>"
+    license: MIT
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+    section: database
+    contents:
+      - src: LICENSE
+        dst: /usr/share/doc/melange/LICENSE
+      - src: README.md
+        dst: /usr/share/doc/melange/README.md
+
+dockers_v2:
+  - id: melange-docker
+    ids:
+      - melange-linux-windows
+    dockerfile: Dockerfile.goreleaser
+    images:
+      - "ghcr.io/pthm/melange"
+    tags:
+      - "v{{ .Version }}"
+      - '{{ if not .Prerelease }}latest{{ end }}'
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    labels:
+      "org.opencontainers.image.title": "{{ .ProjectName }}"
+      "org.opencontainers.image.version": "{{ .Version }}"
+      "org.opencontainers.image.source": "https://github.com/pthm/melange"
+      "org.opencontainers.image.description": "PostgreSQL Fine-Grained Authorization - OpenFGA to SQL compiler"
+      "org.opencontainers.image.licenses": "MIT"
 
 homebrew_casks:
   - name: melange
