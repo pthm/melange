@@ -38,7 +38,7 @@ release-prepare VERSION ALLOW_DIRTY="":
         version="v$version"
     fi
     just _assert-clean ALLOW_DIRTY={{ALLOW_DIRTY}}
-    printf "%s\n" "$version" > VERSION
+    printf "%s # x-release-please-version\n" "$version" > VERSION
     npm_version="${version#v}"
     NPM_VERSION="$npm_version" node -e "
       const fs = require('fs');
@@ -126,7 +126,7 @@ release VERSION="" ALLOW_DIRTY="":
     GOPROXY=direct GONOSUMDB=github.com/pthm/melange go mod tidy
 
     # Validate version consistency
-    version_from_file="$(tr -d '[:space:]' < VERSION)"
+    version_from_file="$(awk '{print $1}' VERSION)"
     if [ -z "$version_from_file" ]; then
         echo "❌ VERSION file is empty"
         echo ""

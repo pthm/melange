@@ -89,16 +89,10 @@ release:
   mode: replace
   name_template: "{{.ProjectName}} v{{.Version}}"
 
+# Release notes are owned by release-please; passed in via `--release-notes`.
+# Goreleaser's own changelog is disabled to avoid two competing sources of truth.
 changelog:
-  use: git
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
-      - "^chore:"
-      - Merge pull request
-      - Merge branch
+  disable: true
 
 nfpms:
   - id: packages

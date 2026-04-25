@@ -11,7 +11,7 @@ if [ ! -f VERSION ]; then
   exit 1
 fi
 
-version=$(tr -d '[:space:]' < VERSION)
+version=$(awk '{print $1}' VERSION)
 if ! echo "$version" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
   echo "ERROR: VERSION must be in format vX.Y.Z, got: $version"
   exit 1
