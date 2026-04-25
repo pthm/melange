@@ -34,15 +34,17 @@ if [[ -n "${MELANGE_SKIP_SIGN:-}" ]]; then
     exit 0
 fi
 
-# Check if we're on macOS
-if [[ "$(uname)" != "Darwin" ]]; then
-    echo "Skipping signing: not on macOS"
-    exit 0
-fi
-
 # Check if this is a darwin binary
 if ! file "$BINARY" | grep -q "Mach-O"; then
     echo "Skipping signing: not a Mach-O binary"
+    exit 0
+fi
+
+# Quill works on any OS via Apple's notary API. Only fall back to "skip on
+# non-macOS" when CI credentials aren't set (i.e. local non-macOS dev that
+# can't reach 1Password and has no env vars — nothing to sign with).
+if [[ "$(uname)" != "Darwin" ]] && [[ -z "${QUILL_SIGN_P12:-}" ]]; then
+    echo "Skipping signing: not on macOS and no QUILL_SIGN_P12 in env"
     exit 0
 fi
 
