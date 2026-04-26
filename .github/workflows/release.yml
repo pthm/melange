@@ -205,8 +205,15 @@ jobs:
           pnpm build
           npm config set //registry.npmjs.org/:_authToken "$NODE_AUTH_TOKEN"
           if [ "$DRY_RUN" = "true" ]; then
-            pnpm publish --dry-run --access public --no-git-checks
-            echo "↪ dry-run: pnpm publish --dry-run completed"
+            # `pnpm publish --dry-run` still hits the registry's version-collision
+            # check, which fails because dry-runs don't bump package.json. Pack
+            # the tarball locally instead, and use `npm whoami` to confirm the
+            # auth token is valid.
+            echo "↪ dry-run: verifying npm auth..."
+            npm whoami
+            echo "↪ dry-run: building and packing tarball..."
+            pnpm pack
+            echo "↪ dry-run: tarball created at clients/typescript/$(ls -1t *.tgz | head -1)"
             exit 0
           fi
           # Idempotent: skip if this version is already on the registry
