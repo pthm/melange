@@ -172,7 +172,11 @@ else
     quill sign "$BINARY" -vv </dev/null
 fi
 
-# Verify signature
-echo "Verifying signature..."
-codesign --verify --verbose "$BINARY"
+# Verify signature with codesign (macOS only). Quill's sign-and-notarize
+# already confirms the signature with Apple's notary service, so this is
+# a belt-and-braces local check, not the source of truth.
+if [[ "$(uname)" == "Darwin" ]]; then
+    echo "Verifying signature..."
+    codesign --verify --verbose "$BINARY"
+fi
 echo "Signed successfully: $BINARY"
