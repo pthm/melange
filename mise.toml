@@ -6,6 +6,10 @@ auto_install = true
 experimental = true
 
 [tools]
+# Toolchain — pinned to major.minor so patch updates flow through but minor
+# bumps are explicit. go.mod's `go` directives top out at 1.25.
+go = "1.25"
+
 # Release automation
 goreleaser = "latest"
 node = "lts"
