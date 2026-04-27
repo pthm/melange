@@ -275,53 +275,139 @@ func buildListSubjectsRecursiveTTUBlocks(plan ListPlan, parentRelations []ListPa
 
 	blocks := make([]TypedQueryBlock, 0, len(parentRelations))
 	for _, parent := range parentRelations {
-		blocks = append(blocks, buildListSubjectsRecursiveTTUBlock(plan, parent))
+		blocks = append(blocks, buildListSubjectsRecursiveTTUBlock(plan, parent)...)
 	}
 	return blocks
 }
 
-// buildListSubjectsRecursiveTTUBlock builds a single TTU path block for recursive list_subjects.
-// Chooses between parent closure optimization (for simple relations) and subject_pool approach (for complex relations).
-func buildListSubjectsRecursiveTTUBlock(plan ListPlan, parent ListParentRelationData) TypedQueryBlock {
-	// Check if ANY parent type has a complex target relation
-	// If so, we must use the subject_pool approach for ALL parent types
-	isComplex := isParentRelationComplex(plan, parent)
+// parentRelationStrategy describes how a parent relation should be resolved
+// during list_subjects TTU evaluation.
+type parentRelationStrategy int
 
-	if isComplex {
-		// Parent relation has intersection/exclusion/etc - use subject_pool + check_permission_internal
-		return buildListSubjectsRecursiveTTUBlockSubjectPool(plan, parent)
-	}
+const (
+	// parentStrategyClosure uses parent_closure CTE + JOINs over melange_tuples.
+	// Sufficient for parent relations whose features are some combination of
+	// Direct, Implied, Wildcard, Userset (simple member only), Recursive.
+	parentStrategyClosure parentRelationStrategy = iota
 
-	// Parent relation is simple (Direct or simple Implied) - use parent closure optimization
-	return buildListSubjectsRecursiveTTUBlockParentClosure(plan, parent)
-}
+	// parentStrategySubjectPool uses subject_pool + per-row check_permission_internal.
+	// Required when the parent relation has intersection or exclusion at the
+	// parent level, or userset patterns whose member relations are themselves
+	// non-closure-compatible.
+	parentStrategySubjectPool
+)
 
-// isParentRelationComplex checks if any parent type's target relation is complex.
-// Returns true if ANY parent type has intersection, exclusion, userset, or recursive features
-// in the target relation, which means we cannot use parent closure optimization.
-func isParentRelationComplex(plan ListPlan, parent ListParentRelationData) bool {
-	// If we don't have an analysis lookup, conservatively assume simple (current behavior)
+// classifyParentRelation picks the dispatch strategy for `parent` by looking
+// at every allowed parent type's target relation. If any parent type forces
+// subject_pool, all paths must use subject_pool to keep the result set
+// consistent.
+func classifyParentRelation(plan ListPlan, parent ListParentRelationData) parentRelationStrategy {
 	if plan.AnalysisLookup == nil {
-		return false
+		// Without analysis, mirror the historical default: closure path.
+		return parentStrategyClosure
 	}
 
-	// Check each parent type's target relation
 	for _, parentType := range parent.AllowedLinkingTypesSlice {
 		key := parentType + "." + parent.Relation
-		analysis := plan.AnalysisLookup[key]
-		if analysis == nil {
-			// Unknown parent relation - conservatively treat as complex
-			return true
+		if parentTargetNeedsSubjectPool(plan.AnalysisLookup[key], parent) {
+			return parentStrategySubjectPool
 		}
+	}
+	return parentStrategyClosure
+}
 
-		// Check if this parent relation has complex features
-		// Complex = not simply resolvable (has intersection, exclusion, userset, or recursive)
-		if !analysis.Features.IsSimplyResolvable() {
+// parentTargetNeedsSubjectPool returns true when the parent target relation
+// cannot be safely evaluated by the closure path. The closure path materializes
+// ancestor objects via one linking relation and looks up direct/userset grants
+// on those ancestors; it cannot evaluate nested TTU semantics or
+// intersection/exclusion at the parent level.
+//
+// Conditions that force subject_pool:
+//   - Parent target relation has intersection or exclusion.
+//   - Parent target relation has complex userset patterns.
+//   - Parent target relation has nested TTUs that are not (a) self-referential
+//     on the target's own object type AND (b) using the same linking relation
+//     as the current parent_closure walk.
+func parentTargetNeedsSubjectPool(target *RelationAnalysis, currentParent ListParentRelationData) bool {
+	if target == nil {
+		return true
+	}
+	if target.Features.HasIntersection || target.Features.HasExclusion {
+		return true
+	}
+	if target.HasComplexUsersetPatterns {
+		return true
+	}
+
+	// Nested TTUs: ParentRelations are direct, ClosureParentRelations are
+	// inherited via implied relations. Both must satisfy the closure path's
+	// preconditions.
+	for _, pr := range target.ParentRelations {
+		if nestedParentForcesSubjectPool(pr, target.ObjectType, currentParent.LinkingRelation) {
 			return true
 		}
 	}
-
+	for _, pr := range target.ClosureParentRelations {
+		if nestedParentForcesSubjectPool(pr, target.ObjectType, currentParent.LinkingRelation) {
+			return true
+		}
+	}
 	return false
+}
+
+// nestedParentForcesSubjectPool returns true when a nested parent relation
+// breaks one of the closure path's preconditions: every allowed linking type
+// must equal the target object type, and the linking relation must match the
+// current walk.
+func nestedParentForcesSubjectPool(pr ParentRelationInfo, targetObjectType, currentLinkingRelation string) bool {
+	if len(pr.AllowedLinkingTypes) == 0 {
+		return true
+	}
+	for _, lt := range pr.AllowedLinkingTypes {
+		// Cross-type link: parent_closure walks via the current linking
+		// relation only; we can't evaluate the chain across a different type.
+		if lt != targetObjectType {
+			return true
+		}
+	}
+	// Self-referential but on a different linking relation than the current
+	// walk traverses; parent_closure can't reach those ancestors.
+	return pr.LinkingRelation != currentLinkingRelation
+}
+
+// buildListSubjectsRecursiveTTUBlock builds the TTU path blocks for one
+// parent relation. The closure path emits a Direct block plus zero or more
+// userset blocks, depending on what features the parent relation declares.
+//
+// Wildcard rows ('*') are surfaced by the Direct block when ExcludeWildcard
+// is false (its WHERE only filters '*' when ExcludeWildcard is true), so no
+// dedicated wildcard block is needed today.
+func buildListSubjectsRecursiveTTUBlock(plan ListPlan, parent ListParentRelationData) []TypedQueryBlock {
+	if classifyParentRelation(plan, parent) == parentStrategySubjectPool {
+		return []TypedQueryBlock{buildListSubjectsRecursiveTTUBlockSubjectPool(plan, parent)}
+	}
+
+	usersetBlocks := buildListSubjectsRecursiveTTUBlockParentClosureUserset(plan, parent)
+	blocks := make([]TypedQueryBlock, 0, 1+len(usersetBlocks))
+	blocks = append(blocks, buildListSubjectsRecursiveTTUBlockParentClosure(plan, parent))
+	blocks = append(blocks, usersetBlocks...)
+	return blocks
+}
+
+// parentRelationAnalysis returns the analysis for the parent target relation
+// at any one allowed parent type. The strategy classifier has already
+// verified that all parent types share the same general shape, so looking at
+// the first one is sufficient. Returns nil if no analysis is available.
+func parentRelationAnalysis(plan ListPlan, parent ListParentRelationData) *RelationAnalysis {
+	if plan.AnalysisLookup == nil {
+		return nil
+	}
+	for _, parentType := range parent.AllowedLinkingTypesSlice {
+		if a := plan.AnalysisLookup[parentType+"."+parent.Relation]; a != nil {
+			return a
+		}
+	}
+	return nil
 }
 
 // collectParentSatisfyingRelations collects all satisfying relations for the parent relation
@@ -397,6 +483,99 @@ func buildListSubjectsRecursiveTTUBlockParentClosure(plan ListPlan, parent ListP
 
 	return TypedQueryBlock{
 		Comments: []string{fmt.Sprintf("-- TTU: subjects via %s -> %s (parent closure optimization)", parent.LinkingRelation, parent.Relation)},
+		Query:    stmt,
+	}
+}
+
+// buildListSubjectsRecursiveTTUBlockParentClosureUserset emits one block per
+// userset pattern at the parent relation level. Each block enumerates members
+// of any userset (e.g., group#member) granted on any ancestor in parent_closure.
+//
+// Member resolution is a direct tuple JOIN, which is correct only when the
+// member relation is closure-compatible; classifyParentRelation routes parents
+// with complex userset patterns to subject_pool instead.
+//
+// Userset patterns can arrive directly or via the closure (an implied
+// relation like can_view = viewer can inherit viewer's [group#member]).
+// buildListUsersetPatternInputs already merges both sources.
+func buildListSubjectsRecursiveTTUBlockParentClosureUserset(plan ListPlan, parent ListParentRelationData) []TypedQueryBlock {
+	parentAnalysis := parentRelationAnalysis(plan, parent)
+	if parentAnalysis == nil {
+		return nil
+	}
+
+	patterns := buildListUsersetPatternInputs(*parentAnalysis)
+	if len(patterns) == 0 {
+		return nil
+	}
+
+	blocks := make([]TypedQueryBlock, 0, len(patterns))
+	for _, pattern := range patterns {
+		// classifyParentRelation routes complex userset patterns to
+		// subject_pool, but guard defensively in case a future change widens
+		// the closure path further.
+		if pattern.IsComplex {
+			continue
+		}
+		blocks = append(blocks, buildListSubjectsRecursiveTTUBlockParentClosureUsersetPattern(plan, parent, pattern))
+	}
+	return blocks
+}
+
+// buildListSubjectsRecursiveTTUBlockParentClosureUsersetPattern builds a
+// single (parent_closure ⋈ grant ⋈ member) JOIN for one userset pattern.
+func buildListSubjectsRecursiveTTUBlockParentClosureUsersetPattern(plan ListPlan, parent ListParentRelationData, pattern listUsersetPatternInput) TypedQueryBlock {
+	const grantAlias, memberAlias = "g", "m"
+
+	memberExclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, Col{Table: memberAlias, Column: "subject_type"}, Col{Table: memberAlias, Column: "subject_id"})
+
+	whereConditions := []Expr{
+		In{Expr: Col{Table: grantAlias, Column: "relation"}, Values: pattern.SourceRelations},
+		Eq{Left: Col{Table: grantAlias, Column: "subject_type"}, Right: Lit(pattern.SubjectType)},
+		HasUserset{Source: Col{Table: grantAlias, Column: "subject_id"}},
+		Eq{Left: UsersetRelation{Source: Col{Table: grantAlias, Column: "subject_id"}}, Right: Lit(pattern.SubjectRelation)},
+		Eq{Left: Col{Table: memberAlias, Column: "subject_type"}, Right: SubjectType},
+		In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
+		NoUserset{Source: Col{Table: memberAlias, Column: "subject_id"}},
+	}
+
+	if plan.ExcludeWildcard() {
+		whereConditions = append(whereConditions, Ne{Left: Col{Table: memberAlias, Column: "subject_id"}, Right: Lit("*")})
+	}
+	whereConditions = append(whereConditions, memberExclusions.BuildPredicates()...)
+
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: memberAlias, Column: "subject_id"}},
+		FromExpr:    TableAs("", "parent_closure", "p"),
+		Joins: []JoinClause{
+			{
+				Type:   "INNER",
+				Schema: "",
+				Table:  "melange_tuples",
+				Alias:  grantAlias,
+				On: And(
+					Eq{Left: Col{Table: grantAlias, Column: "object_type"}, Right: Col{Table: "p", Column: "subject_type"}},
+					Eq{Left: Col{Table: grantAlias, Column: "object_id"}, Right: Col{Table: "p", Column: "subject_id"}},
+				),
+			},
+			{
+				Type:   "INNER",
+				Schema: "",
+				Table:  "melange_tuples",
+				Alias:  memberAlias,
+				On: And(
+					Eq{Left: Col{Table: memberAlias, Column: "object_type"}, Right: Lit(pattern.SubjectType)},
+					Eq{Left: Col{Table: memberAlias, Column: "object_id"}, Right: UsersetObjectID{Source: Col{Table: grantAlias, Column: "subject_id"}}},
+					In{Expr: Col{Table: memberAlias, Column: "relation"}, Values: pattern.SatisfyingRelations},
+				),
+			},
+		},
+		Where: And(whereConditions...),
+	}
+
+	return TypedQueryBlock{
+		Comments: []string{fmt.Sprintf("-- TTU userset: subjects via %s -> %s -> %s#%s (parent closure)", parent.LinkingRelation, parent.Relation, pattern.SubjectType, pattern.SubjectRelation)},
 		Query:    stmt,
 	}
 }

@@ -1,0 +1,300 @@
+# Melange-specific tests: intersection over recursive (parent-traversal) legs.
+#
+# These exercise the worst case our list_subjects fast path needs to cover:
+# an intersection whose legs are themselves Direct+Userset+Recursive. Today
+# the codegen falls back to "subject_pool + per-row check_permission" for
+# these because the parent target relation is classified as "complex". The
+# proposed fix extends the parent_closure-based fast path to cover simple
+# usersets and wildcards at the parent level; these tests are the regression
+# net for that change.
+#
+# Test names are prefixed with "melange/" by the loader.
+
+tests:
+
+  # ---------------------------------------------------------------------------
+  # intersection_recursive_two_leg_simple
+  # Smallest case: 2-leg intersection, both legs recursive direct-only via parent.
+  # No userset, no wildcard. This is what the existing fast path SHOULD already
+  # handle once the router is widened beyond IsSimplyResolvable.
+  # ---------------------------------------------------------------------------
+  - name: intersection_recursive_two_leg_simple
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type folder
+            relations
+              define parent: [folder]
+              define readable: [user] or readable from parent
+              define writable: [user] or writable from parent
+              define editor: readable and writable
+        tuples:
+          # readable granted on folder:root, propagates down
+          - user: user:alice
+            relation: readable
+            object: folder:root
+          - user: user:bob
+            relation: readable
+            object: folder:root
+          # writable granted on folder:mid, propagates down only to leaf
+          - user: user:alice
+            relation: writable
+            object: folder:mid
+          - user: user:carol
+            relation: writable
+            object: folder:mid
+          # parent chain: leaf -> mid -> root
+          - user: folder:mid
+            relation: parent
+            object: folder:leaf
+          - user: folder:root
+            relation: parent
+            object: folder:mid
+        listUsersAssertions:
+          - request:
+              filters: [user]
+              object: folder:leaf
+              relation: editor
+            expectation:
+              - user:alice
+        listObjectsAssertions:
+          # alice has writable on mid (direct) → propagates DOWN to leaf via parent.
+          # writable doesn't reach root (root has no parent above it).
+          # editor = readable AND writable, so alice is editor on leaf + mid only.
+          - request:
+              user: user:alice
+              type: folder
+              relation: editor
+            expectation:
+              - folder:leaf
+              - folder:mid
+
+  # ---------------------------------------------------------------------------
+  # intersection_recursive_with_userset_legs
+  # 3-leg intersection where every leg is Direct+Userset+Recursive.
+  # The userset side uses [group#member] so the fix's "simple userset on
+  # parent_closure" path must enumerate group members at every ancestor.
+  # ---------------------------------------------------------------------------
+  - name: intersection_recursive_with_userset_legs
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type group
+            relations
+              define member: [user]
+
+          type folder
+            relations
+              define parent: [folder]
+              define alpha: [user, group#member] or alpha from parent
+              define beta: [user, group#member] or beta from parent
+              define gamma: [user, group#member] or gamma from parent
+              define viewer: alpha and beta and gamma
+        tuples:
+          # group memberships
+          - user: user:anne
+            relation: member
+            object: group:eng
+          - user: user:beth
+            relation: member
+            object: group:eng
+          - user: user:carol
+            relation: member
+            object: group:eng
+          - user: user:dan
+            relation: member
+            object: group:eng
+          # alpha granted on root via group userset
+          - user: group:eng#member
+            relation: alpha
+            object: folder:root
+          # beta granted on mid via group userset (so anne, beth, carol, dan have beta on mid + leaf)
+          - user: group:eng#member
+            relation: beta
+            object: folder:mid
+          # gamma granted directly on leaf to a subset
+          - user: user:anne
+            relation: gamma
+            object: folder:leaf
+          - user: user:beth
+            relation: gamma
+            object: folder:leaf
+          - user: user:dan
+            relation: gamma
+            object: folder:leaf
+          # parent chain: leaf -> mid -> root
+          - user: folder:mid
+            relation: parent
+            object: folder:leaf
+          - user: folder:root
+            relation: parent
+            object: folder:mid
+        listUsersAssertions:
+          # All three legs satisfied: anne (alpha via root group, beta via mid group, gamma direct),
+          # beth (same), dan (same). carol has alpha+beta but not gamma — excluded.
+          - request:
+              filters: [user]
+              object: folder:leaf
+              relation: viewer
+            expectation:
+              - user:anne
+              - user:beth
+              - user:dan
+        checkAssertions:
+          - name: anne_viewer
+            tuple: { user: user:anne, relation: viewer, object: folder:leaf }
+            expectation: true
+          - name: carol_no_viewer_missing_gamma
+            tuple: { user: user:carol, relation: viewer, object: folder:leaf }
+            expectation: false
+          - name: beth_viewer
+            tuple: { user: user:beth, relation: viewer, object: folder:leaf }
+            expectation: true
+
+  # ---------------------------------------------------------------------------
+  # intersection_recursive_with_wildcard_leg
+  # 2-leg intersection where one leg has a [user, user:*] direct type and a
+  # parent walk. The wildcard MUST not silently survive the intersection
+  # against a leg that doesn't accept wildcards — the result should be only
+  # concrete users that satisfy both legs.
+  # ---------------------------------------------------------------------------
+  - name: intersection_recursive_with_wildcard_leg
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type folder
+            relations
+              define parent: [folder]
+              define open_to_all: [user, user:*] or open_to_all from parent
+              define explicit: [user] or explicit from parent
+              define viewer: open_to_all and explicit
+        tuples:
+          # wildcard grant on root (everyone has open_to_all on root, mid, leaf)
+          - user: user:*
+            relation: open_to_all
+            object: folder:root
+          # explicit grants on mid (propagate to leaf)
+          - user: user:alice
+            relation: explicit
+            object: folder:mid
+          - user: user:bob
+            relation: explicit
+            object: folder:mid
+          # parent chain
+          - user: folder:mid
+            relation: parent
+            object: folder:leaf
+          - user: folder:root
+            relation: parent
+            object: folder:mid
+        listUsersAssertions:
+          # Result must NOT include user:* — explicit leg has no wildcard.
+          # Only alice + bob satisfy both legs.
+          - request:
+              filters: [user]
+              object: folder:leaf
+              relation: viewer
+            expectation:
+              - user:alice
+              - user:bob
+        checkAssertions:
+          - name: alice_viewer_via_wildcard_and_explicit
+            tuple: { user: user:alice, relation: viewer, object: folder:leaf }
+            expectation: true
+          - name: charlie_no_viewer_wildcard_only
+            tuple: { user: user:charlie, relation: viewer, object: folder:leaf }
+            expectation: false
+
+  # ---------------------------------------------------------------------------
+  # intersection_recursive_excluded_downstream
+  # The combined pattern from the upstream wildcard test:
+  # can_read = (intersection of recursive legs) but not (recursive exclusion).
+  # Smaller scale than the upstream test — ~3 users, 3-folder chain, 1 group.
+  # Tests that the "but not" wrapper around an intersection still produces
+  # correct results when each leg is itself recursive.
+  # ---------------------------------------------------------------------------
+  - name: intersection_recursive_excluded_downstream
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type group
+            relations
+              define member: [user]
+
+          type folder
+            relations
+              define parent: [folder]
+              define allowed: [user, group#member] or allowed from parent
+              define accredited: [user] or accredited from parent
+              define readable: allowed and accredited
+              define blocked: [user] or blocked from parent
+              define can_read: readable but not blocked
+        tuples:
+          # group setup
+          - user: user:anne
+            relation: member
+            object: group:eng
+          - user: user:beth
+            relation: member
+            object: group:eng
+          - user: user:carol
+            relation: member
+            object: group:eng
+          # allowed via group on root
+          - user: group:eng#member
+            relation: allowed
+            object: folder:root
+          # accredited directly on mid (propagates to leaf)
+          - user: user:anne
+            relation: accredited
+            object: folder:mid
+          - user: user:beth
+            relation: accredited
+            object: folder:mid
+          - user: user:carol
+            relation: accredited
+            object: folder:mid
+          # carol blocked on leaf
+          - user: user:carol
+            relation: blocked
+            object: folder:leaf
+          # parent chain
+          - user: folder:mid
+            relation: parent
+            object: folder:leaf
+          - user: folder:root
+            relation: parent
+            object: folder:mid
+        listUsersAssertions:
+          # readable: anne, beth, carol (all three have allowed via group, accredited via parent)
+          # can_read = readable BUT NOT blocked: anne, beth (carol is blocked on leaf directly)
+          - request:
+              filters: [user]
+              object: folder:leaf
+              relation: can_read
+            expectation:
+              - user:anne
+              - user:beth
+        checkAssertions:
+          - name: anne_can_read
+            tuple: { user: user:anne, relation: can_read, object: folder:leaf }
+            expectation: true
+          - name: carol_blocked
+            tuple: { user: user:carol, relation: can_read, object: folder:leaf }
+            expectation: false
