@@ -43,9 +43,10 @@ func teardownContextual(ctx context.Context, conn *sql.Conn) {
 	_, _ = conn.ExecContext(ctx, "DROP TABLE IF EXISTS pg_temp.melange_contextual_tuples")
 }
 
-// strategyBaseline mirrors melange/checker.go:830 prepareContextualTuples
-// exactly: pg_class lookup, CREATE TEMP TABLE, one INSERT per tuple,
-// CREATE TEMP VIEW UNION-ALL'ing base + temp table.
+// strategyBaseline reproduces the original setupContextualTuples shape:
+// pg_class lookup, CREATE TEMP TABLE, one INSERT per tuple, CREATE TEMP
+// VIEW UNION-ALL'ing base + temp table. Kept as a stable reference point
+// for the comparison even after the production path has been replaced.
 //
 // Round trips: 1 (lookup) + 1 (create table) + N (inserts) + 1 (create view) = 3+N
 func strategyBaseline(ctx context.Context, conn *sql.Conn, tuples []melange.ContextualTuple) error {
