@@ -172,17 +172,22 @@ jobs:
             git push origin "${VERSION}"
           fi
 
+      # Write release notes outside the repo so goreleaser's "git is dirty"
+      # validation pipe doesn't trip. Snapshot mode skips that pipe; real
+      # release mode does not.
       - name: Write release notes for goreleaser
         run: |
-          cat <<'NOTES_EOF' > .release-notes.md
+          notes_path="${RUNNER_TEMP}/release-notes.md"
+          echo "RELEASE_NOTES_PATH=${notes_path}" >> "$GITHUB_ENV"
+          cat <<'NOTES_EOF' > "${notes_path}"
           ${{ needs.release-please.outputs.body }}
           NOTES_EOF
           # Fallback for workflow_dispatch (no release-please body): extract from CHANGELOG.md
-          if [ ! -s .release-notes.md ]; then
+          if [ ! -s "${notes_path}" ]; then
             awk -v ver="${VERSION#v}" '
               /^## \[/ { if (found) exit; found = ($0 ~ "\\["ver"\\]") ? 1 : 0; if (found) next }
               found { print }
-            ' CHANGELOG.md > .release-notes.md || true
+            ' CHANGELOG.md > "${notes_path}" || true
           fi
 
       - name: Run goreleaser
@@ -196,9 +201,9 @@ jobs:
           QUILL_NOTARY_ISSUER: ${{ secrets.QUILL_NOTARY_ISSUER }}
         run: |
           if [ "$DRY_RUN" = "true" ]; then
-            goreleaser release --snapshot --clean --skip=publish --release-notes .release-notes.md
+            goreleaser release --snapshot --clean --skip=publish --release-notes "$RELEASE_NOTES_PATH"
           else
-            goreleaser release --clean --release-notes .release-notes.md
+            goreleaser release --clean --release-notes "$RELEASE_NOTES_PATH"
           fi
 
       - name: Publish to npm
