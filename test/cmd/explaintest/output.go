@@ -18,7 +18,12 @@ func formatTextOutput(testName string, results []*ExplainResult) string {
 		return sb.String()
 	}
 
+	currentStage := -1
 	for _, r := range results {
+		if r.Stage != currentStage {
+			currentStage = r.Stage
+			sb.WriteString(fmt.Sprintf("\n##### Stage %d #####\n\n", r.Stage))
+		}
 		sb.WriteString(fmt.Sprintf("=== Assertion %d (%s) ===\n",
 			r.AssertionIndex, r.AssertionType))
 		sb.WriteString(fmt.Sprintf("Query: %s(%s)\n", r.Query, strings.Join(r.Parameters, ", ")))

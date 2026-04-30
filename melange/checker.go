@@ -78,6 +78,14 @@ type Checker struct {
 	validateRequest    bool
 	validator          Validator
 	databaseSchema     string
+
+	// tuplesSchema caches the result of lookupTuplesSchema. The schema does
+	// not move during the Checker's lifetime, so the lookup query (a join
+	// across pg_class and pg_namespace) can be amortized to once per Checker.
+	// Failures aren't cached — a transient lookup error should not poison
+	// the Checker for its lifetime.
+	tuplesSchemaMu sync.Mutex
+	tuplesSchema   string
 }
 
 // Option configures a Checker.
@@ -865,65 +873,78 @@ func (c *Checker) prepareContextualTuples(ctx context.Context, tuples []Contextu
 // setupContextualTuples creates the temporary infrastructure for contextual tuples.
 // This is called by prepareContextualTuples after acquiring the right connection/transaction.
 //
-// The setup process:
-//  1. Creates a session-scoped temp table for contextual tuples (no ON COMMIT DROP)
-//  2. Inserts all contextual tuples into the temp table
-//  3. Creates a temp view shadowing melange_tuples that UNIONs base + contextual tuples
+// The setup creates a single session-scoped temp view shadowing the base
+// melange_tuples view. The view's body unions the base relation with the
+// supplied tuples inlined as a VALUES list, so all setup happens in one
+// statement (one round trip) regardless of how many tuples were passed.
 //
-// The temp table is session-scoped (not ON COMMIT DROP) because contextual tuples
-// need to survive transaction boundaries. Without this, committing would drop the
-// table prematurely, breaking permission checks.
+// The temp view is session-scoped: contextual tuples need to survive
+// transaction boundaries within the same connection, which is critical
+// when callers commit between checks.
+//
+// Tuple values are escaped with quoteLiteral. Generated SQL functions
+// reference melange_tuples unqualified and rely on pg_temp shadowing
+// (search_path lookups always check pg_temp first), so the temp view —
+// not a CTE — is what makes contextual tuples visible inside check_permission
+// and the list_* functions. See specs/proposals/CONTEXTUAL_TUPLES_PERFORMANCE.md.
+//
+// Caller invariant: tuples is non-empty (the *WithContextualTuples entry
+// points short-circuit to the non-contextual path on len == 0).
 func (c *Checker) setupContextualTuples(ctx context.Context, q Execer, tuples []ContextualTuple) error {
-	baseSchema, err := c.lookupTuplesSchema(ctx, q)
+	baseSchema, err := c.baseTuplesSchema(ctx, q)
 	if err != nil {
 		return err
 	}
 
-	_, err = q.ExecContext(ctx, `
-		CREATE TEMP TABLE melange_contextual_tuples (
-			subject_type TEXT NOT NULL,
-			subject_id TEXT NOT NULL,
-			relation TEXT NOT NULL,
-			object_type TEXT NOT NULL,
-			object_id TEXT NOT NULL
-		)
-	`)
-	if err != nil {
-		return err
-	}
-
-	for _, tuple := range tuples {
-		_, err = q.ExecContext(ctx, `
-			INSERT INTO melange_contextual_tuples (subject_type, subject_id, relation, object_type, object_id)
-			VALUES ($1, $2, $3, $4, $5)
-		`, tuple.Subject.Type, tuple.Subject.ID, tuple.Relation, tuple.Object.Type, tuple.Object.ID)
-		if err != nil {
-			return err
+	var sb strings.Builder
+	fmt.Fprintf(&sb, `CREATE TEMP VIEW melange_tuples AS
+SELECT subject_type, subject_id, relation, object_type, object_id
+FROM %s.melange_tuples
+UNION ALL
+SELECT subject_type, subject_id, relation, object_type, object_id FROM (VALUES `, quoteIdent(baseSchema))
+	for i, tuple := range tuples {
+		if i > 0 {
+			sb.WriteString(", ")
 		}
+		fmt.Fprintf(&sb, "(%s::text, %s::text, %s::text, %s::text, %s::text)",
+			quoteLiteral(string(tuple.Subject.Type)),
+			quoteLiteral(tuple.Subject.ID),
+			quoteLiteral(string(tuple.Relation)),
+			quoteLiteral(string(tuple.Object.Type)),
+			quoteLiteral(tuple.Object.ID),
+		)
 	}
+	sb.WriteString(`) AS ctx(subject_type, subject_id, relation, object_type, object_id)`)
 
-	_, err = q.ExecContext(ctx, fmt.Sprintf(`
-		CREATE TEMP VIEW melange_tuples AS
-		SELECT subject_type, subject_id, relation, object_type, object_id
-		FROM %s.melange_tuples
-		UNION ALL
-		SELECT subject_type, subject_id, relation, object_type, object_id
-		FROM melange_contextual_tuples
-	`, quoteIdent(baseSchema)))
-	if err != nil {
+	if _, err := q.ExecContext(ctx, sb.String()); err != nil {
 		return err
 	}
-
 	return nil
 }
 
-// cleanupContextualTuples drops the temporary view and table.
+// cleanupContextualTuples drops the temporary view created by setupContextualTuples.
 // This must be called after permission checks complete to prevent temp object leakage.
 // The cleanup is best-effort (ignores errors) since temp objects are automatically
 // cleaned up when the session ends anyway.
 func (c *Checker) cleanupContextualTuples(ctx context.Context, q Execer) {
 	_, _ = q.ExecContext(ctx, "DROP VIEW IF EXISTS pg_temp.melange_tuples")
-	_, _ = q.ExecContext(ctx, "DROP TABLE IF EXISTS pg_temp.melange_contextual_tuples")
+}
+
+// baseTuplesSchema returns the schema containing the melange_tuples relation,
+// caching the result on the Checker so subsequent contextual-tuple calls do
+// not re-query pg_class. The lookup itself is implemented by lookupTuplesSchema.
+func (c *Checker) baseTuplesSchema(ctx context.Context, q Querier) (string, error) {
+	c.tuplesSchemaMu.Lock()
+	defer c.tuplesSchemaMu.Unlock()
+	if c.tuplesSchema != "" {
+		return c.tuplesSchema, nil
+	}
+	schema, err := c.lookupTuplesSchema(ctx, q)
+	if err != nil {
+		return "", err
+	}
+	c.tuplesSchema = schema
+	return schema, nil
 }
 
 // lookupTuplesSchema finds the schema containing the melange_tuples relation.
@@ -954,6 +975,21 @@ func (c *Checker) lookupTuplesSchema(ctx context.Context, q Querier) (string, er
 // constructing schema-qualified relation names in UNION queries.
 func quoteIdent(ident string) string {
 	return `"` + strings.ReplaceAll(ident, `"`, `""`) + `"`
+}
+
+// quoteLiteral safely quotes a PostgreSQL string literal. Single quotes are
+// escaped by doubling; backslashes are doubled and the result is prefixed
+// with E (C-style escape syntax) so the literal is unambiguous regardless of
+// the standard_conforming_strings setting. Mirrors lib/pq.QuoteLiteral and
+// lib/sqlgen/sqldsl.QuoteLiteral — duplicated here because the melange
+// runtime module is stdlib-only and cannot import sqldsl.
+func quoteLiteral(literal string) string {
+	literal = strings.ReplaceAll(literal, `'`, `''`)
+	if strings.Contains(literal, `\`) {
+		literal = strings.ReplaceAll(literal, `\`, `\\`)
+		return ` E'` + literal + `'`
+	}
+	return `'` + literal + `'`
 }
 
 // prefixIdent prefixes the identifier with the schema if it is not empty.

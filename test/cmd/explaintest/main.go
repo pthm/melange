@@ -95,6 +95,7 @@ type ListUsersAssertion struct {
 type Options struct {
 	Format    string // "text", "json"
 	Assertion int    // -1 for all, 1-based index for specific
+	Stage     int    // -1 for all stages, 1-based index for specific
 	Summary   bool
 	Pattern   string
 	Buffers   bool
@@ -107,7 +108,8 @@ type Options struct {
 func main() {
 	// Flags
 	format := flag.String("format", "text", "Output format: text, json")
-	assertion := flag.Int("assertion", -1, "Run only specific assertion (1-based)")
+	assertion := flag.Int("assertion", -1, "Run only specific assertion (1-based, scoped within each stage)")
+	stage := flag.Int("stage", -1, "Run only specific stage (1-based; default -1 = all stages)")
 	summary := flag.Bool("summary", false, "Summary mode across tests")
 	pattern := flag.String("pattern", "", "Pattern for summary mode (default: all tests)")
 	buffers := flag.Bool("buffers", true, "Include buffer statistics")
@@ -120,6 +122,7 @@ func main() {
 	opts := Options{
 		Format:    *format,
 		Assertion: *assertion,
+		Stage:     *stage,
 		Summary:   *summary,
 		Pattern:   *pattern,
 		Buffers:   *buffers,
