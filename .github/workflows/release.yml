@@ -172,6 +172,16 @@ jobs:
             git push origin "${VERSION}"
           fi
 
+      # Goreleaser requires HEAD to match the release tag. After idempotent
+      # re-runs (or if main has advanced past the tag for any reason), HEAD
+      # may diverge — switch to the tag so goreleaser sees a matching state.
+      - name: Switch to release tag
+        run: |
+          git fetch origin "refs/tags/${VERSION}:refs/tags/${VERSION}" 2>/dev/null || true
+          if git rev-parse "refs/tags/${VERSION}" >/dev/null 2>&1; then
+            git checkout "${VERSION}"
+          fi
+
       # Write release notes outside the repo so goreleaser's "git is dirty"
       # validation pipe doesn't trip. Snapshot mode skips that pipe; real
       # release mode does not.
