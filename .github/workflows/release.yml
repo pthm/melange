@@ -41,27 +41,55 @@ jobs:
 
   release:
     needs: release-please
-    if: needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch'
+    # Fire on three signals:
+    #   1. release-please-action set release_created (default flow when it owns the tag)
+    #   2. manual workflow_dispatch (recovery / forced cuts)
+    #   3. push to main where the head commit is a release-please release-PR merge.
+    #      Required because we run release-please-action with skip-github-release: true
+    #      so it can manage PRs without owning the tag — its release_created output
+    #      doesn't fire in that mode (it aborts with "untagged outstanding"), so we
+    #      detect the merge by the commit-message convention release-please uses.
+    if: |
+      needs.release-please.outputs.release_created == 'true' ||
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'chore(main): release '))
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      VERSION: ${{ needs.release-please.outputs.tag_name || github.event.inputs.version }}
       DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
     steps:
-      - name: Validate version and announce mode
+      - name: Determine version and announce mode
+        env:
+          DISPATCH_VERSION: ${{ github.event.inputs.version }}
+          RP_TAG: ${{ needs.release-please.outputs.tag_name }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
-          if [ -z "$VERSION" ]; then
-            echo "❌ VERSION is empty — release-please did not produce a tag and no override was supplied"
-            exit 1
-          fi
-          if ! echo "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$'; then
-            echo "❌ VERSION must look like v1.2.3 or v1.2.3-rc.1, got: $VERSION"
-            exit 1
-          fi
-          if [ "$DRY_RUN" = "true" ]; then
-            echo "::notice title=Dry run::Releasing $VERSION in DRY RUN mode — no tags or publishes will leave the runner."
+          if [ -n "$DISPATCH_VERSION" ]; then
+            version="$DISPATCH_VERSION"
+          elif [ -n "$RP_TAG" ]; then
+            version="$RP_TAG"
           else
-            echo "::notice title=Release::Releasing $VERSION"
+            # release-please merge commit format: "chore(main): release 0.8.2"
+            first_line=$(printf '%s' "$COMMIT_MSG" | head -n 1)
+            version=$(printf '%s' "$first_line" | awk -F': release ' '{print $2}' | awk '{print $1}')
+            if [ -z "$version" ]; then
+              echo "❌ Could not extract version from commit message: $first_line"
+              exit 1
+            fi
+            # release-please writes the version without a leading v; canonicalise.
+            if [ "${version#v}" = "$version" ]; then
+              version="v$version"
+            fi
+          fi
+          if ! printf '%s' "$version" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$'; then
+            echo "❌ VERSION must look like v1.2.3 or v1.2.3-rc.1, got: $version"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "::notice title=Dry run::Releasing $version in DRY RUN mode — no tags or publishes will leave the runner."
+          else
+            echo "::notice title=Release::Releasing $version"
           fi
 
       - uses: actions/checkout@v6
