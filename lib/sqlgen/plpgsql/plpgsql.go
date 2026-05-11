@@ -165,6 +165,7 @@ type PlpgsqlFunction struct {
 	Body       []Stmt
 	Header     []string // Comment lines at the top of the function (without -- prefix)
 	SearchPath string   // If set, appends SET search_path = '<value>' to the function definition
+	Cost       int      // If non-zero, appends COST <n> so the planner treats this function as costlier than the default (100)
 }
 
 // SQL renders the complete CREATE OR REPLACE FUNCTION statement.
@@ -195,6 +196,9 @@ func (f PlpgsqlFunction) SQL() string {
 	}
 	sb.WriteString("END;\n")
 	sb.WriteString("$$ LANGUAGE plpgsql STABLE")
+	if f.Cost > 0 {
+		fmt.Fprintf(&sb, " COST %d", f.Cost)
+	}
 	writeSearchPath(&sb, f.SearchPath, f.Schema)
 	sb.WriteString(";")
 

@@ -76,17 +76,19 @@ type GeneratedSQL struct {
 func GenerateSQL(analyses []RelationAnalysis, inline InlineSQLData, databaseSchema string) (GeneratedSQL, error) {
 	var result GeneratedSQL
 
+	complexityByRelation := buildClosureComplexityIndex(analyses)
+
 	// Generate specialized function for each relation
 	for _, a := range analyses {
 		if !a.Capabilities.CheckAllowed {
 			continue
 		}
-		fn, err := generateCheckFunction(a, inline, databaseSchema, false)
+		fn, err := generateCheckFunction(a, inline, databaseSchema, false, complexityByRelation)
 		if err != nil {
 			return GeneratedSQL{}, fmt.Errorf("generating check function: %w", err)
 		}
 		result.Functions = append(result.Functions, fn)
-		noWildcardFn, err := generateCheckFunction(a, inline, databaseSchema, true)
+		noWildcardFn, err := generateCheckFunction(a, inline, databaseSchema, true, complexityByRelation)
 		if err != nil {
 			return GeneratedSQL{}, fmt.Errorf("generating no-wildcard check function: %w", err)
 		}
@@ -256,4 +258,109 @@ func CollectFunctionNames(analyses []RelationAnalysis) []string {
 	)
 
 	return names
+}
+
+// buildClosureComplexityIndex returns, for each object type, a map from relation
+// name to a cost score derived from the full RelationAnalysis. The score is
+// then propagated along ComplexClosureRelations so that an implied wrapper
+// inherits the cost of any recursive callee it delegates to. Used to order
+// implied and parent function calls cheap-first in generated check functions.
+func buildClosureComplexityIndex(analyses []RelationAnalysis) map[string]map[string]int {
+	byType := make(map[string]map[string]int)
+	for _, a := range analyses {
+		m, ok := byType[a.ObjectType]
+		if !ok {
+			m = make(map[string]int)
+			byType[a.ObjectType] = m
+		}
+		m[a.Relation] = relationComplexityScore(a)
+	}
+
+	// Propagate scores along ComplexClosureRelations until fixed point. Each
+	// pass lifts a relation's score to the max of any complex callee on the
+	// same object type, so wrappers like `a: b` inherit b's cost class.
+	for {
+		changed := false
+		for _, a := range analyses {
+			cur := byType[a.ObjectType][a.Relation]
+			for _, rel := range a.ComplexClosureRelations {
+				if callee, ok := byType[a.ObjectType][rel]; ok && callee > cur {
+					cur = callee
+				}
+			}
+			if cur > byType[a.ObjectType][a.Relation] {
+				byType[a.ObjectType][a.Relation] = cur
+				changed = true
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+
+	return byType
+}
+
+// Complexity tiers used by relationComplexityScore. The recursive tier marks
+// relations whose generated body will invoke check_permission_internal and
+// therefore sit behind the dispatcher's depth-limit raise. checkFunctionCost
+// uses the same threshold to decide when to emit a COST hint.
+const (
+	complexityDirect       = 0
+	complexityImplied      = 1
+	complexityUserset      = 2 // also covers simple-only exclusion
+	complexityIntersection = 3
+	complexityRecursive    = 5
+)
+
+// relationComplexityScore returns a coarse cost class for a relation. Higher
+// scores indicate more expensive — and potentially recursive — evaluation.
+// Keeping the recursive tier above intersection/userset preserves the cheap
+// resolution path at the front of OR/AND chains so deep schemas don't trade
+// a successful deny for an M2002.
+func relationComplexityScore(a RelationAnalysis) int {
+	if invokesInternalCheck(a) {
+		return complexityRecursive
+	}
+	f := a.Features
+	switch {
+	case f.HasIntersection:
+		return complexityIntersection
+	case f.HasUserset, f.HasExclusion:
+		return complexityUserset
+	case f.HasImplied:
+		return complexityImplied
+	default:
+		return complexityDirect
+	}
+}
+
+// invokesInternalCheck reports whether the relation's generated body will emit
+// at least one check_permission_internal call. Such bodies sit behind the
+// dispatcher's depth-limit check, so callers should treat them as expensive
+// regardless of the relation's top-level feature flags.
+func invokesInternalCheck(a RelationAnalysis) bool {
+	f := a.Features
+	if f.HasRecursive || a.HasComplexUsersetPatterns {
+		return true
+	}
+	if len(a.ComplexExcludedRelations) > 0 ||
+		len(a.ExcludedParentRelations) > 0 ||
+		len(a.ExcludedIntersectionGroups) > 0 {
+		return true
+	}
+	for _, g := range a.IntersectionGroups {
+		for _, p := range g.Parts {
+			if p.ParentRelation != nil {
+				return true
+			}
+			if !p.IsThis && !p.IsSimple {
+				return true
+			}
+			if p.ExcludedRelation != "" && !p.IsExcludedSimple {
+				return true
+			}
+		}
+	}
+	return false
 }

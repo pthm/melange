@@ -49,9 +49,22 @@ func renderCheckDirectFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) (st
 		Decls:   []Decl{{Name: "v_userset_check", Type: "INTEGER := 0"}},
 		Body:    body,
 		Header:  checkFunctionHeader(plan),
+		Cost:    checkFunctionCost(plan),
 	}
 
 	return fn.SQL() + "\n", nil
+}
+
+// checkFunctionCost returns recursiveCheckCost when the generated function
+// body will embed a check_permission_internal call — directly, or transitively
+// through a complex closure relation. The propagated score in
+// ComplexityByRelation already lifts wrappers (e.g. `a: b` where b recurses)
+// to the recursive tier, so a single score lookup captures both cases.
+func checkFunctionCost(plan CheckPlan) int {
+	if plan.ComplexityByRelation[plan.ObjectType][plan.Relation] >= complexityRecursive {
+		return recursiveCheckCost
+	}
+	return 0
 }
 
 func renderCheckIntersectionFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) (string, error) {
@@ -83,6 +96,7 @@ func renderCheckIntersectionFunctionFromBlocks(plan CheckPlan, blocks CheckBlock
 		},
 		Body:   body,
 		Header: checkFunctionHeader(plan),
+		Cost:   checkFunctionCost(plan),
 	}
 
 	return fn.SQL() + "\n", nil
@@ -106,6 +120,7 @@ func renderCheckRecursiveFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) 
 		Decls:   recursiveCheckDecls(plan),
 		Body:    body,
 		Header:  checkFunctionHeader(plan),
+		Cost:    checkFunctionCost(plan),
 	}
 
 	return fn.SQL() + "\n", nil
@@ -135,10 +150,18 @@ func renderCheckRecursiveIntersectionFunctionFromBlocks(plan CheckPlan, blocks C
 		Decls:   recursiveCheckDecls(plan),
 		Body:    body,
 		Header:  checkFunctionHeader(plan),
+		Cost:    checkFunctionCost(plan),
 	}
 
 	return fn.SQL() + "\n", nil
 }
+
+// recursiveCheckCost is the planner COST hint we attach to generated check
+// functions that can recurse via check_permission_internal. PostgreSQL's
+// default function cost is 100; bumping these to 1000 marks them as 10x
+// more expensive than a typical predicate, encouraging the planner to
+// evaluate cheaper EXISTS/Direct branches first in OR chains.
+const recursiveCheckCost = 1000
 
 func checkFunctionArgs() []FuncArg {
 	return []FuncArg{

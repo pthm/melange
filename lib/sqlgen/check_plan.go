@@ -43,11 +43,27 @@ type CheckPlan struct {
 	RelationList        []string // Relations for tuple lookup (self + simple closure)
 	ComplexClosure      []string // Complex closure relations
 	AllowedSubjectTypes []string // Subject types allowed for this relation
+
+	// ComplexityByRelation maps (object_type, relation) to a cost score. Used to
+	// order ImpliedFunctionCalls (same object type) and ParentRelationBlocks
+	// (different object type) so cheapest callees are evaluated first in OR
+	// short-circuit chains. May be nil; absent entries score zero.
+	ComplexityByRelation map[string]map[string]int
 }
 
 // BuildCheckPlan creates a plan for generating a check function.
 // Set noWildcard to true to generate a no-wildcard variant.
+// Implied and parent function calls preserve declaration order; use
+// BuildCheckPlanWithOrdering to provide a cost index that orders them cheap-first.
 func BuildCheckPlan(a RelationAnalysis, inline InlineSQLData, databaseSchema string, noWildcard bool) CheckPlan {
+	return BuildCheckPlanWithOrdering(a, inline, databaseSchema, noWildcard, nil)
+}
+
+// BuildCheckPlanWithOrdering is the variant of BuildCheckPlan that accepts a
+// cost index by (object_type, relation). The index orders implied and parent
+// function calls cheap-first in OR/AND chains so the cheapest branch
+// short-circuits the rest. Pass nil to preserve declaration order.
+func BuildCheckPlanWithOrdering(a RelationAnalysis, inline InlineSQLData, databaseSchema string, noWildcard bool, complexityByRelation map[string]map[string]int) CheckPlan {
 	hasWildcard := a.Features.HasWildcard && !noWildcard
 
 	// Determine function names
@@ -94,6 +110,8 @@ func BuildCheckPlan(a RelationAnalysis, inline InlineSQLData, databaseSchema str
 		RelationList:        buildTupleLookupRelations(a),
 		ComplexClosure:      filterComplexClosureRelations(a),
 		AllowedSubjectTypes: buildAllowedSubjectTypesList(a),
+
+		ComplexityByRelation: complexityByRelation,
 	}
 
 	// Configure exclusions if the relation has exclusion features
