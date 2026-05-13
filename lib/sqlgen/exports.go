@@ -231,6 +231,8 @@ var (
 )
 
 // Package-internal lowercase aliases for pagination helpers used by render functions.
+// The unparameterised forms preserve the default-on materialization behavior for
+// callers that don't yet thread plan options.
 func wrapWithPagination(query, idColumn string) string {
 	return sqldsl.WrapWithPagination(query, idColumn)
 }
@@ -241,4 +243,19 @@ func wrapWithPaginationWildcardFirst(query string) string {
 
 func wrapWithExclusionCTEAndPagination(query, exclusionCTE string) string {
 	return sqldsl.WrapWithExclusionCTEAndPagination(query, exclusionCTE)
+}
+
+// Materialized-CTE-aware variants. Render functions pass plan.MaterializeCTEs()
+// which reflects the GenerateSQLOptions.EnableMaterializedCTEs opt-in (default
+// false: PG decides inlining vs materialization on its own).
+func wrapWithPaginationOpts(query, idColumn string, materialize bool) string {
+	return sqldsl.WrapWithPaginationOpts(query, idColumn, materialize)
+}
+
+func wrapWithPaginationWildcardFirstOpts(query string, materialize bool) string {
+	return sqldsl.WrapWithPaginationWildcardFirstOpts(query, materialize)
+}
+
+func wrapWithExclusionCTEAndPaginationOpts(query, exclusionCTE string, materialize bool) string {
+	return sqldsl.WrapWithExclusionCTEAndPaginationOpts(query, exclusionCTE, materialize)
 }

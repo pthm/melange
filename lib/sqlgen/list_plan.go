@@ -45,6 +45,38 @@ type ListPlan struct {
 	// Maps "objectType.relation" -> *RelationAnalysis
 	// Used by TTU block generation to determine if parent relations are simple or complex
 	AnalysisLookup map[string]*RelationAnalysis
+
+	// EnableMaterializedCTEs, when true, emits AS MATERIALIZED on
+	// multi-referenced CTEs in generated list functions. Default false: PG
+	// chooses inlining vs materialization on its own, which on benchmarked
+	// production-scale workloads outperformed forced materialization. Wired
+	// from GenerateSQLOptions for callers that profile a workload where
+	// forced materialization helps.
+	EnableMaterializedCTEs bool
+}
+
+// MaterializeCTEs reports whether multi-referenced CTEs in generated list
+// functions should render with "AS MATERIALIZED". Default is false (let PG
+// decide); set GenerateSQLOptions.EnableMaterializedCTEs to opt in.
+func (p ListPlan) MaterializeCTEs() bool {
+	return p.EnableMaterializedCTEs
+}
+
+// wrapPagination applies plan-aware materialization to the cursor pagination wrapper.
+func (p ListPlan) wrapPagination(query, idColumn string) string {
+	return wrapWithPaginationOpts(query, idColumn, p.MaterializeCTEs())
+}
+
+// wrapPaginationWildcardFirst applies plan-aware materialization to the
+// wildcard-first pagination wrapper used by list_subjects.
+func (p ListPlan) wrapPaginationWildcardFirst(query string) string {
+	return wrapWithPaginationWildcardFirstOpts(query, p.MaterializeCTEs())
+}
+
+// wrapExclusionCTEAndPagination applies plan-aware materialization to the
+// exclusion+pagination wrapper used when CTE-based exclusion is enabled.
+func (p ListPlan) wrapExclusionCTEAndPagination(query, exclusionCTE string) string {
+	return wrapWithExclusionCTEAndPaginationOpts(query, exclusionCTE, p.MaterializeCTEs())
 }
 
 // BuildListObjectsPlanWithLookup creates a plan with analysis lookup for TTU optimization.

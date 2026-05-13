@@ -17,8 +17,8 @@ func RenderListObjectsComposedFunction(plan ListPlan, blocks ComposedObjectsBloc
 	mainQuery := RenderUnionBlocks(mainBlocks)
 
 	// Wrap with pagination
-	selfPaginatedSQL := wrapWithPagination(selfSQL, "object_id")
-	mainPaginatedSQL := wrapWithPagination(mainQuery, "object_id")
+	selfPaginatedSQL := plan.wrapPagination(selfSQL, "object_id")
+	mainPaginatedSQL := plan.wrapPagination(mainQuery, "object_id")
 
 	// Build the body using plpgsql DSL types
 	body := []Stmt{

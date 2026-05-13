@@ -12,7 +12,7 @@ func RenderListSubjectsIntersectionFunction(plan ListPlan, blocks SubjectsInters
 
 	// Build regular query with check_permission filter
 	regularQuery := buildIntersectionRegularQuery(plan, regularCandidatesSQL)
-	regularPaginatedQuery := wrapWithPaginationWildcardFirst(regularQuery)
+	regularPaginatedQuery := plan.wrapPaginationWildcardFirst(regularQuery)
 
 	// Render userset filter candidate blocks
 	usersetCandidateBlocks := renderTypedQueryBlocks(blocks.UsersetFilterCandidateBlocks)
@@ -20,7 +20,7 @@ func RenderListSubjectsIntersectionFunction(plan ListPlan, blocks SubjectsInters
 
 	// Build userset filter query with check_permission filter and self block
 	usersetFilterQuery := buildIntersectionUsersetFilterQuery(plan, usersetCandidatesSQL, blocks.UsersetFilterSelfBlock)
-	usersetFilterPaginatedQuery := wrapWithPaginationWildcardFirst(usersetFilterQuery)
+	usersetFilterPaginatedQuery := plan.wrapPaginationWildcardFirst(usersetFilterQuery)
 
 	// Build the THEN branch (userset filter path)
 	thenBranch := renderUsersetFilterThenBranch(usersetFilterPaginatedQuery)

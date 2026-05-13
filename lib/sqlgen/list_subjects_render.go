@@ -5,7 +5,7 @@ func RenderListSubjectsFunction(plan ListPlan, blocks BlockSet) (string, error) 
 	primaryBlocks := renderTypedQueryBlocks(blocks.Primary)
 	secondaryBlocks := renderTypedQueryBlocks(blocks.Secondary)
 
-	usersetFilterPaginatedQuery := renderUsersetFilterPaginatedQuery(secondaryBlocks, blocks.SecondarySelf)
+	usersetFilterPaginatedQuery := renderUsersetFilterPaginatedQuery(plan, secondaryBlocks, blocks.SecondarySelf)
 
 	regularQuery := RenderUnionBlocks(primaryBlocks)
 	regularPaginatedQuery := renderRegularPaginatedQuery(plan, regularQuery)

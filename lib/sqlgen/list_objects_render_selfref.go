@@ -46,7 +46,7 @@ func RenderListObjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUserse
 		Returns: ListObjectsReturns(),
 		Header:  ListObjectsFunctionHeader(plan.ObjectType, plan.Relation, plan.FeaturesString()+" (self-referential userset)"),
 		Body: []Stmt{
-			ReturnQuery{Query: wrapWithPagination(query, "object_id")},
+			ReturnQuery{Query: plan.wrapPagination(query, "object_id")},
 		},
 	}
 

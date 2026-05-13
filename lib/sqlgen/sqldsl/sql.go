@@ -624,20 +624,39 @@ func IndentLines(input, indent string) string {
 // Pagination Helpers
 // =============================================================================
 
+// materializedKeyword returns " MATERIALIZED" when materialize is true, else empty.
+// Used in pagination CTE templates to force PostgreSQL to compute multi-referenced
+// CTEs once instead of inlining them at each call site (PG 12+ inlines by default).
+func materializedKeyword(materialize bool) string {
+	if materialize {
+		return " MATERIALIZED"
+	}
+	return ""
+}
+
 // WrapWithPagination wraps a query with cursor-based pagination.
 // The idColumn parameter specifies which column to use for ordering and cursoring.
+// Multi-referenced CTEs (paged, returned) are annotated MATERIALIZED by default.
 func WrapWithPagination(query, idColumn string) string {
+	return WrapWithPaginationOpts(query, idColumn, true)
+}
+
+// WrapWithPaginationOpts is the explicit-option form. When materialize is false,
+// paged and returned render without "AS MATERIALIZED" — matches PG ≤11 behavior
+// and the legacy default for users that profile and prefer inlining.
+func WrapWithPaginationOpts(query, idColumn string, materialize bool) string {
+	mat := materializedKeyword(materialize)
 	return fmt.Sprintf(`WITH base_results AS (
 %s
     ),
-    paged AS (
+    paged AS%s (
         SELECT br.%s
         FROM base_results br
         WHERE (p_after IS NULL OR br.%s > p_after)
         ORDER BY br.%s
         LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
     ),
-    returned AS (
+    returned AS%s (
         SELECT p.%s FROM paged p ORDER BY p.%s LIMIT p_limit
     ),
     next AS (
@@ -649,18 +668,25 @@ func WrapWithPagination(query, idColumn string) string {
     SELECT r.%s, n.next_cursor
     FROM returned r
     CROSS JOIN next n`,
-		IndentLines(query, "        "), idColumn, idColumn, idColumn,
-		idColumn, idColumn, idColumn, idColumn)
+		IndentLines(query, "        "), mat, idColumn, idColumn, idColumn,
+		mat, idColumn, idColumn, idColumn, idColumn)
 }
 
 // WrapWithPaginationWildcardFirst wraps a query for list_subjects with wildcard-first ordering.
 // Wildcards ('*') are sorted before all other subject IDs to ensure consistent pagination.
 // Uses a compound sort key: (is_not_wildcard, subject_id) where is_not_wildcard is 0 for '*', 1 otherwise.
+// Multi-referenced CTEs (paged, returned) are annotated MATERIALIZED by default.
 func WrapWithPaginationWildcardFirst(query string) string {
+	return WrapWithPaginationWildcardFirstOpts(query, true)
+}
+
+// WrapWithPaginationWildcardFirstOpts is the explicit-option form.
+func WrapWithPaginationWildcardFirstOpts(query string, materialize bool) string {
+	mat := materializedKeyword(materialize)
 	return fmt.Sprintf(`WITH base_results AS (
 %s
     ),
-    paged AS (
+    paged AS%s (
         SELECT br.subject_id
         FROM base_results br
         WHERE p_after IS NULL OR (
@@ -672,7 +698,7 @@ func WrapWithPaginationWildcardFirst(query string) string {
         ORDER BY (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END), br.subject_id
         LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
     ),
-    returned AS (
+    returned AS%s (
         SELECT p.subject_id FROM paged p
         ORDER BY (CASE WHEN p.subject_id = '*' THEN 0 ELSE 1 END), p.subject_id
         LIMIT p_limit
@@ -688,7 +714,7 @@ func WrapWithPaginationWildcardFirst(query string) string {
     SELECT r.subject_id, n.next_cursor
     FROM returned r
     CROSS JOIN next n`,
-		IndentLines(query, "        "))
+		IndentLines(query, "        "), mat, mat)
 }
 
 // WrapWithExclusionCTEAndPagination wraps a query with exclusion CTE precomputation
@@ -715,7 +741,14 @@ func WrapWithPaginationWildcardFirst(query string) string {
 //	exclusionCTE: SQL for exclusion CTE (SELECT subject_id FROM ...)
 //
 // Returns: Complete paginated query with exclusion anti-join
+// Multi-referenced CTEs (paged, returned) are annotated MATERIALIZED by default.
 func WrapWithExclusionCTEAndPagination(query, exclusionCTE string) string {
+	return WrapWithExclusionCTEAndPaginationOpts(query, exclusionCTE, true)
+}
+
+// WrapWithExclusionCTEAndPaginationOpts is the explicit-option form.
+func WrapWithExclusionCTEAndPaginationOpts(query, exclusionCTE string, materialize bool) string {
+	mat := materializedKeyword(materialize)
 	return fmt.Sprintf(`WITH excluded_subjects AS (
 %s
     ),
@@ -729,7 +762,7 @@ func WrapWithExclusionCTEAndPagination(query, exclusionCTE string) string {
           ON excl.subject_id = s.subject_id OR excl.subject_id = '*'
         WHERE excl.subject_id IS NULL
     ),
-    paged AS (
+    paged AS%s (
         SELECT br.subject_id
         FROM base_results br
         WHERE p_after IS NULL OR (
@@ -741,7 +774,7 @@ func WrapWithExclusionCTEAndPagination(query, exclusionCTE string) string {
         ORDER BY (CASE WHEN br.subject_id = '*' THEN 0 ELSE 1 END), br.subject_id
         LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
     ),
-    returned AS (
+    returned AS%s (
         SELECT p.subject_id FROM paged p
         ORDER BY (CASE WHEN p.subject_id = '*' THEN 0 ELSE 1 END), p.subject_id
         LIMIT p_limit
@@ -758,5 +791,5 @@ func WrapWithExclusionCTEAndPagination(query, exclusionCTE string) string {
     FROM returned r
     CROSS JOIN next n`,
 		IndentLines(exclusionCTE, "        "),
-		IndentLines(query, "        "))
+		IndentLines(query, "        "), mat, mat)
 }

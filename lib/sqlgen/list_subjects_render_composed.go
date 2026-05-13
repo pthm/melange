@@ -28,9 +28,9 @@ func RenderListSubjectsComposedFunction(plan ListPlan, blocks ComposedSubjectsBl
 	regularQuery := buildRegularQueryWithExclusions(plan, blocks, regularCandidates)
 
 	// Wrap queries with pagination
-	selfPaginatedSQL := wrapWithPaginationWildcardFirst(selfSQL)
-	usersetFilterPaginatedSQL := wrapWithPaginationWildcardFirst(usersetFilterQuery)
-	regularPaginatedSQL := wrapWithPaginationWildcardFirst(regularQuery)
+	selfPaginatedSQL := plan.wrapPaginationWildcardFirst(selfSQL)
+	usersetFilterPaginatedSQL := plan.wrapPaginationWildcardFirst(usersetFilterQuery)
+	regularPaginatedSQL := plan.wrapPaginationWildcardFirst(regularQuery)
 
 	// Build the body using plpgsql DSL types
 	body := []Stmt{

@@ -65,7 +65,23 @@ type GeneratedSQL struct {
 	IndexRecommendations []IndexRecommendation
 }
 
-// GenerateSQL generates specialized SQL functions for all relations in the schema.
+// GenerateSQLOptions tunes codegen behavior for GenerateSQLWithOptions and
+// GenerateListSQLWithOptions. The zero value matches the default melange behavior.
+type GenerateSQLOptions struct {
+	// EnableMaterializedCTEs forces "AS MATERIALIZED" on multi-referenced CTEs
+	// inside generated list functions. The default (false) lets PostgreSQL
+	// decide whether to inline or materialize each CTE — which on benchmarked
+	// production-scale workloads (100K+ tuples) outperformed forced
+	// materialization by ~10% on heavy list_objects queries.
+	//
+	// Set true when profiling shows a workload where forced materialization
+	// wins (typically queries whose inner CTE is recomputed many times due to
+	// inlining and produces non-trivial row counts).
+	EnableMaterializedCTEs bool
+}
+
+// GenerateSQL generates specialized SQL functions for all relations in the schema
+// using default options. See GenerateSQLWithOptions for tunable behavior.
 //
 // For each relation, it generates:
 //   - A specialized check function that evaluates permission checks efficiently
@@ -79,6 +95,16 @@ type GeneratedSQL struct {
 // Returns an error if any function fails to generate, though this is rare
 // as the analysis phase validates generation feasibility.
 func GenerateSQL(analyses []RelationAnalysis, inline InlineSQLData, databaseSchema string) (GeneratedSQL, error) {
+	return GenerateSQLWithOptions(analyses, inline, databaseSchema, GenerateSQLOptions{})
+}
+
+// GenerateSQLWithOptions is the option-aware variant of GenerateSQL.
+//
+// Currently the option set only affects list-function codegen (via
+// GenerateListSQLWithOptions); check-function output is independent of the
+// options today. The option is accepted here to keep a single public surface
+// the migrator can configure once.
+func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, databaseSchema string, _ GenerateSQLOptions) (GeneratedSQL, error) {
 	var result GeneratedSQL
 
 	complexityByRelation := buildClosureComplexityIndex(analyses)
