@@ -58,6 +58,11 @@ type GeneratedSQL struct {
 	// BulkDispatcher contains the check_permission_bulk function that evaluates
 	// multiple permission checks in a single SQL call using UNION ALL branches.
 	BulkDispatcher string
+
+	// IndexRecommendations lists composite indexes that make the generated
+	// functions efficient against melange_tuples. Advisory only — users
+	// translate the DDL to their source tables. See RecommendIndexes.
+	IndexRecommendations []IndexRecommendation
 }
 
 // GenerateSQL generates specialized SQL functions for all relations in the schema.
@@ -108,6 +113,10 @@ func GenerateSQL(analyses []RelationAnalysis, inline InlineSQLData, databaseSche
 
 	// Generate bulk dispatcher
 	result.BulkDispatcher = generateBulkDispatcher(analyses, databaseSchema)
+
+	// Index recommendations are advisory and derived from the same analyses;
+	// emitting them here keeps the per-schema output self-contained.
+	result.IndexRecommendations = RecommendIndexes(analyses)
 
 	return result, nil
 }
