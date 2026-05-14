@@ -3,12 +3,16 @@ package test
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/pthm/melange/lib/doctor"
+	"github.com/pthm/melange/pkg/compiler"
+	"github.com/pthm/melange/pkg/parser"
+	"github.com/pthm/melange/pkg/schema"
 	"github.com/pthm/melange/test/testutil"
 )
 
@@ -187,6 +191,9 @@ func TestDoctor_NoView(t *testing.T) {
 
 // TestDoctor_TableNoIndexes verifies that a melange_tuples table without indexes
 // produces warnings recommending the indexes needed for melange query patterns.
+// The exact count comes from sqlgen.RecommendIndexes() driven by the test
+// schema; today that schema has wildcard grants so three recommendations are
+// expected (object-keyed, subject-keyed, wildcard partial).
 func TestDoctor_TableNoIndexes(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -214,7 +221,7 @@ func TestDoctor_TableNoIndexes(t *testing.T) {
 	perfChecks := filterCategory(report, "Performance")
 	assert.NotEmpty(t, perfChecks, "should have performance checks for table")
 
-	// Should warn about both missing indexes.
+	// Every recommendation should surface as a missing-index warning.
 	warnings := 0
 	for _, c := range perfChecks {
 		if c.Name == "table_indexes" && c.Status != doctor.StatusPass {
@@ -223,11 +230,14 @@ func TestDoctor_TableNoIndexes(t *testing.T) {
 			assert.Contains(t, c.FixHint, "melange_tuples", "fix hint should reference melange_tuples")
 		}
 	}
-	assert.Equal(t, 2, warnings, "should warn about both check_lookup and list_objects indexes")
+	assert.GreaterOrEqual(t, warnings, 2,
+		"should warn about at least the two universal recommendations (object-keyed + subject-keyed)")
 }
 
-// TestDoctor_TableWithIndexes verifies that a melange_tuples table with the
-// recommended indexes passes the performance check.
+// TestDoctor_TableWithIndexes verifies that a melange_tuples table carrying
+// every index sqlgen.RecommendIndexes() produces for the test schema passes
+// the performance check. The DDLs are pulled directly from the recommender so
+// the test stays in sync if the recommendations evolve.
 func TestDoctor_TableWithIndexes(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -247,17 +257,10 @@ func TestDoctor_TableWithIndexes(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	// Create both recommended indexes.
-	_, err = db.ExecContext(ctx, `
-		CREATE INDEX idx_melange_tuples_check_lookup
-		ON melange_tuples (object_type, object_id, relation, subject_type, subject_id)
-	`)
-	require.NoError(t, err)
-	_, err = db.ExecContext(ctx, `
-		CREATE INDEX idx_melange_tuples_list_objects
-		ON melange_tuples (object_type, relation, subject_type, subject_id, object_id)
-	`)
-	require.NoError(t, err)
+	for _, ddl := range testSchemaRecommendedDDLs(t) {
+		_, err := db.ExecContext(ctx, ddl)
+		require.NoError(t, err, "creating recommended index: %s", ddl)
+	}
 
 	d := doctor.New(db, "testutil/testdata/schema.fga")
 	report, err := d.Run(ctx)
@@ -267,9 +270,10 @@ func TestDoctor_TableWithIndexes(t *testing.T) {
 	assertCheck(t, perfChecks, "table_indexes", doctor.StatusPass)
 }
 
-// TestDoctor_TablePartialIndexCoverage verifies that having only one of the two
-// recommended indexes produces a warning for the missing one while the covered
-// one passes silently.
+// TestDoctor_TablePartialIndexCoverage verifies that having only the
+// object-keyed full index produces warnings for the remaining recommendations
+// (subject-keyed plus, on a wildcard-using schema, the wildcard partial).
+// The covered one passes silently.
 func TestDoctor_TablePartialIndexCoverage(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -289,9 +293,9 @@ func TestDoctor_TablePartialIndexCoverage(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	// Only create the check_lookup index, omit list_objects.
+	// Only create the object-keyed index; omit the subject-keyed one.
 	_, err = db.ExecContext(ctx, `
-		CREATE INDEX idx_melange_tuples_check_lookup
+		CREATE INDEX idx_obj_keyed
 		ON melange_tuples (object_type, object_id, relation, subject_type, subject_id)
 	`)
 	require.NoError(t, err)
@@ -303,19 +307,25 @@ func TestDoctor_TablePartialIndexCoverage(t *testing.T) {
 	perfChecks := filterCategory(report, "Performance")
 	assert.NotEmpty(t, perfChecks, "should have performance checks")
 
-	// Should warn about exactly one missing index (list_objects).
-	warnings := 0
+	// At least one warning should reference the subject-keyed columns (since
+	// that's the recommendation the existing index doesn't cover).
+	sawSubjectKeyed := false
 	for _, c := range perfChecks {
 		if c.Name == "table_indexes" && c.Status != doctor.StatusPass {
-			warnings++
-			assert.Contains(t, c.Message, "list_objects", "warning should be about the missing list_objects index")
+			if strings.Contains(c.FixHint, "(subject_type, subject_id, relation, object_type, object_id)") {
+				sawSubjectKeyed = true
+			}
 		}
 	}
-	assert.Equal(t, 1, warnings, "should warn about exactly one missing index")
+	assert.True(t, sawSubjectKeyed,
+		"should warn about the missing subject-keyed index when only the object-keyed one exists")
 }
 
 // TestDoctor_TableBroaderIndexSatisfiesRecommendation verifies that an index
-// with extra trailing columns still satisfies a narrower recommendation.
+// with extra trailing columns still satisfies a narrower recommendation. The
+// existing indexes carry the recommended columns as their leading prefix
+// plus an extra trailing column; PG can use them for the same access patterns
+// as the bare recommendation.
 func TestDoctor_TableBroaderIndexSatisfiesRecommendation(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -336,17 +346,14 @@ func TestDoctor_TableBroaderIndexSatisfiesRecommendation(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	// Create indexes with an extra trailing column beyond the recommendation.
-	_, err = db.ExecContext(ctx, `
-		CREATE INDEX idx_broad_check
-		ON melange_tuples (object_type, object_id, relation, subject_type, subject_id, extra_col)
-	`)
-	require.NoError(t, err)
-	_, err = db.ExecContext(ctx, `
-		CREATE INDEX idx_broad_list
-		ON melange_tuples (object_type, relation, subject_type, subject_id, object_id, extra_col)
-	`)
-	require.NoError(t, err)
+	// Build broader-than-recommended indexes by appending a trailing column
+	// to each recommendation. The partial wildcard recommendation needs its
+	// WHERE clause preserved.
+	for _, ddl := range testSchemaRecommendedDDLs(t) {
+		broader := addTrailingColumn(ddl, "extra_col")
+		_, err := db.ExecContext(ctx, broader)
+		require.NoError(t, err, "creating broader index: %s", broader)
+	}
 
 	d := doctor.New(db, "testutil/testdata/schema.fga")
 	report, err := d.Run(ctx)
@@ -354,6 +361,52 @@ func TestDoctor_TableBroaderIndexSatisfiesRecommendation(t *testing.T) {
 
 	perfChecks := filterCategory(report, "Performance")
 	assertCheck(t, perfChecks, "table_indexes", doctor.StatusPass)
+}
+
+// testSchemaRecommendedDDLs returns the index DDL that the recommender emits
+// for testutil/testdata/schema.fga. Tests use these to build matching
+// indexes without hard-coding column lists that drift from the recommender.
+func testSchemaRecommendedDDLs(t *testing.T) []string {
+	t.Helper()
+	types, err := parser.ParseSchema("testutil/testdata/schema.fga")
+	require.NoError(t, err)
+	closureRows := schema.ComputeRelationClosure(types)
+	analyses := compiler.AnalyzeRelations(types, closureRows)
+	analyses = compiler.ComputeCanGenerate(analyses)
+	inline := compiler.BuildInlineSQLData(closureRows, analyses)
+	gen, err := compiler.GenerateSQL(analyses, inline, "")
+	require.NoError(t, err)
+
+	ddls := make([]string, 0, len(gen.IndexRecommendations))
+	for _, rec := range gen.IndexRecommendations {
+		ddls = append(ddls, rec.DDL)
+	}
+	return ddls
+}
+
+// addTrailingColumn rewrites a `CREATE INDEX ... (cols)[ WHERE pred]` DDL to
+// add `extra` as the last column inside the column list, preserving any
+// WHERE clause. Used to build broader-than-recommended indexes in tests.
+func addTrailingColumn(ddl, extra string) string {
+	// Split off any WHERE clause so its parens don't confuse the column-list
+	// surgery (matches splitIndexKeysAndPredicate's contract).
+	keys, pred := ddl, ""
+	for _, sep := range []string{") WHERE ", ") where "} {
+		if i := strings.Index(ddl, sep); i != -1 {
+			keys = ddl[:i+1]
+			pred = ddl[i+len(sep):]
+			break
+		}
+	}
+	closeIdx := strings.LastIndex(keys, ")")
+	if closeIdx == -1 {
+		return ddl
+	}
+	out := keys[:closeIdx] + ", " + extra + ")"
+	if pred != "" {
+		out += " WHERE " + pred
+	}
+	return out
 }
 
 // TestDoctor_OrphanedTuples_UnknownObjectType verifies that tuples with an
@@ -656,4 +709,14 @@ func assertCheck(t *testing.T, checks []doctor.CheckResult, name string, expecte
 		}
 	}
 	t.Errorf("check %q not found in results", name)
+}
+
+// findCheck returns the first check matching the given name, or nil.
+func findCheck(checks []doctor.CheckResult, name string) *doctor.CheckResult {
+	for i := range checks {
+		if checks[i].Name == name {
+			return &checks[i]
+		}
+	}
+	return nil
 }

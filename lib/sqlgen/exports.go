@@ -230,24 +230,10 @@ var (
 	BuildUsersetTypedRows = inline.BuildUsersetTypedRows
 )
 
-// Package-internal lowercase aliases for pagination helpers used by render functions.
-// The unparameterised forms preserve the default-on materialization behavior for
-// callers that don't yet thread plan options.
-func wrapWithPagination(query, idColumn string) string {
-	return sqldsl.WrapWithPagination(query, idColumn)
-}
-
-func wrapWithPaginationWildcardFirst(query string) string {
-	return sqldsl.WrapWithPaginationWildcardFirst(query)
-}
-
-func wrapWithExclusionCTEAndPagination(query, exclusionCTE string) string {
-	return sqldsl.WrapWithExclusionCTEAndPagination(query, exclusionCTE)
-}
-
-// Materialized-CTE-aware variants. Render functions pass plan.MaterializeCTEs()
-// which reflects the GenerateSQLOptions.EnableMaterializedCTEs opt-in (default
-// false: PG decides inlining vs materialization on its own).
+// Materialized-CTE-aware pagination helpers used by render functions. Render
+// callers pass plan.MaterializeCTEs() which reflects the
+// GenerateSQLOptions.EnableMaterializedCTEs opt-in (default false: PG decides
+// inlining vs materialization on its own).
 func wrapWithPaginationOpts(query, idColumn string, materialize bool) string {
 	return sqldsl.WrapWithPaginationOpts(query, idColumn, materialize)
 }

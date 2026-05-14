@@ -158,6 +158,28 @@ type Doctor struct {
 	currentFuncs  []string
 	tuplesInfo    *TuplesInfo
 	viewDef       *ViewDefinition
+
+	// analyses is the parsed schema run through sqlgen's analysis pipeline.
+	// Lazily computed on first call to getAnalyses(); shared by checks that
+	// need RelationAnalysis (generated-functions check, index recommendations).
+	analyses []sqlgen.RelationAnalysis
+}
+
+// getAnalyses returns the cached schema analyses or computes them on demand.
+// Returns nil if the schema couldn't be parsed (checkSchemaFile already
+// reported that as a separate error).
+func (d *Doctor) getAnalyses() []sqlgen.RelationAnalysis {
+	if d.analyses != nil {
+		return d.analyses
+	}
+	if d.parsedTypes == nil {
+		return nil
+	}
+	closureRows := schema.ComputeRelationClosure(d.parsedTypes)
+	analyses := sqlgen.AnalyzeRelations(d.parsedTypes, closureRows)
+	analyses = sqlgen.ComputeCanGenerate(analyses)
+	d.analyses = analyses
+	return analyses
 }
 
 // TuplesInfo contains information about the melange_tuples relation.
@@ -220,6 +242,9 @@ func (d *Doctor) Run(ctx context.Context) (*Report, error) {
 			}
 			if err := d.checkExpressionIndexes(ctx, report); err != nil {
 				return nil, fmt.Errorf("checking expression indexes: %w", err)
+			}
+			if err := d.checkSourceTableIndexAdvisory(ctx, report); err != nil {
+				return nil, fmt.Errorf("checking source-table indexes: %w", err)
 			}
 		case "r":
 			if err := d.checkTableIndexes(ctx, report); err != nil {
@@ -465,10 +490,7 @@ func (d *Doctor) checkGeneratedFunctions(ctx context.Context, report *Report) er
 	}
 
 	// If we have parsed types, check for expected functions
-	if d.parsedTypes != nil {
-		closureRows := schema.ComputeRelationClosure(d.parsedTypes)
-		analyses := sqlgen.AnalyzeRelations(d.parsedTypes, closureRows)
-		analyses = sqlgen.ComputeCanGenerate(analyses)
+	if analyses := d.getAnalyses(); analyses != nil {
 		expectedFuncs := sqlgen.CollectFunctionNames(analyses)
 		d.expectedFuncs = expectedFuncs
 

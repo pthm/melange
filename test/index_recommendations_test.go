@@ -283,11 +283,9 @@ type document
 
 	short := "pp"
 	type access struct {
-		name      string
-		recIndex  int // which recommendation should serve this access pattern
-		query     string
-		minIndex  string // index name substring that MUST appear in EXPLAIN
-		alsoCheck func(plan string) // optional additional checks
+		name     string
+		query    string
+		minIndex string // index name substring that MUST appear in EXPLAIN
 	}
 
 	// Look up recommendations by shape so the test stays decoupled from
