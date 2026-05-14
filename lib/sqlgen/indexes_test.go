@@ -191,6 +191,27 @@ func TestRecommendIndexes_CheckOnlyNoListSub(t *testing.T) {
 	}
 }
 
+// TestIndexName_SingleColumnFallback covers the defensive branch in indexName
+// that handles len(cols) < 2. RecommendIndexes never emits an index with
+// fewer than 2 columns today, but the fallback keeps the function total when
+// a future caller supplies one. Test via the public renderer to avoid
+// internal-impl coupling.
+func TestIndexName_SingleColumnFallback(t *testing.T) {
+	rec := IndexRecommendation{
+		BaseTable: "melange_tuples",
+		Columns:   []string{"object_id"},
+	}
+	rec.DDL = renderIndexDDL(rec)
+
+	if !strings.Contains(rec.DDL, "idx_melange_tuples_object_id") {
+		t.Errorf("single-column fallback must produce idx_melange_tuples_<col>; got: %s", rec.DDL)
+	}
+	// Should not produce the standard "_by_<a>_<b>" infix used for composites.
+	if strings.Contains(rec.DDL, "_by_") {
+		t.Errorf("single-column index name should not contain _by_; got: %s", rec.DDL)
+	}
+}
+
 func TestGenerateSQL_PopulatesIndexRecommendations(t *testing.T) {
 	// Smoke test: confirm GenerateSQL surfaces recommendations on its result.
 	analyses := []RelationAnalysis{

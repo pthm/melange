@@ -180,6 +180,22 @@ func TestUniqueStrings(t *testing.T) {
 	assert.Nil(t, uniqueStrings([]string{}))
 }
 
+func TestPartialSuffix(t *testing.T) {
+	full := sqlgen.IndexRecommendation{Columns: []string{"a", "b"}}
+	if got := partialSuffix(full); got != "" {
+		t.Errorf("full recommendation should yield empty suffix; got %q", got)
+	}
+
+	partial := sqlgen.IndexRecommendation{
+		Columns:     []string{"a"},
+		WhereClause: "subject_id = '*'",
+	}
+	want := " WHERE subject_id = '*'"
+	if got := partialSuffix(partial); got != want {
+		t.Errorf("partial suffix = %q, want %q", got, want)
+	}
+}
+
 func TestParseIndexPredicate(t *testing.T) {
 	tests := []struct {
 		name     string
