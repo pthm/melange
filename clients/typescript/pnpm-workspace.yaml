@@ -1,0 +1,14 @@
+# Project-local pnpm settings. Starting with pnpm v11 the `pnpm` field in
+# package.json is no longer read; configuration like `overrides` lives here.
+# This is not a workspace (no `packages:` key) — pnpm uses the file purely
+# as the settings location.
+
+overrides:
+  # CVE-2024-47068 in rollup <4.22.4; we bound to the safe minor line.
+  rollup: ">=4.59.0"
+
+# pnpm v11+ blocks transitive dependencies with build scripts by default.
+# esbuild is a trusted vitest/vite dependency; pre-approve so CI installs
+# don't fail with ERR_PNPM_IGNORED_BUILDS.
+allowBuilds:
+  esbuild: true
