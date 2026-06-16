@@ -51,7 +51,7 @@ jobs:
     #      detect the merge by the commit-message convention release-please uses.
     if: |
       needs.release-please.outputs.release_created == 'true' ||
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.version != '') ||
       (github.event_name == 'push' && startsWith(github.event.head_commit.message, 'chore(main): release '))
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -309,3 +309,29 @@ jobs:
         run: |
           echo "↪ dry-run: would bump cmd/melange/go.mod to require github.com/pthm/melange@${VERSION}"
           echo "↪ dry-run: would tag and push cmd/melange/${VERSION}"
+
+      # release-please tracks the lifecycle of its own release PRs via two
+      # labels: `autorelease: pending` (PR merged, tag not yet created) and
+      # `autorelease: tagged` (release complete). When release-please owns
+      # the tag, it moves the label automatically; we own the tag, so we
+      # have to do it. Without this, the next release-please run finds a
+      # PR labelled `pending`, decides there's an outstanding untagged
+      # release, and refuses to open the next release PR.
+      - name: Mark release-please PR as tagged
+        if: env.DRY_RUN != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+        run: |
+          pr_number=$(gh pr list \
+            --state merged \
+            --search "chore(main): release ${VERSION#v} in:title" \
+            --json number \
+            --jq '.[0].number // empty')
+          if [ -z "$pr_number" ]; then
+            echo "↪ no release-please PR found for ${VERSION} (likely a workflow_dispatch cut) — skipping label update"
+            exit 0
+          fi
+          gh pr edit "$pr_number" \
+            --remove-label "autorelease: pending" \
+            --add-label "autorelease: tagged"
+          echo "✓ PR #${pr_number} relabelled: pending → tagged"
