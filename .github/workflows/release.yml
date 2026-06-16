@@ -325,13 +325,20 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
         run: |
+          # gh's --search uses GitHub's search syntax, which tokenises on
+          # parentheses — `chore(main):` doesn't match as a phrase. Fetch the
+          # latest merged release-please PRs and filter locally on the exact
+          # title for a clean equality check.
+          expected_title="chore(main): release ${VERSION#v}"
           pr_number=$(gh pr list \
             --state merged \
-            --search "chore(main): release ${VERSION#v} in:title" \
-            --json number \
-            --jq '.[0].number // empty')
+            --label "autorelease: pending" \
+            --limit 20 \
+            --json number,title \
+            --jq ".[] | select(.title == \"${expected_title}\") | .number" \
+            | head -n 1)
           if [ -z "$pr_number" ]; then
-            echo "↪ no release-please PR found for ${VERSION} (likely a workflow_dispatch cut) — skipping label update"
+            echo "↪ no release-please PR found with title '${expected_title}' (likely a workflow_dispatch cut) — skipping label update"
             exit 0
           fi
           gh pr edit "$pr_number" \
