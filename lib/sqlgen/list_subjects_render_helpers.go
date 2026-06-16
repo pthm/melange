@@ -2,14 +2,14 @@ package sqlgen
 
 // renderUsersetFilterPaginatedQuery builds the paginated query for the userset filter path.
 // Returns empty string if there are no secondary blocks.
-func renderUsersetFilterPaginatedQuery(secondaryBlocks []QueryBlock, secondarySelf *TypedQueryBlock) string {
+func renderUsersetFilterPaginatedQuery(plan ListPlan, secondaryBlocks []QueryBlock, secondarySelf *TypedQueryBlock) string {
 	if len(secondaryBlocks) == 0 && secondarySelf == nil {
 		return ""
 	}
 	if secondarySelf != nil {
 		secondaryBlocks = append(secondaryBlocks, renderTypedQueryBlock(*secondarySelf))
 	}
-	return wrapWithPaginationWildcardFirst(RenderUnionBlocks(secondaryBlocks))
+	return plan.wrapPaginationWildcardFirst(RenderUnionBlocks(secondaryBlocks))
 }
 
 // renderUsersetFilterThenBranch builds the THEN branch statements for userset filter path.
@@ -44,9 +44,9 @@ func renderUsersetFilterThenBranch(usersetFilterPaginatedQuery string) []Stmt {
 func renderRegularPaginatedQuery(plan ListPlan, regularQuery string) string {
 	if plan.UseCTEExclusion {
 		exclusionCTE := plan.Exclusions.BuildExclusionCTE()
-		return wrapWithExclusionCTEAndPagination(regularQuery, exclusionCTE)
+		return plan.wrapExclusionCTEAndPagination(regularQuery, exclusionCTE)
 	}
-	return wrapWithPaginationWildcardFirst(regularQuery)
+	return plan.wrapPaginationWildcardFirst(regularQuery)
 }
 
 // renderRegularSubjectElseBranch builds the ELSE branch statements for regular subject type path.

@@ -4,7 +4,7 @@ package sqlgen
 func RenderListObjectsFunction(plan ListPlan, blocks BlockSet) (string, error) {
 	queryBlocks := renderTypedQueryBlocks(blocks.Primary)
 	query := RenderUnionBlocks(queryBlocks)
-	paginatedQuery := wrapWithPagination(query, "object_id")
+	paginatedQuery := plan.wrapPagination(query, "object_id")
 
 	fn := PlpgsqlFunction{
 		Schema:  plan.DatabaseSchema,

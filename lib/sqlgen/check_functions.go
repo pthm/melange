@@ -7,8 +7,8 @@ import (
 	"github.com/pthm/melange/lib/sqlgen/sqldsl"
 )
 
-func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, databaseSchema string, noWildcard bool) (string, error) {
-	plan := BuildCheckPlan(a, inline, databaseSchema, noWildcard)
+func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, databaseSchema string, noWildcard bool, complexityByRelation map[string]map[string]int) (string, error) {
+	plan := BuildCheckPlanWithOrdering(a, inline, databaseSchema, noWildcard, complexityByRelation)
 	blocks, err := BuildCheckBlocks(plan)
 	if err != nil {
 		return "", fmt.Errorf("building check blocks for %s.%s: %w", a.ObjectType, a.Relation, err)
@@ -82,6 +82,10 @@ func renderDispatcherWithCases(databaseSchema, fnName string, cases []Dispatcher
 			"Enforces depth limit of 25 to prevent stack overflow from deep permission chains",
 			"Phase 5: All relations use specialized functions - no generic fallback",
 		},
+		// The internal dispatcher routes to specialized functions that may recurse
+		// via TTU or complex usersets. Mark it as expensive so the planner prefers
+		// cheaper EXISTS branches when both appear in an OR/AND chain.
+		Cost: recursiveCheckCost,
 	}
 
 	publicFn := SqlFunction{

@@ -58,10 +58,5 @@
   },
   "engines": {
     "node": ">=18"
-  },
-  "pnpm": {
-    "overrides": {
-      "rollup": ">=4.59.0"
-    }
   }
 }

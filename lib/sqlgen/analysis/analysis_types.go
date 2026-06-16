@@ -1052,6 +1052,13 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		for i := range a.ExcludedParentRelations {
 			a.ExcludedParentRelations[i].AllowedLinkingTypes = getLinkingTypes(lookup, a.ObjectType, a.ExcludedParentRelations[i].LinkingRelation)
 		}
+		for gi := range a.IntersectionGroups {
+			for pi := range a.IntersectionGroups[gi].Parts {
+				if pr := a.IntersectionGroups[gi].Parts[pi].ParentRelation; pr != nil {
+					pr.AllowedLinkingTypes = getLinkingTypes(lookup, a.ObjectType, pr.LinkingRelation)
+				}
+			}
+		}
 
 		// Classify intersection parts as simple or complex for optimization.
 		// Simple relations can be inlined as EXISTS queries instead of function calls.

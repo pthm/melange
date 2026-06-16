@@ -12,7 +12,7 @@ import (
 // RenderListSubjectsRecursiveFunction renders a recursive list_subjects function from plan and blocks.
 // This handles TTU patterns with subject_pool CTE and check_permission_internal calls.
 func RenderListSubjectsRecursiveFunction(plan ListPlan, blocks SubjectsRecursiveBlockSet) (string, error) {
-	usersetFilterPaginatedQuery := buildUsersetFilterQuery(blocks)
+	usersetFilterPaginatedQuery := buildUsersetFilterQuery(plan, blocks)
 	regularPaginatedQuery := buildRegularPaginatedQuery(plan, blocks)
 
 	mainIf := If{
@@ -46,19 +46,19 @@ func RenderListSubjectsRecursiveFunction(plan ListPlan, blocks SubjectsRecursive
 	return fn.SQL(), nil
 }
 
-func buildUsersetFilterQuery(blocks SubjectsRecursiveBlockSet) string {
+func buildUsersetFilterQuery(plan ListPlan, blocks SubjectsRecursiveBlockSet) string {
 	usersetFilterParts := renderTypedQueryBlocks(blocks.UsersetFilterBlocks)
 	if blocks.UsersetFilterSelfBlock != nil {
 		usersetFilterParts = append(usersetFilterParts, renderTypedQueryBlock(*blocks.UsersetFilterSelfBlock))
 	}
-	return wrapWithPaginationWildcardFirst(RenderUnionBlocks(usersetFilterParts))
+	return plan.wrapPaginationWildcardFirst(RenderUnionBlocks(usersetFilterParts))
 }
 
 func buildRegularPaginatedQuery(plan ListPlan, blocks SubjectsRecursiveBlockSet) string {
 	regularBlocks := renderTypedQueryBlocks(blocks.RegularBlocks)
 	ttuBlocks := renderTypedQueryBlocks(blocks.RegularTTUBlocks)
 	regularQuery := buildSubjectsRecursiveRegularQuery(plan, regularBlocks, ttuBlocks)
-	return wrapWithPaginationWildcardFirst(regularQuery)
+	return plan.wrapPaginationWildcardFirst(regularQuery)
 }
 
 // buildSubjectsRecursiveRegularQuery builds the regular path query with parent_closure and base_results CTEs.
@@ -93,8 +93,12 @@ func buildSubjectsRecursiveRegularQuery(plan ListPlan, regularBlocks, ttuBlocks 
 		ctes = append(ctes, CTEDef{Name: "parent_closure", Query: Raw(parentClosureSQL)})
 	}
 
-	// Add base_results CTE
-	ctes = append(ctes, CTEDef{Name: "base_results", Query: Raw(baseBlocksSQL)})
+	// Add base_results CTE.
+	// base_results is referenced twice in this query: from the has_wildcard CTE
+	// (EXISTS subquery on '*') and from the outer wildcard-tail SELECT (FROM
+	// base_results br). Force materialization so the expensive UNION inside is
+	// computed once instead of inlined into both reference sites.
+	ctes = append(ctes, CTEDef{Name: "base_results", Query: Raw(baseBlocksSQL), Materialized: plan.MaterializeCTEs()})
 
 	// Build the has_wildcard CTE query
 	hasWildcardQuery := SelectStmt{

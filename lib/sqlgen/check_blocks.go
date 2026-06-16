@@ -1,5 +1,7 @@
 package sqlgen
 
+import "sort"
+
 // CheckBlocks contains all the DSL blocks needed to generate a check function.
 type CheckBlocks struct {
 	DirectCheck             Expr       // EXISTS check for direct/implied tuple lookup
@@ -99,10 +101,18 @@ func buildUsersetCheck(plan CheckPlan) Expr {
 		return nil
 	}
 
-	visitedWithKey := VisitedWithKey(plan.ObjectType, plan.Relation, ObjectID)
-	checks := make([]Expr, 0, len(patterns))
+	// Order simple patterns (tuple JOIN) before complex ones (recursive function call)
+	// so the OR short-circuits on the cheaper check first.
+	sorted := make([]UsersetPattern, len(patterns))
+	copy(sorted, patterns)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return !sorted[i].IsComplex && sorted[j].IsComplex
+	})
 
-	for _, pattern := range patterns {
+	visitedWithKey := VisitedWithKey(plan.ObjectType, plan.Relation, ObjectID)
+	checks := make([]Expr, 0, len(sorted))
+
+	for _, pattern := range sorted {
 		checks = append(checks, buildUsersetPatternCheck(plan, pattern, visitedWithKey))
 	}
 
@@ -351,9 +361,16 @@ func buildUsersetSubjectChecks(plan CheckPlan) (selfCheck, computedCheck SelectS
 }
 
 func buildParentRelationBlocks(plan CheckPlan) []ParentRelationBlock {
-	blocks := make([]ParentRelationBlock, 0, len(plan.Analysis.ParentRelations))
+	parents := make([]ParentRelationInfo, len(plan.Analysis.ParentRelations))
+	copy(parents, plan.Analysis.ParentRelations)
+	sort.SliceStable(parents, func(i, j int) bool {
+		return parentRelationScore(parents[i], plan.ComplexityByRelation) <
+			parentRelationScore(parents[j], plan.ComplexityByRelation)
+	})
 
-	for _, parent := range plan.Analysis.ParentRelations {
+	blocks := make([]ParentRelationBlock, 0, len(parents))
+
+	for _, parent := range parents {
 		q := Tuples(plan.DatabaseSchema, "link").
 			ObjectType(plan.ObjectType).
 			Relations(parent.LinkingRelation).
@@ -375,10 +392,30 @@ func buildParentRelationBlocks(plan CheckPlan) []ParentRelationBlock {
 	return blocks
 }
 
-func buildImpliedFunctionCalls(plan CheckPlan) []ImpliedFunctionCheck {
-	calls := make([]ImpliedFunctionCheck, 0, len(plan.Analysis.ComplexClosureRelations))
+// parentRelationScore returns the worst-case complexity for a TTU parent
+// relation across its allowed parent types. Used to order ParentRelationBlocks
+// so cheaper parents are evaluated first in the sequential IF chain.
+func parentRelationScore(p ParentRelationInfo, complexity map[string]map[string]int) int {
+	worst := 0
+	for _, parentType := range p.AllowedLinkingTypes {
+		if score, ok := complexity[parentType][p.Relation]; ok && score > worst {
+			worst = score
+		}
+	}
+	return worst
+}
 
-	for _, rel := range plan.Analysis.ComplexClosureRelations {
+func buildImpliedFunctionCalls(plan CheckPlan) []ImpliedFunctionCheck {
+	relations := make([]string, len(plan.Analysis.ComplexClosureRelations))
+	copy(relations, plan.Analysis.ComplexClosureRelations)
+	sameType := plan.ComplexityByRelation[plan.ObjectType]
+	sort.SliceStable(relations, func(i, j int) bool {
+		return sameType[relations[i]] < sameType[relations[j]]
+	})
+
+	calls := make([]ImpliedFunctionCheck, 0, len(relations))
+
+	for _, rel := range relations {
 		funcName := functionName(plan.ObjectType, rel)
 		if plan.NoWildcard {
 			funcName = functionNameNoWildcard(plan.ObjectType, rel)
@@ -406,14 +443,49 @@ func buildIntersectionGroups(plan CheckPlan) []IntersectionGroupCheck {
 	visitedWithKey := VisitedWithKey(plan.ObjectType, plan.Relation, ObjectID)
 
 	for _, group := range plan.Analysis.IntersectionGroups {
-		parts := make([]IntersectionPartCheck, 0, len(group.Parts))
-		for _, part := range group.Parts {
+		sortedParts := make([]IntersectionPart, len(group.Parts))
+		copy(sortedParts, group.Parts)
+		sort.SliceStable(sortedParts, func(i, j int) bool {
+			return intersectionPartScore(sortedParts[i], plan) <
+				intersectionPartScore(sortedParts[j], plan)
+		})
+
+		parts := make([]IntersectionPartCheck, 0, len(sortedParts))
+		for _, part := range sortedParts {
 			parts = append(parts, buildIntersectionPartCheck(plan, part, visitedWithKey))
 		}
 		groups = append(groups, IntersectionGroupCheck{Parts: parts})
 	}
 
 	return groups
+}
+
+// intersectionPartScore returns a cost class for an intersection AND-part so
+// the AND chain can be ordered cheap-first. Within an AND, putting the cheap
+// (and likely-to-fail) check first short-circuits the rest of the chain.
+func intersectionPartScore(part IntersectionPart, plan CheckPlan) int {
+	score := 0
+	switch {
+	case part.IsThis:
+		score = 0 // direct grant on same relation: index lookup
+	case part.IsSimple:
+		score = 1 // inline EXISTS
+	case part.ParentRelation != nil:
+		score = parentRelationScore(*part.ParentRelation, plan.ComplexityByRelation) + 4
+	default:
+		score = plan.ComplexityByRelation[plan.ObjectType][part.Relation]
+		if score == 0 {
+			score = 3 // unknown but non-simple: assume function call
+		}
+	}
+	if part.ExcludedRelation != "" {
+		if part.IsExcludedSimple {
+			score++
+		} else {
+			score += 3
+		}
+	}
+	return score
 }
 
 // buildSimpleRelationCheck builds an inline EXISTS query for a simple relation check.

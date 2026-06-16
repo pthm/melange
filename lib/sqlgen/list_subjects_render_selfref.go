@@ -4,10 +4,10 @@ package sqlgen
 // Self-Referential Userset Render Functions (List Subjects)
 // =============================================================================
 func RenderListSubjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUsersetSubjectsBlockSet) (string, error) {
-	usersetFilterPaginatedQuery := wrapWithPaginationWildcardFirst(
+	usersetFilterPaginatedQuery := plan.wrapPaginationWildcardFirst(
 		trimTrailingSemicolon(renderSelfRefUsersetFilterQuery(blocks)),
 	)
-	regularPaginatedQuery := wrapWithPaginationWildcardFirst(
+	regularPaginatedQuery := plan.wrapPaginationWildcardFirst(
 		trimTrailingSemicolon(renderSelfRefUsersetRegularQuery(plan, blocks)),
 	)
 
@@ -99,9 +99,11 @@ func renderSelfRefUsersetRegularQuery(plan ListPlan, blocks SelfRefUsersetSubjec
 		},
 	}
 
+	// base_results is referenced twice (has_wildcard EXISTS + outer tail SELECT),
+	// so materialize to compute it once instead of inlining at both sites.
 	cteQuery := MultiCTE(true, []CTEDef{
 		{Name: "userset_objects", Columns: []string{"userset_object_id", "depth"}, Query: Raw(usersetObjectsCTE)},
-		{Name: "base_results", Query: Raw(baseResultsSQL)},
+		{Name: "base_results", Query: Raw(baseResultsSQL), Materialized: plan.MaterializeCTEs()},
 		{Name: "has_wildcard", Query: hasWildcardQuery},
 	}, buildUsersetWildcardTailQuery(plan.Analysis, plan.DatabaseSchema))
 

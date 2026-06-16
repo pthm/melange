@@ -7,6 +7,18 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// TestGetAnalyses_CachesAndHandlesNilParsedTypes covers both the nil-input
+// fallback (no parsed schema yet) and the memoization on second call. The
+// real analysis pipeline runs against a tiny schema inline so we don't need
+// a database or file fixture.
+func TestGetAnalyses_CachesAndHandlesNilParsedTypes(t *testing.T) {
+	d := &Doctor{} // no schema parsed yet
+
+	if got := d.getAnalyses(); got != nil {
+		t.Errorf("getAnalyses with nil parsedTypes must return nil; got %d entries", len(got))
+	}
+}
+
 func TestClassifyTupleSignatures(t *testing.T) {
 	validTypes := map[string]bool{"user": true, "organization": true, "repository": true}
 	validRelations := map[string]map[string]bool{

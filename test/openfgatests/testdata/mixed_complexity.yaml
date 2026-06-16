@@ -1,0 +1,400 @@
+# Melange-specific tests: mixed-complexity paths in a single relation.
+#
+# These schemas combine cheap and expensive resolution paths in one relation
+# so the generated check function has to sort branches cheap-first. Each test
+# targets a specific ordering site in the codegen:
+#
+#   - mixed_userset_patterns:        buildUsersetCheck     (UsersetPattern.IsComplex)
+#   - mixed_implied_complexity:      buildImpliedFunctionCalls (ComplexClosureRelations)
+#   - mixed_parent_complexity:       buildParentRelationBlocks (ParentRelations)
+#   - mixed_intersection_parts:     buildIntersectionGroups    (IntersectionGroupInfo.Parts)
+#   - transitive_implied_recursion: buildClosureComplexityIndex propagation
+#
+# The assertions verify correctness; the value of these schemas is that they
+# produce non-trivial sorts the existing official corpus never triggers.
+#
+# Test names are prefixed with "melange/" by the loader.
+
+tests:
+
+  # ---------------------------------------------------------------------------
+  # mixed_userset_patterns
+  # Pattern: viewer: [simple_group#member, recursive_group#admin]
+  # - simple_group.member is direct-only (cheap pattern: tuple JOIN)
+  # - recursive_group.admin is a recursive userset (complex pattern: function call)
+  # Exercises change A: buildUsersetCheck orders simple before complex so the OR
+  # short-circuits on the cheap JOIN before invoking check_permission_internal.
+  # ---------------------------------------------------------------------------
+  - name: mixed_userset_patterns
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type simple_group
+            relations
+              define member: [user]
+
+          type recursive_group
+            relations
+              define admin: [user, recursive_group#admin]
+
+          type doc
+            relations
+              # Source order places the complex (recursive) userset first; change A
+              # in buildUsersetCheck stable-sorts so the simple JOIN-resolvable
+              # pattern is emitted ahead of the function-call pattern in the OR.
+              define viewer: [recursive_group#admin, simple_group#member]
+        tuples:
+          - user: user:alice
+            relation: member
+            object: simple_group:eng
+          - user: simple_group:eng#member
+            relation: viewer
+            object: doc:1
+          - user: user:bob
+            relation: admin
+            object: recursive_group:root
+          - user: recursive_group:root#admin
+            relation: admin
+            object: recursive_group:sub
+          - user: recursive_group:sub#admin
+            relation: viewer
+            object: doc:2
+        checkAssertions:
+          - name: alice_via_simple_group
+            tuple:
+              user: user:alice
+              relation: viewer
+              object: doc:1
+            expectation: true
+          - name: bob_via_recursive_group
+            tuple:
+              user: user:bob
+              relation: viewer
+              object: doc:2
+            expectation: true
+          - name: alice_not_on_doc2
+            tuple:
+              user: user:alice
+              relation: viewer
+              object: doc:2
+            expectation: false
+          - name: bob_not_on_doc1
+            tuple:
+              user: user:bob
+              relation: viewer
+              object: doc:1
+            expectation: false
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: doc
+              relation: viewer
+            expectation:
+              - doc:1
+          - request:
+              user: user:bob
+              type: doc
+              relation: viewer
+            expectation:
+              - doc:2
+
+  # ---------------------------------------------------------------------------
+  # mixed_implied_complexity
+  # Pattern: viewer: cheap_grant or via_simple_userset or via_complex_userset
+  # The three implied sources have features of different cost classes:
+  #   - cheap_grant:           Direct only (SimpleClosureRelations - not in sort)
+  #   - via_simple_userset:    HasUserset, simple (ComplexClosureRelations, score 2)
+  #   - via_complex_userset:   HasComplexUsersetPatterns (ComplexClosureRelations, score 5)
+  # Exercises change B: buildImpliedFunctionCalls sorts the two complex closure
+  # entries so the simple one is invoked first in the OR chain.
+  # ---------------------------------------------------------------------------
+  - name: mixed_implied_complexity
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type group
+            relations
+              define member: [user]
+              define manager: [user, group#manager]
+
+          type doc
+            relations
+              define cheap_grant: [user]
+              define via_simple_userset: [group#member]
+              define via_complex_userset: [group#manager]
+              define viewer: cheap_grant or via_complex_userset or via_simple_userset
+        tuples:
+          - user: user:alice
+            relation: cheap_grant
+            object: doc:1
+          - user: user:bob
+            relation: member
+            object: group:eng
+          - user: group:eng#member
+            relation: via_simple_userset
+            object: doc:2
+          - user: user:carol
+            relation: manager
+            object: group:root
+          - user: group:root#manager
+            relation: manager
+            object: group:sub
+          - user: group:sub#manager
+            relation: via_complex_userset
+            object: doc:3
+        checkAssertions:
+          - name: alice_via_cheap
+            tuple:
+              user: user:alice
+              relation: viewer
+              object: doc:1
+            expectation: true
+          - name: bob_via_simple_userset
+            tuple:
+              user: user:bob
+              relation: viewer
+              object: doc:2
+            expectation: true
+          - name: carol_via_complex_userset
+            tuple:
+              user: user:carol
+              relation: viewer
+              object: doc:3
+            expectation: true
+          - name: alice_not_on_doc2
+            tuple:
+              user: user:alice
+              relation: viewer
+              object: doc:2
+            expectation: false
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: doc
+              relation: viewer
+            expectation:
+              - doc:1
+          - request:
+              user: user:bob
+              type: doc
+              relation: viewer
+            expectation:
+              - doc:2
+          - request:
+              user: user:carol
+              type: doc
+              relation: viewer
+            expectation:
+              - doc:3
+
+  # ---------------------------------------------------------------------------
+  # mixed_parent_complexity
+  # Pattern: viewer: simple_role from owner or complex_role from owner
+  # Two parent TTUs sharing one linking relation, targeting two relations on
+  # the same parent type that differ in cost:
+  #   - org.simple_role:  [user]                       (score 0)
+  #   - org.complex_role: [user, org#complex_role]     (score 5, recursive userset)
+  # Exercises change C: buildParentRelationBlocks orders parents so the cheap
+  # TTU (resolves to a single tuple lookup) is tried before the recursive one.
+  # ---------------------------------------------------------------------------
+  - name: mixed_parent_complexity
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type org
+            relations
+              define simple_role: [user]
+              define complex_role: [user, org#complex_role]
+
+          type doc
+            relations
+              define simple_owner: [org]
+              define complex_owner: [org]
+              define viewer: [user] or complex_role from complex_owner or simple_role from simple_owner
+        tuples:
+          # alice reaches doc:1 via simple_role on org -> simple_owner
+          - user: user:alice
+            relation: simple_role
+            object: org:acme
+          - user: org:acme
+            relation: simple_owner
+            object: doc:1
+          # bob reaches doc:2 via recursive complex_role on org -> complex_owner
+          - user: user:bob
+            relation: complex_role
+            object: org:root
+          - user: org:root#complex_role
+            relation: complex_role
+            object: org:sub
+          - user: org:sub
+            relation: complex_owner
+            object: doc:2
+          # direct grant for the [user] leg
+          - user: user:diana
+            relation: viewer
+            object: doc:1
+        checkAssertions:
+          - name: alice_via_simple_role
+            tuple:
+              user: user:alice
+              relation: viewer
+              object: doc:1
+            expectation: true
+          - name: bob_via_complex_role
+            tuple:
+              user: user:bob
+              relation: viewer
+              object: doc:2
+            expectation: true
+          - name: diana_via_direct
+            tuple:
+              user: user:diana
+              relation: viewer
+              object: doc:1
+            expectation: true
+          - name: alice_not_on_doc2
+            tuple:
+              user: user:alice
+              relation: viewer
+              object: doc:2
+            expectation: false
+
+  # ---------------------------------------------------------------------------
+  # mixed_intersection_parts
+  # Pattern: viewer: cheap_direct and via_simple_userset and via_recursive_userset
+  # An AND chain with three parts of escalating cost:
+  #   - cheap_direct:          IsSimple (inline EXISTS, score 1)
+  #   - via_simple_userset:    not IsSimple, HasUserset (score 2)
+  #   - via_recursive_userset: HasComplexUsersetPatterns (score 5)
+  # Exercises change D: buildIntersectionGroups sorts parts cheap-first so the
+  # AND short-circuits on the cheapest failing predicate.
+  # ---------------------------------------------------------------------------
+  - name: mixed_intersection_parts
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type team
+            relations
+              define member: [user]
+              define complex_member: [user, team#complex_member]
+
+          type doc
+            relations
+              define cheap_direct: [user]
+              define via_simple_userset: [team#member]
+              define via_recursive_userset: [team#complex_member]
+              define viewer: via_recursive_userset and via_simple_userset and cheap_direct
+        tuples:
+          - user: user:alice
+            relation: cheap_direct
+            object: doc:1
+          - user: user:alice
+            relation: member
+            object: team:simple
+          - user: team:simple#member
+            relation: via_simple_userset
+            object: doc:1
+          - user: user:alice
+            relation: complex_member
+            object: team:root
+          - user: team:root#complex_member
+            relation: complex_member
+            object: team:sub
+          - user: team:sub#complex_member
+            relation: via_recursive_userset
+            object: doc:1
+        checkAssertions:
+          - name: alice_has_all_three
+            tuple:
+              user: user:alice
+              relation: viewer
+              object: doc:1
+            expectation: true
+          - name: bob_missing_all
+            tuple:
+              user: user:bob
+              relation: viewer
+              object: doc:1
+            expectation: false
+
+  # ---------------------------------------------------------------------------
+  # transitive_implied_recursion
+  # Pattern: a is implied by b, b is implied by c, c wraps a recursive userset.
+  # The cheap path (`cheap_grant`) sits alongside the long implied chain
+  # leading to expensive recursion.
+  #
+  # Exercises the transitive propagation in buildClosureComplexityIndex: even
+  # though `outer` has only HasImplied (initial score 1), its closure walks
+  # through `mid` -> `inner` -> `via_recursive_userset` and reaches the
+  # recursive tier. After propagation `outer` should also score 5 so callers
+  # treat it as expensive when ordering OR chains and emit the recursive
+  # COST hint on its generated function.
+  # ---------------------------------------------------------------------------
+  - name: transitive_implied_recursion
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type group
+            relations
+              define member: [user, group#member]
+
+          type doc
+            relations
+              define cheap_grant: [user]
+              define via_recursive_userset: [group#member]
+              define inner: via_recursive_userset
+              define mid: inner
+              define outer: mid
+              define viewer: cheap_grant or outer
+        tuples:
+          - user: user:alice
+            relation: cheap_grant
+            object: doc:1
+          - user: user:bob
+            relation: member
+            object: group:root
+          - user: group:root#member
+            relation: member
+            object: group:sub
+          - user: group:sub#member
+            relation: via_recursive_userset
+            object: doc:2
+        checkAssertions:
+          - name: alice_via_cheap_path
+            tuple:
+              user: user:alice
+              relation: viewer
+              object: doc:1
+            expectation: true
+          - name: bob_via_long_implied_chain
+            tuple:
+              user: user:bob
+              relation: viewer
+              object: doc:2
+            expectation: true
+          - name: alice_not_on_doc2
+            tuple:
+              user: user:alice
+              relation: viewer
+              object: doc:2
+            expectation: false
