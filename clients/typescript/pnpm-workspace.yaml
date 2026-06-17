@@ -6,6 +6,17 @@
 overrides:
   # CVE-2024-47068 in rollup <4.22.4; we bound to the safe minor line.
   rollup: ">=4.59.0"
+  # Dev-only vite/esbuild advisories pulled in transitively via vitest.
+  # vite >=7.3.5 fixes the dev-server WebSocket arbitrary file read
+  # (GHSA-p9ff-h696-f583), the server.fs.deny query/Windows-path bypasses
+  # (GHSA-v2wj-q39q-566r, GHSA-fx2h-pf6j-xcff), the optimized-deps .map path
+  # traversal (GHSA-4w7w-66w2-5vf9) and the bundled launch-editor NTLMv2 hash
+  # disclosure (GHSA-v6wh-96g9-6wx3). Stay on the vite 7 line.
+  vite: "7.3.5"
+  # esbuild >=0.28.1 fixes the Deno-module integrity RCE
+  # (GHSA-gv7w-rqvm-qjhr) and the Windows dev-server arbitrary file read
+  # (GHSA-g7r4-m6w7-qqqr).
+  esbuild: "^0.28.1"
 
 # pnpm v11+ blocks transitive dependencies with build scripts by default.
 # esbuild is a trusted vitest/vite dependency; pre-approve so CI installs
