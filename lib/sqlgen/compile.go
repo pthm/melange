@@ -59,6 +59,20 @@ type GeneratedSQL struct {
 	// multiple permission checks in a single SQL call using UNION ALL branches.
 	BulkDispatcher string
 
+	// ExplainFunctions contains CREATE OR REPLACE FUNCTION statements for the
+	// per-relation explain_{type}_{relation} functions. Each returns JSONB
+	// shaped to melange.Trace and is the codegen companion to check_*.
+	// Stage 1 (slice 1): only direct-grant matches and cycle detection are
+	// implemented in the body; implied / userset / TTU / intersection paths
+	// will be filled in by subsequent slices.
+	ExplainFunctions []string
+
+	// ExplainDispatcher contains the explain_permission public + internal
+	// functions that route to per-relation explain_* by (object_type, relation).
+	// Returns a structurally valid JSONB Trace even for unknown pairs so
+	// callers can deserialise without special-casing.
+	ExplainDispatcher string
+
 	// IndexRecommendations lists composite indexes that make the generated
 	// functions efficient against melange_tuples. Advisory only — users
 	// translate the DDL to their source tables. See RecommendIndexes.
@@ -124,6 +138,21 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 			return GeneratedSQL{}, fmt.Errorf("generating no-wildcard check function: %w", err)
 		}
 		result.NoWildcardFunctions = append(result.NoWildcardFunctions, noWildcardFn)
+		// Stage 1 slice 1: only generate explain_* for relations whose check
+		// resolves through a single direct/implied SELECT. Schemas with
+		// usersets, TTU, exclusion, intersection, or complex implied chains
+		// would produce a trace that disagrees with Check's answer until
+		// later slices implement those branches; rather than ship an
+		// incorrect trace, the dispatcher routes unsupported relations to
+		// the unsupported-in-this-version sentinel.
+		if !explainSupported(a) {
+			continue
+		}
+		explainFn, err := generateExplainFunction(a, inline, databaseSchema, complexityByRelation)
+		if err != nil {
+			return GeneratedSQL{}, fmt.Errorf("generating explain function: %w", err)
+		}
+		result.ExplainFunctions = append(result.ExplainFunctions, explainFn)
 	}
 
 	// Generate dispatchers
@@ -135,6 +164,10 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 	result.DispatcherNoWildcard, err = generateDispatcher(analyses, databaseSchema, true)
 	if err != nil {
 		return GeneratedSQL{}, fmt.Errorf("generating no-wildcard dispatcher: %w", err)
+	}
+	result.ExplainDispatcher, err = generateExplainDispatcher(analyses, databaseSchema)
+	if err != nil {
+		return GeneratedSQL{}, fmt.Errorf("generating explain dispatcher: %w", err)
 	}
 
 	// Generate bulk dispatcher
@@ -221,7 +254,7 @@ func CollectNamedFunctions(
 	analyses []RelationAnalysis,
 ) []NamedFunction {
 	var result []NamedFunction
-	checkIdx, noWildcardIdx := 0, 0
+	checkIdx, noWildcardIdx, explainIdx := 0, 0, 0
 	listObjIdx, listSubjIdx := 0, 0
 
 	for _, a := range analyses {
@@ -236,6 +269,13 @@ func CollectNamedFunctions(
 				SQL:  generatedSQL.NoWildcardFunctions[noWildcardIdx],
 			})
 			noWildcardIdx++
+			if explainSupported(a) {
+				result = append(result, NamedFunction{
+					Name: explainFunctionName(a.ObjectType, a.Relation),
+					SQL:  generatedSQL.ExplainFunctions[explainIdx],
+				})
+				explainIdx++
+			}
 		}
 		if a.Capabilities.ListAllowed {
 			result = append(result, NamedFunction{
@@ -272,6 +312,9 @@ func CollectFunctionNames(analyses []RelationAnalysis) []string {
 				functionName(a.ObjectType, a.Relation),
 				functionNameNoWildcard(a.ObjectType, a.Relation),
 			)
+			if explainSupported(a) {
+				names = append(names, explainFunctionName(a.ObjectType, a.Relation))
+			}
 		}
 		if a.Capabilities.ListAllowed {
 			names = append(names,
@@ -288,6 +331,8 @@ func CollectFunctionNames(analyses []RelationAnalysis) []string {
 		"check_permission_nw",
 		"check_permission_nw_internal",
 		"check_permission_bulk",
+		"explain_permission",
+		"explain_permission_internal",
 		"list_accessible_objects",
 		"list_accessible_subjects",
 	)

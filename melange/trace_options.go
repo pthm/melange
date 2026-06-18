@@ -23,9 +23,12 @@ func applyExplain(options []ExplainOption) explainOpts {
 	return o
 }
 
-// WithExplainMaxNodes caps the total node count in a single Explain trace.
-// When unset, the value resolves via the `melange.max_explain_nodes` GUC,
-// falling back to the built-in default (100). Pass <= 0 to mean "unset".
+// WithExplainMaxNodes is reserved for the Explain node-count cap. It is
+// plumbed through the option pattern for forward compatibility, but the
+// generated explain_* functions in this codegen version do not yet enforce
+// it — setting it is currently a no-op. A later codegen slice will honour
+// the value via the `melange.max_explain_nodes` GUC with the built-in
+// default (100). Pass <= 0 to mean "unset".
 func WithExplainMaxNodes(n int) ExplainOption {
 	return func(o *explainOpts) {
 		if n > 0 {

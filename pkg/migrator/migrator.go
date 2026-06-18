@@ -195,6 +195,19 @@ func (m *Migrator) applyGeneratedSQL(ctx context.Context, db Execer, gen Generat
 		}
 	}
 
+	// Apply per-relation explain functions before the explain dispatcher
+	// (dispatcher CASE expressions name the per-relation functions).
+	for i, fn := range gen.ExplainFunctions {
+		if _, err := db.ExecContext(ctx, fn); err != nil {
+			return fmt.Errorf("applying explain function %d: %w", i, err)
+		}
+	}
+	if gen.ExplainDispatcher != "" {
+		if _, err := db.ExecContext(ctx, gen.ExplainDispatcher); err != nil {
+			return fmt.Errorf("applying explain dispatcher: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -810,6 +823,20 @@ func (m *Migrator) outputDryRun(w io.Writer, melangeVersion, schemaChecksum stri
 	}
 	if generatedSQL.BulkDispatcher != "" {
 		_, _ = fmt.Fprintf(w, "%s\n\n", generatedSQL.BulkDispatcher)
+	}
+
+	// Explain functions + dispatcher (Stage 1: slice 1 — direct-grant only,
+	// with cycle detection and a no-entry sentinel for unknown pairs).
+	if len(generatedSQL.ExplainFunctions) > 0 || generatedSQL.ExplainDispatcher != "" {
+		_, _ = fmt.Fprintf(w, "-- ============================================================\n")
+		_, _ = fmt.Fprintf(w, "-- Explain Functions (%d functions)\n", len(generatedSQL.ExplainFunctions))
+		_, _ = fmt.Fprintf(w, "-- ============================================================\n\n")
+		for _, fn := range generatedSQL.ExplainFunctions {
+			_, _ = fmt.Fprintf(w, "%s\n\n", fn)
+		}
+		if generatedSQL.ExplainDispatcher != "" {
+			_, _ = fmt.Fprintf(w, "%s\n\n", generatedSQL.ExplainDispatcher)
+		}
 	}
 
 	// List objects functions

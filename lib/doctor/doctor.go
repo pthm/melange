@@ -456,6 +456,8 @@ func (d *Doctor) checkGeneratedFunctions(ctx context.Context, report *Report) er
 		"check_permission_internal",
 		"check_permission_nw",
 		"check_permission_nw_internal",
+		"explain_permission",
+		"explain_permission_internal",
 		"list_accessible_objects",
 		"list_accessible_subjects",
 	}
@@ -905,6 +907,7 @@ func (d *Doctor) getCurrentFunctions(ctx context.Context) ([]string, error) {
 			AND (
 				p.proname LIKE 'check_%%'
 				OR p.proname LIKE 'list_%%'
+				OR p.proname LIKE 'explain_%%'
 			)
 		`,
 		d.postgresSchema(),
