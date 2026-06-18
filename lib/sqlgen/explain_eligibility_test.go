@@ -19,10 +19,12 @@ import (
 // machinery; slice 1.3+ will exercise it via real fixtures once TTU lands.
 
 func TestComputeExplainEligibility_LocalOnly(t *testing.T) {
+	blocked := mkAnalysis("doc", "blocked", RelationFeatures{HasDirect: true}, false)
+	blocked.HasComplexUsersetPatterns = true
 	analyses := []RelationAnalysis{
 		mkAnalysis("doc", "owner", RelationFeatures{HasDirect: true}, false),
 		mkAnalysis("doc", "viewer", RelationFeatures{HasDirect: true, HasImplied: true}, false),
-		mkAnalysis("doc", "blocked", RelationFeatures{HasDirect: true, HasExclusion: true}, false),
+		blocked,
 	}
 	got := ComputeExplainEligibility(analyses)
 	if !got["doc"]["owner"] {
@@ -32,21 +34,23 @@ func TestComputeExplainEligibility_LocalOnly(t *testing.T) {
 		t.Errorf("viewer should be eligible (Direct+Implied, no complex deps)")
 	}
 	if got["doc"]["blocked"] {
-		t.Errorf("blocked should be ineligible (HasExclusion)")
+		t.Errorf("blocked should be ineligible (HasComplexUsersetPatterns)")
 	}
 }
 
 func TestComputeExplainEligibility_TransitiveDownward(t *testing.T) {
-	// wrapper depends on dep which is ineligible (HasIntersection). wrapper
-	// must also be marked ineligible even though its own features are simple.
-	dep := mkAnalysis("doc", "dep", RelationFeatures{HasDirect: true, HasIntersection: true}, false)
+	// wrapper depends on dep which is ineligible
+	// (HasComplexUsersetPatterns — still gated). wrapper must also be
+	// marked ineligible even though its own features are simple.
+	dep := mkAnalysis("doc", "dep", RelationFeatures{HasDirect: true}, false)
+	dep.HasComplexUsersetPatterns = true
 	wrapper := mkAnalysis("doc", "wrapper", RelationFeatures{HasDirect: true, HasImplied: true}, false)
 	wrapper.ComplexClosureRelations = []string{"dep"}
 	analyses := []RelationAnalysis{dep, wrapper}
 
 	got := ComputeExplainEligibility(analyses)
 	if got["doc"]["dep"] {
-		t.Errorf("dep should be ineligible (HasIntersection)")
+		t.Errorf("dep should be ineligible (HasComplexUsersetPatterns)")
 	}
 	if got["doc"]["wrapper"] {
 		t.Errorf("wrapper should be downgraded — depends on ineligible dep")
@@ -55,10 +59,12 @@ func TestComputeExplainEligibility_TransitiveDownward(t *testing.T) {
 
 func TestComputeExplainEligibility_TransitiveChain(t *testing.T) {
 	// Three relations in a chain where wrapper depends on middle, and
-	// middle depends on bad. Bad is locally ineligible (HasIntersection);
-	// middle is locally fine but transitively downgrades to ineligible;
-	// then in the next pass wrapper itself gets downgraded.
-	bad := mkAnalysis("doc", "bad", RelationFeatures{HasDirect: true, HasIntersection: true}, false)
+	// middle depends on bad. Bad is locally ineligible
+	// (HasComplexUsersetPatterns); middle is locally fine but
+	// transitively downgrades to ineligible; then in the next pass
+	// wrapper itself gets downgraded.
+	bad := mkAnalysis("doc", "bad", RelationFeatures{HasDirect: true}, false)
+	bad.HasComplexUsersetPatterns = true
 	middle := mkAnalysis("doc", "middle", RelationFeatures{HasDirect: true, HasImplied: true}, false)
 	middle.ComplexClosureRelations = []string{"bad"}
 	wrapper := mkAnalysis("doc", "wrapper", RelationFeatures{HasDirect: true, HasImplied: true}, false)
@@ -67,7 +73,7 @@ func TestComputeExplainEligibility_TransitiveChain(t *testing.T) {
 
 	got := ComputeExplainEligibility(analyses)
 	if got["doc"]["bad"] {
-		t.Errorf("bad should be ineligible (HasIntersection)")
+		t.Errorf("bad should be ineligible (HasComplexUsersetPatterns)")
 	}
 	if got["doc"]["middle"] {
 		t.Errorf("middle should be transitively downgraded by bad")
@@ -101,7 +107,8 @@ func TestComputeExplainEligibility_CrossTypeTTU_OneParentIneligible(t *testing.T
 	// Conservative rule: ALL allowed parent types must have their relation
 	// eligible. A single ineligible parent disables the whole TTU wrapper.
 	orgAdmin := mkAnalysis("organization", "can_admin", RelationFeatures{HasDirect: true}, false)
-	folderAdmin := mkAnalysis("folder", "can_admin", RelationFeatures{HasDirect: true, HasExclusion: true}, false)
+	folderAdmin := mkAnalysis("folder", "can_admin", RelationFeatures{HasDirect: true}, false)
+	folderAdmin.HasComplexUsersetPatterns = true
 	repoAdmin := mkAnalysis("repository", "can_admin", RelationFeatures{HasDirect: true, HasRecursive: true}, false)
 	repoAdmin.ParentRelations = []ParentRelationInfo{{
 		Relation:            "can_admin",
@@ -113,7 +120,7 @@ func TestComputeExplainEligibility_CrossTypeTTU_OneParentIneligible(t *testing.T
 		t.Errorf("organization.can_admin should be eligible")
 	}
 	if got["folder"]["can_admin"] {
-		t.Errorf("folder.can_admin should be ineligible (HasExclusion)")
+		t.Errorf("folder.can_admin should be ineligible (HasComplexUsersetPatterns)")
 	}
 	if got["repository"]["can_admin"] {
 		t.Errorf("repository.can_admin should be ineligible — folder parent dragged it down")
@@ -123,7 +130,7 @@ func TestComputeExplainEligibility_CrossTypeTTU_OneParentIneligible(t *testing.T
 func TestComputeExplainEligibility_UsersetPattern(t *testing.T) {
 	// document.viewer: [group#member] — wrapper depends on group.member.
 	// When group.member is eligible the wrapper is too; flipping group.member
-	// (e.g., HasExclusion) cascades to the wrapper.
+	// (e.g., HasComplexUsersetPatterns) cascades to the wrapper.
 	groupMember := mkAnalysis("group", "member", RelationFeatures{HasDirect: true}, false)
 	docViewer := mkAnalysis("document", "viewer", RelationFeatures{HasDirect: true, HasUserset: true}, false)
 	docViewer.UsersetPatterns = []UsersetPattern{{
@@ -136,10 +143,11 @@ func TestComputeExplainEligibility_UsersetPattern(t *testing.T) {
 	}
 
 	// Now flip group.member to ineligible and verify the cascade.
-	groupMember2 := mkAnalysis("group", "member", RelationFeatures{HasDirect: true, HasExclusion: true}, false)
+	groupMember2 := mkAnalysis("group", "member", RelationFeatures{HasDirect: true}, false)
+	groupMember2.HasComplexUsersetPatterns = true
 	got = ComputeExplainEligibility([]RelationAnalysis{groupMember2, docViewer})
 	if got["group"]["member"] {
-		t.Errorf("group.member should be ineligible (HasExclusion)")
+		t.Errorf("group.member should be ineligible (HasComplexUsersetPatterns)")
 	}
 	if got["document"]["viewer"] {
 		t.Errorf("document.viewer should be downgraded once group.member flipped")
@@ -151,7 +159,8 @@ func TestComputeExplainEligibility_PerObjectTypeIsolation(t *testing.T) {
 	// object type. A "viewer" on document and a "viewer" on folder are
 	// distinct entries; downgrading one must not affect the other.
 	docViewer := mkAnalysis("document", "viewer", RelationFeatures{HasDirect: true}, false)
-	folderViewer := mkAnalysis("folder", "viewer", RelationFeatures{HasDirect: true, HasIntersection: true}, false)
+	folderViewer := mkAnalysis("folder", "viewer", RelationFeatures{HasDirect: true}, false)
+	folderViewer.HasComplexUsersetPatterns = true
 	analyses := []RelationAnalysis{docViewer, folderViewer}
 
 	got := ComputeExplainEligibility(analyses)
@@ -159,7 +168,7 @@ func TestComputeExplainEligibility_PerObjectTypeIsolation(t *testing.T) {
 		t.Errorf("document.viewer should not be touched by folder.viewer's ineligibility")
 	}
 	if got["folder"]["viewer"] {
-		t.Errorf("folder.viewer should be ineligible (HasIntersection)")
+		t.Errorf("folder.viewer should be ineligible (HasComplexUsersetPatterns)")
 	}
 }
 
@@ -376,6 +385,87 @@ func TestRenderExplainFunction_UsersetSubjectPreCheck(t *testing.T) {
 	}
 	if strings.Contains(got, "-- Case 2: closure-aware computed userset match") {
 		t.Errorf("relation without userset patterns should not emit computed-userset case:\n%s", got)
+	}
+}
+
+// TestRenderExplainFunction_IntersectionFlow exercises slice 1.5's
+// intersection attempt block: each part recursively calls
+// explain_permission_internal, results AND-aggregate, and the trace
+// wraps part roots in NodeIntersection.
+func TestRenderExplainFunction_IntersectionFlow(t *testing.T) {
+	a := mkAnalysis("document", "viewer", RelationFeatures{HasDirect: true, HasIntersection: true}, false)
+	a.SatisfyingRelations = []string{"viewer"}
+	a.IntersectionGroups = []IntersectionGroupInfo{{
+		Parts: []IntersectionPart{
+			{Relation: "writer"},
+			{Relation: "editor"},
+		},
+	}}
+	plan := BuildCheckPlanWithOrdering(a, InlineSQLData{}, "", false, nil)
+	blocks, err := BuildCheckBlocks(plan)
+	if err != nil {
+		t.Fatalf("BuildCheckBlocks: %v", err)
+	}
+	got, err := RenderExplainFunction(plan, blocks)
+	if err != nil {
+		t.Fatalf("RenderExplainFunction: %v", err)
+	}
+
+	wants := []string{
+		"v_intersection_children JSONB",
+		"v_intersection_pass BOOLEAN",
+		"v_intersection_children := '[]'::jsonb",
+		"v_intersection_pass := TRUE",
+		"-- Intersection part: writer",
+		"-- Intersection part: editor",
+		"explain_permission_internal(p_subject_type, p_subject_id, 'writer', 'document', p_object_id, p_visited || ARRAY[v_key])",
+		"explain_permission_internal(p_subject_type, p_subject_id, 'editor', 'document', p_object_id, p_visited || ARRAY[v_key])",
+		"v_intersection_children := v_intersection_children || jsonb_build_array(v_child_trace->'root')",
+		"v_intersection_pass := FALSE",
+		"'type', 'intersection'",
+		"'label', 'intersection group 1 (all parts must hold)'",
+	}
+	for _, w := range wants {
+		if !strings.Contains(got, w) {
+			t.Errorf("missing %q in generated SQL:\n%s", w, got)
+		}
+	}
+}
+
+// TestRenderExplainFunction_ExclusionWrapsSuccess pins the success-return
+// helper's exclusion wrapping: every success path checks the exclusion
+// predicate via blocks.ExclusionCheck and wraps the outcome in
+// NodeExclusion (either result=true on pass, or result=false appended to
+// v_attempts on excluded).
+func TestRenderExplainFunction_ExclusionWrapsSuccess(t *testing.T) {
+	a := mkAnalysis("document", "viewer", RelationFeatures{HasDirect: true, HasExclusion: true}, false)
+	a.SatisfyingRelations = []string{"viewer"}
+	a.ExcludedRelations = []string{"banned"}
+	a.SimpleExcludedRelations = []string{"banned"}
+	plan := BuildCheckPlanWithOrdering(a, InlineSQLData{}, "", false, nil)
+	blocks, err := BuildCheckBlocks(plan)
+	if err != nil {
+		t.Fatalf("BuildCheckBlocks: %v", err)
+	}
+	got, err := RenderExplainFunction(plan, blocks)
+	if err != nil {
+		t.Fatalf("RenderExplainFunction: %v", err)
+	}
+
+	wants := []string{
+		// The exclusion check is interposed at the success path
+		"-- Exclusion fired — record failure attempt and continue",
+		"'type', 'exclusion'",
+		"'label', 'excluded — base satisfied but exclusion fired'",
+		"'label', 'base satisfied; exclusion did not fire'",
+		// blocks.ExclusionCheck for a simple exclusion is an EXISTS over excluded tuples
+		"FROM melange_tuples AS excl",
+		"excl.relation IN ('banned')",
+	}
+	for _, w := range wants {
+		if !strings.Contains(got, w) {
+			t.Errorf("missing %q in generated SQL:\n%s", w, got)
+		}
 	}
 }
 

@@ -44,7 +44,8 @@ func RenderExplainFunction(plan CheckPlan, blocks CheckBlocks) (string, error) {
 	body = append(body, buildExplainDirectAttempt(plan, blocks)...)
 	body = append(body, buildExplainImpliedAttempts(plan, blocks)...)
 	body = append(body, buildExplainParentRelationAttempts(plan, blocks)...)
-	body = append(body, buildExplainUsersetAttempts(plan)...)
+	body = append(body, buildExplainUsersetAttempts(plan, blocks)...)
+	body = append(body, buildExplainIntersectionAttempts(plan, blocks)...)
 	body = append(body, buildExplainFinalFailure(plan)...)
 
 	fn := PlpgsqlFunction{
@@ -115,7 +116,7 @@ func explainFunctionDecls(plan CheckPlan, blocks CheckBlocks) []Decl {
 		// SELECT for every relation with a non-empty RelationList.
 		{Name: "v_userset_check", Type: "INTEGER := 0"},
 	}
-	if len(blocks.ImpliedFunctionCalls) > 0 || len(blocks.ParentRelationBlocks) > 0 || len(plan.Analysis.UsersetPatterns) > 0 {
+	if len(blocks.ImpliedFunctionCalls) > 0 || len(blocks.ParentRelationBlocks) > 0 || len(plan.Analysis.UsersetPatterns) > 0 || len(blocks.IntersectionGroups) > 0 {
 		decls = append(decls, Decl{Name: "v_child_trace", Type: "JSONB"})
 	}
 	if len(blocks.ParentRelationBlocks) > 0 {
@@ -125,6 +126,15 @@ func explainFunctionDecls(plan CheckPlan, blocks CheckBlocks) []Decl {
 	}
 	if len(plan.Analysis.UsersetPatterns) > 0 {
 		decls = append(decls, Decl{Name: "v_userset_grant", Type: "RECORD"})
+	}
+	if len(blocks.IntersectionGroups) > 0 {
+		// Accumulators for the intersection attempts. v_intersection_pass
+		// tracks AND across parts; v_intersection_children carries the
+		// per-part traces into the success/failure NodeIntersection.
+		decls = append(decls,
+			Decl{Name: "v_intersection_children", Type: "JSONB"},
+			Decl{Name: "v_intersection_pass", Type: "BOOLEAN"},
+		)
 	}
 	return decls
 }
@@ -189,19 +199,21 @@ func buildExplainDirectAttempt(plan CheckPlan, blocks CheckBlocks) []Stmt {
 		Result: "false",
 	})
 
+	// The miss-attempt append lives in the Else branch so an exclusion-
+	// induced fall-through from emitExplainSuccessReturn doesn't double-
+	// record a "no direct grant" node on top of the NodeExclusion already
+	// appended for the excluded success.
 	return []Stmt{
 		Comment{Text: "Direct/Implied grant attempt"},
 		SelectInto{Query: selectStmt, Variable: "v_evidence_tuple"},
 		If{
 			Cond: Raw("FOUND"),
-			Then: []Stmt{
-				Assign{Name: "v_root", Value: Raw(successNode)},
+			Then: emitExplainSuccessReturn(plan, blocks, successNode),
+			Else: []Stmt{
 				Assign{Name: "v_node_count", Value: Raw("v_node_count + 1")},
-				ReturnValue{Value: Raw(buildExplainTraceRoot(plan, "true", "v_root"))},
+				Assign{Name: "v_attempts", Value: Raw("v_attempts || jsonb_build_array(" + failureNode + ")")},
 			},
 		},
-		Assign{Name: "v_node_count", Value: Raw("v_node_count + 1")},
-		Assign{Name: "v_attempts", Value: Raw("v_attempts || jsonb_build_array(" + failureNode + ")")},
 	}
 }
 
@@ -268,7 +280,7 @@ func buildExplainImpliedAttempts(plan CheckPlan, blocks CheckBlocks) []Stmt {
 			Result:   "false",
 		})
 
-		stmts = append(stmts, explainChildTraceAttempt(plan, callExpr, successNode, failureNode)...)
+		stmts = append(stmts, explainChildTraceAttempt(plan, blocks, callExpr, successNode, failureNode)...)
 	}
 
 	return stmts
@@ -278,27 +290,27 @@ func buildExplainImpliedAttempts(plan CheckPlan, blocks CheckBlocks) []Stmt {
 // explain_*, fold node-count, branch on result" sequence shared by every
 // recursive attempt path (implied, parent, userset, intersection). The
 // caller supplies the dispatcher/function callExpr plus the success and
-// failure NodeJSON SQL strings; this helper handles the v_child_trace
-// COALESCE, the success-return, and the failure-attempt append.
+// failure NodeJSON SQL strings; the helper folds the child trace's
+// node_count, routes success through emitExplainSuccessReturn (so
+// exclusion stays centralised) and appends failureNode to v_attempts on
+// miss.
 //
 // COALESCE on the callExpr guards against a callee that somehow returns
 // NULL — no eligible callee does today, but a malformed result should
 // surface as a failure attempt with an empty subtree rather than a
 // null-children parent node.
-func explainChildTraceAttempt(plan CheckPlan, callExpr, successNode, failureNode string) []Stmt {
+func explainChildTraceAttempt(plan CheckPlan, blocks CheckBlocks, callExpr, successNode, failureNode string) []Stmt {
 	return []Stmt{
 		Assign{Name: "v_child_trace", Value: Raw("COALESCE(" + callExpr + ", '{}'::jsonb)")},
 		Assign{Name: "v_node_count", Value: Raw("v_node_count + COALESCE((v_child_trace->>'node_count')::INTEGER, 0)")},
 		If{
 			Cond: Raw("COALESCE((v_child_trace->>'result')::boolean, FALSE)"),
-			Then: []Stmt{
-				Assign{Name: "v_root", Value: Raw(successNode)},
+			Then: emitExplainSuccessReturn(plan, blocks, successNode),
+			Else: []Stmt{
 				Assign{Name: "v_node_count", Value: Raw("v_node_count + 1")},
-				ReturnValue{Value: Raw(buildExplainTraceRoot(plan, "true", "v_root"))},
+				Assign{Name: "v_attempts", Value: Raw("v_attempts || jsonb_build_array(" + failureNode + ")")},
 			},
 		},
-		Assign{Name: "v_node_count", Value: Raw("v_node_count + 1")},
-		Assign{Name: "v_attempts", Value: Raw("v_attempts || jsonb_build_array(" + failureNode + ")")},
 	}
 }
 
@@ -329,7 +341,7 @@ func buildExplainParentRelationAttempts(plan CheckPlan, blocks CheckBlocks) []St
 	stmts := []Stmt{Comment{Text: "TTU / parent-relation attempts"}}
 
 	for _, parent := range blocks.ParentRelationBlocks {
-		stmts = append(stmts, buildExplainParentLoopStmt(plan, parent))
+		stmts = append(stmts, buildExplainParentLoopStmt(plan, blocks, parent))
 	}
 
 	return stmts
@@ -337,7 +349,7 @@ func buildExplainParentRelationAttempts(plan CheckPlan, blocks CheckBlocks) []St
 
 // buildExplainParentLoopStmt assembles one FOR-loop block over the linking
 // tuples for a single parent relation block.
-func buildExplainParentLoopStmt(plan CheckPlan, parent ParentRelationBlock) Stmt {
+func buildExplainParentLoopStmt(plan CheckPlan, blocks CheckBlocks, parent ParentRelationBlock) Stmt {
 	driverQuery := buildExplainParentLinkingSelect(plan, parent)
 
 	dispatcherCall := fmt.Sprintf(
@@ -371,7 +383,7 @@ func buildExplainParentLoopStmt(plan CheckPlan, parent ParentRelationBlock) Stmt
 	return ForLoop{
 		Variable: "v_parent_link",
 		Query:    driverQuery,
-		Body:     explainChildTraceAttempt(plan, dispatcherCall, successNode, failureNode),
+		Body:     explainChildTraceAttempt(plan, blocks, dispatcherCall, successNode, failureNode),
 	}
 }
 
@@ -444,6 +456,16 @@ func buildExplainUsersetSubjectStmts(plan CheckPlan, blocks CheckBlocks) []Stmt 
 		},
 	}}
 
+	// Case 1's success path matches Check's buildUsersetSubjectStmts which
+	// returns 1 unconditionally — the self-referential userset is a
+	// structural match against the closure, not a tuple-derived grant, so
+	// the exclusion check (about subject identity) does not apply. Bypass
+	// emitExplainSuccessReturn to preserve that contract.
+	case1Success := []Stmt{
+		Assign{Name: "v_root", Value: Raw(selfMatchNode)},
+		Assign{Name: "v_node_count", Value: Raw("v_node_count + 1")},
+		ReturnValue{Value: Raw(buildExplainTraceRoot(plan, "true", "v_root"))},
+	}
 	innerThen := []Stmt{
 		Comment{Text: "Case 1: self-referential userset (subject's userset resolves to this object)"},
 		If{
@@ -452,27 +474,21 @@ func buildExplainUsersetSubjectStmts(plan CheckPlan, blocks CheckBlocks) []Stmt 
 				SelectInto{Query: blocks.UsersetSubjectSelfCheck, Variable: "v_userset_check"},
 				If{
 					Cond: Eq{Left: Raw("v_userset_check"), Right: Int(1)},
-					Then: []Stmt{
-						Assign{Name: "v_root", Value: Raw(selfMatchNode)},
-						Assign{Name: "v_node_count", Value: Raw("v_node_count + 1")},
-						ReturnValue{Value: Raw(buildExplainTraceRoot(plan, "true", "v_root"))},
-					},
+					Then: case1Success,
 				},
 			},
 		},
 	}
 
 	if len(plan.Analysis.UsersetPatterns) > 0 {
+		// Case 2 honors exclusion the way Check's Case 2 does, so route
+		// through the helper.
 		innerThen = append(innerThen,
 			Comment{Text: "Case 2: closure-aware computed userset match"},
 			SelectInto{Query: blocks.UsersetSubjectComputedCheck, Variable: "v_userset_check"},
 			If{
 				Cond: Eq{Left: Raw("v_userset_check"), Right: Int(1)},
-				Then: []Stmt{
-					Assign{Name: "v_root", Value: Raw(computedMatchNode)},
-					Assign{Name: "v_node_count", Value: Raw("v_node_count + 1")},
-					ReturnValue{Value: Raw(buildExplainTraceRoot(plan, "true", "v_root"))},
-				},
+				Then: emitExplainSuccessReturn(plan, blocks, computedMatchNode),
 			},
 		)
 	}
@@ -515,7 +531,7 @@ func buildExplainUsersetSubjectStmts(plan CheckPlan, blocks CheckBlocks) []Stmt 
 // The label inlines the resolved group identifier so the trace reads like
 // "via [group#member] → group:engineering" instead of an abstract pattern
 // description.
-func buildExplainUsersetAttempts(plan CheckPlan) []Stmt {
+func buildExplainUsersetAttempts(plan CheckPlan, blocks CheckBlocks) []Stmt {
 	patterns := plan.Analysis.UsersetPatterns
 	if len(patterns) == 0 {
 		return nil
@@ -523,14 +539,14 @@ func buildExplainUsersetAttempts(plan CheckPlan) []Stmt {
 
 	stmts := []Stmt{Comment{Text: "Userset reference attempts"}}
 	for _, pattern := range patterns {
-		stmts = append(stmts, buildExplainUsersetLoopStmt(plan, pattern))
+		stmts = append(stmts, buildExplainUsersetLoopStmt(plan, blocks, pattern))
 	}
 	return stmts
 }
 
 // buildExplainUsersetLoopStmt assembles one FOR-loop block over the grant
 // tuples carrying a userset reference for a single UsersetPattern.
-func buildExplainUsersetLoopStmt(plan CheckPlan, pattern UsersetPattern) Stmt {
+func buildExplainUsersetLoopStmt(plan CheckPlan, blocks CheckBlocks, pattern UsersetPattern) Stmt {
 	driverQuery := buildExplainUsersetGrantSelect(plan, pattern)
 
 	// The dispatcher recursion uses pattern.SubjectRelation (the membership
@@ -566,7 +582,7 @@ func buildExplainUsersetLoopStmt(plan CheckPlan, pattern UsersetPattern) Stmt {
 	return ForLoop{
 		Variable: "v_userset_grant",
 		Query:    driverQuery,
-		Body:     explainChildTraceAttempt(plan, dispatcherCall, successNode, failureNode),
+		Body:     explainChildTraceAttempt(plan, blocks, dispatcherCall, successNode, failureNode),
 	}
 }
 
@@ -597,6 +613,98 @@ func buildExplainUsersetGrantSelect(plan CheckPlan, pattern UsersetPattern) Sele
 	return q.Build()
 }
 
+// buildExplainIntersectionAttempts emits, per IntersectionGroup, a block
+// that recursively resolves each part through explain_permission_internal,
+// AND-aggregates the results, and wraps the per-part traces in a
+// NodeIntersection. Groups are OR'd together — the first group whose parts
+// all succeed returns; misses append a failure NodeIntersection to
+// v_attempts so the final union shows what was tried.
+//
+// Parts handled in slice 1.5:
+//   - Regular relation parts (`part.Relation` set, no IsParent, no
+//     ExcludedRelation).
+//
+// Parts that require additional renderer work and are NOT handled here:
+//   - IsParent / ParentRelation parts (intersection-of-TTU)
+//   - Parts with ExcludedRelation (intersection-of-exclusion)
+//
+// `explainSupportsIntersection` upstream gates relations whose groups
+// contain unsupported parts so the dispatcher routes them to the no-entry
+// sentinel rather than emitting an incorrect intersection trace.
+func buildExplainIntersectionAttempts(plan CheckPlan, blocks CheckBlocks) []Stmt {
+	if len(blocks.IntersectionGroups) == 0 {
+		return nil
+	}
+
+	stmts := []Stmt{Comment{Text: "Intersection attempts (groups OR'd, parts AND'd within a group)"}}
+	for groupIdx, group := range blocks.IntersectionGroups {
+		stmts = append(stmts, buildExplainIntersectionGroupStmts(plan, blocks, group, groupIdx)...)
+	}
+	return stmts
+}
+
+// buildExplainIntersectionGroupStmts assembles one group's per-part
+// recursive calls + the success/failure aggregation.
+func buildExplainIntersectionGroupStmts(plan CheckPlan, blocks CheckBlocks, group IntersectionGroupCheck, groupIdx int) []Stmt {
+	stmts := []Stmt{
+		Comment{Text: fmt.Sprintf("Intersection group %d", groupIdx+1)},
+		Assign{Name: "v_intersection_children", Value: Raw("'[]'::jsonb")},
+		Assign{Name: "v_intersection_pass", Value: Raw("TRUE")},
+	}
+
+	for _, part := range group.Parts {
+		stmts = append(stmts, buildExplainIntersectionPartStmts(plan, part)...)
+	}
+
+	groupLabel := fmt.Sprintf("intersection group %d (all parts must hold)", groupIdx+1)
+	successNode := BuildNodeJSON(TraceNodeIntersection, NodeJSONArgs{
+		Label:    sqldsl.QuoteLiteral(groupLabel),
+		Children: "v_intersection_children",
+		Result:   "true",
+	})
+	failureNode := BuildNodeJSON(TraceNodeIntersection, NodeJSONArgs{
+		Label:    sqldsl.QuoteLiteral(groupLabel),
+		Children: "v_intersection_children",
+		Result:   "false",
+	})
+
+	stmts = append(stmts,
+		If{
+			Cond: Raw("v_intersection_pass"),
+			Then: emitExplainSuccessReturn(plan, blocks, successNode),
+			Else: []Stmt{
+				Assign{Name: "v_node_count", Value: Raw("v_node_count + 1")},
+				Assign{Name: "v_attempts", Value: Raw("v_attempts || jsonb_build_array(" + failureNode + ")")},
+			},
+		},
+	)
+
+	return stmts
+}
+
+// buildExplainIntersectionPartStmts emits the per-part recursive call:
+// invoke explain_permission_internal for the part's relation, accumulate
+// the trace into v_intersection_children, and update v_intersection_pass.
+func buildExplainIntersectionPartStmts(plan CheckPlan, part IntersectionPartCheck) []Stmt {
+	dispatcherCall := fmt.Sprintf(
+		"%s(p_subject_type, p_subject_id, %s, %s, p_object_id, p_visited || ARRAY[v_key])",
+		sqldsl.PrefixIdent("explain_permission_internal", plan.DatabaseSchema),
+		sqldsl.QuoteLiteral(part.Relation),
+		sqldsl.QuoteLiteral(plan.ObjectType),
+	)
+
+	return []Stmt{
+		Comment{Text: "Intersection part: " + part.Relation},
+		Assign{Name: "v_child_trace", Value: Raw("COALESCE(" + dispatcherCall + ", '{}'::jsonb)")},
+		Assign{Name: "v_node_count", Value: Raw("v_node_count + COALESCE((v_child_trace->>'node_count')::INTEGER, 0)")},
+		Assign{Name: "v_intersection_children", Value: Raw("v_intersection_children || jsonb_build_array(v_child_trace->'root')")},
+		If{
+			Cond: NotExpr{Expr: Raw("COALESCE((v_child_trace->>'result')::boolean, FALSE)")},
+			Then: []Stmt{Assign{Name: "v_intersection_pass", Value: Raw("FALSE")}},
+		},
+	}
+}
+
 // buildExplainFinalFailure emits the bottom-of-function fallthrough — every
 // attempted branch failed, so wrap v_attempts in a NodeUnion and return a
 // result=false trace. When v_attempts is empty (relation has no recorded
@@ -614,6 +722,56 @@ func buildExplainFinalFailure(plan CheckPlan) []Stmt {
 		Assign{Name: "v_node_count", Value: Raw("v_node_count + 1")},
 		ReturnValue{Value: Raw(buildExplainTraceRoot(plan, "false", "v_root"))},
 	}
+}
+
+// emitExplainSuccessReturn produces the canonical "this attempt found a
+// proof" return sequence: assign v_root, bump v_node_count, return the
+// success trace. When the wrapping relation has an exclusion clause, the
+// helper interposes a check using `blocks.ExclusionCheck` (the same
+// boolean predicate Check uses): if exclusion fires, the v_root is wrapped
+// in a `NodeExclusion{result: false}` and appended to `v_attempts` so the
+// final failure union surfaces the excluded path; the function falls
+// through to the next attempt instead of returning. When exclusion
+// doesn't fire, v_root is re-wrapped in a `NodeExclusion{result: true}`
+// success node so callers can see the exclusion check passed.
+//
+// All success paths in renderExplainFunctionFromBlocks route through this
+// helper; lifting any one off-helper would silently bypass exclusion.
+func emitExplainSuccessReturn(plan CheckPlan, blocks CheckBlocks, successNodeExpr string) []Stmt {
+	prelude := []Stmt{
+		Assign{Name: "v_root", Value: Raw(successNodeExpr)},
+		Assign{Name: "v_node_count", Value: Raw("v_node_count + 1")},
+	}
+	if !plan.HasExclusion || blocks.ExclusionCheck == nil {
+		return append(prelude, ReturnValue{Value: Raw(buildExplainTraceRoot(plan, "true", "v_root"))})
+	}
+
+	deniedNode := BuildNodeJSON(TraceNodeExclusion, NodeJSONArgs{
+		Label:    sqldsl.QuoteLiteral("excluded — base satisfied but exclusion fired"),
+		Children: "jsonb_build_array(v_root)",
+		Result:   "false",
+	})
+	passedNode := BuildNodeJSON(TraceNodeExclusion, NodeJSONArgs{
+		Label:    sqldsl.QuoteLiteral("base satisfied; exclusion did not fire"),
+		Children: "jsonb_build_array(v_root)",
+		Result:   "true",
+	})
+
+	return append(prelude,
+		If{
+			Cond: blocks.ExclusionCheck,
+			Then: []Stmt{
+				Comment{Text: "Exclusion fired — record failure attempt and continue"},
+				Assign{Name: "v_node_count", Value: Raw("v_node_count + 1")},
+				Assign{Name: "v_attempts", Value: Raw("v_attempts || jsonb_build_array(" + deniedNode + ")")},
+			},
+			Else: []Stmt{
+				Assign{Name: "v_root", Value: Raw(passedNode)},
+				Assign{Name: "v_node_count", Value: Raw("v_node_count + 1")},
+				ReturnValue{Value: Raw(buildExplainTraceRoot(plan, "true", "v_root"))},
+			},
+		},
+	)
 }
 
 // buildExplainTraceRoot emits the per-call Trace envelope. resultExpr is a
@@ -661,15 +819,45 @@ func explainLocalSupported(a RelationAnalysis) bool {
 		return false
 	}
 	f := a.Features
-	if f.HasIntersection || f.HasExclusion {
+	if f.HasIntersection && !intersectionGroupsAreSimple(a.IntersectionGroups) {
+		// Slice 1.5 handles intersection groups whose parts are simple
+		// relation references. Groups with IsThis ([user] direct),
+		// IsParent (TTU-in-intersection), or per-part ExcludedRelation
+		// (exclusion-in-intersection) require renderer extensions that
+		// haven't landed yet.
 		return false
 	}
-	// HasRecursive (slice 1.3 TTU) and HasUserset (slice 1.4 simple userset
-	// patterns) pass the local check; the transitive sweep verifies that
-	// every allowed parent (type, relation) and every userset (subject_type,
-	// subject_relation) is itself eligible before the wrapping relation
-	// stays in the eligible map.
-	return f.HasDirect || f.HasImplied || f.HasRecursive || f.HasUserset
+	// HasExclusion (slice 1.5) is handled by emitExplainSuccessReturn: every
+	// success-return path checks blocks.ExclusionCheck and wraps the
+	// outcome in a NodeExclusion. No eligibility constraint because the
+	// exclusion predicate evaluates via check_permission_internal which is
+	// always installed.
+	return f.HasDirect || f.HasImplied || f.HasRecursive || f.HasUserset || f.HasIntersection || f.HasExclusion
+}
+
+// intersectionPartIsSimple is true when the part is a plain relation
+// reference — no [user]-direct (IsThis), no TTU-in-intersection
+// (ParentRelation set), and no exclusion-in-intersection (ExcludedRelation
+// set). The missing shapes land in subsequent slices. Shared by
+// intersectionGroupsAreSimple (the gate that rejects relations whose
+// groups carry any non-simple part) and anyExplainDepIneligible (the
+// per-part eligibility sweep that skips non-simple parts because their
+// shape is gated upstream).
+func intersectionPartIsSimple(p IntersectionPart) bool {
+	return !p.IsThis && p.ParentRelation == nil && p.ExcludedRelation == ""
+}
+
+// intersectionGroupsAreSimple is true when every part of every group is a
+// plain relation reference. See intersectionPartIsSimple for the rule.
+func intersectionGroupsAreSimple(groups []IntersectionGroupInfo) bool {
+	for _, g := range groups {
+		for _, p := range g.Parts {
+			if !intersectionPartIsSimple(p) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // ComputeExplainEligibility returns, for each (object_type, relation), whether
@@ -759,6 +947,22 @@ func anyExplainDepIneligible(a RelationAnalysis, eligible map[string]map[string]
 		// is eligible only when the membership relation is itself eligible.
 		if !eligible[pattern.SubjectType][pattern.SubjectRelation] {
 			return true
+		}
+	}
+	// Intersection groups recurse into explain_permission_internal for
+	// every part; the wrapper is eligible only when each part's relation
+	// is itself eligible on the same object type.
+	for _, g := range a.IntersectionGroups {
+		for _, p := range g.Parts {
+			// IsThis is handled by the part's body using direct access
+			// (no inter-relation call needed); the other non-simple
+			// shapes are blocked upstream by intersectionGroupsAreSimple.
+			if !intersectionPartIsSimple(p) {
+				continue
+			}
+			if !eligible[a.ObjectType][p.Relation] {
+				return true
+			}
 		}
 	}
 	return false
