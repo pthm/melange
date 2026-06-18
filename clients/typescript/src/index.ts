@@ -25,6 +25,14 @@ export type {
   PageOptions,
   ListResult,
 } from './types.js';
+export type {
+  NodeType,
+  TupleRef,
+  SubjectRef,
+  TraceNode,
+  Trace,
+  ExplainOptions,
+} from './trace.js';
 
 // Re-export adapters for convenience
 export * from './adapters/index.js';
