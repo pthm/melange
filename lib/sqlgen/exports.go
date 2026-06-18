@@ -208,6 +208,7 @@ type (
 	Comment         = plpgsql.Comment
 	PlpgsqlFunction = plpgsql.PlpgsqlFunction
 	SqlFunction     = plpgsql.SqlFunction
+	ForLoop         = plpgsql.ForLoop
 )
 
 var (

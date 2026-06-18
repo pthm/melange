@@ -42,6 +42,7 @@ func RenderExplainFunction(plan CheckPlan, blocks CheckBlocks) (string, error) {
 	body := buildExplainCycleDetection(plan)
 	body = append(body, buildExplainDirectAttempt(plan, blocks)...)
 	body = append(body, buildExplainImpliedAttempts(plan, blocks)...)
+	body = append(body, buildExplainParentRelationAttempts(plan, blocks)...)
 	body = append(body, buildExplainFinalFailure(plan)...)
 
 	fn := PlpgsqlFunction{
@@ -107,8 +108,13 @@ func explainFunctionDecls(plan CheckPlan, blocks CheckBlocks) []Decl {
 		{Name: "v_root", Type: "JSONB"},
 		{Name: "v_attempts", Type: "JSONB := '[]'::JSONB"},
 	}
-	if len(blocks.ImpliedFunctionCalls) > 0 {
+	if len(blocks.ImpliedFunctionCalls) > 0 || len(blocks.ParentRelationBlocks) > 0 {
 		decls = append(decls, Decl{Name: "v_child_trace", Type: "JSONB"})
+	}
+	if len(blocks.ParentRelationBlocks) > 0 {
+		// PL/pgSQL requires the loop variable for FOR … IN <query> LOOP to
+		// be a record (or list of scalars) declared in advance.
+		decls = append(decls, Decl{Name: "v_parent_link", Type: "RECORD"})
 	}
 	return decls
 }
@@ -286,6 +292,96 @@ func explainChildTraceAttempt(plan CheckPlan, callExpr, successNode, failureNode
 	}
 }
 
+// buildExplainParentRelationAttempts emits a PL/pgSQL FOR loop per parent
+// relation block: enumerate linking tuples in melange_tuples, then for
+// each one recurse into the dispatcher (explain_permission_internal) for
+// the parent's relation. Each iteration wraps the child trace in a NodeTTU
+// node — success path returns immediately; misses append a failure NodeTTU
+// to v_attempts.
+//
+//	FOR v_parent_link IN
+//	    SELECT subject_type AS parent_type, subject_id AS parent_id
+//	    FROM melange_tuples
+//	    WHERE object_type = '<this_type>' AND relation = '<linking>' AND object_id = p_object_id
+//	      AND subject_type IN ('<allowed types>')
+//	LOOP
+//	    -- explainChildTraceAttempt: count + success branch + failure-attempt append
+//	END LOOP;
+//
+// The label inlines the resolved parent identifier so the trace reads
+// like "via org → organization:42 ⇒ can_admin" instead of an abstract
+// path description.
+func buildExplainParentRelationAttempts(plan CheckPlan, blocks CheckBlocks) []Stmt {
+	if len(blocks.ParentRelationBlocks) == 0 {
+		return nil
+	}
+
+	stmts := []Stmt{Comment{Text: "TTU / parent-relation attempts"}}
+
+	for _, parent := range blocks.ParentRelationBlocks {
+		stmts = append(stmts, buildExplainParentLoopStmt(plan, parent))
+	}
+
+	return stmts
+}
+
+// buildExplainParentLoopStmt assembles one FOR-loop block over the linking
+// tuples for a single parent relation block.
+func buildExplainParentLoopStmt(plan CheckPlan, parent ParentRelationBlock) Stmt {
+	driverQuery := buildExplainParentLinkingSelect(plan, parent)
+
+	dispatcherCall := fmt.Sprintf(
+		"%s(p_subject_type, p_subject_id, %s, v_parent_link.parent_type, v_parent_link.parent_id, p_visited || ARRAY[v_key])",
+		sqldsl.PrefixIdent("explain_permission_internal", plan.DatabaseSchema),
+		sqldsl.QuoteLiteral(parent.ParentRelation),
+	)
+
+	// Label is computed per-iteration so the resolved parent identifier
+	// surfaces in the trace. The leading literal carries the linking
+	// relation and the trailing literal carries the parent relation; the
+	// runtime concatenation pulls in the per-iteration parent type/id.
+	labelExpr := fmt.Sprintf(
+		"(%s || v_parent_link.parent_type || ':' || v_parent_link.parent_id || %s)",
+		sqldsl.QuoteLiteral("via "+parent.LinkingRelation+" → "),
+		sqldsl.QuoteLiteral(" ⇒ "+parent.ParentRelation),
+	)
+	childAsArray := "jsonb_build_array(v_child_trace->'root')"
+
+	successNode := BuildNodeJSON(TraceNodeTTU, NodeJSONArgs{
+		Label:    labelExpr,
+		Children: childAsArray,
+		Result:   "true",
+	})
+	failureNode := BuildNodeJSON(TraceNodeTTU, NodeJSONArgs{
+		Label:    labelExpr,
+		Children: childAsArray,
+		Result:   "false",
+	})
+
+	return ForLoop{
+		Variable: "v_parent_link",
+		Query:    driverQuery,
+		Body:     explainChildTraceAttempt(plan, dispatcherCall, successNode, failureNode),
+	}
+}
+
+// buildExplainParentLinkingSelect renders the FROM/WHERE for the driving
+// FOR-loop SELECT: every melange_tuples row that links this object to a
+// parent via the linking relation, projected as (parent_type, parent_id).
+func buildExplainParentLinkingSelect(plan CheckPlan, parent ParentRelationBlock) SelectStmt {
+	q := Tuples(plan.DatabaseSchema, "link").
+		ObjectType(plan.ObjectType).
+		Relations(parent.LinkingRelation).
+		SelectExpr(
+			Alias{Expr: Col{Table: "link", Column: "subject_type"}, Name: "parent_type"},
+			Alias{Expr: Col{Table: "link", Column: "subject_id"}, Name: "parent_id"},
+		).
+		Where(Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID})
+	if len(parent.AllowedLinkingTypes) > 0 {
+		q.Where(In{Expr: Col{Table: "link", Column: "subject_type"}, Values: parent.AllowedLinkingTypes})
+	}
+	return q.Build()
+}
 // buildExplainFinalFailure emits the bottom-of-function fallthrough — every
 // attempted branch failed, so wrap v_attempts in a NodeUnion and return a
 // result=false trace. When v_attempts is empty (relation has no recorded
@@ -346,36 +442,38 @@ func explainLocalSupported(a RelationAnalysis) bool {
 		return false
 	}
 	f := a.Features
-	if f.HasUserset || f.HasIntersection || f.HasExclusion || f.HasRecursive {
+	if f.HasUserset || f.HasIntersection || f.HasExclusion {
 		return false
 	}
-	if len(a.ParentRelations) > 0 {
-		return false
-	}
-	return f.HasDirect || f.HasImplied
-	// Closure-derived features (ClosureExcludedRelations,
-	// ClosureUsersetPatterns, ClosureParentRelations) used to be checked
-	// here as a belt-and-suspenders gate against schemas like
-	// `viewer: editor where editor: [user] but not blocked`. The transitive
-	// eligibility sweep in ComputeExplainEligibility now covers that case:
-	// the wrapping relation's ComplexClosureRelations name the offending
-	// closure relations, and once those siblings are marked ineligible
-	// (their local features include the exclusion / userset / TTU) the
-	// wrapper is downgraded in the next pass.
+	// HasRecursive on Features and ParentRelations on the analysis both
+	// mark TTU relations; their renderer (the FOR-loop recursing into
+	// explain_permission_internal) lives in slice 1.3. Both pass the
+	// local check — the transitive sweep verifies that every allowed
+	// parent (type, relation) is itself eligible before the wrapping
+	// relation stays in the eligible map.
+	return f.HasDirect || f.HasImplied || f.HasRecursive
 }
 
 // ComputeExplainEligibility returns, for each (object_type, relation), whether
 // the current explain renderer can produce a trace that agrees with Check.
 //
-// The result is the fixed point of "locally supported AND every
-// ComplexClosureRelation is itself eligible". Eligibility is monotonically
-// non-increasing across iterations: each pass can downgrade a relation
-// (because one of its callees turned out to be ineligible) but never
-// upgrade it. The fixed point is reached when no relation flips in a pass.
+// The result is the fixed point of:
+//   - locally supported (explainLocalSupported)
+//   - every ComplexClosureRelation is itself eligible
+//     (same-object-type implied function call dependency)
+//   - every parent (type, relation) in ParentRelations is eligible
+//     (cross-object-type TTU dependency)
 //
-// ComplexClosureRelations names are within the same object type by
-// construction (see lib/sqlgen/check_blocks.go:buildImpliedFunctionCalls);
-// the map is keyed accordingly.
+// Eligibility is monotonically non-increasing: each pass can downgrade a
+// relation when a freshly-discovered ineligible dependency surfaces, but
+// nothing ever flips back. The fixed point is reached when no relation
+// changes in a pass.
+//
+// The conservative cross-type rule (ALL AllowedLinkingTypes must be
+// eligible) means a TTU relation with even one ineligible parent type
+// routes to the dispatcher's no-entry sentinel rather than emitting
+// partial traces — explicit "not yet supported" beats silently-skipped
+// linking tuples.
 //
 // Exported so callers that build a CollectFunctionNames input by hand can
 // produce the same map GenerateSQL stashes on GeneratedSQL.ExplainEligible.
@@ -396,12 +494,9 @@ func ComputeExplainEligibility(analyses []RelationAnalysis) map[string]map[strin
 			if !eligible[a.ObjectType][a.Relation] {
 				continue
 			}
-			for _, dep := range a.ComplexClosureRelations {
-				if !eligible[a.ObjectType][dep] {
-					eligible[a.ObjectType][a.Relation] = false
-					changed = true
-					break
-				}
+			if anyExplainDepIneligible(a, eligible) {
+				eligible[a.ObjectType][a.Relation] = false
+				changed = true
 			}
 		}
 		if !changed {
@@ -410,5 +505,34 @@ func ComputeExplainEligibility(analyses []RelationAnalysis) map[string]map[strin
 	}
 
 	return eligible
+}
+
+// anyExplainDepIneligible reports whether any of the relation's recursive
+// dependencies — same-type implied function calls or cross-type parent
+// relations — is currently marked ineligible. Used as the per-iteration
+// downgrade trigger inside the eligibility fixed point.
+//
+// An empty AllowedLinkingTypes is treated as "no parents to verify" so the
+// wrapper stays eligible. In practice the analyser always populates the
+// list from the schema's `parent: [type, ...]` declaration; an empty list
+// shouldn't occur. If it ever does, the FOR-loop driver query would
+// enumerate every linking tuple regardless of parent_type, and the
+// dispatcher would route any unknown parent_type to its no-entry
+// sentinel — structurally valid but a weaker UX than the explicit
+// "not yet supported" label.
+func anyExplainDepIneligible(a RelationAnalysis, eligible map[string]map[string]bool) bool {
+	for _, dep := range a.ComplexClosureRelations {
+		if !eligible[a.ObjectType][dep] {
+			return true
+		}
+	}
+	for _, parent := range a.ParentRelations {
+		for _, parentType := range parent.AllowedLinkingTypes {
+			if !eligible[parentType][parent.Relation] {
+				return true
+			}
+		}
+	}
+	return false
 }
 

@@ -77,6 +77,49 @@ func TestComputeExplainEligibility_TransitiveChain(t *testing.T) {
 	}
 }
 
+func TestComputeExplainEligibility_CrossTypeTTU_AllParentsEligible(t *testing.T) {
+	// repository.can_admin TTUs into organization.can_admin via the org
+	// linking relation. Both parent types declared (only one here) are
+	// individually eligible → wrapper is eligible.
+	orgAdmin := mkAnalysis("organization", "can_admin", RelationFeatures{HasDirect: true, HasImplied: true}, false)
+	repoAdmin := mkAnalysis("repository", "can_admin", RelationFeatures{HasDirect: true, HasImplied: true, HasRecursive: true}, false)
+	repoAdmin.ParentRelations = []ParentRelationInfo{{
+		Relation:            "can_admin",
+		LinkingRelation:     "org",
+		AllowedLinkingTypes: []string{"organization"},
+	}}
+	got := ComputeExplainEligibility([]RelationAnalysis{orgAdmin, repoAdmin})
+	if !got["organization"]["can_admin"] {
+		t.Errorf("organization.can_admin should be eligible (Direct+Implied)")
+	}
+	if !got["repository"]["can_admin"] {
+		t.Errorf("repository.can_admin should be eligible — parent is eligible")
+	}
+}
+
+func TestComputeExplainEligibility_CrossTypeTTU_OneParentIneligible(t *testing.T) {
+	// Conservative rule: ALL allowed parent types must have their relation
+	// eligible. A single ineligible parent disables the whole TTU wrapper.
+	orgAdmin := mkAnalysis("organization", "can_admin", RelationFeatures{HasDirect: true}, false)
+	folderAdmin := mkAnalysis("folder", "can_admin", RelationFeatures{HasDirect: true, HasExclusion: true}, false)
+	repoAdmin := mkAnalysis("repository", "can_admin", RelationFeatures{HasDirect: true, HasRecursive: true}, false)
+	repoAdmin.ParentRelations = []ParentRelationInfo{{
+		Relation:            "can_admin",
+		LinkingRelation:     "org",
+		AllowedLinkingTypes: []string{"organization", "folder"},
+	}}
+	got := ComputeExplainEligibility([]RelationAnalysis{orgAdmin, folderAdmin, repoAdmin})
+	if !got["organization"]["can_admin"] {
+		t.Errorf("organization.can_admin should be eligible")
+	}
+	if got["folder"]["can_admin"] {
+		t.Errorf("folder.can_admin should be ineligible (HasExclusion)")
+	}
+	if got["repository"]["can_admin"] {
+		t.Errorf("repository.can_admin should be ineligible — folder parent dragged it down")
+	}
+}
+
 func TestComputeExplainEligibility_PerObjectTypeIsolation(t *testing.T) {
 	// ComplexClosureRelations names are scoped to the wrapping relation's
 	// object type. A "viewer" on document and a "viewer" on folder are
@@ -138,6 +181,57 @@ func TestRenderExplainFunction_ImpliedFunctionCallEmits(t *testing.T) {
 		"'result', true",
 		// Failure path: append the same node with result=false to v_attempts
 		"v_attempts := v_attempts || jsonb_build_array(jsonb_build_object('type', 'implied'",
+	}
+	for _, w := range wants {
+		if !strings.Contains(got, w) {
+			t.Errorf("missing %q in generated SQL:\n%s", w, got)
+		}
+	}
+}
+
+// TestRenderExplainFunction_TTUFlow exercises slice 1.3's FOR-loop
+// emission. The fixture is a TTU relation that recurses into the
+// dispatcher (explain_permission_internal) for the parent's relation.
+func TestRenderExplainFunction_TTUFlow(t *testing.T) {
+	a := mkAnalysis("repository", "can_admin", RelationFeatures{HasDirect: true, HasRecursive: true}, false)
+	a.SatisfyingRelations = []string{"can_admin"}
+	a.ParentRelations = []ParentRelationInfo{{
+		Relation:            "can_admin",
+		LinkingRelation:     "org",
+		AllowedLinkingTypes: []string{"organization"},
+	}}
+
+	plan := BuildCheckPlanWithOrdering(a, InlineSQLData{}, "", false, nil)
+	blocks, err := BuildCheckBlocks(plan)
+	if err != nil {
+		t.Fatalf("BuildCheckBlocks: %v", err)
+	}
+	if len(blocks.ParentRelationBlocks) == 0 {
+		t.Fatalf("expected ParentRelationBlocks populated; got 0")
+	}
+
+	got, err := RenderExplainFunction(plan, blocks)
+	if err != nil {
+		t.Fatalf("RenderExplainFunction: %v", err)
+	}
+
+	wants := []string{
+		// v_child_trace decl is shared with implied-recursion path
+		"v_child_trace JSONB",
+		// FOR loop drives over linking tuples
+		"FOR v_parent_link IN",
+		"link.subject_type AS parent_type",
+		"link.subject_id AS parent_id",
+		"link.relation IN ('org')",
+		"link.subject_type IN ('organization')",
+		// Dispatcher call carries the parent relation and threads visited
+		"explain_permission_internal(p_subject_type, p_subject_id, 'can_admin', v_parent_link.parent_type, v_parent_link.parent_id, p_visited || ARRAY[v_key])",
+		// NodeTTU wrapping
+		"'type', 'ttu'",
+		"'via org → '",
+		"' ⇒ can_admin'",
+		// Failure-attempt append path
+		"v_attempts := v_attempts || jsonb_build_array(jsonb_build_object('type', 'ttu'",
 	}
 	for _, w := range wants {
 		if !strings.Contains(got, w) {

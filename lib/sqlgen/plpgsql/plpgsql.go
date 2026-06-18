@@ -136,6 +136,31 @@ func (r RawStmt) StmtSQL() string {
 	return r.SQLText
 }
 
+// ForLoop renders FOR <variable> IN <query> LOOP <body> END LOOP;.
+// The variable is bound to each row of the driving query and accessible
+// inside the body via record-style field access (e.g. v_row.column).
+type ForLoop struct {
+	Variable string
+	Query    sqldsl.SQLer
+	Body     []Stmt
+}
+
+func (f ForLoop) StmtSQL() string {
+	var sb strings.Builder
+	sb.WriteString("FOR ")
+	sb.WriteString(f.Variable)
+	sb.WriteString(" IN\n    ")
+	sb.WriteString(f.Query.SQL())
+	sb.WriteString("\nLOOP\n")
+	for _, stmt := range f.Body {
+		sb.WriteString("    ")
+		sb.WriteString(stmt.StmtSQL())
+		sb.WriteString("\n")
+	}
+	sb.WriteString("END LOOP;")
+	return sb.String()
+}
+
 // Raise renders RAISE EXCEPTION 'message' USING ERRCODE = 'code';
 type Raise struct {
 	Message string
