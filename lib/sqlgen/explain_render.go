@@ -40,9 +40,11 @@ import (
 // the direct-grant attempt, and a final failure return.
 func RenderExplainFunction(plan CheckPlan, blocks CheckBlocks) (string, error) {
 	body := buildExplainCycleDetection(plan)
+	body = append(body, buildExplainUsersetSubjectStmts(plan, blocks)...)
 	body = append(body, buildExplainDirectAttempt(plan, blocks)...)
 	body = append(body, buildExplainImpliedAttempts(plan, blocks)...)
 	body = append(body, buildExplainParentRelationAttempts(plan, blocks)...)
+	body = append(body, buildExplainUsersetAttempts(plan)...)
 	body = append(body, buildExplainFinalFailure(plan)...)
 
 	fn := PlpgsqlFunction{
@@ -107,14 +109,22 @@ func explainFunctionDecls(plan CheckPlan, blocks CheckBlocks) []Decl {
 		{Name: "v_evidence_tuple", Type: "RECORD"},
 		{Name: "v_root", Type: "JSONB"},
 		{Name: "v_attempts", Type: "JSONB := '[]'::JSONB"},
+		// v_userset_check holds the integer result of the userset-subject
+		// pre-check SELECTs (UsersetSubjectSelfCheck / Computed). Always
+		// declared because buildExplainUsersetSubjectStmts emits the Case 1
+		// SELECT for every relation with a non-empty RelationList.
+		{Name: "v_userset_check", Type: "INTEGER := 0"},
 	}
-	if len(blocks.ImpliedFunctionCalls) > 0 || len(blocks.ParentRelationBlocks) > 0 {
+	if len(blocks.ImpliedFunctionCalls) > 0 || len(blocks.ParentRelationBlocks) > 0 || len(plan.Analysis.UsersetPatterns) > 0 {
 		decls = append(decls, Decl{Name: "v_child_trace", Type: "JSONB"})
 	}
 	if len(blocks.ParentRelationBlocks) > 0 {
 		// PL/pgSQL requires the loop variable for FOR … IN <query> LOOP to
 		// be a record (or list of scalars) declared in advance.
 		decls = append(decls, Decl{Name: "v_parent_link", Type: "RECORD"})
+	}
+	if len(plan.Analysis.UsersetPatterns) > 0 {
+		decls = append(decls, Decl{Name: "v_userset_grant", Type: "RECORD"})
 	}
 	return decls
 }
@@ -382,6 +392,211 @@ func buildExplainParentLinkingSelect(plan CheckPlan, parent ParentRelationBlock)
 	}
 	return q.Build()
 }
+
+// buildExplainUsersetSubjectStmts mirrors check_render.go's
+// buildUsersetSubjectStmts: when the SUBJECT being checked is itself a
+// userset reference (p_subject_id contains '#'), two paths can satisfy
+// the relation that the regular Direct / Userset attempts would miss.
+//
+// Rather than redefine those paths, we reuse the same SelectStmts the
+// check renderer built in BuildCheckBlocks — `UsersetSubjectSelfCheck`
+// and `UsersetSubjectComputedCheck` — so the explain branch agrees with
+// Check on closure-aware membership cases (e.g. subject `group:eng#admin`
+// satisfying a `[group#member]` grant when `admin` is in `member`'s
+// closure on group).
+//
+// Case 1 (self-referential): the userset's relation suffix is in the
+// closure of the wrapping relation, evaluated against the inlined
+// closure VALUES table.
+//
+// Case 2 (computed userset matching): a grant tuple carries a userset
+// subject whose object_id matches p_subject_id's object_id portion, and
+// whose relation chain ultimately leads to the wrapping relation
+// through the closure JOIN.
+//
+// Skipped when the relation has no satisfying relations or when
+// p_subject_id is a plain id (no '#'). Returns success on match; misses
+// fall through to the regular attempt blocks below.
+func buildExplainUsersetSubjectStmts(plan CheckPlan, blocks CheckBlocks) []Stmt {
+	if len(plan.RelationList) == 0 {
+		return nil
+	}
+
+	selfMatchNode := BuildNodeJSON(TraceNodeUserset, NodeJSONArgs{
+		Label:  sqldsl.QuoteLiteral("self-referential userset matches relation closure"),
+		Result: "true",
+	})
+	computedMatchNode := BuildNodeJSON(TraceNodeUserset, NodeJSONArgs{
+		Label:  sqldsl.QuoteLiteral("userset subject matched via closure"),
+		Result: "true",
+	})
+
+	// Case 1 is the only path on relations without declared userset
+	// patterns — it covers self-referential checks. The outer guard on
+	// the `#` substring keeps non-userset subjects out.
+	selfRefOuterCond := AndExpr{Exprs: []Expr{
+		Eq{Left: SubjectType, Right: Lit(plan.ObjectType)},
+		Eq{
+			Left: Func{Name: "split_part", Args: []Expr{
+				SubjectID, Lit("#"), Int(1),
+			}},
+			Right: ObjectID,
+		},
+	}}
+
+	innerThen := []Stmt{
+		Comment{Text: "Case 1: self-referential userset (subject's userset resolves to this object)"},
+		If{
+			Cond: selfRefOuterCond,
+			Then: []Stmt{
+				SelectInto{Query: blocks.UsersetSubjectSelfCheck, Variable: "v_userset_check"},
+				If{
+					Cond: Eq{Left: Raw("v_userset_check"), Right: Int(1)},
+					Then: []Stmt{
+						Assign{Name: "v_root", Value: Raw(selfMatchNode)},
+						Assign{Name: "v_node_count", Value: Raw("v_node_count + 1")},
+						ReturnValue{Value: Raw(buildExplainTraceRoot(plan, "true", "v_root"))},
+					},
+				},
+			},
+		},
+	}
+
+	if len(plan.Analysis.UsersetPatterns) > 0 {
+		innerThen = append(innerThen,
+			Comment{Text: "Case 2: closure-aware computed userset match"},
+			SelectInto{Query: blocks.UsersetSubjectComputedCheck, Variable: "v_userset_check"},
+			If{
+				Cond: Eq{Left: Raw("v_userset_check"), Right: Int(1)},
+				Then: []Stmt{
+					Assign{Name: "v_root", Value: Raw(computedMatchNode)},
+					Assign{Name: "v_node_count", Value: Raw("v_node_count + 1")},
+					ReturnValue{Value: Raw(buildExplainTraceRoot(plan, "true", "v_root"))},
+				},
+			},
+		)
+	}
+
+	return []Stmt{
+		Comment{Text: "Userset subject handling (subject is itself a userset reference)"},
+		If{
+			Cond: Gt{Left: Position{Needle: Lit("#"), Haystack: SubjectID}, Right: Int(0)},
+			Then: innerThen,
+		},
+	}
+}
+
+// buildExplainUsersetAttempts emits, for each direct UsersetPattern (simple
+// case), a PL/pgSQL FOR loop enumerating grant tuples whose subject is a
+// userset reference (subject_id contains '#'), then for each one recurses
+// into the dispatcher to check membership and wraps the child trace in
+// `NodeUserset`. Skipped when the relation has no userset patterns;
+// complex patterns are blocked upstream by explainLocalSupported (slice 1.5
+// will add the recursive-membership variant).
+//
+// Per pattern, the SQL is roughly:
+//
+//	FOR v_userset_grant IN
+//	    SELECT split_part(subject_id, '#', 1) AS group_id
+//	    FROM melange_tuples
+//	    WHERE object_type = '<this>' AND relation = '<this_relation>'
+//	      AND object_id = p_object_id
+//	      AND subject_type = '<pattern.SubjectType>'
+//	      AND position('#' in subject_id) > 0
+//	      AND split_part(subject_id, '#', 2) = '<pattern.SubjectRelation>'
+//	LOOP
+//	    v_child_trace := COALESCE(explain_permission_internal(
+//	        p_subject_type, p_subject_id, '<pattern.SubjectRelation>',
+//	        '<pattern.SubjectType>', v_userset_grant.group_id,
+//	        p_visited || ARRAY[v_key]), '{}'::jsonb);
+//	    -- count + success branch (return) + failure-attempt append
+//	END LOOP;
+//
+// The label inlines the resolved group identifier so the trace reads like
+// "via [group#member] → group:engineering" instead of an abstract pattern
+// description.
+func buildExplainUsersetAttempts(plan CheckPlan) []Stmt {
+	patterns := plan.Analysis.UsersetPatterns
+	if len(patterns) == 0 {
+		return nil
+	}
+
+	stmts := []Stmt{Comment{Text: "Userset reference attempts"}}
+	for _, pattern := range patterns {
+		stmts = append(stmts, buildExplainUsersetLoopStmt(plan, pattern))
+	}
+	return stmts
+}
+
+// buildExplainUsersetLoopStmt assembles one FOR-loop block over the grant
+// tuples carrying a userset reference for a single UsersetPattern.
+func buildExplainUsersetLoopStmt(plan CheckPlan, pattern UsersetPattern) Stmt {
+	driverQuery := buildExplainUsersetGrantSelect(plan, pattern)
+
+	// The dispatcher recursion uses pattern.SubjectRelation (the membership
+	// relation) on pattern.SubjectType with the extracted object id from
+	// the grant tuple as the parent object.
+	dispatcherCall := fmt.Sprintf(
+		"%s(p_subject_type, p_subject_id, %s, %s, v_userset_grant.group_id, p_visited || ARRAY[v_key])",
+		sqldsl.PrefixIdent("explain_permission_internal", plan.DatabaseSchema),
+		sqldsl.QuoteLiteral(pattern.SubjectRelation),
+		sqldsl.QuoteLiteral(pattern.SubjectType),
+	)
+
+	// "via [group#member] → group:engineering"
+	labelExpr := fmt.Sprintf(
+		"(%s || v_userset_grant.group_id)",
+		sqldsl.QuoteLiteral(
+			"via ["+pattern.SubjectType+"#"+pattern.SubjectRelation+"] → "+pattern.SubjectType+":",
+		),
+	)
+	childAsArray := "jsonb_build_array(v_child_trace->'root')"
+
+	successNode := BuildNodeJSON(TraceNodeUserset, NodeJSONArgs{
+		Label:    labelExpr,
+		Children: childAsArray,
+		Result:   "true",
+	})
+	failureNode := BuildNodeJSON(TraceNodeUserset, NodeJSONArgs{
+		Label:    labelExpr,
+		Children: childAsArray,
+		Result:   "false",
+	})
+
+	return ForLoop{
+		Variable: "v_userset_grant",
+		Query:    driverQuery,
+		Body:     explainChildTraceAttempt(plan, dispatcherCall, successNode, failureNode),
+	}
+}
+
+// buildExplainUsersetGrantSelect builds the FOR-loop driver: every
+// melange_tuples row where the subject is a userset reference of the
+// pattern's shape. Projects `group_id` (the part before '#') for the
+// recursive call.
+func buildExplainUsersetGrantSelect(plan CheckPlan, pattern UsersetPattern) SelectStmt {
+	groupIDExpr := Alias{
+		Expr: Func{Name: "split_part", Args: []Expr{
+			Col{Table: "grant_tuple", Column: "subject_id"},
+			Lit("#"),
+			Int(1),
+		}},
+		Name: "group_id",
+	}
+
+	q := Tuples(plan.DatabaseSchema, "grant_tuple").
+		ObjectType(plan.ObjectType).
+		Relations(plan.Relation).
+		SelectExpr(groupIDExpr).
+		Where(
+			Eq{Left: Col{Table: "grant_tuple", Column: "object_id"}, Right: ObjectID},
+			Eq{Left: Col{Table: "grant_tuple", Column: "subject_type"}, Right: Lit(pattern.SubjectType)},
+			HasUserset{Source: Col{Table: "grant_tuple", Column: "subject_id"}},
+			Eq{Left: UsersetRelation{Source: Col{Table: "grant_tuple", Column: "subject_id"}}, Right: Lit(pattern.SubjectRelation)},
+		)
+	return q.Build()
+}
+
 // buildExplainFinalFailure emits the bottom-of-function fallthrough — every
 // attempted branch failed, so wrap v_attempts in a NodeUnion and return a
 // result=false trace. When v_attempts is empty (relation has no recorded
@@ -439,19 +654,22 @@ func explainFunctionName(objectType, relation string) string {
 // dependencies are themselves not yet supported.
 func explainLocalSupported(a RelationAnalysis) bool {
 	if a.HasComplexUsersetPatterns {
+		// Slice 1.4 ships only simple userset patterns (tuple JOIN style);
+		// complex patterns route the userset check through
+		// check_permission_internal for membership verification and need
+		// extra renderer support that lands in a follow-up slice.
 		return false
 	}
 	f := a.Features
-	if f.HasUserset || f.HasIntersection || f.HasExclusion {
+	if f.HasIntersection || f.HasExclusion {
 		return false
 	}
-	// HasRecursive on Features and ParentRelations on the analysis both
-	// mark TTU relations; their renderer (the FOR-loop recursing into
-	// explain_permission_internal) lives in slice 1.3. Both pass the
-	// local check — the transitive sweep verifies that every allowed
-	// parent (type, relation) is itself eligible before the wrapping
-	// relation stays in the eligible map.
-	return f.HasDirect || f.HasImplied || f.HasRecursive
+	// HasRecursive (slice 1.3 TTU) and HasUserset (slice 1.4 simple userset
+	// patterns) pass the local check; the transitive sweep verifies that
+	// every allowed parent (type, relation) and every userset (subject_type,
+	// subject_relation) is itself eligible before the wrapping relation
+	// stays in the eligible map.
+	return f.HasDirect || f.HasImplied || f.HasRecursive || f.HasUserset
 }
 
 // ComputeExplainEligibility returns, for each (object_type, relation), whether
@@ -533,6 +751,15 @@ func anyExplainDepIneligible(a RelationAnalysis, eligible map[string]map[string]
 			}
 		}
 	}
+	for _, pattern := range a.UsersetPatterns {
+		// IsComplex patterns are blocked by HasComplexUsersetPatterns in
+		// explainLocalSupported and shouldn't reach this point. For the
+		// simple case, the userset emission recurses into the dispatcher
+		// for the referenced (SubjectType, SubjectRelation); the wrapper
+		// is eligible only when the membership relation is itself eligible.
+		if !eligible[pattern.SubjectType][pattern.SubjectRelation] {
+			return true
+		}
+	}
 	return false
 }
-

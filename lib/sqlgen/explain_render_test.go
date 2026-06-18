@@ -83,8 +83,10 @@ func TestRenderExplainFunction_NoDirect(t *testing.T) {
 	if !strings.Contains(got, "CREATE OR REPLACE FUNCTION explain_document_viewer") {
 		t.Errorf("missing function header in:\n%s", got)
 	}
-	if strings.Contains(got, "SELECT INTO v_evidence_tuple") {
-		t.Errorf("relation with no direct path should not emit direct SELECT; got:\n%s", got)
+	// Direct/Implied attempt block is gated by plan.HasDirect/HasImplied;
+	// a Userset-only relation should not emit it.
+	if strings.Contains(got, "-- Direct/Implied grant attempt") {
+		t.Errorf("relation with no direct path should not emit direct attempt; got:\n%s", got)
 	}
 	if !strings.Contains(got, "'type', 'union'") {
 		t.Errorf("final union root missing in:\n%s", got)

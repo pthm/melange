@@ -37,16 +37,16 @@ func TestComputeExplainEligibility_LocalOnly(t *testing.T) {
 }
 
 func TestComputeExplainEligibility_TransitiveDownward(t *testing.T) {
-	// wrapper depends on dep which is ineligible (HasUserset). wrapper must
-	// also be marked ineligible even though its own features are simple.
-	dep := mkAnalysis("doc", "dep", RelationFeatures{HasDirect: true, HasUserset: true}, false)
+	// wrapper depends on dep which is ineligible (HasIntersection). wrapper
+	// must also be marked ineligible even though its own features are simple.
+	dep := mkAnalysis("doc", "dep", RelationFeatures{HasDirect: true, HasIntersection: true}, false)
 	wrapper := mkAnalysis("doc", "wrapper", RelationFeatures{HasDirect: true, HasImplied: true}, false)
 	wrapper.ComplexClosureRelations = []string{"dep"}
 	analyses := []RelationAnalysis{dep, wrapper}
 
 	got := ComputeExplainEligibility(analyses)
 	if got["doc"]["dep"] {
-		t.Errorf("dep should be ineligible (HasUserset)")
+		t.Errorf("dep should be ineligible (HasIntersection)")
 	}
 	if got["doc"]["wrapper"] {
 		t.Errorf("wrapper should be downgraded — depends on ineligible dep")
@@ -55,10 +55,10 @@ func TestComputeExplainEligibility_TransitiveDownward(t *testing.T) {
 
 func TestComputeExplainEligibility_TransitiveChain(t *testing.T) {
 	// Three relations in a chain where wrapper depends on middle, and
-	// middle depends on bad. Bad is locally ineligible (HasUserset);
+	// middle depends on bad. Bad is locally ineligible (HasIntersection);
 	// middle is locally fine but transitively downgrades to ineligible;
 	// then in the next pass wrapper itself gets downgraded.
-	bad := mkAnalysis("doc", "bad", RelationFeatures{HasDirect: true, HasUserset: true}, false)
+	bad := mkAnalysis("doc", "bad", RelationFeatures{HasDirect: true, HasIntersection: true}, false)
 	middle := mkAnalysis("doc", "middle", RelationFeatures{HasDirect: true, HasImplied: true}, false)
 	middle.ComplexClosureRelations = []string{"bad"}
 	wrapper := mkAnalysis("doc", "wrapper", RelationFeatures{HasDirect: true, HasImplied: true}, false)
@@ -67,7 +67,7 @@ func TestComputeExplainEligibility_TransitiveChain(t *testing.T) {
 
 	got := ComputeExplainEligibility(analyses)
 	if got["doc"]["bad"] {
-		t.Errorf("bad should be ineligible (HasUserset)")
+		t.Errorf("bad should be ineligible (HasIntersection)")
 	}
 	if got["doc"]["middle"] {
 		t.Errorf("middle should be transitively downgraded by bad")
@@ -120,12 +120,38 @@ func TestComputeExplainEligibility_CrossTypeTTU_OneParentIneligible(t *testing.T
 	}
 }
 
+func TestComputeExplainEligibility_UsersetPattern(t *testing.T) {
+	// document.viewer: [group#member] — wrapper depends on group.member.
+	// When group.member is eligible the wrapper is too; flipping group.member
+	// (e.g., HasExclusion) cascades to the wrapper.
+	groupMember := mkAnalysis("group", "member", RelationFeatures{HasDirect: true}, false)
+	docViewer := mkAnalysis("document", "viewer", RelationFeatures{HasDirect: true, HasUserset: true}, false)
+	docViewer.UsersetPatterns = []UsersetPattern{{
+		SubjectType:     "group",
+		SubjectRelation: "member",
+	}}
+	got := ComputeExplainEligibility([]RelationAnalysis{groupMember, docViewer})
+	if !got["document"]["viewer"] {
+		t.Errorf("document.viewer should be eligible — group.member is eligible")
+	}
+
+	// Now flip group.member to ineligible and verify the cascade.
+	groupMember2 := mkAnalysis("group", "member", RelationFeatures{HasDirect: true, HasExclusion: true}, false)
+	got = ComputeExplainEligibility([]RelationAnalysis{groupMember2, docViewer})
+	if got["group"]["member"] {
+		t.Errorf("group.member should be ineligible (HasExclusion)")
+	}
+	if got["document"]["viewer"] {
+		t.Errorf("document.viewer should be downgraded once group.member flipped")
+	}
+}
+
 func TestComputeExplainEligibility_PerObjectTypeIsolation(t *testing.T) {
 	// ComplexClosureRelations names are scoped to the wrapping relation's
 	// object type. A "viewer" on document and a "viewer" on folder are
 	// distinct entries; downgrading one must not affect the other.
 	docViewer := mkAnalysis("document", "viewer", RelationFeatures{HasDirect: true}, false)
-	folderViewer := mkAnalysis("folder", "viewer", RelationFeatures{HasDirect: true, HasUserset: true}, false)
+	folderViewer := mkAnalysis("folder", "viewer", RelationFeatures{HasDirect: true, HasIntersection: true}, false)
 	analyses := []RelationAnalysis{docViewer, folderViewer}
 
 	got := ComputeExplainEligibility(analyses)
@@ -133,7 +159,7 @@ func TestComputeExplainEligibility_PerObjectTypeIsolation(t *testing.T) {
 		t.Errorf("document.viewer should not be touched by folder.viewer's ineligibility")
 	}
 	if got["folder"]["viewer"] {
-		t.Errorf("folder.viewer should be ineligible (HasUserset)")
+		t.Errorf("folder.viewer should be ineligible (HasIntersection)")
 	}
 }
 
@@ -237,6 +263,119 @@ func TestRenderExplainFunction_TTUFlow(t *testing.T) {
 		if !strings.Contains(got, w) {
 			t.Errorf("missing %q in generated SQL:\n%s", w, got)
 		}
+	}
+}
+
+// TestRenderExplainFunction_UsersetFlow exercises slice 1.4's FOR-loop
+// emission for userset references ([group#member]). The fixture
+// declares one userset pattern; the renderer must emit one FOR loop
+// over grant tuples whose subject is a userset reference.
+func TestRenderExplainFunction_UsersetFlow(t *testing.T) {
+	a := mkAnalysis("document", "viewer", RelationFeatures{HasDirect: true, HasUserset: true}, false)
+	a.SatisfyingRelations = []string{"viewer"}
+	a.UsersetPatterns = []UsersetPattern{{
+		SubjectType:         "group",
+		SubjectRelation:     "member",
+		SatisfyingRelations: []string{"member"},
+	}}
+
+	plan := BuildCheckPlanWithOrdering(a, InlineSQLData{}, "", false, nil)
+	blocks, err := BuildCheckBlocks(plan)
+	if err != nil {
+		t.Fatalf("BuildCheckBlocks: %v", err)
+	}
+	got, err := RenderExplainFunction(plan, blocks)
+	if err != nil {
+		t.Fatalf("RenderExplainFunction: %v", err)
+	}
+
+	wants := []string{
+		// New record decl + shared child trace decl
+		"v_userset_grant RECORD",
+		"v_child_trace JSONB",
+		// FOR-loop driver projects the parent object id from the userset reference
+		"FOR v_userset_grant IN",
+		"split_part(grant_tuple.subject_id, '#', 1) AS group_id",
+		// Filters: grant subject type matches, subject_id is a userset ref,
+		// suffix matches the pattern's SubjectRelation
+		"grant_tuple.subject_type = 'group'",
+		"position('#' in grant_tuple.subject_id) > 0",
+		"split_part(grant_tuple.subject_id, '#', 2) = 'member'",
+		// Dispatcher call recurses into the membership relation
+		"explain_permission_internal(p_subject_type, p_subject_id, 'member', 'group', v_userset_grant.group_id, p_visited || ARRAY[v_key])",
+		// NodeUserset wrap with informative label
+		"'type', 'userset'",
+		"'via [group#member] → group:'",
+	}
+	for _, w := range wants {
+		if !strings.Contains(got, w) {
+			t.Errorf("missing %q in generated SQL:\n%s", w, got)
+		}
+	}
+}
+
+// TestRenderExplainFunction_UsersetSubjectPreCheck pins the renderer's
+// pre-check for cases where the SUBJECT being checked is itself a userset
+// reference. The block must guard on `position('#' in p_subject_id) > 0`,
+// fire both the self-referential check and the exact-grant lookup, and
+// return successful traces wrapped in NodeUserset before falling through
+// to the regular Direct/Userset attempt flow.
+func TestRenderExplainFunction_UsersetSubjectPreCheck(t *testing.T) {
+	a := mkAnalysis("document", "viewer", RelationFeatures{HasDirect: true, HasUserset: true}, false)
+	a.SatisfyingRelations = []string{"viewer"}
+	a.UsersetPatterns = []UsersetPattern{{
+		SubjectType:         "group",
+		SubjectRelation:     "member",
+		SatisfyingRelations: []string{"member"},
+	}}
+
+	plan := BuildCheckPlanWithOrdering(a, InlineSQLData{}, "", false, nil)
+	blocks, err := BuildCheckBlocks(plan)
+	if err != nil {
+		t.Fatalf("BuildCheckBlocks: %v", err)
+	}
+	got, err := RenderExplainFunction(plan, blocks)
+	if err != nil {
+		t.Fatalf("RenderExplainFunction: %v", err)
+	}
+
+	wants := []string{
+		// Outer guard
+		"position('#' in p_subject_id) > 0",
+		// v_userset_check now shared with check's pre-check SELECTs
+		"v_userset_check INTEGER",
+		// Case 1: self-referential — outer condition + SELECT INTO from the
+		// shared blocks.UsersetSubjectSelfCheck SelectStmt so we agree with
+		// Check on closure handling.
+		"-- Case 1: self-referential userset",
+		"p_subject_type = 'document'",
+		"SELECT INTO v_userset_check",
+		"'label', 'self-referential userset matches relation closure'",
+		// Case 2: closure-aware computed userset — reuses
+		// blocks.UsersetSubjectComputedCheck so closure-mismatched
+		// usersets (e.g., `group:eng#admin` against a `[group#member]`
+		// grant when admin→member) succeed as Check would.
+		"-- Case 2: closure-aware computed userset match",
+		"'label', 'userset subject matched via closure'",
+	}
+	for _, w := range wants {
+		if !strings.Contains(got, w) {
+			t.Errorf("missing %q in generated SQL:\n%s", w, got)
+		}
+	}
+
+	a.UsersetPatterns = nil
+	plan = BuildCheckPlanWithOrdering(a, InlineSQLData{}, "", false, nil)
+	blocks, err = BuildCheckBlocks(plan)
+	if err != nil {
+		t.Fatalf("BuildCheckBlocks without userset patterns: %v", err)
+	}
+	got, err = RenderExplainFunction(plan, blocks)
+	if err != nil {
+		t.Fatalf("RenderExplainFunction without userset patterns: %v", err)
+	}
+	if strings.Contains(got, "-- Case 2: closure-aware computed userset match") {
+		t.Errorf("relation without userset patterns should not emit computed-userset case:\n%s", got)
 	}
 }
 
