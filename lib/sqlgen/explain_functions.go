@@ -31,11 +31,14 @@ func generateExplainFunction(a RelationAnalysis, inline InlineSQLData, databaseS
 // so depth behaviour is symmetric between Check and Explain.
 //
 // Routing returns a JSONB trace. When no case matches, the internal function
-// returns a "no_entry" trace shape (result=false, root.type="direct" with a
-// label noting the unknown pair) so callers get a structurally valid response
-// rather than NULL or an error.
-func generateExplainDispatcher(analyses []RelationAnalysis, databaseSchema string) (string, error) {
-	cases := buildExplainDispatcherCases(analyses, databaseSchema)
+// returns a "no_entry" trace shape (result=false, root.type="union" with a
+// label noting the unsupported pair) so callers get a structurally valid
+// response rather than NULL or an error.
+//
+// eligible is the precomputed (object_type, relation) → bool map from
+// ComputeExplainEligibility; only eligible pairs become CASE branches.
+func generateExplainDispatcher(analyses []RelationAnalysis, databaseSchema string, eligible map[string]map[string]bool) (string, error) {
+	cases := buildExplainDispatcherCases(analyses, databaseSchema, eligible)
 	if len(cases) == 0 {
 		return renderEmptyExplainDispatcher(databaseSchema), nil
 	}
@@ -43,16 +46,16 @@ func generateExplainDispatcher(analyses []RelationAnalysis, databaseSchema strin
 }
 
 // buildExplainDispatcherCases mirrors buildDispatcherCases but only emits
-// cases for relations whose Stage 1 slice 1 explain renderer can produce a
-// correct trace. Unsupported (type, relation) pairs fall through to the
-// dispatcher's else branch — see explainSupported.
-func buildExplainDispatcherCases(analyses []RelationAnalysis, databaseSchema string) []DispatcherCase {
+// cases for relations whose explain renderer can produce a correct trace
+// according to the precomputed eligibility map. Unsupported (type, relation)
+// pairs fall through to the dispatcher's else branch — the no-entry sentinel.
+func buildExplainDispatcherCases(analyses []RelationAnalysis, databaseSchema string, eligible map[string]map[string]bool) []DispatcherCase {
 	var cases []DispatcherCase
 	for _, a := range analyses {
 		if !a.Capabilities.CheckAllowed {
 			continue
 		}
-		if !explainSupported(a) {
+		if !eligible[a.ObjectType][a.Relation] {
 			continue
 		}
 		cases = append(cases, DispatcherCase{

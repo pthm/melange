@@ -41,6 +41,7 @@ import (
 func RenderExplainFunction(plan CheckPlan, blocks CheckBlocks) (string, error) {
 	body := buildExplainCycleDetection(plan)
 	body = append(body, buildExplainDirectAttempt(plan, blocks)...)
+	body = append(body, buildExplainImpliedAttempts(plan, blocks)...)
 	body = append(body, buildExplainFinalFailure(plan)...)
 
 	fn := PlpgsqlFunction{
@@ -48,7 +49,7 @@ func RenderExplainFunction(plan CheckPlan, blocks CheckBlocks) (string, error) {
 		Name:    explainFunctionName(plan.ObjectType, plan.Relation),
 		Args:    explainFunctionArgs(),
 		Returns: "JSONB",
-		Decls:   explainFunctionDecls(plan),
+		Decls:   explainFunctionDecls(plan, blocks),
 		Body:    body,
 		Header:  explainFunctionHeader(plan),
 		Cost:    explainFunctionCost(plan),
@@ -91,20 +92,25 @@ func explainFunctionCost(plan CheckPlan) int {
 // explainFunctionDecls declares the PL/pgSQL locals every Explain body needs.
 // v_key drives cycle detection (mirrors recursiveCheckDecls' v_key). v_node_count
 // tracks how many nodes the body emitted so the trace root reports an accurate
-// count regardless of which branch returned.
-func explainFunctionDecls(plan CheckPlan) []Decl {
+// count regardless of which branch returned. v_child_trace is declared only
+// when the body recurses into a sibling explain_* (implied function calls).
+func explainFunctionDecls(plan CheckPlan, blocks CheckBlocks) []Decl {
 	vKeyExpr := Concat{Parts: []Expr{
 		Lit(plan.ObjectType + ":"),
 		ObjectID,
 		Lit(":" + plan.Relation),
 	}}
-	return []Decl{
+	decls := []Decl{
 		{Name: "v_key", Type: "TEXT := " + vKeyExpr.SQL()},
 		{Name: "v_node_count", Type: "INTEGER := 0"},
 		{Name: "v_evidence_tuple", Type: "RECORD"},
 		{Name: "v_root", Type: "JSONB"},
 		{Name: "v_attempts", Type: "JSONB := '[]'::JSONB"},
 	}
+	if len(blocks.ImpliedFunctionCalls) > 0 {
+		decls = append(decls, Decl{Name: "v_child_trace", Type: "JSONB"})
+	}
+	return decls
 }
 
 // buildExplainCycleDetection emits the standard cycle / depth-limit guard.
@@ -204,6 +210,82 @@ func buildExplainDirectSelect(plan CheckPlan) SelectStmt {
 	return q.Build()
 }
 
+// buildExplainImpliedAttempts emits, for each ComplexClosureRelation, a
+// "call the sibling explain_*, return on success, record failure on miss"
+// block.
+//
+//	v_child_trace := explain_{type}_{rel}(p_subject_type, p_subject_id, p_object_id, p_visited || ARRAY[v_key]);
+//	v_node_count := v_node_count + COALESCE((v_child_trace->>'node_count')::INTEGER, 0);
+//	IF (v_child_trace->>'result')::boolean THEN
+//	    v_root := <NodeImplied wrapping child trace's root, result=true>;
+//	    v_node_count := v_node_count + 1;
+//	    RETURN <trace root, result=true>;
+//	END IF;
+//	v_node_count := v_node_count + 1;
+//	v_attempts := v_attempts || jsonb_build_array(<NodeImplied wrapping child trace's root, result=false>);
+//
+// The call site uses the precomputed cost ordering from blocks.ImpliedFunctionCalls,
+// so cheaper relations are tried first.
+func buildExplainImpliedAttempts(plan CheckPlan, blocks CheckBlocks) []Stmt {
+	if len(blocks.ImpliedFunctionCalls) == 0 {
+		return nil
+	}
+
+	stmts := []Stmt{Comment{Text: "Implied function call attempts"}}
+
+	for _, call := range blocks.ImpliedFunctionCalls {
+		explainFnName := explainFunctionName(plan.ObjectType, call.Relation)
+		callExpr := fmt.Sprintf("%s(p_subject_type, p_subject_id, p_object_id, p_visited || ARRAY[v_key])",
+			sqldsl.PrefixIdent(explainFnName, plan.DatabaseSchema))
+
+		label := sqldsl.QuoteLiteral("implied via " + call.Relation)
+		childAsArray := "jsonb_build_array(v_child_trace->'root')"
+
+		successNode := BuildNodeJSON(TraceNodeImplied, NodeJSONArgs{
+			Label:    label,
+			Children: childAsArray,
+			Result:   "true",
+		})
+		failureNode := BuildNodeJSON(TraceNodeImplied, NodeJSONArgs{
+			Label:    label,
+			Children: childAsArray,
+			Result:   "false",
+		})
+
+		stmts = append(stmts, explainChildTraceAttempt(plan, callExpr, successNode, failureNode)...)
+	}
+
+	return stmts
+}
+
+// explainChildTraceAttempt emits the canonical "recurse into a sibling
+// explain_*, fold node-count, branch on result" sequence shared by every
+// recursive attempt path (implied, parent, userset, intersection). The
+// caller supplies the dispatcher/function callExpr plus the success and
+// failure NodeJSON SQL strings; this helper handles the v_child_trace
+// COALESCE, the success-return, and the failure-attempt append.
+//
+// COALESCE on the callExpr guards against a callee that somehow returns
+// NULL — no eligible callee does today, but a malformed result should
+// surface as a failure attempt with an empty subtree rather than a
+// null-children parent node.
+func explainChildTraceAttempt(plan CheckPlan, callExpr, successNode, failureNode string) []Stmt {
+	return []Stmt{
+		Assign{Name: "v_child_trace", Value: Raw("COALESCE(" + callExpr + ", '{}'::jsonb)")},
+		Assign{Name: "v_node_count", Value: Raw("v_node_count + COALESCE((v_child_trace->>'node_count')::INTEGER, 0)")},
+		If{
+			Cond: Raw("COALESCE((v_child_trace->>'result')::boolean, FALSE)"),
+			Then: []Stmt{
+				Assign{Name: "v_root", Value: Raw(successNode)},
+				Assign{Name: "v_node_count", Value: Raw("v_node_count + 1")},
+				ReturnValue{Value: Raw(buildExplainTraceRoot(plan, "true", "v_root"))},
+			},
+		},
+		Assign{Name: "v_node_count", Value: Raw("v_node_count + 1")},
+		Assign{Name: "v_attempts", Value: Raw("v_attempts || jsonb_build_array(" + failureNode + ")")},
+	}
+}
+
 // buildExplainFinalFailure emits the bottom-of-function fallthrough — every
 // attempted branch failed, so wrap v_attempts in a NodeUnion and return a
 // result=false trace. When v_attempts is empty (relation has no recorded
@@ -249,18 +331,17 @@ func explainFunctionName(objectType, relation string) string {
 	return SafeIdentifier("explain_", objectType, relation, "")
 }
 
-// explainSupported reports whether the slice-1 explain renderer can produce a
-// correct trace for the relation. Returns true when access resolves through
-// the direct/implied tuple SELECT alone — for those, the closure relations
-// list already covers every path Check would take. Returns false for
-// relations that route through userset / TTU / intersection / exclusion /
-// complex implied chains; the dispatcher routes those to a clearly-labelled
-// "unsupported in this version" sentinel rather than emitting a trace that
-// could disagree with Check.
+// explainLocalSupported is the local-only check: does this relation's
+// renderer handle every feature the analysis surfaces? Used as the seed of
+// ComputeExplainEligibility's fixed point. Transitive closure-relation
+// dependencies are handled by the wrapper, not here.
 //
-// Subsequent Stage 1 slices add the missing branches; each slice can extend
-// this predicate to expose the relations its renderer now handles.
-func explainSupported(a RelationAnalysis) bool {
+// Subsequent Stage 1 slices drop conditions from this predicate as the
+// renderer learns more branches. Slice 1.2 drops the
+// ComplexClosureRelations gate — the renderer now recursively calls
+// sibling explain_* — but the wrapper still gates relations whose
+// dependencies are themselves not yet supported.
+func explainLocalSupported(a RelationAnalysis) bool {
 	if a.HasComplexUsersetPatterns {
 		return false
 	}
@@ -271,24 +352,63 @@ func explainSupported(a RelationAnalysis) bool {
 	if len(a.ParentRelations) > 0 {
 		return false
 	}
-	if len(a.ComplexClosureRelations) > 0 {
-		return false
-	}
-	// Features.HasExclusion / HasUserset only reflect *this* relation's direct
-	// definition. A relation like `viewer: editor` where `editor: [user] but
-	// not blocked` carries the exclusion on the closure side — the wrapping
-	// relation is technically Direct+Implied but resolving it correctly
-	// requires running the exclusion. Same shape for userset / TTU patterns
-	// transitively pulled in through the closure. Until the renderer
-	// dispatches those branches we have to stay off any of these schemas.
-	if len(a.ClosureExcludedRelations) > 0 {
-		return false
-	}
-	if len(a.ClosureUsersetPatterns) > 0 {
-		return false
-	}
-	if len(a.ClosureParentRelations) > 0 {
-		return false
-	}
 	return f.HasDirect || f.HasImplied
+	// Closure-derived features (ClosureExcludedRelations,
+	// ClosureUsersetPatterns, ClosureParentRelations) used to be checked
+	// here as a belt-and-suspenders gate against schemas like
+	// `viewer: editor where editor: [user] but not blocked`. The transitive
+	// eligibility sweep in ComputeExplainEligibility now covers that case:
+	// the wrapping relation's ComplexClosureRelations name the offending
+	// closure relations, and once those siblings are marked ineligible
+	// (their local features include the exclusion / userset / TTU) the
+	// wrapper is downgraded in the next pass.
 }
+
+// ComputeExplainEligibility returns, for each (object_type, relation), whether
+// the current explain renderer can produce a trace that agrees with Check.
+//
+// The result is the fixed point of "locally supported AND every
+// ComplexClosureRelation is itself eligible". Eligibility is monotonically
+// non-increasing across iterations: each pass can downgrade a relation
+// (because one of its callees turned out to be ineligible) but never
+// upgrade it. The fixed point is reached when no relation flips in a pass.
+//
+// ComplexClosureRelations names are within the same object type by
+// construction (see lib/sqlgen/check_blocks.go:buildImpliedFunctionCalls);
+// the map is keyed accordingly.
+//
+// Exported so callers that build a CollectFunctionNames input by hand can
+// produce the same map GenerateSQL stashes on GeneratedSQL.ExplainEligible.
+func ComputeExplainEligibility(analyses []RelationAnalysis) map[string]map[string]bool {
+	eligible := make(map[string]map[string]bool, len(analyses))
+	for _, a := range analyses {
+		m, ok := eligible[a.ObjectType]
+		if !ok {
+			m = make(map[string]bool)
+			eligible[a.ObjectType] = m
+		}
+		m[a.Relation] = explainLocalSupported(a)
+	}
+
+	for {
+		changed := false
+		for _, a := range analyses {
+			if !eligible[a.ObjectType][a.Relation] {
+				continue
+			}
+			for _, dep := range a.ComplexClosureRelations {
+				if !eligible[a.ObjectType][dep] {
+					eligible[a.ObjectType][a.Relation] = false
+					changed = true
+					break
+				}
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+
+	return eligible
+}
+

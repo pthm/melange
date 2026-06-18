@@ -99,7 +99,8 @@ func TestGenerateExplainDispatcher_Routes(t *testing.T) {
 		mkAnalysis("document", "viewer", RelationFeatures{HasDirect: true}, true),
 		mkAnalysis("document", "editor", RelationFeatures{HasDirect: true}, true),
 	}
-	got, err := generateExplainDispatcher(analyses, "")
+	eligible := ComputeExplainEligibility(analyses)
+	got, err := generateExplainDispatcher(analyses, "", eligible)
 	if err != nil {
 		t.Fatalf("generateExplainDispatcher: %v", err)
 	}
@@ -125,7 +126,7 @@ func TestGenerateExplainDispatcher_Routes(t *testing.T) {
 // Output must still be a structurally valid Trace shape so the runtime can
 // deserialise without special-casing.
 func TestGenerateExplainDispatcher_Empty(t *testing.T) {
-	got, err := generateExplainDispatcher(nil, "")
+	got, err := generateExplainDispatcher(nil, "", nil)
 	if err != nil {
 		t.Fatalf("generateExplainDispatcher(nil): %v", err)
 	}

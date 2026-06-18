@@ -73,6 +73,12 @@ type GeneratedSQL struct {
 	// callers can deserialise without special-casing.
 	ExplainDispatcher string
 
+	// ExplainEligible records the (object_type, relation) pairs for which an
+	// explain function was generated. CollectNamedFunctions reads this
+	// directly; hand-built GeneratedSQL values must populate it via
+	// ComputeExplainEligibility(analyses) before calling CollectNamedFunctions.
+	ExplainEligible map[string]map[string]bool
+
 	// IndexRecommendations lists composite indexes that make the generated
 	// functions efficient against melange_tuples. Advisory only — users
 	// translate the DDL to their source tables. See RecommendIndexes.
@@ -122,6 +128,14 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 	var result GeneratedSQL
 
 	complexityByRelation := buildClosureComplexityIndex(analyses)
+	// explainEligible is the schema-wide fixed point over local feature
+	// support + transitive ComplexClosureRelations dependencies. The
+	// dispatcher and per-relation generation loop both gate against the
+	// same map so a body never names a function that wasn't generated;
+	// the map is also stashed on result so CollectNamedFunctions can
+	// reuse it.
+	explainEligible := ComputeExplainEligibility(analyses)
+	result.ExplainEligible = explainEligible
 
 	// Generate specialized function for each relation
 	for _, a := range analyses {
@@ -138,14 +152,7 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 			return GeneratedSQL{}, fmt.Errorf("generating no-wildcard check function: %w", err)
 		}
 		result.NoWildcardFunctions = append(result.NoWildcardFunctions, noWildcardFn)
-		// Stage 1 slice 1: only generate explain_* for relations whose check
-		// resolves through a single direct/implied SELECT. Schemas with
-		// usersets, TTU, exclusion, intersection, or complex implied chains
-		// would produce a trace that disagrees with Check's answer until
-		// later slices implement those branches; rather than ship an
-		// incorrect trace, the dispatcher routes unsupported relations to
-		// the unsupported-in-this-version sentinel.
-		if !explainSupported(a) {
+		if !explainEligible[a.ObjectType][a.Relation] {
 			continue
 		}
 		explainFn, err := generateExplainFunction(a, inline, databaseSchema, complexityByRelation)
@@ -165,7 +172,7 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 	if err != nil {
 		return GeneratedSQL{}, fmt.Errorf("generating no-wildcard dispatcher: %w", err)
 	}
-	result.ExplainDispatcher, err = generateExplainDispatcher(analyses, databaseSchema)
+	result.ExplainDispatcher, err = generateExplainDispatcher(analyses, databaseSchema, explainEligible)
 	if err != nil {
 		return GeneratedSQL{}, fmt.Errorf("generating explain dispatcher: %w", err)
 	}
@@ -256,6 +263,7 @@ func CollectNamedFunctions(
 	var result []NamedFunction
 	checkIdx, noWildcardIdx, explainIdx := 0, 0, 0
 	listObjIdx, listSubjIdx := 0, 0
+	explainEligible := generatedSQL.ExplainEligible
 
 	for _, a := range analyses {
 		if a.Capabilities.CheckAllowed {
@@ -269,7 +277,7 @@ func CollectNamedFunctions(
 				SQL:  generatedSQL.NoWildcardFunctions[noWildcardIdx],
 			})
 			noWildcardIdx++
-			if explainSupported(a) {
+			if explainEligible[a.ObjectType][a.Relation] {
 				result = append(result, NamedFunction{
 					Name: explainFunctionName(a.ObjectType, a.Relation),
 					SQL:  generatedSQL.ExplainFunctions[explainIdx],
@@ -305,6 +313,7 @@ func CollectNamedFunctions(
 //   - Dispatcher functions (always included): check_permission, list_accessible_objects, etc.
 func CollectFunctionNames(analyses []RelationAnalysis) []string {
 	var names []string
+	explainEligible := ComputeExplainEligibility(analyses)
 
 	for _, a := range analyses {
 		if a.Capabilities.CheckAllowed {
@@ -312,7 +321,7 @@ func CollectFunctionNames(analyses []RelationAnalysis) []string {
 				functionName(a.ObjectType, a.Relation),
 				functionNameNoWildcard(a.ObjectType, a.Relation),
 			)
-			if explainSupported(a) {
+			if explainEligible[a.ObjectType][a.Relation] {
 				names = append(names, explainFunctionName(a.ObjectType, a.Relation))
 			}
 		}
