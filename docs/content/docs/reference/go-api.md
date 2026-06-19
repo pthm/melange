@@ -212,6 +212,65 @@ func (c *Checker) ListSubjectsWithContextualTuples(ctx context.Context, object O
 
 `ListSubjects` returns subject IDs of the given type that have the relation on the object. `ListSubjectsAll` auto-paginates.
 
+### Explain
+
+```go
+func (c *Checker) Explain(ctx context.Context, subject SubjectLike, relation RelationLike, object ObjectLike, opts ...ExplainOption) (*Trace, error)
+```
+
+Returns the resolution tree for a check: every attempted branch, contributing tuples, per-branch success/failure. Use for debugging and admin tooling, not the request path — Explain builds a JSONB trace per call.
+
+```go
+trace, err := checker.Explain(ctx,
+    melange.Object{Type: "user", ID: "alice"},
+    melange.Relation("viewer"),
+    melange.Object{Type: "document", ID: "1"},
+)
+if err != nil {
+    return err
+}
+
+if *trace.Result {
+    fmt.Println("allowed via", trace.Root.Type, "—", trace.Root.Label)
+}
+```
+
+#### Options
+
+```go
+func WithExplainMaxNodes(n int) ExplainOption
+```
+
+Caps the node count in a single trace. Precedence: per-call > session GUC `melange.max_explain_nodes` > default (100). `n <= 0` is a no-op (defers to the GUC, then the default). When the cap is hit, `trace.Truncated` is `true`.
+
+#### Trace, Node, NodeType
+
+`Trace`, `Node`, `NodeType`, `TupleRef`, and `SubjectRef` model the JSONB the SQL dispatcher returns. JSON tags are snake_case to match the SQL column names. The same types are reused by the planned Expand API.
+
+```go
+type Trace struct {
+    Object    string
+    Relation  string
+    Subject   string
+    Result    *bool      // populated on Explain, nil on Expand
+    Root      *Node
+    Truncated bool
+    NodeCount int
+}
+
+type Node struct {
+    Type       NodeType
+    Label      string
+    Evidence   []TupleRef
+    Children   []*Node
+    Users      []SubjectRef  // Expand leaves + Wildcard sentinels
+    Result     *bool         // per-branch outcome on Explain
+    NextCursor string        // Expand leaf pagination
+}
+```
+
+See the [Explaining Decisions guide](../../guides/explaining-decisions/) for the node-type table, truncation behaviour, and the supported schema patterns.
+
 ## Bulk Check
 
 ### Building a Bulk Check

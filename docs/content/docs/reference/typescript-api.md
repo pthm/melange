@@ -13,13 +13,14 @@ The TypeScript runtime client is in development. This page will be expanded when
 
 **Runtime library** (`@pthm/melange`) is planned. It will mirror the [Go API](../go-api/) with TypeScript idioms:
 
-- `Checker` class with `check()`, `listObjects()`, `listSubjects()`
+- `Checker` class with `check()`, `listObjects()`, `listSubjects()`, `explain()`
 - Bulk check builder
 - Cache interface
 - Decision overrides
 - Contextual tuples
 - Error types (`ValidationError`, `BulkCheckDeniedError`)
 - Custom database schema (`databaseSchema` option)
+- `Trace`, `Node`, `NodeType` type mirrors for [Explain](../../guides/explaining-decisions/) (already shipped in `clients/typescript/src/trace.ts`)
 
 ## Using SQL Directly
 
@@ -27,6 +28,7 @@ Until the runtime ships, call the generated SQL functions from any PostgreSQL cl
 
 ```typescript
 import { Pool } from 'pg';
+import type { Trace } from '@pthm/melange'; // Trace type already published
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -43,6 +45,14 @@ const { rows: objects } = await pool.query(
   ['user', 'alice', 'can_read', 'repository']
 );
 const objectIds = objects.map(r => r.object_id);
+
+// Explain — returns the resolution trace as JSONB
+const { rows: traceRows } = await pool.query<{ explain_permission: Trace }>(
+  'SELECT explain_permission($1, $2, $3, $4, $5)',
+  ['user', 'alice', 'viewer', 'document', '1']
+);
+const trace = traceRows[0].explain_permission;
+console.log(trace.result, trace.root.type);
 ```
 
 See the [SQL API Reference](../sql-api/) for all available functions and their signatures.

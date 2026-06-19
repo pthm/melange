@@ -327,6 +327,45 @@ This shows:
 | UNION instead of UNION ALL | Replace `UNION` with `UNION ALL` in view definition |
 | Missing expression index | Run the `CREATE INDEX` command shown in the fix hint  |
 
+### explain
+
+Return the resolution trace for a check — every attempted branch, contributing tuples, per-branch success/failure. See the [Explaining Decisions guide](../../guides/explaining-decisions/) for the trace structure.
+
+```bash
+melange explain user:alice viewer document:1 --db postgres://localhost/mydb
+```
+
+**Flags:**
+
+| Flag           | Default       | Description                                                                                          |
+| -------------- | ------------- | ---------------------------------------------------------------------------------------------------- |
+| `--db`         | (from config) | PostgreSQL connection string                                                                          |
+| `--db-schema`  | `"public"`    | Database schema                                                                                       |
+| `--format`     | `tree`        | `tree` (unicode pretty-print) or `json` (raw `Trace` JSONB)                                          |
+| `--max-nodes`  | `0`           | Cap on trace nodes. `0` defers to the session GUC `melange.max_explain_nodes`, then to 100           |
+
+**Tree output:**
+
+```
+✓ user:alice has viewer on document:1
+└── via userset: via [group#member] → group:engineering
+    └── direct: user:alice → member → group:engineering
+```
+
+**Failure with attempted branches:**
+
+```
+✗ user:bob does NOT have viewer on document:1
+└── union of 3 branches
+    ├── ✗ no direct grant
+    ├── ✗ implied: implied via editor
+    └── ✗ via userset: via [group#member] → group:engineering
+        └── union of 1 branches
+            └── ✗ no direct grant
+```
+
+`--format=json` returns the raw `Trace` JSONB for tooling.
+
 ---
 
 ## Client Commands

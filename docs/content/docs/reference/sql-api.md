@@ -280,6 +280,100 @@ SELECT subject_id, next_cursor
 FROM list_accessible_subjects('document', '456', 'viewer', 'team#member', NULL, NULL);
 ```
 
+## explain_permission
+
+Returns a JSONB resolution trace for a check: every attempted branch, contributing tuples, per-branch success/failure. The companion to `check_permission` for debugging and admin tooling — not the request path, since it builds a JSONB document per call.
+
+### Signature
+
+```sql
+explain_permission(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_relation TEXT,
+    p_object_type TEXT,
+    p_object_id TEXT,
+    p_max_nodes INTEGER DEFAULT NULL
+) RETURNS JSONB
+```
+
+### Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `p_subject_type` | TEXT | Subject type (e.g., `'user'`) |
+| `p_subject_id` | TEXT | Subject identifier |
+| `p_relation` | TEXT | Relation to check |
+| `p_object_type` | TEXT | Object type (e.g., `'document'`) |
+| `p_object_id` | TEXT | Object identifier |
+| `p_max_nodes` | INTEGER | Optional cap on trace nodes. `NULL` defers to session GUC `melange.max_explain_nodes`, then to the built-in default (100). |
+
+### Return Value
+
+A JSONB document matching the runtime's `Trace` type. Always returns a valid trace; for an unknown `(object_type, relation)` pair the root is a sentinel rather than NULL.
+
+```jsonc
+{
+  "object": "document:1",
+  "relation": "viewer",
+  "subject": "user:alice",
+  "result": true,
+  "root": {
+    "type": "userset",
+    "label": "via [group#member] → group:engineering",
+    "result": true,
+    "children": [
+      {
+        "type": "direct",
+        "label": "direct grant",
+        "result": true,
+        "evidence": [
+          {"subject_type": "user", "subject_id": "alice",
+           "relation": "member", "object_type": "group", "object_id": "engineering"}
+        ]
+      }
+    ]
+  },
+  "node_count": 2
+}
+```
+
+`result` is `true` on allow, `false` on deny. `truncated` is omitted when `false`; it's `true` when `p_max_nodes` capped the trace.
+
+### Examples
+
+```sql
+-- Pretty-print the trace
+SELECT jsonb_pretty(explain_permission('user', 'alice', 'viewer', 'document', '1'));
+
+-- Per-call cap
+SELECT explain_permission('user', 'alice', 'can_read', 'repository', '42', 50);
+
+-- Per-session cap; subsequent calls inherit it
+SET melange.max_explain_nodes = 200;
+SELECT explain_permission('user', 'bob', 'can_admin', 'repository', '7');
+```
+
+### Use from runtime / CLI
+
+`Checker.Explain` and `melange explain` wrap this function. See the [Explaining Decisions guide](../../guides/explaining-decisions/).
+
+## explain_permission_internal
+
+Internal dispatcher behind `explain_permission`. Same signature plus a `p_visited TEXT[]` cycle-detection array. Specialized functions (`explain_<type>_<rel>`) call it recursively; most callers should use `explain_permission` instead.
+
+```sql
+explain_permission_internal(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_relation TEXT,
+    p_object_type TEXT,
+    p_object_id TEXT,
+    p_visited TEXT[] DEFAULT ARRAY[]::TEXT[],
+    p_max_nodes INTEGER DEFAULT NULL
+) RETURNS JSONB
+```
+
 ## Pagination
 
 Both list functions support cursor-based (keyset) pagination for efficient traversal of large result sets.

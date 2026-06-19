@@ -323,6 +323,31 @@ SELECT check_permission('user', '123', 'member', 'organization', '456');
 
 {{< /tabs >}}
 
+## When a Check Returns the Wrong Answer
+
+Use [Explain](../explaining-decisions/) to see the resolution tree behind a check: every attempted branch, the contributing tuples, and per-branch success/failure.
+
+```go
+trace, err := checker.Explain(ctx,
+    melange.Object{Type: "user", ID: "alice"},
+    melange.Relation("viewer"),
+    melange.Object{Type: "document", ID: "1"},
+)
+if !*trace.Result {
+    for _, attempt := range trace.Root.Children {
+        fmt.Printf("tried %s (%s) → %v\n", attempt.Type, attempt.Label, *attempt.Result)
+    }
+}
+```
+
+Or from the CLI:
+
+```bash
+melange explain user:alice viewer document:1
+```
+
+Explain is for debugging and admin tooling, not the request path. It builds a JSONB trace per call.
+
 ## Error Handling
 
 {{< tabs >}}

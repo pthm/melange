@@ -1,6 +1,6 @@
 ---
 title: Testing Authorization
-weight: 6
+weight: 7
 ---
 
 Test your tuples view and schema together against a real PostgreSQL database. Mocking the permission layer risks divergence between test and production behavior.
