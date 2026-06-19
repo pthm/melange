@@ -6,46 +6,38 @@ import (
 	"github.com/pthm/melange/lib/sqlgen/sqldsl"
 )
 
-// Stage 1 (slice 1) Explain codegen.
-//
-// This is the first end-to-end slice of explain_* function generation. It
-// mirrors the shape of check_render.go but emits JSONB Trace nodes shaped to
-// the contract pinned in melange/trace.go and lib/sqlgen/trace_blocks.go.
-//
-// What this slice handles:
-//   - Direct-grant attempts → NodeDirect on hit, recorded as a failure node
-//     on miss
-//   - Cycle detection at the top of every function (NodeCycle on revisit)
-//   - The M2002 depth-limit raise (kept identical to check_permission_internal
-//     so callers can't tell Explain apart from Check at the depth boundary)
-//   - The trace-root envelope (object, relation, subject, result, root,
-//     truncated, node_count) — every return goes through buildExplainTraceRoot
-//     so the shape never drifts
-//
-// What this slice deliberately defers:
-//   - Implied function calls (will recursively call sibling explain_*)
-//   - Userset patterns (NodeUserset wrapping)
-//   - TTU / parent relations (NodeTTU wrapping)
-//   - Intersection / exclusion
-//   - p_max_nodes truncation
-//
-// Relations that need those paths will currently return a result=false trace
-// with the direct attempt as the only recorded branch. That is wrong for
-// implied / userset / TTU schemas but is syntactically a valid Trace —
-// callers can still parse it and the dispatcher routes correctly. Subsequent
-// slices fill in the gaps.
+// Explain codegen. Mirrors the shape of check_render.go but emits JSONB
+// Trace nodes shaped to the contract pinned in melange/trace.go and
+// lib/sqlgen/trace_blocks.go. The body composes, in order: cycle detection,
+// per-call truncation guard, userset-subject pre-check, direct-grant
+// attempt, implied function calls, parent-relation TTU loops, userset
+// reference loops, intersection groups, then the final-failure union.
+// Recursive attempts that branch on result (implied/parent/userset) route
+// through explainChildTraceAttempt so the node-count fold and truncation
+// bail-out stay centralised; intersection parts AND-aggregate into
+// v_intersection_pass instead and call explainTruncationBailout directly.
+// Every success-return routes through emitExplainSuccessReturn so exclusion
+// handling stays centralised. Eligibility is gated by
+// ComputeExplainEligibility — complex usersets / IsThis-in-intersection
+// are not yet supported and route to the dispatcher's no-entry sentinel.
 
 // RenderExplainFunction is the entry point for explain_* function generation.
-// Mirrors RenderCheckFunction in shape; the body composes cycle detection,
-// the direct-grant attempt, and a final failure return.
 func RenderExplainFunction(plan CheckPlan, blocks CheckBlocks) (string, error) {
 	body := buildExplainCycleDetection(plan)
+	body = append(body, explainTruncationBailout(plan))
 	body = append(body, buildExplainUsersetSubjectStmts(plan, blocks)...)
 	body = append(body, buildExplainDirectAttempt(plan, blocks)...)
 	body = append(body, buildExplainImpliedAttempts(plan, blocks)...)
 	body = append(body, buildExplainParentRelationAttempts(plan, blocks)...)
 	body = append(body, buildExplainUsersetAttempts(plan, blocks)...)
 	body = append(body, buildExplainIntersectionAttempts(plan, blocks)...)
+	// Pre-final truncation flag: flip v_truncated when the accumulated
+	// node count crossed v_max_nodes from in-function failure appends
+	// (which the post-recursion checks can't see).
+	body = append(body, If{
+		Cond: Gte{Left: Raw("v_node_count"), Right: Raw("v_max_nodes")},
+		Then: []Stmt{Assign{Name: "v_truncated", Value: Raw("TRUE")}},
+	})
 	body = append(body, buildExplainFinalFailure(plan)...)
 
 	fn := PlpgsqlFunction{
@@ -63,14 +55,17 @@ func RenderExplainFunction(plan CheckPlan, blocks CheckBlocks) (string, error) {
 }
 
 // explainFunctionArgs returns the per-relation explain function signature.
-// Matches the check function shape so dispatcher routing is symmetric.
-// p_max_nodes will be added in a follow-up slice when truncation lands.
+// p_max_nodes is the per-call truncation cap. NULL means "use the session
+// GUC melange.max_explain_nodes; if that's unset, use the built-in
+// default (100)". Three-tier priority is resolved inside the function body
+// via COALESCE; callers don't need to know the precedence order.
 func explainFunctionArgs() []FuncArg {
 	return []FuncArg{
 		{Name: "p_subject_type", Type: "TEXT"},
 		{Name: "p_subject_id", Type: "TEXT"},
 		{Name: "p_object_id", Type: "TEXT"},
 		{Name: "p_visited", Type: "TEXT []", Default: EmptyArray{}},
+		{Name: "p_max_nodes", Type: "INTEGER", Default: Raw("NULL")},
 	}
 }
 
@@ -78,7 +73,6 @@ func explainFunctionHeader(plan CheckPlan) []string {
 	return []string{
 		"Generated explain function for " + plan.ObjectType + "." + plan.Relation,
 		"Features: " + plan.FeaturesString,
-		"Stage 1 slice 1: direct-grant attempts + cycle detection only",
 	}
 }
 
@@ -115,6 +109,17 @@ func explainFunctionDecls(plan CheckPlan, blocks CheckBlocks) []Decl {
 		// declared because buildExplainUsersetSubjectStmts emits the Case 1
 		// SELECT for every relation with a non-empty RelationList.
 		{Name: "v_userset_check", Type: "INTEGER := 0"},
+		// Effective node-count cap. Three-tier precedence: per-call
+		// p_max_nodes > session GUC melange.max_explain_nodes > built-in
+		// default (100). `current_setting`'s second-arg true returns NULL
+		// when the GUC is unset instead of raising; COALESCE then falls to
+		// the default.
+		{Name: "v_max_nodes", Type: "INTEGER := COALESCE(p_max_nodes, current_setting('melange.max_explain_nodes', true)::INTEGER, 100)"},
+		// v_truncated is flipped to TRUE when this function bails because
+		// v_node_count crossed v_max_nodes. The Trace envelope's
+		// `truncated` field surfaces the flag so callers can tell the
+		// trace is partial without inspecting node types.
+		{Name: "v_truncated", Type: "BOOLEAN := FALSE"},
 	}
 	if len(blocks.ImpliedFunctionCalls) > 0 || len(blocks.ParentRelationBlocks) > 0 || len(plan.Analysis.UsersetPatterns) > 0 || len(blocks.IntersectionGroups) > 0 {
 		decls = append(decls, Decl{Name: "v_child_trace", Type: "JSONB"})
@@ -139,9 +144,12 @@ func explainFunctionDecls(plan CheckPlan, blocks CheckBlocks) []Decl {
 	return decls
 }
 
-// buildExplainCycleDetection emits the standard cycle / depth-limit guard.
-// Same shape as buildCycleDetectionStmts but the cycle branch returns a Trace
-// with a NodeCycle root instead of an integer 0.
+// buildExplainCycleDetection emits the standard cycle / depth-limit guard
+// plus a truncation pre-check. Same shape as buildCycleDetectionStmts but
+// the cycle branch returns a Trace with a NodeCycle root, and an
+// additional check enforces v_max_nodes — when the caller's accumulated
+// budget already exceeds the cap, we emit NodeTruncated and bail before
+// doing any work.
 func buildExplainCycleDetection(plan CheckPlan) []Stmt {
 	return []Stmt{
 		Comment{Text: "Cycle detection"},
@@ -156,6 +164,24 @@ func buildExplainCycleDetection(plan CheckPlan) []Stmt {
 		If{
 			Cond: Gte{Left: ArrayLength{Array: Visited}, Right: Int(25)},
 			Then: []Stmt{Raise{Message: "resolution too complex", ErrCode: "M2002"}},
+		},
+	}
+}
+
+// explainTruncationBailout returns the If-statement bail-out used after
+// every node-count accumulation: when v_node_count crosses v_max_nodes,
+// emit NodeTruncated, set v_truncated, return the partial trace. Shared
+// by the top-of-function check (RenderExplainFunction), the per-recursion
+// check inside explainChildTraceAttempt, and the intersection part loop so
+// every site emits identical SQL.
+func explainTruncationBailout(plan CheckPlan) Stmt {
+	return If{
+		Cond: Gte{Left: Raw("v_node_count"), Right: Raw("v_max_nodes")},
+		Then: []Stmt{
+			Assign{Name: "v_root", Value: Raw(BuildTruncatedNode())},
+			Assign{Name: "v_node_count", Value: Raw("v_node_count + 1")},
+			Assign{Name: "v_truncated", Value: Raw("TRUE")},
+			ReturnValue{Value: Raw(buildExplainTraceRoot(plan, "false", "v_root"))},
 		},
 	}
 }
@@ -188,11 +214,31 @@ func buildExplainDirectAttempt(plan CheckPlan, blocks CheckBlocks) []Stmt {
 	if len(plan.RelationList) > 1 {
 		successLabel = "('direct or implied grant via ' || v_evidence_tuple.relation)"
 	}
-	successNode := BuildNodeJSON(TraceNodeDirect, NodeJSONArgs{
+	directNode := BuildNodeJSON(TraceNodeDirect, NodeJSONArgs{
 		Label:    successLabel,
 		Evidence: successEvidence,
 		Result:   "true",
 	})
+
+	// successNode picks NodeWildcard when the matched evidence row carries
+	// a wildcard subject_id ('*'); else falls back to the regular
+	// NodeDirect. The wildcard branch only matters when the relation
+	// allows wildcards — otherwise the SELECT's subject_id filter excludes
+	// '*' rows and the CASE always picks the direct branch. Emitting it
+	// unconditionally keeps the generated SQL uniform across no-wildcard
+	// and allow-wildcard variants. Both branches route through
+	// trace_blocks helpers so the JSON contract stays centralised.
+	wildcardUsers := "jsonb_build_array(" +
+		BuildSubjectRefJSON("v_evidence_tuple.subject_type", sqldsl.QuoteLiteral("*")) +
+		")"
+	wildcardNode := BuildNodeJSON(TraceNodeWildcard, NodeJSONArgs{
+		Users:  wildcardUsers,
+		Result: "true",
+	})
+	successNode := fmt.Sprintf(
+		"(CASE WHEN v_evidence_tuple.subject_id = '*' THEN %s ELSE %s END)",
+		wildcardNode, directNode,
+	)
 
 	failureNode := BuildNodeJSON(TraceNodeDirect, NodeJSONArgs{
 		Label:  sqldsl.QuoteLiteral("no direct grant"),
@@ -263,7 +309,7 @@ func buildExplainImpliedAttempts(plan CheckPlan, blocks CheckBlocks) []Stmt {
 
 	for _, call := range blocks.ImpliedFunctionCalls {
 		explainFnName := explainFunctionName(plan.ObjectType, call.Relation)
-		callExpr := fmt.Sprintf("%s(p_subject_type, p_subject_id, p_object_id, p_visited || ARRAY[v_key])",
+		callExpr := fmt.Sprintf("%s(p_subject_type, p_subject_id, p_object_id, p_visited || ARRAY[v_key], p_max_nodes)",
 			sqldsl.PrefixIdent(explainFnName, plan.DatabaseSchema))
 
 		label := sqldsl.QuoteLiteral("implied via " + call.Relation)
@@ -303,6 +349,7 @@ func explainChildTraceAttempt(plan CheckPlan, blocks CheckBlocks, callExpr, succ
 	return []Stmt{
 		Assign{Name: "v_child_trace", Value: Raw("COALESCE(" + callExpr + ", '{}'::jsonb)")},
 		Assign{Name: "v_node_count", Value: Raw("v_node_count + COALESCE((v_child_trace->>'node_count')::INTEGER, 0)")},
+		explainTruncationBailout(plan),
 		If{
 			Cond: Raw("COALESCE((v_child_trace->>'result')::boolean, FALSE)"),
 			Then: emitExplainSuccessReturn(plan, blocks, successNode),
@@ -353,7 +400,7 @@ func buildExplainParentLoopStmt(plan CheckPlan, blocks CheckBlocks, parent Paren
 	driverQuery := buildExplainParentLinkingSelect(plan, parent)
 
 	dispatcherCall := fmt.Sprintf(
-		"%s(p_subject_type, p_subject_id, %s, v_parent_link.parent_type, v_parent_link.parent_id, p_visited || ARRAY[v_key])",
+		"%s(p_subject_type, p_subject_id, %s, v_parent_link.parent_type, v_parent_link.parent_id, p_visited || ARRAY[v_key], p_max_nodes)",
 		sqldsl.PrefixIdent("explain_permission_internal", plan.DatabaseSchema),
 		sqldsl.QuoteLiteral(parent.ParentRelation),
 	)
@@ -507,8 +554,8 @@ func buildExplainUsersetSubjectStmts(plan CheckPlan, blocks CheckBlocks) []Stmt 
 // userset reference (subject_id contains '#'), then for each one recurses
 // into the dispatcher to check membership and wraps the child trace in
 // `NodeUserset`. Skipped when the relation has no userset patterns;
-// complex patterns are blocked upstream by explainLocalSupported (slice 1.5
-// will add the recursive-membership variant).
+// complex (recursive-membership) patterns are blocked upstream by
+// explainLocalSupported.
 //
 // Per pattern, the SQL is roughly:
 //
@@ -553,7 +600,7 @@ func buildExplainUsersetLoopStmt(plan CheckPlan, blocks CheckBlocks, pattern Use
 	// relation) on pattern.SubjectType with the extracted object id from
 	// the grant tuple as the parent object.
 	dispatcherCall := fmt.Sprintf(
-		"%s(p_subject_type, p_subject_id, %s, %s, v_userset_grant.group_id, p_visited || ARRAY[v_key])",
+		"%s(p_subject_type, p_subject_id, %s, %s, v_userset_grant.group_id, p_visited || ARRAY[v_key], p_max_nodes)",
 		sqldsl.PrefixIdent("explain_permission_internal", plan.DatabaseSchema),
 		sqldsl.QuoteLiteral(pattern.SubjectRelation),
 		sqldsl.QuoteLiteral(pattern.SubjectType),
@@ -620,17 +667,11 @@ func buildExplainUsersetGrantSelect(plan CheckPlan, pattern UsersetPattern) Sele
 // all succeed returns; misses append a failure NodeIntersection to
 // v_attempts so the final union shows what was tried.
 //
-// Parts handled in slice 1.5:
-//   - Regular relation parts (`part.Relation` set, no IsParent, no
-//     ExcludedRelation).
-//
-// Parts that require additional renderer work and are NOT handled here:
-//   - IsParent / ParentRelation parts (intersection-of-TTU)
-//   - Parts with ExcludedRelation (intersection-of-exclusion)
-//
-// `explainSupportsIntersection` upstream gates relations whose groups
-// contain unsupported parts so the dispatcher routes them to the no-entry
-// sentinel rather than emitting an incorrect intersection trace.
+// Parts handled here are regular relation parts (`part.Relation` set, no
+// IsThis, no ParentRelation, no ExcludedRelation). Parts with any of those
+// flags require renderer work not yet shipped; intersectionGroupsAreSimple
+// upstream gates relations carrying them so the dispatcher routes them to
+// the no-entry sentinel rather than emitting an incorrect intersection trace.
 func buildExplainIntersectionAttempts(plan CheckPlan, blocks CheckBlocks) []Stmt {
 	if len(blocks.IntersectionGroups) == 0 {
 		return nil
@@ -687,7 +728,7 @@ func buildExplainIntersectionGroupStmts(plan CheckPlan, blocks CheckBlocks, grou
 // the trace into v_intersection_children, and update v_intersection_pass.
 func buildExplainIntersectionPartStmts(plan CheckPlan, part IntersectionPartCheck) []Stmt {
 	dispatcherCall := fmt.Sprintf(
-		"%s(p_subject_type, p_subject_id, %s, %s, p_object_id, p_visited || ARRAY[v_key])",
+		"%s(p_subject_type, p_subject_id, %s, %s, p_object_id, p_visited || ARRAY[v_key], p_max_nodes)",
 		sqldsl.PrefixIdent("explain_permission_internal", plan.DatabaseSchema),
 		sqldsl.QuoteLiteral(part.Relation),
 		sqldsl.QuoteLiteral(plan.ObjectType),
@@ -697,6 +738,7 @@ func buildExplainIntersectionPartStmts(plan CheckPlan, part IntersectionPartChec
 		Comment{Text: "Intersection part: " + part.Relation},
 		Assign{Name: "v_child_trace", Value: Raw("COALESCE(" + dispatcherCall + ", '{}'::jsonb)")},
 		Assign{Name: "v_node_count", Value: Raw("v_node_count + COALESCE((v_child_trace->>'node_count')::INTEGER, 0)")},
+		explainTruncationBailout(plan),
 		Assign{Name: "v_intersection_children", Value: Raw("v_intersection_children || jsonb_build_array(v_child_trace->'root')")},
 		If{
 			Cond: NotExpr{Expr: Raw("COALESCE((v_child_trace->>'result')::boolean, FALSE)")},
@@ -785,7 +827,7 @@ func buildExplainTraceRoot(plan CheckPlan, resultExpr, rootExpr string) string {
     'subject', %s,
     'result', %s,
     'root', %s,
-    'truncated', false,
+    'truncated', v_truncated,
     'node_count', v_node_count)`,
 		BuildObjectIdentExpr(sqldsl.QuoteLiteral(plan.ObjectType), "p_object_id"),
 		sqldsl.QuoteLiteral(plan.Relation),
@@ -805,33 +847,20 @@ func explainFunctionName(objectType, relation string) string {
 // ComputeExplainEligibility's fixed point. Transitive closure-relation
 // dependencies are handled by the wrapper, not here.
 //
-// Subsequent Stage 1 slices drop conditions from this predicate as the
-// renderer learns more branches. Slice 1.2 drops the
-// ComplexClosureRelations gate — the renderer now recursively calls
-// sibling explain_* — but the wrapper still gates relations whose
-// dependencies are themselves not yet supported.
+// Complex userset patterns (recursive membership) and intersection groups
+// whose parts carry IsThis / ParentRelation / ExcludedRelation are not yet
+// supported and disqualify the relation.
 func explainLocalSupported(a RelationAnalysis) bool {
 	if a.HasComplexUsersetPatterns {
-		// Slice 1.4 ships only simple userset patterns (tuple JOIN style);
-		// complex patterns route the userset check through
-		// check_permission_internal for membership verification and need
-		// extra renderer support that lands in a follow-up slice.
 		return false
 	}
 	f := a.Features
 	if f.HasIntersection && !intersectionGroupsAreSimple(a.IntersectionGroups) {
-		// Slice 1.5 handles intersection groups whose parts are simple
-		// relation references. Groups with IsThis ([user] direct),
-		// IsParent (TTU-in-intersection), or per-part ExcludedRelation
-		// (exclusion-in-intersection) require renderer extensions that
-		// haven't landed yet.
 		return false
 	}
-	// HasExclusion (slice 1.5) is handled by emitExplainSuccessReturn: every
+	// HasExclusion is handled by emitExplainSuccessReturn: every
 	// success-return path checks blocks.ExclusionCheck and wraps the
-	// outcome in a NodeExclusion. No eligibility constraint because the
-	// exclusion predicate evaluates via check_permission_internal which is
-	// always installed.
+	// outcome in a NodeExclusion.
 	return f.HasDirect || f.HasImplied || f.HasRecursive || f.HasUserset || f.HasIntersection || f.HasExclusion
 }
 
@@ -923,9 +952,9 @@ func ComputeExplainEligibility(analyses []RelationAnalysis) map[string]map[strin
 // list from the schema's `parent: [type, ...]` declaration; an empty list
 // shouldn't occur. If it ever does, the FOR-loop driver query would
 // enumerate every linking tuple regardless of parent_type, and the
-// dispatcher would route any unknown parent_type to its no-entry
-// sentinel — structurally valid but a weaker UX than the explicit
-// "not yet supported" label.
+// dispatcher would route any unknown parent_type to its no-entry sentinel
+// — structurally valid but a weaker UX than the explicit "not yet
+// supported" label.
 func anyExplainDepIneligible(a RelationAnalysis, eligible map[string]map[string]bool) bool {
 	for _, dep := range a.ComplexClosureRelations {
 		if !eligible[a.ObjectType][dep] {

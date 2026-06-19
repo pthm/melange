@@ -17,23 +17,25 @@ import (
 // for the request-path permission decision. Use Check for hot-path
 // authorization.
 //
-// # Stage 1 slice 1 scope
+// # Coverage
 //
-// The first slice of explain codegen covers relations whose access resolves
-// through a single direct/implied tuple SELECT (the relation closure list
-// inlined into the WHERE clause). Relations that require usersets, TTU,
-// intersection, exclusion, or recursive function calls route through a
-// "not yet supported" sentinel — the returned trace will have
-// Result=false and a root label flagging the limitation. Future slices fill
-// in those branches.
+// Explain agrees with Check across direct grants, implied (closure-list and
+// recursive), userset references, TTU (`relation from parent`),
+// intersection (`a and b`), and exclusion (`a but not b`). A few advanced
+// patterns are still gated to the "not yet supported" sentinel:
+// intersection groups with `[user]`-direct / TTU-in-intersection /
+// exclusion-in-intersection parts, and complex userset patterns where
+// membership resolution needs check_permission_internal.
 //
-// # Option handling
+// # Truncation
 //
-// WithExplainMaxNodes is accepted but not yet enforced at the SQL layer in
-// this codegen version; the generated functions don't truncate. The option
-// is plumbed for forward compatibility — once truncation lands it will be
-// honoured as `SET LOCAL melange.max_explain_nodes`. Setting it today is a
-// no-op that does not error.
+// When the schema can produce a large trace, pass WithExplainMaxNodes(n)
+// to cap the response. The cap is also honourable as a session GUC:
+// `SET melange.max_explain_nodes = N;` then plain Explain calls inherit
+// the limit. Both the per-call argument and the session GUC override the
+// built-in default (100). On truncation the returned Trace has
+// `Truncated == true` and ends in a NodeTruncated subtree where the
+// budget ran out.
 //
 // # Validation
 //
@@ -45,7 +47,7 @@ import (
 // Returns nil and an error if validation, the dispatcher call, or JSON
 // deserialisation fails.
 func (c *Checker) Explain(ctx context.Context, subject SubjectLike, relation RelationLike, object ObjectLike, opts ...ExplainOption) (*Trace, error) {
-	_ = applyExplain(opts) // see "Option handling" — limits land in a follow-up slice
+	resolved := applyExplain(opts)
 
 	subj := subject.FGASubject()
 	rel := relation.FGARelation()
@@ -62,10 +64,15 @@ func (c *Checker) Explain(ctx context.Context, subject SubjectLike, relation Rel
 		}
 	}
 
+	var maxNodes any
+	if resolved.maxNodes > 0 {
+		maxNodes = resolved.maxNodes
+	}
+
 	var raw []byte
 	err := c.q.QueryRowContext(ctx,
-		fmt.Sprintf("SELECT %s($1, $2, $3, $4, $5)::text", prefixIdent("explain_permission", c.databaseSchema)),
-		subj.Type, subj.ID, rel, obj.Type, obj.ID,
+		fmt.Sprintf("SELECT %s($1, $2, $3, $4, $5, $6)::text", prefixIdent("explain_permission", c.databaseSchema)),
+		subj.Type, subj.ID, rel, obj.Type, obj.ID, maxNodes,
 	).Scan(&raw)
 	if err != nil {
 		return nil, c.mapError("explain_permission", err)

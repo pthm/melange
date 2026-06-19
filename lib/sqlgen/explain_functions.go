@@ -6,7 +6,7 @@ import (
 	"github.com/pthm/melange/lib/sqlgen/sqldsl"
 )
 
-// Stage 1 Explain orchestration. Mirrors check_functions.go but produces
+// Explain orchestration. Mirrors check_functions.go but produces
 // per-relation explain_* functions and the explain_permission dispatcher.
 //
 // Public entry: GenerateSQLWithOptions calls generateExplainFunction per
@@ -14,6 +14,35 @@ import (
 // schema. The dispatcher routes (object_type, relation) → explain_{type}_{relation},
 // or returns a "no entry" trace when nothing matches so callers can deserialise
 // a stable shape even on unknown inputs.
+
+// explainDispatcherInternalArgs is the explain dispatcher's internal
+// signature. Mirrors explainFunctionArgs but with p_relation /
+// p_object_type added; the dispatcher routes by these.
+func explainDispatcherInternalArgs() []FuncArg {
+	return []FuncArg{
+		{Name: "p_subject_type", Type: "TEXT"},
+		{Name: "p_subject_id", Type: "TEXT"},
+		{Name: "p_relation", Type: "TEXT"},
+		{Name: "p_object_type", Type: "TEXT"},
+		{Name: "p_object_id", Type: "TEXT"},
+		{Name: "p_visited", Type: "TEXT []", Default: EmptyArray{}},
+		{Name: "p_max_nodes", Type: "INTEGER", Default: Raw("NULL")},
+	}
+}
+
+// explainDispatcherPublicArgs drops the internal-only p_visited (always
+// starts empty at the public entry) and keeps p_max_nodes so SDK callers
+// can request truncation without manipulating session state.
+func explainDispatcherPublicArgs() []FuncArg {
+	return []FuncArg{
+		{Name: "p_subject_type", Type: "TEXT"},
+		{Name: "p_subject_id", Type: "TEXT"},
+		{Name: "p_relation", Type: "TEXT"},
+		{Name: "p_object_type", Type: "TEXT"},
+		{Name: "p_object_id", Type: "TEXT"},
+		{Name: "p_max_nodes", Type: "INTEGER", Default: Raw("NULL")},
+	}
+}
 
 func generateExplainFunction(a RelationAnalysis, inline InlineSQLData, databaseSchema string, complexityByRelation map[string]map[string]int) (string, error) {
 	plan := BuildCheckPlanWithOrdering(a, inline, databaseSchema, false, complexityByRelation)
@@ -74,7 +103,7 @@ func renderExplainDispatcherWithCases(databaseSchema string, cases []DispatcherC
 	internalFn := PlpgsqlFunction{
 		Schema:  databaseSchema,
 		Name:    "explain_permission_internal",
-		Args:    dispatcherInternalArgs(),
+		Args:    explainDispatcherInternalArgs(),
 		Returns: "JSONB",
 		Body: []Stmt{
 			Comment{Text: "Depth limit check shared with check_permission_internal"},
@@ -99,9 +128,9 @@ func renderExplainDispatcherWithCases(databaseSchema string, cases []DispatcherC
 	publicFn := SqlFunction{
 		Schema:  databaseSchema,
 		Name:    "explain_permission",
-		Args:    dispatcherPublicArgs(),
+		Args:    explainDispatcherPublicArgs(),
 		Returns: "JSONB",
-		Body:    Raw("SELECT " + sqldsl.PrefixIdent("explain_permission_internal", databaseSchema) + "(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, ARRAY[]::TEXT[])"),
+		Body:    Raw("SELECT " + sqldsl.PrefixIdent("explain_permission_internal", databaseSchema) + "(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, ARRAY[]::TEXT[], p_max_nodes)"),
 		Header: []string{
 			"Generated public dispatcher for explain_permission",
 			"Companion to check_permission — returns a JSONB Trace describing",
@@ -121,7 +150,7 @@ func renderEmptyExplainDispatcher(databaseSchema string) string {
 	internalFn := SqlFunction{
 		Schema:  databaseSchema,
 		Name:    "explain_permission_internal",
-		Args:    dispatcherInternalArgs(),
+		Args:    explainDispatcherInternalArgs(),
 		Returns: "JSONB",
 		Body:    Raw(body),
 		Header: []string{
@@ -133,7 +162,7 @@ func renderEmptyExplainDispatcher(databaseSchema string) string {
 	publicFn := SqlFunction{
 		Schema:  databaseSchema,
 		Name:    "explain_permission",
-		Args:    dispatcherPublicArgs(),
+		Args:    explainDispatcherPublicArgs(),
 		Returns: "JSONB",
 		Body:    Raw(body),
 	}
@@ -155,7 +184,7 @@ func buildExplainDispatcherCaseExpr(cases []DispatcherCase) CaseExpr {
 		result := Func{
 			Schema: c.DatabaseSchema,
 			Name:   c.CheckFunctionName,
-			Args:   []Expr{SubjectType, SubjectID, ObjectID, Visited},
+			Args:   []Expr{SubjectType, SubjectID, ObjectID, Visited, Raw("p_max_nodes")},
 		}
 		whens = append(whens, CaseWhen{Cond: cond, Result: result})
 	}

@@ -62,9 +62,6 @@ type GeneratedSQL struct {
 	// ExplainFunctions contains CREATE OR REPLACE FUNCTION statements for the
 	// per-relation explain_{type}_{relation} functions. Each returns JSONB
 	// shaped to melange.Trace and is the codegen companion to check_*.
-	// Stage 1 (slice 1): only direct-grant matches and cycle detection are
-	// implemented in the body; implied / userset / TTU / intersection paths
-	// will be filled in by subsequent slices.
 	ExplainFunctions []string
 
 	// ExplainDispatcher contains the explain_permission public + internal

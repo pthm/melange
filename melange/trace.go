@@ -22,6 +22,13 @@ type Trace struct {
 	Root *Node `json:"root"`
 
 	// Truncated is set when the trace was capped by p_max_nodes / p_max_leaf.
+	// May be true even when Root is not a NodeTruncated: a per-call check
+	// that fires mid-recursion emits NodeTruncated as the root, but a
+	// late-stage overshoot (only local failure-node appends crossed the
+	// budget) flips the envelope flag while still returning the union of
+	// attempted branches as the root. Consumers should consult this
+	// field rather than only inspecting Root.Type to decide whether the
+	// trace is partial.
 	Truncated bool `json:"truncated,omitempty"`
 
 	// NodeCount is the number of resolution nodes the function visited

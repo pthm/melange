@@ -5,18 +5,16 @@ import (
 	"testing"
 )
 
-// Slice 1.2 introduced the transitive eligibility sweep so a relation's
+// computeExplainEligibility runs a transitive sweep so a relation's
 // renderer can recurse into a sibling explain_* without the dispatcher ever
 // naming a function that wasn't generated. The fixed point handles three
 // cases: locally supported with no deps, locally supported with all deps
 // supported, and locally supported but depended on an unsupported relation
 // (the wrapper must be marked ineligible too).
 //
-// In Stage 1 slice 1.2 no real schema activates the implied-attempt code
-// path because every relation that lands in ComplexClosureRelations has at
-// least one feature (Userset/Exclusion/Intersection/Recursive) the
-// renderer still gates out. These tests use synthetic analyses to pin the
-// machinery; slice 1.3+ will exercise it via real fixtures once TTU lands.
+// The implied-attempt path is exercised via synthetic analyses here to pin
+// the machinery; real schemas exercise it once TTU / userset / intersection
+// fixtures land.
 
 func TestComputeExplainEligibility_LocalOnly(t *testing.T) {
 	blocked := mkAnalysis("doc", "blocked", RelationFeatures{HasDirect: true}, false)
@@ -176,9 +174,7 @@ func TestComputeExplainEligibility_PerObjectTypeIsolation(t *testing.T) {
 // with a ComplexClosureRelation entry so the implied-attempt block actually
 // renders. Pins the SQL shape: assignment of v_child_trace, the
 // (result->>'result')::boolean check, NodeImplied wrapping the child's root,
-// and the failure-attempt append. Real OpenFGA schemas don't hit this path
-// in slice 1.2 (every ComplexClosureRelation candidate is itself ineligible)
-// but the code is exercised here so the contract is locked.
+// and the failure-attempt append.
 func TestRenderExplainFunction_ImpliedFunctionCallEmits(t *testing.T) {
 	a := mkAnalysis("doc", "viewer", RelationFeatures{HasDirect: true, HasImplied: true}, false)
 	a.SatisfyingRelations = []string{"viewer", "editor"}
@@ -202,10 +198,10 @@ func TestRenderExplainFunction_ImpliedFunctionCallEmits(t *testing.T) {
 		// New local declared only when the body recurses
 		"v_child_trace JSONB",
 		// Recursive call to sibling explain function, guarded by COALESCE
-		// so a NULL return is normalised to an empty object (slice 1.3+
-		// will recurse for real and a malformed callee should surface as
-		// a failure attempt, not a null-children NodeImplied).
-		"v_child_trace := COALESCE(explain_doc_editor(p_subject_type, p_subject_id, p_object_id, p_visited || ARRAY[v_key]), '{}'::jsonb)",
+		// so a NULL return is normalised to an empty object (a malformed
+		// callee surfaces as a failure attempt, not a null-children
+		// NodeImplied).
+		"v_child_trace := COALESCE(explain_doc_editor(p_subject_type, p_subject_id, p_object_id, p_visited || ARRAY[v_key], p_max_nodes), '{}'::jsonb)",
 		// Tally the child's node count into our running counter
 		"v_node_count := v_node_count + COALESCE((v_child_trace->>'node_count')::INTEGER, 0)",
 		// Success path: wrap child's root in NodeImplied
@@ -224,9 +220,9 @@ func TestRenderExplainFunction_ImpliedFunctionCallEmits(t *testing.T) {
 	}
 }
 
-// TestRenderExplainFunction_TTUFlow exercises slice 1.3's FOR-loop
-// emission. The fixture is a TTU relation that recurses into the
-// dispatcher (explain_permission_internal) for the parent's relation.
+// TestRenderExplainFunction_TTUFlow exercises the TTU FOR-loop emission.
+// The fixture is a TTU relation that recurses into the dispatcher
+// (explain_permission_internal) for the parent's relation.
 func TestRenderExplainFunction_TTUFlow(t *testing.T) {
 	a := mkAnalysis("repository", "can_admin", RelationFeatures{HasDirect: true, HasRecursive: true}, false)
 	a.SatisfyingRelations = []string{"can_admin"}
@@ -260,7 +256,7 @@ func TestRenderExplainFunction_TTUFlow(t *testing.T) {
 		"link.relation IN ('org')",
 		"link.subject_type IN ('organization')",
 		// Dispatcher call carries the parent relation and threads visited
-		"explain_permission_internal(p_subject_type, p_subject_id, 'can_admin', v_parent_link.parent_type, v_parent_link.parent_id, p_visited || ARRAY[v_key])",
+		"explain_permission_internal(p_subject_type, p_subject_id, 'can_admin', v_parent_link.parent_type, v_parent_link.parent_id, p_visited || ARRAY[v_key], p_max_nodes)",
 		// NodeTTU wrapping
 		"'type', 'ttu'",
 		"'via org → '",
@@ -275,10 +271,10 @@ func TestRenderExplainFunction_TTUFlow(t *testing.T) {
 	}
 }
 
-// TestRenderExplainFunction_UsersetFlow exercises slice 1.4's FOR-loop
-// emission for userset references ([group#member]). The fixture
-// declares one userset pattern; the renderer must emit one FOR loop
-// over grant tuples whose subject is a userset reference.
+// TestRenderExplainFunction_UsersetFlow exercises the FOR-loop emission for
+// userset references ([group#member]). The fixture declares one userset
+// pattern; the renderer must emit one FOR loop over grant tuples whose
+// subject is a userset reference.
 func TestRenderExplainFunction_UsersetFlow(t *testing.T) {
 	a := mkAnalysis("document", "viewer", RelationFeatures{HasDirect: true, HasUserset: true}, false)
 	a.SatisfyingRelations = []string{"viewer"}
@@ -311,7 +307,7 @@ func TestRenderExplainFunction_UsersetFlow(t *testing.T) {
 		"position('#' in grant_tuple.subject_id) > 0",
 		"split_part(grant_tuple.subject_id, '#', 2) = 'member'",
 		// Dispatcher call recurses into the membership relation
-		"explain_permission_internal(p_subject_type, p_subject_id, 'member', 'group', v_userset_grant.group_id, p_visited || ARRAY[v_key])",
+		"explain_permission_internal(p_subject_type, p_subject_id, 'member', 'group', v_userset_grant.group_id, p_visited || ARRAY[v_key], p_max_nodes)",
 		// NodeUserset wrap with informative label
 		"'type', 'userset'",
 		"'via [group#member] → group:'",
@@ -388,10 +384,9 @@ func TestRenderExplainFunction_UsersetSubjectPreCheck(t *testing.T) {
 	}
 }
 
-// TestRenderExplainFunction_IntersectionFlow exercises slice 1.5's
-// intersection attempt block: each part recursively calls
-// explain_permission_internal, results AND-aggregate, and the trace
-// wraps part roots in NodeIntersection.
+// TestRenderExplainFunction_IntersectionFlow exercises the intersection
+// attempt block: each part recursively calls explain_permission_internal,
+// results AND-aggregate, and the trace wraps part roots in NodeIntersection.
 func TestRenderExplainFunction_IntersectionFlow(t *testing.T) {
 	a := mkAnalysis("document", "viewer", RelationFeatures{HasDirect: true, HasIntersection: true}, false)
 	a.SatisfyingRelations = []string{"viewer"}
@@ -418,8 +413,8 @@ func TestRenderExplainFunction_IntersectionFlow(t *testing.T) {
 		"v_intersection_pass := TRUE",
 		"-- Intersection part: writer",
 		"-- Intersection part: editor",
-		"explain_permission_internal(p_subject_type, p_subject_id, 'writer', 'document', p_object_id, p_visited || ARRAY[v_key])",
-		"explain_permission_internal(p_subject_type, p_subject_id, 'editor', 'document', p_object_id, p_visited || ARRAY[v_key])",
+		"explain_permission_internal(p_subject_type, p_subject_id, 'writer', 'document', p_object_id, p_visited || ARRAY[v_key], p_max_nodes)",
+		"explain_permission_internal(p_subject_type, p_subject_id, 'editor', 'document', p_object_id, p_visited || ARRAY[v_key], p_max_nodes)",
 		"v_intersection_children := v_intersection_children || jsonb_build_array(v_child_trace->'root')",
 		"v_intersection_pass := FALSE",
 		"'type', 'intersection'",
@@ -461,6 +456,79 @@ func TestRenderExplainFunction_ExclusionWrapsSuccess(t *testing.T) {
 		// blocks.ExclusionCheck for a simple exclusion is an EXISTS over excluded tuples
 		"FROM melange_tuples AS excl",
 		"excl.relation IN ('banned')",
+	}
+	for _, w := range wants {
+		if !strings.Contains(got, w) {
+			t.Errorf("missing %q in generated SQL:\n%s", w, got)
+		}
+	}
+}
+
+// TestRenderExplainFunction_WildcardEmission pins the wildcard branch in
+// the direct attempt: the success node is a CASE expression picking
+// NodeWildcard when v_evidence_tuple.subject_id = '*' and NodeDirect
+// otherwise.
+func TestRenderExplainFunction_WildcardEmission(t *testing.T) {
+	a := mkAnalysis("document", "banned", RelationFeatures{HasDirect: true, HasWildcard: true}, false)
+	a.SatisfyingRelations = []string{"banned"}
+
+	plan := BuildCheckPlanWithOrdering(a, InlineSQLData{}, "", false, nil)
+	blocks, err := BuildCheckBlocks(plan)
+	if err != nil {
+		t.Fatalf("BuildCheckBlocks: %v", err)
+	}
+	got, err := RenderExplainFunction(plan, blocks)
+	if err != nil {
+		t.Fatalf("RenderExplainFunction: %v", err)
+	}
+
+	wants := []string{
+		// CASE picks wildcard sentinel when the evidence carries '*'
+		"CASE WHEN v_evidence_tuple.subject_id = '*' THEN",
+		"'type', 'wildcard'",
+		"'type', v_evidence_tuple.subject_type",
+		"'id', '*'",
+		// ELSE falls through to the standard direct node
+		"'type', 'direct'",
+	}
+	for _, w := range wants {
+		if !strings.Contains(got, w) {
+			t.Errorf("missing %q in generated SQL:\n%s", w, got)
+		}
+	}
+}
+
+// TestRenderExplainFunction_TruncationDeclsAndCheck pins the truncation
+// infrastructure: the function signature carries p_max_nodes, the body
+// declares v_max_nodes resolving to COALESCE(p_max_nodes, GUC, 100),
+// v_truncated tracks the bail flag, and the truncation check fires after
+// each recursive accumulation.
+func TestRenderExplainFunction_TruncationDeclsAndCheck(t *testing.T) {
+	a := mkAnalysis("doc", "viewer", RelationFeatures{HasDirect: true, HasImplied: true}, false)
+	a.SatisfyingRelations = []string{"viewer", "editor"}
+	a.ComplexClosureRelations = []string{"editor"}
+	plan := BuildCheckPlanWithOrdering(a, InlineSQLData{}, "", false, nil)
+	blocks, err := BuildCheckBlocks(plan)
+	if err != nil {
+		t.Fatalf("BuildCheckBlocks: %v", err)
+	}
+	got, err := RenderExplainFunction(plan, blocks)
+	if err != nil {
+		t.Fatalf("RenderExplainFunction: %v", err)
+	}
+
+	wants := []string{
+		// Signature
+		"p_max_nodes INTEGER DEFAULT NULL",
+		// Decls
+		"v_max_nodes INTEGER := COALESCE(p_max_nodes, current_setting('melange.max_explain_nodes', true)::INTEGER, 100)",
+		"v_truncated BOOLEAN := FALSE",
+		// Top-of-body truncation guard
+		"IF v_node_count >= v_max_nodes THEN",
+		"'type', 'truncated'",
+		"v_truncated := TRUE",
+		// Per-call truncation check after accumulation
+		"v_node_count := v_node_count + COALESCE((v_child_trace->>'node_count')::INTEGER, 0)",
 	}
 	for _, w := range wants {
 		if !strings.Contains(got, w) {

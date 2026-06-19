@@ -225,6 +225,94 @@ func TestExplain_TTUFailureRecordsAttempts(t *testing.T) {
 	})
 }
 
+// TestExplain_WildcardSentinel exercises slice 1.6's NodeWildcard
+// emission. The test schema's `repository.banned: [user:*]` accepts a
+// wildcard subject; when alice is checked, the trace should report a
+// NodeWildcard rather than a regular NodeDirect.
+func TestExplain_WildcardSentinel(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	runTestWithSchema(t, func(t *testing.T, databaseSchema string) {
+		db := testutil.DBWithDatabaseSchema(t, databaseSchema)
+		ctx := context.Background()
+
+		var userID, ownerID, orgID, repoID int64
+		require.NoError(t, db.QueryRowContext(ctx,
+			`INSERT INTO users (username) VALUES ('wildcard_alice') RETURNING id`).Scan(&userID))
+		require.NoError(t, db.QueryRowContext(ctx,
+			`INSERT INTO users (username) VALUES ('wildcard_owner') RETURNING id`).Scan(&ownerID))
+		require.NoError(t, db.QueryRowContext(ctx,
+			`INSERT INTO organizations (name) VALUES ('wildcard_org') RETURNING id`).Scan(&orgID))
+		_, err := db.ExecContext(ctx,
+			`INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'owner')`,
+			orgID, ownerID)
+		require.NoError(t, err)
+		require.NoError(t, db.QueryRowContext(ctx,
+			`INSERT INTO repositories (name, organization_id) VALUES ('wildcard_repo', $1) RETURNING id`, orgID).Scan(&repoID))
+		// Wildcard ban: applies to all users via the wildcard subject.
+		_, err = db.ExecContext(ctx,
+			`INSERT INTO repository_bans (repository_id, banned_all) VALUES ($1, true)`, repoID)
+		require.NoError(t, err)
+
+		checker := melange.NewChecker(db, melange.WithDatabaseSchema(databaseSchema))
+		trace, err := checker.Explain(ctx,
+			melange.Object{Type: "user", ID: strconv.FormatInt(userID, 10)},
+			melange.Relation("banned"),
+			melange.Object{Type: "repository", ID: strconv.FormatInt(repoID, 10)},
+		)
+		require.NoError(t, err)
+		require.NotNil(t, trace.Result)
+		assert.True(t, *trace.Result, "wildcard ban should match alice")
+
+		require.NotNil(t, trace.Root)
+		assert.Equal(t, melange.NodeWildcard, trace.Root.Type,
+			"trace should surface the wildcard sentinel, not NodeDirect")
+		require.Len(t, trace.Root.Users, 1)
+		assert.Equal(t, "user", trace.Root.Users[0].Type)
+		assert.Equal(t, "*", trace.Root.Users[0].ID)
+	})
+}
+
+// TestExplain_TruncationCapsTrace exercises slice 1.6's truncation: when
+// the per-call max-nodes is set low enough that accumulation crosses it,
+// the returned trace's envelope marks `Truncated=true`. The root may be
+// NodeTruncated (when the per-call check fires mid-recursion) or a
+// regular union with the envelope flag set (when local appends only
+// overshoot at the very end); we only assert the envelope flag here.
+func TestExplain_TruncationCapsTrace(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	runTestWithSchema(t, func(t *testing.T, databaseSchema string) {
+		db := testutil.DBWithDatabaseSchema(t, databaseSchema)
+		ctx := context.Background()
+
+		var userID, orgID, repoID int64
+		require.NoError(t, db.QueryRowContext(ctx,
+			`INSERT INTO users (username) VALUES ('trunc_user') RETURNING id`).Scan(&userID))
+		require.NoError(t, db.QueryRowContext(ctx,
+			`INSERT INTO organizations (name) VALUES ('trunc_org') RETURNING id`).Scan(&orgID))
+		require.NoError(t, db.QueryRowContext(ctx,
+			`INSERT INTO repositories (name, organization_id) VALUES ('trunc_repo', $1) RETURNING id`, orgID).Scan(&repoID))
+
+		// Cap the budget at 1 node. The first recursive call inside any
+		// TTU resolution will exceed it, forcing the body to return a
+		// NodeTruncated trace.
+		checker := melange.NewChecker(db, melange.WithDatabaseSchema(databaseSchema))
+		trace, err := checker.Explain(ctx,
+			melange.Object{Type: "user", ID: strconv.FormatInt(userID, 10)},
+			melange.Relation("can_deploy"),
+			melange.Object{Type: "repository", ID: strconv.FormatInt(repoID, 10)},
+			melange.WithExplainMaxNodes(1),
+		)
+		require.NoError(t, err)
+		assert.True(t, trace.Truncated, "trace should be marked truncated")
+	})
+}
+
 // TestExplain_UnknownPair confirms the dispatcher's no-entry sentinel: when
 // the schema doesn't define (object_type, relation), the trace is still
 // structurally valid (deserialises) and clearly marked as a failure.

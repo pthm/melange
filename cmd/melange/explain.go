@@ -39,9 +39,8 @@ example:
   melange explain user:bob can_write repository:42
 
 Use --format=json to emit the raw JSONB trace; otherwise a unicode-tree
-pretty-print is rendered to stdout. --max-nodes is reserved for the
-node-count cap; the generated functions in this codegen version do not
-yet enforce it (the flag is accepted but currently a no-op).`,
+pretty-print is rendered to stdout. --max-nodes caps the trace size;
+when the cap is hit the rendered output ends in "... truncated".`,
 	Example: `  # Inspect a successful permission
   melange explain user:alice viewer document:1 --db postgres://localhost/mydb
 
@@ -78,7 +77,7 @@ func init() {
 	f.StringVar(&explainDB, "db", "", "database URL")
 	f.StringVar(&explainDBSchema, "db-schema", "public", "database schema")
 	f.StringVar(&explainFormat, "format", "tree", "output format: tree (default) or json")
-	f.IntVar(&explainMaxNodes, "max-nodes", 0, "reserved: node-count cap (not yet enforced in this codegen version)")
+	f.IntVar(&explainMaxNodes, "max-nodes", 0, "cap total nodes in the trace (0 = session GUC melange.max_explain_nodes or built-in 100)")
 }
 
 // parseTypedIdent splits "<type>:<id>" into a melange.Object. Empty type or id
