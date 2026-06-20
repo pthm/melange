@@ -346,15 +346,15 @@ melange explain user:alice viewer document:1 --db postgres://localhost/mydb
 
 **Tree output:**
 
-```
+{{< explaintree >}}
 ✓ user:alice has viewer on document:1
 └── via userset: via [group#member] → group:engineering
     └── direct: user:alice → member → group:engineering
-```
+{{< /explaintree >}}
 
 **Failure with attempted branches:**
 
-```
+{{< explaintree >}}
 ✗ user:bob does NOT have viewer on document:1
 └── union of 3 branches
     ├── ✗ no direct grant
@@ -362,7 +362,7 @@ melange explain user:alice viewer document:1 --db postgres://localhost/mydb
     └── ✗ via userset: via [group#member] → group:engineering
         └── union of 1 branches
             └── ✗ no direct grant
-```
+{{< /explaintree >}}
 
 `--format=json` returns the raw `Trace` JSONB for tooling.
 

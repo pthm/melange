@@ -258,6 +258,31 @@ func TestTrace_EvidenceMultiAndWithChildren(t *testing.T) {
 	}
 }
 
+func TestColor_OffByDefault_OnWhenEnabled(t *testing.T) {
+	result := true
+	tr := &melange.Trace{
+		Subject: "user:alice", Relation: "viewer", Object: "document:1",
+		Result: &result,
+		Root: &melange.Node{
+			Type:     melange.NodeDirect,
+			Evidence: []melange.TupleRef{{SubjectType: "user", SubjectID: "alice", Relation: "viewer", ObjectType: "document", ObjectID: "1"}},
+		},
+	}
+
+	plain := TraceString(tr)
+	if strings.Contains(plain, "\x1b[") {
+		t.Errorf("default output should be plain, got escapes:\n%q", plain)
+	}
+
+	colored := TraceString(tr, WithColor(true))
+	if !strings.Contains(colored, ansiGreen+markerAllow+ansiReset) {
+		t.Errorf("expected green-wrapped ✓ marker; got:\n%q", colored)
+	}
+	if !strings.Contains(colored, ansiGrey+branchLast+ansiReset) {
+		t.Errorf("expected grey-wrapped tree connector; got:\n%q", colored)
+	}
+}
+
 func TestFormatTuple_Stable(t *testing.T) {
 	got := formatTuple(melange.TupleRef{
 		SubjectType: "user", SubjectID: "alice",

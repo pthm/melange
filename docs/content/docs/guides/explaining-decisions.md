@@ -37,12 +37,12 @@ The signature matches `Check` (subject, relation, object) plus variadic `...Expl
 {{< /tab >}}
 
 {{< tab name="CLI" >}}
-```bash
+{{< explaintree >}}
 $ melange explain user:alice viewer document:1 --db postgres://localhost/mydb
 ✓ user:alice has viewer on document:1
 └── via userset: via [group#member] → group:engineering
     └── direct: user:alice → member → group:engineering
-```
+{{< /explaintree >}}
 
 Subject and object use `<type>:<id>` form. The default tree format is for terminals; use `--format=json` for the raw `Trace` JSONB.
 {{< /tab >}}
@@ -65,7 +65,7 @@ On denial, the trace records every attempted branch with `Result: false` on each
 {{< tabs >}}
 
 {{< tab name="CLI" >}}
-```
+{{< explaintree >}}
 $ melange explain user:bob viewer document:1
 ✗ user:bob does NOT have viewer on document:1
 └── union of 3 branches
@@ -76,7 +76,7 @@ $ melange explain user:bob viewer document:1
     └── ✗ via userset: via [group#member] → group:engineering
         └── union of 1 branches
             └── ✗ no direct grant
-```
+{{< /explaintree >}}
 
 The root is a `union` of three attempts: direct grant (no tuple), implied via `editor` (no editor tuple), userset via `[group#member]` (bob isn't in the group). Adding any of the three missing tuples grants `viewer`.
 {{< /tab >}}

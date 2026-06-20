@@ -50,7 +50,7 @@ The migration has not been run, or it was run against a different database or sc
 
 Run `melange explain` to see which branches the engine tried:
 
-```bash
+{{< explaintree >}}
 $ melange explain user:alice viewer document:1 --db postgres://localhost/mydb
 ✗ user:alice does NOT have viewer on document:1
 └── union of 2 branches
@@ -58,7 +58,7 @@ $ melange explain user:alice viewer document:1 --db postgres://localhost/mydb
     └── ✗ implied: implied via editor
         └── union of 1 branches
             └── ✗ no direct grant
-```
+{{< /explaintree >}}
 
 Here neither a direct `viewer` grant nor an implied path via `editor` matched — add a tuple satisfying one of them. See [Explaining Decisions](../explaining-decisions/) for the full guide.
 
@@ -83,11 +83,11 @@ A wildcard subject (`user:*`) is granting broader access than intended.
 
 `melange explain` shows wildcard matches as a `NodeWildcard` sentinel:
 
-```bash
+{{< explaintree >}}
 $ melange explain user:alice can_view document:1
 ✓ user:alice has can_view on document:1
 └── wildcard: user:*
-```
+{{< /explaintree >}}
 
 Find the wildcard tuples:
 

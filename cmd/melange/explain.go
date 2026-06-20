@@ -21,6 +21,7 @@ var (
 	explainDBSchema string
 	explainFormat   string
 	explainMaxNodes int
+	explainColor    string
 )
 
 var explainCmd = &cobra.Command{
@@ -78,6 +79,29 @@ func init() {
 	f.StringVar(&explainDBSchema, "db-schema", "public", "database schema")
 	f.StringVar(&explainFormat, "format", "tree", "output format: tree (default) or json")
 	f.IntVar(&explainMaxNodes, "max-nodes", 0, "cap total nodes in the trace (0 = session GUC melange.max_explain_nodes or built-in 100)")
+	f.StringVar(&explainColor, "color", "auto", "colour output: auto|always|never (auto = stdout-is-TTY and NO_COLOR unset)")
+}
+
+// shouldColorize resolves the --color mode to a boolean. auto detects a TTY
+// on stdout and honours the NO_COLOR convention (https://no-color.org).
+func shouldColorize(mode string) bool {
+	switch strings.ToLower(mode) {
+	case "always":
+		return true
+	case "never":
+		return false
+	case "auto", "":
+		if os.Getenv("NO_COLOR") != "" {
+			return false
+		}
+		fi, err := os.Stdout.Stat()
+		if err != nil {
+			return false
+		}
+		return (fi.Mode() & os.ModeCharDevice) != 0
+	default:
+		return false
+	}
 }
 
 // parseTypedIdent splits "<type>:<id>" into a melange.Object. Empty type or id
@@ -121,7 +145,7 @@ func runExplain(dsn, databaseSchema string, subject melange.Object, relation mel
 		enc.SetIndent("", "  ")
 		return enc.Encode(trace)
 	case "tree", "":
-		render.Trace(os.Stdout, trace)
+		render.Trace(os.Stdout, trace, render.WithColor(shouldColorize(explainColor)))
 		return nil
 	default:
 		return cli.GeneralError("output format", fmt.Errorf("unknown format %q (want tree|json)", format))
