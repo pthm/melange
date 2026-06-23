@@ -60,12 +60,23 @@ type ExpandPlan struct {
 	ObjectType     string
 	Relation       string
 	Rewrites       []ExpandRewrite
+	// Exclusion names the relation in `but not X` when the relation has
+	// a single simple exclusion (e.g., `viewer: writer but not banned`
+	// gives Exclusion="banned"). When set, the renderer wraps the
+	// rewrites-derived tree in `Difference{base, subtract}` where
+	// subtract is a Leaf.Computed pointer to the excluded relation.
+	//
+	// Multi-exclusion patterns (`but not X but not Y`), TTU-excluded
+	// (`but not X from Y`), and intersection-excluded
+	// (`but not (A and B)`) are not yet handled — those relations
+	// route to the dispatcher's empty-leaf sentinel until follow-up
+	// slices land.
+	Exclusion string
 }
 
-// ExpandRewrite is one of the per-rewrite shapes Expand can emit for
-// slice 2.1: either a Direct grant (Leaf.Users via jsonb_agg) or a
-// Computed pointer (Leaf.Computed naming the implied relation). The
-// fields are mutually exclusive; the discriminator is which is non-zero.
+// ExpandRewrite is one of the per-rewrite shapes Expand can emit.
+// Fields are mutually exclusive; the discriminator is which one is
+// non-zero. Slice 2.1 introduced Direct + Computed; 2.2a adds TTU.
 type ExpandRewrite struct {
 	// Direct is the subject-type whitelist for a direct rewrite. nil/empty
 	// means this rewrite is not a direct grant.
@@ -74,6 +85,11 @@ type ExpandRewrite struct {
 	// a computed-userset rewrite. Empty means this rewrite is not a
 	// computed pointer.
 	Computed string
+	// TTU carries the "X from Y" rewrite info. nil means this rewrite is
+	// not a TTU. When set the renderer emits a Leaf.TupleToUserset with
+	// tupleset = "<obj>:#<linking>" and one Computed per linked object
+	// (enumerated at expand time via jsonb_agg over melange_tuples).
+	TTU *ParentRelationInfo
 }
 
 // ComputeExpandEligibility returns, for each (object_type, relation),
@@ -121,6 +137,15 @@ func BuildExpandPlan(a RelationAnalysis, databaseSchema string) (ExpandPlan, boo
 	for _, implied := range a.DirectImpliedBy {
 		plan.Rewrites = append(plan.Rewrites, ExpandRewrite{Computed: implied})
 	}
+	for i := range a.ParentRelations {
+		// Take a pointer to the slice entry so the rewrite captures the
+		// AllowedLinkingTypes / LinkingRelation by reference — the per-
+		// iteration loop variable would be reused otherwise.
+		plan.Rewrites = append(plan.Rewrites, ExpandRewrite{TTU: &a.ParentRelations[i]})
+	}
+	if a.Features.HasExclusion && isSimpleExclusion(a) {
+		plan.Exclusion = a.ExcludedRelations[0]
+	}
 	if len(plan.Rewrites) == 0 {
 		// Relation has no concrete access paths — let the dispatcher
 		// sentinel handle it rather than emitting a structurally empty
@@ -130,26 +155,49 @@ func BuildExpandPlan(a RelationAnalysis, databaseSchema string) (ExpandPlan, boo
 	return plan, true
 }
 
-// expandLocalSupported is the slice 2.1 eligibility predicate. Each
-// follow-up slice drops one of these gates as it adds renderer support.
+// expandLocalSupported is the slice 2.x eligibility predicate. Each
+// slice drops one gate as it adds renderer support — 2.1 covered direct
+// + computed; 2.2a added TTU (Leaf.TupleToUserset); 2.2b adds simple
+// exclusion (Difference); 2.2c adds intersection; 2.3 adds wildcards
+// + userset references.
 func expandLocalSupported(a RelationAnalysis) bool {
 	f := a.Features
 	if f.HasUserset || f.HasWildcard {
 		return false // slice 2.3
 	}
-	if f.HasRecursive {
-		return false // slice 2.2 (TTU)
-	}
 	if f.HasIntersection {
-		return false // slice 2.2
+		return false // slice 2.2c
 	}
-	if f.HasExclusion {
-		return false // slice 2.2
+	if f.HasExclusion && !isSimpleExclusion(a) {
+		return false // multi-exclusion / TTU-excluded / intersection-excluded
 	}
 	if a.HasComplexUsersetPatterns {
 		return false // follow-up
 	}
-	return f.HasDirect || f.HasImplied
+	return f.HasDirect || f.HasImplied || f.HasRecursive
+}
+
+// isSimpleExclusion is true when the relation has exactly one simple
+// "but not X" exclusion — a single relation name in ExcludedRelations,
+// no TTU exclusions, no intersection-group exclusions. The single
+// exclusion can be either simple (tuple-lookup-resolvable) or complex
+// (function-call-resolvable) because Expand emits a Computed pointer
+// either way and the caller chases it; we don't actually evaluate the
+// exclusion at the Expand call site.
+//
+// This is the predicate gate for slice 2.2b. The exotic variants
+// remain gated until follow-up slices land.
+func isSimpleExclusion(a RelationAnalysis) bool {
+	if len(a.ExcludedRelations) != 1 {
+		return false
+	}
+	if len(a.ExcludedParentRelations) > 0 {
+		return false
+	}
+	if len(a.ExcludedIntersectionGroups) > 0 {
+		return false
+	}
+	return true
 }
 
 // RenderExpandFunction is the entry point for expand_* function
@@ -171,10 +219,26 @@ func RenderExpandFunction(plan ExpandPlan) string {
 		rootValue = BuildExpandUnionJSON(children)
 	}
 
-	rootNode := BuildExpandNodeJSON(
-		BuildExpandNodeName(Lit(plan.ObjectType).SQL(), "p_object_id", plan.Relation),
-		rootValue,
-	)
+	nameExpr := BuildExpandNodeName(Lit(plan.ObjectType).SQL(), "p_object_id", plan.Relation)
+
+	if plan.Exclusion != "" {
+		// Wrap the rewrites-derived tree as the Difference's base. The
+		// base node shares the parent relation's name (it represents
+		// "the relation without exclusion applied"); the subtract names
+		// the excluded relation. OpenFGA's named-slot shape — base /
+		// subtract are addressable by key rather than position.
+		baseNode := BuildExpandNodeJSON(nameExpr, rootValue)
+
+		subtractValue := BuildExpandComputedLeafJSON(
+			BuildExpandNodeName(Lit(plan.ObjectType).SQL(), "p_object_id", plan.Exclusion))
+		subtractNameExpr := BuildExpandNodeName(
+			Lit(plan.ObjectType).SQL(), "p_object_id", plan.Exclusion)
+		subtractNode := BuildExpandNodeJSON(subtractNameExpr, subtractValue)
+
+		rootValue = BuildExpandDifferenceJSON(baseNode, subtractNode)
+	}
+
+	rootNode := BuildExpandNodeJSON(nameExpr, rootValue)
 	body := BuildExpandTreeRoot(rootNode)
 
 	fn := PlpgsqlFunction{
@@ -207,6 +271,8 @@ func buildExpandRewriteNode(plan ExpandPlan, r ExpandRewrite) string {
 // the root node directly.
 func buildExpandRewriteValue(plan ExpandPlan, r ExpandRewrite) string {
 	switch {
+	case r.TTU != nil:
+		return buildExpandTTULeaf(plan, *r.TTU)
 	case r.Computed != "":
 		usersetExpr := BuildExpandNodeName(Lit(plan.ObjectType).SQL(), "p_object_id", r.Computed)
 		return BuildExpandComputedLeafJSON(usersetExpr)
@@ -218,6 +284,57 @@ func buildExpandRewriteValue(plan ExpandPlan, r ExpandRewrite) string {
 		// structurally valid rather than blowing up on NULL.
 		return BuildExpandUsersLeafJSON("'[]'::jsonb", "")
 	}
+}
+
+// buildExpandTTULeaf renders the Leaf.TupleToUserset projection for a
+// "X from Y" rewrite. The tupleset names the linking relation
+// ("<obj>:#<linking>"); the computed array enumerates one Computed
+// entry per linked object found in melange_tuples, projecting
+// "<linked_type>:<linked_id>#<parent_relation>". This matches OpenFGA's
+// shape exactly: tupleset is the pointer-to-list, computed is the
+// pointer-to-userset-per-linked-object.
+//
+// The aggregation runs at expand-call time so the tree reflects the
+// current tuples (consistent with the rest of Melange's read-after-write
+// behaviour). When no linking tuples exist the computed array is
+// empty — that's a valid OpenFGA response meaning "no parents to
+// inherit from".
+func buildExpandTTULeaf(plan ExpandPlan, ttu ParentRelationInfo) string {
+	tuplesTable := sqldsl.PrefixIdent("melange_tuples", plan.DatabaseSchema)
+
+	// Tupleset is built inline rather than via BuildExpandNodeName
+	// because the tupleset references the current object (whose id is
+	// p_object_id, a runtime variable) and the linking relation (a
+	// schema literal).
+	tuplesetExpr := fmt.Sprintf(
+		"(%s || ':' || p_object_id || %s)",
+		Lit(plan.ObjectType).SQL(),
+		sqldsl.QuoteLiteral("#"+ttu.LinkingRelation))
+
+	// Computed array projects each linked-object identifier paired with
+	// the parent relation name. ORDER BY keeps the output deterministic
+	// across pg query plans.
+	parentRelLit := sqldsl.QuoteLiteral("#" + ttu.Relation)
+	where := []string{
+		"object_type = " + sqldsl.QuoteLiteral(plan.ObjectType),
+		"object_id = p_object_id",
+		"relation = " + sqldsl.QuoteLiteral(ttu.LinkingRelation),
+	}
+	if len(ttu.AllowedLinkingTypes) > 0 {
+		where = append(where,
+			"subject_type IN ("+formatSQLStringList(ttu.AllowedLinkingTypes)+")")
+	}
+	computedAgg := fmt.Sprintf(
+		"COALESCE((SELECT jsonb_agg(jsonb_build_object('userset', subject_type || ':' || subject_id || %s) ORDER BY subject_type, subject_id) FROM %s WHERE %s), '[]'::jsonb)",
+		parentRelLit, tuplesTable, strings.Join(where, " AND "))
+
+	// Inline the OpenFGA TupleToUserset shape directly rather than via
+	// BuildExpandTTULeafJSON because the helper takes a []string of
+	// pre-built Computed exprs (one per static parent type); here the
+	// `computed` field is a single dynamic JSONB array built by jsonb_agg.
+	return fmt.Sprintf(
+		"jsonb_build_object('leaf', jsonb_build_object('tuple_to_userset', jsonb_build_object('tupleset', %s, 'computed', %s)))",
+		tuplesetExpr, computedAgg)
 }
 
 // buildExpandDirectLeaf renders the Leaf.Users projection for a direct

@@ -142,15 +142,23 @@ func TestBuildExpandPlan_Ineligible(t *testing.T) {
 		{"has userset", func(a *RelationAnalysis) {
 			a.Features.HasUserset = true
 		}, "slice 2.3"},
-		{"has recursive (TTU)", func(a *RelationAnalysis) {
-			a.Features.HasRecursive = true
-		}, "slice 2.2"},
 		{"has intersection", func(a *RelationAnalysis) {
 			a.Features.HasIntersection = true
 		}, "slice 2.2"},
-		{"has exclusion", func(a *RelationAnalysis) {
+		{"has multi-exclusion", func(a *RelationAnalysis) {
 			a.Features.HasExclusion = true
-		}, "slice 2.2"},
+			a.ExcludedRelations = []string{"banned", "author"}
+		}, "follow-up (slice 2.2b ships single exclusion only)"},
+		{"has TTU exclusion", func(a *RelationAnalysis) {
+			a.Features.HasExclusion = true
+			a.ExcludedRelations = []string{"banned"}
+			a.ExcludedParentRelations = []ParentRelationInfo{{Relation: "banned", LinkingRelation: "parent"}}
+		}, "follow-up"},
+		{"has intersection exclusion", func(a *RelationAnalysis) {
+			a.Features.HasExclusion = true
+			a.ExcludedRelations = []string{"banned"}
+			a.ExcludedIntersectionGroups = []IntersectionGroupInfo{{}}
+		}, "follow-up"},
 		{"has complex userset patterns", func(a *RelationAnalysis) {
 			a.HasComplexUsersetPatterns = true
 		}, "follow-up"},
@@ -174,5 +182,173 @@ func TestBuildExpandPlan_NoAccessPaths(t *testing.T) {
 	a := mkAnalysis("doc", "phantom", RelationFeatures{}, false)
 	if _, ok := BuildExpandPlan(a, ""); ok {
 		t.Errorf("plan with no rewrites must be ineligible — let the dispatcher sentinel handle it")
+	}
+}
+
+// TestRenderExpandFunction_TTUOnly pins the slice 2.2a TTU emission:
+// `define can_deploy: can_admin from org` with parent: [organization]
+// yields a single Leaf.TupleToUserset whose tupleset names the linking
+// relation ("<obj>:#org") and whose computed array is a jsonb_agg over
+// the org-linking tuples, each projecting "organization:<id>#can_admin".
+func TestRenderExpandFunction_TTUOnly(t *testing.T) {
+	a := mkAnalysis("repository", "can_deploy", RelationFeatures{HasRecursive: true}, false)
+	a.SatisfyingRelations = []string{"can_deploy"}
+	a.ParentRelations = []ParentRelationInfo{{
+		Relation:            "can_admin",
+		LinkingRelation:     "org",
+		AllowedLinkingTypes: []string{"organization"},
+	}}
+
+	plan, ok := BuildExpandPlan(a, "")
+	if !ok {
+		t.Fatalf("TTU-only plan should be eligible after slice 2.2a")
+	}
+	got := RenderExpandFunction(plan)
+
+	wants := []string{
+		"CREATE OR REPLACE FUNCTION expand_repository_can_deploy",
+		// Tupleset names the linking relation on the current object
+		"'repository' || ':' || p_object_id || '#org'",
+		// Computed pointers project the parent relation per linked object
+		"subject_type || ':' || subject_id || '#can_admin'",
+		// jsonb_agg with stable ORDER BY so output is deterministic
+		"jsonb_agg(jsonb_build_object('userset'",
+		"ORDER BY subject_type, subject_id",
+		// Linking-type filter from AllowedLinkingTypes
+		"subject_type IN ('organization')",
+		// Linking relation filter
+		"relation = 'org'",
+		// OpenFGA-shape envelope
+		"'tuple_to_userset'",
+		"'tupleset'",
+		"'computed'",
+		// Leaf wrapper so the tree node deserialises as Node.Leaf
+		"jsonb_build_object('leaf', jsonb_build_object('tuple_to_userset'",
+		// COALESCE so an empty computed array becomes [] not null
+		"COALESCE(",
+	}
+	for _, w := range wants {
+		if !strings.Contains(got, w) {
+			t.Errorf("missing %q in generated SQL:\n%s", w, got)
+		}
+	}
+	// Single-rewrite relations skip the Union envelope — TTU on its own
+	// shouldn't wrap in union.
+	if strings.Contains(got, "'union'") {
+		t.Errorf("single TTU rewrite must not emit a Union envelope:\n%s", got)
+	}
+}
+
+// TestRenderExpandFunction_ExclusionWraps pins slice 2.2b: a relation
+// with a simple `but not X` exclusion (`can_review: can_read but not
+// author`) wraps the rewrites-derived tree in Difference{base,
+// subtract}. Base shares the parent relation's name; subtract names the
+// excluded relation. OpenFGA-shape named slots — not positional
+// children.
+func TestRenderExpandFunction_ExclusionWraps(t *testing.T) {
+	a := mkAnalysis("repository", "can_review", RelationFeatures{HasImplied: true, HasExclusion: true}, false)
+	a.SatisfyingRelations = []string{"can_review", "can_read"}
+	a.DirectImpliedBy = []string{"can_read"}
+	a.ExcludedRelations = []string{"author"}
+	a.SimpleExcludedRelations = []string{"author"}
+
+	plan, ok := BuildExpandPlan(a, "")
+	if !ok {
+		t.Fatalf("simple-exclusion plan should be eligible after slice 2.2b")
+	}
+	if plan.Exclusion != "author" {
+		t.Errorf("plan.Exclusion: got %q, want %q", plan.Exclusion, "author")
+	}
+	got := RenderExpandFunction(plan)
+
+	wants := []string{
+		"CREATE OR REPLACE FUNCTION expand_repository_can_review",
+		// Difference wrapper with named slots
+		"jsonb_build_object('difference'",
+		"'base'",
+		"'subtract'",
+		// Base node carries the parent relation's name (the same as the
+		// root) because it represents "the relation without exclusion".
+		"'repository' || ':' || p_object_id || '#can_review'",
+		// Subtract names the excluded relation.
+		"'repository' || ':' || p_object_id || '#author'",
+		// Base contains the rewrites tree (here: a Computed pointer
+		// to can_read since the relation is pure-computed).
+		"'repository' || ':' || p_object_id || '#can_read'",
+		// Subtract emits a leaf — Computed pointer, never resolved
+		// here (the caller chases it).
+		"'leaf', jsonb_build_object('computed'",
+	}
+	for _, w := range wants {
+		if !strings.Contains(got, w) {
+			t.Errorf("missing %q in generated SQL:\n%s", w, got)
+		}
+	}
+}
+
+// TestRenderExpandFunction_TTUWithExclusion exercises the
+// `pull_request.can_review: can_read from repo but not author` shape:
+// base is a Leaf.TupleToUserset (from slice 2.2a's TTU emission);
+// subtract is a Computed pointer to the excluded relation. The two
+// features compose without either branch needing knowledge of the
+// other.
+func TestRenderExpandFunction_TTUWithExclusion(t *testing.T) {
+	a := mkAnalysis("pull_request", "can_review", RelationFeatures{HasRecursive: true, HasExclusion: true}, false)
+	a.SatisfyingRelations = []string{"can_review"}
+	a.ParentRelations = []ParentRelationInfo{{
+		Relation:            "can_read",
+		LinkingRelation:     "repo",
+		AllowedLinkingTypes: []string{"repository"},
+	}}
+	a.ExcludedRelations = []string{"author"}
+	a.SimpleExcludedRelations = []string{"author"}
+
+	plan, ok := BuildExpandPlan(a, "")
+	if !ok {
+		t.Fatalf("TTU+exclusion plan should be eligible")
+	}
+	got := RenderExpandFunction(plan)
+	if !strings.Contains(got, "'difference'") {
+		t.Errorf("missing difference wrapper:\n%s", got)
+	}
+	// Base must be the TTU leaf (tuple_to_userset emission from 2.2a)
+	if !strings.Contains(got, "tuple_to_userset") {
+		t.Errorf("base of difference must carry the TTU rewrite:\n%s", got)
+	}
+	// Subtract is the Computed pointer to author
+	if !strings.Contains(got, "'pull_request' || ':' || p_object_id || '#author'") {
+		t.Errorf("subtract must name the excluded relation:\n%s", got)
+	}
+}
+
+// TestRenderExpandFunction_DirectAndTTU exercises the multi-rewrite
+// path where the relation has both direct grants and a TTU
+// ("viewer: [user] or viewer from parent"). Both rewrites surface as
+// siblings under a Nodes union.
+func TestRenderExpandFunction_DirectAndTTU(t *testing.T) {
+	a := mkAnalysis("folder", "viewer", RelationFeatures{HasDirect: true, HasRecursive: true}, false)
+	a.SatisfyingRelations = []string{"viewer"}
+	a.AllowedSubjectTypes = []string{"user"}
+	a.ParentRelations = []ParentRelationInfo{{
+		Relation:            "viewer",
+		LinkingRelation:     "parent",
+		AllowedLinkingTypes: []string{"folder"},
+	}}
+
+	plan, ok := BuildExpandPlan(a, "")
+	if !ok {
+		t.Fatalf("direct+TTU plan should be eligible")
+	}
+	got := RenderExpandFunction(plan)
+
+	if !strings.Contains(got, "'union'") {
+		t.Errorf("multi-rewrite relation must emit Union envelope:\n%s", got)
+	}
+	// Both rewrites present
+	if !strings.Contains(got, "subject_type IN ('user')") {
+		t.Errorf("direct rewrite missing:\n%s", got)
+	}
+	if !strings.Contains(got, "tuple_to_userset") {
+		t.Errorf("TTU rewrite missing:\n%s", got)
 	}
 }
