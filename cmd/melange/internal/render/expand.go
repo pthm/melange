@@ -1,0 +1,171 @@
+package render
+
+import (
+	"fmt"
+	"io"
+	"strings"
+
+	"github.com/pthm/melange/melange"
+)
+
+// Expand writes a human-readable rendering of an OpenFGA-shaped
+// UsersetTree to w. A nil tree prints nothing; an empty Root prints
+// just a "(no nodes)" placeholder so the output is never silent on a
+// successfully-deserialised but degenerate response.
+//
+// Output shape mirrors the Explain renderer's tree style but using
+// OpenFGA's terminology: each node prints its name followed by either
+// the leaf payload (users / computed pointer / TTU pointer) or the
+// union/intersection/difference structure with children.
+func Expand(w io.Writer, t *melange.UsersetTree, options ...Option) {
+	if t == nil {
+		return
+	}
+	var o opts
+	for _, opt := range options {
+		opt(&o)
+	}
+	if t.Root == nil {
+		fmt.Fprintln(w, "(empty tree)")
+		return
+	}
+	writeExpandNode(w, t.Root, "", true, o)
+}
+
+// ExpandString renders an UsersetTree into a string. Convenience
+// wrapper around Expand for tests, log lines, and HTTP responses.
+func ExpandString(t *melange.UsersetTree, options ...Option) string {
+	var b strings.Builder
+	Expand(&b, t, options...)
+	return b.String()
+}
+
+// writeExpandNode prints a single UsersetTreeNode and recurses through
+// children. The prefix/isLast args are the standard tree-drawing
+// parameters; the Explain renderer's connector glyphs are reused so
+// the visual style stays consistent between melange explain and
+// melange expand output.
+func writeExpandNode(w io.Writer, n *melange.UsersetTreeNode, prefix string, isLast bool, o opts) {
+	if n == nil {
+		return
+	}
+	branch, childPrefix := connectors(prefix, isLast)
+	fmt.Fprintf(w, "%s%s\n", paint(o, ansiGrey, prefix+branch), formatExpandHeader(n))
+
+	switch {
+	case n.Leaf != nil:
+		writeLeaf(w, n.Leaf, childPrefix, o)
+	case n.Union != nil:
+		writeNodes(w, n.Union.Nodes, childPrefix, o)
+	case n.Intersection != nil:
+		writeNodes(w, n.Intersection.Nodes, childPrefix, o)
+	case n.Difference != nil:
+		// Two named slots in fixed order; not-last for the first child so
+		// the connector column flows into the subtract branch correctly.
+		if n.Difference.Base != nil {
+			writeExpandNode(w, n.Difference.Base, childPrefix, false, o)
+		}
+		if n.Difference.Subtract != nil {
+			writeExpandNode(w, n.Difference.Subtract, childPrefix, true, o)
+		}
+	}
+}
+
+// formatExpandHeader produces the single-line summary for a node. The
+// header always starts with the node's name (the OpenFGA
+// "<type>:<id>#<relation>" identifier) followed by a hint about which
+// value slot is populated. Leaf nodes inline the leaf type so the most
+// common case (`name • leaf: users`) is readable at a glance.
+func formatExpandHeader(n *melange.UsersetTreeNode) string {
+	switch {
+	case n.Leaf != nil:
+		return fmt.Sprintf("%s • %s", n.Name, leafKind(n.Leaf))
+	case n.Union != nil:
+		return fmt.Sprintf("%s • union of %d", n.Name, len(n.Union.Nodes))
+	case n.Intersection != nil:
+		return fmt.Sprintf("%s • intersection of %d", n.Name, len(n.Intersection.Nodes))
+	case n.Difference != nil:
+		return n.Name + " • difference (base / subtract)"
+	default:
+		return n.Name
+	}
+}
+
+// leafKind returns the discriminator name for a leaf's populated slot.
+// Exactly one of Users / Computed / TupleToUserset is populated on a
+// well-formed leaf; an unpopulated leaf returns "empty" so the failure
+// mode is visible rather than silent.
+func leafKind(l *melange.Leaf) string {
+	switch {
+	case l.Users != nil:
+		return "users"
+	case l.Computed != nil:
+		return "computed pointer"
+	case l.TupleToUserset != nil:
+		return "tuple-to-userset pointer"
+	default:
+		return "empty"
+	}
+}
+
+// writeLeaf renders the leaf's value slot below the header. Each
+// user-string in Leaf.Users gets its own tree leaf so consumers can scan
+// the column for a known subject without word-wrapping concerns.
+// Computed and TupleToUserset pointers print as single lines with a
+// "(follow with melange expand …)" hint so users know they can chase
+// them.
+func writeLeaf(w io.Writer, l *melange.Leaf, prefix string, o opts) {
+	switch {
+	case l.Users != nil:
+		users := l.Users.Users
+		if len(users) == 0 {
+			branch, _ := connectors(prefix, true)
+			fmt.Fprintf(w, "%s(no users)\n", paint(o, ansiGrey, prefix+branch))
+			if l.Users.UsersTruncated {
+				// Truncation on an empty result is degenerate but possible
+				// if the cap is 0; still surface the warning so the user
+				// knows something was elided.
+				fmt.Fprintf(w, "%s%s\n",
+					paint(o, ansiGrey, prefix),
+					paint(o, ansiRed, "(users_truncated — raise --max-leaf to see more)"))
+			}
+			return
+		}
+		for i, u := range users {
+			last := i == len(users)-1
+			branch, _ := connectors(prefix, last)
+			fmt.Fprintf(w, "%s%s\n", paint(o, ansiGrey, prefix+branch), u)
+		}
+		if l.Users.UsersTruncated {
+			fmt.Fprintf(w, "%s%s\n",
+				paint(o, ansiGrey, prefix),
+				paint(o, ansiRed, "(users_truncated — raise --max-leaf to see more)"))
+		}
+	case l.Computed != nil:
+		branch, _ := connectors(prefix, true)
+		fmt.Fprintf(w, "%scomputed → %s  %s\n",
+			paint(o, ansiGrey, prefix+branch),
+			l.Computed.Userset,
+			paint(o, ansiGrey, "(melange expand "+l.Computed.Userset+" to chase)"))
+	case l.TupleToUserset != nil:
+		branch, _ := connectors(prefix, true)
+		fmt.Fprintf(w, "%stupleset → %s\n",
+			paint(o, ansiGrey, prefix+branch),
+			l.TupleToUserset.Tupleset)
+		for i, c := range l.TupleToUserset.Computed {
+			last := i == len(l.TupleToUserset.Computed)-1
+			sub, _ := connectors(prefix+indentLast, last)
+			fmt.Fprintf(w, "%scomputed → %s\n",
+				paint(o, ansiGrey, prefix+indentLast+sub),
+				c.Userset)
+		}
+	}
+}
+
+// writeNodes is the union / intersection child walker. Same shape for
+// both — the discriminator is the wrapper, not the child layout.
+func writeNodes(w io.Writer, nodes []*melange.UsersetTreeNode, prefix string, o opts) {
+	for i, child := range nodes {
+		writeExpandNode(w, child, prefix, i == len(nodes)-1, o)
+	}
+}

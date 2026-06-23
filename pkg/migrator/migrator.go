@@ -208,6 +208,19 @@ func (m *Migrator) applyGeneratedSQL(ctx context.Context, db Execer, gen Generat
 		}
 	}
 
+	// Apply per-relation expand functions before the expand dispatcher
+	// (dispatcher CASE expressions name the per-relation functions).
+	for i, fn := range gen.ExpandFunctions {
+		if _, err := db.ExecContext(ctx, fn); err != nil {
+			return fmt.Errorf("applying expand function %d: %w", i, err)
+		}
+	}
+	if gen.ExpandDispatcher != "" {
+		if _, err := db.ExecContext(ctx, gen.ExpandDispatcher); err != nil {
+			return fmt.Errorf("applying expand dispatcher: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -836,6 +849,21 @@ func (m *Migrator) outputDryRun(w io.Writer, melangeVersion, schemaChecksum stri
 		}
 		if generatedSQL.ExplainDispatcher != "" {
 			_, _ = fmt.Fprintf(w, "%s\n\n", generatedSQL.ExplainDispatcher)
+		}
+	}
+
+	// Expand functions + dispatcher (Stage 2: slice 2.1 — direct + computed
+	// only; TTU, intersection, exclusion, usersets, wildcards route to the
+	// empty-leaf sentinel until later slices land).
+	if len(generatedSQL.ExpandFunctions) > 0 || generatedSQL.ExpandDispatcher != "" {
+		_, _ = fmt.Fprintf(w, "-- ============================================================\n")
+		_, _ = fmt.Fprintf(w, "-- Expand Functions (%d functions)\n", len(generatedSQL.ExpandFunctions))
+		_, _ = fmt.Fprintf(w, "-- ============================================================\n\n")
+		for _, fn := range generatedSQL.ExpandFunctions {
+			_, _ = fmt.Fprintf(w, "%s\n\n", fn)
+		}
+		if generatedSQL.ExpandDispatcher != "" {
+			_, _ = fmt.Fprintf(w, "%s\n\n", generatedSQL.ExpandDispatcher)
 		}
 	}
 

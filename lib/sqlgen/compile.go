@@ -76,6 +76,24 @@ type GeneratedSQL struct {
 	// ComputeExplainEligibility(analyses) before calling CollectNamedFunctions.
 	ExplainEligible map[string]map[string]bool
 
+	// ExpandFunctions contains CREATE OR REPLACE FUNCTION statements for the
+	// per-relation expand_{type}_{relation} functions. Each returns the
+	// OpenFGA-shaped UsersetTree JSONB documented in melange/expand.go.
+	ExpandFunctions []string
+
+	// ExpandDispatcher contains the expand_permission public + internal
+	// functions that route to per-relation expand_* by (object_type, relation).
+	// Returns an empty Leaf.Users sentinel for unknown / not-yet-supported
+	// pairs so OpenFGA tooling deserialises without special-casing.
+	ExpandDispatcher string
+
+	// ExpandEligible records the (object_type, relation) pairs for which an
+	// expand function was generated. Stage 2 slice 2.1 gates many shapes
+	// (TTU, intersection, exclusion, usersets, wildcards, complex usersets)
+	// out — those route to the dispatcher's empty-leaf sentinel until the
+	// follow-up slices land.
+	ExpandEligible map[string]map[string]bool
+
 	// IndexRecommendations lists composite indexes that make the generated
 	// functions efficient against melange_tuples. Advisory only — users
 	// translate the DDL to their source tables. See RecommendIndexes.
@@ -133,6 +151,12 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 	// reuse it.
 	explainEligible := ComputeExplainEligibility(analyses)
 	result.ExplainEligible = explainEligible
+	// expandEligible is the slice 2.1 gate: per-relation
+	// BuildExpandPlan succeeded. No transitive sweep needed because
+	// Expand is shallow — computed/TTU rewrites surface as pointers
+	// the caller chases, so an ineligible callee doesn't disable the
+	// caller.
+	expandEligible := make(map[string]map[string]bool, len(analyses))
 
 	// Generate specialized function for each relation
 	for _, a := range analyses {
@@ -149,6 +173,13 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 			return GeneratedSQL{}, fmt.Errorf("generating no-wildcard check function: %w", err)
 		}
 		result.NoWildcardFunctions = append(result.NoWildcardFunctions, noWildcardFn)
+		if expandFn, ok := generateExpandFunction(a, databaseSchema); ok {
+			result.ExpandFunctions = append(result.ExpandFunctions, expandFn)
+			if expandEligible[a.ObjectType] == nil {
+				expandEligible[a.ObjectType] = make(map[string]bool)
+			}
+			expandEligible[a.ObjectType][a.Relation] = true
+		}
 		if !explainEligible[a.ObjectType][a.Relation] {
 			continue
 		}
@@ -158,6 +189,7 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 		}
 		result.ExplainFunctions = append(result.ExplainFunctions, explainFn)
 	}
+	result.ExpandEligible = expandEligible
 
 	// Generate dispatchers
 	var err error
@@ -173,6 +205,7 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 	if err != nil {
 		return GeneratedSQL{}, fmt.Errorf("generating explain dispatcher: %w", err)
 	}
+	result.ExpandDispatcher = generateExpandDispatcher(analyses, databaseSchema, expandEligible)
 
 	// Generate bulk dispatcher
 	result.BulkDispatcher = generateBulkDispatcher(analyses, databaseSchema)
@@ -258,9 +291,10 @@ func CollectNamedFunctions(
 	analyses []RelationAnalysis,
 ) []NamedFunction {
 	var result []NamedFunction
-	checkIdx, noWildcardIdx, explainIdx := 0, 0, 0
+	checkIdx, noWildcardIdx, explainIdx, expandIdx := 0, 0, 0, 0
 	listObjIdx, listSubjIdx := 0, 0
 	explainEligible := generatedSQL.ExplainEligible
+	expandEligible := generatedSQL.ExpandEligible
 
 	for _, a := range analyses {
 		if a.Capabilities.CheckAllowed {
@@ -274,6 +308,13 @@ func CollectNamedFunctions(
 				SQL:  generatedSQL.NoWildcardFunctions[noWildcardIdx],
 			})
 			noWildcardIdx++
+			if expandEligible[a.ObjectType][a.Relation] {
+				result = append(result, NamedFunction{
+					Name: expandFunctionName(a.ObjectType, a.Relation),
+					SQL:  generatedSQL.ExpandFunctions[expandIdx],
+				})
+				expandIdx++
+			}
 			if explainEligible[a.ObjectType][a.Relation] {
 				result = append(result, NamedFunction{
 					Name: explainFunctionName(a.ObjectType, a.Relation),
@@ -311,6 +352,7 @@ func CollectNamedFunctions(
 func CollectFunctionNames(analyses []RelationAnalysis) []string {
 	var names []string
 	explainEligible := ComputeExplainEligibility(analyses)
+	expandEligible := ComputeExpandEligibility(analyses)
 
 	for _, a := range analyses {
 		if a.Capabilities.CheckAllowed {
@@ -318,6 +360,9 @@ func CollectFunctionNames(analyses []RelationAnalysis) []string {
 				functionName(a.ObjectType, a.Relation),
 				functionNameNoWildcard(a.ObjectType, a.Relation),
 			)
+			if expandEligible[a.ObjectType][a.Relation] {
+				names = append(names, expandFunctionName(a.ObjectType, a.Relation))
+			}
 			if explainEligible[a.ObjectType][a.Relation] {
 				names = append(names, explainFunctionName(a.ObjectType, a.Relation))
 			}
@@ -339,6 +384,8 @@ func CollectFunctionNames(analyses []RelationAnalysis) []string {
 		"check_permission_bulk",
 		"explain_permission",
 		"explain_permission_internal",
+		"expand_permission",
+		"expand_permission_internal",
 		"list_accessible_objects",
 		"list_accessible_subjects",
 	)

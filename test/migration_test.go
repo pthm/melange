@@ -145,6 +145,7 @@ func getFunctionNames(t *testing.T, ctx context.Context, db *sql.DB) []string {
 			p.proname LIKE 'check_%'
 			OR p.proname LIKE 'list_%'
 			OR p.proname LIKE 'explain_%'
+			OR p.proname LIKE 'expand_%'
 		)
 		ORDER BY p.proname
 	`)

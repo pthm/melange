@@ -257,6 +257,16 @@ type RelationAnalysis struct {
 	// For Direct/Implied patterns - from closure table
 	SatisfyingRelations []string // Relations that satisfy this one (e.g., ["viewer", "editor", "owner"])
 
+	// DirectImpliedBy preserves the immediate `or X` rewrites from the
+	// parsed schema, BEFORE transitive closure flattening. For
+	// `viewer: [user] or editor` it's `["editor"]`; for `viewer: editor`
+	// it's `["editor"]`; for `viewer: [user]` it's nil. SatisfyingRelations
+	// is the closure (`["viewer", "editor", "owner"]`); DirectImpliedBy
+	// is just the immediate rewrites (`["editor"]`). Expand uses this to
+	// emit one Leaf.Computed pointer per direct rewrite — chasing them
+	// is the caller's job, matching OpenFGA's shallow expansion shape.
+	DirectImpliedBy []string
+
 	// For Exclusion patterns
 	ExcludedRelations []string // Relations to exclude (for simple "but not X" patterns)
 
@@ -421,6 +431,15 @@ func analyzeRelation(
 		if rels, ok := typeClosures[r.Name]; ok {
 			analysis.SatisfyingRelations = rels
 		}
+	}
+
+	// Preserve the direct `or X` rewrites from the parsed schema —
+	// SatisfyingRelations gives the transitive closure (used by Check
+	// for `relation IN (...)` lookups), but Expand needs the shallow
+	// rewrites to emit one Leaf.Computed pointer per direct rewrite
+	// without flattening the chain.
+	if len(r.ImpliedBy) > 0 {
+		analysis.DirectImpliedBy = append([]string(nil), r.ImpliedBy...)
 	}
 
 	// Collect userset patterns
