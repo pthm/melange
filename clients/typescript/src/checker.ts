@@ -14,6 +14,7 @@ import type {
   PageOptions,
   ListResult,
 } from './types.js';
+import type { Trace, ExplainOptions } from './trace.js';
 import type { Queryable } from './database.js';
 import { Cache, NoopCache } from './cache.js';
 import { validateObject, validateRelation } from './validator.js';
@@ -358,6 +359,62 @@ export class Checker {
     contextualTuples: ContextualTuple[]
   ): Promise<Decision> {
     return this.check(subject, relation, object, contextualTuples);
+  }
+
+  /**
+   * Explain returns the resolution tree the authorization engine walked when
+   * deciding whether the subject has the relation on the object. The trace
+   * shows the proof path on success and every attempted branch on failure —
+   * useful for debugging "why doesn't X have Y?" questions.
+   *
+   * Explain does more work per call than check (it constructs a JSONB trace
+   * server-side) so it's intended for debugging and admin flows, not the
+   * request-path permission decision.
+   *
+   * The optional `maxNodes` caps the total nodes in the returned trace. When
+   * unset, the cap resolves via the session GUC `melange.max_explain_nodes`,
+   * falling back to the server-side default (100). The returned trace's
+   * `truncated` flag is set when the cap was hit.
+   *
+   * The result is parsed straight from the JSONB envelope — snake_case keys
+   * are preserved to match the SQL wire format.
+   */
+  async explain(
+    subject: MelangeObject,
+    relation: Relation,
+    object: MelangeObject,
+    options?: ExplainOptions
+  ): Promise<Trace> {
+    if (this.validateRequest) {
+      validateObject(subject, 'subject');
+      validateRelation(relation);
+      validateObject(object, 'object');
+    }
+
+    const func = prefixIdent('explain_permission', this.databaseSchema);
+    const maxNodes =
+      options?.maxNodes !== undefined && options.maxNodes > 0
+        ? options.maxNodes
+        : null;
+
+    // Cast to text on the server so the JSONB arrives as a string we can
+    // parse — pg's default JSONB handling returns it already-parsed but the
+    // cast keeps behaviour deterministic across pg-versions and driver
+    // configurations.
+    const result = await this.db.query<{ trace: string | Trace }>(
+      `SELECT ${func}($1, $2, $3, $4, $5, $6)::text AS trace`,
+      [subject.type, subject.id, relation, object.type, object.id, maxNodes]
+    );
+
+    if (!result.rows || result.rows.length === 0) {
+      throw new MelangeError('explain_permission returned no rows');
+    }
+
+    const raw = result.rows[0].trace;
+    if (raw === null || raw === undefined) {
+      throw new MelangeError('explain_permission returned null trace');
+    }
+    return typeof raw === 'string' ? (JSON.parse(raw) as Trace) : raw;
   }
 
   /**

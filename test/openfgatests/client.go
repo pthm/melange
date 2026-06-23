@@ -356,6 +356,45 @@ func (c *Client) Check(ctx context.Context, req *openfgav1.CheckRequest, opts ..
 	}, nil
 }
 
+// Explain returns the resolution Trace for a single check, mirroring the
+// shape of Check above. Used by the OpenFGA-suite parity sweep to assert
+// `trace.Result == checkAssertion.Expectation` for every eligible
+// assertion across every YAML — see explain_parity.go.
+//
+// Contextual tuples are not yet wired through the Explain SQL function, so
+// callers should skip assertions carrying contextual tuples rather than
+// route them here.
+func (c *Client) Explain(ctx context.Context, req *openfgav1.CheckRequest, opts ...grpc.CallOption) (*melange.Trace, error) {
+	store, ok := c.storeByID(req.GetStoreId())
+	if !ok {
+		return nil, fmt.Errorf("store not found: %s", req.GetStoreId())
+	}
+
+	tk := req.GetTupleKey()
+	subject, err := parseSubject(tk.GetUser())
+	if err != nil {
+		return nil, fmt.Errorf("parsing subject: %w", err)
+	}
+	object, err := parseObject(tk.GetObject())
+	if err != nil {
+		return nil, fmt.Errorf("parsing object: %w", err)
+	}
+	relation := tk.GetRelation()
+
+	validator, err := validatorForStore(store, req.GetAuthorizationModelId())
+	if err != nil {
+		return nil, err
+	}
+	checker := melange.NewChecker(
+		store.db,
+		melange.WithUsersetValidation(),
+		melange.WithRequestValidation(),
+		melange.WithValidator(validator),
+		melange.WithDatabaseSchema(c.databaseSchema),
+	)
+	return checker.Explain(ctx, subject, melange.Relation(relation), object)
+}
+
 // ListObjects returns all objects of a given type that the user has a relation on.
 func (c *Client) ListObjects(ctx context.Context, req *openfgav1.ListObjectsRequest, opts ...grpc.CallOption) (*openfgav1.ListObjectsResponse, error) {
 	store, ok := c.storeByID(req.GetStoreId())

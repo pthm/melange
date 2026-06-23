@@ -693,6 +693,14 @@ func RunTest(t *testing.T, parent *Client, tc TestCase) {
 
 				// Run derived list users assertions (generated from check assertions)
 				runDerivedListUsersAssertions(t, ctx, client, storeID, modelID, stage.CheckAssertions)
+
+				// Cross-reference Explain against Check for every eligible
+				// check assertion. Asserts trace.Result == assertion.Expectation
+				// so any drift between the two APIs surfaces in the suite that
+				// already covers the most patterns. Sentinel responses (relation
+				// not yet supported by the explain renderer) are skipped — see
+				// explain_parity.go for the eligibility / skip rules.
+				runExplainParityAssertions(t, ctx, client, storeID, modelID, stage.CheckAssertions)
 			})
 		}
 	})
