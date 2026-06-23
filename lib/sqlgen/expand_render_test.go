@@ -142,9 +142,24 @@ func TestBuildExpandPlan_Ineligible(t *testing.T) {
 		{"has userset", func(a *RelationAnalysis) {
 			a.Features.HasUserset = true
 		}, "slice 2.3"},
-		{"has intersection", func(a *RelationAnalysis) {
+		{"has IsThis intersection part", func(a *RelationAnalysis) {
 			a.Features.HasIntersection = true
-		}, "slice 2.2"},
+			a.IntersectionGroups = []IntersectionGroupInfo{{
+				Parts: []IntersectionPart{{IsThis: true}, {Relation: "editor"}},
+			}}
+		}, "follow-up (slice 2.2c ships simple-part intersections only)"},
+		{"has TTU intersection part", func(a *RelationAnalysis) {
+			a.Features.HasIntersection = true
+			a.IntersectionGroups = []IntersectionGroupInfo{{
+				Parts: []IntersectionPart{{Relation: "writer"}, {ParentRelation: &ParentRelationInfo{}}},
+			}}
+		}, "follow-up"},
+		{"has per-part-exclusion intersection", func(a *RelationAnalysis) {
+			a.Features.HasIntersection = true
+			a.IntersectionGroups = []IntersectionGroupInfo{{
+				Parts: []IntersectionPart{{Relation: "writer"}, {Relation: "editor", ExcludedRelation: "banned"}},
+			}}
+		}, "follow-up"},
 		{"has multi-exclusion", func(a *RelationAnalysis) {
 			a.Features.HasExclusion = true
 			a.ExcludedRelations = []string{"banned", "author"}
@@ -317,6 +332,85 @@ func TestRenderExpandFunction_TTUWithExclusion(t *testing.T) {
 	}
 	// Subtract is the Computed pointer to author
 	if !strings.Contains(got, "'pull_request' || ':' || p_object_id || '#author'") {
+		t.Errorf("subtract must name the excluded relation:\n%s", got)
+	}
+}
+
+// TestRenderExpandFunction_IntersectionSimple pins slice 2.2c: a
+// relation defined as `viewer: writer and editor` emits a Nodes
+// intersection wrapping per-part Leaf.Computed children. Each part
+// is a shallow pointer to <obj>:#<part_relation>; the caller chases
+// pointers with follow-up Expand calls (matches OpenFGA's
+// shallow-by-default semantics).
+func TestRenderExpandFunction_IntersectionSimple(t *testing.T) {
+	a := mkAnalysis("document", "both", RelationFeatures{HasIntersection: true}, false)
+	a.SatisfyingRelations = []string{"both"}
+	a.IntersectionGroups = []IntersectionGroupInfo{{
+		Parts: []IntersectionPart{{Relation: "writer"}, {Relation: "editor"}},
+	}}
+
+	plan, ok := BuildExpandPlan(a, "")
+	if !ok {
+		t.Fatalf("simple-intersection plan should be eligible after slice 2.2c")
+	}
+	got := RenderExpandFunction(plan)
+
+	wants := []string{
+		"CREATE OR REPLACE FUNCTION expand_document_both",
+		// Nodes intersection envelope (no leaf, no difference, no union)
+		"jsonb_build_object('intersection'",
+		"jsonb_build_array(",
+		// Each part is named after the part relation (not the parent)
+		"'document' || ':' || p_object_id || '#writer'",
+		"'document' || ':' || p_object_id || '#editor'",
+		// Each part is a shallow Leaf.Computed pointer
+		"jsonb_build_object('leaf', jsonb_build_object('computed'",
+	}
+	for _, w := range wants {
+		if !strings.Contains(got, w) {
+			t.Errorf("missing %q in generated SQL:\n%s", w, got)
+		}
+	}
+	// Single-group intersection: no top-level Union envelope, the
+	// intersection sits directly under the root.
+	if strings.Contains(got, "'union'") {
+		t.Errorf("single intersection group must not emit a top-level Union:\n%s", got)
+	}
+	// Definitely no melange_tuples lookup — Expand never resolves
+	// intersection parts itself.
+	if strings.Contains(got, "FROM melange_tuples") {
+		t.Errorf("intersection parts must surface as pointers, not resolved tuples:\n%s", got)
+	}
+}
+
+// TestRenderExpandFunction_IntersectionWithExclusion exercises the
+// cross-feature compose: `viewer: (writer and editor) but not banned`.
+// The Difference's base is the Nodes intersection from slice 2.2c;
+// the subtract is a Computed pointer to the excluded relation from
+// slice 2.2b. Confirms the two features compose cleanly without
+// either branch knowing the other exists.
+func TestRenderExpandFunction_IntersectionWithExclusion(t *testing.T) {
+	a := mkAnalysis("document", "both_safe", RelationFeatures{HasIntersection: true, HasExclusion: true}, false)
+	a.SatisfyingRelations = []string{"both_safe"}
+	a.IntersectionGroups = []IntersectionGroupInfo{{
+		Parts: []IntersectionPart{{Relation: "writer"}, {Relation: "editor"}},
+	}}
+	a.ExcludedRelations = []string{"banned"}
+	a.SimpleExcludedRelations = []string{"banned"}
+
+	plan, ok := BuildExpandPlan(a, "")
+	if !ok {
+		t.Fatalf("intersection+exclusion plan should be eligible")
+	}
+	got := RenderExpandFunction(plan)
+
+	if !strings.Contains(got, "'difference'") {
+		t.Errorf("exclusion wrapper missing:\n%s", got)
+	}
+	if !strings.Contains(got, "'intersection'") {
+		t.Errorf("intersection envelope must appear inside the difference base:\n%s", got)
+	}
+	if !strings.Contains(got, "'document' || ':' || p_object_id || '#banned'") {
 		t.Errorf("subtract must name the excluded relation:\n%s", got)
 	}
 }

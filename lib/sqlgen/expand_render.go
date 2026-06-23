@@ -76,7 +76,8 @@ type ExpandPlan struct {
 
 // ExpandRewrite is one of the per-rewrite shapes Expand can emit.
 // Fields are mutually exclusive; the discriminator is which one is
-// non-zero. Slice 2.1 introduced Direct + Computed; 2.2a adds TTU.
+// non-zero. Slice 2.1 introduced Direct + Computed; 2.2a added TTU;
+// 2.2c adds Intersection.
 type ExpandRewrite struct {
 	// Direct is the subject-type whitelist for a direct rewrite. nil/empty
 	// means this rewrite is not a direct grant.
@@ -90,6 +91,14 @@ type ExpandRewrite struct {
 	// tupleset = "<obj>:#<linking>" and one Computed per linked object
 	// (enumerated at expand time via jsonb_agg over melange_tuples).
 	TTU *ParentRelationInfo
+	// Intersection lists the part relation names for `a and b` rewrites
+	// (e.g., `viewer: writer and editor` → ["writer", "editor"]). nil
+	// means this rewrite is not an intersection. When set the renderer
+	// emits a Nodes intersection wrapping per-part Leaf.Computed
+	// children — same shallow-pointer treatment as the Computed rewrite
+	// because OpenFGA's Expand never resolves intersection parts
+	// recursively.
+	Intersection []string
 }
 
 // ComputeExpandEligibility returns, for each (object_type, relation),
@@ -143,6 +152,16 @@ func BuildExpandPlan(a RelationAnalysis, databaseSchema string) (ExpandPlan, boo
 		// iteration loop variable would be reused otherwise.
 		plan.Rewrites = append(plan.Rewrites, ExpandRewrite{TTU: &a.ParentRelations[i]})
 	}
+	for _, g := range a.IntersectionGroups {
+		// Each intersection group emits one rewrite — the parts AND
+		// together as a Nodes intersection. Multiple groups OR together
+		// at the top level (via the existing multi-rewrite Union wrap).
+		parts := make([]string, 0, len(g.Parts))
+		for _, p := range g.Parts {
+			parts = append(parts, p.Relation)
+		}
+		plan.Rewrites = append(plan.Rewrites, ExpandRewrite{Intersection: parts})
+	}
 	if a.Features.HasExclusion && isSimpleExclusion(a) {
 		plan.Exclusion = a.ExcludedRelations[0]
 	}
@@ -157,16 +176,16 @@ func BuildExpandPlan(a RelationAnalysis, databaseSchema string) (ExpandPlan, boo
 
 // expandLocalSupported is the slice 2.x eligibility predicate. Each
 // slice drops one gate as it adds renderer support — 2.1 covered direct
-// + computed; 2.2a added TTU (Leaf.TupleToUserset); 2.2b adds simple
-// exclusion (Difference); 2.2c adds intersection; 2.3 adds wildcards
-// + userset references.
+// + computed; 2.2a added TTU (Leaf.TupleToUserset); 2.2b added simple
+// exclusion (Difference); 2.2c adds intersection (Nodes intersection);
+// 2.3 adds wildcards + userset references.
 func expandLocalSupported(a RelationAnalysis) bool {
 	f := a.Features
 	if f.HasUserset || f.HasWildcard {
 		return false // slice 2.3
 	}
-	if f.HasIntersection {
-		return false // slice 2.2c
+	if f.HasIntersection && !intersectionGroupsAreSimpleForExpand(a) {
+		return false // intersection with IsThis / TTU-part / per-part exclusion
 	}
 	if f.HasExclusion && !isSimpleExclusion(a) {
 		return false // multi-exclusion / TTU-excluded / intersection-excluded
@@ -174,7 +193,31 @@ func expandLocalSupported(a RelationAnalysis) bool {
 	if a.HasComplexUsersetPatterns {
 		return false // follow-up
 	}
-	return f.HasDirect || f.HasImplied || f.HasRecursive
+	return f.HasDirect || f.HasImplied || f.HasRecursive || f.HasIntersection
+}
+
+// intersectionGroupsAreSimpleForExpand is true when every part of every
+// intersection group is a plain relation reference — no `[user]`-direct
+// (IsThis), no `X from Y` (ParentRelation), no per-part exclusion
+// (ExcludedRelation). The renderer can only emit Leaf.Computed pointers
+// for parts today; the exotic shapes need their own per-part renderer
+// branches and land in a follow-up slice.
+//
+// Mirrors lib/sqlgen/explain_render.go's intersectionGroupsAreSimple
+// but lives separately because Expand emits a different per-part shape
+// (single Computed pointer vs Explain's recursive Node).
+func intersectionGroupsAreSimpleForExpand(a RelationAnalysis) bool {
+	for _, g := range a.IntersectionGroups {
+		for _, p := range g.Parts {
+			if p.IsThis || p.ParentRelation != nil || p.ExcludedRelation != "" {
+				return false
+			}
+			if p.Relation == "" {
+				return false // defensive — a part with no relation is unrenderable
+			}
+		}
+	}
+	return true
 }
 
 // isSimpleExclusion is true when the relation has exactly one simple
@@ -271,6 +314,8 @@ func buildExpandRewriteNode(plan ExpandPlan, r ExpandRewrite) string {
 // the root node directly.
 func buildExpandRewriteValue(plan ExpandPlan, r ExpandRewrite) string {
 	switch {
+	case len(r.Intersection) > 0:
+		return buildExpandIntersectionValue(plan, r.Intersection)
 	case r.TTU != nil:
 		return buildExpandTTULeaf(plan, *r.TTU)
 	case r.Computed != "":
@@ -284,6 +329,29 @@ func buildExpandRewriteValue(plan ExpandPlan, r ExpandRewrite) string {
 		// structurally valid rather than blowing up on NULL.
 		return BuildExpandUsersLeafJSON("'[]'::jsonb", "")
 	}
+}
+
+// buildExpandIntersectionValue assembles the `Nodes intersection`
+// envelope for an `a and b [and c …]` rewrite. Each part becomes a
+// child UsersetTreeNode whose value slot is a Leaf.Computed pointer to
+// `<obj>:#<part>`. Like every other Expand rewrite, parts are unresolved
+// pointers — the caller chases them with follow-up Expand calls (or
+// uses Checker.ExpandRecursive once that lands).
+//
+// Per-part child nodes are named after the part relation (not the
+// parent), because they identify what's being intersected. This
+// matches OpenFGA's convention where every node's name pinpoints
+// its referent.
+func buildExpandIntersectionValue(plan ExpandPlan, parts []string) string {
+	objectTypeLit := Lit(plan.ObjectType).SQL()
+	children := make([]string, 0, len(parts))
+	for _, part := range parts {
+		usersetExpr := BuildExpandNodeName(objectTypeLit, "p_object_id", part)
+		leaf := BuildExpandComputedLeafJSON(usersetExpr)
+		partNameExpr := BuildExpandNodeName(objectTypeLit, "p_object_id", part)
+		children = append(children, BuildExpandNodeJSON(partNameExpr, leaf))
+	}
+	return BuildExpandIntersectionJSON(children)
 }
 
 // buildExpandTTULeaf renders the Leaf.TupleToUserset projection for a
