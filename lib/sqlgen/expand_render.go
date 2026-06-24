@@ -101,6 +101,20 @@ type ExpandRewrite struct {
 	Intersection []string
 }
 
+// sliceContains is a small helper for the BuildExpandPlan union of
+// direct subject types and userset pattern subject types. Local because
+// the standard library's slices.Contains requires Go 1.21+ generics
+// and the call site has fewer than half a dozen entries — a linear
+// scan is the right ceiling.
+func sliceContains(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
+}
+
 // ComputeExpandEligibility returns, for each (object_type, relation),
 // whether the slice 2.1 expand renderer can produce a tree for it.
 // Mirrors ComputeExplainEligibility's surface so CollectFunctionNames
@@ -138,10 +152,29 @@ func BuildExpandPlan(a RelationAnalysis, databaseSchema string) (ExpandPlan, boo
 		ObjectType:     a.ObjectType,
 		Relation:       a.Relation,
 	}
-	if a.Features.HasDirect {
-		plan.Rewrites = append(plan.Rewrites, ExpandRewrite{
-			Direct: append([]string(nil), a.AllowedSubjectTypes...),
-		})
+	// Slice 2.3: a single "direct" rewrite covers concrete users
+	// (`[user]`), wildcards (`[user:*]`), AND userset references
+	// (`[group#member]`) — all three shapes live in melange_tuples as
+	// direct grant rows (the userset is encoded in subject_id as
+	// "<id>#<relation>", not in a separate column). The renderer's
+	// projection `subject_type || ':' || subject_id` naturally
+	// produces OpenFGA-formatted strings for every shape:
+	// "user:alice", "user:*", "group:eng#member".
+	//
+	// Subject-type whitelist unions the direct types and the userset
+	// pattern subject types so a SELECT for "[group#member]" doesn't
+	// silently drop group-typed rows. AllowedSubjectTypes is NOT used
+	// here because it's the *transitive* closure (including types
+	// reachable through closure relations); we want the IMMEDIATE
+	// types valid for THIS relation's direct grants.
+	directTypes := append([]string(nil), a.DirectSubjectTypes...)
+	for _, p := range a.UsersetPatterns {
+		if !sliceContains(directTypes, p.SubjectType) {
+			directTypes = append(directTypes, p.SubjectType)
+		}
+	}
+	if len(directTypes) > 0 {
+		plan.Rewrites = append(plan.Rewrites, ExpandRewrite{Direct: directTypes})
 	}
 	for _, implied := range a.DirectImpliedBy {
 		plan.Rewrites = append(plan.Rewrites, ExpandRewrite{Computed: implied})
@@ -177,13 +210,11 @@ func BuildExpandPlan(a RelationAnalysis, databaseSchema string) (ExpandPlan, boo
 // expandLocalSupported is the slice 2.x eligibility predicate. Each
 // slice drops one gate as it adds renderer support — 2.1 covered direct
 // + computed; 2.2a added TTU (Leaf.TupleToUserset); 2.2b added simple
-// exclusion (Difference); 2.2c adds intersection (Nodes intersection);
-// 2.3 adds wildcards + userset references.
+// exclusion (Difference); 2.2c added intersection (Nodes intersection);
+// 2.3 added wildcards + userset references (inline as user-strings in
+// Leaf.Users).
 func expandLocalSupported(a RelationAnalysis) bool {
 	f := a.Features
-	if f.HasUserset || f.HasWildcard {
-		return false // slice 2.3
-	}
 	if f.HasIntersection && !intersectionGroupsAreSimpleForExpand(a) {
 		return false // intersection with IsThis / TTU-part / per-part exclusion
 	}
@@ -191,9 +222,9 @@ func expandLocalSupported(a RelationAnalysis) bool {
 		return false // multi-exclusion / TTU-excluded / intersection-excluded
 	}
 	if a.HasComplexUsersetPatterns {
-		return false // follow-up
+		return false // recursive-membership usersets (follow-up)
 	}
-	return f.HasDirect || f.HasImplied || f.HasRecursive || f.HasIntersection
+	return f.HasDirect || f.HasImplied || f.HasRecursive || f.HasIntersection || f.HasUserset
 }
 
 // intersectionGroupsAreSimpleForExpand is true when every part of every

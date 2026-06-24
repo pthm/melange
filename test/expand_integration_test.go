@@ -457,6 +457,51 @@ func TestExpand_ExclusionOverTTU(t *testing.T) {
 	})
 }
 
+// TestExpand_WildcardInlinesAsUserString exercises slice 2.3:
+// `repository.banned: [user:*]` emits a Leaf.Users containing the
+// literal string "user:*" rather than a separate sentinel node. This
+// matches OpenFGA's inline-string convention (only Explain emits a
+// dedicated NodeWildcard). FlattenUsers includes the wildcard string
+// so consumers treating "<type>:*" as "every user of this type" see
+// it.
+func TestExpand_WildcardInlinesAsUserString(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	runTestWithSchema(t, func(t *testing.T, databaseSchema string) {
+		db := testutil.DBWithDatabaseSchema(t, databaseSchema)
+		ctx := context.Background()
+
+		var orgID, repoID int64
+		require.NoError(t, db.QueryRowContext(ctx,
+			`INSERT INTO organizations (name) VALUES ('expand_wild_org') RETURNING id`).Scan(&orgID))
+		require.NoError(t, db.QueryRowContext(ctx,
+			`INSERT INTO repositories (name, organization_id) VALUES ('expand_wild_repo', $1) RETURNING id`,
+			orgID).Scan(&repoID))
+		// Wildcard ban — repository.banned: [user:*] is satisfied
+		// for everyone via this single melange_tuples row.
+		_, err := db.ExecContext(ctx,
+			`INSERT INTO repository_bans (repository_id, banned_all) VALUES ($1, true)`, repoID)
+		require.NoError(t, err)
+
+		checker := melange.NewChecker(db, melange.WithDatabaseSchema(databaseSchema))
+		tree, err := checker.Expand(ctx,
+			melange.Object{Type: "repository", ID: strconv.FormatInt(repoID, 10)},
+			melange.Relation("banned"))
+		require.NoError(t, err)
+		require.NotNil(t, tree.Root)
+		require.NotNil(t, tree.Root.Leaf)
+		require.NotNil(t, tree.Root.Leaf.Users)
+		assert.Equal(t, []string{"user:*"}, tree.Root.Leaf.Users.Users,
+			"wildcard surfaces inline as the string 'user:*' (matches OpenFGA shape)")
+		// FlattenUsers includes the wildcard string — the convention
+		// is that consumers treat "<type>:*" as "every user of that
+		// type" rather than expanding to a user list.
+		assert.Equal(t, []string{"user:*"}, tree.FlattenUsers())
+	})
+}
+
 // TestExpand_NotYetSupportedSentinel exercises the dispatcher's
 // no-entry sentinel: when the (object_type, relation) pair is unknown
 // OR the relation uses a feature gated out of slice 2.1 (TTU,

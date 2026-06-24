@@ -11,7 +11,7 @@ import (
 func TestRenderExpandFunction_DirectOnly(t *testing.T) {
 	a := mkAnalysis("document", "owner", RelationFeatures{HasDirect: true}, false)
 	a.SatisfyingRelations = []string{"owner"}
-	a.AllowedSubjectTypes = []string{"user"}
+	a.AllowedSubjectTypes = []string{"user"}; a.DirectSubjectTypes = []string{"user"}
 
 	plan, ok := BuildExpandPlan(a, "")
 	if !ok {
@@ -64,7 +64,7 @@ func TestRenderExpandFunction_DirectOnly(t *testing.T) {
 func TestRenderExpandFunction_DirectAndComputed(t *testing.T) {
 	a := mkAnalysis("organization", "admin", RelationFeatures{HasDirect: true, HasImplied: true}, false)
 	a.SatisfyingRelations = []string{"admin", "owner"}
-	a.AllowedSubjectTypes = []string{"user"}
+	a.AllowedSubjectTypes = []string{"user"}; a.DirectSubjectTypes = []string{"user"}
 	a.DirectImpliedBy = []string{"owner"}
 
 	plan, ok := BuildExpandPlan(a, "")
@@ -136,12 +136,6 @@ func TestBuildExpandPlan_Ineligible(t *testing.T) {
 		mutate  func(*RelationAnalysis)
 		slice   string
 	}{
-		{"has wildcard", func(a *RelationAnalysis) {
-			a.Features.HasWildcard = true
-		}, "slice 2.3"},
-		{"has userset", func(a *RelationAnalysis) {
-			a.Features.HasUserset = true
-		}, "slice 2.3"},
 		{"has IsThis intersection part", func(a *RelationAnalysis) {
 			a.Features.HasIntersection = true
 			a.IntersectionGroups = []IntersectionGroupInfo{{
@@ -181,7 +175,7 @@ func TestBuildExpandPlan_Ineligible(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			a := mkAnalysis("doc", "viewer", RelationFeatures{HasDirect: true}, false)
-			a.AllowedSubjectTypes = []string{"user"}
+			a.AllowedSubjectTypes = []string{"user"}; a.DirectSubjectTypes = []string{"user"}
 			tc.mutate(&a)
 			if _, ok := BuildExpandPlan(a, ""); ok {
 				t.Errorf("plan should be ineligible (%s) for %s", tc.name, tc.slice)
@@ -415,6 +409,108 @@ func TestRenderExpandFunction_IntersectionWithExclusion(t *testing.T) {
 	}
 }
 
+// TestRenderExpandFunction_WildcardEmission pins slice 2.3a's wildcard
+// shape: a relation defined as `viewer: [user, user:*]` emits a single
+// direct rewrite whose SELECT admits both concrete user rows
+// (subject_id like "alice") AND wildcard rows (subject_id="*"). The
+// projection `subject_type || ':' || subject_id` produces "user:*"
+// for the wildcard, matching OpenFGA's inline-string convention. No
+// separate NodeWildcard sentinel — Expand inlines wildcards as
+// strings, only Explain emits the sentinel.
+func TestRenderExpandFunction_WildcardEmission(t *testing.T) {
+	a := mkAnalysis("repository", "banned", RelationFeatures{HasDirect: true, HasWildcard: true}, false)
+	a.SatisfyingRelations = []string{"banned"}
+	a.DirectSubjectTypes = []string{"user"}
+	a.AllowedSubjectTypes = []string{"user"}
+
+	plan, ok := BuildExpandPlan(a, "")
+	if !ok {
+		t.Fatalf("wildcard plan should be eligible after slice 2.3")
+	}
+	got := RenderExpandFunction(plan)
+
+	wants := []string{
+		"CREATE OR REPLACE FUNCTION expand_repository_banned",
+		"jsonb_build_object('users'",
+		// The user subject type is in the filter — wildcard rows
+		// (subject_type='user', subject_id='*') pass the IN check
+		"subject_type IN ('user')",
+		// Projection assembles "user:*" naturally from the row
+		"subject_type || ':' || subject_id",
+	}
+	for _, w := range wants {
+		if !strings.Contains(got, w) {
+			t.Errorf("missing %q in generated SQL:\n%s", w, got)
+		}
+	}
+}
+
+// TestRenderExpandFunction_UsersetReferenceEmission pins slice 2.3b's
+// userset-reference shape: `viewer: [user, group#member]` widens the
+// SELECT to include subject_type='group' rows alongside the user
+// rows. The projection produces "group:eng#member" for a userset
+// reference, matching OpenFGA's inline-string convention. Single
+// Leaf.Users contains all three shapes (concrete users, wildcards,
+// userset refs) — no separate rewrite for the userset.
+func TestRenderExpandFunction_UsersetReferenceEmission(t *testing.T) {
+	a := mkAnalysis("document", "viewer", RelationFeatures{HasDirect: true, HasUserset: true}, false)
+	a.SatisfyingRelations = []string{"viewer"}
+	a.DirectSubjectTypes = []string{"user"}
+	a.AllowedSubjectTypes = []string{"user"}
+	a.UsersetPatterns = []UsersetPattern{{
+		SubjectType:     "group",
+		SubjectRelation: "member",
+	}}
+
+	plan, ok := BuildExpandPlan(a, "")
+	if !ok {
+		t.Fatalf("userset plan should be eligible after slice 2.3")
+	}
+	// Single rewrite — userset is folded into the direct grant, not
+	// a separate child node.
+	if len(plan.Rewrites) != 1 {
+		t.Fatalf("userset + direct must collapse to ONE direct rewrite; got %d rewrites", len(plan.Rewrites))
+	}
+	got := RenderExpandFunction(plan)
+
+	if !strings.Contains(got, "subject_type IN ('user', 'group')") {
+		t.Errorf("subject_type filter must union user + userset pattern types:\n%s", got)
+	}
+	// Single-rewrite relation: no Union envelope
+	if strings.Contains(got, "'union'") {
+		t.Errorf("userset folds into the direct rewrite, no Union envelope:\n%s", got)
+	}
+}
+
+// TestRenderExpandFunction_UsersetOnlyRelation exercises a relation
+// where the ONLY rewrite is a userset reference (`viewer:
+// [group#member]`, no direct user grant). The analysis sets
+// HasDirect=false; BuildExpandPlan must still emit a Direct rewrite
+// because the userset's row lives in melange_tuples as a direct grant.
+// Without this, pure-userset relations would silently produce no
+// rewrites and route to the sentinel.
+func TestRenderExpandFunction_UsersetOnlyRelation(t *testing.T) {
+	a := mkAnalysis("document", "viewer", RelationFeatures{HasUserset: true}, false)
+	a.SatisfyingRelations = []string{"viewer"}
+	// HasDirect=false, DirectSubjectTypes empty — only the userset.
+	a.UsersetPatterns = []UsersetPattern{{
+		SubjectType:     "group",
+		SubjectRelation: "member",
+	}}
+
+	plan, ok := BuildExpandPlan(a, "")
+	if !ok {
+		t.Fatalf("userset-only relation should be eligible — the userset row is a direct grant")
+	}
+	if len(plan.Rewrites) != 1 {
+		t.Fatalf("expected exactly one rewrite; got %d", len(plan.Rewrites))
+	}
+	got := RenderExpandFunction(plan)
+	if !strings.Contains(got, "subject_type IN ('group')") {
+		t.Errorf("userset-only relation's filter must use the pattern's subject type:\n%s", got)
+	}
+}
+
 // TestRenderExpandFunction_DirectAndTTU exercises the multi-rewrite
 // path where the relation has both direct grants and a TTU
 // ("viewer: [user] or viewer from parent"). Both rewrites surface as
@@ -422,7 +518,7 @@ func TestRenderExpandFunction_IntersectionWithExclusion(t *testing.T) {
 func TestRenderExpandFunction_DirectAndTTU(t *testing.T) {
 	a := mkAnalysis("folder", "viewer", RelationFeatures{HasDirect: true, HasRecursive: true}, false)
 	a.SatisfyingRelations = []string{"viewer"}
-	a.AllowedSubjectTypes = []string{"user"}
+	a.AllowedSubjectTypes = []string{"user"}; a.DirectSubjectTypes = []string{"user"}
 	a.ParentRelations = []ParentRelationInfo{{
 		Relation:            "viewer",
 		LinkingRelation:     "parent",
