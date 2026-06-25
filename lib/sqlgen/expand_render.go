@@ -438,13 +438,25 @@ func buildExpandTTULeaf(plan ExpandPlan, ttu ParentRelationInfo) string {
 
 // buildExpandDirectLeaf renders the Leaf.Users projection for a direct
 // rewrite: jsonb_agg over melange_tuples matching the relation's
-// allowed subject types, optionally filtered by p_subject_type. The
-// emitted user-strings are OpenFGA-formatted (`<subject_type>:<subject_id>`)
-// so they survive any later flattening helper unchanged.
+// allowed subject types, optionally filtered by p_subject_type, capped
+// by p_max_leaf. The emitted user-strings are OpenFGA-formatted
+// (`<subject_type>:<subject_id>`) so they survive any later flattening
+// helper unchanged.
 //
 // The aggregation is wrapped in COALESCE(..., '[]'::jsonb) so an
 // empty result becomes `{users: []}` rather than `{users: null}` —
 // OpenFGA tooling expects an array, not null.
+//
+// p_max_leaf cap (slice 2.4): when set, the aggregation runs against
+// a subquery with `LIMIT p_max_leaf` and the leaf's `users_truncated`
+// field is set to TRUE when more rows exist beyond the cap. The cap
+// uses two SELECTs against the same WHERE — one to fetch the capped
+// page, one EXISTS-OFFSET probe to detect overflow. PostgreSQL won't
+// share the work between the two but Expand is the debugging-and-
+// admin path, not the request hot path, so the simpler shape wins.
+// When p_max_leaf IS NULL the LIMIT/EXISTS both no-op (matching
+// OpenFGA's unbounded behaviour) and the users_truncated field is
+// omitted from the JSONB via the helper's CASE wrapper.
 func buildExpandDirectLeaf(plan ExpandPlan, subjectTypes []string) string {
 	tuplesTable := sqldsl.PrefixIdent("melange_tuples", plan.DatabaseSchema)
 	subjectTypeList := formatSQLStringList(subjectTypes)
@@ -462,12 +474,26 @@ func buildExpandDirectLeaf(plan ExpandPlan, subjectTypes []string) string {
 	}
 	where = append(where,
 		"(p_subject_type IS NULL OR subject_type = p_subject_type)")
+	whereSQL := strings.Join(where, " AND ")
 
+	// Capped page: SELECT the OpenFGA-formatted user string from the
+	// inner subquery, ORDERed for deterministic output, LIMITed to
+	// p_max_leaf. When p_max_leaf IS NULL the LIMIT effectively
+	// disappears via the IS NULL guard (Postgres treats LIMIT NULL as
+	// "no limit"). Aggregating the OUTER SELECT (rather than inside the
+	// subquery) preserves the ORDER + LIMIT semantics.
 	usersExpr := fmt.Sprintf(
-		"COALESCE((SELECT jsonb_agg(subject_type || ':' || subject_id ORDER BY subject_type, subject_id) FROM %s WHERE %s), '[]'::jsonb)",
-		tuplesTable, strings.Join(where, " AND "))
+		"COALESCE((SELECT jsonb_agg(u) FROM (SELECT subject_type || ':' || subject_id AS u FROM %s WHERE %s ORDER BY subject_type, subject_id LIMIT p_max_leaf) capped), '[]'::jsonb)",
+		tuplesTable, whereSQL)
 
-	// users_truncated is reserved for slice 2.4 — pass empty so the key
-	// is omitted entirely until that slice lands.
-	return BuildExpandUsersLeafJSON(usersExpr, "")
+	// Truncation probe: a single-row EXISTS over the same WHERE with
+	// OFFSET p_max_leaf. When at least one row exists past the cap the
+	// page was truncated. The p_max_leaf IS NOT NULL guard short-
+	// circuits the probe when the cap is unset so OpenFGA-equivalent
+	// callers don't pay for a redundant query.
+	usersTruncatedExpr := fmt.Sprintf(
+		"(p_max_leaf IS NOT NULL AND EXISTS (SELECT 1 FROM %s WHERE %s OFFSET p_max_leaf))",
+		tuplesTable, whereSQL)
+
+	return BuildExpandUsersLeafJSON(usersExpr, usersTruncatedExpr)
 }

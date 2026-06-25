@@ -50,6 +50,17 @@ func TestBuildExpandUsersLeafJSON_WithTruncate(t *testing.T) {
 	if !strings.Contains(got, "ELSE '{}'::jsonb") {
 		t.Errorf("ELSE branch missing for no-truncation case: %s", got)
 	}
+	// Regression pin: the `||` concatenation MUST run at the OBJECT
+	// level (against `jsonb_build_object('users', v_users)`), NOT at
+	// the array level. Postgres's `||` on a JSONB array appends each
+	// element of the right-hand side as an array entry — if the
+	// concat is scoped inside `jsonb_build_object('users', v_users ||
+	// <truncated_obj>)`, the truncated object gets shoved into the
+	// users array instead of becoming a sibling key. Look for the
+	// concat being applied to the build_object call directly.
+	if !strings.Contains(got, "jsonb_build_object('users', v_users) || CASE WHEN") {
+		t.Errorf("concat must be applied to the Users object, not its array; got:\n%s", got)
+	}
 }
 
 func TestBuildExpandUnionJSON(t *testing.T) {

@@ -53,15 +53,18 @@ func BuildExpandComputedLeafJSON(usersetExpr string) string {
 // the array via aggregation should COALESCE the SELECT to '[]'::jsonb so
 // an empty leaf is structurally `{users: []}` rather than `{users: null}`.
 func BuildExpandUsersLeafJSON(usersExpr, usersTruncatedExpr string) string {
-	usersObj := "jsonb_build_object('users', " + usersExpr
+	// Build the inner Users object first: {users: <arr>}. The optional
+	// users_truncated key is merged via `||` AT THE OBJECT level, NOT
+	// inside the jsonb_build_object call — Postgres's `||` on a JSONB
+	// array would APPEND the truncated object as an array element,
+	// mangling the user list. The outer parentheses keep the
+	// concatenation scoped to this object before it's nested.
+	usersObj := "jsonb_build_object('users', " + usersExpr + ")"
 	if usersTruncatedExpr != "" {
-		// CASE wrapping so the key is only present when true — matches
-		// the omitempty marshalling on the Go side.
-		usersObj += fmt.Sprintf(
+		usersObj = "(" + usersObj + fmt.Sprintf(
 			" || CASE WHEN %s THEN jsonb_build_object('users_truncated', true) ELSE '{}'::jsonb END",
-			usersTruncatedExpr)
+			usersTruncatedExpr) + ")"
 	}
-	usersObj += ")"
 	return "jsonb_build_object('leaf', jsonb_build_object('users', " + usersObj + "))"
 }
 

@@ -51,9 +51,22 @@ func TestRenderExpandFunction_DirectOnly(t *testing.T) {
 	if strings.Contains(got, "'union'") {
 		t.Errorf("single-rewrite relation must not emit a Union wrapper; got:\n%s", got)
 	}
-	// users_truncated belongs to slice 2.4 — must not leak in early
-	if strings.Contains(got, "users_truncated") {
-		t.Errorf("users_truncated is slice 2.4; got:\n%s", got)
+	// Slice 2.4 wires p_max_leaf: every direct rewrite must emit the
+	// cap (LIMIT p_max_leaf) and the truncation probe (EXISTS OFFSET).
+	// The CASE wrapper keeps users_truncated out of the response when
+	// the probe is false, so OpenFGA-equivalent callers (no cap set)
+	// don't see the extension key.
+	for _, w := range []string{
+		"LIMIT p_max_leaf",
+		"OFFSET p_max_leaf",
+		"p_max_leaf IS NOT NULL",
+		"'users_truncated', true",
+		// Probe runs against the same WHERE as the page SELECT
+		"EXISTS (SELECT 1 FROM melange_tuples",
+	} {
+		if !strings.Contains(got, w) {
+			t.Errorf("missing %q in generated SQL:\n%s", w, got)
+		}
 	}
 }
 

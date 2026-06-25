@@ -502,6 +502,168 @@ func TestExpand_WildcardInlinesAsUserString(t *testing.T) {
 	})
 }
 
+// TestExpand_MaxLeafCapAndTruncationFlag exercises slice 2.4: the
+// Melange `p_max_leaf` extension caps each Leaf.Users array. With
+// 3 owners and `WithExpandMaxLeaf(2)`, the array should hold 2
+// entries (deterministically sorted) AND carry `users_truncated:
+// true`. The OpenFGA-equivalent unbounded case (no option set)
+// returns all entries with no `users_truncated` key — the JSON
+// omits it via the helper's CASE wrapper.
+func TestExpand_MaxLeafCapAndTruncationFlag(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	runTestWithSchema(t, func(t *testing.T, databaseSchema string) {
+		db := testutil.DBWithDatabaseSchema(t, databaseSchema)
+		ctx := context.Background()
+
+		var orgID int64
+		require.NoError(t, db.QueryRowContext(ctx,
+			`INSERT INTO organizations (name) VALUES ('expand_cap_org') RETURNING id`).Scan(&orgID))
+		// Three owners — enough to exercise both pages of a cap=2.
+		ownerIDs := make([]int64, 0, 3)
+		for i := 0; i < 3; i++ {
+			var uid int64
+			require.NoError(t, db.QueryRowContext(ctx,
+				`INSERT INTO users (username) VALUES ($1) RETURNING id`,
+				fmt.Sprintf("cap_owner_%d", i)).Scan(&uid))
+			_, err := db.ExecContext(ctx,
+				`INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'owner')`,
+				orgID, uid)
+			require.NoError(t, err)
+			ownerIDs = append(ownerIDs, uid)
+		}
+
+		checker := melange.NewChecker(db, melange.WithDatabaseSchema(databaseSchema))
+		object := melange.Object{Type: "organization", ID: strconv.FormatInt(orgID, 10)}
+
+		// Baseline: no cap → all three owners, users_truncated absent.
+		full, err := checker.Expand(ctx, object, melange.Relation("owner"))
+		require.NoError(t, err)
+		require.NotNil(t, full.Root.Leaf)
+		require.NotNil(t, full.Root.Leaf.Users)
+		assert.Len(t, full.Root.Leaf.Users.Users, 3,
+			"uncapped Expand returns every grant")
+		assert.False(t, full.Root.Leaf.Users.UsersTruncated,
+			"OpenFGA-equivalent (unbounded) responses must NOT carry users_truncated")
+
+		// Capped: WithExpandMaxLeaf(2) returns the first two users
+		// (deterministic ordering — the SELECT's ORDER BY pins
+		// subject_type, subject_id ascending) AND surfaces
+		// users_truncated.
+		capped, err := checker.Expand(ctx, object, melange.Relation("owner"),
+			melange.WithExpandMaxLeaf(2))
+		require.NoError(t, err)
+		require.NotNil(t, capped.Root.Leaf)
+		require.NotNil(t, capped.Root.Leaf.Users)
+		assert.Len(t, capped.Root.Leaf.Users.Users, 2,
+			"capped Expand returns at most p_max_leaf entries")
+		assert.True(t, capped.Root.Leaf.Users.UsersTruncated,
+			"capped Expand must signal truncation so consumers know the list is partial")
+
+		// FlattenUsers honours the cap on what's *present* in the
+		// tree — it doesn't re-fetch missing entries.
+		assert.Len(t, capped.FlattenUsers(), 2)
+	})
+}
+
+// TestExpand_MaxLeafExactSizeNoTruncation pins the edge case where
+// the result size exactly matches the cap: every entry fits, so
+// users_truncated MUST be false. Off-by-one error guard — without
+// the EXISTS-OFFSET probe being correct, an exactly-filled page
+// could incorrectly trip the flag.
+func TestExpand_MaxLeafExactSizeNoTruncation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	runTestWithSchema(t, func(t *testing.T, databaseSchema string) {
+		db := testutil.DBWithDatabaseSchema(t, databaseSchema)
+		ctx := context.Background()
+
+		var orgID int64
+		require.NoError(t, db.QueryRowContext(ctx,
+			`INSERT INTO organizations (name) VALUES ('expand_cap_exact_org') RETURNING id`).Scan(&orgID))
+		for i := 0; i < 2; i++ {
+			var uid int64
+			require.NoError(t, db.QueryRowContext(ctx,
+				`INSERT INTO users (username) VALUES ($1) RETURNING id`,
+				fmt.Sprintf("cap_exact_owner_%d", i)).Scan(&uid))
+			_, err := db.ExecContext(ctx,
+				`INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'owner')`,
+				orgID, uid)
+			require.NoError(t, err)
+		}
+
+		checker := melange.NewChecker(db, melange.WithDatabaseSchema(databaseSchema))
+		tree, err := checker.Expand(ctx,
+			melange.Object{Type: "organization", ID: strconv.FormatInt(orgID, 10)},
+			melange.Relation("owner"),
+			melange.WithExpandMaxLeaf(2))
+		require.NoError(t, err)
+		require.NotNil(t, tree.Root.Leaf)
+		require.NotNil(t, tree.Root.Leaf.Users)
+		assert.Len(t, tree.Root.Leaf.Users.Users, 2)
+		assert.False(t, tree.Root.Leaf.Users.UsersTruncated,
+			"result size == cap must NOT trip the truncation flag")
+	})
+}
+
+// TestExpand_MaxLeafJSONShape pins the wire-level shape of the
+// truncation flag: when present it's `"users_truncated": true`;
+// when absent the key is dropped entirely (NOT serialised as
+// false). This is the OpenFGA-compatibility contract — consumers
+// that don't know about the extension shouldn't see an unexpected
+// key on their uncapped requests.
+func TestExpand_MaxLeafJSONShape(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	runTestWithSchema(t, func(t *testing.T, databaseSchema string) {
+		db := testutil.DBWithDatabaseSchema(t, databaseSchema)
+		ctx := context.Background()
+
+		var orgID int64
+		require.NoError(t, db.QueryRowContext(ctx,
+			`INSERT INTO organizations (name) VALUES ('expand_cap_json_org') RETURNING id`).Scan(&orgID))
+		for i := 0; i < 2; i++ {
+			var uid int64
+			require.NoError(t, db.QueryRowContext(ctx,
+				`INSERT INTO users (username) VALUES ($1) RETURNING id`,
+				fmt.Sprintf("cap_json_owner_%d", i)).Scan(&uid))
+			_, err := db.ExecContext(ctx,
+				`INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'owner')`,
+				orgID, uid)
+			require.NoError(t, err)
+		}
+
+		// Direct SQL so we can inspect the raw JSONB envelope.
+		var raw []byte
+		err := db.QueryRowContext(ctx,
+			fmt.Sprintf("SELECT %s($1, $2, $3, NULL, NULL)::text",
+				sqldsl.PrefixIdent("expand_permission", databaseSchema)),
+			"organization", strconv.FormatInt(orgID, 10), "owner").Scan(&raw)
+		require.NoError(t, err)
+		// Uncapped: the key must not appear at all.
+		assert.NotContains(t, string(raw), "users_truncated",
+			"uncapped responses must omit the users_truncated key (omitempty contract)")
+
+		// Capped to 1: the key appears with value true.
+		err = db.QueryRowContext(ctx,
+			fmt.Sprintf("SELECT %s($1, $2, $3, NULL, 1)::text",
+				sqldsl.PrefixIdent("expand_permission", databaseSchema)),
+			"organization", strconv.FormatInt(orgID, 10), "owner").Scan(&raw)
+		require.NoError(t, err)
+		// Whitespace-tolerant — Postgres normalises JSONB on output
+		// (`"key": true`, with the space), so the assertion accepts
+		// any whitespace between the key and the value.
+		assert.Regexp(t, `"users_truncated"\s*:\s*true`, string(raw),
+			"capped responses must carry users_truncated:true (not :false)")
+	})
+}
+
 // TestExpand_NotYetSupportedSentinel exercises the dispatcher's
 // no-entry sentinel: when the (object_type, relation) pair is unknown
 // OR the relation uses a feature gated out of slice 2.1 (TTU,
