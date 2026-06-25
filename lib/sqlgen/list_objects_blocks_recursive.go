@@ -308,7 +308,12 @@ func splitBlocksByPropagation(relations []string, propagatable map[string]bool, 
 }
 
 // buildCrossTypeTTUBlocks builds blocks for cross-type TTU patterns.
-// These are non-recursive and use check_permission_internal.
+// When the parent relation has a non-recursive list_objects function, it uses a
+// subject-first path: list accessible parents for the subject, then join child
+// linking tuples. This avoids scanning every child candidate and calling
+// check_permission_internal for each one. Recursive parent list functions can
+// form cross-type list cycles, so those keep the check_permission_internal
+// fallback.
 func buildCrossTypeTTUBlocks(plan ListPlan, parentRelations []ListParentRelationData) []TypedQueryBlock {
 	var blocks []TypedQueryBlock
 
@@ -326,36 +331,140 @@ func buildCrossTypeTTUBlocks(plan ListPlan, parentRelations []ListParentRelation
 			SubjectID,
 		)
 
-		q := Tuples(plan.DatabaseSchema, "child").
-			ObjectType(plan.ObjectType).
-			Relations(parent.LinkingRelation).
-			Where(
-				In{Expr: Col{Table: "child", Column: "subject_type"}, Values: crossTypes},
-				CheckPermission{
-					Schema:   plan.DatabaseSchema,
-					Subject:  SubjectParams(),
-					Relation: parent.Relation,
-					Object: ObjectRef{
-						Type: Col{Table: "child", Column: "subject_type"},
-						ID:   Col{Table: "child", Column: "subject_id"},
-					},
-					ExpectAllow: true,
-				},
-			).
-			SelectCol("object_id").
-			Distinct()
-
-		for _, pred := range crossExclusions.BuildPredicates() {
-			q.Where(pred)
+		var fallbackTypes []string
+		for _, parentType := range crossTypes {
+			if canUseSubjectFirstTTU(plan, parent, parentType) {
+				blocks = append(blocks, buildSubjectFirstCrossTypeTTUBlock(plan, parent, parentType, crossExclusions))
+			} else {
+				fallbackTypes = append(fallbackTypes, parentType)
+			}
 		}
 
-		blocks = append(blocks, TypedQueryBlock{
-			Comments: []string{fmt.Sprintf("-- Cross-type TTU: %s -> %s", parent.LinkingRelation, parent.Relation)},
-			Query:    q.Build(),
-		})
+		if len(fallbackTypes) > 0 {
+			blocks = append(blocks, buildCheckPermissionCrossTypeTTUBlock(plan, parent, fallbackTypes, crossExclusions))
+		}
 	}
 
 	return blocks
+}
+
+func canUseSubjectFirstTTU(plan ListPlan, parent ListParentRelationData, parentType string) bool {
+	if plan.AnalysisLookup == nil {
+		return false
+	}
+
+	parentAnalysis, ok := plan.AnalysisLookup[parentType+"."+parent.Relation]
+	if !ok || !parentAnalysis.Capabilities.ListAllowed {
+		return false
+	}
+
+	// Avoid introducing cross-type list recursion. The permission-check fallback
+	// carries p_visited and remains the safe path for recursive/composed list
+	// strategies; direct/userset/intersection parents have no TTU list calls.
+	switch parentAnalysis.ListStrategy {
+	case ListStrategyDirect, ListStrategyUserset, ListStrategyIntersection:
+		return true
+	default:
+		return false
+	}
+}
+
+func buildSubjectFirstCrossTypeTTUBlock(plan ListPlan, parent ListParentRelationData, parentType string, exclusions ExclusionConfig) TypedQueryBlock {
+	conditions := exclusions.BuildPredicates()
+	if sourceRelationNeedsVerification(plan, parent) {
+		conditions = append(conditions, sourceRelationCheck(plan, parent))
+	}
+
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "child", Column: "object_id"}},
+		FromExpr: FunctionCallExpr{
+			Schema: plan.DatabaseSchema,
+			Name:   ListObjectsFunctionName(parentType, parent.Relation),
+			Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
+			Alias:  "parent_obj",
+		},
+		Joins: []JoinClause{
+			{
+				Type:  "INNER",
+				Table: "melange_tuples",
+				Alias: "child",
+				On: And(
+					Eq{Left: Col{Table: "child", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+					Eq{Left: Col{Table: "child", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
+					Eq{Left: Col{Table: "child", Column: "subject_type"}, Right: Lit(parentType)},
+					Eq{Left: Col{Table: "child", Column: "subject_id"}, Right: Col{Table: "parent_obj", Column: "object_id"}},
+				),
+			},
+		},
+		Where: buildWhereFromPredicates(conditions),
+	}
+
+	return TypedQueryBlock{
+		Comments: []string{fmt.Sprintf("-- Cross-type TTU subject-first: %s -> %s.%s", parent.LinkingRelation, parentType, parent.Relation)},
+		Query:    stmt,
+	}
+}
+
+func sourceRelationNeedsVerification(plan ListPlan, parent ListParentRelationData) bool {
+	if !parent.IsClosurePattern || parent.SourceRelation == "" {
+		return false
+	}
+	if plan.AnalysisLookup == nil {
+		return true
+	}
+
+	sourceAnalysis, ok := plan.AnalysisLookup[plan.ObjectType+"."+parent.SourceRelation]
+	if !ok {
+		return true
+	}
+
+	return sourceAnalysis.Features.HasExclusion || sourceAnalysis.Features.HasIntersection
+}
+
+func sourceRelationCheck(plan ListPlan, parent ListParentRelationData) Expr {
+	return CheckPermission{
+		Schema:      plan.DatabaseSchema,
+		Subject:     SubjectParams(),
+		Relation:    parent.SourceRelation,
+		Object:      LiteralObject(plan.ObjectType, Col{Table: "child", Column: "object_id"}),
+		ExpectAllow: true,
+	}
+}
+
+func buildCheckPermissionCrossTypeTTUBlock(plan ListPlan, parent ListParentRelationData, crossTypes []string, exclusions ExclusionConfig) TypedQueryBlock {
+	accessCheck := Expr(CheckPermission{
+		Schema:   plan.DatabaseSchema,
+		Subject:  SubjectParams(),
+		Relation: parent.Relation,
+		Object: ObjectRef{
+			Type: Col{Table: "child", Column: "subject_type"},
+			ID:   Col{Table: "child", Column: "subject_id"},
+		},
+		ExpectAllow: true,
+	})
+	if sourceRelationNeedsVerification(plan, parent) {
+		accessCheck = sourceRelationCheck(plan, parent)
+	}
+
+	q := Tuples(plan.DatabaseSchema, "child").
+		ObjectType(plan.ObjectType).
+		Relations(parent.LinkingRelation).
+		Where(
+			In{Expr: Col{Table: "child", Column: "subject_type"}, Values: crossTypes},
+			accessCheck,
+		).
+		SelectCol("object_id").
+		Distinct()
+
+	for _, pred := range exclusions.BuildPredicates() {
+		q.Where(pred)
+	}
+
+	return TypedQueryBlock{
+		Comments: []string{fmt.Sprintf("-- Cross-type TTU fallback: %s -> %s", parent.LinkingRelation, parent.Relation)},
+		Query:    q.Build(),
+	}
 }
 
 // buildRecursiveTTUBlock builds the recursive term block for self-referential TTU.
