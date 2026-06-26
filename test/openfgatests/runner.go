@@ -701,6 +701,14 @@ func RunTest(t *testing.T, parent *Client, tc TestCase) {
 				// not yet supported by the explain renderer) are skipped — see
 				// explain_parity.go for the eligibility / skip rules.
 				runExplainParityAssertions(t, ctx, client, storeID, modelID, stage.CheckAssertions)
+
+				// Cross-reference Expand against list_objects for every
+				// eligible list_objects assertion. For each expected
+				// object, ExpandRecursive(object, relation) must
+				// contain the assertion's user (or a covering wildcard).
+				// Sentinel responses (relation not yet eligible for
+				// Expand) skip — see expand_parity.go.
+				runExpandParityAssertions(t, ctx, client, storeID, modelID, stage.ListObjectsAssertions)
 			})
 		}
 	})

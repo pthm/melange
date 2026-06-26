@@ -22,6 +22,7 @@ var (
 	expandSubjectType string
 	expandMaxLeaf     int
 	expandFlatten     bool
+	expandRecursive   bool
 	expandColor       string
 )
 
@@ -80,7 +81,7 @@ Leaf.Users array; capped leaves carry users_truncated: true.`,
 		relation := melange.Relation(args[1])
 
 		return runExpand(dsn, databaseSchema, object, relation,
-			expandFormat, expandSubjectType, expandMaxLeaf, expandFlatten)
+			expandFormat, expandSubjectType, expandMaxLeaf, expandFlatten, expandRecursive)
 	},
 }
 
@@ -92,10 +93,11 @@ func init() {
 	f.StringVar(&expandSubjectType, "subject-type", "", "Melange extension: narrow Leaf.Users to this subject type (empty = no filter)")
 	f.IntVar(&expandMaxLeaf, "max-leaf", 0, "Melange extension: cap entries per Leaf.Users (0 = unbounded, OpenFGA-equivalent)")
 	f.BoolVar(&expandFlatten, "flatten", false, "print a flat deduplicated user list instead of the tree (Leaf.Users only; does not chase computed/TTU pointers)")
+	f.BoolVar(&expandRecursive, "recursive", false, "print a flat deduplicated user list AND chase computed/TTU pointers via additional Expand calls (implies --flatten)")
 	f.StringVar(&expandColor, "color", "auto", "colour output: auto|always|never (auto = stdout-is-TTY and NO_COLOR unset)")
 }
 
-func runExpand(dsn, databaseSchema string, object melange.Object, relation melange.Relation, format, subjectType string, maxLeaf int, flatten bool) error {
+func runExpand(dsn, databaseSchema string, object melange.Object, relation melange.Relation, format, subjectType string, maxLeaf int, flatten, recursive bool) error {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return cli.DBConnectError("connecting to database", err)
@@ -113,6 +115,21 @@ func runExpand(dsn, databaseSchema string, object melange.Object, relation melan
 	}
 
 	ctx := context.Background()
+
+	// --recursive chases pointers; --flatten just walks the tree.
+	// Recursive is the strict superset, so pass it through directly
+	// and skip the in-memory walk when set.
+	if recursive {
+		users, err := checker.ExpandRecursive(ctx, object, relation, opts...)
+		if err != nil {
+			return cli.GeneralError("expand", err)
+		}
+		for _, u := range users {
+			fmt.Println(u)
+		}
+		return nil
+	}
+
 	tree, err := checker.Expand(ctx, object, relation, opts...)
 	if err != nil {
 		return cli.GeneralError("expand", err)

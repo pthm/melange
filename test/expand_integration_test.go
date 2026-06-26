@@ -664,6 +664,92 @@ func TestExpand_MaxLeafJSONShape(t *testing.T) {
 	})
 }
 
+// TestExpand_RecursiveWalkChasesPointers exercises slice 2.5's
+// Checker.ExpandRecursive convenience walker. The walker chases
+// Leaf.Computed and Leaf.TupleToUserset pointers via additional
+// Expand calls and returns the flat deduplicated user list — same
+// answer as ListSubjects, just via a different code path. Acts as
+// the end-to-end correctness pin for the recursive walker.
+//
+// Schema scenario: organization.admin: [user] or owner. alice is the
+// direct admin, bob is the owner. ExpandRecursive("admin") should
+// return both — the direct admin from the [user] rewrite, and the
+// owner via the chased Computed pointer.
+func TestExpand_RecursiveWalkChasesPointers(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	runTestWithSchema(t, func(t *testing.T, databaseSchema string) {
+		db := testutil.DBWithDatabaseSchema(t, databaseSchema)
+		ctx := context.Background()
+
+		var orgID, aliceID, bobID int64
+		require.NoError(t, db.QueryRowContext(ctx,
+			`INSERT INTO organizations (name) VALUES ('expand_recursive_org') RETURNING id`).Scan(&orgID))
+		require.NoError(t, db.QueryRowContext(ctx,
+			`INSERT INTO users (username) VALUES ('expand_recursive_alice') RETURNING id`).Scan(&aliceID))
+		require.NoError(t, db.QueryRowContext(ctx,
+			`INSERT INTO users (username) VALUES ('expand_recursive_bob') RETURNING id`).Scan(&bobID))
+		_, err := db.ExecContext(ctx,
+			`INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'admin'), ($1, $3, 'owner')`,
+			orgID, aliceID, bobID)
+		require.NoError(t, err)
+
+		checker := melange.NewChecker(db, melange.WithDatabaseSchema(databaseSchema))
+		object := melange.Object{Type: "organization", ID: strconv.FormatInt(orgID, 10)}
+
+		got, err := checker.ExpandRecursive(ctx, object, melange.Relation("admin"))
+		require.NoError(t, err)
+		// Both users appear — alice from the direct rewrite, bob from
+		// the chased owner pointer.
+		assert.ElementsMatch(t,
+			[]string{fmt.Sprintf("user:%d", aliceID), fmt.Sprintf("user:%d", bobID)},
+			got)
+
+		// ExpandRecursive must agree with ListSubjects for the same
+		// (object, relation) — both compute "every user with this
+		// permission" but via independent SQL surfaces. Drift means a
+		// bug in one of the two.
+		listed, err := checker.ListSubjectsAll(ctx, object, melange.Relation("admin"), melange.ObjectType("user"))
+		require.NoError(t, err)
+		listedUsers := make([]string, len(listed))
+		for i, id := range listed {
+			listedUsers[i] = "user:" + id
+		}
+		assert.ElementsMatch(t, listedUsers, got,
+			"ExpandRecursive must agree with ListSubjects for the same (object, relation)")
+	})
+}
+
+// TestExpand_RecursiveCycleSafe pins the cycle-safety contract of
+// ExpandRecursive: a self-referential rewrite (folder.viewer with
+// folder:a as its own parent) must terminate via the visited-set
+// deduplication. Without it, the walker would loop forever issuing
+// the same Expand call.
+func TestExpand_RecursiveCycleSafe(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	ctx := context.Background()
+	db := installAdHocSchema(t, ctx, recursiveTTUSchema, "v2.5-cycle")
+
+	// folder:a links to folder:a — a one-node self-cycle. The TTU
+	// rewrite would chase folder:a#viewer forever without cycle
+	// detection. ExpandRecursive's visited set must terminate it.
+	insertTuple(t, ctx, db, "folder", "a", "parent", "folder", "a")
+	// Also grant alice directly so the result isn't empty.
+	insertTuple(t, ctx, db, "user", "alice", "viewer", "folder", "a")
+
+	checker := melange.NewChecker(db)
+	users, err := checker.ExpandRecursive(ctx,
+		melange.Object{Type: "folder", ID: "a"},
+		melange.Relation("viewer"))
+	require.NoError(t, err, "cycle must terminate via visited set, not loop forever")
+	assert.Equal(t, []string{"user:alice"}, users)
+}
+
 // TestExpand_NotYetSupportedSentinel exercises the dispatcher's
 // no-entry sentinel: when the (object_type, relation) pair is unknown
 // OR the relation uses a feature gated out of slice 2.1 (TTU,

@@ -168,9 +168,12 @@ func (c *Checker) Expand(ctx context.Context, object ObjectLike, relation Relati
 	rel := relation.FGARelation()
 
 	if c.validateRequest {
-		// Reuse the same validator surface Check / Explain use; passing
-		// an empty subject is the convention for "object-side only".
-		if err := c.validateCheckRequest(ctx, c.q, Object{}, rel, obj); err != nil {
+		// Use the object-side validator (mirrors list_subjects /
+		// list_users which also has no subject argument). The subject
+		// type filter, when set, narrows which user types end up in
+		// Leaf.Users; pass it through so the validator can flag
+		// schema-invalid filters.
+		if err := c.validateListUsersRequest(ctx, c.q, rel, obj, resolved.subjectType); err != nil {
 			return nil, err
 		}
 	}
@@ -198,4 +201,133 @@ func (c *Checker) Expand(ctx context.Context, object ObjectLike, relation Relati
 		return nil, fmt.Errorf("expand_permission: decoding tree: %w", err)
 	}
 	return &tree, nil
+}
+
+// ExpandRecursive returns the flat, deduplicated list of users with
+// the relation on the object. Issues an initial Expand call then
+// chases every Leaf.Computed and Leaf.TupleToUserset pointer with
+// follow-up Expand calls until the tree is fully resolved.
+//
+// The cost is N round-trips for N distinct pointers — acceptable for
+// admin / debugging flows but not the request hot path; for that, use
+// Checker.ListObjects (returns a flat list via dedicated SQL) or a
+// regular Check.
+//
+// Cycle-safe: every (object, relation) pair is expanded at most once
+// per call, so a self-referential rewrite (`viewer: viewer from parent`
+// where parent points back at the same object) terminates rather than
+// looping forever.
+//
+// Wildcards (`<type>:*`) and userset references
+// (`<type>:<id>#<rel>`) survive as their string forms in the result;
+// the walker does NOT recursively chase userset refs because OpenFGA's
+// shape models them as inline subjects, not as pointers to another
+// (object, relation) pair. Callers that want recursive userset
+// resolution apply it client-side on the returned list.
+//
+// Order is deterministic (sorted) so tests don't depend on
+// dispatcher ordering or melange_tuples row layout.
+func (c *Checker) ExpandRecursive(ctx context.Context, object ObjectLike, relation RelationLike, opts ...ExpandOption) ([]string, error) {
+	seen := make(map[string]struct{})
+	users := make(map[string]struct{})
+
+	type pending struct {
+		obj Object
+		rel Relation
+	}
+	queue := []pending{{obj: object.FGAObject(), rel: relation.FGARelation()}}
+
+	for len(queue) > 0 {
+		next := queue[0]
+		queue = queue[1:]
+
+		key := string(next.obj.Type) + ":" + next.obj.ID + "#" + string(next.rel)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		tree, err := c.Expand(ctx, next.obj, next.rel, opts...)
+		if err != nil {
+			return nil, err
+		}
+		for _, u := range tree.FlattenUsers() {
+			users[u] = struct{}{}
+		}
+		collectExpandPointers(tree.Root, func(obj Object, rel Relation) {
+			queue = append(queue, pending{obj: obj, rel: rel})
+		})
+	}
+
+	out := make([]string, 0, len(users))
+	for u := range users {
+		out = append(out, u)
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// collectExpandPointers walks an UsersetTreeNode and invokes the
+// callback for every Leaf.Computed and Leaf.TupleToUserset pointer.
+// Difference subtract is NOT chased — the subtract slot names users
+// to exclude, not include (matches FlattenUsers behaviour).
+func collectExpandPointers(n *UsersetTreeNode, push func(Object, Relation)) {
+	if n == nil {
+		return
+	}
+	if n.Leaf != nil && n.Leaf.Computed != nil {
+		if obj, rel, ok := parseUsersetPointer(n.Leaf.Computed.Userset); ok {
+			push(obj, rel)
+		}
+	}
+	if n.Leaf != nil && n.Leaf.TupleToUserset != nil {
+		for _, c := range n.Leaf.TupleToUserset.Computed {
+			if obj, rel, ok := parseUsersetPointer(c.Userset); ok {
+				push(obj, rel)
+			}
+		}
+	}
+	if n.Union != nil {
+		for _, child := range n.Union.Nodes {
+			collectExpandPointers(child, push)
+		}
+	}
+	if n.Intersection != nil {
+		for _, child := range n.Intersection.Nodes {
+			collectExpandPointers(child, push)
+		}
+	}
+	if n.Difference != nil {
+		collectExpandPointers(n.Difference.Base, push)
+	}
+}
+
+// parseUsersetPointer splits a "<type>:<id>#<relation>" string into
+// the Object + Relation pair an Expand follow-up call needs. Returns
+// ok=false on malformed input so a degenerate tree response stops
+// the walker rather than crashing — defensive against future
+// renderer bugs that might emit an empty or malformed Computed
+// userset string.
+func parseUsersetPointer(s string) (Object, Relation, bool) {
+	hash := -1
+	for i := 0; i < len(s); i++ {
+		if s[i] == '#' {
+			hash = i
+			break
+		}
+	}
+	if hash < 1 || hash == len(s)-1 {
+		return Object{}, "", false
+	}
+	colon := -1
+	for i := 0; i < hash; i++ {
+		if s[i] == ':' {
+			colon = i
+			break
+		}
+	}
+	if colon < 1 || colon >= hash-1 {
+		return Object{}, "", false
+	}
+	return Object{Type: ObjectType(s[:colon]), ID: s[colon+1 : hash]}, Relation(s[hash+1:]), true
 }
