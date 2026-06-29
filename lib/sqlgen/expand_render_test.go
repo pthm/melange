@@ -181,9 +181,9 @@ func TestBuildExpandPlan_Ineligible(t *testing.T) {
 			a.ExcludedRelations = []string{"banned"}
 			a.ExcludedIntersectionGroups = []IntersectionGroupInfo{{}}
 		}, "follow-up"},
-		{"has complex userset patterns", func(a *RelationAnalysis) {
-			a.HasComplexUsersetPatterns = true
-		}, "follow-up"},
+		// (slice 1.8 dropped the HasComplexUsersetPatterns gate — the
+		// existing dispatcher recursion handles complex membership via
+		// the membership relation's own eligible function.)
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

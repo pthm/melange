@@ -851,9 +851,12 @@ func explainFunctionName(objectType, relation string) string {
 // whose parts carry IsThis / ParentRelation / ExcludedRelation are not yet
 // supported and disqualify the relation.
 func explainLocalSupported(a RelationAnalysis) bool {
-	if a.HasComplexUsersetPatterns {
-		return false
-	}
+	// SPIKE 1.8: dropped the HasComplexUsersetPatterns gate. The simple-
+	// userset codegen already recurses into explain_permission_internal
+	// for membership; the dispatcher routes to the membership relation's
+	// eligible explain function. Transitive eligibility cascading already
+	// handles ineligible membership targets. If the spike surfaces new
+	// FAILs, reinstate the gate.
 	f := a.Features
 	if f.HasIntersection && !intersectionGroupsAreSimple(a.IntersectionGroups) {
 		return false

@@ -221,9 +221,11 @@ func expandLocalSupported(a RelationAnalysis) bool {
 	if f.HasExclusion && !isSimpleExclusion(a) {
 		return false // multi-exclusion / TTU-excluded / intersection-excluded
 	}
-	if a.HasComplexUsersetPatterns {
-		return false // recursive-membership usersets (follow-up)
-	}
+	// SPIKE 1.8: dropped the HasComplexUsersetPatterns gate. Expand
+	// inlines userset references as user-strings in Leaf.Users; the
+	// membership relation's complexity doesn't affect the wire shape
+	// (callers chase Computed/TupleToUserset pointers via
+	// ExpandRecursive). Reinstate the gate if the spike surfaces FAILs.
 	return f.HasDirect || f.HasImplied || f.HasRecursive || f.HasIntersection || f.HasUserset
 }
 

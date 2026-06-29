@@ -83,7 +83,8 @@ func runExplainParityAssertions(t *testing.T, ctx context.Context, client *Clien
 			// every Check==false expectation as a pass.
 			if label := trace.Root.Label; strings.Contains(label, "explain not yet supported") ||
 				strings.Contains(label, "no relations defined") {
-				t.Skipf("explain not supported for %s: dispatcher sentinel", tk.GetObject())
+				t.Skipf("explain not supported for %s#%s: dispatcher sentinel",
+					tk.GetObject(), tk.GetRelation())
 			}
 
 			require.Equal(t, a.Expectation, *trace.Result,

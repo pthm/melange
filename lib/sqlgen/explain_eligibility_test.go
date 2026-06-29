@@ -16,9 +16,25 @@ import (
 // the machinery; real schemas exercise it once TTU / userset / intersection
 // fixtures land.
 
+// markLocallyIneligible mutates a in place so it fails the
+// explainLocalSupported / expandLocalSupported predicates. Used by the
+// cascade tests below as the "seed" of ineligibility — we used to set
+// HasComplexUsersetPatterns for this, but slice 1.8 dropped that gate.
+// Any non-simple intersection part triggers the same local-ineligibility
+// signal without affecting other cascade behaviour.
+func markLocallyIneligible(a *RelationAnalysis) {
+	a.Features.HasIntersection = true
+	a.IntersectionGroups = []IntersectionGroupInfo{{
+		Parts: []IntersectionPart{
+			{IsThis: true}, // IsThis fails intersectionPartIsSimple
+			{Relation: "rel_for_cascade"},
+		},
+	}}
+}
+
 func TestComputeExplainEligibility_LocalOnly(t *testing.T) {
 	blocked := mkAnalysis("doc", "blocked", RelationFeatures{HasDirect: true}, false)
-	blocked.HasComplexUsersetPatterns = true
+	markLocallyIneligible(&blocked)
 	analyses := []RelationAnalysis{
 		mkAnalysis("doc", "owner", RelationFeatures{HasDirect: true}, false),
 		mkAnalysis("doc", "viewer", RelationFeatures{HasDirect: true, HasImplied: true}, false),
@@ -41,7 +57,7 @@ func TestComputeExplainEligibility_TransitiveDownward(t *testing.T) {
 	// (HasComplexUsersetPatterns — still gated). wrapper must also be
 	// marked ineligible even though its own features are simple.
 	dep := mkAnalysis("doc", "dep", RelationFeatures{HasDirect: true}, false)
-	dep.HasComplexUsersetPatterns = true
+	markLocallyIneligible(&dep)
 	wrapper := mkAnalysis("doc", "wrapper", RelationFeatures{HasDirect: true, HasImplied: true}, false)
 	wrapper.ComplexClosureRelations = []string{"dep"}
 	analyses := []RelationAnalysis{dep, wrapper}
@@ -62,7 +78,7 @@ func TestComputeExplainEligibility_TransitiveChain(t *testing.T) {
 	// transitively downgrades to ineligible; then in the next pass
 	// wrapper itself gets downgraded.
 	bad := mkAnalysis("doc", "bad", RelationFeatures{HasDirect: true}, false)
-	bad.HasComplexUsersetPatterns = true
+	markLocallyIneligible(&bad)
 	middle := mkAnalysis("doc", "middle", RelationFeatures{HasDirect: true, HasImplied: true}, false)
 	middle.ComplexClosureRelations = []string{"bad"}
 	wrapper := mkAnalysis("doc", "wrapper", RelationFeatures{HasDirect: true, HasImplied: true}, false)
@@ -106,7 +122,7 @@ func TestComputeExplainEligibility_CrossTypeTTU_OneParentIneligible(t *testing.T
 	// eligible. A single ineligible parent disables the whole TTU wrapper.
 	orgAdmin := mkAnalysis("organization", "can_admin", RelationFeatures{HasDirect: true}, false)
 	folderAdmin := mkAnalysis("folder", "can_admin", RelationFeatures{HasDirect: true}, false)
-	folderAdmin.HasComplexUsersetPatterns = true
+	markLocallyIneligible(&folderAdmin)
 	repoAdmin := mkAnalysis("repository", "can_admin", RelationFeatures{HasDirect: true, HasRecursive: true}, false)
 	repoAdmin.ParentRelations = []ParentRelationInfo{{
 		Relation:            "can_admin",
@@ -142,7 +158,7 @@ func TestComputeExplainEligibility_UsersetPattern(t *testing.T) {
 
 	// Now flip group.member to ineligible and verify the cascade.
 	groupMember2 := mkAnalysis("group", "member", RelationFeatures{HasDirect: true}, false)
-	groupMember2.HasComplexUsersetPatterns = true
+	markLocallyIneligible(&groupMember2)
 	got = ComputeExplainEligibility([]RelationAnalysis{groupMember2, docViewer})
 	if got["group"]["member"] {
 		t.Errorf("group.member should be ineligible (HasComplexUsersetPatterns)")
@@ -158,7 +174,7 @@ func TestComputeExplainEligibility_PerObjectTypeIsolation(t *testing.T) {
 	// distinct entries; downgrading one must not affect the other.
 	docViewer := mkAnalysis("document", "viewer", RelationFeatures{HasDirect: true}, false)
 	folderViewer := mkAnalysis("folder", "viewer", RelationFeatures{HasDirect: true}, false)
-	folderViewer.HasComplexUsersetPatterns = true
+	markLocallyIneligible(&folderViewer)
 	analyses := []RelationAnalysis{docViewer, folderViewer}
 
 	got := ComputeExplainEligibility(analyses)
