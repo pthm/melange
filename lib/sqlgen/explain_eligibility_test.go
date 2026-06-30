@@ -118,8 +118,11 @@ func TestComputeExplainEligibility_CrossTypeTTU_AllParentsEligible(t *testing.T)
 }
 
 func TestComputeExplainEligibility_CrossTypeTTU_OneParentIneligible(t *testing.T) {
-	// Conservative rule: ALL allowed parent types must have their relation
-	// eligible. A single ineligible parent disables the whole TTU wrapper.
+	// Slice 1.10 dropped the conservative all-types-must-be-eligible rule.
+	// A single ineligible parent type no longer disables the TTU wrapper —
+	// the per-iteration recursion routes ineligible parents through the
+	// dispatcher's no-entry sentinel, which returns a well-formed
+	// result=false trace the miss branch handles as a failure NodeTTU.
 	orgAdmin := mkAnalysis("organization", "can_admin", RelationFeatures{HasDirect: true}, false)
 	folderAdmin := mkAnalysis("folder", "can_admin", RelationFeatures{HasDirect: true}, false)
 	markLocallyIneligible(&folderAdmin)
@@ -134,10 +137,10 @@ func TestComputeExplainEligibility_CrossTypeTTU_OneParentIneligible(t *testing.T
 		t.Errorf("organization.can_admin should be eligible")
 	}
 	if got["folder"]["can_admin"] {
-		t.Errorf("folder.can_admin should be ineligible (HasComplexUsersetPatterns)")
+		t.Errorf("folder.can_admin should be ineligible (markLocallyIneligible)")
 	}
-	if got["repository"]["can_admin"] {
-		t.Errorf("repository.can_admin should be ineligible — folder parent dragged it down")
+	if !got["repository"]["can_admin"] {
+		t.Errorf("repository.can_admin should be eligible — ineligible folder parent no longer drags it down (slice 1.10)")
 	}
 }
 

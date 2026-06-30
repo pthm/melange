@@ -975,23 +975,17 @@ func intersectionGroupsAreSimple(groups []IntersectionGroupInfo) bool {
 // ComputeExplainEligibility returns, for each (object_type, relation), whether
 // the current explain renderer can produce a trace that agrees with Check.
 //
-// The result is the fixed point of:
-//   - locally supported (explainLocalSupported)
-//   - every ComplexClosureRelation is itself eligible
-//     (same-object-type implied function call dependency)
-//   - every parent (type, relation) in ParentRelations is eligible
-//     (cross-object-type TTU dependency)
+// The result is the fixed point of the per-relation locality check
+// (explainLocalSupported) plus the recursive-dependency downgrades
+// enumerated in anyExplainDepIneligible.
 //
 // Eligibility is monotonically non-increasing: each pass can downgrade a
 // relation when a freshly-discovered ineligible dependency surfaces, but
 // nothing ever flips back. The fixed point is reached when no relation
-// changes in a pass.
-//
-// The conservative cross-type rule (ALL AllowedLinkingTypes must be
-// eligible) means a TTU relation with even one ineligible parent type
-// routes to the dispatcher's no-entry sentinel rather than emitting
-// partial traces — explicit "not yet supported" beats silently-skipped
-// linking tuples.
+// changes in a pass. Slice 1.10 dropped the cross-type TTU rule, so an
+// ineligible parent type on a TTU no longer poisons the wrapper — the
+// dispatcher's no-entry sentinel covers missing per-iteration callees
+// with a well-formed result=false trace.
 //
 // Exported so callers that build a CollectFunctionNames input by hand can
 // produce the same map GenerateSQL stashes on GeneratedSQL.ExplainEligible.
@@ -1044,13 +1038,18 @@ func anyExplainDepIneligible(a RelationAnalysis, eligible map[string]map[string]
 			return true
 		}
 	}
-	for _, parent := range a.ParentRelations {
-		for _, parentType := range parent.AllowedLinkingTypes {
-			if !eligible[parentType][parent.Relation] {
-				return true
-			}
-		}
-	}
+	// Cross-type TTU parents intentionally do NOT downgrade the wrapper:
+	// the per-iteration recursion routes through explain_permission_internal,
+	// which falls through to the dispatcher's no-entry sentinel for any
+	// (parent_type, parent_relation) pair without a generated function.
+	// The sentinel returns result=false with a well-formed Trace envelope,
+	// which the TTU loop's miss branch appends as a failure NodeTTU —
+	// structurally correct and matches Check's behavior for the same
+	// missing-callee case. Slice 1.10 dropped the conservative
+	// all-types-must-be-eligible rule; relations like
+	// `can_read: can_view from parent` with `parent: [document, folder]`
+	// now generate when only one of the parent types defines the
+	// referenced relation.
 	for _, pattern := range a.UsersetPatterns {
 		// IsComplex patterns are blocked by HasComplexUsersetPatterns in
 		// explainLocalSupported and shouldn't reach this point. For the
