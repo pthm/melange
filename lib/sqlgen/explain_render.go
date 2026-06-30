@@ -26,10 +26,19 @@ func RenderExplainFunction(plan CheckPlan, blocks CheckBlocks) (string, error) {
 	body := buildExplainCycleDetection(plan)
 	body = append(body, explainTruncationBailout(plan))
 	body = append(body, buildExplainUsersetSubjectStmts(plan, blocks)...)
-	body = append(body, buildExplainDirectAttempt(plan, blocks)...)
-	body = append(body, buildExplainImpliedAttempts(plan, blocks)...)
-	body = append(body, buildExplainParentRelationAttempts(plan, blocks)...)
-	body = append(body, buildExplainUsersetAttempts(plan, blocks)...)
+	// Standalone attempts (Direct, Implied, TTU, Userset) only emit when
+	// the relation has access paths OUTSIDE its intersection groups. When
+	// HasIntersection is true and HasStandaloneAccess is false the direct/
+	// userset grants are CONSTRAINED by the intersection — emitting them as
+	// top-level attempts would short-circuit and return success without
+	// the intersection's AND check. Mirrors Check's HasStandaloneAccess
+	// gate (see check_render.go's buildStandaloneAccessPathStmts call site).
+	if !plan.HasIntersection || plan.HasStandaloneAccess {
+		body = append(body, buildExplainDirectAttempt(plan, blocks)...)
+		body = append(body, buildExplainImpliedAttempts(plan, blocks)...)
+		body = append(body, buildExplainParentRelationAttempts(plan, blocks)...)
+		body = append(body, buildExplainUsersetAttempts(plan, blocks)...)
+	}
 	body = append(body, buildExplainIntersectionAttempts(plan, blocks)...)
 	// Pre-final truncation flag: flip v_truncated when the accumulated
 	// node count crossed v_max_nodes from in-function failure appends
@@ -135,10 +144,13 @@ func explainFunctionDecls(plan CheckPlan, blocks CheckBlocks) []Decl {
 	if len(blocks.IntersectionGroups) > 0 {
 		// Accumulators for the intersection attempts. v_intersection_pass
 		// tracks AND across parts; v_intersection_children carries the
-		// per-part traces into the success/failure NodeIntersection.
+		// per-part traces into the success/failure NodeIntersection;
+		// v_part_pass holds the per-part boolean for complex parts that
+		// use a precomputed Check predicate (slice 1.9).
 		decls = append(decls,
 			Decl{Name: "v_intersection_children", Type: "JSONB"},
 			Decl{Name: "v_intersection_pass", Type: "BOOLEAN"},
+			Decl{Name: "v_part_pass", Type: "BOOLEAN"},
 		)
 	}
 	return decls
@@ -723,10 +735,24 @@ func buildExplainIntersectionGroupStmts(plan CheckPlan, blocks CheckBlocks, grou
 	return stmts
 }
 
-// buildExplainIntersectionPartStmts emits the per-part recursive call:
-// invoke explain_permission_internal for the part's relation, accumulate
-// the trace into v_intersection_children, and update v_intersection_pass.
+// buildExplainIntersectionPartStmts emits per-part SQL for one
+// intersection group's child. Dispatches by part shape:
+//
+//   - Plain relation (Relation set, others empty): the existing
+//     slice 1.5 path — recurse into explain_permission_internal for
+//     the part's relation and append the full sub-trace.
+//   - IsParent / IsThis / ExcludedRelation parts (slice 1.9): use the
+//     precomputed part.Check boolean predicate as the pass signal,
+//     emit a per-shape synthetic trace child. The trace is less rich
+//     than the recursive plain-part case (no nested sub-trace) but
+//     correctly reflects the AND semantics for v_intersection_pass.
+//     A follow-up enrichment slice can promote each shape to a full
+//     recursive trace if richer Explain output is needed.
 func buildExplainIntersectionPartStmts(plan CheckPlan, part IntersectionPartCheck) []Stmt {
+	if part.IsThis || part.IsParent || part.ExcludedRelation != "" || part.Relation == "" {
+		return buildExplainComplexIntersectionPartStmts(plan, part)
+	}
+
 	dispatcherCall := fmt.Sprintf(
 		"%s(p_subject_type, p_subject_id, %s, %s, p_object_id, p_visited || ARRAY[v_key], p_max_nodes)",
 		sqldsl.PrefixIdent("explain_permission_internal", plan.DatabaseSchema),
@@ -742,6 +768,58 @@ func buildExplainIntersectionPartStmts(plan CheckPlan, part IntersectionPartChec
 		Assign{Name: "v_intersection_children", Value: Raw("v_intersection_children || jsonb_build_array(v_child_trace->'root')")},
 		If{
 			Cond: NotExpr{Expr: Raw("COALESCE((v_child_trace->>'result')::boolean, FALSE)")},
+			Then: []Stmt{Assign{Name: "v_intersection_pass", Value: Raw("FALSE")}},
+		},
+	}
+}
+
+// buildExplainComplexIntersectionPartStmts handles intersection parts
+// with non-relation shapes (slice 1.9): IsParent (TTU-in-intersection),
+// IsThis (`[user]` direct grant inline), and per-part ExcludedRelation
+// (`X but not Y` as a part). Uses part.Check — the boolean predicate
+// the Check renderer already builds for this part shape — as the pass
+// signal, and emits a labelled synthetic trace child reflecting the
+// shape.
+//
+// Trace shape per part type:
+//   - IsParent          → NodeTTU labelled "via <linking>"
+//   - per-part Excluded → NodeExclusion labelled "<rel> but not <excl>"
+//   - IsThis (default)  → NodeDirect labelled "direct grant"
+//
+// The synthetic children are leaf-like (no further recursion) — a
+// future enrichment can promote each to a full recursive sub-trace
+// once the per-shape renderers exist. Today's shape is good enough
+// to surface the AND structure in the trace and pass the parity sweep.
+func buildExplainComplexIntersectionPartStmts(_ CheckPlan, part IntersectionPartCheck) []Stmt {
+	var label, nodeType string
+	switch {
+	case part.IsParent:
+		nodeType = string(TraceNodeTTU)
+		label = fmt.Sprintf("intersection part: %s from %s", part.ParentRelation, part.LinkingRelation)
+	case part.ExcludedRelation != "":
+		nodeType = string(TraceNodeExclusion)
+		label = fmt.Sprintf("intersection part: %s but not %s", part.Relation, part.ExcludedRelation)
+	default:
+		nodeType = string(TraceNodeDirect)
+		label = "intersection part: direct"
+	}
+
+	// Construct the synthetic node JSONB inline because the per-part
+	// result varies (v_part_pass) and we want it embedded — not a
+	// CASE expression on a hardcoded shape.
+	successNode := fmt.Sprintf(
+		"jsonb_build_object('type', %s, 'label', %s, 'result', v_part_pass)",
+		sqldsl.QuoteLiteral(nodeType),
+		sqldsl.QuoteLiteral(label),
+	)
+
+	return []Stmt{
+		Comment{Text: "Intersection part (complex shape): " + label},
+		Assign{Name: "v_part_pass", Value: part.Check},
+		Assign{Name: "v_node_count", Value: Raw("v_node_count + 1")},
+		Assign{Name: "v_intersection_children", Value: Raw("v_intersection_children || jsonb_build_array(" + successNode + ")")},
+		If{
+			Cond: NotExpr{Expr: Raw("v_part_pass")},
 			Then: []Stmt{Assign{Name: "v_intersection_pass", Value: Raw("FALSE")}},
 		},
 	}
@@ -858,9 +936,11 @@ func explainLocalSupported(a RelationAnalysis) bool {
 	// handles ineligible membership targets. If the spike surfaces new
 	// FAILs, reinstate the gate.
 	f := a.Features
-	if f.HasIntersection && !intersectionGroupsAreSimple(a.IntersectionGroups) {
-		return false
-	}
+	// Slice 1.9 dropped the intersectionGroupsAreSimple gate. The
+	// per-part renderer now dispatches on IntersectionPartCheck
+	// shape: plain → recursive dispatcher call, IsParent / IsThis /
+	// ExcludedRelation → buildExplainComplexIntersectionPartStmts
+	// using the precomputed part.Check boolean predicate.
 	// HasExclusion is handled by emitExplainSuccessReturn: every
 	// success-return path checks blocks.ExclusionCheck and wraps the
 	// outcome in a NodeExclusion.

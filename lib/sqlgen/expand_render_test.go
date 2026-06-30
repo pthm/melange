@@ -149,24 +149,9 @@ func TestBuildExpandPlan_Ineligible(t *testing.T) {
 		mutate  func(*RelationAnalysis)
 		slice   string
 	}{
-		{"has IsThis intersection part", func(a *RelationAnalysis) {
-			a.Features.HasIntersection = true
-			a.IntersectionGroups = []IntersectionGroupInfo{{
-				Parts: []IntersectionPart{{IsThis: true}, {Relation: "editor"}},
-			}}
-		}, "follow-up (slice 2.2c ships simple-part intersections only)"},
-		{"has TTU intersection part", func(a *RelationAnalysis) {
-			a.Features.HasIntersection = true
-			a.IntersectionGroups = []IntersectionGroupInfo{{
-				Parts: []IntersectionPart{{Relation: "writer"}, {ParentRelation: &ParentRelationInfo{}}},
-			}}
-		}, "follow-up"},
-		{"has per-part-exclusion intersection", func(a *RelationAnalysis) {
-			a.Features.HasIntersection = true
-			a.IntersectionGroups = []IntersectionGroupInfo{{
-				Parts: []IntersectionPart{{Relation: "writer"}, {Relation: "editor", ExcludedRelation: "banned"}},
-			}}
-		}, "follow-up"},
+		// (slice 1.9 dropped the intersectionGroupsAreSimpleForExpand gate —
+		// IsThis / TTU-in-intersection / per-part exclusion are now
+		// emitted as per-part shapes by the renderer.)
 		{"has multi-exclusion", func(a *RelationAnalysis) {
 			a.Features.HasExclusion = true
 			a.ExcludedRelations = []string{"banned", "author"}

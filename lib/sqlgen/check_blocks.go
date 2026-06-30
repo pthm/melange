@@ -42,6 +42,7 @@ type IntersectionGroupCheck struct {
 type IntersectionPartCheck struct {
 	Relation         string
 	ExcludedRelation string
+	IsThis           bool // [user]-direct grant probe at the wrapping relation
 	IsParent         bool
 	ParentRelation   string
 	LinkingRelation  string
@@ -523,6 +524,7 @@ func buildIntersectionPartCheck(plan CheckPlan, part IntersectionPart, visitedWi
 		pc.Check = buildParentCheck(plan, part.ParentRelation, visitedWithKey)
 
 	case part.IsThis:
+		pc.IsThis = true
 		pc.Check = buildThisCheck(plan, part)
 
 	case part.IsSimple:
