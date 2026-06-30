@@ -60,18 +60,32 @@ type ExpandPlan struct {
 	ObjectType     string
 	Relation       string
 	Rewrites       []ExpandRewrite
-	// Exclusion names the relation in `but not X` when the relation has
-	// a single simple exclusion (e.g., `viewer: writer but not banned`
-	// gives Exclusion="banned"). When set, the renderer wraps the
-	// rewrites-derived tree in `Difference{base, subtract}` where
-	// subtract is a Leaf.Computed pointer to the excluded relation.
+	// Exclusions captures the relation's `but not` subtrahends. Each
+	// entry wraps into a `Difference{base, subtract}` node, with the
+	// previous tree as `base` — chained exclusions like
+	// `(writer but not editor) but not owner` produce left-nested
+	// Differences. Each entry's shape determines its subtract leaf:
 	//
-	// Multi-exclusion patterns (`but not X but not Y`), TTU-excluded
-	// (`but not X from Y`), and intersection-excluded
-	// (`but not (A and B)`) are not yet handled — those relations
-	// route to the dispatcher's empty-leaf sentinel until follow-up
-	// slices land.
-	Exclusion string
+	//   - Relation set                 → Leaf.Computed pointer
+	//     (`but not X` — covers both simple and complex; Expand emits a
+	//      pointer and the caller chases via ExpandRecursive)
+	//   - ParentRelation set           → Leaf.TupleToUserset
+	//     (`but not X from Y` — same shape as the top-level TTU rewrite)
+	//   - Intersection set             → Nodes.Intersection
+	//     (`but not (A and B)` — reuses the intersection rewrite shape)
+	//
+	// An empty slice means the relation has no exclusion (the renderer
+	// emits the rewrites-derived tree directly).
+	Exclusions []ExpandExclusion
+}
+
+// ExpandExclusion is one subtrahend of a `but not` chain. Exactly one
+// of Relation / ParentRelation / Intersection is set; the renderer
+// dispatches on shape to emit the matching subtract leaf.
+type ExpandExclusion struct {
+	Relation       string
+	ParentRelation *ParentRelationInfo
+	Intersection   *IntersectionGroupInfo
 }
 
 // ExpandRewrite is one of the per-rewrite shapes Expand can emit.
@@ -210,8 +224,26 @@ func BuildExpandPlan(a RelationAnalysis, databaseSchema string) (ExpandPlan, boo
 			Intersection: append([]IntersectionPart(nil), g.Parts...),
 		})
 	}
-	if a.Features.HasExclusion && isSimpleExclusion(a) {
-		plan.Exclusion = a.ExcludedRelations[0]
+	if a.Features.HasExclusion {
+		// Source order preserved WITHIN each shape (ExcludedRelations
+		// keeps its left-to-right order from the schema), but ACROSS
+		// shapes we emit simple → TTU → intersection. RelationAnalysis
+		// pre-splits exclusions by shape and discards inter-shape
+		// ordering; recovering the original interleaving would require
+		// threading an OrderedSubtrahends field through the analyzer.
+		// Set semantics are unaffected (`A - B - C = A - C - B`), but a
+		// mixed-shape relation's Expand tree will not byte-match
+		// OpenFGA's emission. Zero schemas in the OpenFGA suite mix
+		// shapes today, so the analyzer change is deferred.
+		for _, rel := range a.ExcludedRelations {
+			plan.Exclusions = append(plan.Exclusions, ExpandExclusion{Relation: rel})
+		}
+		for i := range a.ExcludedParentRelations {
+			plan.Exclusions = append(plan.Exclusions, ExpandExclusion{ParentRelation: &a.ExcludedParentRelations[i]})
+		}
+		for i := range a.ExcludedIntersectionGroups {
+			plan.Exclusions = append(plan.Exclusions, ExpandExclusion{Intersection: &a.ExcludedIntersectionGroups[i]})
+		}
 	}
 	if len(plan.Rewrites) == 0 {
 		// Relation has no concrete access paths — let the dispatcher
@@ -227,18 +259,17 @@ func BuildExpandPlan(a RelationAnalysis, databaseSchema string) (ExpandPlan, boo
 // + computed; 2.2a added TTU (Leaf.TupleToUserset); 2.2b added simple
 // exclusion (Difference); 2.2c added intersection (Nodes intersection);
 // 2.3 added wildcards + userset references (inline as user-strings in
-// Leaf.Users).
+// Leaf.Users); 2.7 dropped the single-simple-exclusion gate and added
+// nested Difference chaining for multi / TTU / intersection exclusions.
 func expandLocalSupported(a RelationAnalysis) bool {
 	f := a.Features
 	// Slice 1.9 dropped the intersectionGroupsAreSimpleForExpand gate.
 	// The per-part renderer now dispatches on IntersectionPart shape:
 	// plain → Leaf.Computed, IsThis → Leaf.Users, ParentRelation →
-	// Leaf.TupleToUserset, ExcludedRelation → Difference. The
-	// predicate still exists below for documentation / spec reference
-	// but is no longer consulted at eligibility time.
-	if f.HasExclusion && !isSimpleExclusion(a) {
-		return false // multi-exclusion / TTU-excluded / intersection-excluded
-	}
+	// Leaf.TupleToUserset, ExcludedRelation → Difference.
+	// Slice 2.7 dropped the isSimpleExclusion gate. Each subtrahend
+	// becomes one nested Difference (ExpandPlan.Exclusions is iterated
+	// left-fold in source order).
 	// SPIKE 1.8: dropped the HasComplexUsersetPatterns gate. Expand
 	// inlines userset references as user-strings in Leaf.Users; the
 	// membership relation's complexity doesn't affect the wire shape
@@ -271,29 +302,6 @@ func intersectionGroupsAreSimpleForExpand(a RelationAnalysis) bool {
 	return true
 }
 
-// isSimpleExclusion is true when the relation has exactly one simple
-// "but not X" exclusion — a single relation name in ExcludedRelations,
-// no TTU exclusions, no intersection-group exclusions. The single
-// exclusion can be either simple (tuple-lookup-resolvable) or complex
-// (function-call-resolvable) because Expand emits a Computed pointer
-// either way and the caller chases it; we don't actually evaluate the
-// exclusion at the Expand call site.
-//
-// This is the predicate gate for slice 2.2b. The exotic variants
-// remain gated until follow-up slices land.
-func isSimpleExclusion(a RelationAnalysis) bool {
-	if len(a.ExcludedRelations) != 1 {
-		return false
-	}
-	if len(a.ExcludedParentRelations) > 0 {
-		return false
-	}
-	if len(a.ExcludedIntersectionGroups) > 0 {
-		return false
-	}
-	return true
-}
-
 // RenderExpandFunction is the entry point for expand_* function
 // generation. Returns the complete CREATE OR REPLACE FUNCTION text plus
 // a trailing newline so file-level concatenation stays clean.
@@ -313,22 +321,19 @@ func RenderExpandFunction(plan ExpandPlan) string {
 		rootValue = BuildExpandUnionJSON(children)
 	}
 
-	nameExpr := BuildExpandNodeName(Lit(plan.ObjectType).SQL(), "p_object_id", plan.Relation)
+	objectTypeLit := Lit(plan.ObjectType).SQL()
+	nameExpr := BuildExpandNodeName(objectTypeLit, "p_object_id", plan.Relation)
 
-	if plan.Exclusion != "" {
-		// Wrap the rewrites-derived tree as the Difference's base. The
-		// base node shares the parent relation's name (it represents
-		// "the relation without exclusion applied"); the subtract names
-		// the excluded relation. OpenFGA's named-slot shape — base /
-		// subtract are addressable by key rather than position.
+	// Each exclusion subtrahend wraps the current tree in a Difference.
+	// Order is source order, so `(W but not E) but not O` produces
+	// Difference{Difference{W, E}, O} — left-nested. The base node
+	// always shares the parent relation's name; the subtract node's
+	// name depends on the subtrahend shape (relation name / linking
+	// relation / parent relation).
+	for _, ex := range plan.Exclusions {
 		baseNode := BuildExpandNodeJSON(nameExpr, rootValue)
-
-		subtractValue := BuildExpandComputedLeafJSON(
-			BuildExpandNodeName(Lit(plan.ObjectType).SQL(), "p_object_id", plan.Exclusion))
-		subtractNameExpr := BuildExpandNodeName(
-			Lit(plan.ObjectType).SQL(), "p_object_id", plan.Exclusion)
-		subtractNode := BuildExpandNodeJSON(subtractNameExpr, subtractValue)
-
+		subtractName, subtractValue := buildExpandExclusionSubtract(plan, objectTypeLit, ex)
+		subtractNode := BuildExpandNodeJSON(subtractName, subtractValue)
 		rootValue = BuildExpandDifferenceJSON(baseNode, subtractNode)
 	}
 
@@ -344,6 +349,28 @@ func RenderExpandFunction(plan ExpandPlan) string {
 		Header:  expandFunctionHeader(plan),
 	}
 	return fn.SQL() + "\n"
+}
+
+// buildExpandExclusionSubtract returns (name, value) for one
+// subtrahend in an exclusion chain. The name addresses the subtract
+// node (used by callers that need to chase the pointer); the value
+// is the leaf or composite under it.
+func buildExpandExclusionSubtract(plan ExpandPlan, objectTypeLit string, ex ExpandExclusion) (string, string) {
+	switch {
+	case ex.ParentRelation != nil:
+		name := BuildExpandNodeName(objectTypeLit, "p_object_id", ex.ParentRelation.LinkingRelation)
+		return name, buildExpandTTULeaf(plan, *ex.ParentRelation)
+	case ex.Intersection != nil:
+		// Intersection subtrahends reuse the same per-part renderer the
+		// IntersectionRewrite path uses. The subtract node's name slot
+		// uses the parent relation — there's no single "intersection
+		// relation" name to address it by.
+		name := BuildExpandNodeName(objectTypeLit, "p_object_id", plan.Relation)
+		return name, buildExpandIntersectionValue(plan, ex.Intersection.Parts)
+	default:
+		name := BuildExpandNodeName(objectTypeLit, "p_object_id", ex.Relation)
+		return name, BuildExpandComputedLeafJSON(name)
+	}
 }
 
 // buildExpandRewriteNode wraps one rewrite's value slot in the outer
@@ -422,11 +449,14 @@ func buildExpandIntersectionPartNode(plan ExpandPlan, objectTypeLit string, part
 		// Name the node after the parent — OpenFGA's convention is
 		// that this-style parts share the parent's identity.
 		partName = BuildExpandNodeName(objectTypeLit, "p_object_id", plan.Relation)
-		// Reuse the direct-rewrite leaf renderer; AllowedSubjectTypes
-		// comes from the analysis but the part itself doesn't carry
-		// it — fall back to the plan's existing direct rewrite if
-		// one exists, otherwise default to "user" which is the
-		// near-universal IsThis case in OpenFGA schemas.
+		// Subject types come from the plan's top-level direct rewrite:
+		// when the wrapping relation has an IsThis intersection part,
+		// the analyzer always also surfaces the `[...]` types on
+		// DirectSubjectTypes (the part lives inside an intersection,
+		// but the type spec lives on the relation), so a non-empty
+		// rewrite is guaranteed. The "user" fallback is dead defensive
+		// code — if it ever fires it means the analyzer dropped a
+		// type spec it should have collected.
 		subjectTypes := plan.directSubjectTypes()
 		if len(subjectTypes) == 0 {
 			subjectTypes = []string{"user"}

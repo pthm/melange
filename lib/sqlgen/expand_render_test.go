@@ -149,26 +149,15 @@ func TestBuildExpandPlan_Ineligible(t *testing.T) {
 		mutate  func(*RelationAnalysis)
 		slice   string
 	}{
-		// (slice 1.9 dropped the intersectionGroupsAreSimpleForExpand gate —
-		// IsThis / TTU-in-intersection / per-part exclusion are now
-		// emitted as per-part shapes by the renderer.)
-		{"has multi-exclusion", func(a *RelationAnalysis) {
-			a.Features.HasExclusion = true
-			a.ExcludedRelations = []string{"banned", "author"}
-		}, "follow-up (slice 2.2b ships single exclusion only)"},
-		{"has TTU exclusion", func(a *RelationAnalysis) {
-			a.Features.HasExclusion = true
-			a.ExcludedRelations = []string{"banned"}
-			a.ExcludedParentRelations = []ParentRelationInfo{{Relation: "banned", LinkingRelation: "parent"}}
-		}, "follow-up"},
-		{"has intersection exclusion", func(a *RelationAnalysis) {
-			a.Features.HasExclusion = true
-			a.ExcludedRelations = []string{"banned"}
-			a.ExcludedIntersectionGroups = []IntersectionGroupInfo{{}}
-		}, "follow-up"},
-		// (slice 1.8 dropped the HasComplexUsersetPatterns gate — the
-		// existing dispatcher recursion handles complex membership via
-		// the membership relation's own eligible function.)
+		// All previously-gated exclusion variants are now eligible:
+		// - slice 1.9 dropped intersectionGroupsAreSimpleForExpand
+		//   (IsThis / TTU-in-intersection / per-part exclusion parts)
+		// - slice 2.7 dropped isSimpleExclusion
+		//   (multi-exclusion, TTU exclusion, intersection exclusion —
+		//   all emitted as nested Differences in ExpandPlan.Exclusions)
+		// - slice 1.8 dropped HasComplexUsersetPatterns
+		//   (the existing dispatcher recursion handles complex
+		//   membership via the membership relation's own function).
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -189,6 +178,40 @@ func TestBuildExpandPlan_NoAccessPaths(t *testing.T) {
 	a := mkAnalysis("doc", "phantom", RelationFeatures{}, false)
 	if _, ok := BuildExpandPlan(a, ""); ok {
 		t.Errorf("plan with no rewrites must be ineligible — let the dispatcher sentinel handle it")
+	}
+}
+
+// TestBuildExpandPlan_MixedExclusionShapesAreOrdered pins the documented
+// across-shape order (simple → TTU → intersection) the renderer left-folds
+// into nested Differences. Within each shape, source order is preserved.
+// Inter-shape ordering is not the schema's source order — see the
+// HasExclusion branch in BuildExpandPlan for why. If the analyzer ever
+// gains an OrderedSubtrahends field, this test should be updated to
+// pin source-order interleaving instead.
+func TestBuildExpandPlan_MixedExclusionShapesAreOrdered(t *testing.T) {
+	a := mkAnalysis("doc", "viewer", RelationFeatures{HasDirect: true, HasExclusion: true}, false)
+	a.AllowedSubjectTypes = []string{"user"}
+	a.DirectSubjectTypes = []string{"user"}
+	a.ExcludedRelations = []string{"banned", "muted"}
+	a.ExcludedParentRelations = []ParentRelationInfo{{Relation: "owner", LinkingRelation: "parent"}}
+	a.ExcludedIntersectionGroups = []IntersectionGroupInfo{{
+		Parts: []IntersectionPart{{Relation: "a"}, {Relation: "b"}},
+	}}
+	plan, ok := BuildExpandPlan(a, "")
+	if !ok {
+		t.Fatalf("mixed-shape exclusion plan should be eligible (slice 2.7)")
+	}
+	if len(plan.Exclusions) != 4 {
+		t.Fatalf("len(plan.Exclusions) = %d, want 4", len(plan.Exclusions))
+	}
+	if plan.Exclusions[0].Relation != "banned" || plan.Exclusions[1].Relation != "muted" {
+		t.Errorf("simple exclusions out of order: %+v", plan.Exclusions[:2])
+	}
+	if plan.Exclusions[2].ParentRelation == nil || plan.Exclusions[2].ParentRelation.Relation != "owner" {
+		t.Errorf("TTU exclusion not at index 2: %+v", plan.Exclusions[2])
+	}
+	if plan.Exclusions[3].Intersection == nil || len(plan.Exclusions[3].Intersection.Parts) != 2 {
+		t.Errorf("intersection exclusion not at index 3: %+v", plan.Exclusions[3])
 	}
 }
 
@@ -263,8 +286,8 @@ func TestRenderExpandFunction_ExclusionWraps(t *testing.T) {
 	if !ok {
 		t.Fatalf("simple-exclusion plan should be eligible after slice 2.2b")
 	}
-	if plan.Exclusion != "author" {
-		t.Errorf("plan.Exclusion: got %q, want %q", plan.Exclusion, "author")
+	if len(plan.Exclusions) != 1 || plan.Exclusions[0].Relation != "author" {
+		t.Errorf("plan.Exclusions: got %+v, want [{Relation: author}]", plan.Exclusions)
 	}
 	got := RenderExpandFunction(plan)
 
