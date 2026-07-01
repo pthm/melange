@@ -134,12 +134,14 @@ func init() {
 	validateCmd.GroupID = groupSchema
 	migrateCmd.GroupID = groupSchema
 	statusCmd.GroupID = groupSchema
+	schemaCmd.GroupID = groupSchema
 	doctorCmd.GroupID = groupSchema
 	explainCmd.GroupID = groupSchema
 	expandCmd.GroupID = groupSchema
 	rootCmd.AddCommand(validateCmd)
 	rootCmd.AddCommand(migrateCmd)
 	rootCmd.AddCommand(statusCmd)
+	rootCmd.AddCommand(schemaCmd)
 	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(explainCmd)
 	rootCmd.AddCommand(expandCmd)

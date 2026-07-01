@@ -52,7 +52,7 @@ when the cap is hit the rendered output ends in "... truncated".`,
   melange explain user:alice viewer document:1 --format=json`,
 	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		databaseSchema := resolveString(explainDBSchema, cfg.Database.Schema)
+		databaseSchema := resolveString(explainDBSchema, cfg.Database.Schema, "public")
 
 		dsn, err := resolveDSN(explainDB)
 		if err != nil {
@@ -76,7 +76,7 @@ when the cap is hit the rendered output ends in "... truncated".`,
 func init() {
 	f := explainCmd.Flags()
 	f.StringVar(&explainDB, "db", "", "database URL")
-	f.StringVar(&explainDBSchema, "db-schema", "public", "database schema")
+	f.StringVar(&explainDBSchema, "db-schema", "", "database schema (default: config database.schema, else public)")
 	f.StringVar(&explainFormat, "format", "tree", "output format: tree (default) or json")
 	f.IntVar(&explainMaxNodes, "max-nodes", 0, "cap total nodes in the trace (0 = session GUC melange.max_explain_nodes or built-in 100)")
 	f.StringVar(&explainColor, "color", "auto", "color output: auto|always|never (auto = stdout-is-TTY and NO_COLOR unset)")

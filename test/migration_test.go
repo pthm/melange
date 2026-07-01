@@ -1156,3 +1156,29 @@ func TestMigration_BackfillsModelOnRerun(t *testing.T) {
 	require.NotNil(t, model, "rerun should backfill the deployed model")
 	assert.Equal(t, schemaV1, model.DSL)
 }
+
+// TestMigration_GetLastMigrationToleratesMissingMelangeVersion verifies that a
+// database migrated before the melange_version column existed can still be read
+// — status now depends on GetLastMigration, so a missing optional column must
+// not fail the whole command.
+func TestMigration_GetLastMigrationToleratesMissingMelangeVersion(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+	m := migrator.NewMigrator(db, "")
+
+	migrateSchema(t, ctx, m, schemaV1, migrator.InternalMigrateOptions{Version: "v0.9.0"})
+
+	// Simulate a legacy table that predates the melange_version column.
+	_, err := db.ExecContext(ctx, "ALTER TABLE melange_migrations DROP COLUMN melange_version")
+	require.NoError(t, err)
+
+	rec, err := m.GetLastMigration(ctx)
+	require.NoError(t, err, "read should tolerate a missing melange_version column")
+	require.NotNil(t, rec)
+	assert.Empty(t, rec.MelangeVersion)
+	assert.NotEmpty(t, rec.FunctionNames)
+}

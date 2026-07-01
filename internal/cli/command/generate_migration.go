@@ -62,7 +62,7 @@ Three comparison modes determine orphaned functions to drop:
   melange generate migration --schema schema.fga --output migrations/ --previous-schema old.fga`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Resolve values: flags > config > defaults
-		databaseSchema := resolveString(genMigrationDBSchema, cfg.Database.Schema)
+		databaseSchema := resolveString(genMigrationDBSchema, cfg.Database.Schema, "public")
 		schemaPath := resolveString(genMigrationSchema, cfg.Schema)
 		output := resolveString(genMigrationOutput, cfg.Generate.Migration.Output)
 		name := resolveString(genMigrationName, cfg.Generate.Migration.Name, "melange")
@@ -187,7 +187,7 @@ func init() {
 	f.BoolVar(&genMigrationUp, "up", false, "output only the UP migration")
 	f.BoolVar(&genMigrationDown, "down", false, "output only the DOWN migration")
 	f.StringVar(&genMigrationDB, "db", "", "database URL for comparison (reads previous state)")
-	f.StringVar(&genMigrationDBSchema, "db-schema", "public", "database schema")
+	f.StringVar(&genMigrationDBSchema, "db-schema", "", "database schema (default: config database.schema, else public)")
 	f.StringVar(&genMigrationGitRef, "git-ref", "", "git ref for comparison (reads previous schema)")
 	f.StringVar(&genMigrationPreviousSchema, "previous-schema", "", "path to previous .fga file for comparison (modular schemas not supported)")
 }

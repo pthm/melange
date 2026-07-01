@@ -452,17 +452,24 @@ func (m *Migrator) getLastMigration(ctx context.Context, db Execer) (*MigrationR
 		return nil, err
 	}
 
-	// id, migrated_at, and the original columns are always present. Optional
-	// columns are appended to the SELECT and to the scan targets together.
+	// id, migrated_at, and the original three columns are always present.
+	// melange_version, function_checksums, and the model columns were each added
+	// later, so probe for them; a database migrated by an old version that lacks
+	// one must still read cleanly (status now depends on this).
 	var (
-		rec           MigrationRecord
-		checksumsJSON sql.NullString
-		schemaDSL     sql.NullString
-		schemaFormat  sql.NullString
-		modelJSON     sql.NullString
+		rec            MigrationRecord
+		melangeVersion sql.NullString
+		checksumsJSON  sql.NullString
+		schemaDSL      sql.NullString
+		schemaFormat   sql.NullString
+		modelJSON      sql.NullString
 	)
-	selects := []string{"id", "migrated_at", "melange_version", "schema_checksum", "codegen_version", "function_names"}
-	targets := []any{&rec.ID, &rec.MigratedAt, &rec.MelangeVersion, &rec.SchemaChecksum, &rec.CodegenVersion, pq.Array(&rec.FunctionNames)}
+	selects := []string{"id", "migrated_at", "schema_checksum", "codegen_version", "function_names"}
+	targets := []any{&rec.ID, &rec.MigratedAt, &rec.SchemaChecksum, &rec.CodegenVersion, pq.Array(&rec.FunctionNames)}
+	if cols["melange_version"] {
+		selects = append(selects, "melange_version")
+		targets = append(targets, &melangeVersion)
+	}
 	if cols["function_checksums"] {
 		selects = append(selects, "function_checksums::TEXT")
 		targets = append(targets, &checksumsJSON)
@@ -496,6 +503,7 @@ func (m *Migrator) getLastMigration(ctx context.Context, db Execer) (*MigrationR
 			return nil, fmt.Errorf("unmarshaling function checksums: %w", err)
 		}
 	}
+	rec.MelangeVersion = melangeVersion.String
 	rec.SchemaDSL = schemaDSL.String
 	rec.SchemaFormat = schemaFormat.String
 	if modelJSON.Valid && modelJSON.String != "" && modelJSON.String != "{}" {

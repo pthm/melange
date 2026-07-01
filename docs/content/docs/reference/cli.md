@@ -18,9 +18,15 @@ These flags are available on all commands:
 | Flag                | Description                                                                                         |
 | ------------------- | --------------------------------------------------------------------------------------------------- |
 | `--config`          | Path to config file (default: auto-discover `melange.yaml`). See [Configuration](../configuration/). |
+| `--env`             | Select a named environment profile. See [Configuration → Environments](../configuration/#environments). |
 | `-v`, `--verbose`   | Increase verbosity (can be repeated: `-vv`, `-vvv`)                                                 |
 | `-q`, `--quiet`     | Suppress non-error output                                                                           |
 | `--no-update-check` | Disable automatic update checking                                                                   |
+
+Any command that connects to a database accepts `--env <name>` to target one of
+the [environment profiles](../configuration/#environments) defined in your
+config (e.g. `melange status --env production`). An explicit `--db` still wins
+over the environment's connection.
 
 ### Update Notifications
 
@@ -59,9 +65,9 @@ The cache respects the `XDG_CACHE_HOME` environment variable if set.
 
 Commands are organized into logical groups:
 
-**Schema Commands:** `validate`, `migrate`, `status`, `doctor`
+**Schema Commands:** `validate`, `migrate`, `status`, `schema pull`, `doctor`, `explain`, `expand`
 **Client Commands:** `generate client`, `generate migration`
-**Utility Commands:** `init`, `config`, `version`, `license`
+**Utility Commands:** `init`, `config show`, `env list`, `version`, `license`
 
 ---
 
@@ -119,7 +125,9 @@ This command:
 1. Checks if the schema has changed since the last migration
 2. Installs generated SQL functions (`check_permission`, `list_accessible_objects`, etc.)
 3. Cleans up orphaned functions from removed relations
-4. Records the migration in `melange_migrations` table
+4. Records the migration in `melange_migrations` table — including the schema
+   DSL and parsed model, so the database is self-describing. This is what
+   `melange status` and `melange schema pull` read back.
 
 **Skip-if-unchanged behavior:**
 
@@ -171,7 +179,8 @@ See [Tuples View](../../concepts/tuples-view/) for setup instructions.
 
 ### status
 
-Check the current migration status.
+Show whether the schema file and `melange_tuples` view are present, what model
+the database has deployed, and whether the local schema file is in sync with it.
 
 ```bash
 melange status \
@@ -181,23 +190,106 @@ melange status \
 
 **Flags:**
 
-| Flag          | Default              | Description                  |
-| ------------- | -------------------- | ---------------------------- |
-| `--db`        | (from config)        | PostgreSQL connection string |
-| `--db-schema` | `""`                 | Database schema              |
-| `--schema`    | `schemas/schema.fga` | Path to schema.fga file      |
+| Flag          | Default              | Description                                                     |
+| ------------- | -------------------- | -------------------------------------------------------------- |
+| `--db`        | (from config)        | PostgreSQL connection string                                   |
+| `--db-schema` | (config, else `public`) | PostgreSQL schema for melange objects                       |
+| `--schema`    | `schemas/schema.fga` | Path to schema.fga file                                        |
+| `--format`    | `text`               | Output format: `text` or `json`                                |
 
 **Output:**
 
 ```
 Schema file:  present
 Tuples view:  present
+Deployed:     checksum d0c1746f7e26… · melange v0.9.0 · 2026-07-01T20:46:10Z
+Sync:         in sync — local schema matches deployed
 ```
 
-This helps you verify that:
+The **Deployed** line reports the model recorded by the most recent migration
+(checksum, melange version, and time). The **Sync** state compares the local
+schema file's checksum against the deployed one:
 
-- Your schema file exists
-- The tuples view exists in the database
+| Sync state     | Meaning                                                          |
+| -------------- | --------------------------------------------------------------- |
+| `in_sync`      | The local schema matches what's deployed                        |
+| `drift`        | The local schema differs — run `melange migrate` to apply       |
+| `unknown`      | No local schema file to compare against                         |
+| `not_recorded` | The database has no migration record                            |
+
+Databases migrated before v0.9 (or by `MigrateWithTypes`) have no recorded model
+DSL; status notes this and `melange schema pull` cannot recover them. Reading the
+migration record is non-fatal — if it fails, status still reports schema/tuples
+presence and adds a `Note:` line.
+
+**JSON output** (`--format json`) emits the machine-readable report, including a
+`notes` array for any non-fatal warnings:
+
+```json
+{
+  "schema_file": "present",
+  "tuples_view": "present",
+  "sync": "in_sync",
+  "deployed": {
+    "melange_version": "v0.9.0",
+    "migrated_at": "2026-07-01T20:46:10Z",
+    "schema_checksum": "d0c1746f7e26ea40027a24b1c0e0c5f34e279e7c27f6fa17e4611ce2f1ec0962",
+    "schema_format": "single",
+    "model_recorded": true
+  }
+}
+```
+
+### schema pull
+
+Reconstruct the OpenFGA schema recorded by the most recent migration. Use it to
+recover a schema whose source file was lost, or to see exactly what model a
+database is running.
+
+```bash
+# Print the deployed schema
+melange schema pull --db postgres://localhost/mydb
+
+# Recover it to a file, targeting a named environment
+melange schema pull --env production -o recovered.fga
+```
+
+**Flags:**
+
+| Flag             | Default              | Description                                            |
+| ---------------- | -------------------- | ------------------------------------------------------ |
+| `--db`           | (from config)        | PostgreSQL connection string                           |
+| `--db-schema`    | (config, else `public`) | PostgreSQL schema for melange objects               |
+| `-o`, `--output` | (stdout)             | Write to this file instead of stdout                   |
+| `--no-header`    | `false`              | Omit the provenance header comment                     |
+
+**Output:**
+
+```
+# Pulled from a melange-migrated database by `melange schema pull`
+# Deployed: 2026-07-01T20:46:10Z by melange v0.9.0
+# Schema checksum: d0c1746f7e26ea40027a24b1c0e0c5f34e279e7c27f6fa17e4611ce2f1ec0962
+
+model
+  schema 1.1
+
+type user
+...
+```
+
+The provenance header is written as `#` comments (valid DSL), so the output still
+parses; the database URL is never included. Pass `--no-header` for the bare
+schema, which for a single-file schema is byte-identical to what you migrated.
+
+{{< callout type="info" >}}
+A **modular** (`fga.mod`) schema is emitted as the stored manifest + module
+bundle for reference/recovery. That combined form does **not** re-parse as a
+single `.fga`, and splitting it back into module files is not supported.
+{{< /callout >}}
+
+Requires a database migrated by melange v0.9 or later. Older databases did not
+record the model; pull reports whether the database was never migrated or was
+migrated before model storage existed.
 
 ### doctor
 
@@ -705,7 +797,8 @@ melange init -y --template minimal
 
 ### config show
 
-Display the effective configuration after merging defaults, config file, and environment variables.
+Display the effective configuration after merging defaults, config file,
+environment variables, and any selected environment profile.
 
 ```bash
 melange config show
@@ -713,30 +806,59 @@ melange config show
 
 **Flags:**
 
-| Flag       | Default | Description                          |
-| ---------- | ------- | ------------------------------------ |
-| `--source` | `false` | Show the config file path being used |
+| Flag              | Default | Description                                                 |
+| ----------------- | ------- | ----------------------------------------------------------- |
+| `--source`        | `false` | Show the config file path and active environment            |
+| `--reveal-secrets`| `false` | Print passwords in cleartext instead of masking them        |
 
-**Example with source:**
+Passwords — in both `database.url` and the discrete `password` field, across the
+base config and every environment profile — are **masked by default**, including
+values resolved from `${VAR}` references. Pass `--reveal-secrets` to print them.
+
+**Example — inspect the resolved production profile:**
 
 ```bash
-melange config show --source
+melange config show --env production --source
 ```
 
 **Output:**
 
 ```
 Config file: /path/to/project/melange.yaml
+Environment: production
 
 schema: schemas/schema.fga
 database:
-  url: postgres://localhost/mydb
-  host: ""
-  port: 5432
+  url: postgres://prod-user:****@prod-db:5432/app
   ...
 ```
 
-This is useful for debugging configuration issues and understanding which values are in effect.
+This is useful for debugging configuration issues and understanding which values
+are in effect for a given environment.
+
+### env list
+
+List the [environment profiles](../configuration/#environments) defined in your
+config and their connection targets. The active environment is marked with `*`.
+
+```bash
+melange env list
+```
+
+**Output:**
+
+```
+Environments:
+* local            postgres://localhost:5432/mydb_dev
+  production       ${PROD_DATABASE_URL}
+  staging          staging.db.internal:5432/app
+
+Default: local
+Active:  local (marked with *)
+```
+
+Targets are shown as configured — `${VAR}` references are left literal (not
+expanded) and any URL password is redacted, so the listing is safe to share.
 
 ### version
 

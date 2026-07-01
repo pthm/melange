@@ -34,7 +34,7 @@ var doctorCmd = &cobra.Command{
   # Run with verbose output
   melange doctor --db postgres://localhost/mydb --verbose`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		databaseSchema := resolveString(doctorDBSchema, cfg.Database.Schema)
+		databaseSchema := resolveString(doctorDBSchema, cfg.Database.Schema, "public")
 		schemaPath := resolveString(doctorSchema, cfg.Schema)
 		verboseFlag := resolveBool(doctorVerbose, cfg.Doctor.Verbose)
 		skipPerf := resolveBool(doctorSkipPerformance, cfg.Doctor.SkipPerformance)
@@ -51,7 +51,7 @@ var doctorCmd = &cobra.Command{
 func init() {
 	f := doctorCmd.Flags()
 	f.StringVar(&doctorDB, "db", "", "database URL")
-	f.StringVar(&doctorDBSchema, "db-schema", "public", "database schema")
+	f.StringVar(&doctorDBSchema, "db-schema", "", "database schema (default: config database.schema, else public)")
 	f.StringVar(&doctorSchema, "schema", "", "path to schema.fga or fga.mod file")
 	f.BoolVar(&doctorVerbose, "verbose", false, "show detailed output")
 	f.BoolVar(&doctorSkipPerformance, "skip-performance", false, "skip performance checks")
