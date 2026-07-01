@@ -73,11 +73,15 @@ jobs:
           elif [ -n "$RP_TAG" ]; then
             version="$RP_TAG"
           else
-            # release-please merge commit format: "chore(main): release 0.8.2"
-            first_line=$(printf '%s' "$COMMIT_MSG" | head -n 1)
-            version=$(printf '%s' "$first_line" | awk -F': release ' '{print $2}' | awk '{print $1}')
+            # release-please subject format: "chore(main): release 0.8.2"
+            # Appears on line 1 for squash-merged release PRs and on a later
+            # line (after the "Merge pull request #N …" subject) for classic
+            # merge commits, so scan the whole message rather than just line 1.
+            subject=$(printf '%s\n' "$COMMIT_MSG" | grep -E '^chore(\([^)]*\))?: release ' | head -n 1)
+            version=$(printf '%s' "$subject" | awk -F': release ' '{print $2}' | awk '{print $1}')
             if [ -z "$version" ]; then
-              echo "❌ Could not extract version from commit message: $first_line"
+              echo "❌ Could not extract version from commit message:"
+              printf '%s\n' "$COMMIT_MSG" >&2
               exit 1
             fi
             # release-please writes the version without a leading v; canonicalise.
