@@ -357,7 +357,8 @@ func (c *Checker) mapError(operation string, err error) error {
 		}
 	case pgUndefinedFunction:
 		if strings.Contains(err.Error(), "check_permission") ||
-			strings.Contains(err.Error(), "list_accessible") {
+			strings.Contains(err.Error(), "list_accessible") ||
+			strings.Contains(err.Error(), "explain_permission") {
 			return fmt.Errorf("%w: %v", ErrMissingFunction, err)
 		}
 	case pgResolutionTooComplex:

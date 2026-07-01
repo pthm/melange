@@ -1,0 +1,16 @@
+{{- /*
+  Block shortcode: render an explain CLI tree with ✓ green, ✗ red, and the
+  Unicode tree connectors greyed. Inline styles so this works in both the
+  light and dark Hextra themes without theme-specific CSS.
+
+  Usage:
+    {{< explaintree >}}
+    ✓ user:alice has viewer on document:1
+    └── direct: user:alice → viewer → document:1
+    {{< /explaintree >}}
+*/ -}}
+{{- $c := trim .Inner "\n" -}}
+{{- $c = replace $c "✓" `<span style="color:#22c55e;font-weight:bold">✓</span>` -}}
+{{- $c = replace $c "✗" `<span style="color:#ef4444;font-weight:bold">✗</span>` -}}
+{{- $c = replaceRE "(└── |├── |│   )" `<span style="color:#9ca3af">${1}</span>` $c -}}
+<pre class="explain-tree" style="overflow-x:auto;padding:1rem;border-radius:0.375rem;line-height:1.5">{{ $c | safeHTML }}</pre>

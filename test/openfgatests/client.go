@@ -356,6 +356,102 @@ func (c *Client) Check(ctx context.Context, req *openfgav1.CheckRequest, opts ..
 	}, nil
 }
 
+// Explain returns the resolution Trace for a single check, mirroring the
+// shape of Check above. Used by the OpenFGA-suite parity sweep to assert
+// `trace.Result == checkAssertion.Expectation` for every eligible
+// assertion across every YAML — see explain_parity.go.
+//
+// Contextual tuples are not yet wired through the Explain SQL function, so
+// callers should skip assertions carrying contextual tuples rather than
+// route them here.
+func (c *Client) Explain(ctx context.Context, req *openfgav1.CheckRequest, opts ...grpc.CallOption) (*melange.Trace, error) {
+	store, ok := c.storeByID(req.GetStoreId())
+	if !ok {
+		return nil, fmt.Errorf("store not found: %s", req.GetStoreId())
+	}
+
+	tk := req.GetTupleKey()
+	subject, err := parseSubject(tk.GetUser())
+	if err != nil {
+		return nil, fmt.Errorf("parsing subject: %w", err)
+	}
+	object, err := parseObject(tk.GetObject())
+	if err != nil {
+		return nil, fmt.Errorf("parsing object: %w", err)
+	}
+	relation := tk.GetRelation()
+
+	validator, err := validatorForStore(store, req.GetAuthorizationModelId())
+	if err != nil {
+		return nil, err
+	}
+	checker := melange.NewChecker(
+		store.db,
+		melange.WithUsersetValidation(),
+		melange.WithRequestValidation(),
+		melange.WithValidator(validator),
+		melange.WithDatabaseSchema(c.databaseSchema),
+	)
+	return checker.Explain(ctx, subject, melange.Relation(relation), object)
+}
+
+// ExpandRecursive returns the flat deduplicated user-string list for an
+// (object, relation) pair, chasing every Leaf.Computed and
+// Leaf.TupleToUserset pointer in the response tree via additional
+// Expand calls. Used by the OpenFGA-suite parity sweep — see
+// expand_parity.go.
+//
+// Same eligibility/skip rules as Explain: skip the dispatcher's
+// empty-leaf sentinel (relations gated out of slice 2.x Expand) and
+// contextual tuples (not supported by Expand SQL).
+func (c *Client) ExpandRecursive(ctx context.Context, storeID, modelID, object, relation string) ([]string, error) {
+	store, ok := c.storeByID(storeID)
+	if !ok {
+		return nil, fmt.Errorf("store not found: %s", storeID)
+	}
+	obj, err := parseObject(object)
+	if err != nil {
+		return nil, fmt.Errorf("parsing object: %w", err)
+	}
+	// modelID is unused by Expand (no validator) but kept in the
+	// signature for symmetry with Explain — both methods take the
+	// canonical (storeID, modelID, object, relation) tuple OpenFGA
+	// requests carry. Skipping the validator here is safe because the
+	// OpenFGA suite already validates the model + tuples through the
+	// typesystem before any check runs, and the SQL dispatcher rejects
+	// unknown (object_type, relation) pairs via its sentinel.
+	_ = modelID
+	checker := melange.NewChecker(
+		store.db,
+		melange.WithDatabaseSchema(c.databaseSchema),
+	)
+	return checker.ExpandRecursive(ctx, obj, melange.Relation(relation))
+}
+
+// Expand returns the raw UsersetTree for an (object, relation) pair
+// without chasing pointers. Used by the parity sweep's sentinel
+// detection — when the renderer is not yet eligible for the relation,
+// the dispatcher's empty-leaf sentinel surfaces an empty Leaf.Users
+// at the root, which we use as the skip signal.
+func (c *Client) Expand(ctx context.Context, storeID, modelID, object, relation string) (*melange.UsersetTree, error) {
+	store, ok := c.storeByID(storeID)
+	if !ok {
+		return nil, fmt.Errorf("store not found: %s", storeID)
+	}
+	obj, err := parseObject(object)
+	if err != nil {
+		return nil, fmt.Errorf("parsing object: %w", err)
+	}
+	// See the ExpandRecursive comment for why we skip the validator —
+	// modelID is kept in the signature for caller symmetry only.
+	_ = modelID
+	checker := melange.NewChecker(
+		store.db,
+		melange.WithDatabaseSchema(c.databaseSchema),
+	)
+	return checker.Expand(ctx, obj, melange.Relation(relation))
+}
+
 // ListObjects returns all objects of a given type that the user has a relation on.
 func (c *Client) ListObjects(ctx context.Context, req *openfgav1.ListObjectsRequest, opts ...grpc.CallOption) (*openfgav1.ListObjectsResponse, error) {
 	store, ok := c.storeByID(req.GetStoreId())

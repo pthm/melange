@@ -1,6 +1,6 @@
 ---
 title: Contextual Tuples
-weight: 5
+weight: 6
 ---
 
 Contextual tuples are temporary tuples injected at check time. They are not persisted to the database and only affect the single check or list call they are passed to.

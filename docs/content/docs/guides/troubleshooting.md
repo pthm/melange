@@ -48,9 +48,21 @@ The migration has not been run, or it was run against a different database or sc
 
 ### Permission checks always return false
 
-The tuples view exists but returns no rows for the subject/object/relation being checked.
+Run `melange explain` to see which branches the engine tried:
 
-**Debug**:
+{{< explaintree >}}
+$ melange explain user:alice viewer document:1 --db postgres://localhost/mydb
+✗ user:alice does NOT have viewer on document:1
+└── union of 2 branches
+    ├── ✗ no direct grant
+    └── ✗ implied: implied via editor
+        └── union of 1 branches
+            └── ✗ no direct grant
+{{< /explaintree >}}
+
+Here neither a direct `viewer` grant nor an implied path via `editor` matched — add a tuple satisfying one of them. See [Explaining Decisions](../explaining-decisions/) for the full guide.
+
+If Explain returns the "explain not yet supported" sentinel (the schema uses a pattern the renderer doesn't cover yet), inspect the tuples view directly:
 
 ```sql
 -- Check what tuples exist for the subject
@@ -69,13 +81,21 @@ Common causes:
 
 A wildcard subject (`user:*`) is granting broader access than intended.
 
-**Debug**:
+`melange explain` shows wildcard matches as a `NodeWildcard` sentinel:
+
+{{< explaintree >}}
+$ melange explain user:alice can_view document:1
+✓ user:alice has can_view on document:1
+└── wildcard: user:*
+{{< /explaintree >}}
+
+Find the wildcard tuples:
 
 ```sql
 SELECT * FROM melange_tuples WHERE subject_id = '*';
 ```
 
-Check that wildcard rows are scoped to the correct relation and object type.
+Check they're scoped to the intended relation and object type.
 
 ### Slow permission checks
 
@@ -121,6 +141,14 @@ melange migrate --force
 **Fix**: run `melange migrate --force` to regenerate all SQL functions with the current Melange version.
 
 ## Debugging Techniques
+
+### Explain a permission decision
+
+```bash
+melange explain <subject> <relation> <object> --db postgres://localhost/mydb
+```
+
+Output is a tree of every branch the engine tried with `✓`/`✗` markers per node. `--format=json` returns the raw `Trace` JSONB; `--max-nodes N` caps the trace size. See [Explaining Decisions](../explaining-decisions/).
 
 ### Preview Generated SQL
 

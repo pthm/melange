@@ -298,6 +298,15 @@ Performance checks run automatically when `melange_tuples` is a view (not a tabl
   - **Failure** if the source table has 10,000+ rows (critical at current scale)
   - Provides exact `CREATE INDEX` statements as fix hints
 
+**Expand Fan-Out Advisory:**
+
+Runs whenever `melange_tuples` exists (both view and table backends). Flags relations whose Expand response can grow large depending on tuple counts:
+
+- **Wildcard grants** (`[user:*]`): every Expand response surfaces the wildcard entry (`user:*`). Downstream consumers that enumerate the wildcard client-side hit unbounded fan-out.
+- **Recursive TTU** (`viewer from parent` on a self-referential type): `ExpandRecursive` walks the parent pointer chain, so a deep hierarchy multiplies round-trip cost.
+
+The advisory is `StatusPass` — a hint, not a diagnosed problem — and suggests setting `melange.max_expand_leaf` as a session-level guardrail. See [Expanding Permissions](../../guides/expanding-permissions/#per-leaf-cap).
+
 **Verbose mode:**
 
 Use `--verbose` to see additional details for each check:
@@ -326,6 +335,100 @@ This shows:
 | Unknown types in tuples  | Update tuples view or schema to match                 |
 | UNION instead of UNION ALL | Replace `UNION` with `UNION ALL` in view definition |
 | Missing expression index | Run the `CREATE INDEX` command shown in the fix hint  |
+
+### explain
+
+Return the resolution trace for a check — every attempted branch, contributing tuples, per-branch success/failure. See the [Explaining Decisions guide](../../guides/explaining-decisions/) for the trace structure.
+
+```bash
+melange explain user:alice viewer document:1 --db postgres://localhost/mydb
+```
+
+**Flags:**
+
+| Flag           | Default       | Description                                                                                          |
+| -------------- | ------------- | ---------------------------------------------------------------------------------------------------- |
+| `--db`         | (from config) | PostgreSQL connection string                                                                          |
+| `--db-schema`  | `"public"`    | Database schema                                                                                       |
+| `--format`     | `tree`        | `tree` (unicode pretty-print) or `json` (raw `Trace` JSONB)                                          |
+| `--max-nodes`  | `0`           | Cap on trace nodes. `0` defers to the session GUC `melange.max_explain_nodes`, then to 100           |
+| `--color`      | `auto`        | `auto` (TTY + `NO_COLOR` unset), `always`, or `never`. See [Colour Output](#colour-output) below.    |
+
+**Tree output:**
+
+{{< explaintree >}}
+✓ user:alice has viewer on document:1
+└── via userset: via [group#member] → group:engineering
+    └── direct: user:alice → member → group:engineering
+{{< /explaintree >}}
+
+**Failure with attempted branches:**
+
+{{< explaintree >}}
+✗ user:bob does NOT have viewer on document:1
+└── union of 3 branches
+    ├── ✗ no direct grant
+    ├── ✗ implied: implied via editor
+    └── ✗ via userset: via [group#member] → group:engineering
+        └── union of 1 branches
+            └── ✗ no direct grant
+{{< /explaintree >}}
+
+`--format=json` returns the raw `Trace` JSONB for tooling.
+
+### expand
+
+Return the OpenFGA-shaped `UsersetTree` for a `(object, relation)` pair — the structured "who has access?" answer. See the [Expanding Permissions guide](../../guides/expanding-permissions/) for the tree structure and the shallow-by-default resolution model.
+
+```bash
+melange expand document:1 viewer --db postgres://localhost/mydb
+```
+
+**Flags:**
+
+| Flag             | Default       | Description                                                                                                      |
+| ---------------- | ------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `--db`           | (from config) | PostgreSQL connection string                                                                                     |
+| `--db-schema`   | `"public"`    | Database schema                                                                                                  |
+| `--format`       | `tree`        | `tree` (unicode pretty-print) or `json` (raw `UsersetTree` JSONB)                                                |
+| `--flatten`      | `false`       | Call `ExpandRecursive` and print the flat, deduplicated user list (chases `Leaf.Computed` and TTU pointers)      |
+| `--recursive`    | `false`       | Alias for `--flatten`                                                                                            |
+| `--subject-type` | (unset)       | Melange extension. Narrow `Leaf.Users` to a single subject type                                                  |
+| `--max-leaf`     | `0`           | Melange extension. Cap each `Leaf.Users` list. `0` defers to session GUC `melange.max_expand_leaf`, then unbounded |
+| `--color`        | `auto`        | `auto` (TTY + `NO_COLOR` unset), `always`, or `never`. See [Colour Output](#colour-output) below.                |
+
+**Tree output:**
+
+```
+document:1#viewer • union of 2
+├── document:1#viewer • users
+│   ├── user:alice
+│   ├── user:bob
+│   └── group:eng#member
+└── document:1#viewer • computed pointer
+    └── computed → document:1#editor  (melange expand document:1#editor to chase)
+```
+
+**Flattened user list:**
+
+```
+$ melange expand document:1 viewer --flatten
+user:alice
+user:bob
+user:carol
+group:eng#member
+user:*
+```
+
+`--flatten` chases every `Leaf.Computed` and `Leaf.TupleToUserset` pointer with follow-up Expand calls. Cost is N round-trips per N distinct pointers; suitable for admin flows, not the request path. `--format=json` returns the raw `UsersetTree` JSONB for tooling.
+
+### Colour output
+
+`melange explain` and `melange expand` colourise identifiers in `tree` output to match the [OpenFGA VS Code extension](https://github.com/openfga/vscode-ext)'s `openfga-dark` theme. Types render green, relations cyan, type restrictions (`[user]`, `[group#member]`) mint, keywords / delimiters grey, dim prose and tree connectors dim grey. The `✓` / `✗` result markers in the header render as bold white glyphs on a coloured background chip.
+
+Colours are emitted as 24-bit ANSI true colour so the mapping matches the VS Code palette on modern terminals. `--color=never` disables all escapes for piped writers or legacy terminals. `--color=auto` (default) enables colour when stdout is a TTY and `NO_COLOR` is unset.
+
+`--format=json` output is never colourised — the raw JSONB is unaffected by `--color`.
 
 ---
 

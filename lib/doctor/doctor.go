@@ -251,6 +251,9 @@ func (d *Doctor) Run(ctx context.Context) (*Report, error) {
 				return nil, fmt.Errorf("checking table indexes: %w", err)
 			}
 		}
+		if err := d.checkExpandFanoutAdvisory(ctx, report); err != nil {
+			return nil, fmt.Errorf("checking Expand fan-out advisory: %w", err)
+		}
 	}
 
 	return report, nil
@@ -456,6 +459,10 @@ func (d *Doctor) checkGeneratedFunctions(ctx context.Context, report *Report) er
 		"check_permission_internal",
 		"check_permission_nw",
 		"check_permission_nw_internal",
+		"explain_permission",
+		"explain_permission_internal",
+		"expand_permission",
+		"expand_permission_internal",
 		"list_accessible_objects",
 		"list_accessible_subjects",
 	}
@@ -905,6 +912,8 @@ func (d *Doctor) getCurrentFunctions(ctx context.Context) ([]string, error) {
 			AND (
 				p.proname LIKE 'check_%%'
 				OR p.proname LIKE 'list_%%'
+				OR p.proname LIKE 'explain_%%'
+				OR p.proname LIKE 'expand_%%'
 			)
 		`,
 		d.postgresSchema(),

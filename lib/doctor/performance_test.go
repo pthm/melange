@@ -1,6 +1,8 @@
 package doctor
 
 import (
+	"context"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -320,5 +322,88 @@ func TestIndexCoversRecommendation(t *testing.T) {
 	t.Run("no existing indexes", func(t *testing.T) {
 		assert.False(t, indexCoversRecommendation(nil, full))
 		assert.False(t, indexCoversRecommendation(nil, partial))
+	})
+}
+
+func TestCheckExpandFanoutAdvisory(t *testing.T) {
+	feat := func(hasWildcard, hasRecursive bool) sqlgen.RelationFeatures {
+		return sqlgen.RelationFeatures{HasWildcard: hasWildcard, HasRecursive: hasRecursive}
+	}
+	analysis := func(objectType, relation string, f sqlgen.RelationFeatures) sqlgen.RelationAnalysis {
+		return sqlgen.RelationAnalysis{
+			ObjectType: objectType,
+			Relation:   relation,
+			Features:   f,
+		}
+	}
+
+	t.Run("no wildcards or recursive → no advisory", func(t *testing.T) {
+		d := &Doctor{analyses: []sqlgen.RelationAnalysis{
+			analysis("document", "viewer", feat(false, false)),
+			analysis("document", "editor", feat(false, false)),
+		}}
+		report := &Report{}
+		if err := d.checkExpandFanoutAdvisory(context.Background(), report); err != nil {
+			t.Fatalf("checkExpandFanoutAdvisory: %v", err)
+		}
+		if len(report.Checks) != 0 {
+			t.Errorf("expected no advisory, got %d checks: %+v", len(report.Checks), report.Checks)
+		}
+	})
+
+	t.Run("wildcard relation surfaces advisory with guardrail suggestion", func(t *testing.T) {
+		d := &Doctor{analyses: []sqlgen.RelationAnalysis{
+			analysis("document", "public", feat(true, false)),
+		}}
+		report := &Report{}
+		if err := d.checkExpandFanoutAdvisory(context.Background(), report); err != nil {
+			t.Fatalf("checkExpandFanoutAdvisory: %v", err)
+		}
+		if len(report.Checks) != 1 {
+			t.Fatalf("expected 1 advisory, got %d", len(report.Checks))
+		}
+		check := report.Checks[0]
+		assert.Equal(t, "expand_fanout_advisory", check.Name)
+		assert.Equal(t, StatusPass, check.Status)
+		assert.Contains(t, check.Details, "document#public")
+		assert.Contains(t, check.Details, "max_expand_leaf")
+		assert.Contains(t, check.Details, "Wildcard grants")
+	})
+
+	t.Run("recursive TTU surfaces advisory", func(t *testing.T) {
+		d := &Doctor{analyses: []sqlgen.RelationAnalysis{
+			analysis("document", "viewer", feat(false, true)),
+		}}
+		report := &Report{}
+		if err := d.checkExpandFanoutAdvisory(context.Background(), report); err != nil {
+			t.Fatalf("checkExpandFanoutAdvisory: %v", err)
+		}
+		if len(report.Checks) != 1 {
+			t.Fatalf("expected 1 advisory, got %d", len(report.Checks))
+		}
+		check := report.Checks[0]
+		assert.Contains(t, check.Details, "Recursive TTU")
+		assert.Contains(t, check.Details, "document#viewer")
+	})
+
+	t.Run("both signals in one advisory", func(t *testing.T) {
+		d := &Doctor{analyses: []sqlgen.RelationAnalysis{
+			analysis("document", "public", feat(true, false)),
+			analysis("folder", "viewer", feat(false, true)),
+		}}
+		report := &Report{}
+		if err := d.checkExpandFanoutAdvisory(context.Background(), report); err != nil {
+			t.Fatalf("checkExpandFanoutAdvisory: %v", err)
+		}
+		if len(report.Checks) != 1 {
+			t.Fatalf("expected 1 advisory, got %d", len(report.Checks))
+		}
+		check := report.Checks[0]
+		assert.Contains(t, check.Message, "2 relation(s)")
+		assert.Contains(t, check.Details, "document#public")
+		assert.Contains(t, check.Details, "folder#viewer")
+		// Both sections present.
+		assert.True(t, strings.Contains(check.Details, "Wildcard grants") && strings.Contains(check.Details, "Recursive TTU"),
+			"expected both wildcard and recursive sections in details:\n%s", check.Details)
 	})
 }

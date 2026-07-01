@@ -14,6 +14,9 @@ import type {
   PageOptions,
   ListResult,
 } from './types.js';
+import type { Trace, ExplainOptions } from './trace.js';
+import type { UsersetTree, ExpandOptions, Computed } from './expand.js';
+import { flattenUsers } from './expand.js';
 import type { Queryable } from './database.js';
 import { Cache, NoopCache } from './cache.js';
 import { validateObject, validateRelation } from './validator.js';
@@ -361,6 +364,164 @@ export class Checker {
   }
 
   /**
+   * Explain returns the resolution tree the authorization engine walked when
+   * deciding whether the subject has the relation on the object. The trace
+   * shows the proof path on success and every attempted branch on failure —
+   * useful for debugging "why doesn't X have Y?" questions.
+   *
+   * Explain does more work per call than check (it constructs a JSONB trace
+   * server-side) so it's intended for debugging and admin flows, not the
+   * request-path permission decision.
+   *
+   * The optional `maxNodes` caps the total nodes in the returned trace. When
+   * unset, the cap resolves via the session GUC `melange.max_explain_nodes`,
+   * falling back to the server-side default (100). The returned trace's
+   * `truncated` flag is set when the cap was hit.
+   *
+   * The result is parsed straight from the JSONB envelope — snake_case keys
+   * are preserved to match the SQL wire format.
+   */
+  async explain(
+    subject: MelangeObject,
+    relation: Relation,
+    object: MelangeObject,
+    options?: ExplainOptions
+  ): Promise<Trace> {
+    if (this.validateRequest) {
+      validateObject(subject, 'subject');
+      validateRelation(relation);
+      validateObject(object, 'object');
+    }
+
+    const func = prefixIdent('explain_permission', this.databaseSchema);
+    const maxNodes =
+      options?.maxNodes !== undefined && options.maxNodes > 0
+        ? options.maxNodes
+        : null;
+
+    // Cast to text on the server so the JSONB arrives as a string we can
+    // parse — pg's default JSONB handling returns it already-parsed but the
+    // cast keeps behaviour deterministic across pg-versions and driver
+    // configurations.
+    const result = await this.db.query<{ trace: string | Trace }>(
+      `SELECT ${func}($1, $2, $3, $4, $5, $6)::text AS trace`,
+      [subject.type, subject.id, relation, object.type, object.id, maxNodes]
+    );
+
+    if (!result.rows || result.rows.length === 0) {
+      throw new MelangeError('explain_permission returned no rows');
+    }
+
+    const raw = result.rows[0].trace;
+    if (raw === null || raw === undefined) {
+      throw new MelangeError('explain_permission returned null trace');
+    }
+    return typeof raw === 'string' ? (JSON.parse(raw) as Trace) : raw;
+  }
+
+  /**
+   * Expand returns the OpenFGA UsersetTree for (object, relation).
+   *
+   * Resolution is shallow: computed-userset rewrites surface as
+   * Leaf.Computed pointers and TTU rewrites surface as
+   * Leaf.TupleToUserset pointers. The caller chases pointers with
+   * follow-up Expand calls (or uses expandRecursive for the convenience
+   * walker that does it automatically).
+   *
+   * Wildcards (`[type:*]`) and userset references (`[group#member]`)
+   * survive inline as user-strings in Leaf.Users — never expanded.
+   *
+   * The Melange-only `subjectType` and `maxLeaf` options narrow / cap
+   * the resulting tree. OpenFGA Expand has neither; capped leaves
+   * carry `users_truncated: true` which OpenFGA consumers ignore via
+   * JSON's unknown-field handling.
+   */
+  async expand(
+    object: MelangeObject,
+    relation: Relation,
+    options?: ExpandOptions
+  ): Promise<UsersetTree> {
+    if (this.validateRequest) {
+      validateObject(object, 'object');
+      validateRelation(relation);
+    }
+
+    const func = prefixIdent('expand_permission', this.databaseSchema);
+    const subjectType = options?.subjectType ?? null;
+    const maxLeaf =
+      options?.maxLeaf !== undefined && options.maxLeaf > 0
+        ? options.maxLeaf
+        : null;
+
+    const result = await this.db.query<{ tree: string | UsersetTree }>(
+      `SELECT ${func}($1, $2, $3, $4, $5)::text AS tree`,
+      [object.type, object.id, relation, subjectType, maxLeaf]
+    );
+
+    if (!result.rows || result.rows.length === 0) {
+      throw new MelangeError('expand_permission returned no rows');
+    }
+
+    const raw = result.rows[0].tree;
+    if (raw === null || raw === undefined) {
+      throw new MelangeError('expand_permission returned null tree');
+    }
+    return typeof raw === 'string' ? (JSON.parse(raw) as UsersetTree) : raw;
+  }
+
+  /**
+   * expandRecursive returns the flat, deduplicated list of users with
+   * the relation on the object. Issues an initial Expand call then
+   * chases every Leaf.Computed and Leaf.TupleToUserset pointer with
+   * follow-up Expand calls until the tree is fully resolved.
+   *
+   * The cost is N round-trips for N pointers — acceptable for
+   * admin / debugging flows but not the request hot path; for that,
+   * use Checker.listObjects or a regular Check.
+   *
+   * Cycle-safe: every (object, relation) pair is expanded at most
+   * once per call, so a self-referential rewrite (`viewer: viewer from
+   * parent` where parent points back at the same object) terminates.
+   *
+   * Wildcards (`<type>:*`) and userset references
+   * (`<type>:<id>#<rel>`) survive as their string forms in the
+   * result; callers decide whether to expand them further (the
+   * walker doesn't recursively chase userset refs because OpenFGA's
+   * shape models them as inline subjects, not as pointers to another
+   * (object, relation) pair).
+   */
+  async expandRecursive(
+    object: MelangeObject,
+    relation: Relation,
+    options?: ExpandOptions
+  ): Promise<string[]> {
+    const seen = new Set<string>(); // visited (object, relation) pairs
+    const users = new Set<string>();
+
+    type Pending = { obj: MelangeObject; rel: Relation };
+    const queue: Pending[] = [{ obj: object, rel: relation }];
+
+    while (queue.length > 0) {
+      const { obj, rel } = queue.shift()!;
+      const key = `${obj.type}:${obj.id}#${rel}`;
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+
+      const tree = await this.expand(obj, rel, options);
+      // Collect users from this tree.
+      for (const u of flattenUsers(tree)) {
+        users.add(u);
+      }
+      // Enqueue pointers for follow-up Expand calls.
+      collectPointers(tree.root, queue);
+    }
+
+    return Array.from(users).sort();
+  }
+
+  /**
    * Create a new BulkCheckBuilder for batching multiple permission checks
    * into a single SQL call via check_permission_bulk.
    *
@@ -394,3 +555,55 @@ export class Checker {
     return `${subject.type}:${subject.id}|${relation}|${object.type}:${object.id}`;
   }
 }
+
+// collectPointers walks an UsersetTree node and queues every
+// Leaf.Computed / Leaf.TupleToUserset pointer it finds for follow-up
+// Expand calls. Difference subtract is NOT chased — the subtract slot
+// names users to exclude, not include (matches flattenUsers behaviour).
+function collectPointers(
+  node: UsersetTreeNode | null | undefined,
+  queue: { obj: MelangeObject; rel: Relation }[]
+): void {
+  if (!node) return;
+  if (node.leaf?.computed) {
+    const ptr = parseUsersetPointer(node.leaf.computed);
+    if (ptr) queue.push(ptr);
+  }
+  if (node.leaf?.tuple_to_userset) {
+    for (const c of node.leaf.tuple_to_userset.computed) {
+      const ptr = parseUsersetPointer(c);
+      if (ptr) queue.push(ptr);
+    }
+  }
+  if (node.union) {
+    for (const child of node.union.nodes) collectPointers(child, queue);
+  }
+  if (node.intersection) {
+    for (const child of node.intersection.nodes) collectPointers(child, queue);
+  }
+  if (node.difference) {
+    collectPointers(node.difference.base, queue);
+  }
+}
+
+// parseUsersetPointer splits a `<type>:<id>#<relation>` string into a
+// MelangeObject + Relation. Returns null on malformed input so a
+// degenerate tree response stops the walker rather than crashing.
+function parseUsersetPointer(c: Computed): { obj: MelangeObject; rel: Relation } | null {
+  const u = c.userset;
+  const hash = u.indexOf('#');
+  if (hash < 1 || hash === u.length - 1) return null;
+  const colon = u.indexOf(':');
+  if (colon < 1 || colon >= hash - 1) return null;
+  return {
+    obj: { type: u.slice(0, colon), id: u.slice(colon + 1, hash) },
+    rel: u.slice(hash + 1),
+  };
+}
+
+// Re-import the UsersetTreeNode type into module scope so the helper's
+// signature can reference it cleanly. (The Checker.expand return type
+// already imports UsersetTree which transitively names UsersetTreeNode,
+// but the helper signature is local-only so a focused alias keeps the
+// typechecker happy without polluting the file's import list.)
+type UsersetTreeNode = import('./expand.js').UsersetTreeNode;

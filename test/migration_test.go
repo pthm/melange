@@ -144,6 +144,8 @@ func getFunctionNames(t *testing.T, ctx context.Context, db *sql.DB) []string {
 		AND (
 			p.proname LIKE 'check_%'
 			OR p.proname LIKE 'list_%'
+			OR p.proname LIKE 'explain_%'
+			OR p.proname LIKE 'expand_%'
 		)
 		ORDER BY p.proname
 	`)
@@ -253,7 +255,98 @@ type folder
     define viewer: [user] or owner
 `
 
+// schemaIntersectionExclusion exercises slice 1.5's intersection and
+// exclusion emissions. The generated explain bodies contain the
+// intersection FOR-equivalent (per-part recursive calls) plus the
+// success-return helper's exclusion wrapping. Verifies the SQL is valid
+// in PG.
+const schemaIntersectionExclusion = `model
+  schema 1.1
+
+type user
+
+type document
+  relations
+    define writer: [user]
+    define editor: [user]
+    define banned: [user]
+    define both: writer and editor
+    define safe_viewer: writer but not banned
+`
+
+// TestMigration_IntersectionExclusionSchema applies a schema with both
+// intersection and exclusion patterns and confirms the migrate succeeds.
+func TestMigration_IntersectionExclusionSchema(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+
+	cs, migration := fullMigration(t, schemaIntersectionExclusion, "v1.5.0")
+	applyMigrationUp(t, ctx, db, migration)
+
+	assertFunctions(t, ctx, db, map[string]string{
+		"explain_document_both":        "intersection wrapper should generate an explain function",
+		"explain_document_safe_viewer": "exclusion wrapper should generate an explain function",
+		"explain_permission":           "dispatcher should exist",
+	})
+
+	installedFunctions := getFunctionNames(t, ctx, db)
+	for _, expected := range cs.functionNames {
+		assert.Contains(t, installedFunctions, expected, "function %s should be installed", expected)
+	}
+}
+
+// schemaUserset exercises the explain renderer's userset (`[group#member]`)
+// emission against real PG. The generated explain_document_viewer body
+// contains a FOR loop over grant tuples with userset references and a
+// recursive call into explain_permission_internal for the membership
+// relation; this test ensures the SQL parses and applies cleanly.
+const schemaUserset = `model
+  schema 1.1
+
+type user
+
+type group
+  relations
+    define member: [user]
+
+type document
+  relations
+    define viewer: [user, group#member]
+`
+
 // --- Tests ---
+
+// TestMigration_UsersetSchema applies a userset schema and confirms the
+// explain function for document.viewer is installed. Real value of this
+// test is that PG would refuse the generated SQL if the userset FOR-loop
+// emission were malformed — a syntactic regression in
+// buildExplainUsersetLoopStmt would surface as a migration failure here.
+func TestMigration_UsersetSchema(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+
+	cs, migration := fullMigration(t, schemaUserset, "v1.4.0")
+	applyMigrationUp(t, ctx, db, migration)
+
+	assertFunctions(t, ctx, db, map[string]string{
+		"explain_document_viewer": "userset wrapper should generate an explain function",
+		"explain_group_member":    "userset target relation should also generate an explain function",
+		"explain_permission":      "dispatcher should exist",
+	})
+
+	installedFunctions := getFunctionNames(t, ctx, db)
+	for _, expected := range cs.functionNames {
+		assert.Contains(t, installedFunctions, expected, "function %s should be installed", expected)
+	}
+}
 
 // TestMigration_InitialApply verifies that a first-time migration (full mode)
 // installs all expected functions into the database.

@@ -165,6 +165,8 @@ func writeFunctionSection(b *strings.Builder, label string, functions []string) 
 func writeAllFunctions(b *strings.Builder, generatedSQL GeneratedSQL, listSQL ListGeneratedSQL) {
 	writeFunctionSection(b, "Check Functions", generatedSQL.Functions)
 	writeFunctionSection(b, "No-Wildcard Check Functions", generatedSQL.NoWildcardFunctions)
+	writeFunctionSection(b, "Explain Functions", generatedSQL.ExplainFunctions)
+	writeFunctionSection(b, "Expand Functions", generatedSQL.ExpandFunctions)
 	writeFunctionSection(b, "List Objects Functions", listSQL.ListObjectsFunctions)
 	writeFunctionSection(b, "List Subjects Functions", listSQL.ListSubjectsFunctions)
 }
@@ -205,6 +207,16 @@ func writeDispatchers(b *strings.Builder, generatedSQL GeneratedSQL, listSQL Lis
 		}
 	}
 
+	if generatedSQL.ExplainDispatcher != "" {
+		writeSectionHeader(b, "Explain Dispatcher")
+		fmt.Fprintf(b, "%s\n\n", generatedSQL.ExplainDispatcher)
+	}
+
+	if generatedSQL.ExpandDispatcher != "" {
+		writeSectionHeader(b, "Expand Dispatcher")
+		fmt.Fprintf(b, "%s\n\n", generatedSQL.ExpandDispatcher)
+	}
+
 	listDispatchers := collectNonEmpty(listSQL.ListObjectsDispatcher, listSQL.ListSubjectsDispatcher)
 	if len(listDispatchers) > 0 {
 		writeSectionHeader(b, "List Dispatchers")
@@ -234,6 +246,10 @@ var dispatcherFunctionNames = []string{
 	"check_permission_nw",
 	"check_permission_nw_internal",
 	"check_permission_bulk",
+	"explain_permission",
+	"explain_permission_internal",
+	"expand_permission",
+	"expand_permission_internal",
 	"list_accessible_objects",
 	"list_accessible_subjects",
 }
