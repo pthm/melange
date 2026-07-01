@@ -45,9 +45,49 @@ cache.Clear()  // Remove all entries
 
 ### What Is Cached
 
-Only `Check` and `CheckWithContextualTuples` results are cached. List operations (`ListObjects`, `ListSubjects`) always query the database.
+`Check`, `CheckWithContextualTuples`, `Explain`, and `Expand` results all participate. List operations (`ListObjects`, `ListSubjects`) always query the database.
 
 Checks with contextual tuples bypass the cache entirely. Each contextual tuple check goes directly to the database because the temporary tuples are unique to that call.
+
+## Explain and Expand Caching
+
+`Checker.Explain` and `Checker.Expand` consult and populate the same cache passed to `WithCache`, opt-in via interface satisfaction. The default `CacheImpl` satisfies all three:
+
+```go
+cache := melange.NewCache(melange.WithTTL(5 * time.Minute))
+checker := melange.NewChecker(db, melange.WithCache(cache))
+
+// First call hits the database, populates the cache.
+trace1, _ := checker.Explain(ctx, user, "viewer", doc)
+
+// Second call hits the cache — even after the underlying tuple changes,
+// until the TTL expires or Clear is called.
+trace2, _ := checker.Explain(ctx, user, "viewer", doc)
+```
+
+The Checker type-asserts the injected cache to `ExplainCache` / `ExpandCache`; implementations that only satisfy `Cache` fall through to the DB on every Explain / Expand call. Existing Check-only cache implementations keep working without changes.
+
+### Key Composition
+
+The cache key includes every option that affects output — different option values produce different traces, so they must not alias.
+
+| API | Cache key components |
+|-----|----------------------|
+| `Check` | subject, relation, object |
+| `Explain` | subject, relation, object, `MaxNodes` |
+| `Expand` | object, relation, `SubjectType` filter, `MaxLeaf` |
+
+Two Explain calls at different `WithExplainMaxNodes` values populate distinct entries because a truncated trace at one cap must not be served to a caller that passed a larger cap. Same for `Expand`'s `WithSubjectTypeFilter` and `WithExpandMaxLeaf`.
+
+### Clearing
+
+`Clear()` resets all three families in one call. `Size()` returns the combined count. Tuple writes that would invalidate a cached Check would also invalidate cached Explain and Expand results, so one blanket Clear is the intended coarse-grained reset:
+
+```go
+cache.Size()   // 12 (4 Check + 5 Explain + 3 Expand)
+cache.Clear()  // nukes everything
+cache.Size()   // 0
+```
 
 ## Request-Scoped Caching
 
@@ -108,14 +148,26 @@ The cache grows unbounded within the TTL window. For long-running processes with
 
 ## Custom Cache Implementations
 
-Implement the `Cache` interface for distributed caches (Redis, Memcached, etc.):
+Three interfaces cover the three cache families. Implement only the ones you need — `Checker.Explain` and `Checker.Expand` fall through to the DB when their interface isn't satisfied.
 
 ```go
 type Cache interface {
     Get(subject Object, relation Relation, object Object) (allowed bool, err error, ok bool)
     Set(subject Object, relation Relation, object Object, allowed bool, err error)
 }
+
+type ExplainCache interface {
+    GetExplain(subject Object, relation Relation, object Object, maxNodes int) (*Trace, error, bool)
+    SetExplain(subject Object, relation Relation, object Object, maxNodes int, trace *Trace, err error)
+}
+
+type ExpandCache interface {
+    GetExpand(object Object, relation Relation, subjectType ObjectType, maxLeaf int) (*UsersetTree, error, bool)
+    SetExpand(object Object, relation Relation, subjectType ObjectType, maxLeaf int, tree *UsersetTree, err error)
+}
 ```
+
+The default `CacheImpl` satisfies all three.
 
 Example Redis implementation:
 

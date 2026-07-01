@@ -374,6 +374,99 @@ explain_permission_internal(
 ) RETURNS JSONB
 ```
 
+## expand_permission
+
+Returns a JSONB `UsersetTree` for a `(object, relation)` pair, matching `openfgav1.UsersetTree` field-for-field. Resolution is shallow: computed rewrites surface as `Leaf.Computed` pointers, TTU rewrites as `Leaf.TupleToUserset` pointers. The companion to `list_accessible_subjects` for admin / audit tooling that needs the structural tree rather than a flat list.
+
+### Signature
+
+```sql
+expand_permission(
+    p_object_type  TEXT,
+    p_object_id    TEXT,
+    p_relation     TEXT,
+    p_subject_type TEXT    DEFAULT NULL,
+    p_max_leaf     INTEGER DEFAULT NULL
+) RETURNS JSONB
+```
+
+### Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `p_object_type` | TEXT | Object type (e.g., `'document'`) |
+| `p_object_id` | TEXT | Object identifier |
+| `p_relation` | TEXT | Relation to expand |
+| `p_subject_type` | TEXT | Melange extension. When set, `Leaf.Users` entries are filtered to this subject type. `NULL` matches all types. |
+| `p_max_leaf` | INTEGER | Melange extension. Caps each `Leaf.Users` list. `NULL` defers to session GUC `melange.max_expand_leaf`, then to unbounded (matching OpenFGA). When the cap fires the leaf's `users_truncated` field is `true`. |
+
+### Return Value
+
+A JSONB document matching the runtime's `UsersetTree` type. Always returns a valid tree; for an unknown `(object_type, relation)` pair the root's `Leaf.Users` is empty rather than NULL.
+
+```jsonc
+{
+  "root": {
+    "name": "document:1#viewer",
+    "union": {
+      "nodes": [
+        {
+          "name": "document:1#viewer",
+          "leaf": {
+            "users": {
+              "users": ["user:alice", "user:bob", "group:eng#member"]
+            }
+          }
+        },
+        {
+          "name": "document:1#viewer",
+          "leaf": {
+            "computed": {"userset": "document:1#editor"}
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+Wildcards (`user:*`) and userset references (`group:eng#member`) survive as inline strings in `Leaf.Users`. Callers chase `Leaf.Computed` and `Leaf.TupleToUserset` pointers with follow-up `expand_permission` calls, or use `Checker.ExpandRecursive` from the runtime for the walker.
+
+### Examples
+
+```sql
+-- Full tree
+SELECT jsonb_pretty(expand_permission('document', '1', 'viewer'));
+
+-- Filter Leaf.Users to a single subject type
+SELECT expand_permission('document', '1', 'viewer', 'user');
+
+-- Per-call cap; users_truncated fires on overflowing leaves
+SELECT expand_permission('document', '1', 'viewer', NULL, 100);
+
+-- Per-session default; subsequent calls inherit it
+SET melange.max_expand_leaf = 500;
+SELECT expand_permission('document', '1', 'viewer');
+```
+
+### Use from runtime / CLI
+
+`Checker.Expand`, `Checker.ExpandRecursive`, and `melange expand` wrap this function. See the [Expanding Permissions guide](../../guides/expanding-permissions/).
+
+## expand_permission_internal
+
+Internal dispatcher behind `expand_permission`. Same signature. Specialized functions (`expand_<type>_<rel>`) call it recursively to resolve pointer chains inside `ExpandRecursive`; most callers should use `expand_permission` instead.
+
+```sql
+expand_permission_internal(
+    p_object_type  TEXT,
+    p_object_id    TEXT,
+    p_relation     TEXT,
+    p_subject_type TEXT    DEFAULT NULL,
+    p_max_leaf     INTEGER DEFAULT NULL
+) RETURNS JSONB
+```
+
 ## Pagination
 
 Both list functions support cursor-based (keyset) pagination for efficient traversal of large result sets.

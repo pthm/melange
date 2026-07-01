@@ -181,17 +181,17 @@ When the cap is hit, `trace.Truncated` is `true`. The root may be `NodeTruncated
 
 ## Supported Schema Patterns
 
-Explain matches `Check` for:
+Explain matches `Check` across the full supported schema feature set:
 
-- Direct grants (`[user]`)
-- Implied closure relations (`viewer: [user] or editor`)
-- Implied via function call (closure relations whose bodies recurse)
-- TTU (`viewer from parent`), single and multi-level
-- Simple userset references (`[group#member]`)
-- Intersection (`a and b`) when every part is a plain relation reference
-- Exclusion (`a but not b`), including TTU and intersection-style exclusions
+- Direct grants (`[user]`, `[user:*]`)
+- Implied closure relations (`viewer: [user] or editor`), including recursive implication
+- TTU (`viewer from parent`), single and multi-level, single- and multi-type linking
+- Userset references (`[group#member]`), simple and complex (recursive-membership)
+- Intersection (`a and b`) with any part shape: plain relation, `[user]` inline, TTU-in-intersection, per-part exclusion
+- Exclusion (`a but not b`), including chained (`(a but not b) but not c`), TTU (`but not X from Y`), and intersection-group (`but not (A and B)`) subtrahends
+- Wildcards and per-call / per-session truncation
 
-For unsupported patterns the dispatcher returns a sentinel trace rather than a misleading one:
+Every `(object_type, relation)` pair in the OpenFGA compatibility suite generates a specialised `explain_*` function. The dispatcher's no-entry sentinel remains in the codebase as a runtime guard for pairs that don't exist in the schema:
 
 ```jsonc
 {
@@ -203,16 +203,13 @@ For unsupported patterns the dispatcher returns a sentinel trace rather than a m
 }
 ```
 
-Not yet supported:
-
-- Complex userset patterns where membership resolution itself calls `check_permission_internal`.
-- Intersection groups containing `[user]`-direct, TTU-in-intersection, or exclusion-in-intersection parts.
-
-`Check` evaluates these correctly; only `Explain` returns the sentinel.
+A sentinel response means the requested pair has no generated function. Check what you passed against the migrated schema before treating it as a bug.
 
 ## See Also
 
+- [Expanding Permissions](./expanding-permissions/): the companion `Expand` API for "who has access?"
 - [Checking Permissions](./checking-permissions/): the request-path `Check` API
+- [Caching](./caching/): opt-in caching for Explain traces via `ExplainCache`
 - [Troubleshooting](./troubleshooting/): when checks return the wrong answer
 - [Go API reference](../reference/go-api/#explain): `Checker.Explain` signature
 - [SQL API reference](../reference/sql-api/#explain_permission): `explain_permission` SQL function

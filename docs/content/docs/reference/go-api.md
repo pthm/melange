@@ -135,6 +135,32 @@ type Cache interface {
 
 Implement this interface for custom cache backends (e.g., Redis). The built-in `CacheImpl` satisfies this interface.
 
+### ExplainCache
+
+```go
+type ExplainCache interface {
+    GetExplain(subject Object, relation Relation, object Object, maxNodes int) (trace *Trace, err error, ok bool)
+    SetExplain(subject Object, relation Relation, object Object, maxNodes int, trace *Trace, err error)
+}
+```
+
+Opt-in extension for caching Explain traces. `Checker.Explain` type-asserts the injected `Cache` to `ExplainCache` and, on success, consults / populates the Explain cache before the DB call. Cache implementations that only implement `Cache` fall through to the DB on every Explain call — no breakage.
+
+`maxNodes` is part of the key. Different `WithExplainMaxNodes` values produce different traces (truncation flips), so they get distinct entries.
+
+### ExpandCache
+
+```go
+type ExpandCache interface {
+    GetExpand(object Object, relation Relation, subjectType ObjectType, maxLeaf int) (tree *UsersetTree, err error, ok bool)
+    SetExpand(object Object, relation Relation, subjectType ObjectType, maxLeaf int, tree *UsersetTree, err error)
+}
+```
+
+Opt-in extension for caching Expand trees. Same contract as `ExplainCache`. `subjectType` (the `WithSubjectTypeFilter` value) and `maxLeaf` (`WithExpandMaxLeaf`) are both part of the key because each changes the emitted tree.
+
+The default `CacheImpl` implements `Cache`, `ExplainCache`, and `ExpandCache`. Custom cache backends implement only the interfaces they support.
+
 ### Validator
 
 ```go
@@ -245,31 +271,119 @@ Caps the node count in a single trace. Precedence: per-call > session GUC `melan
 
 #### Trace, Node, NodeType
 
-`Trace`, `Node`, `NodeType`, `TupleRef`, and `SubjectRef` model the JSONB the SQL dispatcher returns. JSON tags are snake_case to match the SQL column names. The same types are reused by the planned Expand API.
+`Trace`, `Node`, `NodeType`, `TupleRef`, and `SubjectRef` model the JSONB the SQL dispatcher returns. JSON tags are snake_case to match the SQL column names.
 
 ```go
 type Trace struct {
     Object    string
     Relation  string
     Subject   string
-    Result    *bool      // populated on Explain, nil on Expand
+    Result    *bool
     Root      *Node
     Truncated bool
     NodeCount int
 }
 
 type Node struct {
-    Type       NodeType
-    Label      string
-    Evidence   []TupleRef
-    Children   []*Node
-    Users      []SubjectRef  // Expand leaves + Wildcard sentinels
-    Result     *bool         // per-branch outcome on Explain
-    NextCursor string        // Expand leaf pagination
+    Type     NodeType
+    Label    string
+    Evidence []TupleRef
+    Children []*Node
+    Users    []SubjectRef  // NodeWildcard sentinel entry only
+    Result   *bool         // per-branch outcome; nil on cycle/truncated nodes
 }
 ```
 
 See the [Explaining Decisions guide](../../guides/explaining-decisions/) for the node-type table, truncation behaviour, and the supported schema patterns.
+
+### Expand
+
+```go
+func (c *Checker) Expand(ctx context.Context, object ObjectLike, relation RelationLike, opts ...ExpandOption) (*UsersetTree, error)
+```
+
+Returns the OpenFGA-shaped `UsersetTree` for `(object, relation)`. Resolution is shallow: computed rewrites surface as `Leaf.Computed` pointers and TTUs as `Leaf.TupleToUserset` pointers. The caller chases pointers with follow-up Expand calls, or uses `ExpandRecursive` for the walker.
+
+```go
+tree, err := checker.Expand(ctx,
+    melange.Object{Type: "document", ID: "1"},
+    melange.Relation("viewer"),
+)
+if err != nil {
+    return err
+}
+
+// FlattenUsers collects every Leaf.Users entry in the returned tree
+// (concrete users, inlined userset refs, wildcards) without chasing
+// pointers.
+for _, u := range tree.FlattenUsers() {
+    fmt.Println(u)
+}
+```
+
+```go
+func (c *Checker) ExpandRecursive(ctx context.Context, object ObjectLike, relation RelationLike, opts ...ExpandOption) ([]string, error)
+```
+
+Walks `Leaf.Computed` and `Leaf.TupleToUserset` pointers with additional Expand calls and returns the flat, deduplicated user-string list. Cycle-safe (every `(object, relation)` pair is expanded at most once per call). Wildcards and userset references survive as their string forms (`"user:*"`, `"group:eng#member"`); the walker does not chase userset refs because OpenFGA models them as inline subjects, not pointers.
+
+Cost is N round-trips for N distinct pointers. Suitable for admin / debugging flows, not the request path — for the request path use `ListObjects` or `Check`.
+
+#### Options
+
+```go
+func WithSubjectTypeFilter(subjectType ObjectType) ExpandOption
+```
+
+Narrows `Leaf.Users` entries to a single subject type. `""` (the default) matches all types. Melange extension — OpenFGA Expand has no equivalent.
+
+```go
+func WithExpandMaxLeaf(n int) ExpandOption
+```
+
+Caps each `Leaf.Users` list to `n` entries. `n <= 0` defers to session GUC `melange.max_expand_leaf`, then to unbounded (matching OpenFGA). When the cap fires, the emitted `Users.UsersTruncated` field is `true`. Melange extension.
+
+#### UsersetTree, UsersetTreeNode, Leaf, Difference, Nodes
+
+Field-for-field mirror of `openfgav1.UsersetTree` so existing OpenFGA tooling deserialises the JSON without adapters.
+
+```go
+type UsersetTree struct {
+    Root *UsersetTreeNode
+}
+
+type UsersetTreeNode struct {
+    Name         string       // "document:1#viewer"
+    Leaf         *Leaf
+    Difference   *Difference  // named base / subtract slots
+    Union        *Nodes
+    Intersection *Nodes
+}
+
+type Leaf struct {
+    Users          *Users
+    Computed       *Computed        // {Userset: "document:1#editor"}
+    TupleToUserset *TupleToUserset  // {Tupleset: ..., Computed: [...]}
+}
+
+type Users struct {
+    Users          []string  // "user:alice", "group:eng#member", "user:*"
+    UsersTruncated bool      // Melange extension; set when p_max_leaf capped the list
+}
+
+type Difference struct {
+    Base     *UsersetTreeNode
+    Subtract *UsersetTreeNode
+}
+
+type Nodes struct {
+    Nodes []*UsersetTreeNode
+}
+```
+
+`FlattenUsers` collects every `Leaf.Users` entry in the tree into a deduplicated, sorted slice. Difference nodes are walked into `Base` only (the subtract side names users to exclude).
+
+See the [Expanding Permissions guide](../../guides/expanding-permissions/) for the tree structure, shallow-by-default semantics, and CLI usage.
 
 ## Bulk Check
 
@@ -351,11 +465,20 @@ func WithTTL(ttl time.Duration) CacheOption
 ```go
 func (c *CacheImpl) Get(subject Object, relation Relation, object Object) (bool, error, bool)
 func (c *CacheImpl) Set(subject Object, relation Relation, object Object, allowed bool, err error)
+
+func (c *CacheImpl) GetExplain(subject Object, relation Relation, object Object, maxNodes int) (*Trace, error, bool)
+func (c *CacheImpl) SetExplain(subject Object, relation Relation, object Object, maxNodes int, trace *Trace, err error)
+
+func (c *CacheImpl) GetExpand(object Object, relation Relation, subjectType ObjectType, maxLeaf int) (*UsersetTree, error, bool)
+func (c *CacheImpl) SetExpand(object Object, relation Relation, subjectType ObjectType, maxLeaf int, tree *UsersetTree, err error)
+
 func (c *CacheImpl) Size() int
 func (c *CacheImpl) Clear()
 ```
 
-The built-in cache is an in-memory map, thread-safe, unbounded within the TTL window. Entries expire individually based on their insertion time.
+The built-in cache is an in-memory map, thread-safe, unbounded within the TTL window. Entries expire individually based on their insertion time. `Size` returns the total count across Check, Explain, and Expand families; `Clear` resets all three.
+
+`CacheImpl` implements `Cache`, `ExplainCache`, and `ExpandCache` — one `WithCache` call activates caching for every API.
 
 ```go
 cache := melange.NewCache(melange.WithTTL(5 * time.Minute))
