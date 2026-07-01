@@ -1,14 +1,11 @@
 package command
 
 import (
-	"context"
-	"database/sql"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
-	_ "github.com/lib/pq"
 	"github.com/spf13/cobra"
 
 	"github.com/pthm/melange/internal/cli"
@@ -62,27 +59,9 @@ func init() {
 }
 
 func runSchemaPull(dsn, databaseSchema, output string, noHeader bool) error {
-	db, err := sql.Open("postgres", dsn)
+	model, err := readDeployedModel(dsn, databaseSchema)
 	if err != nil {
-		return cli.DBConnectError("connecting to database", err)
-	}
-	defer func() { _ = db.Close() }()
-
-	ctx := context.Background()
-	m := migrator.NewMigrator(db, "")
-	m.SetDatabaseSchema(databaseSchema)
-
-	model, err := m.GetDeployedModel(ctx)
-	if err != nil {
-		return cli.GeneralError("reading deployed model", err)
-	}
-	if model == nil {
-		// Distinguish "never migrated" from "migrated before the model was recorded".
-		rec, rerr := m.GetLastMigration(ctx)
-		if rerr == nil && rec != nil {
-			return cli.GeneralError("this database was migrated before melange v0.9, so the model was not recorded — re-run `melange migrate` with a current version to enable schema pull", nil)
-		}
-		return cli.GeneralError("no melange migration found in this database", nil)
+		return err
 	}
 
 	content := model.DSL

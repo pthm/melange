@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -415,4 +416,23 @@ func gitShowFile(ref, path string) (string, error) {
 		return "", err
 	}
 	return string(out), nil
+}
+
+// gitRelativePath converts a schema path to one relative to the git repo root,
+// as required by "git show ref:path". A relative path is resolved against the
+// current working directory first, so it works from any subdirectory.
+func gitRelativePath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", cli.GeneralError("resolving schema path", err)
+	}
+	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output() //nolint:gosec // no user input
+	if err != nil {
+		return "", cli.GeneralError("locating git repository root", err)
+	}
+	rel, err := filepath.Rel(strings.TrimSpace(string(out)), abs)
+	if err != nil {
+		return "", cli.GeneralError("resolving schema path relative to repo root", err)
+	}
+	return rel, nil
 }

@@ -224,7 +224,7 @@ func syncDescription(sync string) string {
 	case syncInSync:
 		return "in sync — local schema matches deployed"
 	case syncDrift:
-		return "drift — local schema differs from deployed (run `melange migrate` to apply)"
+		return "drift — local schema differs from deployed (`melange diff` to see changes, `melange migrate` to apply)"
 	case syncUnknown:
 		return "unknown — no local schema file to compare"
 	default:
