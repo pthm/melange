@@ -14,11 +14,15 @@ import (
 
 var (
 	// Global state set during PersistentPreRunE
-	cfg        *cli.Config
-	configPath string
+	cfg           *cli.Config
+	baseCfg       *cli.Config // config before environment overlay (for 'env list')
+	configPath    string
+	activeEnv     string // environment applied to cfg (empty = base config)
+	envResolveErr error  // deferred environment-resolution failure, surfaced at connect time
 
 	// Persistent flags
 	cfgFile       string
+	envFlag       string
 	verbose       int
 	quiet         bool
 	noUpdateCheck bool
@@ -57,6 +61,47 @@ from OpenFGA schemas, enabling single-query permission checks in PostgreSQL.`,
 			return cli.ConfigError("loading configuration", err)
 		}
 
+		// Resolve the active environment and overlay it onto cfg. Downstream
+		// resolution (resolveDSN, cfg.DSN) operates on the resolved config.
+		baseCfg = cfg
+		explicitEnv := resolveString(envFlag, os.Getenv("MELANGE_ENV"))
+		activeEnv = resolveString(explicitEnv, cfg.DefaultEnvironment)
+
+		// Typo protection: an explicitly named environment must exist. A stale
+		// default_environment is handled leniently below instead.
+		if explicitEnv != "" && !cfg.HasEnvironment(explicitEnv) {
+			return cli.ConfigError("resolving environment",
+				fmt.Errorf("environment %q is not defined in configuration", explicitEnv))
+		}
+
+		resolved, err := cfg.ForEnvironment(activeEnv)
+		if err != nil {
+			if explicitEnv == "" && activeEnv != "" && !cfg.HasEnvironment(activeEnv) {
+				// Only a *stale* default_environment (naming an environment that
+				// no longer exists) is lenient: warn and use base. A defined
+				// default with an unset secret must NOT silently fall through to
+				// base — it is deferred below so a connecting command fails loud.
+				fmt.Fprintf(os.Stderr, "warning: default_environment %q is not defined; using base config\n", activeEnv)
+				activeEnv = ""
+				resolved, err = cfg.ForEnvironment("")
+			}
+			if err != nil {
+				// Almost always an unset ${VAR} secret. Defer to connect time so
+				// diagnostic commands (env list, config show, validate) still run;
+				// resolveDSN surfaces this for commands that actually connect. Keep
+				// the best-effort resolved config (non-connection overlay such as
+				// schema still applies, and an explicit --db can proceed).
+				envResolveErr = err
+			}
+		}
+		cfg = resolved
+
+		// Surface the target so a command running against a non-base environment
+		// (especially one selected via default_environment) is never silent.
+		if activeEnv != "" && !quiet {
+			fmt.Fprintf(os.Stderr, "→ environment: %s\n", activeEnv)
+		}
+
 		return nil
 	},
 	SilenceUsage:  true, // Don't show usage on errors
@@ -73,6 +118,7 @@ const (
 func init() {
 	// Persistent flags (available to all commands)
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: auto-discover melange.yaml)")
+	rootCmd.PersistentFlags().StringVar(&envFlag, "env", "", "environment profile to target (see 'environments' in config)")
 	rootCmd.PersistentFlags().CountVarP(&verbose, "verbose", "v", "increase verbosity (can be repeated)")
 	rootCmd.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false, "suppress non-error output")
 	rootCmd.PersistentFlags().BoolVar(&noUpdateCheck, "no-update-check", false, "disable update check")
@@ -105,10 +151,12 @@ func init() {
 	// Utility commands
 	initCmd.GroupID = groupUtility
 	configCmd.GroupID = groupUtility
+	envCmd.GroupID = groupUtility
 	versionCmd.GroupID = groupUtility
 	licenseCmd.GroupID = groupUtility
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(configCmd)
+	rootCmd.AddCommand(envCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(licenseCmd)
 }

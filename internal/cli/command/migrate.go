@@ -79,6 +79,13 @@ func resolveDSN(flagDSN string) (string, error) {
 		return flagDSN, nil
 	}
 
+	// A deferred environment-resolution failure (e.g. an unset ${VAR} secret)
+	// becomes an error only now, when a command actually needs to connect. An
+	// explicit --db above bypasses it.
+	if envResolveErr != nil {
+		return "", cli.ConfigError("resolving environment", envResolveErr)
+	}
+
 	dsn, err := cfg.DSN()
 	if err != nil {
 		return "", cli.ConfigError("database configuration", err)
