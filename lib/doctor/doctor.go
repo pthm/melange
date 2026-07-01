@@ -251,6 +251,9 @@ func (d *Doctor) Run(ctx context.Context) (*Report, error) {
 				return nil, fmt.Errorf("checking table indexes: %w", err)
 			}
 		}
+		if err := d.checkExpandFanoutAdvisory(ctx, report); err != nil {
+			return nil, fmt.Errorf("checking Expand fan-out advisory: %w", err)
+		}
 	}
 
 	return report, nil

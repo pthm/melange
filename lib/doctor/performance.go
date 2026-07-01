@@ -321,6 +321,74 @@ func (d *Doctor) checkTableIndexes(ctx context.Context, report *Report) error { 
 	return nil
 }
 
+// checkExpandFanoutAdvisory emits a schema-derived advisory when the
+// schema has relations that can produce large Expand responses. The
+// heuristic is intentionally coarse — Expand's response size is
+// data-driven (bounded by tuple counts, not schema shape) so we can't
+// precisely predict which relations will explode. What we CAN detect:
+//
+//   - Wildcard grants (`[user:*]`): every Expand for that (object,
+//     relation) surfaces the wildcard, and downstream consumers that
+//     enumerate the wildcard client-side hit unbounded fan-out.
+//   - Recursive TTU (`viewer from parent` where parent chain can be
+//     long): ExpandRecursive walks the pointer chain, so a deep parent
+//     hierarchy multiplies the round-trip cost.
+//
+// When any relation matches either signal, we surface one advisory
+// that recommends `melange.max_expand_leaf` as a session guardrail.
+// StatusPass — never escalates — because the schema signal is a hint,
+// not a diagnosed problem.
+func (d *Doctor) checkExpandFanoutAdvisory(_ context.Context, report *Report) error { //nolint:unparam // error return kept for consistent checker interface
+	analyses := d.getAnalyses()
+	if analyses == nil {
+		return nil
+	}
+
+	var wildcardRels, recursiveRels []string
+	for _, a := range analyses {
+		if a.Features.HasWildcard {
+			wildcardRels = append(wildcardRels, a.ObjectType+"#"+a.Relation)
+		}
+		if a.Features.HasRecursive {
+			recursiveRels = append(recursiveRels, a.ObjectType+"#"+a.Relation)
+		}
+	}
+	if len(wildcardRels) == 0 && len(recursiveRels) == 0 {
+		return nil
+	}
+
+	var details strings.Builder
+	details.WriteString("Expand responses on these relations can grow large depending on tuple counts. ")
+	details.WriteString("Consider setting a per-leaf cap so admin flows don't blow past a reasonable ")
+	details.WriteString("response size:\n\n")
+	details.WriteString("    SET melange.max_expand_leaf = 1000;\n")
+	details.WriteString("    -- or per-call: Checker.Expand(..., WithExpandMaxLeaf(1000))\n\n")
+	if len(wildcardRels) > 0 {
+		details.WriteString(fmt.Sprintf("Wildcard grants (%d relation(s)) — every Expand surfaces the wildcard entry (`user:*`):\n", len(wildcardRels)))
+		for _, r := range wildcardRels {
+			details.WriteString("  - " + r + "\n")
+		}
+	}
+	if len(recursiveRels) > 0 {
+		if len(wildcardRels) > 0 {
+			details.WriteByte('\n')
+		}
+		details.WriteString(fmt.Sprintf("Recursive TTU (%d relation(s)) — ExpandRecursive walks the parent chain per call:\n", len(recursiveRels)))
+		for _, r := range recursiveRels {
+			details.WriteString("  - " + r + "\n")
+		}
+	}
+
+	report.AddCheck(CheckResult{
+		Category: "Performance",
+		Name:     "expand_fanout_advisory",
+		Status:   StatusPass,
+		Message:  fmt.Sprintf("%d relation(s) can produce large Expand responses — see --verbose for guardrail", len(wildcardRels)+len(recursiveRels)),
+		Details:  details.String(),
+	})
+	return nil
+}
+
 // checkSourceTableIndexAdvisory emits the schema-derived index recommendations
 // as advisory output when melange_tuples is a view. PostgreSQL won't allow
 // CREATE INDEX directly on a view, so the user must translate the DDL to the
