@@ -79,11 +79,11 @@ func init() {
 	f.StringVar(&explainDBSchema, "db-schema", "public", "database schema")
 	f.StringVar(&explainFormat, "format", "tree", "output format: tree (default) or json")
 	f.IntVar(&explainMaxNodes, "max-nodes", 0, "cap total nodes in the trace (0 = session GUC melange.max_explain_nodes or built-in 100)")
-	f.StringVar(&explainColor, "color", "auto", "colour output: auto|always|never (auto = stdout-is-TTY and NO_COLOR unset)")
+	f.StringVar(&explainColor, "color", "auto", "color output: auto|always|never (auto = stdout-is-TTY and NO_COLOR unset)")
 }
 
 // shouldColorize resolves the --color mode to a boolean. auto detects a TTY
-// on stdout and honours the NO_COLOR convention (https://no-color.org).
+// on stdout and honors the NO_COLOR convention (https://no-color.org).
 func shouldColorize(mode string) bool {
 	switch strings.ToLower(mode) {
 	case "always":

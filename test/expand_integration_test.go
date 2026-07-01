@@ -165,7 +165,7 @@ func TestExpand_PureComputed(t *testing.T) {
 //
 // The shared schema's `organization.owner` only accepts users, so we
 // test the filter's negative case (passing a type that has no grants)
-// to verify the SELECT WHERE clause honours the filter rather than
+// to verify the SELECT WHERE clause honors the filter rather than
 // returning the unfiltered set.
 func TestExpand_SubjectTypeFilter(t *testing.T) {
 	if testing.Short() {
@@ -269,7 +269,7 @@ func TestExpand_TTUOnly(t *testing.T) {
 // TestExpand_TTUNoLinkedObjects exercises the edge case where the
 // linking relation has no tuples for this object: the response is
 // structurally valid with an empty computed array, NOT a missing
-// leaf or a sentinel. Matches OpenFGA's behaviour for "no parents".
+// leaf or a sentinel. Matches OpenFGA's behavior for "no parents".
 func TestExpand_TTUNoLinkedObjects(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -522,7 +522,6 @@ func TestExpand_MaxLeafCapAndTruncationFlag(t *testing.T) {
 		require.NoError(t, db.QueryRowContext(ctx,
 			`INSERT INTO organizations (name) VALUES ('expand_cap_org') RETURNING id`).Scan(&orgID))
 		// Three owners — enough to exercise both pages of a cap=2.
-		ownerIDs := make([]int64, 0, 3)
 		for i := 0; i < 3; i++ {
 			var uid int64
 			require.NoError(t, db.QueryRowContext(ctx,
@@ -532,7 +531,6 @@ func TestExpand_MaxLeafCapAndTruncationFlag(t *testing.T) {
 				`INSERT INTO organization_members (organization_id, user_id, role) VALUES ($1, $2, 'owner')`,
 				orgID, uid)
 			require.NoError(t, err)
-			ownerIDs = append(ownerIDs, uid)
 		}
 
 		checker := melange.NewChecker(db, melange.WithDatabaseSchema(databaseSchema))
@@ -562,7 +560,7 @@ func TestExpand_MaxLeafCapAndTruncationFlag(t *testing.T) {
 		assert.True(t, capped.Root.Leaf.Users.UsersTruncated,
 			"capped Expand must signal truncation so consumers know the list is partial")
 
-		// FlattenUsers honours the cap on what's *present* in the
+		// FlattenUsers honors the cap on what's *present* in the
 		// tree — it doesn't re-fetch missing entries.
 		assert.Len(t, capped.FlattenUsers(), 2)
 	})
@@ -612,7 +610,7 @@ func TestExpand_MaxLeafExactSizeNoTruncation(t *testing.T) {
 
 // TestExpand_MaxLeafJSONShape pins the wire-level shape of the
 // truncation flag: when present it's `"users_truncated": true`;
-// when absent the key is dropped entirely (NOT serialised as
+// when absent the key is dropped entirely (NOT serialized as
 // false). This is the OpenFGA-compatibility contract — consumers
 // that don't know about the extension shouldn't see an unexpected
 // key on their uncapped requests.

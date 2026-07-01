@@ -291,18 +291,18 @@ func TestFormatTuple_Stable(t *testing.T) {
 	})
 	want := "user:alice → viewer → document:1"
 	if got != want {
-		t.Errorf("formatTuple (uncoloured) = %q, want %q", got, want)
+		t.Errorf("formatTuple (uncolored) = %q, want %q", got, want)
 	}
 }
 
-// TestPalette_OpenFGATokensColoured pins the OpenFGA-style palette
+// TestPalette_OpenFGATokensColored pins the OpenFGA-style palette
 // mapping: type portions render green, relations cyan, arrows and
 // keyword prose dim grey, `:` delimiters keyword grey. Regressions
 // here mean the CLI drifted away from the openfga-dark theme.
-func TestPalette_OpenFGATokensColoured(t *testing.T) {
+func TestPalette_OpenFGATokensColored(t *testing.T) {
 	o := opts{color: true}
 
-	// paintObjectIdent: type green, colon keyword, id uncoloured.
+	// paintObjectIdent: type green, colon keyword, id uncolored.
 	got := paintObjectIdent(o, "user:alice")
 	if !strings.HasPrefix(got, colorType+"user"+ansiReset) {
 		t.Errorf("expected type-green prefix; got %q", got)
@@ -311,7 +311,7 @@ func TestPalette_OpenFGATokensColoured(t *testing.T) {
 		t.Errorf("expected keyword-styled colon; got %q", got)
 	}
 	if !strings.HasSuffix(got, "alice") {
-		t.Errorf("expected uncoloured id suffix; got %q", got)
+		t.Errorf("expected uncolored id suffix; got %q", got)
 	}
 
 	// paintUsersetIdent: type green + `#` keyword + relation cyan.
@@ -365,7 +365,7 @@ func TestTrace_HeaderPaintsTokens(t *testing.T) {
 // TestTrace_LabelPaintsUsersetRef pins the label tokeniser: a label
 // like "via [group#member] → group:eng" gets the bracket group mint
 // and the userset identifier partitioned into type/id/relation
-// colours.
+// colors.
 func TestTrace_LabelPaintsUsersetRef(t *testing.T) {
 	result := true
 	tr := &melange.Trace{
@@ -389,4 +389,3 @@ func assertContains(t *testing.T, haystack, needle, why string) {
 		t.Errorf("expected %s (%q) in output:\n%q", why, needle, haystack)
 	}
 }
-

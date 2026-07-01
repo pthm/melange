@@ -10,7 +10,7 @@ import (
 
 // UsersetTree is the root of an Expand response. The shape mirrors
 // openfgav1.UsersetTree field-for-field so existing OpenFGA tooling
-// (UI builders, audit exporters, SDK consumers) deserialises the JSON
+// (UI builders, audit exporters, SDK consumers) deserializes the JSON
 // without an adapter layer.
 //
 // Resolution is shallow by default: computed rewrites and tuple-to-userset
@@ -57,7 +57,7 @@ type Leaf struct {
 //
 // UsersTruncated is a Melange extension. True when the per-leaf cap
 // (p_max_leaf / WithExpandMaxLeaf) was set and the user list was
-// capped. OpenFGA consumers can ignore the field (it serialises as
+// capped. OpenFGA consumers can ignore the field (it serializes as
 // omitempty); Melange clients surface it as a warning.
 type Users struct {
 	Users          []string `json:"users"`
@@ -159,7 +159,7 @@ func collectLeafUsers(n *UsersetTreeNode, set map[string]struct{}) {
 // Wildcards ([type:*]) and userset references ([group#member]) survive
 // the projection inline as user-strings in Leaf.Users — never expanded.
 //
-// Expand honours the same WithUsersetValidation / WithRequestValidation
+// Expand honors the same WithUsersetValidation / WithRequestValidation
 // options as Check; validation errors short-circuit before any SQL is
 // issued.
 func (c *Checker) Expand(ctx context.Context, object ObjectLike, relation RelationLike, opts ...ExpandOption) (*UsersetTree, error) {
@@ -283,7 +283,7 @@ func (c *Checker) ExpandRecursive(ctx context.Context, object ObjectLike, relati
 // collectExpandPointers walks an UsersetTreeNode and invokes the
 // callback for every Leaf.Computed and Leaf.TupleToUserset pointer.
 // Difference subtract is NOT chased — the subtract slot names users
-// to exclude, not include (matches FlattenUsers behaviour).
+// to exclude, not include (matches FlattenUsers behavior).
 func collectExpandPointers(n *UsersetTreeNode, push func(Object, Relation)) {
 	if n == nil {
 		return

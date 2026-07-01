@@ -28,7 +28,7 @@ import (
 // Skipping (not failing):
 //   - The dispatcher's no-entry sentinel. When the relation's renderer is
 //     not yet eligible (see lib/sqlgen ComputeExplainEligibility) the
-//     dispatcher returns a NodeUnion root labelled "explain not yet
+//     dispatcher returns a NodeUnion root labeled "explain not yet
 //     supported …" with result=false. Asserting parity here would let the
 //     sentinel falsely match every Check==false assertion as a "pass". We
 //     log the skip so coverage gaps stay visible without poisoning the
@@ -122,4 +122,3 @@ func explainParityEligible(checks []*CheckAssertion) []*CheckAssertion {
 	}
 	return out
 }
-

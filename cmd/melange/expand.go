@@ -36,7 +36,7 @@ Resolution is shallow by default — computed-userset rewrites and TTU
 ("relation from parent") rewrites surface as unresolved pointers
 (leaf.computed / leaf.tuple_to_userset) that callers chase with follow-up
 Expand calls. This matches OpenFGA's wire format so existing tooling
-(UI builders, audit exporters, SDK consumers) deserialises the response
+(UI builders, audit exporters, SDK consumers) deserializes the response
 unchanged.
 
 For the simpler "give me a flat list of users with access" use case, pass
@@ -94,7 +94,7 @@ func init() {
 	f.IntVar(&expandMaxLeaf, "max-leaf", 0, "Melange extension: cap entries per Leaf.Users (0 = unbounded, OpenFGA-equivalent)")
 	f.BoolVar(&expandFlatten, "flatten", false, "print a flat deduplicated user list instead of the tree (Leaf.Users only; does not chase computed/TTU pointers)")
 	f.BoolVar(&expandRecursive, "recursive", false, "print a flat deduplicated user list AND chase computed/TTU pointers via additional Expand calls (implies --flatten)")
-	f.StringVar(&expandColor, "color", "auto", "colour output: auto|always|never (auto = stdout-is-TTY and NO_COLOR unset)")
+	f.StringVar(&expandColor, "color", "auto", "color output: auto|always|never (auto = stdout-is-TTY and NO_COLOR unset)")
 }
 
 func runExpand(dsn, databaseSchema string, object melange.Object, relation melange.Relation, format, subjectType string, maxLeaf int, flatten, recursive bool) error {

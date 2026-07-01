@@ -57,7 +57,7 @@ func generateExplainFunction(a RelationAnalysis, inline InlineSQLData, databaseS
 // Mirrors check_permission's structure: a public wrapper (SQL function) that
 // hands off to an internal PL/pgSQL function. The internal function applies
 // the M2002 depth check before routing, identical to check_permission_internal
-// so depth behaviour is symmetric between Check and Explain.
+// so depth behavior is symmetric between Check and Explain.
 //
 // Routing returns a JSONB trace. When no case matches, the internal function
 // returns a "no_entry" trace shape (result=false, root.type="union" with a

@@ -28,7 +28,7 @@ import (
 // # Truncation
 //
 // When the schema can produce a large trace, pass WithExplainMaxNodes(n)
-// to cap the response. The cap is also honourable as a session GUC:
+// to cap the response. The cap is also honorable as a session GUC:
 // `SET melange.max_explain_nodes = N;` then plain Explain calls inherit
 // the limit. Both the per-call argument and the session GUC override the
 // built-in default (100). On truncation the returned Trace has
@@ -37,7 +37,7 @@ import (
 //
 // # Validation
 //
-// Explain honours the same WithUsersetValidation / WithRequestValidation
+// Explain honors the same WithUsersetValidation / WithRequestValidation
 // options as Check so the two APIs reject the same malformed inputs at the
 // Go layer. Validation errors short-circuit before any SQL is issued; the
 // returned (*Trace, error) is (nil, err).

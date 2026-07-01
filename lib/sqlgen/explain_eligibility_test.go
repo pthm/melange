@@ -21,7 +21,7 @@ import (
 // cascade tests below as the "seed" of ineligibility — we used to set
 // HasComplexUsersetPatterns for this, but slice 1.8 dropped that gate.
 // Any non-simple intersection part triggers the same local-ineligibility
-// signal without affecting other cascade behaviour.
+// signal without affecting other cascade behavior.
 func markLocallyIneligible(a *RelationAnalysis) {
 	a.Features.HasIntersection = true
 	a.IntersectionGroups = []IntersectionGroupInfo{{

@@ -26,7 +26,7 @@ import (
 //
 //	go test -count=1 -v -run TestSentinelReport ./test/openfgatests/
 //
-// Honours `t.Short()` so `go test -short ./...` skips the schema sweep
+// Honors `t.Short()` so `go test -short ./...` skips the schema sweep
 // (avoids slowing down CI's smoke pass).
 func TestSentinelReport(t *testing.T) {
 	if testing.Short() {
@@ -64,7 +64,7 @@ func TestSentinelReport(t *testing.T) {
 				}
 				explainSentinel := !explainEligible[a.ObjectType][a.Relation]
 				expandSentinel := !expandEligible[a.ObjectType][a.Relation]
-				if !(explainSentinel || expandSentinel) {
+				if !explainSentinel && !expandSentinel {
 					continue
 				}
 				k := key{a.ObjectType, a.Relation}

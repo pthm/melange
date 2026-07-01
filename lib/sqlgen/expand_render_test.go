@@ -11,7 +11,8 @@ import (
 func TestRenderExpandFunction_DirectOnly(t *testing.T) {
 	a := mkAnalysis("document", "owner", RelationFeatures{HasDirect: true}, false)
 	a.SatisfyingRelations = []string{"owner"}
-	a.AllowedSubjectTypes = []string{"user"}; a.DirectSubjectTypes = []string{"user"}
+	a.AllowedSubjectTypes = []string{"user"}
+	a.DirectSubjectTypes = []string{"user"}
 
 	plan, ok := BuildExpandPlan(a, "")
 	if !ok {
@@ -36,7 +37,7 @@ func TestRenderExpandFunction_DirectOnly(t *testing.T) {
 		"relation = 'owner'",
 		"object_type = 'document'",
 		"subject_type IN ('user')",
-		// Per-call subject_type filter must be honoured
+		// Per-call subject_type filter must be honored
 		"(p_subject_type IS NULL OR subject_type = p_subject_type)",
 		// COALESCE so empty results yield [] not null
 		"COALESCE(",
@@ -77,7 +78,8 @@ func TestRenderExpandFunction_DirectOnly(t *testing.T) {
 func TestRenderExpandFunction_DirectAndComputed(t *testing.T) {
 	a := mkAnalysis("organization", "admin", RelationFeatures{HasDirect: true, HasImplied: true}, false)
 	a.SatisfyingRelations = []string{"admin", "owner"}
-	a.AllowedSubjectTypes = []string{"user"}; a.DirectSubjectTypes = []string{"user"}
+	a.AllowedSubjectTypes = []string{"user"}
+	a.DirectSubjectTypes = []string{"user"}
 	a.DirectImpliedBy = []string{"owner"}
 
 	plan, ok := BuildExpandPlan(a, "")
@@ -145,9 +147,9 @@ func TestRenderExpandFunction_PureComputed(t *testing.T) {
 // true and updates the test.
 func TestBuildExpandPlan_Ineligible(t *testing.T) {
 	cases := []struct {
-		name    string
-		mutate  func(*RelationAnalysis)
-		slice   string
+		name   string
+		mutate func(*RelationAnalysis)
+		slice  string
 	}{
 		// All previously-gated exclusion variants are now eligible:
 		// - slice 1.9 dropped intersectionGroupsAreSimpleForExpand
@@ -162,7 +164,8 @@ func TestBuildExpandPlan_Ineligible(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			a := mkAnalysis("doc", "viewer", RelationFeatures{HasDirect: true}, false)
-			a.AllowedSubjectTypes = []string{"user"}; a.DirectSubjectTypes = []string{"user"}
+			a.AllowedSubjectTypes = []string{"user"}
+			a.DirectSubjectTypes = []string{"user"}
 			tc.mutate(&a)
 			if _, ok := BuildExpandPlan(a, ""); ok {
 				t.Errorf("plan should be ineligible (%s) for %s", tc.name, tc.slice)
@@ -252,7 +255,7 @@ func TestRenderExpandFunction_TTUOnly(t *testing.T) {
 		"'tuple_to_userset'",
 		"'tupleset'",
 		"'computed'",
-		// Leaf wrapper so the tree node deserialises as Node.Leaf
+		// Leaf wrapper so the tree node deserializes as Node.Leaf
 		"jsonb_build_object('leaf', jsonb_build_object('tuple_to_userset'",
 		// COALESCE so an empty computed array becomes [] not null
 		"COALESCE(",
@@ -539,7 +542,8 @@ func TestRenderExpandFunction_UsersetOnlyRelation(t *testing.T) {
 func TestRenderExpandFunction_DirectAndTTU(t *testing.T) {
 	a := mkAnalysis("folder", "viewer", RelationFeatures{HasDirect: true, HasRecursive: true}, false)
 	a.SatisfyingRelations = []string{"viewer"}
-	a.AllowedSubjectTypes = []string{"user"}; a.DirectSubjectTypes = []string{"user"}
+	a.AllowedSubjectTypes = []string{"user"}
+	a.DirectSubjectTypes = []string{"user"}
 	a.ParentRelations = []ParentRelationInfo{{
 		Relation:            "viewer",
 		LinkingRelation:     "parent",

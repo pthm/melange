@@ -15,7 +15,7 @@ import (
 	"github.com/pthm/melange/melange"
 )
 
-// Tree connector glyphs. Centralised so tests can spell them once.
+// Tree connector glyphs. Centralized so tests can spell them once.
 const (
 	branchLast = "└── "
 	branchMore = "├── "
@@ -23,17 +23,17 @@ const (
 	indentMore = "│   "
 )
 
-// Header markers signalling the Explain result. Expand omits the marker
+// Header markers signaling the Explain result. Expand omits the marker
 // entirely because it has no boolean result to communicate.
 const (
 	markerAllow = "✓"
 	markerDeny  = "✗"
 )
 
-// Colour constants live in palette.go so trace.go and expand.go
+// Color constants live in palette.go so trace.go and expand.go
 // share the OpenFGA-mapped palette + structured painters.
 
-// Option configures a single Trace rendering. The zero value is colourless
+// Option configures a single Trace rendering. The zero value is colorless
 // output suitable for piped writers and captured strings.
 type Option func(*opts)
 
@@ -41,7 +41,7 @@ type opts struct {
 	color bool
 }
 
-// WithColor enables ANSI colour escapes in the rendered output. Callers
+// WithColor enables ANSI color escapes in the rendered output. Callers
 // (e.g. the CLI command) typically detect TTY + NO_COLOR and pass the
 // resolved bool.
 func WithColor(enabled bool) Option {
@@ -87,7 +87,7 @@ func Trace(w io.Writer, t *melange.Trace, options ...Option) {
 	}
 
 	if t.Truncated {
-		fmt.Fprintf(w, "\n(truncated after %d nodes — raise --max-nodes for more)\n", t.NodeCount)
+		_, _ = fmt.Fprintf(w, "\n(truncated after %d nodes — raise --max-nodes for more)\n", t.NodeCount)
 	}
 }
 
@@ -108,15 +108,15 @@ func writeHeader(w io.Writer, t *melange.Trace, o opts) {
 	on := paintKeyword(o, "on")
 	switch {
 	case t.Subject != "" && t.Result != nil && *t.Result:
-		fmt.Fprintf(w, "%s %s %s %s %s %s\n", paintAllowChip(o), subj, has, rel, on, obj)
+		_, _ = fmt.Fprintf(w, "%s %s %s %s %s %s\n", paintAllowChip(o), subj, has, rel, on, obj)
 	case t.Subject != "" && t.Result != nil && !*t.Result:
 		notHas := paintKeyword(o, "does NOT have")
-		fmt.Fprintf(w, "%s %s %s %s %s %s\n", paintDenyChip(o), subj, notHas, rel, on, obj)
+		_, _ = fmt.Fprintf(w, "%s %s %s %s %s %s\n", paintDenyChip(o), subj, notHas, rel, on, obj)
 	case t.Subject != "":
 		// Explain trace missing Result is unusual but render something sensible.
-		fmt.Fprintf(w, "? %s ?? %s %s %s\n", subj, rel, on, obj)
+		_, _ = fmt.Fprintf(w, "? %s ?? %s %s %s\n", subj, rel, on, obj)
 	default:
-		fmt.Fprintf(w, "%s %s %s\n", rel, on, obj)
+		_, _ = fmt.Fprintf(w, "%s %s %s\n", rel, on, obj)
 	}
 }
 
@@ -137,7 +137,7 @@ func writeNode(w io.Writer, n *melange.Node, prefix string, isLast bool, o opts)
 	if n.Result != nil && !*n.Result {
 		mark = paint(o, "\x1b[1m"+colorDeny, markerDeny) + " "
 	}
-	fmt.Fprintf(w, "%s%s%s\n", paint(o, colorDim, prefix+branch), mark, formatNode(o, n))
+	_, _ = fmt.Fprintf(w, "%s%s%s\n", paint(o, colorDim, prefix+branch), mark, formatNode(o, n))
 
 	// Track which sub-items are last so connectors line up.
 	subEvidence := n.Evidence
@@ -152,7 +152,7 @@ func writeNode(w io.Writer, n *melange.Node, prefix string, isLast bool, o opts)
 	for i, ev := range subEvidence {
 		last := len(n.Children)+i == total-1
 		branch, _ := connectors(childPrefix, last)
-		fmt.Fprintf(w, "%s%s %s\n",
+		_, _ = fmt.Fprintf(w, "%s%s %s\n",
 			paint(o, colorDim, childPrefix+branch),
 			paintKeyword(o, "tuple:"),
 			formatTuple(o, ev))
@@ -176,7 +176,7 @@ func shouldInlineEvidence(n *melange.Node) bool {
 // The string never includes a newline — caller handles tree connectors.
 // Nodes carrying free-form labels (via userset, via parent, exclusion,
 // cycle) route labels through paintLabel so embedded userset refs and
-// type restrictions get coloured too.
+// type restrictions get colored too.
 func formatNode(o opts, n *melange.Node) string {
 	switch n.Type {
 	case melange.NodeDirect:
@@ -234,12 +234,12 @@ func formatTuple(o opts, t melange.TupleRef) string {
 	return fmt.Sprintf("%s %s %s %s %s", subj, arrow, rel, arrow, obj)
 }
 
-// paintLabel colours embedded userset references and type
+// paintLabel colors embedded userset references and type
 // restrictions inside a free-form label. Anything else in the label
-// stays uncoloured. Two shapes are recognised:
+// stays uncolored. Two shapes are recognized:
 //
 //   - `[<inner>]` — anywhere in the label, wrapped in mint (matches
-//     OpenFGA's type-restrictions colour).
+//     OpenFGA's type-restrictions color).
 //   - `<type>:<id>[#<rel>]` — wrapped via paintUsersetIdent so the
 //     type / id / relation partitions match the palette.
 //
@@ -291,7 +291,7 @@ func paintLabelToken(o opts, tok string) string {
 	}
 	// Similarly peel a leading `(` so "(via editor)" works.
 	leading := ""
-	if len(tok) > 0 && tok[0] == '(' {
+	if tok != "" && tok[0] == '(' {
 		leading = paintKeyword(o, "(")
 		tok = tok[1:]
 	}

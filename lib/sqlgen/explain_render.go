@@ -14,10 +14,10 @@ import (
 // reference loops, intersection groups, then the final-failure union.
 // Recursive attempts that branch on result (implied/parent/userset) route
 // through explainChildTraceAttempt so the node-count fold and truncation
-// bail-out stay centralised; intersection parts AND-aggregate into
+// bail-out stay centralized; intersection parts AND-aggregate into
 // v_intersection_pass instead and call explainTruncationBailout directly.
 // Every success-return routes through emitExplainSuccessReturn so exclusion
-// handling stays centralised. Eligibility is computed by
+// handling stays centralized. Eligibility is computed by
 // ComputeExplainEligibility; relations without an eligible renderer route to
 // the dispatcher's no-entry sentinel.
 
@@ -236,7 +236,7 @@ func buildExplainDirectAttempt(plan CheckPlan, blocks CheckBlocks) []Stmt {
 	// '*' rows and the CASE always picks the direct branch. Emitting it
 	// unconditionally keeps the generated SQL uniform across no-wildcard
 	// and allow-wildcard variants. Both branches route through
-	// trace_blocks helpers so the JSON contract stays centralised.
+	// trace_blocks helpers so the JSON contract stays centralized.
 	wildcardUsers := "jsonb_build_array(" +
 		BuildSubjectRefJSON("v_evidence_tuple.subject_type", sqldsl.QuoteLiteral("*")) +
 		")"
@@ -347,7 +347,7 @@ func buildExplainImpliedAttempts(plan CheckPlan, blocks CheckBlocks) []Stmt {
 // caller supplies the dispatcher/function callExpr plus the success and
 // failure NodeJSON SQL strings; the helper folds the child trace's
 // node_count, routes success through emitExplainSuccessReturn (so
-// exclusion stays centralised) and appends failureNode to v_attempts on
+// exclusion stays centralized) and appends failureNode to v_attempts on
 // miss.
 //
 // COALESCE on the callExpr guards against a callee that somehow returns
@@ -695,11 +695,12 @@ func buildExplainIntersectionAttempts(plan CheckPlan, blocks CheckBlocks) []Stmt
 // buildExplainIntersectionGroupStmts assembles one group's per-part
 // recursive calls + the success/failure aggregation.
 func buildExplainIntersectionGroupStmts(plan CheckPlan, blocks CheckBlocks, group IntersectionGroupCheck, groupIdx int) []Stmt {
-	stmts := []Stmt{
+	stmts := make([]Stmt, 0, 3+len(group.Parts)*8)
+	stmts = append(stmts,
 		Comment{Text: fmt.Sprintf("Intersection group %d", groupIdx+1)},
 		Assign{Name: "v_intersection_children", Value: Raw("'[]'::jsonb")},
 		Assign{Name: "v_intersection_pass", Value: Raw("TRUE")},
-	}
+	)
 
 	for _, part := range group.Parts {
 		stmts = append(stmts, buildExplainIntersectionPartStmts(plan, part)...)
@@ -770,12 +771,12 @@ func buildExplainIntersectionPartStmts(plan CheckPlan, part IntersectionPartChec
 // non-relation shapes: IsParent (TTU-in-intersection), IsThis ([user] direct
 // grant), and per-part ExcludedRelation (X but not Y as a part). Uses
 // part.Check — the boolean predicate the Check renderer builds for this shape
-// — as the pass signal, and emits a labelled synthetic trace child.
+// — as the pass signal, and emits a labeled synthetic trace child.
 //
 // Trace shape per part type:
-//   - IsParent          → NodeTTU labelled "via <linking>"
-//   - per-part Excluded → NodeExclusion labelled "<rel> but not <excl>"
-//   - IsThis (default)  → NodeDirect labelled "direct grant"
+//   - IsParent          → NodeTTU labeled "via <linking>"
+//   - per-part Excluded → NodeExclusion labeled "<rel> but not <excl>"
+//   - IsThis (default)  → NodeDirect labeled "direct grant"
 //
 // The synthetic children are leaf nodes (no recursive sub-trace). They
 // correctly surface the AND structure in the trace without recursing into
@@ -922,7 +923,7 @@ func explainLocalSupported(a RelationAnalysis) bool {
 	// explain_permission_internal; intersection parts with IsParent /
 	// IsThis / ExcludedRelation shapes use the precomputed part.Check
 	// predicate via buildExplainComplexIntersectionPartStmts; exclusions
-	// are centralised in emitExplainSuccessReturn.
+	// are centralized in emitExplainSuccessReturn.
 	f := a.Features
 	return f.HasDirect || f.HasImplied || f.HasRecursive || f.HasUserset || f.HasIntersection || f.HasExclusion
 }

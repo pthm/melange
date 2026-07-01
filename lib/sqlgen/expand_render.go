@@ -295,7 +295,7 @@ func RenderExpandFunction(plan ExpandPlan) string {
 // subtrahend in an exclusion chain. The name addresses the subtract
 // node (used by callers that need to chase the pointer); the value
 // is the leaf or composite under it.
-func buildExpandExclusionSubtract(plan ExpandPlan, objectTypeLit string, ex ExpandExclusion) (string, string) {
+func buildExpandExclusionSubtract(plan ExpandPlan, objectTypeLit string, ex ExpandExclusion) (name, value string) {
 	switch {
 	case ex.ParentRelation != nil:
 		name := BuildExpandNodeName(objectTypeLit, "p_object_id", ex.ParentRelation.LinkingRelation)
@@ -437,7 +437,7 @@ func buildExpandIntersectionPartNode(plan ExpandPlan, objectTypeLit string, part
 //
 // The aggregation runs at expand-call time so the tree reflects the
 // current tuples (consistent with the rest of Melange's read-after-write
-// behaviour). When no linking tuples exist the computed array is
+// behavior). When no linking tuples exist the computed array is
 // empty — that's a valid OpenFGA response meaning "no parents to
 // inherit from".
 func buildExpandTTULeaf(plan ExpandPlan, ttu ParentRelationInfo) string {
@@ -496,7 +496,7 @@ func buildExpandTTULeaf(plan ExpandPlan, ttu ParentRelationInfo) string {
 // detect overflow. PostgreSQL won't share the work between the two, but
 // Expand is the debugging-and-admin path, not the request hot path, so the
 // simpler two-query shape wins. When p_max_leaf IS NULL the LIMIT/EXISTS
-// both no-op (matching OpenFGA's unbounded behaviour) and the
+// both no-op (matching OpenFGA's unbounded behavior) and the
 // users_truncated field is omitted from the JSONB via the helper's CASE
 // wrapper.
 func buildExpandDirectLeaf(plan ExpandPlan, subjectTypes []string) string {

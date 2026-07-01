@@ -92,9 +92,9 @@ func TestShouldColorize(t *testing.T) {
 	// non-empty and auto must return false even if a TTY is attached.
 	t.Setenv("NO_COLOR", "1")
 	if shouldColorize("auto") {
-		t.Errorf("NO_COLOR set should disable colour under --color=auto")
+		t.Errorf("NO_COLOR set should disable color under --color=auto")
 	}
 	if shouldColorize("") {
-		t.Errorf("empty mode (default) should behave as auto and honour NO_COLOR")
+		t.Errorf("empty mode (default) should behave as auto and honor NO_COLOR")
 	}
 }

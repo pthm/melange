@@ -2,7 +2,7 @@ package melange
 
 // ExplainOption configures a single Checker.Explain call. Options resolve
 // either as direct SQL parameters to the explain dispatcher or as
-// `SET LOCAL melange.*` statements at request start; both paths honour the
+// `SET LOCAL melange.*` statements at request start; both paths honor the
 // three-tier priority: per-call > session GUC > built-in default.
 
 // ExplainOption configures a single Checker.Explain call.
@@ -44,7 +44,7 @@ func WithExplainMaxNodes(n int) ExplainOption {
 type ExpandOption func(*expandOpts)
 
 // expandOpts holds resolved Expand options. The zero value means "no
-// extensions in effect" — i.e. full OpenFGA-compatible behaviour.
+// extensions in effect" — i.e. full OpenFGA-compatible behavior.
 type expandOpts struct {
 	subjectType ObjectType // empty => no filter (all subject types)
 	maxLeaf     int        // 0 => unset (unbounded, OpenFGA-equivalent)
@@ -76,8 +76,8 @@ func WithSubjectTypeFilter(subjectType ObjectType) ExpandOption {
 // WithExpandMaxLeaf caps the number of entries in any single
 // Leaf.Users array. When the cap fires the affected Users carries
 // UsersTruncated=true; OpenFGA consumers ignore the field (it
-// serialises as omitempty), Melange clients surface a warning. Pass
-// <= 0 to mean "unset" (unbounded, matching OpenFGA's behaviour).
+// serializes as omitempty), Melange clients surface a warning. Pass
+// <= 0 to mean "unset" (unbounded, matching OpenFGA's behavior).
 //
 // This is a Melange extension — OpenFGA Expand returns all matching
 // subjects without a cap.

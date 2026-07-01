@@ -278,7 +278,7 @@ func TestExplain_UsersetReferenceFailureRecordsAttempts(t *testing.T) {
 //
 // The check_permission counterpart raises with code M2002 ("resolution too
 // complex"); explain_permission_internal mirrors the same guard. Both
-// behaviours are required for the Explain tree to stop on pathological
+// behaviors are required for the Explain tree to stop on pathological
 // schemas. We also walk the returned tree to confirm a NodeCycle subtree
 // is present — without that assertion the test would pass even if the
 // cycle guard silently fell through without recording the cycle node,
@@ -444,7 +444,7 @@ func TestExplain_TTUMultipleLinkingTypes(t *testing.T) {
 		"label should inline the resolved parent's type:id (workspace branch, not folder)")
 }
 
-// TestExplain_EmptyRawBytes_ReturnsError pins the defensive behaviour at
+// TestExplain_EmptyRawBytes_ReturnsError pins the defensive behavior at
 // melange/explain.go:Explain when the underlying SQL scan yields NULL/empty
 // bytes. In practice the dispatcher always returns a structurally valid
 // JSONB envelope (even on unknown pairs — see explainNoEntrySentinelSQL),

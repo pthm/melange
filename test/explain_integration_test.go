@@ -49,7 +49,7 @@ func TestExplain_DirectGrantSuccess(t *testing.T) {
 		require.NotNil(t, trace)
 
 		assert.Equal(t, fmt.Sprintf("organization:%d", orgID), trace.Object)
-		assert.Equal(t, "owner", string(trace.Relation))
+		assert.Equal(t, "owner", trace.Relation)
 		assert.Equal(t, fmt.Sprintf("user:%d", userID), trace.Subject)
 		require.NotNil(t, trace.Result, "Explain must populate Result")
 		assert.True(t, *trace.Result, "owner of org should resolve to true")
@@ -124,7 +124,7 @@ func TestExplain_DirectGrantFailure(t *testing.T) {
 // resolves through a TTU path (`can_admin from org` on repository). The
 // trace's root is the user's ownership tuple wrapped in an implied →
 // success chain on the parent organization, with each TTU/Implied node
-// labelled informatively. This is the first integration test where slice
+// labeled informatively. This is the first integration test where slice
 // 1.2's implied infrastructure also activates: the dispatcher routes
 // through explain_permission_internal, which calls
 // explain_organization_can_admin, whose body in turn finds the owner
@@ -474,7 +474,7 @@ func TestExplain_ExclusionFiredRecordsDenial(t *testing.T) {
 			if child.Type == melange.NodeExclusion && child.Result != nil && !*child.Result {
 				foundExcluded = true
 				assert.Contains(t, child.Label, "excluded",
-					"failed exclusion node should be labelled as excluded")
+					"failed exclusion node should be labeled as excluded")
 				break
 			}
 		}
@@ -598,9 +598,9 @@ func TestExplain_NodeCountInvariant(t *testing.T) {
 // tests pin shape; this test pins the load-bearing correctness contract
 // (drift here means traces lie about the decision).
 //
-// JSON round-trip is also asserted: marshalling and unmarshalling the trace
+// JSON round-trip is also asserted: marshaling and unmarshaling the trace
 // must reproduce the same envelope flags and root type, so external tools
-// that re-serialise the trace see no shape drift.
+// that re-serialize the trace see no shape drift.
 func TestExplain_AgreesWithCheck(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -662,7 +662,7 @@ func TestExplain_AgreesWithCheck(t *testing.T) {
 				assert.Equal(t, allowed, *trace.Result,
 					"Explain.Result must equal Check for the same inputs")
 
-				// JSON round-trip pin: marshalling the trace and decoding it
+				// JSON round-trip pin: marshaling the trace and decoding it
 				// again must produce an equal envelope shape, so downstream
 				// tools that proxy the trace through JSON do not lose data.
 				raw, err := json.Marshal(trace)
@@ -693,7 +693,7 @@ func TestExplain_UnknownPair(t *testing.T) {
 		ctx := context.Background()
 
 		// Direct SQL call to bypass Go-side validation — we want to see the
-		// SQL dispatcher's behaviour on an unknown (type, relation).
+		// SQL dispatcher's behavior on an unknown (type, relation).
 		var raw []byte
 		err := db.QueryRowContext(ctx,
 			fmt.Sprintf("SELECT %s($1, $2, $3, $4, $5)::text", sqldsl.PrefixIdent("explain_permission", databaseSchema)),
