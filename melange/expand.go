@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 )
 
 // UsersetTree is the root of an Expand response. The shape mirrors
@@ -321,23 +322,11 @@ func collectExpandPointers(n *UsersetTreeNode, push func(Object, Relation)) {
 // renderer bugs that might emit an empty or malformed Computed
 // userset string.
 func parseUsersetPointer(s string) (Object, Relation, bool) {
-	hash := -1
-	for i := 0; i < len(s); i++ {
-		if s[i] == '#' {
-			hash = i
-			break
-		}
-	}
+	hash := strings.IndexByte(s, '#')
 	if hash < 1 || hash == len(s)-1 {
 		return Object{}, "", false
 	}
-	colon := -1
-	for i := 0; i < hash; i++ {
-		if s[i] == ':' {
-			colon = i
-			break
-		}
-	}
+	colon := strings.IndexByte(s[:hash], ':')
 	if colon < 1 || colon >= hash-1 {
 		return Object{}, "", false
 	}

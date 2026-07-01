@@ -207,10 +207,7 @@ func explainTruncationBailout(plan CheckPlan) Stmt {
 // When the relation has no direct path the block is skipped entirely; the
 // outer trace simply falls through to the final-failure return.
 func buildExplainDirectAttempt(plan CheckPlan, blocks CheckBlocks) []Stmt {
-	if !plan.HasDirect && !plan.HasImplied {
-		return nil
-	}
-	if blocks.DirectCheck == nil {
+	if (!plan.HasDirect && !plan.HasImplied) || blocks.DirectCheck == nil {
 		return nil
 	}
 
@@ -933,25 +930,11 @@ func explainLocalSupported(a RelationAnalysis) bool {
 // intersectionPartIsSimple is true when the part is a plain relation
 // reference — no [user]-direct (IsThis), no TTU-in-intersection
 // (ParentRelation set), and no exclusion-in-intersection (ExcludedRelation
-// set). Shared by intersectionGroupsAreSimple and anyExplainDepIneligible:
-// the eligibility sweep skips non-simple parts because their recursive
-// sub-traces are not required for correctness (complex shapes use the
-// precomputed part.Check predicate instead).
+// set). Used by anyExplainDepIneligible to skip non-simple parts: complex
+// shapes use the precomputed part.Check predicate instead of recursing
+// into another relation's explain function.
 func intersectionPartIsSimple(p IntersectionPart) bool {
 	return !p.IsThis && p.ParentRelation == nil && p.ExcludedRelation == ""
-}
-
-// intersectionGroupsAreSimple is true when every part of every group is a
-// plain relation reference. See intersectionPartIsSimple for the rule.
-func intersectionGroupsAreSimple(groups []IntersectionGroupInfo) bool {
-	for _, g := range groups {
-		for _, p := range g.Parts {
-			if !intersectionPartIsSimple(p) {
-				return false
-			}
-		}
-	}
-	return true
 }
 
 // ComputeExplainEligibility returns, for each (object_type, relation), whether

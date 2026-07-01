@@ -364,7 +364,7 @@ func (d *Doctor) checkExpandFanoutAdvisory(_ context.Context, report *Report) er
 	details.WriteString("    SET melange.max_expand_leaf = 1000;\n")
 	details.WriteString("    -- or per-call: Checker.Expand(..., WithExpandMaxLeaf(1000))\n\n")
 	if len(wildcardRels) > 0 {
-		details.WriteString(fmt.Sprintf("Wildcard grants (%d relation(s)) — every Expand surfaces the wildcard entry (`user:*`):\n", len(wildcardRels)))
+		fmt.Fprintf(&details, "Wildcard grants (%d relation(s)) — every Expand surfaces the wildcard entry (`user:*`):\n", len(wildcardRels))
 		for _, r := range wildcardRels {
 			details.WriteString("  - " + r + "\n")
 		}
@@ -373,7 +373,7 @@ func (d *Doctor) checkExpandFanoutAdvisory(_ context.Context, report *Report) er
 		if len(wildcardRels) > 0 {
 			details.WriteByte('\n')
 		}
-		details.WriteString(fmt.Sprintf("Recursive TTU (%d relation(s)) — ExpandRecursive walks the parent chain per call:\n", len(recursiveRels)))
+		fmt.Fprintf(&details, "Recursive TTU (%d relation(s)) — ExpandRecursive walks the parent chain per call:\n", len(recursiveRels))
 		for _, r := range recursiveRels {
 			details.WriteString("  - " + r + "\n")
 		}

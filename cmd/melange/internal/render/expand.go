@@ -62,12 +62,9 @@ func writeExpandNode(w io.Writer, n *melange.UsersetTreeNode, prefix string, isL
 	case n.Difference != nil:
 		// Two named slots in fixed order; not-last for the first child so
 		// the connector column flows into the subtract branch correctly.
-		if n.Difference.Base != nil {
-			writeExpandNode(w, n.Difference.Base, childPrefix, false, o)
-		}
-		if n.Difference.Subtract != nil {
-			writeExpandNode(w, n.Difference.Subtract, childPrefix, true, o)
-		}
+		// writeExpandNode handles nil children, so no guards needed.
+		writeExpandNode(w, n.Difference.Base, childPrefix, false, o)
+		writeExpandNode(w, n.Difference.Subtract, childPrefix, true, o)
 	}
 }
 
@@ -124,15 +121,6 @@ func writeLeaf(w io.Writer, l *melange.Leaf, prefix string, o opts) {
 			fmt.Fprintf(w, "%s%s\n",
 				paint(o, colorDim, prefix+branch),
 				paintKeyword(o, "(no users)"))
-			if l.Users.UsersTruncated {
-				// Truncation on an empty result is degenerate but possible
-				// if the cap is 0; still surface the warning so the user
-				// knows something was elided.
-				fmt.Fprintf(w, "%s%s\n",
-					paint(o, colorDim, prefix),
-					paint(o, colorDeny, "(users_truncated — raise --max-leaf to see more)"))
-			}
-			return
 		}
 		for i, u := range users {
 			last := i == len(users)-1
@@ -141,6 +129,9 @@ func writeLeaf(w io.Writer, l *melange.Leaf, prefix string, o opts) {
 				paint(o, colorDim, prefix+branch),
 				paintUsersetIdent(o, u))
 		}
+		// Truncation on an empty result is degenerate but possible if the
+		// cap is 0; still surface the warning so the user knows something
+		// was elided.
 		if l.Users.UsersTruncated {
 			fmt.Fprintf(w, "%s%s\n",
 				paint(o, colorDim, prefix),

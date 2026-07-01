@@ -2,6 +2,7 @@ package sqlgen
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/pthm/melange/lib/sqlgen/sqldsl"
@@ -129,20 +130,6 @@ func (p ExpandPlan) directSubjectTypes() []string {
 	return nil
 }
 
-// sliceContains is a small helper for the BuildExpandPlan union of
-// direct subject types and userset pattern subject types. Local because
-// the standard library's slices.Contains requires Go 1.21+ generics
-// and the call site has fewer than half a dozen entries — a linear
-// scan is the right ceiling.
-func sliceContains(haystack []string, needle string) bool {
-	for _, s := range haystack {
-		if s == needle {
-			return true
-		}
-	}
-	return false
-}
-
 // ComputeExpandEligibility returns, for each (object_type, relation),
 // whether the expand renderer can produce a tree for it. Mirrors
 // ComputeExplainEligibility's surface so CollectFunctionNames can call
@@ -189,7 +176,7 @@ func BuildExpandPlan(a RelationAnalysis, databaseSchema string) (ExpandPlan, boo
 	// transitive closure; we want only the immediate types for this relation.
 	directTypes := append([]string(nil), a.DirectSubjectTypes...)
 	for _, p := range a.UsersetPatterns {
-		if !sliceContains(directTypes, p.SubjectType) {
+		if !slices.Contains(directTypes, p.SubjectType) {
 			directTypes = append(directTypes, p.SubjectType)
 		}
 	}
@@ -253,26 +240,6 @@ func BuildExpandPlan(a RelationAnalysis, databaseSchema string) (ExpandPlan, boo
 func expandLocalSupported(a RelationAnalysis) bool {
 	f := a.Features
 	return f.HasDirect || f.HasImplied || f.HasRecursive || f.HasIntersection || f.HasUserset
-}
-
-// intersectionGroupsAreSimpleForExpand is true when every part of every
-// intersection group is a plain relation reference — no [user]-direct
-// (IsThis), no X from Y (ParentRelation), no per-part exclusion
-// (ExcludedRelation). Mirrors intersectionGroupsAreSimple in explain_render.go
-// but lives separately because Expand emits a different per-part shape
-// (Computed pointer vs Explain's recursive Node).
-func intersectionGroupsAreSimpleForExpand(a RelationAnalysis) bool {
-	for _, g := range a.IntersectionGroups {
-		for _, p := range g.Parts {
-			if p.IsThis || p.ParentRelation != nil || p.ExcludedRelation != "" {
-				return false
-			}
-			if p.Relation == "" {
-				return false // defensive — a part with no relation is unrenderable
-			}
-		}
-	}
-	return true
 }
 
 // RenderExpandFunction is the entry point for expand_* function
