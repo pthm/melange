@@ -1,6 +1,7 @@
 package test
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"strings"
@@ -951,4 +952,207 @@ func TestMigration_Modular_EquivalentToSingleFile(t *testing.T) {
 	fnModular := getFunctionNames(t, ctx, db2)
 	assert.Equal(t, fnSingle, fnModular,
 		"installed functions should be identical between single-file and modular schemas")
+}
+
+// TestMigration_RecordsDeployedModel verifies that a migration persists the
+// schema DSL, format, and parsed model, and that GetDeployedModel reads them
+// back losslessly. This is the foundation for `melange schema pull` and diffs.
+func TestMigration_RecordsDeployedModel(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+	m := migrator.NewMigrator(db, "")
+
+	migrateSchema(t, ctx, m, schemaV1, migrator.InternalMigrateOptions{
+		Version:      "v0.9.0",
+		SchemaFormat: "single",
+	})
+
+	model, err := m.GetDeployedModel(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, model, "deployed model should be recorded")
+
+	assert.Equal(t, schemaV1, model.DSL, "stored DSL should match the migrated schema")
+	assert.Equal(t, "single", model.Format)
+	assert.Equal(t, "v0.9.0", model.MelangeVersion)
+	assert.False(t, model.MigratedAt.IsZero(), "migrated_at should be populated")
+
+	// The parsed model round-trips to exactly what the schema parses to.
+	wantTypes, err := parser.ParseSchemaString(schemaV1)
+	require.NoError(t, err)
+	assert.Equal(t, wantTypes, model.Types, "stored model should round-trip to the parsed types")
+}
+
+// TestMigration_DeployedModelAbsentColumns simulates a database migrated before
+// model storage existed: GetLastMigration still works (dynamic column
+// selection) and GetDeployedModel returns nil gracefully rather than erroring.
+func TestMigration_DeployedModelAbsentColumns(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+	m := migrator.NewMigrator(db, "")
+
+	migrateSchema(t, ctx, m, schemaV1, migrator.InternalMigrateOptions{Version: "v0.9.0"})
+
+	// Drop the model columns to mimic an older installation.
+	for _, col := range []string{"schema_dsl", "schema_format", "model_json"} {
+		_, err := db.ExecContext(ctx, "ALTER TABLE melange_migrations DROP COLUMN "+col)
+		require.NoError(t, err, "dropping column %s", col)
+	}
+
+	// GetLastMigration still reads the surviving columns.
+	rec, err := m.GetLastMigration(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	assert.NotEmpty(t, rec.FunctionNames, "function names should still be read")
+	assert.Empty(t, rec.SchemaDSL, "schema_dsl is absent on an old install")
+
+	// GetDeployedModel reports "no model recorded" as nil, not an error.
+	model, err := m.GetDeployedModel(ctx)
+	require.NoError(t, err)
+	assert.Nil(t, model)
+}
+
+// TestMigration_DryRunScriptRecordsModel verifies that a dry-run migration
+// script, applied separately, records a self-describing migration: applying the
+// emitted SQL creates the tracking table and an INSERT that GetDeployedModel can
+// read back. Guards the dry-run INSERT against dropping the model columns.
+func TestMigration_DryRunScriptRecordsModel(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+	m := migrator.NewMigrator(db, "")
+
+	types, err := parser.ParseSchemaString(schemaV1)
+	require.NoError(t, err)
+
+	var buf bytes.Buffer
+	err = m.MigrateWithTypesAndOptions(ctx, types, migrator.InternalMigrateOptions{
+		DryRun:        &buf,
+		Version:       "v0.9.0",
+		SchemaContent: schemaV1,
+		SchemaFormat:  "single",
+	})
+	require.NoError(t, err)
+
+	// The emitted script must be valid SQL end-to-end.
+	_, err = db.ExecContext(ctx, buf.String())
+	require.NoError(t, err, "dry-run script should apply cleanly")
+
+	// And it must have recorded a model the read-back API can return.
+	model, err := m.GetDeployedModel(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, model, "applied dry-run script should record the model")
+	assert.Equal(t, schemaV1, model.DSL)
+	assert.Equal(t, "single", model.Format)
+	assert.Equal(t, "v0.9.0", model.MelangeVersion)
+}
+
+// TestMigration_DryRunScriptUpgradesOldTable applies a dry-run script to a
+// database whose melange_migrations table predates the deployed-model columns.
+// The script must ADD the columns (CREATE TABLE IF NOT EXISTS is a no-op on the
+// existing table) before its INSERT references them.
+func TestMigration_DryRunScriptUpgradesOldTable(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+	m := migrator.NewMigrator(db, "")
+
+	// Establish an older installation, then drop the model columns.
+	migrateSchema(t, ctx, m, schemaV1, migrator.InternalMigrateOptions{Version: "v0.8.0"})
+	for _, col := range []string{"schema_dsl", "schema_format", "model_json"} {
+		_, err := db.ExecContext(ctx, "ALTER TABLE melange_migrations DROP COLUMN "+col)
+		require.NoError(t, err, "dropping column %s", col)
+	}
+
+	types, err := parser.ParseSchemaString(schemaV1)
+	require.NoError(t, err)
+
+	var buf bytes.Buffer
+	err = m.MigrateWithTypesAndOptions(ctx, types, migrator.InternalMigrateOptions{
+		DryRun:        &buf,
+		Version:       "v0.9.0",
+		SchemaContent: schemaV1,
+		SchemaFormat:  "single",
+	})
+	require.NoError(t, err)
+
+	_, err = db.ExecContext(ctx, buf.String())
+	require.NoError(t, err, "dry-run script should upgrade the old table then insert")
+
+	model, err := m.GetDeployedModel(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, model, "model should be readable after applying upgrade script")
+	assert.Equal(t, schemaV1, model.DSL)
+}
+
+// TestMigration_MigrateFromStringRecordsModel verifies the high-level
+// MigrateFromString entrypoint records a self-describing migration, so
+// GetDeployedModel works for library users following the recommended APIs.
+func TestMigration_MigrateFromStringRecordsModel(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+
+	require.NoError(t, migrator.MigrateFromString(ctx, db, schemaV1))
+
+	m := migrator.NewMigrator(db, "")
+	model, err := m.GetDeployedModel(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, model, "MigrateFromString should record the deployed model")
+	assert.Equal(t, schemaV1, model.DSL)
+	assert.Equal(t, "single", model.Format)
+}
+
+// TestMigration_BackfillsModelOnRerun verifies that rerunning migrate with an
+// unchanged schema backfills the deployed model when an older record lacks it,
+// rather than fast-path skipping and leaving GetDeployedModel nil.
+func TestMigration_BackfillsModelOnRerun(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+	m := migrator.NewMigrator(db, "")
+
+	migrateSchema(t, ctx, m, schemaV1, migrator.InternalMigrateOptions{
+		Version:      "v0.9.0",
+		SchemaFormat: "single",
+	})
+
+	// Simulate a record written before model storage existed.
+	_, err := db.ExecContext(ctx,
+		"UPDATE melange_migrations SET schema_dsl = '', schema_format = '', model_json = '{}'::jsonb")
+	require.NoError(t, err)
+
+	model, err := m.GetDeployedModel(ctx)
+	require.NoError(t, err)
+	require.Nil(t, model, "precondition: model appears unrecorded")
+
+	// Rerunning the same schema must backfill instead of fast-path skipping.
+	migrateSchema(t, ctx, m, schemaV1, migrator.InternalMigrateOptions{
+		Version:      "v0.9.0",
+		SchemaFormat: "single",
+	})
+
+	model, err = m.GetDeployedModel(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, model, "rerun should backfill the deployed model")
+	assert.Equal(t, schemaV1, model.DSL)
 }

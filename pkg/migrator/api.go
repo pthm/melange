@@ -43,12 +43,22 @@ func Migrate(ctx context.Context, db Execer, schemaPath string) error {
 		return fmt.Errorf("no schema found at %s", m.SchemaPath())
 	}
 
+	// Read the raw content so the migration record is self-describing (schema
+	// checksum, DSL, and model), the same as MigrateWithOptions and the CLI.
+	content, err := parser.ReadSchemaContent(schemaPath)
+	if err != nil {
+		return fmt.Errorf("reading schema: %w", err)
+	}
+
 	types, err := parser.ParseSchema(m.SchemaPath())
 	if err != nil {
 		return fmt.Errorf("parsing schema: %w", err)
 	}
 
-	return m.MigrateWithTypes(ctx, types)
+	return m.MigrateWithTypesAndOptions(ctx, types, InternalMigrateOptions{
+		SchemaContent: string(content),
+		SchemaFormat:  schemaFormat(schemaPath),
+	})
 }
 
 // MigrateFromString parses schema content and applies it to the database.
@@ -71,8 +81,13 @@ func MigrateFromString(ctx context.Context, db Execer, content string) error {
 		return fmt.Errorf("parsing schema: %w", err)
 	}
 
+	// An embedded string is always a single (non-modular) schema. Passing the
+	// content records a self-describing migration (checksum, DSL, model).
 	m := NewMigrator(db, "")
-	return m.MigrateWithTypes(ctx, types)
+	return m.MigrateWithTypesAndOptions(ctx, types, InternalMigrateOptions{
+		SchemaContent: content,
+		SchemaFormat:  FormatSingle,
+	})
 }
 
 // MigrateWithOptions performs migration with control over dry-run and skip behavior.
@@ -129,10 +144,27 @@ func MigrateWithOptions(ctx context.Context, db Execer, schemaPath string, opts 
 		Force:         opts.Force,
 		Version:       opts.Version,
 		SchemaContent: string(schemaContent),
+		SchemaFormat:  schemaFormat(m.SchemaPath()),
 	}
 
 	// Skip detection (both phases) happens inside migrateWithTypesAndOptions;
 	// its skipped result covers the phase 1 fast path and the phase 2 no-op
 	// that dev builds rely on (see shouldSkipMigration).
 	return m.migrateWithTypesAndOptions(ctx, types, internalOpts)
+}
+
+// Schema format values recorded in melange_migrations.schema_format and
+// surfaced on DeployedModel.Format.
+const (
+	FormatSingle  = "single"  // a single .fga file
+	FormatModular = "modular" // an fga.mod manifest
+)
+
+// schemaFormat classifies how a schema was authored, for the deployed-model
+// record.
+func schemaFormat(path string) string {
+	if parser.IsModularSchema(path) {
+		return FormatModular
+	}
+	return FormatSingle
 }

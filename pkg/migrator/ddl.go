@@ -19,6 +19,10 @@ func migrationsDDL(databaseSchema string) string {
 -- - schema_checksum: SHA256 of the schema.fga content
 -- - codegen_version: Version of the SQL generation logic
 -- - function_names: All generated function names (for orphan detection)
+-- - schema_dsl: The OpenFGA DSL that produced this migration (source for
+--   "melange schema pull"; the exact content that was checksummed)
+-- - schema_format: "single" or "modular" (fga.mod)
+-- - model_json: The parsed model as JSON (machine-readable form for diffing)
 --
 -- The migrator checks the most recent record to determine if re-migration
 -- is needed. If both checksum and codegen_version match, migration is skipped
@@ -30,7 +34,10 @@ CREATE TABLE IF NOT EXISTS %[1]s (
     melange_version TEXT NOT NULL DEFAULT '',
     schema_checksum VARCHAR(64) NOT NULL,
     codegen_version TEXT NOT NULL,
-    function_names TEXT[] NOT NULL
+    function_names TEXT[] NOT NULL,
+    schema_dsl TEXT NOT NULL DEFAULT '',
+    schema_format VARCHAR(16) NOT NULL DEFAULT '',
+    model_json JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 
 -- Lookup by checksum for change detection
@@ -104,6 +111,7 @@ func migrationsTableDDL(databaseSchema string) []string {
 		addMelangeVersionColumn(databaseSchema),
 		addFunctionChecksumsColumn(databaseSchema),
 		widenVersionColumnsDDL(databaseSchema),
+		addSchemaModelColumns(databaseSchema),
 	}
 }
 
@@ -120,5 +128,27 @@ func addFunctionChecksumsColumn(databaseSchema string) string {
 	return fmt.Sprintf(`
 ALTER TABLE %s
 ADD COLUMN IF NOT EXISTS function_checksums JSONB NOT NULL DEFAULT '{}';
+`, table)
+}
+
+// addSchemaModelColumns returns a query to add the deployed-model columns
+// (schema_dsl, schema_format, model_json) to existing melange_migrations tables.
+// These columns were introduced after the original DDL, so they are applied
+// separately via ADD COLUMN IF NOT EXISTS to preserve compatibility with
+// databases migrated by earlier versions.
+//
+// Together they make the database self-describing: schema_dsl is the source of
+// truth for `melange schema pull`, schema_format records single vs. modular, and
+// model_json is the machine-readable form used for diffing.
+func addSchemaModelColumns(databaseSchema string) string {
+	table := sqldsl.PrefixIdent("melange_migrations", databaseSchema)
+
+	return fmt.Sprintf(`
+ALTER TABLE %[1]s
+ADD COLUMN IF NOT EXISTS schema_dsl TEXT NOT NULL DEFAULT '';
+ALTER TABLE %[1]s
+ADD COLUMN IF NOT EXISTS schema_format VARCHAR(16) NOT NULL DEFAULT '';
+ALTER TABLE %[1]s
+ADD COLUMN IF NOT EXISTS model_json JSONB NOT NULL DEFAULT '{}'::jsonb;
 `, table)
 }
