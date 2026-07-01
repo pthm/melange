@@ -145,3 +145,33 @@ func TestExpand_DifferenceNamedSlots(t *testing.T) {
 		t.Errorf("named slots missing; got:\n%s", got)
 	}
 }
+
+// TestExpand_HeaderPaintsUsersetIdent pins the OpenFGA palette on the
+// node name field: `document:1#viewer` renders as type-green +
+// keyword-grey delimiters + relation-cyan. Leaf user entries route
+// through the same painter so `group:eng#member` shows partitioned
+// styling.
+func TestExpand_HeaderPaintsUsersetIdent(t *testing.T) {
+	tree := &melange.UsersetTree{
+		Root: &melange.UsersetTreeNode{
+			Name: "document:1#viewer",
+			Leaf: &melange.Leaf{Users: &melange.Users{Users: []string{"user:alice", "group:eng#member", "user:*"}}},
+		},
+	}
+	got := ExpandString(tree, WithColor(true))
+	if !strings.Contains(got, colorType+"document"+ansiReset) {
+		t.Errorf("node name type green missing:\n%s", got)
+	}
+	if !strings.Contains(got, colorRelation+"viewer"+ansiReset) {
+		t.Errorf("node name relation cyan missing:\n%s", got)
+	}
+	if !strings.Contains(got, colorType+"user"+ansiReset) {
+		t.Errorf("leaf user type green missing:\n%s", got)
+	}
+	if !strings.Contains(got, colorType+"group"+ansiReset) {
+		t.Errorf("leaf group userset type green missing:\n%s", got)
+	}
+	if !strings.Contains(got, colorRelation+"member"+ansiReset) {
+		t.Errorf("leaf userset relation cyan missing:\n%s", got)
+	}
+}

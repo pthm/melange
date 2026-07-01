@@ -30,13 +30,10 @@ const (
 	markerDeny  = "✗"
 )
 
-// ANSI SGR escape sequences. Applied when WithColor(true) is in effect.
-const (
-	ansiReset = "\x1b[0m"
-	ansiGreen = "\x1b[32m"
-	ansiRed   = "\x1b[31m"
-	ansiGrey  = "\x1b[90m"
-)
+// Colour constants live in palette.go so trace.go and expand.go
+// share the OpenFGA-mapped palette + structured painters. Retained
+// alias names (ansiReset / ansiGreen / ansiRed / ansiGrey) keep
+// pre-refactor test expectations working.
 
 // Option configures a single Trace rendering. The zero value is colourless
 // output suitable for piped writers and captured strings.
@@ -106,16 +103,22 @@ func TraceString(t *melange.Trace, options ...Option) string {
 }
 
 func writeHeader(w io.Writer, t *melange.Trace, o opts) {
+	subj := paintUsersetIdent(o, t.Subject)
+	obj := paintUsersetIdent(o, t.Object)
+	rel := paintRelation(o, t.Relation)
+	has := paintKeyword(o, "has")
+	on := paintKeyword(o, "on")
 	switch {
 	case t.Subject != "" && t.Result != nil && *t.Result:
-		fmt.Fprintf(w, "%s %s has %s on %s\n", paint(o, ansiGreen, markerAllow), t.Subject, t.Relation, t.Object)
+		fmt.Fprintf(w, "%s %s %s %s %s %s\n", paintAllowChip(o), subj, has, rel, on, obj)
 	case t.Subject != "" && t.Result != nil && !*t.Result:
-		fmt.Fprintf(w, "%s %s does NOT have %s on %s\n", paint(o, ansiRed, markerDeny), t.Subject, t.Relation, t.Object)
+		notHas := paintKeyword(o, "does NOT have")
+		fmt.Fprintf(w, "%s %s %s %s %s %s\n", paintDenyChip(o), subj, notHas, rel, on, obj)
 	case t.Subject != "":
 		// Explain trace missing Result is unusual but render something sensible.
-		fmt.Fprintf(w, "? %s ?? %s on %s\n", t.Subject, t.Relation, t.Object)
+		fmt.Fprintf(w, "? %s ?? %s %s %s\n", subj, rel, on, obj)
 	default:
-		fmt.Fprintf(w, "%s on %s\n", t.Relation, t.Object)
+		fmt.Fprintf(w, "%s %s %s\n", rel, on, obj)
 	}
 }
 
@@ -128,11 +131,15 @@ func writeNode(w io.Writer, n *melange.Node, prefix string, isLast bool, o opts)
 	branch, childPrefix := connectors(prefix, isLast)
 	// Per-node Result mark (Explain only) — failed branches get a ✗ so
 	// users can scan the failure path quickly.
+	// Per-node failure markers use the pink foreground (not a chip)
+	// so the tree stays visually calm — only the header verdict gets
+	// the badge treatment. Bold for a bit more weight without a
+	// background block.
 	mark := ""
 	if n.Result != nil && !*n.Result {
-		mark = paint(o, ansiRed, markerDeny) + " "
+		mark = paint(o, "\x1b[1m"+colorDeny, markerDeny) + " "
 	}
-	fmt.Fprintf(w, "%s%s%s\n", paint(o, ansiGrey, prefix+branch), mark, formatNode(n))
+	fmt.Fprintf(w, "%s%s%s\n", paint(o, colorDim, prefix+branch), mark, formatNode(o, n))
 
 	// Track which sub-items are last so connectors line up.
 	subEvidence := n.Evidence
@@ -147,7 +154,10 @@ func writeNode(w io.Writer, n *melange.Node, prefix string, isLast bool, o opts)
 	for i, ev := range subEvidence {
 		last := len(n.Children)+i == total-1
 		branch, _ := connectors(childPrefix, last)
-		fmt.Fprintf(w, "%stuple: %s\n", paint(o, ansiGrey, childPrefix+branch), formatTuple(ev))
+		fmt.Fprintf(w, "%s%s %s\n",
+			paint(o, colorDim, childPrefix+branch),
+			paintKeyword(o, "tuple:"),
+			formatTuple(o, ev))
 	}
 }
 
@@ -166,34 +176,40 @@ func shouldInlineEvidence(n *melange.Node) bool {
 
 // formatNode produces the human-readable summary line for a single node.
 // The string never includes a newline — caller handles tree connectors.
-func formatNode(n *melange.Node) string {
+// Nodes carrying free-form labels (via userset, via parent, exclusion,
+// cycle) route labels through paintLabel so embedded userset refs and
+// type restrictions get coloured too.
+func formatNode(o opts, n *melange.Node) string {
 	switch n.Type {
 	case melange.NodeDirect:
 		if shouldInlineEvidence(n) {
-			return fmt.Sprintf("direct: %s", formatTuple(n.Evidence[0]))
+			return paintKeyword(o, "direct:") + " " + formatTuple(o, n.Evidence[0])
 		}
-		return labelOr(n.Label, "direct grant")
+		return paintLabel(o, labelOr(n.Label, "direct grant"))
 	case melange.NodeImplied:
-		return fmt.Sprintf("implied: %s", labelOr(n.Label, "via rewrite"))
+		return paintKeyword(o, "implied:") + " " + paintLabel(o, labelOr(n.Label, "via rewrite"))
 	case melange.NodeUserset:
-		return fmt.Sprintf("via userset: %s", labelOr(n.Label, "[type#relation]"))
+		return paintKeyword(o, "via userset:") + " " + paintLabel(o, labelOr(n.Label, "[type#relation]"))
 	case melange.NodeTTU:
-		return fmt.Sprintf("via parent: %s", labelOr(n.Label, "from parent"))
+		return paintKeyword(o, "via parent:") + " " + paintLabel(o, labelOr(n.Label, "from parent"))
 	case melange.NodeUnion:
-		return fmt.Sprintf("union of %d branches", len(n.Children))
+		return paintKeyword(o, fmt.Sprintf("union of %d branches", len(n.Children)))
 	case melange.NodeIntersection:
-		return fmt.Sprintf("intersection of %d parts", len(n.Children))
+		return paintKeyword(o, fmt.Sprintf("intersection of %d parts", len(n.Children)))
 	case melange.NodeExclusion:
-		return labelOr(n.Label, "exclusion (base but not excluded)")
+		return paintLabel(o, labelOr(n.Label, "exclusion (base but not excluded)"))
 	case melange.NodeWildcard:
 		if len(n.Users) > 0 {
-			return fmt.Sprintf("wildcard: %s:*", n.Users[0].Type)
+			return paintKeyword(o, "wildcard:") + " " +
+				paint(o, colorType, n.Users[0].Type) + paintKeyword(o, ":*")
 		}
-		return "wildcard"
+		return paintKeyword(o, "wildcard")
 	case melange.NodeCycle:
-		return fmt.Sprintf("cycle at %s (resolution stopped)", labelOr(n.Label, "<unknown>"))
+		return paintKeyword(o, "cycle at") + " " +
+			paintUsersetIdent(o, labelOr(n.Label, "<unknown>")) + " " +
+			paintKeyword(o, "(resolution stopped)")
 	case melange.NodeTruncated:
-		return "... truncated (raise --max-nodes to extend)"
+		return paintKeyword(o, "... truncated (raise --max-nodes to extend)")
 	default:
 		return string(n.Type)
 	}
@@ -210,8 +226,86 @@ func labelOr(label, fallback string) string {
 //
 //	"user:alice" → "viewer" → "document:1"
 //
-// Single line, deterministic, easy to grep.
-func formatTuple(t melange.TupleRef) string {
-	return fmt.Sprintf("%s:%s → %s → %s:%s",
-		t.SubjectType, t.SubjectID, t.Relation, t.ObjectType, t.ObjectID)
+// Single line, deterministic, easy to grep. Types render as type-name
+// green, relations as relation cyan, arrows as keyword-grey.
+func formatTuple(o opts, t melange.TupleRef) string {
+	arrow := paintKeyword(o, "→")
+	subj := paint(o, colorType, t.SubjectType) + paintKeyword(o, ":") + t.SubjectID
+	obj := paint(o, colorType, t.ObjectType) + paintKeyword(o, ":") + t.ObjectID
+	rel := paintRelation(o, t.Relation)
+	return fmt.Sprintf("%s %s %s %s %s", subj, arrow, rel, arrow, obj)
+}
+
+// paintLabel colours embedded userset references and type
+// restrictions inside a free-form label. Anything else in the label
+// stays uncoloured. Two shapes are recognised:
+//
+//   - `[<inner>]` — anywhere in the label, wrapped in mint (matches
+//     OpenFGA's type-restrictions colour).
+//   - `<type>:<id>[#<rel>]` — wrapped via paintUsersetIdent so the
+//     type / id / relation partitions match the palette.
+//
+// The rest of the label (prose like "via", "→", parent id names) is
+// dimmed as keyword prose so it fades relative to the strong-tinted
+// identifiers.
+func paintLabel(o opts, label string) string {
+	if !o.color || label == "" {
+		return label
+	}
+	// Tokenise by whitespace so we can paint identifier-shaped tokens
+	// individually. This keeps the highlighter deterministic (no
+	// regex-driven surprises) and matches how VS Code's tokeniser
+	// scans the DSL.
+	fields := strings.Fields(label)
+	if len(fields) == 0 {
+		return label
+	}
+	for i, f := range fields {
+		fields[i] = paintLabelToken(o, f)
+	}
+	return strings.Join(fields, " ")
+}
+
+// paintLabelToken applies one paint pass to a single whitespace-
+// separated label token, in order:
+//
+//  1. Bracketed type restriction (`[type#rel]` or `[a, b]`)
+//     → colorTypeRestr on the whole token.
+//  2. Userset identifier (`type:id#rel`)
+//     → paintUsersetIdent (type + id + rel partitions).
+//  3. Object identifier (`type:id`) with no `#`
+//     → paintObjectIdent.
+//  4. Anything else → keyword-dim so it recedes visually.
+//
+// Trailing punctuation (`,`, `)`, `.`) is stripped before matching
+// and re-appended dimmed so the token detection stays robust against
+// label prose like "via editor, on document:1".
+func paintLabelToken(o opts, tok string) string {
+	if tok == "" {
+		return tok
+	}
+	// Peel one trailing punctuation char so identifiers like
+	// "document:1," classify correctly.
+	trailing := ""
+	if last := tok[len(tok)-1]; last == ',' || last == '.' || last == ')' || last == ';' {
+		trailing = paintKeyword(o, string(last))
+		tok = tok[:len(tok)-1]
+	}
+	// Similarly peel a leading `(` so "(via editor)" works.
+	leading := ""
+	if len(tok) > 0 && tok[0] == '(' {
+		leading = paintKeyword(o, "(")
+		tok = tok[1:]
+	}
+
+	switch {
+	case len(tok) >= 2 && tok[0] == '[' && tok[len(tok)-1] == ']':
+		return leading + paintTypeRestriction(o, tok) + trailing
+	case strings.Contains(tok, "#") && strings.Contains(tok, ":"):
+		return leading + paintUsersetIdent(o, tok) + trailing
+	case strings.Contains(tok, ":") && !strings.ContainsAny(tok, "()[]{}<>"):
+		return leading + paintObjectIdent(o, tok) + trailing
+	default:
+		return leading + paintKeyword(o, tok) + trailing
+	}
 }

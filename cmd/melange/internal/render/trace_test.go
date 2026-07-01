@@ -275,8 +275,8 @@ func TestColor_OffByDefault_OnWhenEnabled(t *testing.T) {
 	}
 
 	colored := TraceString(tr, WithColor(true))
-	if !strings.Contains(colored, ansiGreen+markerAllow+ansiReset) {
-		t.Errorf("expected green-wrapped ✓ marker; got:\n%q", colored)
+	if !strings.Contains(colored, markerAllowChip+" "+markerAllow+" "+ansiReset) {
+		t.Errorf("expected chip-styled ✓ marker; got:\n%q", colored)
 	}
 	if !strings.Contains(colored, ansiGrey+branchLast+ansiReset) {
 		t.Errorf("expected grey-wrapped tree connector; got:\n%q", colored)
@@ -284,14 +284,109 @@ func TestColor_OffByDefault_OnWhenEnabled(t *testing.T) {
 }
 
 func TestFormatTuple_Stable(t *testing.T) {
-	got := formatTuple(melange.TupleRef{
+	got := formatTuple(opts{}, melange.TupleRef{
 		SubjectType: "user", SubjectID: "alice",
 		Relation:   "viewer",
 		ObjectType: "document", ObjectID: "1",
 	})
 	want := "user:alice → viewer → document:1"
 	if got != want {
-		t.Errorf("formatTuple = %q, want %q", got, want)
+		t.Errorf("formatTuple (uncoloured) = %q, want %q", got, want)
+	}
+}
+
+// TestPalette_OpenFGATokensColoured pins the OpenFGA-style palette
+// mapping: type portions render green, relations cyan, arrows and
+// keyword prose dim grey, `:` delimiters keyword grey. Regressions
+// here mean the CLI drifted away from the openfga-dark theme.
+func TestPalette_OpenFGATokensColoured(t *testing.T) {
+	o := opts{color: true}
+
+	// paintObjectIdent: type green, colon keyword, id uncoloured.
+	got := paintObjectIdent(o, "user:alice")
+	if !strings.HasPrefix(got, colorType+"user"+ansiReset) {
+		t.Errorf("expected type-green prefix; got %q", got)
+	}
+	if !strings.Contains(got, colorKeyword+":"+ansiReset) {
+		t.Errorf("expected keyword-styled colon; got %q", got)
+	}
+	if !strings.HasSuffix(got, "alice") {
+		t.Errorf("expected uncoloured id suffix; got %q", got)
+	}
+
+	// paintUsersetIdent: type green + `#` keyword + relation cyan.
+	got = paintUsersetIdent(o, "group:eng#member")
+	if !strings.Contains(got, colorType+"group"+ansiReset) {
+		t.Errorf("expected type-green; got %q", got)
+	}
+	if !strings.Contains(got, colorRelation+"member"+ansiReset) {
+		t.Errorf("expected relation-cyan for 'member'; got %q", got)
+	}
+	if !strings.Contains(got, colorKeyword+"#"+ansiReset) {
+		t.Errorf("expected keyword-styled '#'; got %q", got)
+	}
+
+	// paintTypeRestriction paints the whole [] group mint.
+	got = paintTypeRestriction(o, "[user, group#member]")
+	if got != colorTypeRestr+"[user, group#member]"+ansiReset {
+		t.Errorf("expected mint-wrapped bracket group; got %q", got)
+	}
+}
+
+// TestTrace_HeaderPaintsTokens verifies the ✓/✗ header lines route
+// through the OpenFGA palette — types green, relation cyan, `has` /
+// `on` / `does NOT have` keyword-dim.
+func TestTrace_HeaderPaintsTokens(t *testing.T) {
+	result := true
+	allow := &melange.Trace{
+		Subject: "user:alice", Relation: "viewer", Object: "document:1",
+		Result: &result,
+		Root:   &melange.Node{Type: melange.NodeDirect},
+	}
+	got := TraceString(allow, WithColor(true))
+	assertContains(t, got, markerAllowChip+" "+markerAllow+" "+ansiReset, "allow marker chip")
+	assertContains(t, got, colorType+"user"+ansiReset, "subject type green")
+	assertContains(t, got, colorType+"document"+ansiReset, "object type green")
+	assertContains(t, got, colorRelation+"viewer"+ansiReset, "relation cyan")
+	assertContains(t, got, colorKeyword+"has"+ansiReset, "'has' keyword grey")
+	assertContains(t, got, colorKeyword+"on"+ansiReset, "'on' keyword grey")
+
+	deny := false
+	denyTrace := &melange.Trace{
+		Subject: "user:bob", Relation: "viewer", Object: "document:1",
+		Result: &deny,
+		Root:   &melange.Node{Type: melange.NodeUnion},
+	}
+	got = TraceString(denyTrace, WithColor(true))
+	assertContains(t, got, markerDenyChip+" "+markerDeny+" "+ansiReset, "deny marker chip")
+	assertContains(t, got, colorKeyword+"does NOT have"+ansiReset, "negation keyword")
+}
+
+// TestTrace_LabelPaintsUsersetRef pins the label tokeniser: a label
+// like "via [group#member] → group:eng" gets the bracket group mint
+// and the userset identifier partitioned into type/id/relation
+// colours.
+func TestTrace_LabelPaintsUsersetRef(t *testing.T) {
+	result := true
+	tr := &melange.Trace{
+		Subject: "user:alice", Relation: "viewer", Object: "document:1",
+		Result: &result,
+		Root: &melange.Node{
+			Type:  melange.NodeUserset,
+			Label: "via [group#member] → group:eng",
+		},
+	}
+	got := TraceString(tr, WithColor(true))
+	assertContains(t, got, colorTypeRestr+"[group#member]"+ansiReset, "type restriction mint")
+	assertContains(t, got, colorType+"group"+ansiReset, "'group' as type green")
+	assertContains(t, got, colorKeyword+"via"+ansiReset, "'via' keyword")
+	assertContains(t, got, colorKeyword+"→"+ansiReset, "arrow keyword")
+}
+
+func assertContains(t *testing.T, haystack, needle, why string) {
+	t.Helper()
+	if !strings.Contains(haystack, needle) {
+		t.Errorf("expected %s (%q) in output:\n%q", why, needle, haystack)
 	}
 }
 

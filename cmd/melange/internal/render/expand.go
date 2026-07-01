@@ -50,7 +50,7 @@ func writeExpandNode(w io.Writer, n *melange.UsersetTreeNode, prefix string, isL
 		return
 	}
 	branch, childPrefix := connectors(prefix, isLast)
-	fmt.Fprintf(w, "%s%s\n", paint(o, ansiGrey, prefix+branch), formatExpandHeader(n))
+	fmt.Fprintf(w, "%s%s\n", paint(o, colorDim, prefix+branch), formatExpandHeader(o, n))
 
 	switch {
 	case n.Leaf != nil:
@@ -72,22 +72,23 @@ func writeExpandNode(w io.Writer, n *melange.UsersetTreeNode, prefix string, isL
 }
 
 // formatExpandHeader produces the single-line summary for a node. The
-// header always starts with the node's name (the OpenFGA
-// "<type>:<id>#<relation>" identifier) followed by a hint about which
-// value slot is populated. Leaf nodes inline the leaf type so the most
-// common case (`name • leaf: users`) is readable at a glance.
-func formatExpandHeader(n *melange.UsersetTreeNode) string {
+// name (`<type>:<id>#<relation>`) is colourised via paintUsersetIdent;
+// the slot descriptor is dimmed as keyword prose so the identifier
+// pops visually against it.
+func formatExpandHeader(o opts, n *melange.UsersetTreeNode) string {
+	name := paintUsersetIdent(o, n.Name)
+	sep := " " + paintKeyword(o, "•") + " "
 	switch {
 	case n.Leaf != nil:
-		return fmt.Sprintf("%s • %s", n.Name, leafKind(n.Leaf))
+		return name + sep + paintKeyword(o, leafKind(n.Leaf))
 	case n.Union != nil:
-		return fmt.Sprintf("%s • union of %d", n.Name, len(n.Union.Nodes))
+		return name + sep + paintKeyword(o, fmt.Sprintf("union of %d", len(n.Union.Nodes)))
 	case n.Intersection != nil:
-		return fmt.Sprintf("%s • intersection of %d", n.Name, len(n.Intersection.Nodes))
+		return name + sep + paintKeyword(o, fmt.Sprintf("intersection of %d", len(n.Intersection.Nodes)))
 	case n.Difference != nil:
-		return n.Name + " • difference (base / subtract)"
+		return name + sep + paintKeyword(o, "difference (base / subtract)")
 	default:
-		return n.Name
+		return name
 	}
 }
 
@@ -120,44 +121,54 @@ func writeLeaf(w io.Writer, l *melange.Leaf, prefix string, o opts) {
 		users := l.Users.Users
 		if len(users) == 0 {
 			branch, _ := connectors(prefix, true)
-			fmt.Fprintf(w, "%s(no users)\n", paint(o, ansiGrey, prefix+branch))
+			fmt.Fprintf(w, "%s%s\n",
+				paint(o, colorDim, prefix+branch),
+				paintKeyword(o, "(no users)"))
 			if l.Users.UsersTruncated {
 				// Truncation on an empty result is degenerate but possible
 				// if the cap is 0; still surface the warning so the user
 				// knows something was elided.
 				fmt.Fprintf(w, "%s%s\n",
-					paint(o, ansiGrey, prefix),
-					paint(o, ansiRed, "(users_truncated — raise --max-leaf to see more)"))
+					paint(o, colorDim, prefix),
+					paint(o, colorDeny, "(users_truncated — raise --max-leaf to see more)"))
 			}
 			return
 		}
 		for i, u := range users {
 			last := i == len(users)-1
 			branch, _ := connectors(prefix, last)
-			fmt.Fprintf(w, "%s%s\n", paint(o, ansiGrey, prefix+branch), u)
+			fmt.Fprintf(w, "%s%s\n",
+				paint(o, colorDim, prefix+branch),
+				paintUsersetIdent(o, u))
 		}
 		if l.Users.UsersTruncated {
 			fmt.Fprintf(w, "%s%s\n",
-				paint(o, ansiGrey, prefix),
-				paint(o, ansiRed, "(users_truncated — raise --max-leaf to see more)"))
+				paint(o, colorDim, prefix),
+				paint(o, colorDeny, "(users_truncated — raise --max-leaf to see more)"))
 		}
 	case l.Computed != nil:
 		branch, _ := connectors(prefix, true)
-		fmt.Fprintf(w, "%scomputed → %s  %s\n",
-			paint(o, ansiGrey, prefix+branch),
-			l.Computed.Userset,
-			paint(o, ansiGrey, "(melange expand "+l.Computed.Userset+" to chase)"))
+		fmt.Fprintf(w, "%s%s %s %s  %s\n",
+			paint(o, colorDim, prefix+branch),
+			paintKeyword(o, "computed"),
+			paintKeyword(o, "→"),
+			paintUsersetIdent(o, l.Computed.Userset),
+			paintKeyword(o, "(melange expand "+l.Computed.Userset+" to chase)"))
 	case l.TupleToUserset != nil:
 		branch, _ := connectors(prefix, true)
-		fmt.Fprintf(w, "%stupleset → %s\n",
-			paint(o, ansiGrey, prefix+branch),
-			l.TupleToUserset.Tupleset)
+		fmt.Fprintf(w, "%s%s %s %s\n",
+			paint(o, colorDim, prefix+branch),
+			paintKeyword(o, "tupleset"),
+			paintKeyword(o, "→"),
+			paintUsersetIdent(o, l.TupleToUserset.Tupleset))
 		for i, c := range l.TupleToUserset.Computed {
 			last := i == len(l.TupleToUserset.Computed)-1
 			sub, _ := connectors(prefix+indentLast, last)
-			fmt.Fprintf(w, "%scomputed → %s\n",
-				paint(o, ansiGrey, prefix+indentLast+sub),
-				c.Userset)
+			fmt.Fprintf(w, "%s%s %s %s\n",
+				paint(o, colorDim, prefix+indentLast+sub),
+				paintKeyword(o, "computed"),
+				paintKeyword(o, "→"),
+				paintUsersetIdent(o, c.Userset))
 		}
 	}
 }
