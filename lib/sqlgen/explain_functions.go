@@ -190,7 +190,7 @@ func buildExplainDispatcherCaseExpr(cases []DispatcherCase) CaseExpr {
 	}
 
 	noEntry := Raw(explainNoEntrySentinelSQL(
-		"explain not yet supported for this (object_type, relation) — relation may use usersets, intersection, exclusion, or TTU which are pending future melange versions",
+		"explain not yet supported for this (object_type, relation) — no generated explain function for the requested pair. Confirm the pair exists in the migrated schema.",
 	))
 
 	return CaseExpr{Whens: whens, Else: noEntry}

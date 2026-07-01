@@ -19,13 +19,11 @@ import (
 //
 // # Coverage
 //
-// Explain agrees with Check across direct grants, implied (closure-list and
-// recursive), userset references, TTU (`relation from parent`),
-// intersection (`a and b`), and exclusion (`a but not b`). A few advanced
-// patterns are still gated to the "not yet supported" sentinel:
-// intersection groups with `[user]`-direct / TTU-in-intersection /
-// exclusion-in-intersection parts, and complex userset patterns where
-// membership resolution needs check_permission_internal.
+// Explain agrees with Check across direct grants, implied relations, userset
+// references, TTU (`relation from parent`), intersection (`a and b`), and
+// exclusion (`a but not b`). Relations without a generated explain function
+// return the dispatcher's no-entry sentinel (result=false, with a label
+// identifying the pair as unsupported).
 //
 // # Truncation
 //

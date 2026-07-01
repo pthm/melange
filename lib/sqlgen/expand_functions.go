@@ -26,18 +26,17 @@ func expandDispatcherInternalArgs() []FuncArg {
 	}
 }
 
-// expandDispatcherPublicArgs is the public-facing signature. Identical
-// to the internal one — no p_visited to strip because Expand doesn't
-// recurse. Both signatures stay separate for symmetry with the
-// explain dispatchers (and so future slices can add internal-only
-// fields without breaking the public surface).
+// expandDispatcherPublicArgs is the public-facing signature. Identical to
+// the internal one because Expand doesn't recurse (no p_visited to strip).
+// Kept separate from the internal signature so internal-only fields can be
+// added later without changing the public surface.
 func expandDispatcherPublicArgs() []FuncArg {
 	return expandDispatcherInternalArgs()
 }
 
 // generateExpandFunction wraps RenderExpandFunction with the per-relation
-// plan derivation, returning ("", false) when the relation isn't
-// eligible for the current slice's renderer support.
+// plan derivation, returning ("", false) when BuildExpandPlan reports the
+// relation ineligible.
 func generateExpandFunction(a RelationAnalysis, databaseSchema string) (string, bool) {
 	plan, ok := BuildExpandPlan(a, databaseSchema)
 	if !ok {

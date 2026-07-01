@@ -31,9 +31,7 @@ const (
 )
 
 // Colour constants live in palette.go so trace.go and expand.go
-// share the OpenFGA-mapped palette + structured painters. Retained
-// alias names (ansiReset / ansiGreen / ansiRed / ansiGrey) keep
-// pre-refactor test expectations working.
+// share the OpenFGA-mapped palette + structured painters.
 
 // Option configures a single Trace rendering. The zero value is colourless
 // output suitable for piped writers and captured strings.

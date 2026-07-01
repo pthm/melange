@@ -18,8 +18,7 @@ import "strings"
 //   - Deny / invalid / truncation warnings    → colorDeny         (#FF5370)
 //
 // The `ansiGrey` / `ansiGreen` / `ansiRed` names are retained as
-// aliases so the pre-refactor test suite keeps compiling; new code
-// uses the semantic names.
+// aliases so existing test and call sites continue to compile.
 const (
 	colorType      = "\x1b[38;2;121;237;131m" // #79ED83 — matches OpenFGA "Type"
 	colorRelation  = "\x1b[38;2;32;241;245m"  // #20F1F5 — matches OpenFGA "Relation"

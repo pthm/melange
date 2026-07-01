@@ -14,11 +14,12 @@ import (
 // no per-call truncation), so the only thing the body does is build the
 // JSONB tree for the relation's direct rewrites.
 //
-// Slice 2.1 scope: direct grants (Leaf.Users via jsonb_agg over
-// melange_tuples) and computed-userset rewrites (Leaf.Computed pointers
-// emitted from RelationAnalysis.DirectImpliedBy). Slices 2.2 / 2.3 / 2.4
-// drop the corresponding eligibility gates and add TTU, intersection,
-// exclusion, wildcards, usersets, and the p_max_leaf cap.
+// Supported rewrites: direct grants (Leaf.Users via jsonb_agg over
+// melange_tuples), computed-userset rewrites (Leaf.Computed pointers),
+// TTU (Leaf.TupleToUserset), intersection (Nodes.Intersection), exclusion
+// (Difference chaining), wildcards, and userset references. All are
+// inlined into the tree; callers chase Computed/TTU pointers via
+// Checker.ExpandRecursive.
 
 // expandFunctionName returns "expand_{type}_{relation}".
 func expandFunctionName(objectType, relation string) string {
@@ -89,9 +90,8 @@ type ExpandExclusion struct {
 }
 
 // ExpandRewrite is one of the per-rewrite shapes Expand can emit.
-// Fields are mutually exclusive; the discriminator is which one is
-// non-zero. Slice 2.1 introduced Direct + Computed; 2.2a added TTU;
-// 2.2c adds Intersection.
+// Exactly one field is populated; the discriminator is which one is
+// non-zero.
 type ExpandRewrite struct {
 	// Direct is the subject-type whitelist for a direct rewrite. nil/empty
 	// means this rewrite is not a direct grant.
@@ -144,12 +144,11 @@ func sliceContains(haystack []string, needle string) bool {
 }
 
 // ComputeExpandEligibility returns, for each (object_type, relation),
-// whether the slice 2.1 expand renderer can produce a tree for it.
-// Mirrors ComputeExplainEligibility's surface so CollectFunctionNames
-// can call either without branching, but the implementation is trivial:
-// no transitive sweep is needed because Expand is shallow (computed/TTU
-// rewrites surface as unresolved pointers — an ineligible callee
-// doesn't disable the caller).
+// whether the expand renderer can produce a tree for it. Mirrors
+// ComputeExplainEligibility's surface so CollectFunctionNames can call
+// either without branching. No transitive sweep is needed because Expand
+// is shallow — computed/TTU rewrites surface as unresolved pointers, so
+// an ineligible callee doesn't disable the caller.
 func ComputeExpandEligibility(analyses []RelationAnalysis) map[string]map[string]bool {
 	eligible := make(map[string]map[string]bool, len(analyses))
 	for _, a := range analyses {
@@ -165,12 +164,9 @@ func ComputeExpandEligibility(analyses []RelationAnalysis) map[string]map[string
 }
 
 // BuildExpandPlan derives the per-rewrite plan from a RelationAnalysis.
-// Returns (plan, true) when the relation is eligible for slice 2.1; the
-// dispatcher routes ineligible relations to the no-entry sentinel.
-//
-// Slice 2.1 eligibility: at least one rewrite (direct or computed), AND
-// no usersets / wildcards / TTU / intersection / exclusion / complex
-// userset patterns. Later slices drop these gates.
+// Returns (plan, true) when the relation is eligible; the dispatcher routes
+// ineligible relations to the no-entry sentinel. A plan with no rewrites
+// is ineligible — the caller returns the sentinel rather than an empty tree.
 func BuildExpandPlan(a RelationAnalysis, databaseSchema string) (ExpandPlan, bool) {
 	if !expandLocalSupported(a) {
 		return ExpandPlan{}, false
@@ -180,21 +176,17 @@ func BuildExpandPlan(a RelationAnalysis, databaseSchema string) (ExpandPlan, boo
 		ObjectType:     a.ObjectType,
 		Relation:       a.Relation,
 	}
-	// Slice 2.3: a single "direct" rewrite covers concrete users
-	// (`[user]`), wildcards (`[user:*]`), AND userset references
-	// (`[group#member]`) — all three shapes live in melange_tuples as
-	// direct grant rows (the userset is encoded in subject_id as
-	// "<id>#<relation>", not in a separate column). The renderer's
-	// projection `subject_type || ':' || subject_id` naturally
-	// produces OpenFGA-formatted strings for every shape:
-	// "user:alice", "user:*", "group:eng#member".
+	// A single "direct" rewrite covers concrete users (`[user]`), wildcards
+	// (`[user:*]`), and userset references (`[group#member]`) — all three
+	// shapes live in melange_tuples as direct grant rows (the userset is
+	// encoded in subject_id as "<id>#<relation>"). The renderer's
+	// projection `subject_type || ':' || subject_id` naturally produces
+	// OpenFGA-formatted strings for every shape.
 	//
-	// Subject-type whitelist unions the direct types and the userset
-	// pattern subject types so a SELECT for "[group#member]" doesn't
-	// silently drop group-typed rows. AllowedSubjectTypes is NOT used
-	// here because it's the *transitive* closure (including types
-	// reachable through closure relations); we want the IMMEDIATE
-	// types valid for THIS relation's direct grants.
+	// Subject-type whitelist unions the direct types and the userset pattern
+	// subject types so a SELECT for "[group#member]" doesn't silently drop
+	// group-typed rows. AllowedSubjectTypes is NOT used here because it's the
+	// transitive closure; we want only the immediate types for this relation.
 	directTypes := append([]string(nil), a.DirectSubjectTypes...)
 	for _, p := range a.UsersetPatterns {
 		if !sliceContains(directTypes, p.SubjectType) {
@@ -218,23 +210,21 @@ func BuildExpandPlan(a RelationAnalysis, databaseSchema string) (ExpandPlan, boo
 		// together as a Nodes intersection. Multiple groups OR together
 		// at the top level (via the existing multi-rewrite Union wrap).
 		// The plan captures full IntersectionPart structs so the
-		// renderer can dispatch by part shape (slice 1.9 — IsThis /
-		// ParentRelation / per-part ExcludedRelation).
+		// renderer can dispatch by part shape (IsThis / ParentRelation /
+		// per-part ExcludedRelation).
 		plan.Rewrites = append(plan.Rewrites, ExpandRewrite{
 			Intersection: append([]IntersectionPart(nil), g.Parts...),
 		})
 	}
 	if a.Features.HasExclusion {
-		// Source order preserved WITHIN each shape (ExcludedRelations
-		// keeps its left-to-right order from the schema), but ACROSS
-		// shapes we emit simple → TTU → intersection. RelationAnalysis
-		// pre-splits exclusions by shape and discards inter-shape
-		// ordering; recovering the original interleaving would require
-		// threading an OrderedSubtrahends field through the analyzer.
-		// Set semantics are unaffected (`A - B - C = A - C - B`), but a
-		// mixed-shape relation's Expand tree will not byte-match
-		// OpenFGA's emission. Zero schemas in the OpenFGA suite mix
-		// shapes today, so the analyzer change is deferred.
+		// Source order is preserved within each shape (ExcludedRelations
+		// keeps its left-to-right schema order), but across shapes we
+		// emit simple → TTU → intersection. RelationAnalysis pre-splits
+		// exclusions by shape; recovering the original interleaving of
+		// mixed-shape exclusions would require threading an
+		// OrderedSubtrahends field through the analyzer. Set semantics
+		// are unaffected (A - B - C = A - C - B), but a mixed-shape
+		// relation's Expand tree will not byte-match OpenFGA's emission.
 		for _, rel := range a.ExcludedRelations {
 			plan.Exclusions = append(plan.Exclusions, ExpandExclusion{Relation: rel})
 		}
@@ -254,40 +244,23 @@ func BuildExpandPlan(a RelationAnalysis, databaseSchema string) (ExpandPlan, boo
 	return plan, true
 }
 
-// expandLocalSupported is the slice 2.x eligibility predicate. Each
-// slice drops one gate as it adds renderer support — 2.1 covered direct
-// + computed; 2.2a added TTU (Leaf.TupleToUserset); 2.2b added simple
-// exclusion (Difference); 2.2c added intersection (Nodes intersection);
-// 2.3 added wildcards + userset references (inline as user-strings in
-// Leaf.Users); 2.7 dropped the single-simple-exclusion gate and added
-// nested Difference chaining for multi / TTU / intersection exclusions.
+// expandLocalSupported reports whether a RelationAnalysis has at least one
+// rewrite the expand renderer can emit. The renderer supports all feature
+// flags: plain relations, TTU, intersection, exclusion (Difference chaining),
+// wildcards, and userset references. Relations with none of these (HasDirect,
+// HasImplied, HasRecursive, HasIntersection, HasUserset all false) have no
+// concrete access paths and route to the dispatcher's no-entry sentinel.
 func expandLocalSupported(a RelationAnalysis) bool {
 	f := a.Features
-	// Slice 1.9 dropped the intersectionGroupsAreSimpleForExpand gate.
-	// The per-part renderer now dispatches on IntersectionPart shape:
-	// plain → Leaf.Computed, IsThis → Leaf.Users, ParentRelation →
-	// Leaf.TupleToUserset, ExcludedRelation → Difference.
-	// Slice 2.7 dropped the isSimpleExclusion gate. Each subtrahend
-	// becomes one nested Difference (ExpandPlan.Exclusions is iterated
-	// left-fold in source order).
-	// SPIKE 1.8: dropped the HasComplexUsersetPatterns gate. Expand
-	// inlines userset references as user-strings in Leaf.Users; the
-	// membership relation's complexity doesn't affect the wire shape
-	// (callers chase Computed/TupleToUserset pointers via
-	// ExpandRecursive). Reinstate the gate if the spike surfaces FAILs.
 	return f.HasDirect || f.HasImplied || f.HasRecursive || f.HasIntersection || f.HasUserset
 }
 
 // intersectionGroupsAreSimpleForExpand is true when every part of every
-// intersection group is a plain relation reference — no `[user]`-direct
-// (IsThis), no `X from Y` (ParentRelation), no per-part exclusion
-// (ExcludedRelation). The renderer can only emit Leaf.Computed pointers
-// for parts today; the exotic shapes need their own per-part renderer
-// branches and land in a follow-up slice.
-//
-// Mirrors lib/sqlgen/explain_render.go's intersectionGroupsAreSimple
+// intersection group is a plain relation reference — no [user]-direct
+// (IsThis), no X from Y (ParentRelation), no per-part exclusion
+// (ExcludedRelation). Mirrors intersectionGroupsAreSimple in explain_render.go
 // but lives separately because Expand emits a different per-part shape
-// (single Computed pointer vs Explain's recursive Node).
+// (Computed pointer vs Explain's recursive Node).
 func intersectionGroupsAreSimpleForExpand(a RelationAnalysis) bool {
 	for _, g := range a.IntersectionGroups {
 		for _, p := range g.Parts {
@@ -477,8 +450,6 @@ func buildExpandIntersectionPartNode(plan ExpandPlan, objectTypeLit string, part
 	if part.ExcludedRelation != "" {
 		// Per-part exclusion wraps the part's base in a Difference,
 		// with subtract = Computed pointer to the excluded relation.
-		// Composes slice 2.2b's Difference primitive with the per-part
-		// shape from above.
 		baseNode := BuildExpandNodeJSON(partName, partValue)
 		subtractName := BuildExpandNodeName(objectTypeLit, "p_object_id", part.ExcludedRelation)
 		subtractValue := BuildExpandComputedLeafJSON(subtractName)
@@ -551,16 +522,16 @@ func buildExpandTTULeaf(plan ExpandPlan, ttu ParentRelationInfo) string {
 // empty result becomes `{users: []}` rather than `{users: null}` —
 // OpenFGA tooling expects an array, not null.
 //
-// p_max_leaf cap (slice 2.4): when set, the aggregation runs against
-// a subquery with `LIMIT p_max_leaf` and the leaf's `users_truncated`
-// field is set to TRUE when more rows exist beyond the cap. The cap
-// uses two SELECTs against the same WHERE — one to fetch the capped
-// page, one EXISTS-OFFSET probe to detect overflow. PostgreSQL won't
-// share the work between the two but Expand is the debugging-and-
-// admin path, not the request hot path, so the simpler shape wins.
-// When p_max_leaf IS NULL the LIMIT/EXISTS both no-op (matching
-// OpenFGA's unbounded behaviour) and the users_truncated field is
-// omitted from the JSONB via the helper's CASE wrapper.
+// p_max_leaf cap: when set, the aggregation runs against a subquery with
+// `LIMIT p_max_leaf` and the leaf's `users_truncated` field is set to TRUE
+// when more rows exist beyond the cap. The cap uses two SELECTs against the
+// same WHERE — one to fetch the capped page, one EXISTS-OFFSET probe to
+// detect overflow. PostgreSQL won't share the work between the two, but
+// Expand is the debugging-and-admin path, not the request hot path, so the
+// simpler two-query shape wins. When p_max_leaf IS NULL the LIMIT/EXISTS
+// both no-op (matching OpenFGA's unbounded behaviour) and the
+// users_truncated field is omitted from the JSONB via the helper's CASE
+// wrapper.
 func buildExpandDirectLeaf(plan ExpandPlan, subjectTypes []string) string {
 	tuplesTable := sqldsl.PrefixIdent("melange_tuples", plan.DatabaseSchema)
 	subjectTypeList := formatSQLStringList(subjectTypes)

@@ -17,9 +17,9 @@ import (
 // bail-out stay centralised; intersection parts AND-aggregate into
 // v_intersection_pass instead and call explainTruncationBailout directly.
 // Every success-return routes through emitExplainSuccessReturn so exclusion
-// handling stays centralised. Eligibility is gated by
-// ComputeExplainEligibility — complex usersets / IsThis-in-intersection
-// are not yet supported and route to the dispatcher's no-entry sentinel.
+// handling stays centralised. Eligibility is computed by
+// ComputeExplainEligibility; relations without an eligible renderer route to
+// the dispatcher's no-entry sentinel.
 
 // RenderExplainFunction is the entry point for explain_* function generation.
 func RenderExplainFunction(plan CheckPlan, blocks CheckBlocks) (string, error) {
@@ -145,8 +145,8 @@ func explainFunctionDecls(plan CheckPlan, blocks CheckBlocks) []Decl {
 		// Accumulators for the intersection attempts. v_intersection_pass
 		// tracks AND across parts; v_intersection_children carries the
 		// per-part traces into the success/failure NodeIntersection;
-		// v_part_pass holds the per-part boolean for complex parts that
-		// use a precomputed Check predicate (slice 1.9).
+		// v_part_pass holds the per-part boolean for complex intersection
+		// parts that use a precomputed Check predicate.
 		decls = append(decls,
 			Decl{Name: "v_intersection_children", Type: "JSONB"},
 			Decl{Name: "v_intersection_pass", Type: "BOOLEAN"},
@@ -679,11 +679,10 @@ func buildExplainUsersetGrantSelect(plan CheckPlan, pattern UsersetPattern) Sele
 // all succeed returns; misses append a failure NodeIntersection to
 // v_attempts so the final union shows what was tried.
 //
-// Parts handled here are regular relation parts (`part.Relation` set, no
-// IsThis, no ParentRelation, no ExcludedRelation). Parts with any of those
-// flags require renderer work not yet shipped; intersectionGroupsAreSimple
-// upstream gates relations carrying them so the dispatcher routes them to
-// the no-entry sentinel rather than emitting an incorrect intersection trace.
+// Dispatches per part by shape: plain relation parts recurse into
+// explain_permission_internal; IsParent, IsThis, and ExcludedRelation parts
+// use the precomputed part.Check predicate and emit a synthetic leaf node
+// (see buildExplainComplexIntersectionPartStmts).
 func buildExplainIntersectionAttempts(plan CheckPlan, blocks CheckBlocks) []Stmt {
 	if len(blocks.IntersectionGroups) == 0 {
 		return nil
@@ -738,16 +737,13 @@ func buildExplainIntersectionGroupStmts(plan CheckPlan, blocks CheckBlocks, grou
 // buildExplainIntersectionPartStmts emits per-part SQL for one
 // intersection group's child. Dispatches by part shape:
 //
-//   - Plain relation (Relation set, others empty): the existing
-//     slice 1.5 path — recurse into explain_permission_internal for
-//     the part's relation and append the full sub-trace.
-//   - IsParent / IsThis / ExcludedRelation parts (slice 1.9): use the
-//     precomputed part.Check boolean predicate as the pass signal,
-//     emit a per-shape synthetic trace child. The trace is less rich
-//     than the recursive plain-part case (no nested sub-trace) but
-//     correctly reflects the AND semantics for v_intersection_pass.
-//     A follow-up enrichment slice can promote each shape to a full
-//     recursive trace if richer Explain output is needed.
+//   - Plain relation (Relation set, others empty): recurse into
+//     explain_permission_internal for the part's relation and append
+//     the full sub-trace.
+//   - IsParent / IsThis / ExcludedRelation parts: use the precomputed
+//     part.Check boolean predicate as the pass signal and emit a
+//     per-shape synthetic trace child (no nested sub-trace). The AND
+//     semantics for v_intersection_pass are preserved.
 func buildExplainIntersectionPartStmts(plan CheckPlan, part IntersectionPartCheck) []Stmt {
 	if part.IsThis || part.IsParent || part.ExcludedRelation != "" || part.Relation == "" {
 		return buildExplainComplexIntersectionPartStmts(plan, part)
@@ -773,23 +769,20 @@ func buildExplainIntersectionPartStmts(plan CheckPlan, part IntersectionPartChec
 	}
 }
 
-// buildExplainComplexIntersectionPartStmts handles intersection parts
-// with non-relation shapes (slice 1.9): IsParent (TTU-in-intersection),
-// IsThis (`[user]` direct grant inline), and per-part ExcludedRelation
-// (`X but not Y` as a part). Uses part.Check — the boolean predicate
-// the Check renderer already builds for this part shape — as the pass
-// signal, and emits a labelled synthetic trace child reflecting the
-// shape.
+// buildExplainComplexIntersectionPartStmts handles intersection parts with
+// non-relation shapes: IsParent (TTU-in-intersection), IsThis ([user] direct
+// grant), and per-part ExcludedRelation (X but not Y as a part). Uses
+// part.Check — the boolean predicate the Check renderer builds for this shape
+// — as the pass signal, and emits a labelled synthetic trace child.
 //
 // Trace shape per part type:
 //   - IsParent          → NodeTTU labelled "via <linking>"
 //   - per-part Excluded → NodeExclusion labelled "<rel> but not <excl>"
 //   - IsThis (default)  → NodeDirect labelled "direct grant"
 //
-// The synthetic children are leaf-like (no further recursion) — a
-// future enrichment can promote each to a full recursive sub-trace
-// once the per-shape renderers exist. Today's shape is good enough
-// to surface the AND structure in the trace and pass the parity sweep.
+// The synthetic children are leaf nodes (no recursive sub-trace). They
+// correctly surface the AND structure in the trace without recursing into
+// the per-shape relation.
 func buildExplainComplexIntersectionPartStmts(_ CheckPlan, part IntersectionPartCheck) []Stmt {
 	var label, nodeType string
 	switch {
@@ -827,10 +820,9 @@ func buildExplainComplexIntersectionPartStmts(_ CheckPlan, part IntersectionPart
 
 // buildExplainFinalFailure emits the bottom-of-function fallthrough — every
 // attempted branch failed, so wrap v_attempts in a NodeUnion and return a
-// result=false trace. When v_attempts is empty (relation has no recorded
-// paths at all in this slice) the union has zero children; that is still
-// structurally valid and signals "nothing matched" without surfacing a
-// misleading success node.
+// result=false trace. When v_attempts is empty the union has zero children;
+// that is still structurally valid and signals "nothing matched" without
+// surfacing a misleading success node.
 func buildExplainFinalFailure(plan CheckPlan) []Stmt {
 	unionNode := BuildNodeJSON(TraceNodeUnion, NodeJSONArgs{
 		Children: "v_attempts",
@@ -925,36 +917,26 @@ func explainFunctionName(objectType, relation string) string {
 // ComputeExplainEligibility's fixed point. Transitive closure-relation
 // dependencies are handled by the wrapper, not here.
 //
-// Complex userset patterns (recursive membership) and intersection groups
-// whose parts carry IsThis / ParentRelation / ExcludedRelation are not yet
-// supported and disqualify the relation.
+// Returns true when at least one known feature flag is set; the renderer
+// covers all currently-used feature combinations (direct, implied, recursive,
+// userset, intersection, exclusion).
 func explainLocalSupported(a RelationAnalysis) bool {
-	// SPIKE 1.8: dropped the HasComplexUsersetPatterns gate. The simple-
-	// userset codegen already recurses into explain_permission_internal
-	// for membership; the dispatcher routes to the membership relation's
-	// eligible explain function. Transitive eligibility cascading already
-	// handles ineligible membership targets. If the spike surfaces new
-	// FAILs, reinstate the gate.
+	// All feature flags are covered: plain relations recurse into
+	// explain_permission_internal; intersection parts with IsParent /
+	// IsThis / ExcludedRelation shapes use the precomputed part.Check
+	// predicate via buildExplainComplexIntersectionPartStmts; exclusions
+	// are centralised in emitExplainSuccessReturn.
 	f := a.Features
-	// Slice 1.9 dropped the intersectionGroupsAreSimple gate. The
-	// per-part renderer now dispatches on IntersectionPartCheck
-	// shape: plain → recursive dispatcher call, IsParent / IsThis /
-	// ExcludedRelation → buildExplainComplexIntersectionPartStmts
-	// using the precomputed part.Check boolean predicate.
-	// HasExclusion is handled by emitExplainSuccessReturn: every
-	// success-return path checks blocks.ExclusionCheck and wraps the
-	// outcome in a NodeExclusion.
 	return f.HasDirect || f.HasImplied || f.HasRecursive || f.HasUserset || f.HasIntersection || f.HasExclusion
 }
 
 // intersectionPartIsSimple is true when the part is a plain relation
 // reference — no [user]-direct (IsThis), no TTU-in-intersection
 // (ParentRelation set), and no exclusion-in-intersection (ExcludedRelation
-// set). The missing shapes land in subsequent slices. Shared by
-// intersectionGroupsAreSimple (the gate that rejects relations whose
-// groups carry any non-simple part) and anyExplainDepIneligible (the
-// per-part eligibility sweep that skips non-simple parts because their
-// shape is gated upstream).
+// set). Shared by intersectionGroupsAreSimple and anyExplainDepIneligible:
+// the eligibility sweep skips non-simple parts because their recursive
+// sub-traces are not required for correctness (complex shapes use the
+// precomputed part.Check predicate instead).
 func intersectionPartIsSimple(p IntersectionPart) bool {
 	return !p.IsThis && p.ParentRelation == nil && p.ExcludedRelation == ""
 }
@@ -973,7 +955,7 @@ func intersectionGroupsAreSimple(groups []IntersectionGroupInfo) bool {
 }
 
 // ComputeExplainEligibility returns, for each (object_type, relation), whether
-// the current explain renderer can produce a trace that agrees with Check.
+// the explain renderer can produce a trace that agrees with Check.
 //
 // The result is the fixed point of the per-relation locality check
 // (explainLocalSupported) plus the recursive-dependency downgrades
@@ -982,9 +964,8 @@ func intersectionGroupsAreSimple(groups []IntersectionGroupInfo) bool {
 // Eligibility is monotonically non-increasing: each pass can downgrade a
 // relation when a freshly-discovered ineligible dependency surfaces, but
 // nothing ever flips back. The fixed point is reached when no relation
-// changes in a pass. Slice 1.10 dropped the cross-type TTU rule, so an
-// ineligible parent type on a TTU no longer poisons the wrapper — the
-// dispatcher's no-entry sentinel covers missing per-iteration callees
+// changes in a pass. Cross-type TTU parents do not poison the wrapper —
+// the dispatcher's no-entry sentinel covers missing per-iteration callees
 // with a well-formed result=false trace.
 //
 // Exported so callers that build a CollectFunctionNames input by hand can
@@ -1030,32 +1011,24 @@ func ComputeExplainEligibility(analyses []RelationAnalysis) map[string]map[strin
 // shouldn't occur. If it ever does, the FOR-loop driver query would
 // enumerate every linking tuple regardless of parent_type, and the
 // dispatcher would route any unknown parent_type to its no-entry sentinel
-// — structurally valid but a weaker UX than the explicit "not yet
-// supported" label.
+// — structurally valid but with less diagnostic information.
 func anyExplainDepIneligible(a RelationAnalysis, eligible map[string]map[string]bool) bool {
 	for _, dep := range a.ComplexClosureRelations {
 		if !eligible[a.ObjectType][dep] {
 			return true
 		}
 	}
-	// Cross-type TTU parents intentionally do NOT downgrade the wrapper:
-	// the per-iteration recursion routes through explain_permission_internal,
-	// which falls through to the dispatcher's no-entry sentinel for any
-	// (parent_type, parent_relation) pair without a generated function.
-	// The sentinel returns result=false with a well-formed Trace envelope,
-	// which the TTU loop's miss branch appends as a failure NodeTTU —
-	// structurally correct and matches Check's behavior for the same
-	// missing-callee case. Slice 1.10 dropped the conservative
-	// all-types-must-be-eligible rule; relations like
-	// `can_read: can_view from parent` with `parent: [document, folder]`
-	// now generate when only one of the parent types defines the
-	// referenced relation.
+	// Cross-type TTU parents do NOT downgrade the wrapper: the per-iteration
+	// recursion routes through explain_permission_internal, which falls through
+	// to the dispatcher's no-entry sentinel for any (parent_type, parent_relation)
+	// pair without a generated function. The sentinel returns result=false with a
+	// well-formed Trace envelope, which the TTU loop's miss branch appends as a
+	// failure NodeTTU — structurally correct and consistent with Check for the
+	// same missing-callee case.
 	for _, pattern := range a.UsersetPatterns {
-		// IsComplex patterns are blocked by HasComplexUsersetPatterns in
-		// explainLocalSupported and shouldn't reach this point. For the
-		// simple case, the userset emission recurses into the dispatcher
-		// for the referenced (SubjectType, SubjectRelation); the wrapper
-		// is eligible only when the membership relation is itself eligible.
+		// Userset emission recurses into the dispatcher for the referenced
+		// (SubjectType, SubjectRelation); the wrapper is eligible only when
+		// the membership relation is itself eligible.
 		if !eligible[pattern.SubjectType][pattern.SubjectRelation] {
 			return true
 		}
@@ -1065,9 +1038,10 @@ func anyExplainDepIneligible(a RelationAnalysis, eligible map[string]map[string]
 	// is itself eligible on the same object type.
 	for _, g := range a.IntersectionGroups {
 		for _, p := range g.Parts {
-			// IsThis is handled by the part's body using direct access
-			// (no inter-relation call needed); the other non-simple
-			// shapes are blocked upstream by intersectionGroupsAreSimple.
+			// Non-simple parts (IsThis, ParentRelation, ExcludedRelation)
+			// use a precomputed predicate and don't recurse into another
+			// relation's explain function, so they don't impose an
+			// eligibility dependency.
 			if !intersectionPartIsSimple(p) {
 				continue
 			}
