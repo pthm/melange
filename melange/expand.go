@@ -178,6 +178,15 @@ func (c *Checker) Expand(ctx context.Context, object ObjectLike, relation Relati
 		}
 	}
 
+	// Cache lookup — same shape as Explain. subjectType filter and
+	// maxLeaf cap are part of the key because both change the tree.
+	expandCache, cacheOK := c.cache.(ExpandCache)
+	if cacheOK {
+		if tree, cachedErr, found := expandCache.GetExpand(obj, rel, resolved.subjectType, resolved.maxLeaf); found {
+			return tree, cachedErr
+		}
+	}
+
 	var subjectType any
 	if resolved.subjectType != "" {
 		subjectType = string(resolved.subjectType)
@@ -199,6 +208,9 @@ func (c *Checker) Expand(ctx context.Context, object ObjectLike, relation Relati
 	var tree UsersetTree
 	if err := json.Unmarshal(raw, &tree); err != nil {
 		return nil, fmt.Errorf("expand_permission: decoding tree: %w", err)
+	}
+	if cacheOK {
+		expandCache.SetExpand(obj, rel, resolved.subjectType, resolved.maxLeaf, &tree, nil)
 	}
 	return &tree, nil
 }

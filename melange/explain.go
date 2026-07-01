@@ -64,6 +64,18 @@ func (c *Checker) Explain(ctx context.Context, subject SubjectLike, relation Rel
 		}
 	}
 
+	// Cache lookup. c.cache is the shared Cache field; when it also
+	// implements ExplainCache we consult / populate the Explain family.
+	// maxNodes is part of the key because different caps produce
+	// different traces (truncation flips). Miss on the type assertion
+	// (Check-only Cache impl) → fall through to the DB.
+	explainCache, cacheOK := c.cache.(ExplainCache)
+	if cacheOK {
+		if trace, cachedErr, found := explainCache.GetExplain(subj, rel, obj, resolved.maxNodes); found {
+			return trace, cachedErr
+		}
+	}
+
 	var maxNodes any
 	if resolved.maxNodes > 0 {
 		maxNodes = resolved.maxNodes
@@ -81,6 +93,9 @@ func (c *Checker) Explain(ctx context.Context, subject SubjectLike, relation Rel
 	var trace Trace
 	if err := json.Unmarshal(raw, &trace); err != nil {
 		return nil, fmt.Errorf("explain_permission: decoding trace: %w", err)
+	}
+	if cacheOK {
+		explainCache.SetExplain(subj, rel, obj, resolved.maxNodes, &trace, nil)
 	}
 	return &trace, nil
 }
