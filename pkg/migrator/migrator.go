@@ -70,6 +70,19 @@ type MigrateOptions struct {
 
 	// DatabaseSchema is the Postgres schema where the objects will be created.
 	DatabaseSchema string
+
+	// IfDeployedChecksum, when non-nil, makes migration a compare-and-swap: it
+	// proceeds only if the currently-deployed schema checksum equals the pointed-to
+	// value, otherwise it aborts with *DeployedModelChangedError without applying
+	// anything. An empty string matches a database with no migration recorded. It
+	// is enforced in dry-run too, so a drift-gated preview aborts rather than
+	// printing SQL against a drifted database.
+	//
+	// The checksum is verified up front and again inside the apply transaction, so
+	// a migration committed while this one runs aborts it. It is not a hard lock:
+	// two migrations that verify at the exact same instant could both proceed, but
+	// concurrent migrations against one database are unsupported regardless.
+	IfDeployedChecksum *string
 }
 
 // InternalMigrateOptions extends MigrateOptions with internal fields.
@@ -89,6 +102,58 @@ type InternalMigrateOptions struct {
 	// file or "modular" for an fga.mod manifest. Stored alongside the DSL so
 	// `melange schema pull` can annotate its output.
 	SchemaFormat string
+
+	// IfDeployedChecksum is the compare-and-swap precondition; see MigrateOptions.
+	IfDeployedChecksum *string
+}
+
+// DeployedModelChangedError is returned by migrate when --if-deployed-checksum
+// does not match the currently-deployed schema checksum: the database drifted
+// from the expected state, so nothing was applied.
+type DeployedModelChangedError struct {
+	Expected string // checksum the caller expected to be deployed
+	Actual   string // checksum actually deployed ("" when no migration is recorded)
+}
+
+func (e *DeployedModelChangedError) Error() string {
+	actual := e.Actual
+	if actual == "" {
+		actual = "none (no migration recorded)"
+	}
+	return fmt.Sprintf("deployed model changed: expected checksum %s but database has %s; nothing was applied",
+		e.Expected, actual)
+}
+
+// driftGuardError returns a *DeployedModelChangedError when expected is non-nil
+// and does not match the deployed checksum (rec's checksum, or "" when rec is
+// nil). It returns nil when the guard is unset or satisfied.
+func driftGuardError(expected *string, rec *MigrationRecord) error {
+	if expected == nil {
+		return nil
+	}
+	deployed := ""
+	if rec != nil {
+		deployed = rec.SchemaChecksum
+	}
+	if deployed != *expected {
+		return &DeployedModelChangedError{Expected: *expected, Actual: deployed}
+	}
+	return nil
+}
+
+// driftGuardInTx re-evaluates the drift guard against the latest record visible
+// to db (a transaction). Read-committed visibility means a migration committed
+// since the up-front check is seen here, so a concurrent change that lands while
+// this migration applies is caught before the record is written.
+func (m *Migrator) driftGuardInTx(ctx context.Context, db Execer, expected *string) error {
+	if expected == nil {
+		return nil
+	}
+	rec, err := m.getLastMigration(ctx, db)
+	if err != nil {
+		return err
+	}
+	return driftGuardError(expected, rec)
 }
 
 // MigrationRecord represents a row in the melange_migrations table.
@@ -723,8 +788,10 @@ func (w migrationWrite) modelJSONOrEmpty() []byte {
 
 // recordMigrationOnly inserts a migration record without re-applying functions.
 // Used when phase 2 skip determines the generated SQL is identical to what's
-// already installed — only the melange version or schema checksum changed.
-func (m *Migrator) recordMigrationOnly(ctx context.Context, w migrationWrite) error {
+// already installed — only the melange version or schema checksum changed. The
+// drift guard is re-verified in-transaction before the insert, like the full
+// apply path, so a concurrent change is not overwritten.
+func (m *Migrator) recordMigrationOnly(ctx context.Context, w migrationWrite, ifDeployed *string) error {
 	if txer, ok := m.db.(interface {
 		BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
 	}); ok {
@@ -737,6 +804,9 @@ func (m *Migrator) recordMigrationOnly(ctx context.Context, w migrationWrite) er
 		if err := m.applyMigrationsDDL(ctx, tx); err != nil {
 			return err
 		}
+		if err := m.driftGuardInTx(ctx, tx, ifDeployed); err != nil {
+			return err
+		}
 		if err := m.insertMigrationRecord(ctx, tx, w); err != nil {
 			return err
 		}
@@ -744,6 +814,9 @@ func (m *Migrator) recordMigrationOnly(ctx context.Context, w migrationWrite) er
 	}
 
 	if err := m.applyMigrationsDDL(ctx, m.db); err != nil {
+		return err
+	}
+	if err := m.driftGuardInTx(ctx, m.db, ifDeployed); err != nil {
 		return err
 	}
 	return m.insertMigrationRecord(ctx, m.db, w)
@@ -802,14 +875,28 @@ func (m *Migrator) migrateWithTypesAndOptions(ctx context.Context, types []TypeD
 		schemaChecksum = ComputeSchemaChecksum(opts.SchemaContent)
 	}
 
-	// 3. Fetch last migration record (needed for both skip phases)
+	// 3. Fetch last migration record (needed for the drift guard and both skip
+	// phases). The guard needs it even under --force and --dry-run.
 	var lastMigration *MigrationRecord
-	if !opts.Force && opts.DryRun == nil && schemaChecksum != "" {
+	if opts.IfDeployedChecksum != nil ||
+		(!opts.Force && opts.DryRun == nil && schemaChecksum != "") {
 		lastMigration, err = m.getLastMigration(ctx, m.db)
 		if err != nil {
 			return false, fmt.Errorf("checking last migration: %w", err)
 		}
-		// Phase 1 skip: schema + codegen version unchanged → skip entirely
+	}
+
+	// Drift guard: --if-deployed-checksum makes migrate a compare-and-swap. Abort
+	// early if the database isn't at the expected checksum — including in dry-run,
+	// so a drift-gated preview fails rather than printing SQL against a drifted
+	// database. The apply path re-checks inside its transaction (see below) to
+	// catch drift committed while this migration runs.
+	if err := driftGuardError(opts.IfDeployedChecksum, lastMigration); err != nil {
+		return false, err
+	}
+
+	// Phase 1 skip: schema + codegen version unchanged → skip entirely
+	if !opts.Force && opts.DryRun == nil && schemaChecksum != "" {
 		if shouldSkipMigration(lastMigration, schemaChecksum) {
 			return true, nil
 		}
@@ -873,7 +960,7 @@ func (m *Migrator) migrateWithTypesAndOptions(ctx context.Context, types []TypeD
 		if migrationRecordMatches(lastMigration, schemaChecksum) {
 			return true, nil
 		}
-		return false, m.recordMigrationOnly(ctx, write)
+		return false, m.recordMigrationOnly(ctx, write, opts.IfDeployedChecksum)
 	}
 
 	// 10. Apply everything atomically
@@ -912,6 +999,12 @@ func (m *Migrator) migrateWithTypesAndOptions(ctx context.Context, types []TypeD
 			return false, err
 		}
 
+		// Re-verify the drift guard inside the transaction before recording, so a
+		// migration committed while we were applying aborts this one (rollback).
+		if err := m.driftGuardInTx(ctx, tx, opts.IfDeployedChecksum); err != nil {
+			return false, err
+		}
+
 		// Record migration
 		if schemaChecksum != "" {
 			if err := m.insertMigrationRecord(ctx, tx, write); err != nil {
@@ -922,8 +1015,13 @@ func (m *Migrator) migrateWithTypesAndOptions(ctx context.Context, types []TypeD
 		return false, tx.Commit()
 	}
 
-	// Fall back to non-transactional (for *sql.Conn)
+	// Fall back to non-transactional (for *sql.Conn). Without a transaction there
+	// is no rollback, so the drift guard is re-checked BEFORE any function is
+	// applied — a failure then leaves nothing applied, matching the error.
 	if err := m.applyMigrationsDDL(ctx, m.db); err != nil {
+		return false, err
+	}
+	if err := m.driftGuardInTx(ctx, m.db, opts.IfDeployedChecksum); err != nil {
 		return false, err
 	}
 	currentFunctions, err := m.getCurrentFunctions(ctx, m.db)

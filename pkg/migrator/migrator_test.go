@@ -407,6 +407,17 @@ func TestMigrateNoSchemaFile(t *testing.T) {
 	})
 }
 
+func TestDeployedModelChangedError(t *testing.T) {
+	e := &DeployedModelChangedError{Expected: "aaa", Actual: "bbb"}
+	if !strings.Contains(e.Error(), "aaa") || !strings.Contains(e.Error(), "bbb") {
+		t.Errorf("error should mention both checksums, got %q", e.Error())
+	}
+	empty := &DeployedModelChangedError{Expected: "aaa", Actual: ""}
+	if !strings.Contains(empty.Error(), "no migration recorded") {
+		t.Errorf("empty actual should be described, got %q", empty.Error())
+	}
+}
+
 func TestMigrationsDDL(t *testing.T) {
 	t.Run("no schema uses unqualified table name", func(t *testing.T) {
 		sql := migrationsDDL("")

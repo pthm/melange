@@ -140,11 +140,12 @@ func MigrateWithOptions(ctx context.Context, db Execer, schemaPath string, opts 
 
 	// Convert to internal MigrateOptions
 	internalOpts := InternalMigrateOptions{
-		DryRun:        opts.DryRun,
-		Force:         opts.Force,
-		Version:       opts.Version,
-		SchemaContent: string(schemaContent),
-		SchemaFormat:  schemaFormat(m.SchemaPath()),
+		DryRun:             opts.DryRun,
+		Force:              opts.Force,
+		Version:            opts.Version,
+		SchemaContent:      string(schemaContent),
+		SchemaFormat:       schemaFormat(m.SchemaPath()),
+		IfDeployedChecksum: opts.IfDeployedChecksum,
 	}
 
 	// Skip detection (both phases) happens inside migrateWithTypesAndOptions;

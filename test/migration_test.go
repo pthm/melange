@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -1181,4 +1184,154 @@ func TestMigration_GetLastMigrationToleratesMissingMelangeVersion(t *testing.T) 
 	require.NotNil(t, rec)
 	assert.Empty(t, rec.MelangeVersion)
 	assert.NotEmpty(t, rec.FunctionNames)
+}
+
+// migrateWithGuard applies a schema with a --if-deployed-checksum precondition.
+func migrateWithGuard(t *testing.T, ctx context.Context, m *migrator.Migrator, schemaContent, version, expectedChecksum string) error {
+	t.Helper()
+	types, err := parser.ParseSchemaString(schemaContent)
+	require.NoError(t, err)
+	return m.MigrateWithTypesAndOptions(ctx, types, migrator.InternalMigrateOptions{
+		Version:            version,
+		SchemaContent:      schemaContent,
+		SchemaFormat:       "single",
+		IfDeployedChecksum: &expectedChecksum,
+	})
+}
+
+// TestMigration_DriftGuardMatches verifies a compare-and-swap migrate proceeds
+// when the deployed checksum matches the expected one.
+func TestMigration_DriftGuardMatches(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+	m := migrator.NewMigrator(db, "")
+
+	migrateSchema(t, ctx, m, schemaV1, migrator.InternalMigrateOptions{Version: "v0.9.0"})
+
+	// Deployed is V1; guard against V1's checksum, apply V2.
+	err := migrateWithGuard(t, ctx, m, schemaV2, "v0.9.1", migrator.ComputeSchemaChecksum(schemaV1))
+	require.NoError(t, err)
+	assert.True(t, functionExists(t, ctx, db, "check_document_editor"), "V2 should have been applied")
+}
+
+// TestMigration_DriftGuardMismatchAborts verifies a mismatched precondition
+// aborts without applying anything, leaving the deployed model untouched.
+func TestMigration_DriftGuardMismatchAborts(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+	m := migrator.NewMigrator(db, "")
+
+	migrateSchema(t, ctx, m, schemaV1, migrator.InternalMigrateOptions{Version: "v0.9.0"})
+
+	err := migrateWithGuard(t, ctx, m, schemaV2, "v0.9.1", "not-the-deployed-checksum")
+	require.Error(t, err)
+	var driftErr *migrator.DeployedModelChangedError
+	require.True(t, errors.As(err, &driftErr), "expected DeployedModelChangedError, got %v", err)
+
+	// Nothing applied: V2's editor function is absent and the record is still V1.
+	assert.False(t, functionExists(t, ctx, db, "check_document_editor"), "V2 must not have been applied")
+	rec, err := m.GetLastMigration(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	assert.Equal(t, migrator.ComputeSchemaChecksum(schemaV1), rec.SchemaChecksum, "deployed model should still be V1")
+}
+
+// TestMigration_DriftGuardEmptyMatchesFreshDatabase verifies that an empty
+// expected checksum matches a database with no migration, and a non-empty one
+// aborts against a fresh database.
+func TestMigration_DriftGuardEmptyMatchesFreshDatabase(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	ctx := context.Background()
+
+	// Empty expected checksum matches a never-migrated database → applies.
+	db := testutil.EmptyDB(t)
+	m := migrator.NewMigrator(db, "")
+	require.NoError(t, migrateWithGuard(t, ctx, m, schemaV1, "v0.9.0", ""))
+	assert.True(t, functionExists(t, ctx, db, "check_document_viewer"))
+
+	// A non-empty expected checksum against a fresh database aborts.
+	db2 := testutil.EmptyDB(t)
+	m2 := migrator.NewMigrator(db2, "")
+	err := migrateWithGuard(t, ctx, m2, schemaV1, "v0.9.0", "some-expected-checksum")
+	var driftErr *migrator.DeployedModelChangedError
+	require.True(t, errors.As(err, &driftErr), "expected DeployedModelChangedError, got %v", err)
+	assert.False(t, functionExists(t, ctx, db2, "check_document_viewer"), "nothing should have been applied")
+}
+
+// TestMigration_GuardedUnchangedReportsSkipped verifies that a guarded migrate
+// of an unchanged schema still reports skipped=true (the guard is checked before
+// the fast-path skip), and that a mismatched guard aborts.
+func TestMigration_GuardedUnchangedReportsSkipped(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+
+	path := filepath.Join(t.TempDir(), "schema.fga")
+	require.NoError(t, os.WriteFile(path, []byte(schemaV1), 0o644))
+
+	_, err := migrator.MigrateWithOptions(ctx, db, path, migrator.MigrateOptions{Version: "v0.9.0"})
+	require.NoError(t, err)
+
+	sum := migrator.ComputeSchemaChecksum(schemaV1)
+	skipped, err := migrator.MigrateWithOptions(ctx, db, path, migrator.MigrateOptions{
+		Version:            "v0.9.0",
+		IfDeployedChecksum: &sum,
+	})
+	require.NoError(t, err)
+	assert.True(t, skipped, "unchanged guarded migrate should report skipped")
+
+	wrong := "not-the-checksum"
+	_, err = migrator.MigrateWithOptions(ctx, db, path, migrator.MigrateOptions{
+		Version:            "v0.9.0",
+		IfDeployedChecksum: &wrong,
+	})
+	var driftErr *migrator.DeployedModelChangedError
+	require.True(t, errors.As(err, &driftErr), "mismatched guard should abort, got %v", err)
+}
+
+// TestMigration_DriftGuardEnforcedInDryRun verifies that --if-deployed-checksum
+// is honored in dry-run: a mismatch aborts before printing any SQL, and a match
+// still produces the preview.
+func TestMigration_DriftGuardEnforcedInDryRun(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+	m := migrator.NewMigrator(db, "")
+
+	migrateSchema(t, ctx, m, schemaV1, migrator.InternalMigrateOptions{Version: "v0.9.0"})
+	types, err := parser.ParseSchemaString(schemaV2)
+	require.NoError(t, err)
+
+	// Mismatch → aborts, nothing printed.
+	wrong := "not-the-deployed-checksum"
+	var buf bytes.Buffer
+	err = m.MigrateWithTypesAndOptions(ctx, types, migrator.InternalMigrateOptions{
+		DryRun: &buf, Version: "v0.9.1", SchemaContent: schemaV2, SchemaFormat: "single",
+		IfDeployedChecksum: &wrong,
+	})
+	var driftErr *migrator.DeployedModelChangedError
+	require.True(t, errors.As(err, &driftErr), "dry-run should enforce the guard, got %v", err)
+	assert.Empty(t, buf.String(), "no SQL should be printed on a drift-guard failure")
+
+	// Match → proceeds and prints the preview.
+	sum := migrator.ComputeSchemaChecksum(schemaV1)
+	var buf2 bytes.Buffer
+	err = m.MigrateWithTypesAndOptions(ctx, types, migrator.InternalMigrateOptions{
+		DryRun: &buf2, Version: "v0.9.1", SchemaContent: schemaV2, SchemaFormat: "single",
+		IfDeployedChecksum: &sum,
+	})
+	require.NoError(t, err)
+	assert.Contains(t, buf2.String(), "Melange Migration (dry-run)", "matching guard should still preview")
 }
