@@ -137,6 +137,10 @@ Three comparison modes determine orphaned functions to drop:
 			NamedFunctions: namedFunctions,
 		}
 
+		// previousTypes drives the semantic-diff header, when a previous model can
+		// be reconstructed from the chosen comparison source.
+		var previousTypes []schema.TypeDefinition
+
 		if genMigrationDB != "" {
 			prevState, err := previousStateFromDB(genMigrationDB, databaseSchema)
 			if err != nil {
@@ -146,6 +150,7 @@ Three comparison modes determine orphaned functions to drop:
 				opts.PreviousFunctionNames = prevState.FunctionNames
 				opts.PreviousChecksums = prevState.FunctionChecksums
 				opts.PreviousSource = "database"
+				previousTypes = prevState.Types
 			}
 		} else if genMigrationGitRef != "" {
 			prevState, err := previousStateFromSchema(genMigrationGitRef, schemaPath, databaseSchema, true)
@@ -155,6 +160,7 @@ Three comparison modes determine orphaned functions to drop:
 			opts.PreviousFunctionNames = prevState.FunctionNames
 			opts.PreviousChecksums = prevState.FunctionChecksums
 			opts.PreviousSource = fmt.Sprintf("git:%s", genMigrationGitRef)
+			previousTypes = prevState.Types
 		} else if genMigrationPreviousSchema != "" {
 			if parser.IsModularSchema(genMigrationPreviousSchema) {
 				return cli.ConfigError("--previous-schema does not support modular schemas (fga.mod); use --db or --git-ref instead", nil)
@@ -166,10 +172,16 @@ Three comparison modes determine orphaned functions to drop:
 			opts.PreviousFunctionNames = prevState.FunctionNames
 			opts.PreviousChecksums = prevState.FunctionChecksums
 			opts.PreviousSource = fmt.Sprintf("file:%s", genMigrationPreviousSchema)
+			previousTypes = prevState.Types
 		}
 
 		// Generate migration SQL
 		result := compiler.GenerateMigrationSQL(generatedSQL, listSQL, expectedFunctions, opts)
+
+		// Document what the migration changes, when a previous model is known.
+		if previousTypes != nil {
+			result.Up = semanticDiffHeader(schema.Diff(previousTypes, types)) + result.Up
+		}
 
 		// Write output
 		if output == "" {
@@ -256,12 +268,34 @@ func writeFiles(result compiler.MigrationSQL, output, name, format string) error
 	return nil
 }
 
+// semanticDiffHeader renders a SQL comment block summarizing how the migration
+// changes the model relative to the previous one. Returns "" when there are no
+// changes, so an unchanged (version-only) migration gets no header.
+func semanticDiffHeader(diff schema.SchemaDiff) string {
+	if diff.Empty() {
+		return ""
+	}
+	additive, breaking := diff.Counts()
+	var b strings.Builder
+	fmt.Fprintf(&b, "-- Schema changes vs previous model: %d breaking, %d additive\n", breaking, additive)
+	for _, c := range diff.Changes {
+		fmt.Fprintf(&b, "--   [%s] %s\n", c.Class, c.Summary)
+	}
+	b.WriteString("--\n")
+	return b.String()
+}
+
 // previousState holds the function inventory from a prior migration.
 // It normalises the output of all three comparison modes (--db, --git-ref,
 // --previous-schema) so the caller can handle them uniformly.
 type previousState struct {
 	FunctionNames     []string
 	FunctionChecksums map[string]string
+
+	// Types is the previous parsed model, when it can be reconstructed. It drives
+	// the semantic-diff header. Nil when unavailable (e.g. a database migrated
+	// before model storage existed), in which case no header is emitted.
+	Types []schema.TypeDefinition
 }
 
 // previousStateFromDB reads function names and checksums from the most recent
@@ -293,9 +327,24 @@ func previousStateFromDB(dsn, databaseSchema string) (*previousState, error) {
 		fmt.Fprintln(os.Stderr)
 	}
 
+	// Reconstruct the previous model for the semantic-diff header (best-effort).
+	// Prefer the parsed model; fall back to parsing the stored DSL when the JSON
+	// model is absent, mirroring `melange diff`/`doctor`. A modular DSL won't
+	// parse as a single schema, leaving prevTypes nil (no header). Absent
+	// entirely on databases migrated before model storage existed.
+	var prevTypes []schema.TypeDefinition
+	if rec.SchemaDSL != "" {
+		if t, uerr := schema.UnmarshalModel(rec.ModelJSON); uerr == nil && len(t) > 0 {
+			prevTypes = t
+		} else if parsed, perr := parser.ParseSchemaString(rec.SchemaDSL); perr == nil {
+			prevTypes = parsed
+		}
+	}
+
 	return &previousState{
 		FunctionNames:     rec.FunctionNames,
 		FunctionChecksums: rec.FunctionChecksums,
+		Types:             prevTypes,
 	}, nil
 }
 
@@ -334,6 +383,7 @@ func previousStateFromSchema(pathOrRef, schemaPath, databaseSchema string, isGit
 	return &previousState{
 		FunctionNames:     names,
 		FunctionChecksums: checksums,
+		Types:             types,
 	}, nil
 }
 
