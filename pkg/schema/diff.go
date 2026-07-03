@@ -44,6 +44,17 @@ func (d SchemaDiff) HasBreaking() bool {
 	return false
 }
 
+// BreakingSummaries returns the human-readable summaries of the breaking changes.
+func (d SchemaDiff) BreakingSummaries() []string {
+	var out []string
+	for _, c := range d.Changes {
+		if c.Class == ClassBreaking {
+			out = append(out, c.Summary)
+		}
+	}
+	return out
+}
+
 // Counts returns how many additive and breaking changes there are.
 func (d SchemaDiff) Counts() (additive, breaking int) {
 	for _, c := range d.Changes {

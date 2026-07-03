@@ -3,6 +3,8 @@ package test
 import (
 	"context"
 	"database/sql"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,6 +13,7 @@ import (
 
 	"github.com/pthm/melange/internal/doctor"
 	"github.com/pthm/melange/pkg/compiler"
+	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/pkg/parser"
 	"github.com/pthm/melange/pkg/schema"
 	"github.com/pthm/melange/test/testutil"
@@ -719,4 +722,153 @@ func findCheck(checks []doctor.CheckResult, name string) *doctor.CheckResult {
 		}
 	}
 	return nil
+}
+
+// TestDoctor_DeployedModelChecks verifies the "Deployed Model" checks: the model
+// is recorded, and a pending local change is classified additive vs breaking.
+func TestDoctor_DeployedModelChecks(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+
+	const docBase = `model
+  schema 1.1
+type user
+type document
+  relations
+    define owner: [user]
+    define viewer: [user] or owner
+`
+	const docAdditive = `model
+  schema 1.1
+type user
+type document
+  relations
+    define owner: [user]
+    define editor: [user]
+    define viewer: [user] or owner
+`
+	const docBreaking = `model
+  schema 1.1
+type user
+type document
+  relations
+    define owner: [user]
+`
+
+	m := migrator.NewMigrator(db, "")
+	migrateSchema(t, ctx, m, docBase, migrator.InternalMigrateOptions{Version: "v0.9.0", SchemaFormat: "single"})
+
+	run := func(content string) []doctor.CheckResult {
+		path := filepath.Join(t.TempDir(), "schema.fga")
+		require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+		d := doctor.New(db, path, doctor.Options{SkipPerformance: true})
+		report, err := d.Run(ctx)
+		require.NoError(t, err)
+		return filterCategory(report, "Deployed Model")
+	}
+
+	// In sync: model recorded, no drift advisory.
+	inSync := run(docBase)
+	assertCheck(t, inSync, "recorded", doctor.StatusPass)
+	assert.Nil(t, findCheck(inSync, "drift_safety"), "no drift advisory when in sync")
+
+	// Additive local change: drift advisory passes.
+	additive := run(docAdditive)
+	assertCheck(t, additive, "recorded", doctor.StatusPass)
+	assertCheck(t, additive, "drift_safety", doctor.StatusPass)
+
+	// Breaking local change: drift advisory warns and names the change.
+	breaking := run(docBreaking)
+	assertCheck(t, breaking, "drift_safety", doctor.StatusWarn)
+	if c := findCheck(breaking, "drift_safety"); assert.NotNil(t, c) {
+		assert.Contains(t, c.Details, "viewer", "breaking detail should name the removed relation")
+	}
+}
+
+// TestDoctor_DeployedModelCorruptDegradesToWarning verifies that a corrupt
+// stored model_json produces a warning rather than aborting the whole run —
+// doctor must still diagnose the broken deployment.
+func TestDoctor_DeployedModelCorruptDegradesToWarning(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+
+	const doc = `model
+  schema 1.1
+type user
+type document
+  relations
+    define viewer: [user]
+`
+	m := migrator.NewMigrator(db, "")
+	migrateSchema(t, ctx, m, doc, migrator.InternalMigrateOptions{Version: "v0.9.0", SchemaFormat: "single"})
+
+	// Corrupt the stored model: valid JSON (the column is jsonb) but the wrong
+	// shape for UnmarshalModel, which expects an array of type definitions.
+	_, err := db.ExecContext(ctx, `UPDATE melange_migrations SET model_json = '{"corrupt": true}'`)
+	require.NoError(t, err)
+
+	path := filepath.Join(t.TempDir(), "schema.fga")
+	require.NoError(t, os.WriteFile(path, []byte(doc), 0o644))
+	d := doctor.New(db, path, doctor.Options{SkipPerformance: true})
+	report, err := d.Run(ctx)
+	require.NoError(t, err, "doctor must not abort on a corrupt deployed model")
+
+	dm := filterCategory(report, "Deployed Model")
+	c := findCheck(dm, "recorded")
+	require.NotNil(t, c)
+	assert.Equal(t, doctor.StatusWarn, c.Status)
+	assert.Contains(t, c.Message, "could not be decoded")
+
+	// Subsequent checks still ran — the run was not aborted.
+	assert.NotEmpty(t, filterCategory(report, "Generated Functions"), "later checks should still run")
+}
+
+// TestDoctor_DeployedModelDriftFromDSLFallback verifies the drift advisory still
+// works when a record has schema_dsl but no usable model_json (an older/partial
+// record): the deployed model is reconstructed by parsing the stored DSL.
+func TestDoctor_DeployedModelDriftFromDSLFallback(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+
+	const withViewer = `model
+  schema 1.1
+type user
+type document
+  relations
+    define owner: [user]
+    define viewer: [user] or owner
+`
+	const withoutViewer = `model
+  schema 1.1
+type user
+type document
+  relations
+    define owner: [user]
+`
+	m := migrator.NewMigrator(db, "")
+	migrateSchema(t, ctx, m, withViewer, migrator.InternalMigrateOptions{Version: "v0.9.0", SchemaFormat: "single"})
+
+	// Blank out the JSON model, leaving schema_dsl — forces the DSL fallback.
+	_, err := db.ExecContext(ctx, `UPDATE melange_migrations SET model_json = 'null'`)
+	require.NoError(t, err)
+
+	// Local schema removes viewer: a breaking change that must still be caught.
+	path := filepath.Join(t.TempDir(), "schema.fga")
+	require.NoError(t, os.WriteFile(path, []byte(withoutViewer), 0o644))
+	d := doctor.New(db, path, doctor.Options{SkipPerformance: true})
+	report, err := d.Run(ctx)
+	require.NoError(t, err)
+
+	dm := filterCategory(report, "Deployed Model")
+	assertCheck(t, dm, "recorded", doctor.StatusPass)
+	assertCheck(t, dm, "drift_safety", doctor.StatusWarn)
 }
