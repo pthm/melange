@@ -136,6 +136,7 @@ func init() {
 	statusCmd.GroupID = groupSchema
 	schemaCmd.GroupID = groupSchema
 	diffCmd.GroupID = groupSchema
+	historyCmd.GroupID = groupSchema
 	doctorCmd.GroupID = groupSchema
 	explainCmd.GroupID = groupSchema
 	expandCmd.GroupID = groupSchema
@@ -144,6 +145,7 @@ func init() {
 	rootCmd.AddCommand(statusCmd)
 	rootCmd.AddCommand(schemaCmd)
 	rootCmd.AddCommand(diffCmd)
+	rootCmd.AddCommand(historyCmd)
 	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(explainCmd)
 	rootCmd.AddCommand(expandCmd)

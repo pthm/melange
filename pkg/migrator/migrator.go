@@ -141,21 +141,6 @@ func driftGuardError(expected *string, rec *MigrationRecord) error {
 	return nil
 }
 
-// driftGuardInTx re-evaluates the drift guard against the latest record visible
-// to db (a transaction). Read-committed visibility means a migration committed
-// since the up-front check is seen here, so a concurrent change that lands while
-// this migration applies is caught before the record is written.
-func (m *Migrator) driftGuardInTx(ctx context.Context, db Execer, expected *string) error {
-	if expected == nil {
-		return nil
-	}
-	rec, err := m.getLastMigration(ctx, db)
-	if err != nil {
-		return err
-	}
-	return driftGuardError(expected, rec)
-}
-
 // MigrationRecord represents a row in the melange_migrations table.
 type MigrationRecord struct {
 	// ID and MigratedAt identify the row and when it was written. Populated by
@@ -493,20 +478,9 @@ func (m *Migrator) GetLastMigration(ctx context.Context) (*MigrationRecord, erro
 // any earlier version without a branch per column combination.
 func (m *Migrator) getLastMigration(ctx context.Context, db Execer) (*MigrationRecord, error) {
 	// First check if the migrations table exists
-	var tableExists bool
-	err := db.QueryRowContext(ctx, fmt.Sprintf(
-		`
-			SELECT EXISTS (
-				SELECT 1 FROM pg_class c
-				JOIN pg_namespace n ON n.oid = c.relnamespace
-				WHERE c.relname = 'melange_migrations'
-				AND n.nspname = %s
-			)
-		`,
-		m.postgresSchema(),
-	)).Scan(&tableExists)
+	tableExists, err := m.migrationTableExists(ctx, db)
 	if err != nil {
-		return nil, fmt.Errorf("checking melange_migrations table: %w", err)
+		return nil, err
 	}
 	if !tableExists {
 		return nil, nil // No migrations table yet
@@ -577,6 +551,44 @@ func (m *Migrator) getLastMigration(ctx context.Context, db Execer) (*MigrationR
 	return &rec, nil
 }
 
+// migrationTableExists reports whether the melange_migrations table exists in
+// the configured schema. Used to distinguish an un-migrated database from one
+// whose columns are merely hidden by privileges (which would make an
+// information_schema probe misleadingly return nothing).
+func (m *Migrator) migrationTableExists(ctx context.Context, db Execer) (bool, error) {
+	var exists bool
+	err := db.QueryRowContext(ctx, fmt.Sprintf(
+		`
+			SELECT EXISTS (
+				SELECT 1 FROM pg_class c
+				JOIN pg_namespace n ON n.oid = c.relnamespace
+				WHERE c.relname = 'melange_migrations'
+				AND n.nspname = %s
+			)
+		`,
+		m.postgresSchema(),
+	)).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("checking melange_migrations table: %w", err)
+	}
+	return exists, nil
+}
+
+// driftGuardInTx re-evaluates the drift guard against the latest record visible
+// to db (a transaction). Read-committed visibility means a migration committed
+// since the up-front check is seen here, so a concurrent change that lands while
+// this migration applies is caught before the record is written.
+func (m *Migrator) driftGuardInTx(ctx context.Context, db Execer, expected *string) error {
+	if expected == nil {
+		return nil
+	}
+	rec, err := m.getLastMigration(ctx, db)
+	if err != nil {
+		return err
+	}
+	return driftGuardError(expected, rec)
+}
+
 // migrationColumns returns the set of column names present in the
 // melange_migrations table, used to build a compatible SELECT.
 func (m *Migrator) migrationColumns(ctx context.Context, db Execer) (map[string]bool, error) {
@@ -639,6 +651,68 @@ func (m *Migrator) GetDeployedModel(ctx context.Context) (*DeployedModel, error)
 		MelangeVersion: rec.MelangeVersion,
 		MigratedAt:     rec.MigratedAt,
 	}, nil
+}
+
+// GetMigrationHistory returns up to limit migration records, most recent first.
+// It reads a lightweight subset (no DSL or model JSON) suitable for an audit
+// listing, and tolerates databases migrated by older versions that lack the
+// melange_version or schema_format columns. Returns nil when no migrations table
+// exists.
+func (m *Migrator) GetMigrationHistory(ctx context.Context, limit int) ([]MigrationRecord, error) {
+	if limit < 1 {
+		return nil, fmt.Errorf("limit must be at least 1, got %d", limit)
+	}
+	exists, err := m.migrationTableExists(ctx, m.db)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
+	cols, err := m.migrationColumns(ctx, m.db)
+	if err != nil {
+		return nil, err
+	}
+
+	selects := []string{"id", "migrated_at", "schema_checksum", "codegen_version", "function_names"}
+	hasVersion := cols["melange_version"]
+	hasFormat := cols["schema_format"]
+	if hasVersion {
+		selects = append(selects, "melange_version")
+	}
+	if hasFormat {
+		selects = append(selects, "schema_format")
+	}
+
+	query := fmt.Sprintf("SELECT %s FROM %s ORDER BY id DESC LIMIT $1",
+		strings.Join(selects, ", "), m.prefixIdent("melange_migrations"))
+	rows, err := m.db.QueryContext(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("querying migration history: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var history []MigrationRecord
+	for rows.Next() {
+		var (
+			rec                MigrationRecord
+			melangeVer, format sql.NullString
+		)
+		targets := []any{&rec.ID, &rec.MigratedAt, &rec.SchemaChecksum, &rec.CodegenVersion, pq.Array(&rec.FunctionNames)}
+		if hasVersion {
+			targets = append(targets, &melangeVer)
+		}
+		if hasFormat {
+			targets = append(targets, &format)
+		}
+		if err := rows.Scan(targets...); err != nil {
+			return nil, fmt.Errorf("scanning migration row: %w", err)
+		}
+		rec.MelangeVersion = melangeVer.String
+		rec.SchemaFormat = format.String
+		history = append(history, rec)
+	}
+	return history, rows.Err()
 }
 
 // migrationRecordMatches reports whether the last migration was recorded with

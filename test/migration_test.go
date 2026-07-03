@@ -1335,3 +1335,39 @@ func TestMigration_DriftGuardEnforcedInDryRun(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, buf2.String(), "Melange Migration (dry-run)", "matching guard should still preview")
 }
+
+// TestMigration_GetMigrationHistory verifies the audit-history reader returns
+// records most-recent-first with the expected fields, and honors the limit.
+func TestMigration_GetMigrationHistory(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+	m := migrator.NewMigrator(db, "")
+
+	empty, err := m.GetMigrationHistory(ctx, 10)
+	require.NoError(t, err)
+	assert.Empty(t, empty, "fresh database has no history")
+
+	migrateSchema(t, ctx, m, schemaV1, migrator.InternalMigrateOptions{Version: "v0.9.0", SchemaFormat: "single"})
+	migrateSchema(t, ctx, m, schemaV2, migrator.InternalMigrateOptions{Version: "v0.9.1", SchemaFormat: "single"})
+
+	h, err := m.GetMigrationHistory(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, h, 2)
+
+	// Most recent first.
+	assert.Equal(t, migrator.ComputeSchemaChecksum(schemaV2), h[0].SchemaChecksum)
+	assert.Equal(t, "v0.9.1", h[0].MelangeVersion)
+	assert.Equal(t, "single", h[0].SchemaFormat)
+	assert.NotEmpty(t, h[0].FunctionNames)
+	assert.False(t, h[0].MigratedAt.IsZero())
+	assert.Equal(t, migrator.ComputeSchemaChecksum(schemaV1), h[1].SchemaChecksum)
+
+	// Limit is honored.
+	one, err := m.GetMigrationHistory(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, one, 1)
+	assert.Equal(t, migrator.ComputeSchemaChecksum(schemaV2), one[0].SchemaChecksum)
+}
