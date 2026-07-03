@@ -65,7 +65,7 @@ The cache respects the `XDG_CACHE_HOME` environment variable if set.
 
 Commands are organized into logical groups:
 
-**Schema Commands:** `validate`, `migrate`, `status`, `schema pull`, `doctor`, `explain`, `expand`
+**Schema Commands:** `validate`, `migrate`, `status`, `schema pull`, `diff`, `history`, `doctor`, `explain`, `expand`
 **Client Commands:** `generate client`, `generate migration`
 **Utility Commands:** `init`, `config show`, `env list`, `version`, `license`
 
@@ -112,13 +112,14 @@ melange migrate \
 
 **Flags:**
 
-| Flag          | Default              | Description                                   |
-| ------------- | -------------------- | --------------------------------------------- |
-| `--db`        | (from config)        | PostgreSQL connection string                  |
-| `--db-schema` | `""`                 | PostgreSQL schema for melange objects          |
-| `--schema`    | `schemas/schema.fga` | Path to schema.fga file                       |
-| `--dry-run`   | `false`              | Output SQL to stdout without applying changes |
-| `--force`     | `false`              | Force migration even if schema is unchanged   |
+| Flag                     | Default              | Description                                                    |
+| ------------------------ | -------------------- | ------------------------------------------------------------- |
+| `--db`                   | (from config)        | PostgreSQL connection string                                  |
+| `--db-schema`            | (config, else `public`) | PostgreSQL schema for melange objects                      |
+| `--schema`               | `schemas/schema.fga` | Path to schema.fga file                                       |
+| `--dry-run`              | `false`              | Output SQL to stdout without applying changes                 |
+| `--force`                | `false`              | Force migration even if schema is unchanged                   |
+| `--if-deployed-checksum` | (unset)              | Apply only if the deployed schema checksum matches (see below) |
 
 This command:
 
@@ -139,6 +140,40 @@ Use --force to re-apply.
 ```
 
 Use `--force` to re-apply the migration anyway (useful after updating Melange itself).
+
+**Drift-safe apply (`--if-deployed-checksum`):**
+
+`--if-deployed-checksum` turns migrate into a compare-and-swap: it applies only if
+the database is currently at the schema checksum you pass, otherwise it aborts
+having changed nothing and exits non-zero. This closes the window where someone
+else migrates the database between the time you plan a change and the time your
+deploy applies — which last-writer-wins would silently clobber.
+
+The intended CI pattern reads the current checksum from `status`, then gates the
+apply on it:
+
+```bash
+CURRENT=$(melange status --env production --format json | jq -r .deployed.schema_checksum)
+# review / plan the change …
+melange migrate --env production --if-deployed-checksum "$CURRENT"
+```
+
+On a mismatch:
+
+```
+Error: migration aborted: deployed model changed: expected checksum abc… but database has def…; nothing was applied
+```
+
+An empty value (`--if-deployed-checksum ""`) matches a database with no migration
+recorded (a fresh database). The guard is enforced in `--dry-run` too, so a
+drift-gated preview aborts rather than printing SQL against a drifted database.
+
+{{< callout type="info" >}}
+The guard is verified up front and again inside the apply transaction, so a
+change committed while your migration runs aborts it. It is not a hard lock
+against two migrations that verify at the exact same instant, but concurrent
+migrations against one database are unsupported regardless.
+{{< /callout >}}
 
 **Dry-run mode:**
 
@@ -290,6 +325,81 @@ single `.fga`, and splitting it back into module files is not supported.
 Requires a database migrated by melange v0.9 or later. Older databases did not
 record the model; pull reports whether the database was never migrated or was
 migrated before model storage existed.
+
+### diff
+
+Show what changed between a deployed (or previous) model and your local schema,
+with each change classified **additive** (safe — widens access or adds structure)
+or **breaking** (narrows access or removes structure).
+
+```bash
+# What would migrating apply to production?
+melange diff --env production
+
+# Compare against the schema on main, or a previous file
+melange diff --git-ref main
+melange diff --previous-schema old.fga
+```
+
+**Flags:**
+
+| Flag                | Default              | Description                                                          |
+| ------------------- | -------------------- | ------------------------------------------------------------------- |
+| `--db`              | (from config)        | Database to compare against (the default source)                    |
+| `--db-schema`       | (config, else `public`) | PostgreSQL schema for melange objects                            |
+| `--schema`          | `schemas/schema.fga` | Local `.fga` — the new side of the diff                             |
+| `--git-ref`         | (unset)              | Compare against your schema at a git commit/branch/tag              |
+| `--previous-schema` | (unset)              | Compare against a previous `.fga` file (modular not supported)      |
+| `--format`          | `tree`               | Output format: `tree` (default) or `json`                           |
+| `--exit-code`       | `false`              | Exit 1 if any change is breaking (CI gate)                          |
+
+The comparison source is the deployed model by default (`--db`/`--env`, or the
+configured database); `--git-ref` and `--previous-schema` select a file/git
+source instead and are mutually exclusive with a database source.
+
+**Output:**
+
+```
+Comparing deployed → melange/schema.fga
+
+  BREAKING  document.legacy removed
+  additive  type audit_log added
+  additive  document.viewer grants [org]
+
+1 breaking, 2 additive
+```
+
+Classification reflects melange's compiled model and is deliberately conservative:
+it accounts for implied-by closure, intersection subsumption, and exclusion
+polarity, and it never under-reports a breaking change — so `--exit-code` is safe
+as a CI gate. `--format=json` emits the structured `SchemaDiff` for tooling.
+
+### history
+
+List recent entries from the `melange_migrations` table — when each migration
+ran, the melange version, the schema checksum, and how many functions it
+installed. An audit trail of how a database's model has evolved.
+
+```bash
+melange history --db postgres://localhost/mydb
+```
+
+**Flags:**
+
+| Flag          | Default              | Description                              |
+| ------------- | -------------------- | ---------------------------------------- |
+| `--db`        | (from config)        | PostgreSQL connection string             |
+| `--db-schema` | (config, else `public`) | PostgreSQL schema for melange objects |
+| `--format`    | `text`               | Output format: `text` (default) or `json` |
+| `--limit`     | `20`                 | Maximum number of entries to show        |
+
+**Output:**
+
+```
+Migration history (most recent first):
+  2026-07-02T20:46:10Z · melange v0.9.1 · checksum 550b0008a779… · single · 23 functions
+  2026-07-01T18:12:03Z · melange v0.9.0 · checksum 0ba53b1429e9… · single · 17 functions
+```
 
 ### doctor
 
@@ -896,6 +1006,11 @@ This displays the Melange license and attribution for all embedded third-party d
 | 3    | Schema parse error                                                   |
 | 4    | Database connection error                                            |
 
+The CI gates exit non-zero on an intentional gate failure, not just tool errors:
+`melange diff --exit-code` exits 1 when a change is breaking, and `melange migrate
+--if-deployed-checksum` exits 1 when the deployed model has drifted. In both cases
+the accompanying message explains the condition.
+
 ## Common Workflows
 
 ### Development Setup
@@ -963,6 +1078,22 @@ For pipelines where you want to ensure migrations are always applied (e.g., afte
 
 ```bash
 melange migrate --force
+```
+
+**Gated deploy against a live environment.** Fail the build on a breaking change,
+then apply only if the environment hasn't drifted since you inspected it:
+
+```bash
+# Fail review if the change narrows access
+melange diff --env production --exit-code
+
+# Capture the state you reviewed
+CURRENT=$(melange status --env production --format json | jq -r .deployed.schema_checksum)
+
+# … approval gate …
+
+# Apply only if production is still at that checksum
+melange migrate --env production --if-deployed-checksum "$CURRENT"
 ```
 
 ### Schema Updates
