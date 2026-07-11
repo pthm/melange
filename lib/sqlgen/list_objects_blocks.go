@@ -398,6 +398,9 @@ func buildListObjectsUsersetPatternBlocks(plan ListPlan) ([]TypedQueryBlock, err
 }
 
 // buildListObjectsComplexUsersetBlock builds a block for complex userset patterns.
+// Membership comes from usersetMembership: a semi-join against the userset
+// relation's list function when composition is safe, or a per-candidate
+// check_permission_internal call otherwise.
 func buildListObjectsComplexUsersetBlock(plan ListPlan, pattern listUsersetPatternInput) (TypedQueryBlock, error) {
 	q := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
@@ -409,16 +412,7 @@ func buildListObjectsComplexUsersetBlock(plan ListPlan, pattern listUsersetPatte
 				Left:  UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}},
 				Right: Lit(pattern.SubjectRelation),
 			},
-			CheckPermission{
-				Schema:   plan.DatabaseSchema,
-				Subject:  SubjectParams(),
-				Relation: pattern.SubjectRelation,
-				Object: ObjectRef{
-					Type: Lit(pattern.SubjectType),
-					ID:   UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}},
-				},
-				ExpectAllow: true,
-			},
+			usersetMembership(plan, pattern),
 		).
 		SelectCol("object_id").
 		Distinct()

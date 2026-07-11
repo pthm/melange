@@ -192,6 +192,9 @@ func buildRecursiveIntersectionClosureBlock(plan ListPlan, rel string) TypedQuer
 }
 
 // buildRecursiveComplexUsersetBlock builds a block for complex userset patterns.
+// Membership comes from usersetMembership: a semi-join against the userset
+// relation's list function when composition is safe, or a per-candidate
+// check_permission_internal call otherwise.
 func buildRecursiveComplexUsersetBlock(plan ListPlan, pattern listUsersetPatternInput) TypedQueryBlock {
 	q := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
@@ -203,16 +206,7 @@ func buildRecursiveComplexUsersetBlock(plan ListPlan, pattern listUsersetPattern
 				Left:  UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}},
 				Right: Lit(pattern.SubjectRelation),
 			},
-			CheckPermission{
-				Schema:   plan.DatabaseSchema,
-				Subject:  SubjectParams(),
-				Relation: pattern.SubjectRelation,
-				Object: ObjectRef{
-					Type: Lit(pattern.SubjectType),
-					ID:   UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}},
-				},
-				ExpectAllow: true,
-			},
+			usersetMembership(plan, pattern),
 		).
 		SelectCol("object_id").
 		Distinct()
@@ -335,38 +329,34 @@ func buildCrossTypeTTUBlocks(plan ListPlan, parentRelations []ListParentRelation
 		for _, parentType := range crossTypes {
 			if canUseSubjectFirstTTU(plan, parent, parentType) {
 				blocks = append(blocks, buildSubjectFirstCrossTypeTTUBlock(plan, parent, parentType, crossExclusions))
+				// Userset-typed subjects (e.g. "group:eng#member") can be
+				// provable by the parent's check function through closure arms
+				// its list function does not enumerate; keep a per-candidate
+				// check arm for exactly that case. The guard is false for
+				// plain subjects, so the check never runs on the hot path.
+				blocks = append(blocks, buildCheckPermissionCrossTypeTTUBlock(plan, parent, []string{parentType}, crossExclusions, true))
 			} else {
 				fallbackTypes = append(fallbackTypes, parentType)
 			}
 		}
 
 		if len(fallbackTypes) > 0 {
-			blocks = append(blocks, buildCheckPermissionCrossTypeTTUBlock(plan, parent, fallbackTypes, crossExclusions))
+			blocks = append(blocks, buildCheckPermissionCrossTypeTTUBlock(plan, parent, fallbackTypes, crossExclusions, false))
 		}
 	}
 
 	return blocks
 }
 
+// canUseSubjectFirstTTU decides whether the parent relation's list function
+// can be composed with (subject-first path) instead of checking every child
+// linking tuple. All strategies route through the same reachability gate:
+// list functions carry no p_visited guard, so composition is allowed only
+// when the relation-reference graph proves the parent can never call back
+// into this function (and cannot reach an always-raising DepthExceeded list
+// function). Cyclic schemas keep the per-candidate permission-check fallback.
 func canUseSubjectFirstTTU(plan ListPlan, parent ListParentRelationData, parentType string) bool {
-	if plan.AnalysisLookup == nil {
-		return false
-	}
-
-	parentAnalysis, ok := plan.AnalysisLookup[parentType+"."+parent.Relation]
-	if !ok || !parentAnalysis.Capabilities.ListAllowed {
-		return false
-	}
-
-	// Avoid introducing cross-type list recursion. The permission-check fallback
-	// carries p_visited and remains the safe path for recursive/composed list
-	// strategies; direct/userset/intersection parents have no TTU list calls.
-	switch parentAnalysis.ListStrategy {
-	case ListStrategyDirect, ListStrategyUserset, ListStrategyIntersection:
-		return true
-	default:
-		return false
-	}
+	return composableListTarget(plan, parentType, parent.Relation)
 }
 
 func buildSubjectFirstCrossTypeTTUBlock(plan ListPlan, parent ListParentRelationData, parentType string, exclusions ExclusionConfig) TypedQueryBlock {
@@ -432,7 +422,11 @@ func sourceRelationCheck(plan ListPlan, parent ListParentRelationData) Expr {
 	}
 }
 
-func buildCheckPermissionCrossTypeTTUBlock(plan ListPlan, parent ListParentRelationData, crossTypes []string, exclusions ExclusionConfig) TypedQueryBlock {
+// buildCheckPermissionCrossTypeTTUBlock builds the per-candidate check block
+// for cross-type TTU. With usersetSubjectsOnly it additionally guards on the
+// subject being a userset, serving as the parity companion to a subject-first
+// composition block (the guard short-circuits for plain subjects).
+func buildCheckPermissionCrossTypeTTUBlock(plan ListPlan, parent ListParentRelationData, crossTypes []string, exclusions ExclusionConfig, usersetSubjectsOnly bool) TypedQueryBlock {
 	accessCheck := Expr(CheckPermission{
 		Schema:   plan.DatabaseSchema,
 		Subject:  SubjectParams(),
@@ -450,10 +444,14 @@ func buildCheckPermissionCrossTypeTTUBlock(plan ListPlan, parent ListParentRelat
 	q := Tuples(plan.DatabaseSchema, "child").
 		ObjectType(plan.ObjectType).
 		Relations(parent.LinkingRelation).
-		Where(
-			In{Expr: Col{Table: "child", Column: "subject_type"}, Values: crossTypes},
-			accessCheck,
-		).
+		Where(In{Expr: Col{Table: "child", Column: "subject_type"}, Values: crossTypes})
+
+	comment := fmt.Sprintf("-- Cross-type TTU fallback: %s -> %s", parent.LinkingRelation, parent.Relation)
+	if usersetSubjectsOnly {
+		q.Where(HasUserset{Source: SubjectID})
+		comment = fmt.Sprintf("-- Cross-type TTU userset-subject parity: %s -> %s", parent.LinkingRelation, parent.Relation)
+	}
+	q.Where(accessCheck).
 		SelectCol("object_id").
 		Distinct()
 
@@ -462,7 +460,7 @@ func buildCheckPermissionCrossTypeTTUBlock(plan ListPlan, parent ListParentRelat
 	}
 
 	return TypedQueryBlock{
-		Comments: []string{fmt.Sprintf("-- Cross-type TTU fallback: %s -> %s", parent.LinkingRelation, parent.Relation)},
+		Comments: []string{comment},
 		Query:    q.Build(),
 	}
 }

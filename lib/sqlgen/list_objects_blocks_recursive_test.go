@@ -34,8 +34,8 @@ func TestBuildCrossTypeTTUBlocksUsesSubjectFirstParentList(t *testing.T) {
 		HasCrossTypeLinks:     true,
 	}})
 
-	if len(blocks) != 1 {
-		t.Fatalf("buildCrossTypeTTUBlocks() returned %d blocks, want 1", len(blocks))
+	if len(blocks) != 2 {
+		t.Fatalf("buildCrossTypeTTUBlocks() returned %d blocks, want 2 (subject-first + userset-subject parity)", len(blocks))
 	}
 
 	sql := blocks[0].Query.SQL()
@@ -46,9 +46,16 @@ func TestBuildCrossTypeTTUBlocksUsesSubjectFirstParentList(t *testing.T) {
 	assertContains(t, sql, "child.subject_type = 'namespace'")
 	assertContains(t, sql, "child.subject_id = parent_obj.object_id")
 	assertNotContains(t, sql, "check_permission_internal")
+
+	// Parity companion: per-candidate check, guarded to userset-typed subjects.
+	parity := blocks[1].Query.SQL()
+	assertContains(t, parity, "position('#' in p_subject_id) > 0")
+	assertContains(t, parity, "check_permission_internal")
 }
 
 func TestBuildCrossTypeTTUBlocksFallsBackForRecursiveParentList(t *testing.T) {
+	// folder.viewer reaches back into document.viewer (mutual cross-type TTU),
+	// so composing list functions would recurse infinitely — must fall back.
 	parentAnalysis := RelationAnalysis{
 		ObjectType: "folder",
 		Relation:   "viewer",
@@ -56,6 +63,11 @@ func TestBuildCrossTypeTTUBlocksFallsBackForRecursiveParentList(t *testing.T) {
 			ListAllowed: true,
 		},
 		ListStrategy: ListStrategyRecursive,
+		ParentRelations: []ParentRelationInfo{{
+			Relation:            "viewer",
+			LinkingRelation:     "parent",
+			AllowedLinkingTypes: []string{"document"},
+		}},
 	}
 
 	plan := ListPlan{
@@ -127,8 +139,8 @@ func TestBuildCrossTypeTTUBlocksVerifiesClosureSourceRelationWhenConstrained(t *
 		SourceRelation:        "reader",
 	}})
 
-	if len(blocks) != 1 {
-		t.Fatalf("buildCrossTypeTTUBlocks() returned %d blocks, want 1", len(blocks))
+	if len(blocks) != 2 {
+		t.Fatalf("buildCrossTypeTTUBlocks() returned %d blocks, want 2 (subject-first + userset-subject parity)", len(blocks))
 	}
 
 	sql := blocks[0].Query.SQL()
@@ -172,8 +184,8 @@ func TestBuildCrossTypeTTUBlocksSkipsClosureSourceCheckWhenUnconstrained(t *test
 		SourceRelation:        "reader",
 	}})
 
-	if len(blocks) != 1 {
-		t.Fatalf("buildCrossTypeTTUBlocks() returned %d blocks, want 1", len(blocks))
+	if len(blocks) != 2 {
+		t.Fatalf("buildCrossTypeTTUBlocks() returned %d blocks, want 2 (subject-first + userset-subject parity)", len(blocks))
 	}
 
 	sql := blocks[0].Query.SQL()
@@ -182,6 +194,8 @@ func TestBuildCrossTypeTTUBlocksSkipsClosureSourceCheckWhenUnconstrained(t *test
 }
 
 func TestBuildCrossTypeTTUBlocksFallbackVerifiesClosureSourceRelation(t *testing.T) {
+	// folder.viewer reaches back into document.can_read, so composition is
+	// unsafe and the fallback must carry the closure-source verification.
 	parentAnalysis := RelationAnalysis{
 		ObjectType: "folder",
 		Relation:   "viewer",
@@ -189,6 +203,11 @@ func TestBuildCrossTypeTTUBlocksFallbackVerifiesClosureSourceRelation(t *testing
 			ListAllowed: true,
 		},
 		ListStrategy: ListStrategyRecursive,
+		ParentRelations: []ParentRelationInfo{{
+			Relation:            "can_read",
+			LinkingRelation:     "parent",
+			AllowedLinkingTypes: []string{"document"},
+		}},
 	}
 	sourceAnalysis := RelationAnalysis{
 		ObjectType: "document",
@@ -229,6 +248,162 @@ func TestBuildCrossTypeTTUBlocksFallbackVerifiesClosureSourceRelation(t *testing
 	assertContains(t, sql, "child.subject_type IN ('folder')")
 	assertContains(t, sql, "check_permission_internal(p_subject_type, p_subject_id, 'reader', 'document', child.object_id, ARRAY[]::TEXT[]) = 1")
 	assertNotContains(t, sql, "list_folder_viewer_obj")
+}
+
+func TestBuildCrossTypeTTUBlocksComposesAcyclicRecursiveParent(t *testing.T) {
+	// workspace.manage is Recursive but only reaches upward (organization),
+	// never back into element — composing with its list function is safe.
+	parentAnalysis := RelationAnalysis{
+		ObjectType: "workspace",
+		Relation:   "manage",
+		Capabilities: GenerationCapabilities{
+			ListAllowed: true,
+		},
+		ListStrategy: ListStrategyRecursive,
+		ParentRelations: []ParentRelationInfo{{
+			Relation:            "manage",
+			LinkingRelation:     "organization",
+			AllowedLinkingTypes: []string{"organization"},
+		}},
+	}
+
+	plan := ListPlan{
+		ObjectType: "element",
+		Relation:   "view",
+		Analysis: RelationAnalysis{
+			ObjectType: "element",
+			Relation:   "view",
+		},
+		AnalysisLookup: map[string]*RelationAnalysis{
+			"workspace.manage": &parentAnalysis,
+		},
+	}
+
+	blocks := buildCrossTypeTTUBlocks(plan, []ListParentRelationData{{
+		Relation:              "manage",
+		LinkingRelation:       "workspace",
+		CrossTypeLinkingTypes: "'workspace'",
+		HasCrossTypeLinks:     true,
+	}})
+
+	if len(blocks) != 2 {
+		t.Fatalf("buildCrossTypeTTUBlocks() returned %d blocks, want 2 (subject-first + userset-subject parity)", len(blocks))
+	}
+
+	sql := blocks[0].Query.SQL()
+	assertContains(t, sql, "FROM list_workspace_manage_obj(p_subject_type, p_subject_id, NULL, NULL) AS parent_obj")
+	assertNotContains(t, sql, "check_permission_internal")
+
+	parity := blocks[1].Query.SQL()
+	assertContains(t, parity, "position('#' in p_subject_id) > 0")
+	assertContains(t, parity, "check_permission_internal")
+}
+
+func TestBuildRecursiveComplexUsersetBlockComposesWhenSafe(t *testing.T) {
+	// workspace.view is complex (has its own TTU) but never reaches back into
+	// element — membership resolves via semi-join on its list function.
+	targetAnalysis := RelationAnalysis{
+		ObjectType: "workspace",
+		Relation:   "view",
+		Capabilities: GenerationCapabilities{
+			ListAllowed: true,
+		},
+		ListStrategy: ListStrategyRecursive,
+		ParentRelations: []ParentRelationInfo{{
+			Relation:            "manage",
+			LinkingRelation:     "organization",
+			AllowedLinkingTypes: []string{"organization"},
+		}},
+	}
+
+	plan := ListPlan{
+		ObjectType:     "element",
+		Relation:       "view",
+		DatabaseSchema: "",
+		Analysis: RelationAnalysis{
+			ObjectType: "element",
+			Relation:   "view",
+		},
+		AnalysisLookup: map[string]*RelationAnalysis{
+			"workspace.view": &targetAnalysis,
+		},
+	}
+
+	pattern := listUsersetPatternInput{
+		SubjectType:     "workspace",
+		SubjectRelation: "view",
+		SourceRelations: []string{"view"},
+		IsComplex:       true,
+	}
+
+	sql := buildRecursiveComplexUsersetBlock(plan, pattern).Query.SQL()
+	assertContains(t, sql, "IN (SELECT obj.object_id FROM list_workspace_view_obj(p_subject_type, p_subject_id, NULL, NULL) obj)")
+	// Userset-typed subjects keep a guarded per-candidate check arm.
+	assertContains(t, sql, "position('#' in p_subject_id) > 0")
+	assertContains(t, sql, "check_permission_internal")
+}
+
+func TestBuildRecursiveComplexUsersetBlockFallsBackWhenCyclic(t *testing.T) {
+	// group.member holds a userset of element.view — composing would recurse.
+	targetAnalysis := RelationAnalysis{
+		ObjectType: "group",
+		Relation:   "member",
+		Capabilities: GenerationCapabilities{
+			ListAllowed: true,
+		},
+		ListStrategy: ListStrategyRecursive,
+		UsersetPatterns: []UsersetPattern{{
+			SubjectType:     "element",
+			SubjectRelation: "view",
+		}},
+	}
+
+	plan := ListPlan{
+		ObjectType: "element",
+		Relation:   "view",
+		Analysis: RelationAnalysis{
+			ObjectType: "element",
+			Relation:   "view",
+		},
+		AnalysisLookup: map[string]*RelationAnalysis{
+			"group.member": &targetAnalysis,
+		},
+	}
+
+	pattern := listUsersetPatternInput{
+		SubjectType:     "group",
+		SubjectRelation: "member",
+		SourceRelations: []string{"view"},
+		IsComplex:       true,
+	}
+
+	sql := buildRecursiveComplexUsersetBlock(plan, pattern).Query.SQL()
+	assertContains(t, sql, "check_permission_internal")
+	assertNotContains(t, sql, "list_group_member_obj")
+}
+
+func TestListCompositionSafeSelfAndTransitive(t *testing.T) {
+	lookup := map[string]*RelationAnalysis{
+		"b.rel": {ObjectType: "b", Relation: "rel", ParentRelations: []ParentRelationInfo{{
+			Relation: "rel", LinkingRelation: "link", AllowedLinkingTypes: []string{"c"},
+		}}},
+		"c.rel": {ObjectType: "c", Relation: "rel", UsersetPatterns: []UsersetPattern{{
+			SubjectType: "a", SubjectRelation: "rel",
+		}}},
+	}
+
+	if listCompositionSafe(lookup, "a", "rel", "a", "rel") {
+		t.Error("self-composition must be unsafe")
+	}
+	if listCompositionSafe(lookup, "a", "rel", "b", "rel") {
+		t.Error("transitive cycle a->b->c->a must be unsafe")
+	}
+	if !listCompositionSafe(lookup, "x", "rel", "b", "rel") {
+		t.Error("unreachable relation must be safe")
+	}
+	if listCompositionSafe(nil, "x", "rel", "b", "rel") {
+		t.Error("nil lookup must be unsafe (no analysis available)")
+	}
 }
 
 func assertContains(t *testing.T, got, want string) {
