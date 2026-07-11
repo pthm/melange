@@ -237,11 +237,10 @@ BEGIN
     IF array_length(p_visited, 1) >= 25 THEN
         RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';
     END IF;
-    RETURN (SELECT CASE
-        WHEN (p_object_type = 'document' AND p_relation = 'viewer')
-            THEN check_document_viewer(p_subject_type, p_subject_id, p_object_id, p_visited)
-        ELSE 0
-    END);
+    IF (p_object_type = 'document' AND p_relation = 'viewer') THEN
+        RETURN check_document_viewer(p_subject_type, p_subject_id, p_object_id, p_visited);
+    END IF;
+    RETURN 0;
 END;
 $$ LANGUAGE plpgsql STABLE;
 
@@ -318,19 +317,19 @@ CREATE OR REPLACE FUNCTION check_document_editor_no_wildcard(
 -- Check Dispatchers
 -- ============================================================
 
--- Dispatchers are always regenerated to include the new CASE branch
+-- Dispatchers are always regenerated to include the new routing branch
 CREATE OR REPLACE FUNCTION check_permission_internal(
     /* ... */
 ) RETURNS INTEGER AS $$
 BEGIN
     /* ... */
-    RETURN (SELECT CASE
-        WHEN (p_object_type = 'document' AND p_relation = 'editor')
-            THEN check_document_editor(p_subject_type, p_subject_id, p_object_id, p_visited)
-        WHEN (p_object_type = 'document' AND p_relation = 'viewer')
-            THEN check_document_viewer(p_subject_type, p_subject_id, p_object_id, p_visited)
-        ELSE 0
-    END);
+    IF (p_object_type = 'document' AND p_relation = 'editor') THEN
+        RETURN check_document_editor(p_subject_type, p_subject_id, p_object_id, p_visited);
+    END IF;
+    IF (p_object_type = 'document' AND p_relation = 'viewer') THEN
+        RETURN check_document_viewer(p_subject_type, p_subject_id, p_object_id, p_visited);
+    END IF;
+    RETURN 0;
 END;
 $$ LANGUAGE plpgsql STABLE;
 

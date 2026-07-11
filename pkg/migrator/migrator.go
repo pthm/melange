@@ -41,6 +41,8 @@ var (
 	GenerateListSQL        = sqlgen.GenerateListSQL
 	CollectFunctionNames   = sqlgen.CollectFunctionNames
 	collectNamedFunctions  = sqlgen.CollectNamedFunctions
+
+	collectDispatcherFunctions = sqlgen.CollectDispatcherFunctions
 )
 
 // CodegenVersion returns the melange version used to identify which codegen
@@ -480,14 +482,27 @@ func (m *Migrator) getLastMigration(ctx context.Context, db Execer) (*MigrationR
 	return &rec, nil
 }
 
-// shouldSkipMigration returns true if the schema and codegen version are unchanged.
-// This is the fast-path (phase 1) skip: no SQL generation needed at all.
-func shouldSkipMigration(lastMigration *MigrationRecord, schemaChecksum string) bool {
+// migrationRecordMatches reports whether the last migration was recorded with
+// the same schema checksum and codegen version as the current run.
+func migrationRecordMatches(lastMigration *MigrationRecord, schemaChecksum string) bool {
 	if lastMigration == nil {
 		return false
 	}
 	return lastMigration.SchemaChecksum == schemaChecksum &&
 		lastMigration.CodegenVersion == CodegenVersion()
+}
+
+// shouldSkipMigration returns true if the schema and codegen version are unchanged.
+// This is the fast-path (phase 1) skip: no SQL generation needed at all.
+//
+// Dev builds never skip here: "dev" is a constant, so a rebuilt binary with
+// changed codegen would look identical to the last migration. Falling through
+// lets the phase 2 checksum comparison (which includes dispatchers) decide.
+func shouldSkipMigration(lastMigration *MigrationRecord, schemaChecksum string) bool {
+	if CodegenVersion() == "dev" {
+		return false
+	}
+	return migrationRecordMatches(lastMigration, schemaChecksum)
 }
 
 // shouldSkipApply returns true if the generated SQL is identical to what was
@@ -649,9 +664,17 @@ func (m *Migrator) insertMigrationRecord(ctx context.Context, db Execer, melange
 //
 // See MigrateWithTypes for basic usage without options.
 func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeDefinition, opts InternalMigrateOptions) error {
+	_, err := m.migrateWithTypesAndOptions(ctx, types, opts)
+	return err
+}
+
+// migrateWithTypesAndOptions implements MigrateWithTypesAndOptions and
+// additionally reports whether the migration was a no-op (both skip phases
+// count; recording a new migration state does not).
+func (m *Migrator) migrateWithTypesAndOptions(ctx context.Context, types []TypeDefinition, opts InternalMigrateOptions) (skipped bool, err error) {
 	// 1. Validate schema before any computation
 	if err := DetectCycles(types); err != nil {
-		return err
+		return false, err
 	}
 
 	// 2. Compute schema checksum if content provided
@@ -663,14 +686,13 @@ func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeD
 	// 3. Fetch last migration record (needed for both skip phases)
 	var lastMigration *MigrationRecord
 	if !opts.Force && opts.DryRun == nil && schemaChecksum != "" {
-		var err error
 		lastMigration, err = m.getLastMigration(ctx, m.db)
 		if err != nil {
-			return fmt.Errorf("checking last migration: %w", err)
+			return false, fmt.Errorf("checking last migration: %w", err)
 		}
-		// Phase 1 skip: schema + melange version unchanged → skip entirely
+		// Phase 1 skip: schema + codegen version unchanged → skip entirely
 		if shouldSkipMigration(lastMigration, schemaChecksum) {
-			return nil
+			return true, nil
 		}
 	}
 
@@ -683,24 +705,28 @@ func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeD
 	inline := buildInlineSQLData(closureRows, analyses)
 	generatedSQL, err := GenerateSQL(analyses, inline, m.databaseSchema)
 	if err != nil {
-		return fmt.Errorf("generating check SQL: %w", err)
+		return false, fmt.Errorf("generating check SQL: %w", err)
 	}
 
 	// 6. Generate list functions
 	listSQL, err := GenerateListSQL(analyses, inline, m.databaseSchema)
 	if err != nil {
-		return fmt.Errorf("generating list SQL: %w", err)
+		return false, fmt.Errorf("generating list SQL: %w", err)
 	}
 
-	// 7. Collect expected function names and checksums for tracking
+	// 7. Collect expected function names and checksums for tracking.
+	// Dispatchers are checksummed alongside specialized functions so that a
+	// codegen change altering only dispatcher SQL still defeats the phase 2
+	// skip below.
 	expectedFunctions := CollectFunctionNames(analyses)
 	namedFunctions := collectNamedFunctions(generatedSQL, listSQL, analyses)
+	namedFunctions = append(namedFunctions, collectDispatcherFunctions(generatedSQL, listSQL)...)
 	functionChecksums := ComputeFunctionChecksums(namedFunctions)
 
 	// 8. Handle dry-run mode
 	if opts.DryRun != nil {
 		m.outputDryRun(opts.DryRun, opts.Version, schemaChecksum, generatedSQL, listSQL, expectedFunctions)
-		return nil
+		return false, nil
 	}
 
 	// 9. Phase 2 skip: generated SQL is identical to what's already applied.
@@ -708,7 +734,12 @@ func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeD
 	// generated functions are byte-for-byte identical. Record the new version
 	// but skip re-applying the functions.
 	if !opts.Force && schemaChecksum != "" && shouldSkipApply(lastMigration, functionChecksums, expectedFunctions) {
-		return m.recordMigrationOnly(ctx, opts.Version, schemaChecksum, expectedFunctions, functionChecksums)
+		// Nothing changed at all (dev-build re-run that bypassed phase 1):
+		// pure no-op, don't insert a migration record per run.
+		if migrationRecordMatches(lastMigration, schemaChecksum) {
+			return true, nil
+		}
+		return false, m.recordMigrationOnly(ctx, opts.Version, schemaChecksum, expectedFunctions, functionChecksums)
 	}
 
 	// 10. Apply everything atomically
@@ -717,69 +748,69 @@ func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeD
 	}); ok {
 		tx, err := txer.BeginTx(ctx, nil)
 		if err != nil {
-			return fmt.Errorf("starting transaction: %w", err)
+			return false, fmt.Errorf("starting transaction: %w", err)
 		}
 		defer func() { _ = tx.Rollback() }()
 
 		// Apply migrations DDL (creates tracking table)
 		if err := m.applyMigrationsDDL(ctx, tx); err != nil {
-			return err
+			return false, err
 		}
 
 		// Get current functions before applying new ones (for orphan detection)
 		currentFunctions, err := m.getCurrentFunctions(ctx, tx)
 		if err != nil {
-			return fmt.Errorf("getting current functions: %w", err)
+			return false, fmt.Errorf("getting current functions: %w", err)
 		}
 
 		// Apply generated specialized check functions
 		if err := m.applyGeneratedSQL(ctx, tx, generatedSQL); err != nil {
-			return err
+			return false, err
 		}
 
 		// Apply generated specialized list functions
 		if err := m.applyGeneratedListSQL(ctx, tx, listSQL); err != nil {
-			return err
+			return false, err
 		}
 
 		// Drop orphaned functions
 		if err := m.dropOrphanedFunctions(ctx, tx, currentFunctions, expectedFunctions); err != nil {
-			return err
+			return false, err
 		}
 
 		// Record migration
 		if schemaChecksum != "" {
 			if err := m.insertMigrationRecord(ctx, tx, opts.Version, schemaChecksum, expectedFunctions, functionChecksums); err != nil {
-				return err
+				return false, err
 			}
 		}
 
-		return tx.Commit()
+		return false, tx.Commit()
 	}
 
 	// Fall back to non-transactional (for *sql.Conn)
 	if err := m.applyMigrationsDDL(ctx, m.db); err != nil {
-		return err
+		return false, err
 	}
 	currentFunctions, err := m.getCurrentFunctions(ctx, m.db)
 	if err != nil {
-		return fmt.Errorf("getting current functions: %w", err)
+		return false, fmt.Errorf("getting current functions: %w", err)
 	}
 	if err := m.applyGeneratedSQL(ctx, m.db, generatedSQL); err != nil {
-		return err
+		return false, err
 	}
 	if err := m.applyGeneratedListSQL(ctx, m.db, listSQL); err != nil {
-		return err
+		return false, err
 	}
 	if err := m.dropOrphanedFunctions(ctx, m.db, currentFunctions, expectedFunctions); err != nil {
-		return err
+		return false, err
 	}
 	if schemaChecksum != "" {
 		if err := m.insertMigrationRecord(ctx, m.db, opts.Version, schemaChecksum, expectedFunctions, functionChecksums); err != nil {
-			return err
+			return false, err
 		}
 	}
-	return nil
+	return false, nil
 }
 
 // outputDryRun writes the migration SQL to the provided writer.

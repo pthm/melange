@@ -81,16 +81,14 @@ func buildExpandDispatcherCases(analyses []RelationAnalysis, databaseSchema stri
 }
 
 func renderExpandDispatcherWithCases(databaseSchema string, cases []DispatcherCase) string {
-	caseExpr := buildExpandDispatcherCaseExpr(cases)
-
 	internalFn := PlpgsqlFunction{
 		Schema:  databaseSchema,
 		Name:    "expand_permission_internal",
 		Args:    expandDispatcherInternalArgs(),
 		Returns: "JSONB",
-		Body: []Stmt{
-			ReturnValue{Value: Raw("(SELECT " + caseExpr.SQL() + ")")},
-		},
+		// IF-chain, not RETURN CASE: measurably faster on the hot path (see
+		// dispatchIfChain in check_functions.go).
+		Body: dispatchIfChain(cases, expandDispatchCall, Raw(expandNoEntrySentinelSQL())),
 		Header: []string{
 			"Generated internal dispatcher for expand_permission",
 			"Routes (object_type, relation) to specialised expand_* functions",
@@ -149,28 +147,13 @@ func renderEmptyExpandDispatcher(databaseSchema string) string {
 	return internalFn.SQL() + "\n\n" + publicFn.SQL() + "\n"
 }
 
-// buildExpandDispatcherCaseExpr routes (object_type, relation) to the
-// matching expand_<type>_<rel> function. The ELSE branch is the
-// no-entry sentinel — an empty Leaf.Users wrapped in the standard
-// UsersetTree envelope, so unknown pairs and not-yet-supported
-// relations both deserialise cleanly.
-func buildExpandDispatcherCaseExpr(cases []DispatcherCase) CaseExpr {
-	whens := make([]CaseWhen, 0, len(cases))
-	for _, c := range cases {
-		cond := AndExpr{Exprs: []Expr{
-			Eq{Left: Raw("p_object_type"), Right: Lit(c.ObjectType)},
-			Eq{Left: Raw("p_relation"), Right: Lit(c.Relation)},
-		}}
-		result := Func{
-			Schema: c.DatabaseSchema,
-			Name:   c.CheckFunctionName,
-			Args:   []Expr{Raw("p_object_id"), Raw("p_subject_type"), Raw("p_max_leaf")},
-		}
-		whens = append(whens, CaseWhen{Cond: cond, Result: result})
+// expandDispatchCall is the specialized expand_<type>_<rel> call for one arm.
+func expandDispatchCall(c DispatcherCase) Expr {
+	return Func{
+		Schema: c.DatabaseSchema,
+		Name:   c.CheckFunctionName,
+		Args:   []Expr{Raw("p_object_id"), Raw("p_subject_type"), Raw("p_max_leaf")},
 	}
-
-	noEntry := Raw(expandNoEntrySentinelSQL())
-	return CaseExpr{Whens: whens, Else: noEntry}
 }
 
 // expandNoEntrySentinelSQL emits the JSONB UsersetTree returned when

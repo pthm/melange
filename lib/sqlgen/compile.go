@@ -278,8 +278,9 @@ type NamedFunction struct {
 }
 
 // CollectNamedFunctions returns all specialized functions paired with their SQL.
-// Dispatchers are excluded — they always change when any relation changes and
-// should be unconditionally included in migrations.
+// Dispatchers are excluded here; the migrator checksums them separately via
+// CollectDispatcherFunctions so a dispatcher-only codegen change still defeats
+// the phase-2 skip.
 //
 // The analyses slice must be the same slice, in the same order, passed to
 // GenerateSQL and GenerateListSQL that produced generatedSQL and listSQL.
@@ -337,6 +338,29 @@ func CollectNamedFunctions(
 		}
 	}
 
+	return result
+}
+
+// CollectDispatcherFunctions returns the dispatcher functions paired with their
+// SQL, named by their public entry point. Dispatchers are excluded from
+// CollectNamedFunctions, so without these entries a codegen change that only
+// alters dispatcher SQL is invisible to checksum-based skip detection.
+func CollectDispatcherFunctions(generatedSQL GeneratedSQL, listSQL ListGeneratedSQL) []NamedFunction {
+	all := []NamedFunction{
+		{Name: "check_permission", SQL: generatedSQL.Dispatcher},
+		{Name: "check_permission_nw", SQL: generatedSQL.DispatcherNoWildcard},
+		{Name: "check_permission_bulk", SQL: generatedSQL.BulkDispatcher},
+		{Name: "explain_permission", SQL: generatedSQL.ExplainDispatcher},
+		{Name: "expand_permission", SQL: generatedSQL.ExpandDispatcher},
+		{Name: "list_accessible_objects", SQL: listSQL.ListObjectsDispatcher},
+		{Name: "list_accessible_subjects", SQL: listSQL.ListSubjectsDispatcher},
+	}
+	result := make([]NamedFunction, 0, len(all))
+	for _, nf := range all {
+		if nf.SQL != "" {
+			result = append(result, nf)
+		}
+	}
 	return result
 }
 

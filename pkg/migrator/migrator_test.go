@@ -7,7 +7,18 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pthm/melange/lib/version"
 )
+
+// withVersion temporarily overrides the build version so tests can exercise
+// release-build skip behavior (the test binary reports "dev").
+func withVersion(t *testing.T, v string) {
+	t.Helper()
+	prev := version.Version
+	version.Version = v
+	t.Cleanup(func() { version.Version = prev })
+}
 
 func TestNewMigrator(t *testing.T) {
 	m := NewMigrator(nil, "schemas/schema.fga")
@@ -96,12 +107,24 @@ func TestShouldSkipMigration(t *testing.T) {
 	})
 
 	t.Run("matching checksum and codegen version skips", func(t *testing.T) {
+		withVersion(t, "v9.9.9")
 		rec := &MigrationRecord{
 			SchemaChecksum: checksum,
 			CodegenVersion: CodegenVersion(),
 		}
 		if !shouldSkipMigration(rec, checksum) {
 			t.Error("should skip when checksum and codegen version match")
+		}
+	})
+
+	t.Run("dev build never skips phase 1", func(t *testing.T) {
+		withVersion(t, "dev")
+		rec := &MigrationRecord{
+			SchemaChecksum: checksum,
+			CodegenVersion: CodegenVersion(),
+		}
+		if shouldSkipMigration(rec, checksum) {
+			t.Error("dev builds must fall through to phase 2: codegen can change without a version bump")
 		}
 	})
 
@@ -166,6 +189,26 @@ func TestShouldSkipApply(t *testing.T) {
 		}
 		if !shouldSkipApply(rec, checksums, functions) {
 			t.Error("should skip when all checksums match and no orphans")
+		}
+	})
+
+	t.Run("changed dispatcher checksum does not skip", func(t *testing.T) {
+		// Dispatchers are checksummed alongside specialized functions
+		// (see MigrateWithTypesAndOptions step 7); a dispatcher-only codegen
+		// change must defeat the phase 2 skip.
+		current := map[string]string{
+			"check_doc_viewer": "hash_a",
+			"check_permission": "dispatcher_hash_new",
+		}
+		rec := &MigrationRecord{
+			FunctionNames: []string{"check_doc_viewer", "check_permission"},
+			FunctionChecksums: map[string]string{
+				"check_doc_viewer": "hash_a",
+				"check_permission": "dispatcher_hash_old",
+			},
+		}
+		if shouldSkipApply(rec, current, []string{"check_doc_viewer", "check_permission"}) {
+			t.Error("should not skip when only a dispatcher checksum changed")
 		}
 	})
 

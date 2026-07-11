@@ -95,12 +95,16 @@ func TestCodegen_DispatcherRouting(t *testing.T) {
 
 	t.Logf("Internal dispatcher definition:\n%s", internalDispatcherDef)
 
-	// Verify the internal dispatcher contains specialized routing
-	// It should contain CASE statements for routing to specialized functions
+	// Verify the internal dispatcher contains specialized routing: an IF-chain
+	// of guarded RETURNs, one per (object_type, relation) pair.
 	assert.Contains(t, internalDispatcherDef, "check_organization_owner",
 		"internal dispatcher should route to check_organization_owner")
-	// Phase 5: Dispatcher returns 0 for unknown type/relation pairs (no generic fallback)
-	assert.Contains(t, internalDispatcherDef, "ELSE 0",
+	assert.Contains(t, internalDispatcherDef, "IF p_object_type = 'organization' THEN",
+		"internal dispatcher should nest dispatch by object type")
+	assert.Contains(t, internalDispatcherDef, "IF p_relation = 'owner' THEN",
+		"internal dispatcher should route relations within a type block")
+	// Dispatcher returns 0 for unknown type/relation pairs (no generic fallback)
+	assert.Contains(t, internalDispatcherDef, "RETURN 0;",
 		"internal dispatcher should return 0 for unknown type/relation pairs")
 
 	// Also verify the public check_permission delegates to internal

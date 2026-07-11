@@ -129,20 +129,8 @@ func MigrateWithOptions(ctx context.Context, db Execer, schemaPath string, opts 
 		SchemaContent: string(schemaContent),
 	}
 
-	// Check if we should skip (only if not dry-run and not force)
-	if !opts.Force && opts.DryRun == nil {
-		checksum := ComputeSchemaChecksum(string(schemaContent))
-		lastMigration, err := m.GetLastMigration(ctx)
-		if err != nil {
-			return false, fmt.Errorf("checking last migration: %w", err)
-		}
-		if lastMigration != nil &&
-			lastMigration.SchemaChecksum == checksum &&
-			lastMigration.CodegenVersion == CodegenVersion() {
-			return true, nil // Skipped
-		}
-	}
-
-	err = m.MigrateWithTypesAndOptions(ctx, types, internalOpts)
-	return false, err
+	// Skip detection (both phases) happens inside migrateWithTypesAndOptions;
+	// its skipped result covers the phase 1 fast path and the phase 2 no-op
+	// that dev builds rely on (see shouldSkipMigration).
+	return m.migrateWithTypesAndOptions(ctx, types, internalOpts)
 }

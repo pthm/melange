@@ -98,21 +98,24 @@ func buildExplainDispatcherCases(analyses []RelationAnalysis, databaseSchema str
 }
 
 func renderExplainDispatcherWithCases(databaseSchema string, cases []DispatcherCase) string {
-	caseExpr := buildExplainDispatcherCaseExpr(cases)
+	noEntry := Raw(explainNoEntrySentinelSQL(
+		"explain not yet supported for this (object_type, relation) — no generated explain function for the requested pair. Confirm the pair exists in the migrated schema.",
+	))
 
 	internalFn := PlpgsqlFunction{
 		Schema:  databaseSchema,
 		Name:    "explain_permission_internal",
 		Args:    explainDispatcherInternalArgs(),
 		Returns: "JSONB",
-		Body: []Stmt{
+		// IF-chain, not RETURN CASE: measurably faster on the hot path (see
+		// dispatchIfChain in check_functions.go).
+		Body: append([]Stmt{
 			Comment{Text: "Depth limit check shared with check_permission_internal"},
 			If{
 				Cond: Gte{Left: ArrayLength{Array: Visited}, Right: Int(25)},
 				Then: []Stmt{Raise{Message: "resolution too complex", ErrCode: "M2002"}},
 			},
-			ReturnValue{Value: Raw("(SELECT " + caseExpr.SQL() + ")")},
-		},
+		}, dispatchIfChain(cases, explainDispatchCall, noEntry)...),
 		Header: []string{
 			"Generated internal dispatcher for explain_permission",
 			"Routes (object_type, relation) to specialised explain_* functions",
@@ -170,30 +173,13 @@ func renderEmptyExplainDispatcher(databaseSchema string) string {
 	return internalFn.SQL() + "\n\n" + publicFn.SQL() + "\n"
 }
 
-// buildExplainDispatcherCaseExpr mirrors buildDispatcherCaseExpr but with a
-// JSONB no-entry sentinel in the ELSE branch. The shape matches the empty
-// dispatcher's output so the unknown-pair handling is consistent in both
-// paths.
-func buildExplainDispatcherCaseExpr(cases []DispatcherCase) CaseExpr {
-	whens := make([]CaseWhen, 0, len(cases))
-	for _, c := range cases {
-		cond := AndExpr{Exprs: []Expr{
-			Eq{Left: ObjectType, Right: Lit(c.ObjectType)},
-			Eq{Left: Raw("p_relation"), Right: Lit(c.Relation)},
-		}}
-		result := Func{
-			Schema: c.DatabaseSchema,
-			Name:   c.CheckFunctionName,
-			Args:   []Expr{SubjectType, SubjectID, ObjectID, Visited, Raw("p_max_nodes")},
-		}
-		whens = append(whens, CaseWhen{Cond: cond, Result: result})
+// explainDispatchCall is the specialized explain_<type>_<rel> call for one arm.
+func explainDispatchCall(c DispatcherCase) Expr {
+	return Func{
+		Schema: c.DatabaseSchema,
+		Name:   c.CheckFunctionName,
+		Args:   []Expr{SubjectType, SubjectID, ObjectID, Visited, Raw("p_max_nodes")},
 	}
-
-	noEntry := Raw(explainNoEntrySentinelSQL(
-		"explain not yet supported for this (object_type, relation) — no generated explain function for the requested pair. Confirm the pair exists in the migrated schema.",
-	))
-
-	return CaseExpr{Whens: whens, Else: noEntry}
 }
 
 // explainNoEntrySentinelSQL emits the JSONB Trace returned when the
