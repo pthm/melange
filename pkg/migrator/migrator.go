@@ -589,16 +589,10 @@ func (m *Migrator) dropOrphanedFunctions(ctx context.Context, db Execer, current
 // applyMigrationsDDL creates the melange_migrations table if it doesn't exist.
 // Also applies any necessary column migrations for existing tables.
 func (m *Migrator) applyMigrationsDDL(ctx context.Context, db Execer) error {
-	if _, err := db.ExecContext(ctx, migrationsDDL(m.databaseSchema)); err != nil {
-		return fmt.Errorf("applying migrations DDL: %w", err)
-	}
-	// Add melange_version column if it doesn't exist (for existing tables)
-	if _, err := db.ExecContext(ctx, addMelangeVersionColumn(m.databaseSchema)); err != nil {
-		return fmt.Errorf("adding melange_version column: %w", err)
-	}
-	// Add function_checksums column if it doesn't exist (for existing tables)
-	if _, err := db.ExecContext(ctx, addFunctionChecksumsColumn(m.databaseSchema)); err != nil {
-		return fmt.Errorf("adding function_checksums column: %w", err)
+	for _, stmt := range migrationsTableDDL(m.databaseSchema) {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			return fmt.Errorf("applying migrations DDL: %w", err)
+		}
 	}
 	return nil
 }
@@ -833,11 +827,13 @@ func (m *Migrator) outputDryRun(w io.Writer, melangeVersion, schemaChecksum stri
 		_, _ = fmt.Fprintf(w, "-- ============================================================\n\n")
 	}
 
-	// Migrations DDL
+	// Migrations DDL (including column migrations for legacy tables)
 	_, _ = fmt.Fprintf(w, "-- ============================================================\n")
 	_, _ = fmt.Fprintf(w, "-- DDL: Migration Tracking Table\n")
 	_, _ = fmt.Fprintf(w, "-- ============================================================\n\n")
-	_, _ = fmt.Fprintf(w, "%s\n\n", migrationsDDL(m.databaseSchema))
+	for _, stmt := range migrationsTableDDL(m.databaseSchema) {
+		_, _ = fmt.Fprintf(w, "%s\n\n", stmt)
+	}
 
 	// Check functions
 	_, _ = fmt.Fprintf(w, "-- ============================================================\n")

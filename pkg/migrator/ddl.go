@@ -27,9 +27,9 @@ func migrationsDDL(databaseSchema string) string {
 CREATE TABLE IF NOT EXISTS %[1]s (
     id SERIAL PRIMARY KEY,
     migrated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    melange_version VARCHAR(64) NOT NULL DEFAULT '',
+    melange_version TEXT NOT NULL DEFAULT '',
     schema_checksum VARCHAR(64) NOT NULL,
-    codegen_version VARCHAR(32) NOT NULL,
+    codegen_version TEXT NOT NULL,
     function_names TEXT[] NOT NULL
 );
 
@@ -46,8 +46,41 @@ func addMelangeVersionColumn(databaseSchema string) string {
 
 	return fmt.Sprintf(`
 ALTER TABLE %s
-ADD COLUMN IF NOT EXISTS melange_version VARCHAR(64) NOT NULL DEFAULT '';
+ADD COLUMN IF NOT EXISTS melange_version TEXT NOT NULL DEFAULT '';
 `, table)
+}
+
+// widenVersionColumns returns a query that widens the version columns of
+// existing tables from their original VARCHAR types to TEXT. Module
+// pseudo-versions (e.g. "v0.8.4-0.20260701080815-8f95d5d39b90" from
+// go-install builds) are 38+ characters and overflowed the original
+// codegen_version VARCHAR(32), failing every migrate with "value too long".
+// Runs unconditionally like the sibling ADD COLUMN helpers: ALTER TYPE has
+// no IF syntax, varchar→text is catalog-only (no table rewrite), and re-runs
+// on an already-TEXT column are harmless no-op catalog updates on a table
+// with one row per migration.
+func widenVersionColumns(databaseSchema string) string {
+	table := sqldsl.PrefixIdent("melange_migrations", databaseSchema)
+
+	return fmt.Sprintf(`
+ALTER TABLE %[1]s ALTER COLUMN codegen_version TYPE TEXT;
+ALTER TABLE %[1]s ALTER COLUMN melange_version TYPE TEXT;
+`, table)
+}
+
+// migrationsTableDDL returns every statement that brings the
+// melange_migrations table to the current shape, in order: create if absent,
+// then the column migrations for tables created by earlier versions. Both
+// the direct apply path (applyMigrationsDDL) and the dry-run/file output
+// (outputDryRun) must emit all of them — a statement missing from either
+// path resurfaces the legacy-table bugs for that workflow.
+func migrationsTableDDL(databaseSchema string) []string {
+	return []string{
+		migrationsDDL(databaseSchema),
+		addMelangeVersionColumn(databaseSchema),
+		addFunctionChecksumsColumn(databaseSchema),
+		widenVersionColumns(databaseSchema),
+	}
 }
 
 // addFunctionChecksumsColumn return a query to add function_checksums to existing melange_migrations

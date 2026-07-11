@@ -117,12 +117,14 @@ type SelectInto struct {
 }
 
 func (s SelectInto) StmtSQL() string {
-	q := s.Query.SQL()
+	q := strings.TrimSpace(s.Query.SQL())
 	// Insert INTO clause after SELECT
 	if len(q) >= 6 && q[:6] == "SELECT" {
 		return "SELECT" + " INTO " + s.Variable + q[6:] + ";"
 	}
-	// Fallback: wrap the query
+	// Fallback: wrap the query in a scalar subquery. Adds a SubPlan layer per
+	// execution — extend the primary branch instead if a new query shape hits
+	// this.
 	return fmt.Sprintf("SELECT INTO %s (%s);", s.Variable, q)
 }
 
