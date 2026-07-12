@@ -205,6 +205,51 @@ func complexClosureMembership(plan ListPlan, rel string) Expr {
 	)
 }
 
+// complexClosureSubjectMembership returns the predicate proving the candidate
+// subject t.subject_id holds rel on the object p_object_id, for a complex
+// closure relation in list_subjects.
+//
+// When composition is safe it replaces the per-candidate
+// check_permission_internal with a semi-join against rel's list_subjects set —
+// list_{type}_{rel}_sub(p_object_id, p_subject_type) is exactly the set of
+// subjects holding rel on the object. The list_objects mirror keeps a userset-
+// guarded check arm, but list_subjects composition is gated OUT entirely when
+// wildcards are in play: list_{type}_{rel}_sub returns '*' for wildcard grants,
+// not the concrete subjects, so an IN membership would drop a concrete
+// candidate that holds rel only via a wildcard (under-report). The gate mirrors
+// buildSubjectFirstTTUSubjectBlocks: skip composition when either this
+// relation or the target relation HasWildcard.
+//
+// When composition is unsafe it returns the per-candidate check alone, which is
+// always correct. Mirrors complexClosureMembership.
+func complexClosureSubjectMembership(plan ListPlan, rel string) Expr {
+	check := CheckPermission{
+		Schema:      plan.DatabaseSchema,
+		Subject:     SubjectRef{Type: SubjectType, ID: Col{Table: "t", Column: "subject_id"}},
+		Relation:    rel,
+		Object:      LiteralObject(plan.ObjectType, ObjectID),
+		ExpectAllow: true,
+	}
+	if plan.Analysis.Features.HasWildcard {
+		return check
+	}
+	target := plan.AnalysisLookup[plan.ObjectType+"."+rel]
+	if target != nil && target.Features.HasWildcard {
+		return check
+	}
+	if !composableListTargetLookup(plan.AnalysisLookup, plan.ObjectType, plan.Relation, plan.ObjectType, rel) {
+		return check
+	}
+	return InFunctionSelect{
+		Expr:      Col{Table: "t", Column: "subject_id"},
+		Schema:    plan.DatabaseSchema,
+		FuncName:  listSubjectsFunctionName(plan.ObjectType, rel),
+		Args:      []Expr{ObjectID, SubjectType},
+		Alias:     "sub",
+		SelectCol: "subject_id",
+	}
+}
+
 // usersetMembership returns the membership predicate for a complex userset
 // arm: does the subject hold pattern.SubjectRelation on the userset object?
 //

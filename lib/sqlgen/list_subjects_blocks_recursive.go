@@ -96,16 +96,7 @@ func buildListSubjectsRecursiveComplexClosureBlocks(plan ListPlan) []TypedQueryB
 				Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
 				Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
 				NoUserset{Source: Col{Table: "t", Column: "subject_id"}},
-				CheckPermission{
-					Schema: plan.DatabaseSchema,
-					Subject: SubjectRef{
-						Type: SubjectType,
-						ID:   Col{Table: "t", Column: "subject_id"},
-					},
-					Relation:    rel,
-					Object:      LiteralObject(plan.ObjectType, ObjectID),
-					ExpectAllow: true,
-				},
+				complexClosureSubjectMembership(plan, rel),
 			).
 			SelectCol("subject_id").
 			Distinct()

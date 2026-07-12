@@ -100,6 +100,124 @@ func TestComplexClosure_FallsBackWhenNotListGeneratable(t *testing.T) {
 	}
 }
 
+// closureSubjectsPlan builds a minimal recursive list_subjects ListPlan for
+// object type "doc" relation "can_read" with a single complex-closure relation
+// "reader", using the given analysis lookup to drive composability.
+func closureSubjectsPlan(lookup map[string]*RelationAnalysis, self RelationFeatures) ListPlan {
+	return ListPlan{
+		ObjectType:          "doc",
+		Relation:            "can_read",
+		DatabaseSchema:      "",
+		ComplexClosure:      []string{"reader"},
+		AllowedSubjectTypes: []string{"user"},
+		AnalysisLookup:      lookup,
+		Analysis:            RelationAnalysis{ObjectType: "doc", Relation: "can_read", Features: self},
+	}
+}
+
+func complexClosureSubjectsSQL(t *testing.T, plan ListPlan) string {
+	t.Helper()
+	blocks := buildListSubjectsRecursiveComplexClosureBlocks(plan)
+	if len(blocks) != 1 {
+		t.Fatalf("expected 1 block, got %d", len(blocks))
+	}
+	return blocks[0].Query.SQL()
+}
+
+func TestComplexClosureSubjects_ComposesWhenComposable(t *testing.T) {
+	lookup := map[string]*RelationAnalysis{
+		"doc.reader": {
+			ObjectType:   "doc",
+			Relation:     "reader",
+			Capabilities: GenerationCapabilities{ListAllowed: true},
+			ListStrategy: ListStrategyRecursive,
+			ParentRelations: []ParentRelationInfo{{
+				Relation: "admin", LinkingRelation: "org", AllowedLinkingTypes: []string{"org"},
+			}},
+		},
+		"org.admin": {ObjectType: "org", Relation: "admin"},
+	}
+
+	sql := complexClosureSubjectsSQL(t, closureSubjectsPlan(lookup, RelationFeatures{}))
+
+	if !strings.Contains(sql, "t.subject_id IN (SELECT sub.subject_id FROM list_doc_reader_sub(p_object_id, p_subject_type) sub)") {
+		t.Errorf("expected set-oriented composition against list_doc_reader_sub, got:\n%s", sql)
+	}
+	if strings.Contains(sql, "check_permission_internal") {
+		t.Errorf("composed block must not keep a per-candidate check, got:\n%s", sql)
+	}
+}
+
+func TestComplexClosureSubjects_FallsBackWhenCyclic(t *testing.T) {
+	lookup := map[string]*RelationAnalysis{
+		"doc.reader": {
+			ObjectType:              "doc",
+			Relation:                "reader",
+			Capabilities:            GenerationCapabilities{ListAllowed: true},
+			ListStrategy:            ListStrategyRecursive,
+			ComplexClosureRelations: []string{"can_read"},
+		},
+	}
+
+	sql := complexClosureSubjectsSQL(t, closureSubjectsPlan(lookup, RelationFeatures{}))
+
+	if strings.Contains(sql, "list_doc_reader_sub") {
+		t.Errorf("cyclic composition must fall back to per-candidate check, got composition:\n%s", sql)
+	}
+	if !strings.Contains(sql, "check_permission_internal(p_subject_type, t.subject_id, 'reader', 'doc', p_object_id") {
+		t.Errorf("expected per-candidate check fallback, got:\n%s", sql)
+	}
+}
+
+func TestComplexClosureSubjects_FallsBackWhenTargetHasWildcard(t *testing.T) {
+	lookup := map[string]*RelationAnalysis{
+		"doc.reader": {
+			ObjectType:   "doc",
+			Relation:     "reader",
+			Capabilities: GenerationCapabilities{ListAllowed: true},
+			ListStrategy: ListStrategyRecursive,
+			Features:     RelationFeatures{HasWildcard: true},
+			ParentRelations: []ParentRelationInfo{{
+				Relation: "admin", LinkingRelation: "org", AllowedLinkingTypes: []string{"org"},
+			}},
+		},
+		"org.admin": {ObjectType: "org", Relation: "admin"},
+	}
+
+	sql := complexClosureSubjectsSQL(t, closureSubjectsPlan(lookup, RelationFeatures{}))
+
+	if strings.Contains(sql, "list_doc_reader_sub") {
+		t.Errorf("target HasWildcard must fall back to per-candidate check, got composition:\n%s", sql)
+	}
+	if !strings.Contains(sql, "check_permission_internal") {
+		t.Errorf("expected per-candidate check fallback, got:\n%s", sql)
+	}
+}
+
+func TestComplexClosureSubjects_FallsBackWhenSelfHasWildcard(t *testing.T) {
+	lookup := map[string]*RelationAnalysis{
+		"doc.reader": {
+			ObjectType:   "doc",
+			Relation:     "reader",
+			Capabilities: GenerationCapabilities{ListAllowed: true},
+			ListStrategy: ListStrategyRecursive,
+			ParentRelations: []ParentRelationInfo{{
+				Relation: "admin", LinkingRelation: "org", AllowedLinkingTypes: []string{"org"},
+			}},
+		},
+		"org.admin": {ObjectType: "org", Relation: "admin"},
+	}
+
+	sql := complexClosureSubjectsSQL(t, closureSubjectsPlan(lookup, RelationFeatures{HasWildcard: true}))
+
+	if strings.Contains(sql, "list_doc_reader_sub") {
+		t.Errorf("self HasWildcard must fall back to per-candidate check, got composition:\n%s", sql)
+	}
+	if !strings.Contains(sql, "check_permission_internal") {
+		t.Errorf("expected per-candidate check fallback, got:\n%s", sql)
+	}
+}
+
 // The recursive builder shares complexClosureMembership, so it composes too.
 func TestComplexClosure_RecursiveComposes(t *testing.T) {
 	lookup := map[string]*RelationAnalysis{
