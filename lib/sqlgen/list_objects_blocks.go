@@ -164,13 +164,7 @@ func buildTypedListObjectsComplexClosureBlocks(plan ListPlan) ([]TypedQueryBlock
 				Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
 				In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
 				SubjectIDMatch(Col{Table: "t", Column: "subject_id"}, SubjectID, plan.AllowWildcard),
-				CheckPermission{
-					Schema:      plan.DatabaseSchema,
-					Subject:     SubjectParams(),
-					Relation:    rel,
-					Object:      LiteralObject(plan.ObjectType, Col{Table: "t", Column: "object_id"}),
-					ExpectAllow: true,
-				},
+				complexClosureMembership(plan, rel),
 			).
 			SelectCol("object_id").
 			Distinct()
@@ -182,7 +176,7 @@ func buildTypedListObjectsComplexClosureBlocks(plan ListPlan) ([]TypedQueryBlock
 
 		blocks = append(blocks, TypedQueryBlock{
 			Comments: []string{
-				"-- Complex closure relations: find candidates via tuples, validate via check_permission_internal",
+				"-- Complex closure relations: find candidates via tuples, validate via list composition (or check_permission_internal fallback)",
 				"-- These relations have exclusions or other complex features that require full permission check",
 			},
 			Query: q.Build(),

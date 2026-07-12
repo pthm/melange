@@ -169,6 +169,42 @@ func composableListTarget(plan ListPlan, targetType, targetRelation string) bool
 	return composableListTargetLookup(plan.AnalysisLookup, plan.ObjectType, plan.Relation, targetType, targetRelation)
 }
 
+// complexClosureMembership returns the predicate proving the subject holds rel
+// on the candidate object t.object_id, for a complex closure relation.
+//
+// When composition is safe it replaces the per-candidate
+// check_permission_internal with a semi-join against rel's list_objects set
+// (the set of objects the subject holds rel on), keeping a check arm guarded to
+// userset-typed subjects for parity: the list function is complete for plain
+// subjects but a Recursive/Composed target may under-report userset subjects
+// ("group:eng#member"), and an under-reported positive membership drops objects
+// (under-permissive). For plain subjects the guard is false and the arm
+// short-circuits before the check. When composition is unsafe it returns the
+// per-candidate check alone. Mirrors usersetMembership / complexExclusionAntiJoin.
+func complexClosureMembership(plan ListPlan, rel string) Expr {
+	check := CheckPermission{
+		Schema:      plan.DatabaseSchema,
+		Subject:     SubjectParams(),
+		Relation:    rel,
+		Object:      LiteralObject(plan.ObjectType, Col{Table: "t", Column: "object_id"}),
+		ExpectAllow: true,
+	}
+	if !composableListTarget(plan, plan.ObjectType, rel) {
+		return check
+	}
+	return Or(
+		InFunctionSelect{
+			Expr:      Col{Table: "t", Column: "object_id"},
+			Schema:    plan.DatabaseSchema,
+			FuncName:  ListObjectsFunctionName(plan.ObjectType, rel),
+			Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
+			Alias:     "obj",
+			SelectCol: "object_id",
+		},
+		And(HasUserset{Source: SubjectID}, check),
+	)
+}
+
 // usersetMembership returns the membership predicate for a complex userset
 // arm: does the subject hold pattern.SubjectRelation on the userset object?
 //

@@ -151,13 +151,7 @@ func buildRecursiveComplexClosureBlock(plan ListPlan, rel string) TypedQueryBloc
 			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
 			In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
 			SubjectIDMatch(Col{Table: "t", Column: "subject_id"}, SubjectID, plan.AllowWildcard),
-			CheckPermission{
-				Schema:      plan.DatabaseSchema,
-				Subject:     SubjectParams(),
-				Relation:    rel,
-				Object:      LiteralObject(plan.ObjectType, Col{Table: "t", Column: "object_id"}),
-				ExpectAllow: true,
-			},
+			complexClosureMembership(plan, rel),
 		).
 		SelectCol("object_id").
 		Distinct()
