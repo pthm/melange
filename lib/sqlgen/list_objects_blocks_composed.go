@@ -100,22 +100,12 @@ func BuildListObjectsComposedBlocks(plan ListPlan) (ComposedObjectsBlockSet, err
 
 // buildComposedObjectsSelfBlock builds the self-candidate check block.
 func buildComposedObjectsSelfBlock(plan ListPlan) (*TypedQueryBlock, error) {
-	closureStmt := SelectStmt{
-		ColumnExprs: []Expr{Int(1)},
-		FromExpr:    ClosureTable(plan.Inline.ClosureRows, "c"),
-		Where: And(
-			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(plan.ObjectType)},
-			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(plan.Relation)},
-			Eq{Left: Col{Table: "c", Column: "satisfying_relation"}, Right: SubstringUsersetRelation{Source: SubjectID}},
-		),
-	}
-
 	stmt := SelectStmt{
 		ColumnExprs: []Expr{SelectAs(UsersetObjectID{Source: SubjectID}, "object_id")},
 		Where: And(
 			Eq{Left: SubjectType, Right: Lit(plan.ObjectType)},
 			HasUserset{Source: SubjectID},
-			Raw(closureStmt.Exists()),
+			usersetSelfSatisfyingExpr(plan.Analysis),
 		),
 	}
 
@@ -166,15 +156,35 @@ func buildComposedTTUObjectsBlock(plan ListPlan, anchor *IndirectAnchorInfo, tar
 }
 
 // buildComposedRecursiveTTUObjectsBlock builds a recursive TTU composition block.
+//
+// The linking tuples are scanned and each parent object t.subject_id validated
+// against anchor's target relation. When composition is safe
+// (composableListTarget), the per-candidate check_permission_internal is
+// replaced by a semi-join against the parent relation's list_objects set — the
+// set of parent objects the subject holds the target relation on — mirroring
+// buildComposedTTUObjectsBlock. A check arm guarded to userset-typed subjects is
+// kept for parity: the list function is complete for plain subjects but a
+// Recursive/Composed target may under-report a userset-typed query subject
+// ("group:eng#member"), and an under-reported positive membership drops objects.
+// When composition is unsafe (the recursive parent chain is self-referential/
+// cyclic, so the gate refuses) it keeps the per-candidate check alone.
 func buildComposedRecursiveTTUObjectsBlock(plan ListPlan, anchor *IndirectAnchorInfo, recursiveType string, exclusions ExclusionConfig) (*TypedQueryBlock, error) {
 	exclusionPreds := exclusions.BuildPredicates()
+
+	targetRel := anchor.Path[0].TargetRelation
+	check := CheckPermissionInternalExpr(plan.DatabaseSchema, SubjectParams(), targetRel, ObjectRef{Type: Lit(recursiveType), ID: Col{Table: "t", Column: "subject_id"}}, true)
+
+	membership := check
+	if composableListTarget(plan, recursiveType, targetRel) {
+		membership = composedListObjectsMembership(plan.DatabaseSchema, recursiveType, targetRel, Col{Table: "t", Column: "subject_id"}, SubjectType, SubjectID, "obj", check)
+	}
 
 	conditions := make([]Expr, 0, 4+len(exclusionPreds))
 	conditions = append(conditions,
 		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 		Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(anchor.Path[0].LinkingRelation)},
 		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(recursiveType)},
-		CheckPermissionInternalExpr(plan.DatabaseSchema, SubjectParams(), anchor.Path[0].TargetRelation, ObjectRef{Type: Lit(recursiveType), ID: Col{Table: "t", Column: "subject_id"}}, true),
+		membership,
 	)
 	conditions = append(conditions, exclusionPreds...)
 
@@ -194,19 +204,28 @@ func buildComposedRecursiveTTUObjectsBlock(plan ListPlan, anchor *IndirectAnchor
 }
 
 // buildComposedUsersetObjectsBlock builds a userset composition block.
+//
+// The block finds grant tuples whose subject is a userset (X:id#rel) and keeps
+// the candidate object when the query subject holds rel on X:id. When
+// composition is safe (composableListTarget) that membership is a semi-join
+// against the userset relation's list_objects set, with a check arm guarded to
+// userset-typed query subjects for parity: the list function is complete for
+// plain subjects but a Recursive/Composed target may under-report a userset
+// query subject ("group:eng#member"), and an under-reported positive membership
+// drops objects. The guard (position('#' in p_subject_id) > 0) means plain
+// subjects skip the per-row check entirely — the fan-out this block used to pay
+// on every subject. When composition is unsafe it keeps the per-candidate check
+// alone. Mirrors usersetMembership / buildComposedRecursiveTTUObjectsBlock.
 func buildComposedUsersetObjectsBlock(plan ListPlan, firstStep AnchorPathStep, exclusions ExclusionConfig) (*TypedQueryBlock, error) {
 	exclusionPreds := exclusions.BuildPredicates()
 
-	// Build subquery for list function call using typed DSL
 	// split_part(t.subject_id, '#', 1) extracts the object_id from the userset
 	usersetObjectID := Raw("split_part(t.subject_id, '#', 1)")
-	inSubquery := InFunctionSelect{
-		Expr:      usersetObjectID,
-		Schema:    plan.DatabaseSchema,
-		FuncName:  ListObjectsFunctionName(firstStep.SubjectType, firstStep.SubjectRelation),
-		Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
-		Alias:     "obj",
-		SelectCol: "object_id",
+	check := CheckPermissionInternalExpr(plan.DatabaseSchema, SubjectParams(), firstStep.SubjectRelation, ObjectRef{Type: Lit(firstStep.SubjectType), ID: usersetObjectID}, true)
+
+	membership := check
+	if composableListTarget(plan, firstStep.SubjectType, firstStep.SubjectRelation) {
+		membership = composedListObjectsMembership(plan.DatabaseSchema, firstStep.SubjectType, firstStep.SubjectRelation, usersetObjectID, SubjectType, SubjectID, "obj", check)
 	}
 
 	conditions := make([]Expr, 0, 6+len(exclusionPreds))
@@ -216,10 +235,7 @@ func buildComposedUsersetObjectsBlock(plan ListPlan, firstStep AnchorPathStep, e
 		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(firstStep.SubjectType)},
 		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
 		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(firstStep.SubjectRelation)},
-		Or(
-			inSubquery,
-			CheckPermissionInternalExpr(plan.DatabaseSchema, SubjectParams(), firstStep.SubjectRelation, ObjectRef{Type: Lit(firstStep.SubjectType), ID: usersetObjectID}, true),
-		),
+		membership,
 	)
 	conditions = append(conditions, exclusionPreds...)
 

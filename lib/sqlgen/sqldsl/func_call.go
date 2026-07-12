@@ -62,17 +62,23 @@ func InternalPermissionCheckCall(schema, relation, objectType string, objectID, 
 	}
 }
 
-// NoWildcardPermissionCheckCall creates a check_permission_nw function call.
+// NoWildcardPermissionCheckCall creates a check_permission_nw_internal call
+// with an empty visited array. It targets the internal dispatcher directly
+// rather than the public check_permission_nw wrapper so the per-candidate-row
+// validation in list_subjects skips the extra LANGUAGE sql wrapper layer (and
+// its GUC save/restore). Semantics are identical: the nw dispatcher excludes
+// wildcard grants, and visited starts empty at a fresh check.
 func NoWildcardPermissionCheckCall(schema, relation, objectType string, subjectID, objectID Expr) FuncCallEq {
 	return FuncCallEq{
 		Schema:   schema,
-		FuncName: "check_permission_nw",
+		FuncName: "check_permission_nw_internal",
 		Args: []Expr{
 			SubjectType,
 			subjectID,
 			Lit(relation),
 			Lit(objectType),
 			objectID,
+			EmptyArray{},
 		},
 		Value: Int(1),
 	}

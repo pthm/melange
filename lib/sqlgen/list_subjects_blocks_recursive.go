@@ -96,16 +96,7 @@ func buildListSubjectsRecursiveComplexClosureBlocks(plan ListPlan) []TypedQueryB
 				Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
 				Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
 				NoUserset{Source: Col{Table: "t", Column: "subject_id"}},
-				CheckPermission{
-					Schema: plan.DatabaseSchema,
-					Subject: SubjectRef{
-						Type: SubjectType,
-						ID:   Col{Table: "t", Column: "subject_id"},
-					},
-					Relation:    rel,
-					Object:      LiteralObject(plan.ObjectType, ObjectID),
-					ExpectAllow: true,
-				},
+				complexClosureSubjectMembership(plan, rel),
 			).
 			SelectCol("subject_id").
 			Distinct()
@@ -142,7 +133,18 @@ func buildListSubjectsRecursiveUsersetPatternBlocks(plan ListPlan) ([]TypedQuery
 }
 
 // buildListSubjectsRecursiveComplexUsersetBlock builds a complex userset block for recursive list_subjects.
+//
+// For a userset pattern [X#rel] the block finds grant tuples (X:id#rel granted on
+// the target) then enumerates the members holding rel on X:id. Those members are
+// exactly list_{X}_{rel}_sub(X:id, p_subject_type). When composition is safe
+// (composableSubjectFirstUserset) it replaces the member tuple JOIN + per-member
+// check_permission_internal with a CROSS JOIN LATERAL on that list function.
+// Otherwise it keeps the per-candidate check unchanged.
 func buildListSubjectsRecursiveComplexUsersetBlock(plan ListPlan, pattern listUsersetPatternInput) TypedQueryBlock {
+	if composableSubjectFirstUserset(plan, pattern) {
+		return buildListSubjectsRecursiveComplexUsersetBlockComposed(plan, pattern)
+	}
+
 	const grantAlias, memberAlias = "g", "m"
 
 	memberExclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, Col{Table: memberAlias, Column: "subject_type"}, Col{Table: memberAlias, Column: "subject_id"})
@@ -204,6 +206,82 @@ func buildListSubjectsRecursiveComplexUsersetBlock(plan ListPlan, pattern listUs
 
 	return TypedQueryBlock{
 		Comments: []string{fmt.Sprintf("-- Userset: %s#%s (complex)", pattern.SubjectType, pattern.SubjectRelation)},
+		Query:    stmt,
+	}
+}
+
+// composableSubjectFirstUserset reports whether the complex-userset member JOIN
+// can be replaced by a CROSS JOIN LATERAL on list_{SubjectType}_{SubjectRelation}_sub.
+//
+// The list_subjects function is complete and exactly equal to the member set,
+// so the transform is a faithful equivalence — but only when no wildcards are in
+// play (list_..._sub returns '*' for wildcard grants, not concrete subjects, so
+// an IN/LATERAL membership would drop concrete subjects that hold the relation
+// only via a wildcard) and the target relation is list-generatable and
+// cycle-safe. Mirrors buildSubjectFirstTTUSubjectBlocks / complexClosureSubjectMembership.
+func composableSubjectFirstUserset(plan ListPlan, pattern listUsersetPatternInput) bool {
+	if plan.Analysis.Features.HasWildcard {
+		return false
+	}
+	return composableListSubjectsTarget(plan, pattern.SubjectType, pattern.SubjectRelation)
+}
+
+// buildListSubjectsRecursiveComplexUsersetBlockComposed is the set-oriented form
+// of buildListSubjectsRecursiveComplexUsersetBlock: for each grant tuple g of a
+// userset X:id#rel, it enumerates the subjects holding rel on X:id via
+// list_{X}_{rel}_sub(X:id, p_subject_type) instead of joining melange_tuples
+// members and calling check_permission_internal per member. All non-check
+// predicates (member exclusions, wildcard/userset filters, closure source check,
+// allowed-subject-type guard) are preserved against the lateral's subject_id.
+func buildListSubjectsRecursiveComplexUsersetBlockComposed(plan ListPlan, pattern listUsersetPatternInput) TypedQueryBlock {
+	const grantAlias, memberAlias = "g", "m"
+
+	memberExclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: memberAlias, Column: "subject_id"})
+
+	whereConditions := []Expr{
+		Eq{Left: Col{Table: grantAlias, Column: "object_type"}, Right: Lit(plan.ObjectType)},
+		Eq{Left: Col{Table: grantAlias, Column: "object_id"}, Right: ObjectID},
+		In{Expr: Col{Table: grantAlias, Column: "relation"}, Values: pattern.SourceRelations},
+		Eq{Left: Col{Table: grantAlias, Column: "subject_type"}, Right: Lit(pattern.SubjectType)},
+		HasUserset{Source: Col{Table: grantAlias, Column: "subject_id"}},
+		Eq{Left: UsersetRelation{Source: Col{Table: grantAlias, Column: "subject_id"}}, Right: Lit(pattern.SubjectRelation)},
+		In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
+		NoUserset{Source: Col{Table: memberAlias, Column: "subject_id"}},
+	}
+
+	if plan.ExcludeWildcard() {
+		whereConditions = append(whereConditions, Ne{Left: Col{Table: memberAlias, Column: "subject_id"}, Right: Lit("*")})
+	}
+	whereConditions = append(whereConditions, memberExclusions.BuildPredicates()...)
+
+	if pattern.IsClosurePattern {
+		whereConditions = append(whereConditions, CheckPermission{
+			Schema:      plan.DatabaseSchema,
+			Subject:     SubjectRef{Type: SubjectType, ID: Col{Table: memberAlias, Column: "subject_id"}},
+			Relation:    pattern.SourceRelation,
+			Object:      LiteralObject(plan.ObjectType, ObjectID),
+			ExpectAllow: true,
+		})
+	}
+
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: memberAlias, Column: "subject_id"}},
+		FromExpr:    TableAs("", "melange_tuples", grantAlias),
+		Joins: []JoinClause{{
+			Type: "CROSS",
+			TableExpr: LateralFunction{
+				Schema: plan.DatabaseSchema,
+				Name:   listSubjectsFunctionName(pattern.SubjectType, pattern.SubjectRelation),
+				Args:   []Expr{UsersetObjectID{Source: Col{Table: grantAlias, Column: "subject_id"}}, SubjectType},
+				Alias:  memberAlias,
+			},
+		}},
+		Where: And(whereConditions...),
+	}
+
+	return TypedQueryBlock{
+		Comments: []string{fmt.Sprintf("-- Userset: %s#%s (complex, compose list_subjects)", pattern.SubjectType, pattern.SubjectRelation)},
 		Query:    stmt,
 	}
 }
@@ -384,6 +462,9 @@ func nestedParentForcesSubjectPool(pr ParentRelationInfo, targetObjectType, curr
 // dedicated wildcard block is needed today.
 func buildListSubjectsRecursiveTTUBlock(plan ListPlan, parent ListParentRelationData) []TypedQueryBlock {
 	if classifyParentRelation(plan, parent) == parentStrategySubjectPool {
+		if blocks := buildSubjectFirstTTUSubjectBlocks(plan, parent); blocks != nil {
+			return blocks
+		}
 		return []TypedQueryBlock{buildListSubjectsRecursiveTTUBlockSubjectPool(plan, parent)}
 	}
 
@@ -576,6 +657,115 @@ func buildListSubjectsRecursiveTTUBlockParentClosureUsersetPattern(plan ListPlan
 
 	return TypedQueryBlock{
 		Comments: []string{fmt.Sprintf("-- TTU userset: subjects via %s -> %s -> %s#%s (parent closure)", parent.LinkingRelation, parent.Relation, pattern.SubjectType, pattern.SubjectRelation)},
+		Query:    stmt,
+	}
+}
+
+// buildSubjectFirstTTUSubjectBlocks returns set-oriented TTU blocks that
+// compose with the parent relation's list_subjects function instead of
+// scanning every candidate subject (subject_pool) and calling
+// check_permission_internal per (subject, link) pair. It is the list_subjects
+// mirror of the list_objects subject-first TTU path.
+//
+// The subject_pool block computes {s ∈ all-subjects-of-type :
+// check(s, parentRel, parentObj) = 1}; list_{ptype}_{parentRel}_sub(parentObj,
+// type) is exactly that set, so the transform is a faithful equivalence — for
+// each link, enumerate the parent object's subjects directly.
+//
+// Returns nil (keep the subject_pool path) unless every case is cleanly
+// handled: direct parent pattern only, no wildcards on the current or target
+// relation (subject-side '*' needs the subject_pool wildcard handling), and
+// every allowed parent type has a composable, cycle-safe list_subjects
+// function.
+func buildSubjectFirstTTUSubjectBlocks(plan ListPlan, parent ListParentRelationData) []TypedQueryBlock {
+	if plan.Analysis.Features.HasWildcard || plan.AnalysisLookup == nil {
+		return nil
+	}
+	if parent.IsClosurePattern {
+		return buildSubjectFirstTTUClosureSubjectBlocks(plan, parent)
+	}
+	types := parent.AllowedLinkingTypesSlice
+	if len(types) == 0 {
+		return nil
+	}
+	for _, ptype := range types {
+		// ListAllowed gates both list_objects and list_subjects generation and
+		// the reference graph (TTU parent edges) is shared, so the list_objects
+		// composability check covers the list_subjects call too.
+		if !composableListSubjectsTarget(plan, ptype, parent.Relation) {
+			return nil
+		}
+	}
+
+	blocks := make([]TypedQueryBlock, 0, len(types))
+	for _, ptype := range types {
+		blocks = append(blocks, buildSubjectFirstTTUSubjectBlock(plan, parent, ptype))
+	}
+	return blocks
+}
+
+// buildSubjectFirstTTUClosureSubjectBlocks returns the set-oriented form of the
+// closure-pattern subject_pool block. For a closure pattern the per-row check is
+// check(subject, parent.SourceRelation, plan.ObjectType, p_object_id) — the SAME
+// target object for every (subject, link) pair — so {s : check(s, sourceRel,
+// obj) = 1} is exactly list_{objType}_{sourceRel}_sub(p_object_id,
+// p_subject_type). No linking tuples are needed: the check never varies per link.
+//
+// Returns nil (keep the subject_pool path) unless list_{objType}_{sourceRel}_sub
+// is composable and cycle-safe and no wildcards are in play (subject-side '*'
+// under-reports concrete subjects through an IN-set — same gate as
+// buildSubjectFirstTTUSubjectBlocks). The closure-pattern subject_pool block does
+// not apply plan.Exclusions, so neither does this replacement.
+func buildSubjectFirstTTUClosureSubjectBlocks(plan ListPlan, parent ListParentRelationData) []TypedQueryBlock {
+	if !composableListSubjectsTarget(plan, plan.ObjectType, parent.SourceRelation) {
+		return nil
+	}
+
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "sub", Column: "subject_id"}},
+		FromExpr: FunctionCallExpr{
+			Schema: plan.DatabaseSchema,
+			Name:   listSubjectsFunctionName(plan.ObjectType, parent.SourceRelation),
+			Args:   []Expr{ObjectID, SubjectType},
+			Alias:  "sub",
+		},
+	}
+
+	return []TypedQueryBlock{{
+		Comments: []string{fmt.Sprintf("-- TTU subject-first: subjects via %s -> %s (closure pattern from %s - compose list_subjects)", parent.LinkingRelation, parent.Relation, parent.SourceRelation)},
+		Query:    stmt,
+	}}
+}
+
+// buildSubjectFirstTTUSubjectBlock builds one subject-first TTU block for a
+// single parent type: for each linking tuple to a parent object of that type,
+// enumerate the subjects holding parent.Relation on it via the parent's
+// list_subjects function.
+func buildSubjectFirstTTUSubjectBlock(plan ListPlan, parent ListParentRelationData, parentType string) TypedQueryBlock {
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "sub", Column: "subject_id"}},
+		FromExpr:    TableAs("", "melange_tuples", "link"),
+		Joins: []JoinClause{{
+			Type: "CROSS",
+			TableExpr: LateralFunction{
+				Schema: plan.DatabaseSchema,
+				Name:   listSubjectsFunctionName(parentType, parent.Relation),
+				Args:   []Expr{Col{Table: "link", Column: "subject_id"}, SubjectType},
+				Alias:  "sub",
+			},
+		}},
+		Where: And(
+			Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+			Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
+			Eq{Left: Col{Table: "link", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
+			Eq{Left: Col{Table: "link", Column: "subject_type"}, Right: Lit(parentType)},
+		),
+	}
+
+	return TypedQueryBlock{
+		Comments: []string{fmt.Sprintf("-- TTU subject-first: subjects via %s -> %s.%s (compose list_subjects)", parent.LinkingRelation, parentType, parent.Relation)},
 		Query:    stmt,
 	}
 }

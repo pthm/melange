@@ -44,6 +44,24 @@ type ExclusionConfig struct {
 
 	// ExcludedIntersection represents intersection exclusions (e.g., "but not (A and B)").
 	ExcludedIntersection []ExcludedIntersectionGroup
+
+	// Compose, when set, lets complex exclusions replace the per-candidate
+	// check_permission_internal(...) = 0 with a set-oriented anti-join against
+	// the excluded relation's list_objects function. It is only valid in a
+	// list_objects context — ObjectIDExpr must be the per-row candidate column
+	// and the subject exprs query-constant params — so only the list_objects
+	// plan builder sets it; check and list_subjects contexts leave it nil and
+	// keep the per-candidate check.
+	Compose *exclusionCompose
+}
+
+// exclusionCompose carries the compile-time context the anti-join needs: the
+// relation-reference lookup and the listing relation to run the cycle-safety
+// walk from.
+type exclusionCompose struct {
+	Lookup   map[string]*RelationAnalysis
+	FromType string
+	FromRel  string
 }
 
 // HasExclusions returns true if any exclusion rules are configured.
@@ -130,6 +148,10 @@ func (c ExclusionConfig) BuildPredicates() []Expr {
 	}
 
 	for _, rel := range c.ComplexExcludedRelations {
+		if pred := c.complexExclusionAntiJoin(rel); pred != nil {
+			predicates = append(predicates, pred)
+			continue
+		}
 		predicates = append(predicates, c.checkPermission(rel, c.objectRef(), false))
 	}
 
@@ -144,6 +166,32 @@ func (c ExclusionConfig) BuildPredicates() []Expr {
 	}
 
 	return predicates
+}
+
+// complexExclusionAntiJoin returns the set-oriented exclusion predicate for a
+// complex excluded relation, or nil when composition is unavailable/unsafe (the
+// caller then falls back to the per-candidate check).
+//
+// The object is kept ("but not rel" is satisfied) when the subject does NOT
+// hold rel on it. Membership — "subject holds rel on this object" — is the
+// excluded relation's list_objects set, plus a per-row check that only fires
+// for userset-typed subjects (`id#relation`): the list function is complete
+// for plain subjects but a Recursive/Composed target may under-report userset
+// subjects, and an under-reported exclusion is over-permissive. The predicate
+// is the negation of that membership, mirroring usersetMembership.
+func (c ExclusionConfig) complexExclusionAntiJoin(rel string) Expr {
+	if c.Compose == nil {
+		return nil
+	}
+	if !composableListTargetLookup(c.Compose.Lookup, c.Compose.FromType, c.Compose.FromRel, c.ObjectType, rel) {
+		return nil
+	}
+	membership := composedListObjectsMembership(
+		c.DatabaseSchema, c.ObjectType, rel, c.ObjectIDExpr,
+		c.SubjectTypeExpr, c.SubjectIDExpr, "excl_obj",
+		c.checkPermission(rel, c.objectRef(), true),
+	)
+	return Not(membership)
 }
 
 func (c ExclusionConfig) buildIntersectionPredicate(group ExcludedIntersectionGroup) Expr {
@@ -219,13 +267,16 @@ func (c ExclusionConfig) BuildExclusionCTE() string {
 		return "SELECT NULL::TEXT AS subject_id WHERE FALSE"
 	}
 
-	q := Tuples(c.DatabaseSchema, "").
+	// Alias the tuples table and qualify subject_id so it cannot collide with
+	// the enclosing function's OUT parameter of the same name (which would
+	// otherwise raise "column reference subject_id is ambiguous" at runtime).
+	q := Tuples(c.DatabaseSchema, "e").
 		ObjectType(c.ObjectType).
 		Relations(c.SimpleExcludedRelations...).
 		Where(
-			Eq{Left: Col{Column: "object_id"}, Right: c.ObjectIDExpr},
+			Eq{Left: Col{Table: "e", Column: "object_id"}, Right: c.ObjectIDExpr},
 		).
-		Select("subject_id")
+		SelectCol("subject_id")
 
 	return q.Build().SQL()
 }

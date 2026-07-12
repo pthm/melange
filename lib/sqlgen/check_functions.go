@@ -8,7 +8,7 @@ import (
 )
 
 func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, databaseSchema string, noWildcard bool, complexityByRelation map[string]map[string]int) (string, error) {
-	plan := BuildCheckPlanWithOrdering(a, inline, databaseSchema, noWildcard, complexityByRelation)
+	plan := BuildCheckPlanWithOrdering(a, filterInlineForCheck(inline, a), databaseSchema, noWildcard, complexityByRelation)
 	blocks, err := BuildCheckBlocks(plan)
 	if err != nil {
 		return "", fmt.Errorf("building check blocks for %s.%s: %w", a.ObjectType, a.Relation, err)
@@ -58,24 +58,23 @@ func isInlineable(f RelationFeatures) bool {
 }
 
 func renderDispatcherWithCases(databaseSchema, fnName string, cases []DispatcherCase) string {
-	caseExpr := buildDispatcherCaseExpr(cases)
-
 	internalName := fnName + "_internal"
+
+	body := append([]Stmt{
+		Comment{Text: "Depth limit check: prevent excessively deep permission resolution chains"},
+		Comment{Text: "This catches both recursive TTU patterns and long userset chains"},
+		If{
+			Cond: Gte{Left: ArrayLength{Array: Visited}, Right: Int(25)},
+			Then: []Stmt{Raise{Message: "resolution too complex", ErrCode: "M2002"}},
+		},
+	}, dispatchIfChain(cases, checkDispatchCall, Int(0))...)
 
 	internalFn := PlpgsqlFunction{
 		Schema:  databaseSchema,
 		Name:    internalName,
 		Args:    dispatcherInternalArgs(),
 		Returns: "INTEGER",
-		Body: []Stmt{
-			Comment{Text: "Depth limit check: prevent excessively deep permission resolution chains"},
-			Comment{Text: "This catches both recursive TTU patterns and long userset chains"},
-			If{
-				Cond: Gte{Left: ArrayLength{Array: Visited}, Right: Int(25)},
-				Then: []Stmt{Raise{Message: "resolution too complex", ErrCode: "M2002"}},
-			},
-			ReturnValue{Value: Raw("(SELECT " + caseExpr.SQL() + ")")},
-		},
+		Body:    body,
 		Header: []string{
 			"Generated internal dispatcher for " + internalName,
 			"Routes to specialized functions with p_visited for cycle detection in TTU patterns",
@@ -86,6 +85,9 @@ func renderDispatcherWithCases(databaseSchema, fnName string, cases []Dispatcher
 		// via TTU or complex usersets. Mark it as expensive so the planner prefers
 		// cheaper EXISTS branches when both appear in an OR/AND chain.
 		Cost: recursiveCheckCost,
+		// Body references only schema-qualified check_{type}_{rel} calls, no
+		// unqualified melange_tuples — search_path is unnecessary here.
+		NoSearchPath: true,
 	}
 
 	publicFn := SqlFunction{
@@ -98,6 +100,9 @@ func renderDispatcherWithCases(databaseSchema, fnName string, cases []Dispatcher
 			"Generated dispatcher for " + fnName,
 			"Routes to specialized functions for all known type/relation pairs",
 		},
+		// Calls only the schema-qualified internal dispatcher. Omitting SET
+		// lets the planner inline this LANGUAGE sql wrapper.
+		NoSearchPath: true,
 	}
 
 	return internalFn.SQL() + "\n\n" + publicFn.SQL() + "\n"
@@ -114,14 +119,16 @@ func renderEmptyDispatcher(databaseSchema, fnName string) string {
 			"Generated dispatcher for " + fnName + " (no relations defined)",
 			"Returns 0 (deny) for all requests",
 		},
+		NoSearchPath: true,
 	}
 
 	publicFn := SqlFunction{
-		Schema:  databaseSchema,
-		Name:    fnName,
-		Args:    dispatcherPublicArgs(),
-		Returns: "INTEGER",
-		Body:    Raw("SELECT 0"),
+		Schema:       databaseSchema,
+		Name:         fnName,
+		Args:         dispatcherPublicArgs(),
+		Returns:      "INTEGER",
+		Body:         Raw("SELECT 0"),
+		NoSearchPath: true,
 	}
 
 	return internalFn.SQL() + "\n\n" + publicFn.SQL() + "\n"
@@ -322,21 +329,68 @@ func functionNameForDispatcher(a RelationAnalysis, noWildcard bool) string {
 	return functionName(a.ObjectType, a.Relation)
 }
 
-func buildDispatcherCaseExpr(cases []DispatcherCase) CaseExpr {
-	whens := make([]CaseWhen, 0, len(cases))
+// dispatchIfChain renders a routing dispatcher as an IF-chain nested by object
+// type: one outer `IF (p_object_type = 'x') THEN ... END IF;` per type, each
+// containing one inner `IF (p_relation = 'y') THEN RETURN result(c); END IF;`
+// per relation of that type, then `RETURN <elseValue>`. result maps a case to
+// the specialized function call for its arm; elseValue is returned when no
+// pair matches (unknown relation for a known type, or unknown type).
+//
+// The IF-chain beats the equivalent `RETURN CASE ... END`: each matched branch
+// executes a single-function-call RETURN — a trivial simple expression, O(1)
+// to initialize — whereas the CASE is one N-arm expression whose ExecInitExpr
+// setup is O(#relations) on every evaluation. Both avoid the scalar-subquery
+// sublink that disqualified the original `RETURN (SELECT CASE ...)` from
+// PL/pgSQL's simple-expression fast path.
+//
+// Nesting by object type makes a matched call cost O(#types +
+// #relations-of-matched-type) instead of O(#all-relations): a check on one
+// type no longer walks the arms of unrelated types. Unrelated schema growth
+// (relations on other types) stops degrading every query. The dispatcher runs
+// as a per-row predicate inside list/check bodies, so this per-call walk is
+// paid per candidate row.
+//
+// Measured on the issue #67 workload across PostgreSQL 15/16/18:
+// RETURN (SELECT CASE) ~8.0s, RETURN CASE ~4.5s, flat IF-chain ~2.6s. Nesting
+// removes the residual +32% seen when 200 unrelated relations sort ahead of
+// the target in the flat chain.
+func dispatchIfChain(cases []DispatcherCase, result func(DispatcherCase) Expr, elseValue Expr) []Stmt {
+	var typeOrder []string
+	byType := make(map[string][]DispatcherCase)
 	for _, c := range cases {
-		cond := AndExpr{Exprs: []Expr{
-			Eq{Left: ObjectType, Right: Lit(c.ObjectType)},
-			Eq{Left: Raw("p_relation"), Right: Lit(c.Relation)},
-		}}
-		result := Func{
-			Schema: c.DatabaseSchema,
-			Name:   c.CheckFunctionName,
-			Args:   []Expr{SubjectType, SubjectID, ObjectID, Visited},
+		if _, seen := byType[c.ObjectType]; !seen {
+			typeOrder = append(typeOrder, c.ObjectType)
 		}
-		whens = append(whens, CaseWhen{Cond: cond, Result: result})
+		byType[c.ObjectType] = append(byType[c.ObjectType], c)
 	}
-	return CaseExpr{Whens: whens, Else: Int(0)}
+
+	stmts := make([]Stmt, 0, len(typeOrder)+1)
+	for _, ot := range typeOrder {
+		inner := make([]Stmt, 0, len(byType[ot])+1)
+		for _, c := range byType[ot] {
+			inner = append(inner, If{
+				Cond: Eq{Left: Raw("p_relation"), Right: Lit(c.Relation)},
+				Then: []Stmt{ReturnValue{Value: result(c)}},
+			})
+		}
+		// Known type, unknown relation → elseValue (matches the flat chain,
+		// which would fall through every remaining arm to the same result).
+		inner = append(inner, ReturnValue{Value: elseValue})
+		stmts = append(stmts, If{
+			Cond: Eq{Left: ObjectType, Right: Lit(ot)},
+			Then: inner,
+		})
+	}
+	return append(stmts, ReturnValue{Value: elseValue})
+}
+
+// checkDispatchCall is the specialized check_<type>_<rel> call for one arm.
+func checkDispatchCall(c DispatcherCase) Expr {
+	return Func{
+		Schema: c.DatabaseSchema,
+		Name:   c.CheckFunctionName,
+		Args:   []Expr{SubjectType, SubjectID, ObjectID, Visited},
+	}
 }
 
 func bulkDispatcherArgs() []FuncArg {

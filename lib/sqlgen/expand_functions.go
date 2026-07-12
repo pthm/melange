@@ -81,16 +81,14 @@ func buildExpandDispatcherCases(analyses []RelationAnalysis, databaseSchema stri
 }
 
 func renderExpandDispatcherWithCases(databaseSchema string, cases []DispatcherCase) string {
-	caseExpr := buildExpandDispatcherCaseExpr(cases)
-
 	internalFn := PlpgsqlFunction{
 		Schema:  databaseSchema,
 		Name:    "expand_permission_internal",
 		Args:    expandDispatcherInternalArgs(),
 		Returns: "JSONB",
-		Body: []Stmt{
-			ReturnValue{Value: Raw("(SELECT " + caseExpr.SQL() + ")")},
-		},
+		// IF-chain, not RETURN CASE: measurably faster on the hot path (see
+		// dispatchIfChain in check_functions.go).
+		Body: dispatchIfChain(cases, expandDispatchCall, Raw(expandNoEntrySentinelSQL())),
 		Header: []string{
 			"Generated internal dispatcher for expand_permission",
 			"Routes (object_type, relation) to specialised expand_* functions",
@@ -99,6 +97,9 @@ func renderExpandDispatcherWithCases(databaseSchema string, cases []DispatcherCa
 			"Callers that need to distinguish 'no one has access' from 'expand",
 			"not supported for this relation' should compare against Check.",
 		},
+		// Routes only to schema-qualified expand_{type}_{rel} calls, no
+		// unqualified melange_tuples.
+		NoSearchPath: true,
 	}
 
 	publicFn := SqlFunction{
@@ -115,6 +116,7 @@ func renderExpandDispatcherWithCases(databaseSchema string, cases []DispatcherCa
 			"Shallow by default: computed/TTU rewrites surface as unresolved",
 			"pointers (use Checker.ExpandRecursive client-side to chase).",
 		},
+		NoSearchPath: true,
 	}
 
 	return internalFn.SQL() + "\n\n" + publicFn.SQL() + "\n"
@@ -136,41 +138,28 @@ func renderEmptyExpandDispatcher(databaseSchema string) string {
 			"Generated empty dispatcher for expand_permission",
 			"(no eligible relations — every request returns an empty tree)",
 		},
+		NoSearchPath: true,
 	}
 
 	publicFn := SqlFunction{
-		Schema:  databaseSchema,
-		Name:    "expand_permission",
-		Args:    expandDispatcherPublicArgs(),
-		Returns: "JSONB",
-		Body:    Raw(body),
+		Schema:       databaseSchema,
+		Name:         "expand_permission",
+		Args:         expandDispatcherPublicArgs(),
+		Returns:      "JSONB",
+		Body:         Raw(body),
+		NoSearchPath: true,
 	}
 
 	return internalFn.SQL() + "\n\n" + publicFn.SQL() + "\n"
 }
 
-// buildExpandDispatcherCaseExpr routes (object_type, relation) to the
-// matching expand_<type>_<rel> function. The ELSE branch is the
-// no-entry sentinel — an empty Leaf.Users wrapped in the standard
-// UsersetTree envelope, so unknown pairs and not-yet-supported
-// relations both deserialise cleanly.
-func buildExpandDispatcherCaseExpr(cases []DispatcherCase) CaseExpr {
-	whens := make([]CaseWhen, 0, len(cases))
-	for _, c := range cases {
-		cond := AndExpr{Exprs: []Expr{
-			Eq{Left: Raw("p_object_type"), Right: Lit(c.ObjectType)},
-			Eq{Left: Raw("p_relation"), Right: Lit(c.Relation)},
-		}}
-		result := Func{
-			Schema: c.DatabaseSchema,
-			Name:   c.CheckFunctionName,
-			Args:   []Expr{Raw("p_object_id"), Raw("p_subject_type"), Raw("p_max_leaf")},
-		}
-		whens = append(whens, CaseWhen{Cond: cond, Result: result})
+// expandDispatchCall is the specialized expand_<type>_<rel> call for one arm.
+func expandDispatchCall(c DispatcherCase) Expr {
+	return Func{
+		Schema: c.DatabaseSchema,
+		Name:   c.CheckFunctionName,
+		Args:   []Expr{Raw("p_object_id"), Raw("p_subject_type"), Raw("p_max_leaf")},
 	}
-
-	noEntry := Raw(expandNoEntrySentinelSQL())
-	return CaseExpr{Whens: whens, Else: noEntry}
 }
 
 // expandNoEntrySentinelSQL emits the JSONB UsersetTree returned when

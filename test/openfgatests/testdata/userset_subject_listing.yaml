@@ -1,0 +1,88 @@
+# Melange-specific tests: userset-typed QUERY subjects in list_objects
+#
+# Regression coverage for issue #10: list_accessible_objects called with a
+# subject that is itself a userset (e.g. group:g2#member) under-reported
+# objects that check_permission allows, when access flowed through a
+# complex-closure relation (a relation wrapped by an exclusion/intersection).
+#
+# The userset query subject is named directly on a candidate-relation tuple
+# (group:g2#member is a viewer of doc:d1), but the complex-closure candidate
+# arm restricted candidates to concrete direct subject types (user), dropping
+# the userset subject. check_permission has full userset coverage, so the two
+# diverged. This case pins them back together.
+#
+# Test names are prefixed with "melange/" by the loader.
+
+tests:
+  - name: userset_subject_list_objects_complex_closure
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type group
+            relations
+              define member: [user]
+
+          type doc
+            relations
+              define viewer: [user, group#member]
+              define blocked: [user, group#member]
+              define can_read: viewer but not blocked
+        tuples:
+          # group:g2#member is granted viewer on d1 (userset subject reaching
+          # access through the complex-closure relation can_read = viewer but
+          # not blocked).
+          - user: group:g2#member
+            relation: viewer
+            object: doc:d1
+          # group:g2#member is granted viewer AND blocked on d3 -> can_read false.
+          - user: group:g2#member
+            relation: viewer
+            object: doc:d3
+          - user: group:g2#member
+            relation: blocked
+            object: doc:d3
+          # alice is a concrete member of g2 (plain-subject path must stay intact).
+          - user: user:alice
+            relation: member
+            object: group:g2
+        checkAssertions:
+          # The userset subject can_read d1 (viewer, not blocked).
+          - name: userset_subject_can_read_d1_allowed
+            tuple:
+              user: group:g2#member
+              relation: can_read
+              object: doc:d1
+            expectation: true
+          # The userset subject is blocked on d3 -> can_read false.
+          - name: userset_subject_can_read_d3_blocked
+            tuple:
+              user: group:g2#member
+              relation: can_read
+              object: doc:d3
+            expectation: false
+          # Plain member alice inherits can_read on d1 via group#member.
+          - name: alice_can_read_d1_allowed
+            tuple:
+              user: user:alice
+              relation: can_read
+              object: doc:d1
+            expectation: true
+        listObjectsAssertions:
+          # The bug: this returned [] before the fix; must return doc:d1.
+          - request:
+              user: group:g2#member
+              type: doc
+              relation: can_read
+            expectation:
+              - doc:d1
+          # Plain subject path unchanged: alice reads d1 via her group membership.
+          - request:
+              user: user:alice
+              type: doc
+              relation: can_read
+            expectation:
+              - doc:d1

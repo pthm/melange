@@ -98,9 +98,14 @@ func buildListObjectsDirectBlock(plan ListPlan) (TypedQueryBlock, error) {
 	}, nil
 }
 
-// buildListObjectsUsersetSubjectBlock builds the userset subject matching block.
-func buildListObjectsUsersetSubjectBlock(plan ListPlan) (TypedQueryBlock, error) {
-	// Build the closure EXISTS subquery
+// usersetSubjectCandidateMatch returns the predicate matching tuples whose
+// subject_id names the userset query subject p_subject_id directly (exact
+// userset equality) or via a closure-equivalent relation. It gates on both the
+// query subject and the tuple subject being usersets, so it is a no-op for
+// plain subjects. Shared by the userset-subject block and the complex-closure
+// candidate arm so a userset query subject is admitted as a candidate wherever
+// a plain subject would be.
+func usersetSubjectCandidateMatch(plan ListPlan) Expr {
 	closureExistsStmt := SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
 		FromExpr:    ClosureTable(plan.Inline.ClosureRows, "c"),
@@ -123,14 +128,37 @@ func buildListObjectsUsersetSubjectBlock(plan ListPlan) (TypedQueryBlock, error)
 		),
 	)
 
+	return And(
+		HasUserset{Source: SubjectID},
+		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
+		subjectMatch,
+	)
+}
+
+// complexClosureCandidateMatch admits a tuple as a list_objects candidate for a
+// complex-closure relation: a plain subject via the type-guarded exact/wildcard
+// match, or a userset query subject via userset closure equality. Without the
+// userset arm a userset query subject (e.g. group:g2#member) named directly on a
+// candidate-relation tuple is dropped, under-reporting objects that
+// check_permission allows (issue #10).
+func complexClosureCandidateMatch(plan ListPlan) Expr {
+	return Or(
+		And(
+			In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
+			SubjectIDMatch(Col{Table: "t", Column: "subject_id"}, SubjectID, plan.AllowWildcard),
+		),
+		usersetSubjectCandidateMatch(plan),
+	)
+}
+
+// buildListObjectsUsersetSubjectBlock builds the userset subject matching block.
+func buildListObjectsUsersetSubjectBlock(plan ListPlan) (TypedQueryBlock, error) {
 	q := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
 		Relations(plan.RelationList...).
 		Where(
 			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
-			HasUserset{Source: SubjectID},
-			HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
-			subjectMatch,
+			usersetSubjectCandidateMatch(plan),
 		).
 		SelectCol("object_id").
 		Distinct()
@@ -162,15 +190,8 @@ func buildTypedListObjectsComplexClosureBlocks(plan ListPlan) ([]TypedQueryBlock
 			Relations(rel).
 			Where(
 				Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
-				In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
-				SubjectIDMatch(Col{Table: "t", Column: "subject_id"}, SubjectID, plan.AllowWildcard),
-				CheckPermission{
-					Schema:      plan.DatabaseSchema,
-					Subject:     SubjectParams(),
-					Relation:    rel,
-					Object:      LiteralObject(plan.ObjectType, Col{Table: "t", Column: "object_id"}),
-					ExpectAllow: true,
-				},
+				complexClosureCandidateMatch(plan),
+				complexClosureMembership(plan, rel),
 			).
 			SelectCol("object_id").
 			Distinct()
@@ -182,7 +203,7 @@ func buildTypedListObjectsComplexClosureBlocks(plan ListPlan) ([]TypedQueryBlock
 
 		blocks = append(blocks, TypedQueryBlock{
 			Comments: []string{
-				"-- Complex closure relations: find candidates via tuples, validate via check_permission_internal",
+				"-- Complex closure relations: find candidates via tuples, validate via list composition (or check_permission_internal fallback)",
 				"-- These relations have exclusions or other complex features that require full permission check",
 			},
 			Query: q.Build(),
@@ -345,24 +366,12 @@ func buildIntersectionPartQuery(plan ListPlan, part IntersectionPart) SelectStmt
 		q = Tuples(plan.DatabaseSchema, alias).
 			ObjectType(plan.ObjectType).
 			SelectCol("object_id").
-			Where(CheckPermission{
-				Schema:      plan.DatabaseSchema,
-				Subject:     SubjectParams(),
-				Relation:    part.Relation,
-				Object:      LiteralObject(plan.ObjectType, Col{Table: alias, Column: "object_id"}),
-				ExpectAllow: true,
-			}).
+			Where(intersectionPartMembership(plan, part.Relation, Col{Table: alias, Column: "object_id"})).
 			Distinct()
 	}
 
 	if part.ExcludedRelation != "" {
-		q.Where(CheckPermission{
-			Schema:      plan.DatabaseSchema,
-			Subject:     SubjectParams(),
-			Relation:    part.ExcludedRelation,
-			Object:      LiteralObject(plan.ObjectType, Col{Table: alias, Column: "object_id"}),
-			ExpectAllow: false,
-		})
+		q.Where(intersectionPartExclusion(plan, part.ExcludedRelation, Col{Table: alias, Column: "object_id"}))
 	}
 
 	return q.Build()
@@ -398,6 +407,9 @@ func buildListObjectsUsersetPatternBlocks(plan ListPlan) ([]TypedQueryBlock, err
 }
 
 // buildListObjectsComplexUsersetBlock builds a block for complex userset patterns.
+// Membership comes from usersetMembership: a semi-join against the userset
+// relation's list function when composition is safe, or a per-candidate
+// check_permission_internal call otherwise.
 func buildListObjectsComplexUsersetBlock(plan ListPlan, pattern listUsersetPatternInput) (TypedQueryBlock, error) {
 	q := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
@@ -409,16 +421,7 @@ func buildListObjectsComplexUsersetBlock(plan ListPlan, pattern listUsersetPatte
 				Left:  UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}},
 				Right: Lit(pattern.SubjectRelation),
 			},
-			CheckPermission{
-				Schema:   plan.DatabaseSchema,
-				Subject:  SubjectParams(),
-				Relation: pattern.SubjectRelation,
-				Object: ObjectRef{
-					Type: Lit(pattern.SubjectType),
-					ID:   UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}},
-				},
-				ExpectAllow: true,
-			},
+			usersetMembership(plan, pattern),
 		).
 		SelectCol("object_id").
 		Distinct()
@@ -476,23 +479,13 @@ func buildListObjectsSimpleUsersetBlock(plan ListPlan, pattern listUsersetPatter
 // buildListObjectsSelfCandidateBlock builds the self-candidate block for when
 // the subject is a userset on the same object type (e.g., document:1#writer).
 func buildListObjectsSelfCandidateBlock(plan ListPlan) *TypedQueryBlock {
-	closureStmt := SelectStmt{
-		ColumnExprs: []Expr{Int(1)},
-		FromExpr:    ClosureTable(plan.Inline.ClosureRows, "c"),
-		Where: And(
-			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(plan.ObjectType)},
-			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(plan.Relation)},
-			Eq{Left: Col{Table: "c", Column: "satisfying_relation"}, Right: SubstringUsersetRelation{Source: SubjectID}},
-		),
-	}
-
 	stmt := SelectStmt{
 		ColumnExprs: []Expr{UsersetObjectID{Source: SubjectID}},
 		Alias:       "object_id",
 		Where: And(
 			HasUserset{Source: SubjectID},
 			Eq{Left: SubjectType, Right: Lit(plan.ObjectType)},
-			Raw(closureStmt.Exists()),
+			usersetSelfSatisfyingExpr(plan.Analysis),
 		),
 	}
 

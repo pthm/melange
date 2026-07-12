@@ -117,12 +117,14 @@ type SelectInto struct {
 }
 
 func (s SelectInto) StmtSQL() string {
-	q := s.Query.SQL()
+	q := strings.TrimSpace(s.Query.SQL())
 	// Insert INTO clause after SELECT
 	if len(q) >= 6 && q[:6] == "SELECT" {
 		return "SELECT" + " INTO " + s.Variable + q[6:] + ";"
 	}
-	// Fallback: wrap the query
+	// Fallback: wrap the query in a scalar subquery. Adds a SubPlan layer per
+	// execution — extend the primary branch instead if a new query shape hits
+	// this.
 	return fmt.Sprintf("SELECT INTO %s (%s);", s.Variable, q)
 }
 
@@ -190,7 +192,12 @@ type PlpgsqlFunction struct {
 	Body       []Stmt
 	Header     []string // Comment lines at the top of the function (without -- prefix)
 	SearchPath string   // If set, appends SET search_path = '<value>' to the function definition
-	Cost       int      // If non-zero, appends COST <n> so the planner treats this function as costlier than the default (100)
+	// NoSearchPath omits the SET search_path clause entirely. Safe only for
+	// functions whose body references no unqualified melange_tuples (dispatchers
+	// and public wrappers, which use schema-qualified names). Omitting the SET
+	// lets LANGUAGE sql wrappers inline and avoids a per-call GUC save/restore.
+	NoSearchPath bool
+	Cost         int // If non-zero, appends COST <n> so the planner treats this function as costlier than the default (100)
 }
 
 // SQL renders the complete CREATE OR REPLACE FUNCTION statement.
@@ -224,7 +231,9 @@ func (f PlpgsqlFunction) SQL() string {
 	if f.Cost > 0 {
 		fmt.Fprintf(&sb, " COST %d", f.Cost)
 	}
-	writeSearchPath(&sb, f.SearchPath, f.Schema)
+	if !f.NoSearchPath {
+		writeSearchPath(&sb, f.SearchPath, f.Schema)
+	}
 	sb.WriteString(";")
 
 	return sb.String()
@@ -318,6 +327,9 @@ type SqlFunction struct {
 	Body       sqldsl.SQLer // The body expression (e.g., a SelectStmt or function call)
 	Header     []string     // Comment lines at the top of the function (without -- prefix)
 	SearchPath string       // If set, appends SET search_path = '<value>' to the function definition
+	// NoSearchPath omits the SET search_path clause. See PlpgsqlFunction.NoSearchPath.
+	// For LANGUAGE sql wrappers this is what allows the planner to inline them.
+	NoSearchPath bool
 }
 
 // SQL renders the complete CREATE OR REPLACE FUNCTION statement as LANGUAGE sql.
@@ -331,7 +343,9 @@ func (f SqlFunction) SQL() string {
 	sb.WriteString(f.Body.SQL())
 	sb.WriteString(";\n")
 	sb.WriteString("$$ LANGUAGE sql STABLE")
-	writeSearchPath(&sb, f.SearchPath, f.Schema)
+	if !f.NoSearchPath {
+		writeSearchPath(&sb, f.SearchPath, f.Schema)
+	}
 	sb.WriteString(";")
 
 	return sb.String()
