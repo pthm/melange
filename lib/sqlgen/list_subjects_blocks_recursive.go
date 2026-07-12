@@ -384,6 +384,9 @@ func nestedParentForcesSubjectPool(pr ParentRelationInfo, targetObjectType, curr
 // dedicated wildcard block is needed today.
 func buildListSubjectsRecursiveTTUBlock(plan ListPlan, parent ListParentRelationData) []TypedQueryBlock {
 	if classifyParentRelation(plan, parent) == parentStrategySubjectPool {
+		if blocks := buildSubjectFirstTTUSubjectBlocks(plan, parent); blocks != nil {
+			return blocks
+		}
 		return []TypedQueryBlock{buildListSubjectsRecursiveTTUBlockSubjectPool(plan, parent)}
 	}
 
@@ -576,6 +579,82 @@ func buildListSubjectsRecursiveTTUBlockParentClosureUsersetPattern(plan ListPlan
 
 	return TypedQueryBlock{
 		Comments: []string{fmt.Sprintf("-- TTU userset: subjects via %s -> %s -> %s#%s (parent closure)", parent.LinkingRelation, parent.Relation, pattern.SubjectType, pattern.SubjectRelation)},
+		Query:    stmt,
+	}
+}
+
+// buildSubjectFirstTTUSubjectBlocks returns set-oriented TTU blocks that
+// compose with the parent relation's list_subjects function instead of
+// scanning every candidate subject (subject_pool) and calling
+// check_permission_internal per (subject, link) pair. It is the list_subjects
+// mirror of the list_objects subject-first TTU path.
+//
+// The subject_pool block computes {s ∈ all-subjects-of-type :
+// check(s, parentRel, parentObj) = 1}; list_{ptype}_{parentRel}_sub(parentObj,
+// type) is exactly that set, so the transform is a faithful equivalence — for
+// each link, enumerate the parent object's subjects directly.
+//
+// Returns nil (keep the subject_pool path) unless every case is cleanly
+// handled: direct parent pattern only, no wildcards on the current or target
+// relation (subject-side '*' needs the subject_pool wildcard handling), and
+// every allowed parent type has a composable, cycle-safe list_subjects
+// function.
+func buildSubjectFirstTTUSubjectBlocks(plan ListPlan, parent ListParentRelationData) []TypedQueryBlock {
+	if parent.IsClosurePattern || plan.Analysis.Features.HasWildcard || plan.AnalysisLookup == nil {
+		return nil
+	}
+	types := parent.AllowedLinkingTypesSlice
+	if len(types) == 0 {
+		return nil
+	}
+	for _, ptype := range types {
+		target := plan.AnalysisLookup[ptype+"."+parent.Relation]
+		if target == nil || target.Features.HasWildcard {
+			return nil
+		}
+		// ListAllowed gates both list_objects and list_subjects generation and
+		// the reference graph (TTU parent edges) is shared, so the list_objects
+		// composability check covers the list_subjects call too.
+		if !composableListTargetLookup(plan.AnalysisLookup, plan.ObjectType, plan.Relation, ptype, parent.Relation) {
+			return nil
+		}
+	}
+
+	blocks := make([]TypedQueryBlock, 0, len(types))
+	for _, ptype := range types {
+		blocks = append(blocks, buildSubjectFirstTTUSubjectBlock(plan, parent, ptype))
+	}
+	return blocks
+}
+
+// buildSubjectFirstTTUSubjectBlock builds one subject-first TTU block for a
+// single parent type: for each linking tuple to a parent object of that type,
+// enumerate the subjects holding parent.Relation on it via the parent's
+// list_subjects function.
+func buildSubjectFirstTTUSubjectBlock(plan ListPlan, parent ListParentRelationData, parentType string) TypedQueryBlock {
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "sub", Column: "subject_id"}},
+		FromExpr:    TableAs("", "melange_tuples", "link"),
+		Joins: []JoinClause{{
+			Type: "CROSS",
+			TableExpr: LateralFunction{
+				Schema: plan.DatabaseSchema,
+				Name:   listSubjectsFunctionName(parentType, parent.Relation),
+				Args:   []Expr{Col{Table: "link", Column: "subject_id"}, SubjectType},
+				Alias:  "sub",
+			},
+		}},
+		Where: And(
+			Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+			Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
+			Eq{Left: Col{Table: "link", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
+			Eq{Left: Col{Table: "link", Column: "subject_type"}, Right: Lit(parentType)},
+		),
+	}
+
+	return TypedQueryBlock{
+		Comments: []string{fmt.Sprintf("-- TTU subject-first: subjects via %s -> %s.%s (compose list_subjects)", parent.LinkingRelation, parentType, parent.Relation)},
 		Query:    stmt,
 	}
 }
