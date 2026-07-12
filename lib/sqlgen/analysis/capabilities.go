@@ -1,9 +1,11 @@
 // Package analysis provides relation analysis and strategy selection for SQL code generation.
 package analysis
 
+import "slices"
+
 // GenerationCapabilities represents the unified generation eligibility for a relation.
-// This consolidates the former separate CanGenerate (check) and CanGenerateListValue (list)
-// flags into a single structure with clear semantics.
+// CheckAllowed gates specialized check SQL; ListAllowed gates specialized list SQL.
+// When false, the respective dispatcher falls back to the generic implementation.
 type GenerationCapabilities struct {
 	// CheckAllowed is true if specialized check SQL can be generated.
 	// When false, the check dispatcher falls back to check_permission_generic_internal.
@@ -80,18 +82,37 @@ func (s ListStrategy) String() string {
 	}
 }
 
+// hasSelfReferentialParent reports whether the relation recurses on itself
+// through a TTU parent arm — i.e. an arm "R from L" where L links through the
+// relation's own object type AND R is the relation being defined (e.g.
+// "local_admin: admin from org or local_admin from parent"). Only that shape
+// chains across the parent edge and needs the Recursive strategy's CTE.
+//
+// An arm like "can_read: viewer from parent" (parent: [document, folder]) links
+// through the object type too, but its target relation is viewer, not can_read,
+// so it is a single hop — the Composed strategy handles it and the Recursive
+// CTE would wrongly chain can_read through the parent. Hence the R == a.Relation
+// guard, not a bare linking-type check.
+func hasSelfReferentialParent(a RelationAnalysis) bool {
+	isSelfRecursive := func(p ParentRelationInfo) bool {
+		return p.Relation == a.Relation && slices.Contains(p.AllowedLinkingTypes, a.ObjectType)
+	}
+	return slices.ContainsFunc(a.ParentRelations, isSelfRecursive) ||
+		slices.ContainsFunc(a.ClosureParentRelations, isSelfRecursive)
+}
+
 // DetermineListStrategy computes the appropriate list generation strategy
-// based on the relation's analysis data. The priority order matches the
-// former selectListObjectsTemplate/selectListSubjectsTemplate functions.
+// for a relation based on its analysis data.
 //
 // Priority (highest to lowest):
-// 1. DepthExceeded - relation exceeds userset depth limit
-// 2. SelfRefUserset - has self-referential userset patterns
-// 3. Composed - has indirect anchor (pure TTU reaching direct grants)
-// 4. Intersection - has intersection patterns (AND groups)
-// 5. Recursive - has TTU patterns or closure TTU patterns
-// 6. Userset - has userset patterns or closure userset patterns
-// 7. Direct - default (handles direct, implied, and exclusion patterns)
+//  1. DepthExceeded - relation exceeds userset depth limit
+//  2. SelfRefUserset - has self-referential userset patterns
+//  3. Composed - has indirect anchor (pure TTU reaching direct grants), but only
+//     when there is no self-referential recursive parent — see below.
+//  4. Intersection - has intersection patterns (AND groups)
+//  5. Recursive - has TTU patterns or closure TTU patterns
+//  6. Userset - has userset patterns or closure userset patterns
+//  7. Direct - default (handles direct, implied, and exclusion patterns)
 func DetermineListStrategy(a RelationAnalysis) ListStrategy {
 	if a.ExceedsDepthLimit {
 		return ListStrategyDepthExceeded
@@ -99,7 +120,14 @@ func DetermineListStrategy(a RelationAnalysis) ListStrategy {
 	if a.HasSelfReferentialUserset {
 		return ListStrategySelfRefUserset
 	}
-	if a.IndirectAnchor != nil {
+	// A relation like "local_admin: admin from org or local_admin from parent"
+	// is pure TTU, so an indirect anchor gets computed for the cross-type arm
+	// (admin from org). But the Composed strategy models a single anchor path
+	// and cannot represent the self-referential "local_admin from parent" walk,
+	// so it under-reports every object reached only through the parent chain.
+	// Route these to Recursive, whose CTE covers both the cross-type anchor base
+	// and the self-referential parent expansion.
+	if a.IndirectAnchor != nil && !hasSelfReferentialParent(a) {
 		return ListStrategyComposed
 	}
 	if a.Features.HasIntersection {

@@ -101,8 +101,11 @@ func buildRecursiveBaseBlocks(plan ListPlan, parentRelations []ListParentRelatio
 		blocks = append(blocks, buildRecursiveUsersetBlocks(plan, pattern, propagatable)...)
 	}
 
-	// Cross-type TTU blocks are non-propagatable (one-hop, not self-referential).
-	blocks = append(blocks, buildCrossTypeTTUBlocks(plan, parentRelations)...)
+	// Cross-type TTU blocks are a one-hop grant of the outer relation. They must
+	// propagate when that relation is itself self-referential (e.g. "local_admin:
+	// admin from org or local_admin from parent"): the object granted via the
+	// cross-type "admin from org" arm has to seed the recursive parent walk.
+	blocks = append(blocks, buildCrossTypeTTUBlocks(plan, parentRelations, propagatable)...)
 
 	return blocks, nil
 }
@@ -301,13 +304,22 @@ func splitBlocksByPropagation(relations []string, propagatable map[string]bool, 
 // check_permission_internal for each one. Recursive parent list functions can
 // form cross-type list cycles, so those keep the check_permission_internal
 // fallback.
-func buildCrossTypeTTUBlocks(plan ListPlan, parentRelations []ListParentRelationData) []TypedQueryBlock {
+func buildCrossTypeTTUBlocks(plan ListPlan, parentRelations []ListParentRelationData, propagatable map[string]bool) []TypedQueryBlock {
 	var blocks []TypedQueryBlock
 
 	for _, parent := range parentRelations {
 		if !parent.HasCrossTypeLinks {
 			continue
 		}
+
+		// The cross-type arm grants the outer relation (plan.Relation), or the
+		// source relation it was inherited from for a closure pattern. Propagate
+		// the block when that relation seeds a self-referential parent walk.
+		grantedRel := plan.Relation
+		if parent.SourceRelation != "" {
+			grantedRel = parent.SourceRelation
+		}
+		propagate := propagatable[grantedRel]
 
 		crossTypes := dequoteLinkingRelations(parent.CrossTypeLinkingTypes)
 		crossExclusions := buildExclusionInput(
@@ -318,6 +330,11 @@ func buildCrossTypeTTUBlocks(plan ListPlan, parentRelations []ListParentRelation
 			SubjectID,
 		)
 
+		appendBlock := func(b TypedQueryBlock) {
+			b.Propagatable = propagate
+			blocks = append(blocks, b)
+		}
+
 		var fallbackTypes []string
 		for _, parentType := range crossTypes {
 			if canUseSubjectFirstTTU(plan, parent, parentType) {
@@ -326,16 +343,15 @@ func buildCrossTypeTTUBlocks(plan ListPlan, parentRelations []ListParentRelation
 				// its list function does not enumerate; keep a per-candidate
 				// check arm for exactly that case. The guard is false for
 				// plain subjects, so the check never runs on the hot path.
-				blocks = append(blocks,
-					buildSubjectFirstCrossTypeTTUBlock(plan, parent, parentType, crossExclusions),
-					buildCheckPermissionCrossTypeTTUBlock(plan, parent, []string{parentType}, crossExclusions, true))
+				appendBlock(buildSubjectFirstCrossTypeTTUBlock(plan, parent, parentType, crossExclusions))
+				appendBlock(buildCheckPermissionCrossTypeTTUBlock(plan, parent, []string{parentType}, crossExclusions, true))
 			} else {
 				fallbackTypes = append(fallbackTypes, parentType)
 			}
 		}
 
 		if len(fallbackTypes) > 0 {
-			blocks = append(blocks, buildCheckPermissionCrossTypeTTUBlock(plan, parent, fallbackTypes, crossExclusions, false))
+			appendBlock(buildCheckPermissionCrossTypeTTUBlock(plan, parent, fallbackTypes, crossExclusions, false))
 		}
 	}
 

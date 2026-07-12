@@ -1,0 +1,102 @@
+# Melange-specific regression test: list_objects completeness for a relation
+# that combines a cross-type TTU with a self-referential recursive TTU (#12).
+#
+# folder.local_admin = admin from org or local_admin from parent
+#
+# A plain subject (alice) reaches local_admin on a deep folder purely through
+# the recursive `local_admin from parent` arm: she is admin of org o1, folder
+# f1 is in o1 (so alice is local_admin of f1 via `admin from org`), and folder
+# f2's parent is f1 (so alice is local_admin of f2 via `local_admin from
+# parent`). check_permission grants alice local_admin on BOTH f1 and f2, but
+# list_folder_local_admin_obj under-reports f2 — the recursive arm's candidate
+# generation does not carry the org-sourced grant across the parent edge.
+#
+# The listObjectsAssertions below are EXPLICIT (not derived) so they hard-fail:
+# RED before the fix (f2 missing), GREEN after.
+#
+# Test names are prefixed with "melange/" by the loader.
+
+tests:
+  - name: recursive_ttu_list_objects
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type org
+            relations
+              define admin: [user]
+
+          type folder
+            relations
+              define org: [org]
+              define parent: [folder]
+              define local_admin: admin from org or local_admin from parent
+        tuples:
+          # alice is admin of org o1
+          - user: user:alice
+            relation: admin
+            object: org:o1
+          # folder f1 belongs to org o1  -> alice is local_admin of f1
+          - user: org:o1
+            relation: org
+            object: folder:f1
+          # folder f2's parent is f1  -> alice is local_admin of f2 (recursive)
+          - user: folder:f1
+            relation: parent
+            object: folder:f2
+          # folder f3's parent is f2  -> alice is local_admin of f3 (2 hops)
+          - user: folder:f2
+            relation: parent
+            object: folder:f3
+        checkAssertions:
+          - name: alice_local_admin_f1
+            tuple:
+              user: user:alice
+              relation: local_admin
+              object: folder:f1
+            expectation: true
+          - name: alice_local_admin_f2_recursive
+            tuple:
+              user: user:alice
+              relation: local_admin
+              object: folder:f2
+            expectation: true
+          - name: alice_local_admin_f3_recursive
+            tuple:
+              user: user:alice
+              relation: local_admin
+              object: folder:f3
+            expectation: true
+        listObjectsAssertions:
+          # Explicit assertion. alice must list all three folders. Before the fix
+          # only f1 came back — f2/f3 (reached via `local_admin from parent`)
+          # were dropped even though check_permission grants them. f3 proves the
+          # walk is genuinely multi-hop, not a single parent step.
+          - request:
+              user: user:alice
+              relation: local_admin
+              type: folder
+            expectation:
+              - folder:f1
+              - folder:f2
+              - folder:f3
+        listUsersAssertions:
+          # Symmetric list_subjects direction: alice must surface as a
+          # local_admin of the recursively-reached f2, not just f1.
+          - request:
+              object: folder:f1
+              relation: local_admin
+              filters:
+                - user
+            expectation:
+              - user:alice
+          - request:
+              object: folder:f2
+              relation: local_admin
+              filters:
+                - user
+            expectation:
+              - user:alice

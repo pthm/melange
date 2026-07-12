@@ -1,0 +1,86 @@
+# Melange regression probe for codex review finding P2 on the #12 fix:
+# when a mixed cross-type + self-recursive relation
+# (folder.local_admin = admin from org or local_admin from parent) is routed to
+# the Recursive list strategy, does list_subjects wrongly walk the CROSS-TYPE
+# target's OWN same-named linking relation?
+#
+# Here `org` also has a `parent` relation. folder.local_admin recurses over
+# folder's `parent` (folder -> folder). It must NOT traverse org:o1 -> parent ->
+# org:o0: admin-from-org is a single hop to the folder's DIRECT org, so bob
+# (admin of the grandparent org o0) must NOT be a local_admin of f1.
+#
+# Explicit assertions hard-fail. If the fix over-reports, listUsers for f1 will
+# wrongly include user:bob.
+
+tests:
+  - name: recursive_ttu_crosstype_collision
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type org
+            relations
+              define parent: [org]
+              define admin: [user]
+
+          type folder
+            relations
+              define org: [org]
+              define parent: [folder]
+              define local_admin: admin from org or local_admin from parent
+        tuples:
+          # alice is admin of org o1 (the folder's direct org)
+          - user: user:alice
+            relation: admin
+            object: org:o1
+          # bob is admin of org o0, the PARENT org of o1 (must be irrelevant)
+          - user: user:bob
+            relation: admin
+            object: org:o0
+          # o1's parent is o0 (org-side parent chain, unrelated to folder.local_admin)
+          - user: org:o0
+            relation: parent
+            object: org:o1
+          # folder f1 belongs to org o1
+          - user: org:o1
+            relation: org
+            object: folder:f1
+        checkAssertions:
+          - name: alice_is_local_admin_f1
+            tuple:
+              user: user:alice
+              relation: local_admin
+              object: folder:f1
+            expectation: true
+          - name: bob_not_local_admin_f1_via_org_parent
+            tuple:
+              user: user:bob
+              relation: local_admin
+              object: folder:f1
+            expectation: false
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              relation: local_admin
+              type: folder
+            expectation:
+              - folder:f1
+          # bob must list NO folders as local_admin
+          - request:
+              user: user:bob
+              relation: local_admin
+              type: folder
+            expectation: []
+        listUsersAssertions:
+          # Only alice (direct org admin). bob (grandparent-org admin) must NOT
+          # appear — that would be the over-report codex flagged.
+          - request:
+              object: folder:f1
+              relation: local_admin
+              filters:
+                - user
+            expectation:
+              - user:alice
