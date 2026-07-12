@@ -1,0 +1,83 @@
+# Melange-specific regression test: wildcard reached via a TTU parent in
+# list_subjects.
+#
+# Regression: a relation can surface the wildcard token '*' either directly
+# (its own Features.HasWildcard) OR transitively through a TTU parent whose
+# target relation is wildcard-granted. The analyzer does NOT propagate
+# HasWildcard across TTU edges, so folder.viewer below had HasWildcard=false
+# even though `viewer from org` resolves to org.viewer=[user:*]. As a result
+# list_folder_viewer_sub (and the composed list_subjects path) filtered '*' out
+# of the parent-closure scan and never expanded the wildcard, so
+# list_accessible_subjects returned only concrete subjects — dropping every
+# subject who has access ONLY via the wildcard, while check_permission still
+# granted them.
+#
+# The listUsersAssertions below are EXPLICIT (not derived) so they hard-fail:
+# this case is RED before the fix (missing user:*) and GREEN after it.
+#
+# Test names are prefixed with "melange/" by the loader.
+
+tests:
+  - name: wildcard_ttu_list_subjects
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type group
+            relations
+              define member: [user]
+
+          type org
+            relations
+              define viewer: [user:*]
+
+          type folder
+            relations
+              define org: [org]
+              define viewer: [user, group#member] or viewer from org
+              define can_view: viewer
+        tuples:
+          # everyone (wildcard) is a viewer of org o1
+          - user: user:*
+            relation: viewer
+            object: org:o1
+          # folder f1 belongs to org o1
+          - user: org:o1
+            relation: org
+            object: folder:f1
+          # alice is a direct member of group g1
+          - user: user:alice
+            relation: member
+            object: group:g1
+          # g1's members are viewers of f1
+          - user: group:g1#member
+            relation: viewer
+            object: folder:f1
+        checkAssertions:
+          - name: alice_can_view_via_group
+            tuple:
+              user: user:alice
+              relation: can_view
+              object: folder:f1
+            expectation: true
+          - name: bob_can_view_via_wildcard
+            tuple:
+              user: user:bob
+              relation: can_view
+              object: folder:f1
+            expectation: true
+        listUsersAssertions:
+          # Explicit assertion. The wildcard token (user:*) must be returned
+          # alongside the group-expanded concrete subject (alice). Before the
+          # fix only user:alice came back — the TTU-reached wildcard was dropped.
+          - request:
+              object: folder:f1
+              relation: can_view
+              filters:
+                - user
+            expectation:
+              - user:*
+              - user:alice

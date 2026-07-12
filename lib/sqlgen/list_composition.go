@@ -146,6 +146,48 @@ func relationReferences(a *RelationAnalysis) []string {
 	return refs
 }
 
+// reachesWildcard reports whether the list_subjects function for
+// (targetType, targetRelation) can surface a wildcard token ('*') — either the
+// relation itself HasWildcard, or it transitively reaches a wildcard relation
+// through its TTU parents / closure / userset reference edges. list_*_sub
+// returns '*' for such grants, not the concrete subjects, so an IN/LATERAL
+// membership composed against it would drop concrete candidates that hold the
+// relation only via the wildcard (under-report).
+//
+// Features.HasWildcard is NOT propagated across TTU parent edges by the
+// analyzer: e.g. folder.viewer = "[user, group#member] or viewer from org"
+// with org.viewer = [user:*] has folder.viewer.HasWildcard=false, yet
+// list_folder_viewer_sub returns '*' from the parent. This walk (over the same
+// over-approximating edge set as relationReferences, so a "reaches" verdict is
+// sound) closes that gap. Callers skip composition and keep the subject_pool /
+// per-candidate fallback, which resolves wildcards correctly.
+func reachesWildcard(lookup map[string]*RelationAnalysis, targetType, targetRelation string) bool {
+	if lookup == nil {
+		return true // no analysis: assume unsafe
+	}
+	start := targetType + "." + targetRelation
+	visited := map[string]bool{start: true}
+	queue := []string{start}
+	for len(queue) > 0 {
+		key := queue[0]
+		queue = queue[1:]
+		a, ok := lookup[key]
+		if !ok {
+			continue
+		}
+		if a.Features.HasWildcard {
+			return true
+		}
+		for _, next := range relationReferences(a) {
+			if !visited[next] {
+				visited[next] = true
+				queue = append(queue, next)
+			}
+		}
+	}
+	return false
+}
+
 // composableListTargetLookup reports whether the list_objects function for
 // (fromType, fromRelation) may compose with the list_objects function for
 // (targetType, targetRelation): the target must be list-generatable and
@@ -232,8 +274,9 @@ func complexClosureMembership(plan ListPlan, rel string) Expr {
 // wildcards are in play: list_{type}_{rel}_sub returns '*' for wildcard grants,
 // not the concrete subjects, so an IN membership would drop a concrete
 // candidate that holds rel only via a wildcard (under-report). The gate mirrors
-// buildSubjectFirstTTUSubjectBlocks: skip composition when either this
-// relation or the target relation HasWildcard.
+// buildSubjectFirstTTUSubjectBlocks: skip composition when this relation
+// HasWildcard or the target relation can surface '*' (own or transitively
+// reachable via TTU parents — reachesWildcard).
 //
 // When composition is unsafe it returns the per-candidate check alone, which is
 // always correct. Mirrors complexClosureMembership.
@@ -248,8 +291,7 @@ func complexClosureSubjectMembership(plan ListPlan, rel string) Expr {
 	if plan.Analysis.Features.HasWildcard {
 		return check
 	}
-	target := plan.AnalysisLookup[plan.ObjectType+"."+rel]
-	if target != nil && target.Features.HasWildcard {
+	if reachesWildcard(plan.AnalysisLookup, plan.ObjectType, rel) {
 		return check
 	}
 	if !composableListTargetLookup(plan.AnalysisLookup, plan.ObjectType, plan.Relation, plan.ObjectType, rel) {

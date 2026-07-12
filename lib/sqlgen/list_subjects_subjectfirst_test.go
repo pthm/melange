@@ -102,3 +102,46 @@ func TestSubjectFirstTTU_FallsBackWhenNotListGeneratable(t *testing.T) {
 		t.Errorf("non-generatable target must fall back to subject_pool")
 	}
 }
+
+// TestSubjectFirstTTU_FallsBackWhenTargetReachesWildcardTransitively pins the
+// fix: org.admin has HasWildcard=false itself but reaches org2.viewer=[user:*]
+// via a TTU parent, so list_org_admin_sub surfaces '*'. Composition against it
+// with an IN/LATERAL set would drop concrete subjects granted only via the
+// wildcard, so we must fall back to subject_pool.
+func TestSubjectFirstTTU_FallsBackWhenTargetReachesWildcardTransitively(t *testing.T) {
+	lookup := composableOrgAdmin()
+	lookup["org.admin"].ParentRelations = []ParentRelationInfo{{
+		Relation: "viewer", LinkingRelation: "parent", AllowedLinkingTypes: []string{"org2"},
+	}}
+	lookup["org2.viewer"] = &RelationAnalysis{
+		ObjectType: "org2", Relation: "viewer",
+		Features: RelationFeatures{HasWildcard: true},
+	}
+	plan, parent := subjectFirstPlan(lookup)
+
+	if blocks := buildSubjectFirstTTUSubjectBlocks(plan, parent); blocks != nil {
+		t.Errorf("transitively-wildcard-reaching target must fall back to subject_pool")
+	}
+}
+
+// TestReachesWildcard_Transitive checks reachesWildcard walks TTU/closure edges.
+func TestReachesWildcard_Transitive(t *testing.T) {
+	lookup := map[string]*RelationAnalysis{
+		"folder.viewer": {
+			ObjectType: "folder", Relation: "viewer",
+			Features:        RelationFeatures{}, // HasWildcard false
+			ParentRelations: []ParentRelationInfo{{Relation: "viewer", LinkingRelation: "org", AllowedLinkingTypes: []string{"org"}}},
+		},
+		"org.viewer": {ObjectType: "org", Relation: "viewer", Features: RelationFeatures{HasWildcard: true}},
+	}
+	if !reachesWildcard(lookup, "folder", "viewer") {
+		t.Error("folder.viewer must reach wildcard via org.viewer TTU parent")
+	}
+	if reachesWildcard(lookup, "org", "viewer") == false {
+		t.Error("org.viewer HasWildcard directly")
+	}
+	delete(lookup, "org.viewer")
+	if reachesWildcard(lookup, "folder", "viewer") {
+		t.Error("no wildcard reachable once org.viewer removed")
+	}
+}

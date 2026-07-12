@@ -223,8 +223,7 @@ func composableSubjectFirstUserset(plan ListPlan, pattern listUsersetPatternInpu
 	if plan.Analysis.Features.HasWildcard {
 		return false
 	}
-	target := plan.AnalysisLookup[pattern.SubjectType+"."+pattern.SubjectRelation]
-	if target != nil && target.Features.HasWildcard {
+	if reachesWildcard(plan.AnalysisLookup, pattern.SubjectType, pattern.SubjectRelation) {
 		return false
 	}
 	return composableListTargetLookup(plan.AnalysisLookup, plan.ObjectType, plan.Relation, pattern.SubjectType, pattern.SubjectRelation)
@@ -694,7 +693,7 @@ func buildSubjectFirstTTUSubjectBlocks(plan ListPlan, parent ListParentRelationD
 	}
 	for _, ptype := range types {
 		target := plan.AnalysisLookup[ptype+"."+parent.Relation]
-		if target == nil || target.Features.HasWildcard {
+		if target == nil || reachesWildcard(plan.AnalysisLookup, ptype, parent.Relation) {
 			return nil
 		}
 		// ListAllowed gates both list_objects and list_subjects generation and
@@ -726,7 +725,7 @@ func buildSubjectFirstTTUSubjectBlocks(plan ListPlan, parent ListParentRelationD
 // not apply plan.Exclusions, so neither does this replacement.
 func buildSubjectFirstTTUClosureSubjectBlocks(plan ListPlan, parent ListParentRelationData) []TypedQueryBlock {
 	target := plan.AnalysisLookup[plan.ObjectType+"."+parent.SourceRelation]
-	if target == nil || target.Features.HasWildcard {
+	if target == nil || reachesWildcard(plan.AnalysisLookup, plan.ObjectType, parent.SourceRelation) {
 		return nil
 	}
 	if !composableListTargetLookup(plan.AnalysisLookup, plan.ObjectType, plan.Relation, plan.ObjectType, parent.SourceRelation) {

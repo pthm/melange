@@ -19,7 +19,7 @@ type ListPlan struct {
 	ComplexClosure         []string // Complex closure relations (excluding intersection)
 
 	// Feature configuration
-	AllowWildcard bool            // Whether wildcards are allowed (list_objects)
+	AllowWildcard bool            // Whether the relation can surface '*' (direct or TTU-reachable)
 	Exclusions    ExclusionConfig // Exclusion rules configuration
 
 	// Feature flags (derived from analysis)
@@ -135,7 +135,14 @@ func buildBasePlan(a RelationAnalysis, inline InlineSQLData, databaseSchema, fun
 		AllowedSubjectTypes:    buildAllowedSubjectTypesList(a),
 		ComplexClosure:         filterComplexClosureRelations(a),
 
-		AllowWildcard: a.Features.HasWildcard,
+		// A relation surfaces '*' either directly (Features.HasWildcard) or
+		// through a TTU parent / closure whose target relation is wildcard-
+		// granted — the analyzer does not propagate HasWildcard across those
+		// edges, so walk the reference graph. Without this, list_*_sub for a
+		// relation like folder.viewer ("... or viewer from org", org.viewer=
+		// [user:*]) drops the wildcard granted on the parent (ExcludeWildcard
+		// filters '*' from the parent-closure scan and the tail never expands).
+		AllowWildcard: a.Features.HasWildcard || reachesWildcard(lookup, a.ObjectType, a.Relation),
 
 		HasUserset:      a.Features.HasUserset,
 		HasExclusion:    a.Features.HasExclusion,
