@@ -1,0 +1,95 @@
+# Melange-specific regression test: wildcard grant + exclusion in list_subjects.
+#
+# Regression for issue #11: when a relation allows a wildcard subject AND has an
+# exclusion (e.g. `admin: [user, user:*, group#member] but not blocked`), the
+# generated list_{type}_{relation}_sub function emitted an UNQUALIFIED subject_id
+# in the excluded_subjects CTE. Since the function returns TABLE(subject_id TEXT,
+# ...), that column collided with the OUT parameter and Postgres raised
+# "column reference subject_id is ambiguous" at query time.
+#
+# The listUsersAssertions below are EXPLICIT (not derived) so require.NoError
+# catches the ambiguous-column error: this case FAILS before the fix and PASSES
+# after it.
+#
+# Test names are prefixed with "melange/" by the loader.
+
+tests:
+  # ---------------------------------------------------------------------------
+  # wildcard_exclusion_list_subjects
+  # Pattern: admin: [user, user:*, group#member] but not blocked
+  # ---------------------------------------------------------------------------
+  - name: wildcard_exclusion_list_subjects
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type group
+            relations
+              define member: [user]
+
+          type org
+            relations
+              define blocked: [user]
+              define admin: [user, user:*, group#member] but not blocked
+        tuples:
+          # alice is a direct admin
+          - user: user:alice
+            relation: admin
+            object: org:o1
+          # everyone (wildcard) is an admin
+          - user: user:*
+            relation: admin
+            object: org:o1
+          # the g1 group's members are admins
+          - user: group:g1#member
+            relation: admin
+            object: org:o1
+          # gm1 is a member of g1
+          - user: user:gm1
+            relation: member
+            object: group:g1
+          # bob is blocked (excluded from admin)
+          - user: user:bob
+            relation: blocked
+            object: org:o1
+        checkAssertions:
+          - name: alice_is_admin_direct
+            tuple:
+              user: user:alice
+              relation: admin
+              object: org:o1
+            expectation: true
+          - name: gm1_is_admin_via_group
+            tuple:
+              user: user:gm1
+              relation: admin
+              object: org:o1
+            expectation: true
+          - name: carol_is_admin_via_wildcard
+            tuple:
+              user: user:carol
+              relation: admin
+              object: org:o1
+            expectation: true
+          - name: bob_is_not_admin_blocked
+            tuple:
+              user: user:bob
+              relation: admin
+              object: org:o1
+            expectation: false
+        listUsersAssertions:
+          # Explicit assertion — reproduces issue #11. The wildcard token
+          # (user:*) is returned alongside the direct + group-expanded concrete
+          # subjects; the blocked user (bob) is excluded.
+          - request:
+              object: org:o1
+              relation: admin
+              filters:
+                - user
+            expectation:
+              - user:*
+              - user:alice
+              - user:gm1

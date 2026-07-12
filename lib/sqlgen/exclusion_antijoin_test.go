@@ -127,3 +127,24 @@ func TestComplexExclusion_CheckContextKeepsPerCandidate(t *testing.T) {
 		t.Errorf("expected per-candidate check, got:\n%s", sql)
 	}
 }
+
+// TestBuildExclusionCTEQualifiesSubjectID guards issue #11: the excluded_subjects
+// CTE must qualify subject_id with the tuples alias. An unqualified subject_id
+// collides with the enclosing list_*_sub function's OUT parameter of the same
+// name, raising "column reference subject_id is ambiguous" at query time.
+func TestBuildExclusionCTEQualifiesSubjectID(t *testing.T) {
+	c := ExclusionConfig{
+		ObjectType:              "org",
+		ObjectIDExpr:            Param("p_object_id"),
+		SimpleExcludedRelations: []string{"blocked"},
+	}
+
+	sql := c.BuildExclusionCTE()
+
+	if !strings.Contains(sql, "e.subject_id") {
+		t.Errorf("exclusion CTE must qualify subject_id (e.subject_id), got:\n%s", sql)
+	}
+	if strings.Contains(sql, "SELECT subject_id") {
+		t.Errorf("exclusion CTE must not select unqualified subject_id, got:\n%s", sql)
+	}
+}

@@ -267,13 +267,16 @@ func (c ExclusionConfig) BuildExclusionCTE() string {
 		return "SELECT NULL::TEXT AS subject_id WHERE FALSE"
 	}
 
-	q := Tuples(c.DatabaseSchema, "").
+	// Alias the tuples table and qualify subject_id so it cannot collide with
+	// the enclosing function's OUT parameter of the same name (which would
+	// otherwise raise "column reference subject_id is ambiguous" at runtime).
+	q := Tuples(c.DatabaseSchema, "e").
 		ObjectType(c.ObjectType).
 		Relations(c.SimpleExcludedRelations...).
 		Where(
-			Eq{Left: Col{Column: "object_id"}, Right: c.ObjectIDExpr},
+			Eq{Left: Col{Table: "e", Column: "object_id"}, Right: c.ObjectIDExpr},
 		).
-		Select("subject_id")
+		SelectCol("subject_id")
 
 	return q.Build().SQL()
 }
