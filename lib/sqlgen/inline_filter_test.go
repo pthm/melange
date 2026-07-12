@@ -65,6 +65,59 @@ func TestFilterInlineForCheck_KeepsObjectAndSubjectTypes(t *testing.T) {
 	}
 }
 
+func TestFilterInlineForList_KeepsReferencedTypesDropsUnrelated(t *testing.T) {
+	inline := InlineSQLData{
+		ClosureRows: []ValuesRow{
+			closureRow("element", "view", "view"),       // own object type
+			closureRow("group", "member", "member"),      // userset subject type
+			closureRow("folder", "view", "view"),         // TTU parent linking type
+			closureRow("workspace", "view", "view"),      // allowed subject type
+			closureRow("aaa", "rel001", "rel001"),        // unrelated → drop
+			closureRow("organization", "own", "own"),     // unrelated → drop
+		},
+		UsersetRows: []ValuesRow{
+			usersetRow("element", "view", "group", "member"),
+			usersetRow("group", "member", "user", ""),          // userset subject type kept (list_objects keys on it)
+			usersetRow("aaa", "rel001", "user", ""),            // unrelated → drop
+		},
+	}
+	a := RelationAnalysis{
+		ObjectType:          "element",
+		Relation:            "view",
+		AllowedSubjectTypes: []string{"user", "workspace"},
+		UsersetPatterns: []UsersetPattern{
+			{SubjectType: "group", SubjectRelation: "member"},
+		},
+		ParentRelations: []ParentRelationInfo{
+			{Relation: "view", LinkingRelation: "parent", AllowedLinkingTypes: []string{"folder"}},
+		},
+	}
+
+	out := filterInlineForList(inline, a)
+
+	gotClosure := objectTypesOf(out.ClosureRows)
+	for _, want := range []string{"element", "group", "folder", "workspace"} {
+		if !gotClosure[want] {
+			t.Errorf("closure filter dropped needed object type %q", want)
+		}
+	}
+	for _, unwant := range []string{"aaa", "organization"} {
+		if gotClosure[unwant] {
+			t.Errorf("closure filter kept unrelated object type %q", unwant)
+		}
+	}
+
+	gotUserset := objectTypesOf(out.UsersetRows)
+	for _, want := range []string{"element", "group"} {
+		if !gotUserset[want] {
+			t.Errorf("userset filter dropped needed object type %q", want)
+		}
+	}
+	if gotUserset["aaa"] {
+		t.Errorf("userset filter kept unrelated object type %q", "aaa")
+	}
+}
+
 func TestFilterRowsByObjectType_KeepsNonLitRows(t *testing.T) {
 	// A row whose first column is not a plain Lit must be kept conservatively.
 	rows := []ValuesRow{

@@ -1,5 +1,7 @@
 package sqlgen
 
+import "strings"
+
 // filterInlineForCheck returns an InlineSQLData carrying only the closure and
 // userset VALUES rows a check function for relation a actually references,
 // instead of the whole model's rows.
@@ -42,6 +44,48 @@ func filterInlineForCheck(inline InlineSQLData, a RelationAnalysis) InlineSQLDat
 	return InlineSQLData{
 		ClosureRows: filterRowsByObjectType(inline.ClosureRows, closureTypes),
 		UsersetRows: filterRowsByObjectType(inline.UsersetRows, map[string]bool{a.ObjectType: true}),
+	}
+}
+
+// filterInlineForList returns an InlineSQLData carrying only the closure and
+// userset VALUES rows a list function (objects or subjects) for relation a can
+// reference, instead of the whole model's rows.
+//
+// Every closure/userset VALUES lookup in the list block builders keys its
+// object_type column on one of exactly three things (verified by reading every
+// use site — grep ClosureTable/UsersetTable/TypedClosureValuesTable across
+// list_objects_blocks*.go, list_subjects_blocks*.go, list_helpers.go):
+//
+//   - Lit(plan.ObjectType) — the relation's own object type (constant).
+//   - Param("v_filter_type") / SubjectType — the subject-type filter/param. This
+//     is only ever reached under a userset guard (position('#' in subject_id) > 0
+//     / HasUserset), so the value can only be a userset subject type this
+//     relation grants to (e.g. "group" for a [group#member] pattern).
+//   - Col{link.subject_type} — a TTU parent tuple's subject type (the recursive
+//     list_subjects TTU blocks), bounded by the TTU parent AllowedLinkingTypes.
+//
+// relationReferences(&a) over-approximates every "type.relation" edge a's
+// generated functions can reference — same-type closure/implied/excluded,
+// TTU parents (direct + closure + excluded + intersection), and userset targets
+// (direct + closure + selfref + indirect-anchor). The TYPE half of that edge set
+// therefore covers every userset subject type and every TTU parent type any
+// closure/userset lookup can key on. Adding a.ObjectType and AllowedSubjectTypes
+// is extra safety. The result is a safe superset: it can only keep extra rows,
+// never drop a needed one, so the generated SQL is semantically identical while
+// the embedded VALUES stop growing with unrelated schema.
+func filterInlineForList(inline InlineSQLData, a RelationAnalysis) InlineSQLData {
+	keep := map[string]bool{a.ObjectType: true}
+	for _, t := range a.AllowedSubjectTypes {
+		keep[t] = true
+	}
+	for _, ref := range relationReferences(&a) {
+		if i := strings.IndexByte(ref, '.'); i > 0 {
+			keep[ref[:i]] = true
+		}
+	}
+	return InlineSQLData{
+		ClosureRows: filterRowsByObjectType(inline.ClosureRows, keep),
+		UsersetRows: filterRowsByObjectType(inline.UsersetRows, keep),
 	}
 }
 

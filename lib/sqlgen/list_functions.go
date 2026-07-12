@@ -105,6 +105,10 @@ func listSubjectsFunctionName(objectType, relation string) string {
 
 // generateListObjectsFunctionWithLookup generates a list_objects function with analysis lookup for TTU optimization.
 func generateListObjectsFunctionWithLookup(a RelationAnalysis, inline InlineSQLData, databaseSchema string, lookup map[string]*RelationAnalysis, opts GenerateSQLOptions) (string, error) {
+	// Filter the whole-model VALUES down to the object types this function can
+	// reference, so the embedded closure/userset tables stop growing with
+	// unrelated schema (see filterInlineForList).
+	inline = filterInlineForList(inline, a)
 	// Route to appropriate generator based on ListStrategy
 	plan := BuildListObjectsPlanWithLookup(a, inline, databaseSchema, lookup)
 	plan.EnableMaterializedCTEs = opts.EnableMaterializedCTEs
@@ -148,6 +152,10 @@ func generateListObjectsFunctionWithLookup(a RelationAnalysis, inline InlineSQLD
 
 // generateListSubjectsFunctionWithLookup generates a list_subjects function with analysis lookup for TTU optimization.
 func generateListSubjectsFunctionWithLookup(a RelationAnalysis, inline InlineSQLData, databaseSchema string, lookup map[string]*RelationAnalysis, opts GenerateSQLOptions) (string, error) {
+	// Filter the whole-model VALUES down to the object types this function can
+	// reference, so the embedded closure/userset tables stop growing with
+	// unrelated schema (see filterInlineForList).
+	inline = filterInlineForList(inline, a)
 	// Route to appropriate generator based on ListStrategy
 	plan := BuildListSubjectsPlanWithLookup(a, inline, databaseSchema, lookup)
 	plan.EnableMaterializedCTEs = opts.EnableMaterializedCTEs
