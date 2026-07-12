@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.8.5](https://github.com/pthm/melange/compare/v0.8.4...v0.8.5) (2026-07-12)
+
+
+### Bug Fixes
+
+* **migrator:** guard version-column widen so dependent views don't break ([8d3cec2](https://github.com/pthm/melange/commit/8d3cec26aa446950c41d76900abfeab0cbff9437))
+* **sqlgen:** list userset query subjects through complex-closure arm ([f6ccd36](https://github.com/pthm/melange/commit/f6ccd36a4e22e3d97a2907fd3d34255aad058389))
+* **sqlgen:** make self-referential recursive TTU lists complete and sound ([#12](https://github.com/pthm/melange/issues/12)) ([bdd6c00](https://github.com/pthm/melange/commit/bdd6c006a153d061c87de19d4b5cb78fc7aa355a))
+* **sqlgen:** qualify ambiguous subject_id in list_subjects wildcard+exclusion path ([43113c3](https://github.com/pthm/melange/commit/43113c39acda2bead80a2103b04998cc42f7edff))
+* **sqlgen:** route self-referential recursive TTU to recursive list strategy ([c901401](https://github.com/pthm/melange/commit/c901401cc39869091ac3dcafa1300640216adcac))
+* **sqlgen:** surface TTU-reachable wildcards in list_subjects ([1cb4001](https://github.com/pthm/melange/commit/1cb4001a155b6a7ec45991ad7505be61192d8d9f))
+* widen migration version columns to TEXT for go-install pseudo-versions ([280ffe3](https://github.com/pthm/melange/commit/280ffe3e6a6410a6459c270672f6909a48c5cea0))
+
+
+### Performance
+
+* nested IF-chain dispatcher for schema-size-independent routing ([8b68aad](https://github.com/pthm/melange/commit/8b68aadbbdca801fc0a3546cbe40c6fcc0ba2a2e))
+* schema-independent dispatch + set-oriented list composition ([#67](https://github.com/pthm/melange/issues/67)) ([25e13ca](https://github.com/pthm/melange/commit/25e13cad917c123d50c34aa17b6d626d69221f25))
+* **sqlgen:** compose closure-source verification on subject-first TTU ([ff76c89](https://github.com/pthm/melange/commit/ff76c891c6a70760b74b5c3de3a4bfaeedd0c67d))
+* **sqlgen:** compose complex-closure list_objects blocks with list functions ([f0fe5b9](https://github.com/pthm/melange/commit/f0fe5b91ec3735dbc3860b65883bc64694cce1dc))
+* **sqlgen:** compose complex-closure list_subjects blocks with list functions ([b982f9a](https://github.com/pthm/melange/commit/b982f9a9b25094113a93b34900e7ebc156130c2b))
+* **sqlgen:** compose complex-userset list_subjects block with list_subjects ([a6d14c4](https://github.com/pthm/melange/commit/a6d14c4c5b18a4f225966c4901f3b3d9c5d1bcfc))
+* **sqlgen:** compose composed-strategy recursive TTU list_objects block ([e127d03](https://github.com/pthm/melange/commit/e127d03e8c91519dc9fd17815194cfe805dc8dab))
+* **sqlgen:** compose list_objects arms with parent list functions when acyclic ([35e2111](https://github.com/pthm/melange/commit/35e2111a11771b29fb0112fc57be50ba7f79eccd))
+* **sqlgen:** compose list_objects intersection group parts ([8f4796b](https://github.com/pthm/melange/commit/8f4796babbd7c1b11c7e6ab989455b6074bcae2b))
+* **sqlgen:** drop search_path from dispatchers/wrappers and call internal directly in list_subjects ([5764322](https://github.com/pthm/melange/commit/5764322f1fe14b9099b66a42833c213b606e153f))
+* **sqlgen:** filter inline closure/userset VALUES per list function ([5460360](https://github.com/pthm/melange/commit/546036000cc57b4095c2199266ba4647f172bf6e))
+* **sqlgen:** filter inline VALUES per check function to referenced types ([9cecad2](https://github.com/pthm/melange/commit/9cecad2d8503e0e9df2224e56db8e92a7af6aa1f))
+* **sqlgen:** fold userset self-check to compile-time IN-list ([25ecfab](https://github.com/pthm/melange/commit/25ecfabc21594ea693c0d4e10829b496387e16f7))
+* **sqlgen:** guard userset-composition list_objects check to userset subjects ([ec8ed75](https://github.com/pthm/melange/commit/ec8ed750b317695c6604786fc2ec33c25489a00e))
+* **sqlgen:** set-oriented anti-join for complex exclusions in list_objects ([f93ba37](https://github.com/pthm/melange/commit/f93ba37b5c09944b6b619cb04c949ce147a3474f))
+* **sqlgen:** subject-first composition for cross-type TTU in list_subjects ([2882def](https://github.com/pthm/melange/commit/2882def29c326162fbbaa8270b1e5d65f5357a50))
+
 ## [0.8.4](https://github.com/pthm/melange/compare/v0.8.3...v0.8.4) (2026-07-01)
 
 
