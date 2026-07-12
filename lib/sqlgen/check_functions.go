@@ -8,7 +8,7 @@ import (
 )
 
 func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, databaseSchema string, noWildcard bool, complexityByRelation map[string]map[string]int) (string, error) {
-	plan := BuildCheckPlanWithOrdering(a, inline, databaseSchema, noWildcard, complexityByRelation)
+	plan := BuildCheckPlanWithOrdering(a, filterInlineForCheck(inline, a), databaseSchema, noWildcard, complexityByRelation)
 	blocks, err := BuildCheckBlocks(plan)
 	if err != nil {
 		return "", fmt.Errorf("building check blocks for %s.%s: %w", a.ObjectType, a.Relation, err)
