@@ -449,26 +449,28 @@ func buildListObjectsSimpleUsersetBlock(plan ListPlan, pattern listUsersetPatter
 	}, nil
 }
 
+// listSelfSatisfyingExpr folds the self-candidate closure lookup to a
+// compile-time IN-list, mirroring usersetSelfSatisfyingExpr for check
+// functions. The self-candidate predicate keys the closure on the constant
+// (plan.ObjectType, plan.Relation) with satisfying_relation =
+// substring(subject_id ...); that satisfying set is statically known as
+// plan.Analysis.SatisfyingRelations (same relation, same closure rows), so the
+// whole-model closure VALUES scan folds to substring(...) IN (...). Empty set →
+// FALSE, matching the empty VALUES scan.
+func listSelfSatisfyingExpr(plan ListPlan) Expr {
+	return In{Expr: SubstringUsersetRelation{Source: SubjectID}, Values: plan.Analysis.SatisfyingRelations}
+}
+
 // buildListObjectsSelfCandidateBlock builds the self-candidate block for when
 // the subject is a userset on the same object type (e.g., document:1#writer).
 func buildListObjectsSelfCandidateBlock(plan ListPlan) *TypedQueryBlock {
-	closureStmt := SelectStmt{
-		ColumnExprs: []Expr{Int(1)},
-		FromExpr:    ClosureTable(plan.Inline.ClosureRows, "c"),
-		Where: And(
-			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(plan.ObjectType)},
-			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(plan.Relation)},
-			Eq{Left: Col{Table: "c", Column: "satisfying_relation"}, Right: SubstringUsersetRelation{Source: SubjectID}},
-		),
-	}
-
 	stmt := SelectStmt{
 		ColumnExprs: []Expr{UsersetObjectID{Source: SubjectID}},
 		Alias:       "object_id",
 		Where: And(
 			HasUserset{Source: SubjectID},
 			Eq{Left: SubjectType, Right: Lit(plan.ObjectType)},
-			Raw(closureStmt.Exists()),
+			listSelfSatisfyingExpr(plan),
 		),
 	}
 

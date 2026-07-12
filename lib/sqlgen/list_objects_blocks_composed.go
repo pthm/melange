@@ -100,22 +100,12 @@ func BuildListObjectsComposedBlocks(plan ListPlan) (ComposedObjectsBlockSet, err
 
 // buildComposedObjectsSelfBlock builds the self-candidate check block.
 func buildComposedObjectsSelfBlock(plan ListPlan) (*TypedQueryBlock, error) {
-	closureStmt := SelectStmt{
-		ColumnExprs: []Expr{Int(1)},
-		FromExpr:    ClosureTable(plan.Inline.ClosureRows, "c"),
-		Where: And(
-			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(plan.ObjectType)},
-			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(plan.Relation)},
-			Eq{Left: Col{Table: "c", Column: "satisfying_relation"}, Right: SubstringUsersetRelation{Source: SubjectID}},
-		),
-	}
-
 	stmt := SelectStmt{
 		ColumnExprs: []Expr{SelectAs(UsersetObjectID{Source: SubjectID}, "object_id")},
 		Where: And(
 			Eq{Left: SubjectType, Right: Lit(plan.ObjectType)},
 			HasUserset{Source: SubjectID},
-			Raw(closureStmt.Exists()),
+			listSelfSatisfyingExpr(plan),
 		),
 	}
 
