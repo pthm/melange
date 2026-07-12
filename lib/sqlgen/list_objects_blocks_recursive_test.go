@@ -32,7 +32,7 @@ func TestBuildCrossTypeTTUBlocksUsesSubjectFirstParentList(t *testing.T) {
 		LinkingRelation:       "namespace",
 		CrossTypeLinkingTypes: "'namespace'",
 		HasCrossTypeLinks:     true,
-	}})
+	}}, nil)
 
 	if len(blocks) != 2 {
 		t.Fatalf("buildCrossTypeTTUBlocks() returned %d blocks, want 2 (subject-first + userset-subject parity)", len(blocks))
@@ -87,7 +87,7 @@ func TestBuildCrossTypeTTUBlocksFallsBackForRecursiveParentList(t *testing.T) {
 		LinkingRelation:       "parent",
 		CrossTypeLinkingTypes: "'folder'",
 		HasCrossTypeLinks:     true,
-	}})
+	}}, nil)
 
 	if len(blocks) != 1 {
 		t.Fatalf("buildCrossTypeTTUBlocks() returned %d blocks, want 1", len(blocks))
@@ -137,7 +137,7 @@ func TestBuildCrossTypeTTUBlocksVerifiesClosureSourceRelationWhenConstrained(t *
 		HasCrossTypeLinks:     true,
 		IsClosurePattern:      true,
 		SourceRelation:        "reader",
-	}})
+	}}, nil)
 
 	if len(blocks) != 2 {
 		t.Fatalf("buildCrossTypeTTUBlocks() returned %d blocks, want 2 (subject-first + userset-subject parity)", len(blocks))
@@ -182,7 +182,7 @@ func TestBuildCrossTypeTTUBlocksSkipsClosureSourceCheckWhenUnconstrained(t *test
 		HasCrossTypeLinks:     true,
 		IsClosurePattern:      true,
 		SourceRelation:        "reader",
-	}})
+	}}, nil)
 
 	if len(blocks) != 2 {
 		t.Fatalf("buildCrossTypeTTUBlocks() returned %d blocks, want 2 (subject-first + userset-subject parity)", len(blocks))
@@ -237,7 +237,7 @@ func TestBuildCrossTypeTTUBlocksFallbackVerifiesClosureSourceRelation(t *testing
 		HasCrossTypeLinks:     true,
 		IsClosurePattern:      true,
 		SourceRelation:        "reader",
-	}})
+	}}, nil)
 
 	if len(blocks) != 1 {
 		t.Fatalf("buildCrossTypeTTUBlocks() returned %d blocks, want 1", len(blocks))
@@ -284,7 +284,7 @@ func TestBuildCrossTypeTTUBlocksComposesAcyclicRecursiveParent(t *testing.T) {
 		LinkingRelation:       "workspace",
 		CrossTypeLinkingTypes: "'workspace'",
 		HasCrossTypeLinks:     true,
-	}})
+	}}, nil)
 
 	if len(blocks) != 2 {
 		t.Fatalf("buildCrossTypeTTUBlocks() returned %d blocks, want 2 (subject-first + userset-subject parity)", len(blocks))

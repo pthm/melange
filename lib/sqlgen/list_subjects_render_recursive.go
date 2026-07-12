@@ -179,7 +179,15 @@ func buildParentClosureCTESQL(plan ListPlan) string {
 	}
 
 	// Recursive case: walk parent chains
-	// Join on the parent's subject (which becomes the new object to search from)
+	// Join on the parent's subject (which becomes the new object to search from).
+	//
+	// Only recurse OUT FROM nodes of the object's own type: the self-referential
+	// linking relation (e.g. folder.parent -> folder) drives the recursion, while
+	// cross-type linking relations (e.g. folder.org -> org) are one-hop terminals
+	// whose targets feed the grant lookup but must not recurse. Without the
+	// p.subject_type guard the walk would follow a cross-type target's OWN
+	// same-named linking relation (org:o1 -> parent -> org:o0), pulling in grants
+	// from unrelated ancestors and over-reporting subjects.
 	recursiveQuery := SelectStmt{
 		ColumnExprs: []Expr{
 			Col{Table: "link", Column: "subject_type"},
@@ -198,6 +206,7 @@ func buildParentClosureCTESQL(plan ListPlan) string {
 			),
 		}},
 		Where: And(
+			Eq{Left: Col{Table: "p", Column: "subject_type"}, Right: Lit(plan.ObjectType)},
 			In{Expr: Col{Table: "link", Column: "relation"}, Values: linkingRelations},
 			Lt{Left: Col{Table: "p", Column: "depth"}, Right: Int(25)},
 		),
