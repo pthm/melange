@@ -101,13 +101,12 @@ func buildListSubjectsUsersetFilterDirectBlock(plan ListPlan) TypedQueryBlock {
 				Eq{Left: SubstringUsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Param("v_filter_relation")},
 				ExistsExpr(closureExistsStmt),
 			),
-			CheckPermissionCall{
-				Schema:       plan.DatabaseSchema,
-				FunctionName: "check_permission",
-				Subject:      SubjectRef{Type: Param("v_filter_type"), ID: Col{Table: "t", Column: "subject_id"}},
-				Relation:     plan.Relation,
-				Object:       LiteralObject(plan.ObjectType, ObjectID),
-				ExpectAllow:  true,
+			CheckPermission{
+				Schema:      plan.DatabaseSchema,
+				Subject:     SubjectRef{Type: Param("v_filter_type"), ID: Col{Table: "t", Column: "subject_id"}},
+				Relation:    plan.Relation,
+				Object:      LiteralObject(plan.ObjectType, ObjectID),
+				ExpectAllow: true,
 			},
 		),
 	}
@@ -268,13 +267,12 @@ func buildListSubjectsIntersectionClosureBlocks(plan ListPlan, subjectTypeExpr, 
 
 		if validate && checkSubjectTypeExpr != "" {
 			stmt.Distinct = true
-			stmt.Where = CheckPermissionCall{
-				Schema:       plan.DatabaseSchema,
-				FunctionName: "check_permission",
-				Subject:      SubjectRef{Type: Raw(checkSubjectTypeExpr), ID: Col{Table: "ics", Column: "subject_id"}},
-				Relation:     plan.Relation,
-				Object:       LiteralObject(plan.ObjectType, ObjectID),
-				ExpectAllow:  true,
+			stmt.Where = CheckPermission{
+				Schema:      plan.DatabaseSchema,
+				Subject:     SubjectRef{Type: Raw(checkSubjectTypeExpr), ID: Col{Table: "ics", Column: "subject_id"}},
+				Relation:    plan.Relation,
+				Object:      LiteralObject(plan.ObjectType, ObjectID),
+				ExpectAllow: true,
 			}
 		}
 

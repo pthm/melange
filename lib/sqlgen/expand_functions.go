@@ -97,6 +97,9 @@ func renderExpandDispatcherWithCases(databaseSchema string, cases []DispatcherCa
 			"Callers that need to distinguish 'no one has access' from 'expand",
 			"not supported for this relation' should compare against Check.",
 		},
+		// Routes only to schema-qualified expand_{type}_{rel} calls, no
+		// unqualified melange_tuples.
+		NoSearchPath: true,
 	}
 
 	publicFn := SqlFunction{
@@ -113,6 +116,7 @@ func renderExpandDispatcherWithCases(databaseSchema string, cases []DispatcherCa
 			"Shallow by default: computed/TTU rewrites surface as unresolved",
 			"pointers (use Checker.ExpandRecursive client-side to chase).",
 		},
+		NoSearchPath: true,
 	}
 
 	return internalFn.SQL() + "\n\n" + publicFn.SQL() + "\n"
@@ -134,14 +138,16 @@ func renderEmptyExpandDispatcher(databaseSchema string) string {
 			"Generated empty dispatcher for expand_permission",
 			"(no eligible relations — every request returns an empty tree)",
 		},
+		NoSearchPath: true,
 	}
 
 	publicFn := SqlFunction{
-		Schema:  databaseSchema,
-		Name:    "expand_permission",
-		Args:    expandDispatcherPublicArgs(),
-		Returns: "JSONB",
-		Body:    Raw(body),
+		Schema:       databaseSchema,
+		Name:         "expand_permission",
+		Args:         expandDispatcherPublicArgs(),
+		Returns:      "JSONB",
+		Body:         Raw(body),
+		NoSearchPath: true,
 	}
 
 	return internalFn.SQL() + "\n\n" + publicFn.SQL() + "\n"

@@ -126,6 +126,9 @@ func renderExplainDispatcherWithCases(databaseSchema string, cases []DispatcherC
 		// recursive bodies, so OR/AND chains should evaluate cheap branches
 		// first.
 		Cost: recursiveCheckCost,
+		// Routes only to schema-qualified explain_{type}_{rel} calls, no
+		// unqualified melange_tuples.
+		NoSearchPath: true,
 	}
 
 	publicFn := SqlFunction{
@@ -139,6 +142,7 @@ func renderExplainDispatcherWithCases(databaseSchema string, cases []DispatcherC
 			"Companion to check_permission — returns a JSONB Trace describing",
 			"why the check decision was reached",
 		},
+		NoSearchPath: true,
 	}
 
 	return internalFn.SQL() + "\n\n" + publicFn.SQL() + "\n"
@@ -160,14 +164,16 @@ func renderEmptyExplainDispatcher(databaseSchema string) string {
 			"Generated empty dispatcher for explain_permission",
 			"(no relations defined — every request returns a deny trace)",
 		},
+		NoSearchPath: true,
 	}
 
 	publicFn := SqlFunction{
-		Schema:  databaseSchema,
-		Name:    "explain_permission",
-		Args:    explainDispatcherPublicArgs(),
-		Returns: "JSONB",
-		Body:    Raw(body),
+		Schema:       databaseSchema,
+		Name:         "explain_permission",
+		Args:         explainDispatcherPublicArgs(),
+		Returns:      "JSONB",
+		Body:         Raw(body),
+		NoSearchPath: true,
 	}
 
 	return internalFn.SQL() + "\n\n" + publicFn.SQL() + "\n"

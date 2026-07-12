@@ -86,6 +86,9 @@ func renderDispatcherWithCases(databaseSchema, fnName string, cases []Dispatcher
 		// via TTU or complex usersets. Mark it as expensive so the planner prefers
 		// cheaper EXISTS branches when both appear in an OR/AND chain.
 		Cost: recursiveCheckCost,
+		// Body references only schema-qualified check_{type}_{rel} calls, no
+		// unqualified melange_tuples — search_path is unnecessary here.
+		NoSearchPath: true,
 	}
 
 	publicFn := SqlFunction{
@@ -98,6 +101,9 @@ func renderDispatcherWithCases(databaseSchema, fnName string, cases []Dispatcher
 			"Generated dispatcher for " + fnName,
 			"Routes to specialized functions for all known type/relation pairs",
 		},
+		// Calls only the schema-qualified internal dispatcher. Omitting SET
+		// lets the planner inline this LANGUAGE sql wrapper.
+		NoSearchPath: true,
 	}
 
 	return internalFn.SQL() + "\n\n" + publicFn.SQL() + "\n"
@@ -114,14 +120,16 @@ func renderEmptyDispatcher(databaseSchema, fnName string) string {
 			"Generated dispatcher for " + fnName + " (no relations defined)",
 			"Returns 0 (deny) for all requests",
 		},
+		NoSearchPath: true,
 	}
 
 	publicFn := SqlFunction{
-		Schema:  databaseSchema,
-		Name:    fnName,
-		Args:    dispatcherPublicArgs(),
-		Returns: "INTEGER",
-		Body:    Raw("SELECT 0"),
+		Schema:       databaseSchema,
+		Name:         fnName,
+		Args:         dispatcherPublicArgs(),
+		Returns:      "INTEGER",
+		Body:         Raw("SELECT 0"),
+		NoSearchPath: true,
 	}
 
 	return internalFn.SQL() + "\n\n" + publicFn.SQL() + "\n"
