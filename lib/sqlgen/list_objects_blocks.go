@@ -339,24 +339,12 @@ func buildIntersectionPartQuery(plan ListPlan, part IntersectionPart) SelectStmt
 		q = Tuples(plan.DatabaseSchema, alias).
 			ObjectType(plan.ObjectType).
 			SelectCol("object_id").
-			Where(CheckPermission{
-				Schema:      plan.DatabaseSchema,
-				Subject:     SubjectParams(),
-				Relation:    part.Relation,
-				Object:      LiteralObject(plan.ObjectType, Col{Table: alias, Column: "object_id"}),
-				ExpectAllow: true,
-			}).
+			Where(intersectionPartMembership(plan, part.Relation, Col{Table: alias, Column: "object_id"})).
 			Distinct()
 	}
 
 	if part.ExcludedRelation != "" {
-		q.Where(CheckPermission{
-			Schema:      plan.DatabaseSchema,
-			Subject:     SubjectParams(),
-			Relation:    part.ExcludedRelation,
-			Object:      LiteralObject(plan.ObjectType, Col{Table: alias, Column: "object_id"}),
-			ExpectAllow: false,
-		})
+		q.Where(intersectionPartExclusion(plan, part.ExcludedRelation, Col{Table: alias, Column: "object_id"}))
 	}
 
 	return q.Build()

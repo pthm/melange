@@ -250,6 +250,96 @@ func complexClosureSubjectMembership(plan ListPlan, rel string) Expr {
 	}
 }
 
+// intersectionPartComposable reports whether a list_objects intersection part
+// may compose with rel's list_objects set. INTERSECT is only sound when every
+// part is complete: if any semi-joined part under-reports, the whole object is
+// dropped. Keep this proof to direct, non-wildcard targets. Recursive/userset/
+// composed targets can make check_permission_internal true for a plain concrete
+// subject through paths their list_objects function may not enumerate; the
+// userset-parity arm cannot recover that case because its guard is false for
+// plain subjects.
+func intersectionPartComposable(plan ListPlan, rel string) bool {
+	target := plan.AnalysisLookup[plan.ObjectType+"."+rel]
+	if target == nil || target.Features.HasWildcard || target.ListStrategy != ListStrategyDirect {
+		return false
+	}
+	return composableListTarget(plan, plan.ObjectType, rel)
+}
+
+// intersectionPartMembership returns the predicate proving the subject holds
+// rel on the candidate object objectID, for one positive part of an INTERSECT
+// group in list_objects.
+//
+// When composition is safe it replaces the per-candidate check_permission_internal
+// with a semi-join against rel's list_objects set, keeping a check arm guarded to
+// userset-typed subjects for parity (a Recursive/Composed target may under-report
+// a userset subject like "group:eng#member"; an under-reported positive membership
+// drops objects that should stay in the group — under-permissive). For plain
+// subjects the guard is false and the arm short-circuits. When composition is
+// unsafe it returns the per-candidate check alone. Mirrors complexClosureMembership.
+func intersectionPartMembership(plan ListPlan, rel string, objectID Expr) Expr {
+	check := CheckPermission{
+		Schema:      plan.DatabaseSchema,
+		Subject:     SubjectParams(),
+		Relation:    rel,
+		Object:      LiteralObject(plan.ObjectType, objectID),
+		ExpectAllow: true,
+	}
+	if !intersectionPartComposable(plan, rel) {
+		return check
+	}
+	return Or(
+		InFunctionSelect{
+			Expr:      objectID,
+			Schema:    plan.DatabaseSchema,
+			FuncName:  ListObjectsFunctionName(plan.ObjectType, rel),
+			Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
+			Alias:     "obj",
+			SelectCol: "object_id",
+		},
+		And(HasUserset{Source: SubjectID}, check),
+	)
+}
+
+// intersectionPartExclusion returns the "but not rel" predicate for a nested
+// exclusion inside an INTERSECT part: the object is kept when the subject does
+// NOT hold rel on it. When composition is safe it is the negation of rel's
+// list_objects membership (plus a userset-guarded check arm — an under-reported
+// exclusion is over-permissive); otherwise the per-candidate check_permission_internal
+// with ExpectAllow=false. Mirrors complexExclusionAntiJoin.
+func intersectionPartExclusion(plan ListPlan, rel string, objectID Expr) Expr {
+	check := CheckPermission{
+		Schema:      plan.DatabaseSchema,
+		Subject:     SubjectParams(),
+		Relation:    rel,
+		Object:      LiteralObject(plan.ObjectType, objectID),
+		ExpectAllow: false,
+	}
+	if !intersectionPartComposable(plan, rel) {
+		return check
+	}
+	return Not(Or(
+		InFunctionSelect{
+			Expr:      objectID,
+			Schema:    plan.DatabaseSchema,
+			FuncName:  ListObjectsFunctionName(plan.ObjectType, rel),
+			Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
+			Alias:     "excl_obj",
+			SelectCol: "object_id",
+		},
+		And(
+			HasUserset{Source: SubjectID},
+			CheckPermission{
+				Schema:      plan.DatabaseSchema,
+				Subject:     SubjectParams(),
+				Relation:    rel,
+				Object:      LiteralObject(plan.ObjectType, objectID),
+				ExpectAllow: true,
+			},
+		),
+	))
+}
+
 // usersetMembership returns the membership predicate for a complex userset
 // arm: does the subject hold pattern.SubjectRelation on the userset object?
 //
