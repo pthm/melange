@@ -50,22 +50,46 @@ ADD COLUMN IF NOT EXISTS melange_version TEXT NOT NULL DEFAULT '';
 `, table)
 }
 
-// widenVersionColumns returns a query that widens the version columns of
-// existing tables from their original VARCHAR types to TEXT. Module
-// pseudo-versions (e.g. "v0.8.4-0.20260701080815-8f95d5d39b90" from
-// go-install builds) are 38+ characters and overflowed the original
-// codegen_version VARCHAR(32), failing every migrate with "value too long".
-// Runs unconditionally like the sibling ADD COLUMN helpers: ALTER TYPE has
-// no IF syntax, varchar→text is catalog-only (no table rewrite), and re-runs
-// on an already-TEXT column are harmless no-op catalog updates on a table
-// with one row per migration.
-func widenVersionColumns(databaseSchema string) string {
+// widenVersionColumnsDDL returns a guarded statement that widens the version
+// columns to TEXT only when they are still bounded VARCHAR. Module
+// pseudo-versions (e.g. "v0.8.4-0.20260701080815-8f95d5d39b90" from go-install
+// builds) are 38+ characters and overflowed the original codegen_version
+// VARCHAR(32), failing every migrate with "value too long".
+//
+// ALTER TYPE has no IF syntax and PostgreSQL rejects even a no-op
+// VARCHAR->TEXT/TEXT->TEXT change when a view or rule depends on the column, so
+// the widen must be conditional: once the columns are TEXT
+// (character_maximum_length IS NULL) the ALTERs are skipped, leaving dependent
+// views intact. The guard runs server-side in a DO block so the same statement
+// is correct on both the direct apply path and the dry-run/file output path.
+func widenVersionColumnsDDL(databaseSchema string) string {
 	table := sqldsl.PrefixIdent("melange_migrations", databaseSchema)
+	schema := sqldsl.PostgresSchemaExpr(databaseSchema)
 
 	return fmt.Sprintf(`
-ALTER TABLE %[1]s ALTER COLUMN codegen_version TYPE TEXT;
-ALTER TABLE %[1]s ALTER COLUMN melange_version TYPE TEXT;
-`, table)
+DO $mig$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'melange_migrations'
+          AND column_name = 'codegen_version'
+          AND table_schema = %[2]s
+          AND character_maximum_length IS NOT NULL
+    ) THEN
+        ALTER TABLE %[1]s ALTER COLUMN codegen_version TYPE TEXT;
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'melange_migrations'
+          AND column_name = 'melange_version'
+          AND table_schema = %[2]s
+          AND character_maximum_length IS NOT NULL
+    ) THEN
+        ALTER TABLE %[1]s ALTER COLUMN melange_version TYPE TEXT;
+    END IF;
+END
+$mig$;
+`, table, schema)
 }
 
 // migrationsTableDDL returns every statement that brings the
@@ -79,7 +103,7 @@ func migrationsTableDDL(databaseSchema string) []string {
 		migrationsDDL(databaseSchema),
 		addMelangeVersionColumn(databaseSchema),
 		addFunctionChecksumsColumn(databaseSchema),
-		widenVersionColumns(databaseSchema),
+		widenVersionColumnsDDL(databaseSchema),
 	}
 }
 

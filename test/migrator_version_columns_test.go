@@ -111,6 +111,36 @@ type document
 			"file-based migrations must include column additions for legacy tables")
 	})
 
+	t.Run("re-migrate succeeds with a view over melange_migrations", func(t *testing.T) {
+		// The widen must be conditional: PostgreSQL rejects ALTER COLUMN TYPE
+		// (even a no-op TEXT->TEXT) when a view depends on the column. On a
+		// fresh install the version columns are already TEXT, so the widen must
+		// be skipped and a dependent view must not break re-migration.
+		db := testutil.EmptyDB(t)
+		_, err := db.ExecContext(ctx, `
+			CREATE TABLE melange_tuples (
+				subject_type TEXT NOT NULL,
+				subject_id TEXT NOT NULL,
+				relation TEXT NOT NULL,
+				object_type TEXT NOT NULL,
+				object_id TEXT NOT NULL
+			)`)
+		require.NoError(t, err)
+
+		_, err = migrator.MigrateWithOptions(ctx, db, schemaPath, migrator.MigrateOptions{Version: version.Version})
+		require.NoError(t, err)
+
+		_, err = db.ExecContext(ctx,
+			`CREATE VIEW mig_audit AS SELECT codegen_version, melange_version FROM melange_migrations`)
+		require.NoError(t, err)
+
+		_, err = migrator.MigrateWithOptions(ctx, db, schemaPath, migrator.MigrateOptions{
+			Version: version.Version,
+			Force:   true,
+		})
+		require.NoError(t, err, "re-migrate must not break on a view depending on melange_migrations")
+	})
+
 	t.Run("upgrade widens legacy varchar columns", func(t *testing.T) {
 		db := testutil.EmptyDB(t)
 		_, err := db.ExecContext(ctx, `
