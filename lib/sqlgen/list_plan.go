@@ -90,6 +90,15 @@ func BuildListObjectsPlanWithLookup(a RelationAnalysis, inline InlineSQLData, da
 			SubjectType,
 			SubjectID,
 		)
+		// list_objects context: object_id is the per-row candidate column and
+		// the subject exprs are query-constant params, so complex exclusions
+		// may use a set-oriented anti-join against the excluded relation's
+		// list_objects function instead of a per-candidate check.
+		plan.Exclusions.Compose = &exclusionCompose{
+			Lookup:   lookup,
+			FromType: a.ObjectType,
+			FromRel:  a.Relation,
+		}
 	}
 	return plan
 }

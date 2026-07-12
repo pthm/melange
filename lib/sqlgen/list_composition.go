@@ -146,19 +146,27 @@ func relationReferences(a *RelationAnalysis) []string {
 	return refs
 }
 
-// composableListTarget reports whether (targetType, targetRelation) has a
-// usable list_objects function this plan's function may compose with: the
-// target must be list-generatable and composition must be cycle-free and
-// unable to reach an always-raising DepthExceeded list function.
-func composableListTarget(plan ListPlan, targetType, targetRelation string) bool {
-	if plan.AnalysisLookup == nil {
+// composableListTargetLookup reports whether the list_objects function for
+// (fromType, fromRelation) may compose with the list_objects function for
+// (targetType, targetRelation): the target must be list-generatable and
+// composition must be cycle-free and unable to reach an always-raising
+// DepthExceeded list function (listCompositionSafe checks DepthExceeded on
+// every reachable node, including the target itself).
+func composableListTargetLookup(lookup map[string]*RelationAnalysis, fromType, fromRelation, targetType, targetRelation string) bool {
+	if lookup == nil {
 		return false
 	}
-	target, ok := plan.AnalysisLookup[targetType+"."+targetRelation]
+	target, ok := lookup[targetType+"."+targetRelation]
 	if !ok || !target.Capabilities.ListAllowed {
 		return false
 	}
-	return listCompositionSafe(plan.AnalysisLookup, plan.ObjectType, plan.Relation, targetType, targetRelation)
+	return listCompositionSafe(lookup, fromType, fromRelation, targetType, targetRelation)
+}
+
+// composableListTarget is the ListPlan-scoped form of
+// composableListTargetLookup, from this plan's relation to the target.
+func composableListTarget(plan ListPlan, targetType, targetRelation string) bool {
+	return composableListTargetLookup(plan.AnalysisLookup, plan.ObjectType, plan.Relation, targetType, targetRelation)
 }
 
 // usersetMembership returns the membership predicate for a complex userset
