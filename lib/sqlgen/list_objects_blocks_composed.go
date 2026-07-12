@@ -166,15 +166,45 @@ func buildComposedTTUObjectsBlock(plan ListPlan, anchor *IndirectAnchorInfo, tar
 }
 
 // buildComposedRecursiveTTUObjectsBlock builds a recursive TTU composition block.
+//
+// The linking tuples are scanned and each parent object t.subject_id validated
+// against anchor's target relation. When composition is safe
+// (composableListTarget), the per-candidate check_permission_internal is
+// replaced by a semi-join against the parent relation's list_objects set — the
+// set of parent objects the subject holds the target relation on — mirroring
+// buildComposedTTUObjectsBlock. A check arm guarded to userset-typed subjects is
+// kept for parity: the list function is complete for plain subjects but a
+// Recursive/Composed target may under-report a userset-typed query subject
+// ("group:eng#member"), and an under-reported positive membership drops objects.
+// When composition is unsafe (the recursive parent chain is self-referential/
+// cyclic, so the gate refuses) it keeps the per-candidate check alone.
 func buildComposedRecursiveTTUObjectsBlock(plan ListPlan, anchor *IndirectAnchorInfo, recursiveType string, exclusions ExclusionConfig) (*TypedQueryBlock, error) {
 	exclusionPreds := exclusions.BuildPredicates()
+
+	targetRel := anchor.Path[0].TargetRelation
+	check := CheckPermissionInternalExpr(plan.DatabaseSchema, SubjectParams(), targetRel, ObjectRef{Type: Lit(recursiveType), ID: Col{Table: "t", Column: "subject_id"}}, true)
+
+	var membership Expr = check
+	if composableListTarget(plan, recursiveType, targetRel) {
+		membership = Or(
+			InFunctionSelect{
+				Expr:      Col{Table: "t", Column: "subject_id"},
+				Schema:    plan.DatabaseSchema,
+				FuncName:  ListObjectsFunctionName(recursiveType, targetRel),
+				Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
+				Alias:     "obj",
+				SelectCol: "object_id",
+			},
+			And(HasUserset{Source: SubjectID}, check),
+		)
+	}
 
 	conditions := make([]Expr, 0, 4+len(exclusionPreds))
 	conditions = append(conditions,
 		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 		Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(anchor.Path[0].LinkingRelation)},
 		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(recursiveType)},
-		CheckPermissionInternalExpr(plan.DatabaseSchema, SubjectParams(), anchor.Path[0].TargetRelation, ObjectRef{Type: Lit(recursiveType), ID: Col{Table: "t", Column: "subject_id"}}, true),
+		membership,
 	)
 	conditions = append(conditions, exclusionPreds...)
 
