@@ -224,19 +224,38 @@ func buildComposedRecursiveTTUObjectsBlock(plan ListPlan, anchor *IndirectAnchor
 }
 
 // buildComposedUsersetObjectsBlock builds a userset composition block.
+//
+// The block finds grant tuples whose subject is a userset (X:id#rel) and keeps
+// the candidate object when the query subject holds rel on X:id. When
+// composition is safe (composableListTarget) that membership is a semi-join
+// against the userset relation's list_objects set, with a check arm guarded to
+// userset-typed query subjects for parity: the list function is complete for
+// plain subjects but a Recursive/Composed target may under-report a userset
+// query subject ("group:eng#member"), and an under-reported positive membership
+// drops objects. The guard (position('#' in p_subject_id) > 0) means plain
+// subjects skip the per-row check entirely — the fan-out this block used to pay
+// on every subject. When composition is unsafe it keeps the per-candidate check
+// alone. Mirrors usersetMembership / buildComposedRecursiveTTUObjectsBlock.
 func buildComposedUsersetObjectsBlock(plan ListPlan, firstStep AnchorPathStep, exclusions ExclusionConfig) (*TypedQueryBlock, error) {
 	exclusionPreds := exclusions.BuildPredicates()
 
-	// Build subquery for list function call using typed DSL
 	// split_part(t.subject_id, '#', 1) extracts the object_id from the userset
 	usersetObjectID := Raw("split_part(t.subject_id, '#', 1)")
-	inSubquery := InFunctionSelect{
-		Expr:      usersetObjectID,
-		Schema:    plan.DatabaseSchema,
-		FuncName:  ListObjectsFunctionName(firstStep.SubjectType, firstStep.SubjectRelation),
-		Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
-		Alias:     "obj",
-		SelectCol: "object_id",
+	check := CheckPermissionInternalExpr(plan.DatabaseSchema, SubjectParams(), firstStep.SubjectRelation, ObjectRef{Type: Lit(firstStep.SubjectType), ID: usersetObjectID}, true)
+
+	var membership Expr = check
+	if composableListTarget(plan, firstStep.SubjectType, firstStep.SubjectRelation) {
+		membership = Or(
+			InFunctionSelect{
+				Expr:      usersetObjectID,
+				Schema:    plan.DatabaseSchema,
+				FuncName:  ListObjectsFunctionName(firstStep.SubjectType, firstStep.SubjectRelation),
+				Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
+				Alias:     "obj",
+				SelectCol: "object_id",
+			},
+			And(HasUserset{Source: SubjectID}, check),
+		)
 	}
 
 	conditions := make([]Expr, 0, 6+len(exclusionPreds))
@@ -246,10 +265,7 @@ func buildComposedUsersetObjectsBlock(plan ListPlan, firstStep AnchorPathStep, e
 		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(firstStep.SubjectType)},
 		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
 		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(firstStep.SubjectRelation)},
-		Or(
-			inSubquery,
-			CheckPermissionInternalExpr(plan.DatabaseSchema, SubjectParams(), firstStep.SubjectRelation, ObjectRef{Type: Lit(firstStep.SubjectType), ID: usersetObjectID}, true),
-		),
+		membership,
 	)
 	conditions = append(conditions, exclusionPreds...)
 
