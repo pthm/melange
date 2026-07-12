@@ -35,58 +35,66 @@ func bigClosure(objType, relation string, satisfying []string) InlineSQLData {
 	return InlineSQLData{ClosureRows: rows}
 }
 
-func TestUsersetSelfCheck_CheckFunctionFold(t *testing.T) {
-	a := mkFoldAnalysis("doc", "viewer", []string{"viewer", "editor"})
-	plan := BuildCheckPlan(a, bigClosure("doc", "viewer", []string{"viewer", "editor"}), "", false)
-	selfCheck, _ := buildUsersetSubjectChecks(plan)
-	sql := selfCheck.SQL()
-
-	if strings.Contains(sql, closureAlias) {
-		t.Fatalf("check self-check still embeds closure VALUES:\n%s", sql)
-	}
-	if !strings.Contains(sql, "IN ('viewer', 'editor')") {
-		t.Fatalf("check self-check missing folded IN-list:\n%s", sql)
-	}
-}
-
-func TestUsersetSelfCheck_ListObjectsFold(t *testing.T) {
-	a := mkFoldAnalysis("doc", "viewer", []string{"viewer"})
-	plan := ListPlan{
-		Analysis:   a,
-		Inline:     bigClosure("doc", "viewer", []string{"viewer"}),
+// listFoldPlan builds a ListPlan for the doc#viewer self-candidate fold tests,
+// with a big unrelated closure that a VALUES-scan would embed.
+func listFoldPlan(satisfying []string) ListPlan {
+	return ListPlan{
+		Analysis:   mkFoldAnalysis("doc", "viewer", satisfying),
+		Inline:     bigClosure("doc", "viewer", satisfying),
 		ObjectType: "doc",
 		Relation:   "viewer",
 	}
-	block := buildListObjectsSelfCandidateBlock(plan)
-	sql := block.Query.SQL()
-
-	if strings.Contains(sql, closureAlias) {
-		t.Fatalf("list_objects self-candidate still embeds closure VALUES:\n%s", sql)
-	}
-	if !strings.Contains(sql, "IN ('viewer')") {
-		t.Fatalf("list_objects self-candidate missing folded IN-list:\n%s", sql)
-	}
 }
 
-func TestUsersetSelfCheck_ComposedObjectsFold(t *testing.T) {
-	a := mkFoldAnalysis("doc", "viewer", []string{"viewer"})
-	plan := ListPlan{
-		Analysis:   a,
-		Inline:     bigClosure("doc", "viewer", []string{"viewer"}),
-		ObjectType: "doc",
-		Relation:   "viewer",
+// Each self-check site folds the whole-model closure VALUES scan to a
+// compile-time IN-list: the rendered SQL must not embed the closure table and
+// must carry the satisfying set as an IN-list.
+func TestUsersetSelfCheck_Fold(t *testing.T) {
+	cases := []struct {
+		name   string
+		wantIN string
+		sql    func(t *testing.T) string
+	}{
+		{
+			name:   "check function",
+			wantIN: "IN ('viewer', 'editor')",
+			sql: func(t *testing.T) string {
+				a := mkFoldAnalysis("doc", "viewer", []string{"viewer", "editor"})
+				plan := BuildCheckPlan(a, bigClosure("doc", "viewer", []string{"viewer", "editor"}), "", false)
+				selfCheck, _ := buildUsersetSubjectChecks(plan)
+				return selfCheck.SQL()
+			},
+		},
+		{
+			name:   "list_objects self-candidate",
+			wantIN: "IN ('viewer')",
+			sql: func(t *testing.T) string {
+				return buildListObjectsSelfCandidateBlock(listFoldPlan([]string{"viewer"})).Query.SQL()
+			},
+		},
+		{
+			name:   "composed self-block",
+			wantIN: "IN ('viewer')",
+			sql: func(t *testing.T) string {
+				block, err := buildComposedObjectsSelfBlock(listFoldPlan([]string{"viewer"}))
+				if err != nil {
+					t.Fatal(err)
+				}
+				return block.Query.SQL()
+			},
+		},
 	}
-	block, err := buildComposedObjectsSelfBlock(plan)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sql := block.Query.SQL()
 
-	if strings.Contains(sql, closureAlias) {
-		t.Fatalf("composed self-block still embeds closure VALUES:\n%s", sql)
-	}
-	if !strings.Contains(sql, "IN ('viewer')") {
-		t.Fatalf("composed self-block missing folded IN-list:\n%s", sql)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sql := tc.sql(t)
+			if strings.Contains(sql, closureAlias) {
+				t.Fatalf("%s still embeds closure VALUES:\n%s", tc.name, sql)
+			}
+			if !strings.Contains(sql, tc.wantIN) {
+				t.Fatalf("%s missing folded IN-list %q:\n%s", tc.name, tc.wantIN, sql)
+			}
+		})
 	}
 }
 

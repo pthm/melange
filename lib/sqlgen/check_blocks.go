@@ -303,17 +303,23 @@ func orExprs(exprs []Expr) Expr {
 
 // usersetSelfSatisfyingExpr folds the userset self-check closure lookup — "is
 // the subject a userset on THIS object type whose relation satisfies
-// plan.Relation?" — to a compile-time IN-list. object_type and relation are
-// constants (plan.ObjectType, plan.Relation), so the closure's
-// satisfying_relation set for that (type, relation) is statically known:
-// plan.Analysis.SatisfyingRelations (populated directly from the same closure
-// rows in analyzeRelation). This replaces a VALUES scan over the whole model's
-// closure with substring(subject_id ...) IN ('rel', ...), so the emitted SQL no
-// longer embeds the closure table and its size is independent of unrelated
-// relations. Empty SatisfyingRelations → `... IN ()` renders FALSE, matching the
-// VALUES scan (which also never matches when the (type, relation) has no rows).
-func usersetSelfSatisfyingExpr(plan CheckPlan, subjectID Expr) Expr {
-	return In{Expr: SubstringUsersetRelation{Source: subjectID}, Values: plan.Analysis.SatisfyingRelations}
+// a.Relation?" — to a compile-time IN-list. object_type and relation are
+// constants (a.ObjectType, a.Relation), so the closure's satisfying_relation
+// set for that (type, relation) is statically known: a.SatisfyingRelations
+// (populated directly from the same closure rows in analyzeRelation). This
+// replaces a VALUES scan over the whole model's closure with
+// substring(subject_id ...) IN ('rel', ...), so the emitted SQL no longer
+// embeds the closure table and its size is independent of unrelated relations.
+// Empty SatisfyingRelations → `... IN ()` renders FALSE, matching the VALUES
+// scan (which also never matches when the (type, relation) has no rows).
+//
+// Shared by the check self-check (buildUsersetSubjectChecks) and the
+// list_objects self-candidate blocks (buildListObjectsSelfCandidateBlock,
+// buildComposedObjectsSelfBlock): all three key the same constant (object_type,
+// relation) on substring(subject_id ...) against the same closure rows, so they
+// fold to the identical IN-list.
+func usersetSelfSatisfyingExpr(a RelationAnalysis) Expr {
+	return In{Expr: SubstringUsersetRelation{Source: SubjectID}, Values: a.SatisfyingRelations}
 }
 
 func buildUsersetSubjectChecks(plan CheckPlan) (selfCheck, computedCheck SelectStmt) {
@@ -321,7 +327,7 @@ func buildUsersetSubjectChecks(plan CheckPlan) (selfCheck, computedCheck SelectS
 
 	selfCheck = SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
-		Where:       usersetSelfSatisfyingExpr(plan, SubjectID),
+		Where:       usersetSelfSatisfyingExpr(plan.Analysis),
 		Limit:       1,
 	}
 

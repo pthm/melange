@@ -105,7 +105,7 @@ func buildComposedObjectsSelfBlock(plan ListPlan) (*TypedQueryBlock, error) {
 		Where: And(
 			Eq{Left: SubjectType, Right: Lit(plan.ObjectType)},
 			HasUserset{Source: SubjectID},
-			listSelfSatisfyingExpr(plan),
+			usersetSelfSatisfyingExpr(plan.Analysis),
 		),
 	}
 
