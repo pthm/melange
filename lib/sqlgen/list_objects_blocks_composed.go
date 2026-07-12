@@ -186,17 +186,7 @@ func buildComposedRecursiveTTUObjectsBlock(plan ListPlan, anchor *IndirectAnchor
 
 	var membership Expr = check
 	if composableListTarget(plan, recursiveType, targetRel) {
-		membership = Or(
-			InFunctionSelect{
-				Expr:      Col{Table: "t", Column: "subject_id"},
-				Schema:    plan.DatabaseSchema,
-				FuncName:  ListObjectsFunctionName(recursiveType, targetRel),
-				Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
-				Alias:     "obj",
-				SelectCol: "object_id",
-			},
-			And(HasUserset{Source: SubjectID}, check),
-		)
+		membership = composedListObjectsMembership(plan.DatabaseSchema, recursiveType, targetRel, Col{Table: "t", Column: "subject_id"}, SubjectType, SubjectID, "obj", check)
 	}
 
 	conditions := make([]Expr, 0, 4+len(exclusionPreds))
@@ -245,17 +235,7 @@ func buildComposedUsersetObjectsBlock(plan ListPlan, firstStep AnchorPathStep, e
 
 	var membership Expr = check
 	if composableListTarget(plan, firstStep.SubjectType, firstStep.SubjectRelation) {
-		membership = Or(
-			InFunctionSelect{
-				Expr:      usersetObjectID,
-				Schema:    plan.DatabaseSchema,
-				FuncName:  ListObjectsFunctionName(firstStep.SubjectType, firstStep.SubjectRelation),
-				Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
-				Alias:     "obj",
-				SelectCol: "object_id",
-			},
-			And(HasUserset{Source: SubjectID}, check),
-		)
+		membership = composedListObjectsMembership(plan.DatabaseSchema, firstStep.SubjectType, firstStep.SubjectRelation, usersetObjectID, SubjectType, SubjectID, "obj", check)
 	}
 
 	conditions := make([]Expr, 0, 6+len(exclusionPreds))

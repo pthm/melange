@@ -186,19 +186,10 @@ func (c ExclusionConfig) complexExclusionAntiJoin(rel string) Expr {
 	if !composableListTargetLookup(c.Compose.Lookup, c.Compose.FromType, c.Compose.FromRel, c.ObjectType, rel) {
 		return nil
 	}
-	membership := Or(
-		InFunctionSelect{
-			Expr:      c.ObjectIDExpr,
-			Schema:    c.DatabaseSchema,
-			FuncName:  ListObjectsFunctionName(c.ObjectType, rel),
-			Args:      []Expr{c.SubjectTypeExpr, c.SubjectIDExpr, Null{}, Null{}},
-			Alias:     "excl_obj",
-			SelectCol: "object_id",
-		},
-		And(
-			HasUserset{Source: c.SubjectIDExpr},
-			c.checkPermission(rel, c.objectRef(), true),
-		),
+	membership := composedListObjectsMembership(
+		c.DatabaseSchema, c.ObjectType, rel, c.ObjectIDExpr,
+		c.SubjectTypeExpr, c.SubjectIDExpr, "excl_obj",
+		c.checkPermission(rel, c.objectRef(), true),
 	)
 	return Not(membership)
 }

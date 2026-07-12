@@ -427,17 +427,7 @@ func sourceRelationCheck(plan ListPlan, parent ListParentRelationData) Expr {
 	if !composableListTarget(plan, plan.ObjectType, parent.SourceRelation) {
 		return check
 	}
-	return Or(
-		InFunctionSelect{
-			Expr:      Col{Table: "child", Column: "object_id"},
-			Schema:    plan.DatabaseSchema,
-			FuncName:  ListObjectsFunctionName(plan.ObjectType, parent.SourceRelation),
-			Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
-			Alias:     "src_obj",
-			SelectCol: "object_id",
-		},
-		And(HasUserset{Source: SubjectID}, check),
-	)
+	return composedListObjectsMembership(plan.DatabaseSchema, plan.ObjectType, parent.SourceRelation, Col{Table: "child", Column: "object_id"}, SubjectType, SubjectID, "src_obj", check)
 }
 
 // buildCheckPermissionCrossTypeTTUBlock builds the per-candidate check block

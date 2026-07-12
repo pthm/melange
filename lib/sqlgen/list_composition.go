@@ -169,6 +169,31 @@ func composableListTarget(plan ListPlan, targetType, targetRelation string) bool
 	return composableListTargetLookup(plan.AnalysisLookup, plan.ObjectType, plan.Relation, targetType, targetRelation)
 }
 
+// composedListObjectsMembership is the positive-membership predicate shared by
+// every list_objects composition site: "the subject holds targetRel on the
+// candidate object objectIDExpr". It semi-joins against the target relation's
+// list_objects set and keeps a check arm guarded to userset-typed subjects
+// (position('#' in subjectID) > 0) for parity — the list function is complete
+// for plain subjects but a Recursive/Composed target may under-report a userset
+// subject ("group:eng#member"), and an under-reported positive membership drops
+// objects (under-permissive); for plain subjects the guard is false and the arm
+// short-circuits. Callers gate composability first and pass the per-candidate
+// check as the fallback arm; anti-join sites negate the result. The alias only
+// affects the rendered subquery alias and must stay unique within a predicate.
+func composedListObjectsMembership(schema, targetType, targetRel string, objectIDExpr, subjectType, subjectID Expr, alias string, check Expr) Expr {
+	return Or(
+		InFunctionSelect{
+			Expr:      objectIDExpr,
+			Schema:    schema,
+			FuncName:  ListObjectsFunctionName(targetType, targetRel),
+			Args:      []Expr{subjectType, subjectID, Null{}, Null{}},
+			Alias:     alias,
+			SelectCol: "object_id",
+		},
+		And(HasUserset{Source: subjectID}, check),
+	)
+}
+
 // complexClosureMembership returns the predicate proving the subject holds rel
 // on the candidate object t.object_id, for a complex closure relation.
 //
@@ -192,17 +217,7 @@ func complexClosureMembership(plan ListPlan, rel string) Expr {
 	if !composableListTarget(plan, plan.ObjectType, rel) {
 		return check
 	}
-	return Or(
-		InFunctionSelect{
-			Expr:      Col{Table: "t", Column: "object_id"},
-			Schema:    plan.DatabaseSchema,
-			FuncName:  ListObjectsFunctionName(plan.ObjectType, rel),
-			Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
-			Alias:     "obj",
-			SelectCol: "object_id",
-		},
-		And(HasUserset{Source: SubjectID}, check),
-	)
+	return composedListObjectsMembership(plan.DatabaseSchema, plan.ObjectType, rel, Col{Table: "t", Column: "object_id"}, SubjectType, SubjectID, "obj", check)
 }
 
 // complexClosureSubjectMembership returns the predicate proving the candidate
@@ -288,17 +303,7 @@ func intersectionPartMembership(plan ListPlan, rel string, objectID Expr) Expr {
 	if !intersectionPartComposable(plan, rel) {
 		return check
 	}
-	return Or(
-		InFunctionSelect{
-			Expr:      objectID,
-			Schema:    plan.DatabaseSchema,
-			FuncName:  ListObjectsFunctionName(plan.ObjectType, rel),
-			Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
-			Alias:     "obj",
-			SelectCol: "object_id",
-		},
-		And(HasUserset{Source: SubjectID}, check),
-	)
+	return composedListObjectsMembership(plan.DatabaseSchema, plan.ObjectType, rel, objectID, SubjectType, SubjectID, "obj", check)
 }
 
 // intersectionPartExclusion returns the "but not rel" predicate for a nested
@@ -318,26 +323,14 @@ func intersectionPartExclusion(plan ListPlan, rel string, objectID Expr) Expr {
 	if !intersectionPartComposable(plan, rel) {
 		return check
 	}
-	return Not(Or(
-		InFunctionSelect{
-			Expr:      objectID,
-			Schema:    plan.DatabaseSchema,
-			FuncName:  ListObjectsFunctionName(plan.ObjectType, rel),
-			Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
-			Alias:     "excl_obj",
-			SelectCol: "object_id",
-		},
-		And(
-			HasUserset{Source: SubjectID},
-			CheckPermission{
-				Schema:      plan.DatabaseSchema,
-				Subject:     SubjectParams(),
-				Relation:    rel,
-				Object:      LiteralObject(plan.ObjectType, objectID),
-				ExpectAllow: true,
-			},
-		),
-	))
+	positiveCheck := CheckPermission{
+		Schema:      plan.DatabaseSchema,
+		Subject:     SubjectParams(),
+		Relation:    rel,
+		Object:      LiteralObject(plan.ObjectType, objectID),
+		ExpectAllow: true,
+	}
+	return Not(composedListObjectsMembership(plan.DatabaseSchema, plan.ObjectType, rel, objectID, SubjectType, SubjectID, "excl_obj", positiveCheck))
 }
 
 // usersetMembership returns the membership predicate for a complex userset
@@ -365,15 +358,5 @@ func usersetMembership(plan ListPlan, pattern listUsersetPatternInput) Expr {
 	if !composableListTarget(plan, pattern.SubjectType, pattern.SubjectRelation) {
 		return check
 	}
-	return Or(
-		InFunctionSelect{
-			Expr:      UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}},
-			Schema:    plan.DatabaseSchema,
-			FuncName:  ListObjectsFunctionName(pattern.SubjectType, pattern.SubjectRelation),
-			Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
-			Alias:     "obj",
-			SelectCol: "object_id",
-		},
-		And(HasUserset{Source: SubjectID}, check),
-	)
+	return composedListObjectsMembership(plan.DatabaseSchema, pattern.SubjectType, pattern.SubjectRelation, UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}}, SubjectType, SubjectID, "obj", check)
 }
