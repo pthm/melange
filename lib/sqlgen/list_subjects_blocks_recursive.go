@@ -223,10 +223,7 @@ func composableSubjectFirstUserset(plan ListPlan, pattern listUsersetPatternInpu
 	if plan.Analysis.Features.HasWildcard {
 		return false
 	}
-	if reachesWildcard(plan.AnalysisLookup, pattern.SubjectType, pattern.SubjectRelation) {
-		return false
-	}
-	return composableListTargetLookup(plan.AnalysisLookup, plan.ObjectType, plan.Relation, pattern.SubjectType, pattern.SubjectRelation)
+	return composableListSubjectsTarget(plan, pattern.SubjectType, pattern.SubjectRelation)
 }
 
 // buildListSubjectsRecursiveComplexUsersetBlockComposed is the set-oriented form
@@ -692,14 +689,10 @@ func buildSubjectFirstTTUSubjectBlocks(plan ListPlan, parent ListParentRelationD
 		return nil
 	}
 	for _, ptype := range types {
-		target := plan.AnalysisLookup[ptype+"."+parent.Relation]
-		if target == nil || reachesWildcard(plan.AnalysisLookup, ptype, parent.Relation) {
-			return nil
-		}
 		// ListAllowed gates both list_objects and list_subjects generation and
 		// the reference graph (TTU parent edges) is shared, so the list_objects
 		// composability check covers the list_subjects call too.
-		if !composableListTargetLookup(plan.AnalysisLookup, plan.ObjectType, plan.Relation, ptype, parent.Relation) {
+		if !composableListSubjectsTarget(plan, ptype, parent.Relation) {
 			return nil
 		}
 	}
@@ -724,11 +717,7 @@ func buildSubjectFirstTTUSubjectBlocks(plan ListPlan, parent ListParentRelationD
 // buildSubjectFirstTTUSubjectBlocks). The closure-pattern subject_pool block does
 // not apply plan.Exclusions, so neither does this replacement.
 func buildSubjectFirstTTUClosureSubjectBlocks(plan ListPlan, parent ListParentRelationData) []TypedQueryBlock {
-	target := plan.AnalysisLookup[plan.ObjectType+"."+parent.SourceRelation]
-	if target == nil || reachesWildcard(plan.AnalysisLookup, plan.ObjectType, parent.SourceRelation) {
-		return nil
-	}
-	if !composableListTargetLookup(plan.AnalysisLookup, plan.ObjectType, plan.Relation, plan.ObjectType, parent.SourceRelation) {
+	if !composableListSubjectsTarget(plan, plan.ObjectType, parent.SourceRelation) {
 		return nil
 	}
 

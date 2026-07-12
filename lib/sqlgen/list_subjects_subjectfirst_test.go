@@ -145,3 +145,40 @@ func TestReachesWildcard_Transitive(t *testing.T) {
 		t.Error("no wildcard reachable once org.viewer removed")
 	}
 }
+
+// TestComposableListSubjectsTarget pins the extracted subject-first gate (the
+// single predicate now shared by complex-closure, complex-userset and TTU
+// subject-first composition sites): composable only when the target is
+// list-generatable, cycle/DepthExceeded-safe, AND not wildcard-reachable.
+func TestComposableListSubjectsTarget(t *testing.T) {
+	plan, _ := subjectFirstPlan(composableOrgAdmin())
+	if !composableListSubjectsTarget(plan, "org", "admin") {
+		t.Fatal("safe, non-wildcard, generatable target must be composable")
+	}
+
+	// Wildcard-reachable target: list_org_admin_sub would emit '*', so skip.
+	wc := composableOrgAdmin()
+	wc["org.admin"].Features.HasWildcard = true
+	planWC, _ := subjectFirstPlan(wc)
+	if composableListSubjectsTarget(planWC, "org", "admin") {
+		t.Error("wildcard-reachable target must not be composable")
+	}
+
+	// Cyclic: target references back into the caller relation → unsafe.
+	cyc := composableOrgAdmin()
+	cyc["org.admin"].ParentRelations = []ParentRelationInfo{{
+		Relation: "viewer", LinkingRelation: "link", AllowedLinkingTypes: []string{"folder"},
+	}}
+	planCyc, _ := subjectFirstPlan(cyc)
+	if composableListSubjectsTarget(planCyc, "org", "admin") {
+		t.Error("cyclic target must not be composable")
+	}
+
+	// Not list-generatable → unsafe.
+	ng := composableOrgAdmin()
+	ng["org.admin"].Capabilities.ListAllowed = false
+	planNG, _ := subjectFirstPlan(ng)
+	if composableListSubjectsTarget(planNG, "org", "admin") {
+		t.Error("non-generatable target must not be composable")
+	}
+}

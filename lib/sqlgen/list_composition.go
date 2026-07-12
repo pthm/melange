@@ -211,6 +211,23 @@ func composableListTarget(plan ListPlan, targetType, targetRelation string) bool
 	return composableListTargetLookup(plan.AnalysisLookup, plan.ObjectType, plan.Relation, targetType, targetRelation)
 }
 
+// composableListSubjectsTarget reports whether this plan's list_subjects
+// function may compose against the target's list_{targetType}_{targetRelation}_sub
+// function. It is composableListTarget plus the list_subjects-only wildcard skip:
+// list_*_sub emits '*' for wildcard grants rather than the concrete subjects, so
+// an IN/LATERAL membership against a wildcard-reachable target would drop
+// concrete subjects that hold the relation only via a wildcard. This is the one
+// gate shared by every subject-first composition site (complex closure, complex
+// userset, TTU subject-first direct + closure patterns). Callers still apply the
+// caller-side plan.Analysis.Features.HasWildcard guard separately, since that
+// concerns the CALLER relation's own wildcards, not the target's.
+func composableListSubjectsTarget(plan ListPlan, targetType, targetRelation string) bool {
+	if reachesWildcard(plan.AnalysisLookup, targetType, targetRelation) {
+		return false
+	}
+	return composableListTarget(plan, targetType, targetRelation)
+}
+
 // composedListObjectsMembership is the positive-membership predicate shared by
 // every list_objects composition site: "the subject holds targetRel on the
 // candidate object objectIDExpr". It semi-joins against the target relation's
@@ -291,10 +308,7 @@ func complexClosureSubjectMembership(plan ListPlan, rel string) Expr {
 	if plan.Analysis.Features.HasWildcard {
 		return check
 	}
-	if reachesWildcard(plan.AnalysisLookup, plan.ObjectType, rel) {
-		return check
-	}
-	if !composableListTargetLookup(plan.AnalysisLookup, plan.ObjectType, plan.Relation, plan.ObjectType, rel) {
+	if !composableListSubjectsTarget(plan, plan.ObjectType, rel) {
 		return check
 	}
 	return InFunctionSelect{

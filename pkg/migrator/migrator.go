@@ -495,9 +495,12 @@ func migrationRecordMatches(lastMigration *MigrationRecord, schemaChecksum strin
 // shouldSkipMigration returns true if the schema and codegen version are unchanged.
 // This is the fast-path (phase 1) skip: no SQL generation needed at all.
 //
-// Dev builds never skip here: "dev" is a constant, so a rebuilt binary with
-// changed codegen would look identical to the last migration. Falling through
-// lets the phase 2 checksum comparison (which includes dispatchers) decide.
+// Unstamped "dev" builds never skip here: "dev" is a constant, so a rebuilt
+// binary with changed codegen would look identical to the last migration.
+// Falling through lets the phase 2 checksum comparison (which includes
+// dispatchers) decide. Released binaries and go-install/library builds report a
+// real version (lib/version resolves it from ldflags or embedded build info),
+// so they still get the fast-path skip.
 func shouldSkipMigration(lastMigration *MigrationRecord, schemaChecksum string) bool {
 	if CodegenVersion() == "dev" {
 		return false
