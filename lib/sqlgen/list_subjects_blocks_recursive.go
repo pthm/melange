@@ -133,7 +133,18 @@ func buildListSubjectsRecursiveUsersetPatternBlocks(plan ListPlan) ([]TypedQuery
 }
 
 // buildListSubjectsRecursiveComplexUsersetBlock builds a complex userset block for recursive list_subjects.
+//
+// For a userset pattern [X#rel] the block finds grant tuples (X:id#rel granted on
+// the target) then enumerates the members holding rel on X:id. Those members are
+// exactly list_{X}_{rel}_sub(X:id, p_subject_type). When composition is safe
+// (composableSubjectFirstUserset) it replaces the member tuple JOIN + per-member
+// check_permission_internal with a CROSS JOIN LATERAL on that list function.
+// Otherwise it keeps the per-candidate check unchanged.
 func buildListSubjectsRecursiveComplexUsersetBlock(plan ListPlan, pattern listUsersetPatternInput) TypedQueryBlock {
+	if composableSubjectFirstUserset(plan, pattern) {
+		return buildListSubjectsRecursiveComplexUsersetBlockComposed(plan, pattern)
+	}
+
 	const grantAlias, memberAlias = "g", "m"
 
 	memberExclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, Col{Table: memberAlias, Column: "subject_type"}, Col{Table: memberAlias, Column: "subject_id"})
@@ -195,6 +206,86 @@ func buildListSubjectsRecursiveComplexUsersetBlock(plan ListPlan, pattern listUs
 
 	return TypedQueryBlock{
 		Comments: []string{fmt.Sprintf("-- Userset: %s#%s (complex)", pattern.SubjectType, pattern.SubjectRelation)},
+		Query:    stmt,
+	}
+}
+
+// composableSubjectFirstUserset reports whether the complex-userset member JOIN
+// can be replaced by a CROSS JOIN LATERAL on list_{SubjectType}_{SubjectRelation}_sub.
+//
+// The list_subjects function is complete and exactly equal to the member set,
+// so the transform is a faithful equivalence — but only when no wildcards are in
+// play (list_..._sub returns '*' for wildcard grants, not concrete subjects, so
+// an IN/LATERAL membership would drop concrete subjects that hold the relation
+// only via a wildcard) and the target relation is list-generatable and
+// cycle-safe. Mirrors buildSubjectFirstTTUSubjectBlocks / complexClosureSubjectMembership.
+func composableSubjectFirstUserset(plan ListPlan, pattern listUsersetPatternInput) bool {
+	if plan.Analysis.Features.HasWildcard {
+		return false
+	}
+	target := plan.AnalysisLookup[pattern.SubjectType+"."+pattern.SubjectRelation]
+	if target != nil && target.Features.HasWildcard {
+		return false
+	}
+	return composableListTargetLookup(plan.AnalysisLookup, plan.ObjectType, plan.Relation, pattern.SubjectType, pattern.SubjectRelation)
+}
+
+// buildListSubjectsRecursiveComplexUsersetBlockComposed is the set-oriented form
+// of buildListSubjectsRecursiveComplexUsersetBlock: for each grant tuple g of a
+// userset X:id#rel, it enumerates the subjects holding rel on X:id via
+// list_{X}_{rel}_sub(X:id, p_subject_type) instead of joining melange_tuples
+// members and calling check_permission_internal per member. All non-check
+// predicates (member exclusions, wildcard/userset filters, closure source check,
+// allowed-subject-type guard) are preserved against the lateral's subject_id.
+func buildListSubjectsRecursiveComplexUsersetBlockComposed(plan ListPlan, pattern listUsersetPatternInput) TypedQueryBlock {
+	const grantAlias, memberAlias = "g", "m"
+
+	memberExclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: memberAlias, Column: "subject_id"})
+
+	whereConditions := []Expr{
+		Eq{Left: Col{Table: grantAlias, Column: "object_type"}, Right: Lit(plan.ObjectType)},
+		Eq{Left: Col{Table: grantAlias, Column: "object_id"}, Right: ObjectID},
+		In{Expr: Col{Table: grantAlias, Column: "relation"}, Values: pattern.SourceRelations},
+		Eq{Left: Col{Table: grantAlias, Column: "subject_type"}, Right: Lit(pattern.SubjectType)},
+		HasUserset{Source: Col{Table: grantAlias, Column: "subject_id"}},
+		Eq{Left: UsersetRelation{Source: Col{Table: grantAlias, Column: "subject_id"}}, Right: Lit(pattern.SubjectRelation)},
+		In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
+		NoUserset{Source: Col{Table: memberAlias, Column: "subject_id"}},
+	}
+
+	if plan.ExcludeWildcard() {
+		whereConditions = append(whereConditions, Ne{Left: Col{Table: memberAlias, Column: "subject_id"}, Right: Lit("*")})
+	}
+	whereConditions = append(whereConditions, memberExclusions.BuildPredicates()...)
+
+	if pattern.IsClosurePattern {
+		whereConditions = append(whereConditions, CheckPermission{
+			Schema:      plan.DatabaseSchema,
+			Subject:     SubjectRef{Type: SubjectType, ID: Col{Table: memberAlias, Column: "subject_id"}},
+			Relation:    pattern.SourceRelation,
+			Object:      LiteralObject(plan.ObjectType, ObjectID),
+			ExpectAllow: true,
+		})
+	}
+
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: memberAlias, Column: "subject_id"}},
+		FromExpr:    TableAs("", "melange_tuples", grantAlias),
+		Joins: []JoinClause{{
+			Type: "CROSS",
+			TableExpr: LateralFunction{
+				Schema: plan.DatabaseSchema,
+				Name:   listSubjectsFunctionName(pattern.SubjectType, pattern.SubjectRelation),
+				Args:   []Expr{UsersetObjectID{Source: Col{Table: grantAlias, Column: "subject_id"}}, SubjectType},
+				Alias:  memberAlias,
+			},
+		}},
+		Where: And(whereConditions...),
+	}
+
+	return TypedQueryBlock{
+		Comments: []string{fmt.Sprintf("-- Userset: %s#%s (complex, compose list_subjects)", pattern.SubjectType, pattern.SubjectRelation)},
 		Query:    stmt,
 	}
 }
