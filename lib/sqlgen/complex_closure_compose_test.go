@@ -59,6 +59,42 @@ func TestComplexClosure_ComposesWhenComposable(t *testing.T) {
 	}
 }
 
+// TestComplexClosure_AdmitsUsersetQuerySubject pins the fix for issue #10: the
+// complex-closure candidate arm must admit a userset-typed query subject
+// (e.g. group:g2#member) whose access flows through the complex relation, not
+// only plain subjects gated by AllowedSubjectTypes. Otherwise list_objects
+// under-reports objects that check_permission allows for that userset subject.
+func TestComplexClosure_AdmitsUsersetQuerySubject(t *testing.T) {
+	lookup := map[string]*RelationAnalysis{
+		"doc.reader": {
+			ObjectType:   "doc",
+			Relation:     "reader",
+			Capabilities: GenerationCapabilities{ListAllowed: true},
+			ListStrategy: ListStrategyRecursive,
+			ParentRelations: []ParentRelationInfo{{
+				Relation: "admin", LinkingRelation: "org", AllowedLinkingTypes: []string{"org"},
+			}},
+		},
+		"org.admin": {ObjectType: "org", Relation: "admin"},
+	}
+
+	sql := complexClosureSQL(t, closurePlan(lookup))
+
+	// Plain-subject arm: type guard AND exact subject match.
+	if !strings.Contains(sql, "p_subject_type IN ('user')") {
+		t.Errorf("expected plain-subject type guard, got:\n%s", sql)
+	}
+	// Userset-subject arm: both sides must be usersets, admitted via exact
+	// userset equality (OR closure). Gated by position('#'...) so it is a no-op
+	// for plain subjects.
+	if !strings.Contains(sql, "position('#' in p_subject_id) > 0 AND position('#' in t.subject_id) > 0") {
+		t.Errorf("expected userset query-subject candidate arm, got:\n%s", sql)
+	}
+	if !strings.Contains(sql, "t.subject_id = p_subject_id") {
+		t.Errorf("expected exact userset equality in candidate arm, got:\n%s", sql)
+	}
+}
+
 func TestComplexClosure_FallsBackWhenCyclic(t *testing.T) {
 	// doc.reader reaches back into doc.can_read → composition unsafe.
 	lookup := map[string]*RelationAnalysis{
