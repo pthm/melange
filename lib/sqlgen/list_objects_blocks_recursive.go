@@ -406,14 +406,38 @@ func sourceRelationNeedsVerification(plan ListPlan, parent ListParentRelationDat
 	return sourceAnalysis.Features.HasExclusion || sourceAnalysis.Features.HasIntersection
 }
 
+// sourceRelationCheck proves the subject holds the closure-pattern TTU's source
+// relation on the child object. When composition is safe it replaces the
+// per-candidate check_permission_internal with a semi-join against the source
+// relation's list_objects set (the set of objects the subject holds SourceRelation
+// on), keeping a check arm guarded to userset-typed subjects for parity: the list
+// function is complete for plain subjects but a Recursive/Composed target may
+// under-report userset subjects ("group:eng#member"), and an under-reported
+// positive membership drops objects (under-permissive). For plain subjects the
+// guard is false and the arm short-circuits. When composition is unsafe it returns
+// the per-candidate check alone. Mirrors complexClosureMembership.
 func sourceRelationCheck(plan ListPlan, parent ListParentRelationData) Expr {
-	return CheckPermission{
+	check := CheckPermission{
 		Schema:      plan.DatabaseSchema,
 		Subject:     SubjectParams(),
 		Relation:    parent.SourceRelation,
 		Object:      LiteralObject(plan.ObjectType, Col{Table: "child", Column: "object_id"}),
 		ExpectAllow: true,
 	}
+	if !composableListTarget(plan, plan.ObjectType, parent.SourceRelation) {
+		return check
+	}
+	return Or(
+		InFunctionSelect{
+			Expr:      Col{Table: "child", Column: "object_id"},
+			Schema:    plan.DatabaseSchema,
+			FuncName:  ListObjectsFunctionName(plan.ObjectType, parent.SourceRelation),
+			Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
+			Alias:     "src_obj",
+			SelectCol: "object_id",
+		},
+		And(HasUserset{Source: SubjectID}, check),
+	)
 }
 
 // buildCheckPermissionCrossTypeTTUBlock builds the per-candidate check block
