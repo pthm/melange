@@ -25,7 +25,7 @@ func mkFoldAnalysis(objType, relation string, satisfying []string) RelationAnaly
 // bigClosure returns closure rows for the target relation plus many unrelated
 // rows, so a VALUES-scan self-check would embed all of them.
 func bigClosure(objType, relation string, satisfying []string) InlineSQLData {
-	var rows []ValuesRow
+	rows := make([]ValuesRow, 0, len(satisfying)+200)
 	for _, s := range satisfying {
 		rows = append(rows, closureRow(objType, relation, s))
 	}

@@ -68,17 +68,17 @@ func TestFilterInlineForCheck_KeepsObjectAndSubjectTypes(t *testing.T) {
 func TestFilterInlineForList_KeepsReferencedTypesDropsUnrelated(t *testing.T) {
 	inline := InlineSQLData{
 		ClosureRows: []ValuesRow{
-			closureRow("element", "view", "view"),       // own object type
-			closureRow("group", "member", "member"),      // userset subject type
-			closureRow("folder", "view", "view"),         // TTU parent linking type
-			closureRow("workspace", "view", "view"),      // allowed subject type
-			closureRow("aaa", "rel001", "rel001"),        // unrelated → drop
-			closureRow("organization", "own", "own"),     // unrelated → drop
+			closureRow("element", "view", "view"),    // own object type
+			closureRow("group", "member", "member"),  // userset subject type
+			closureRow("folder", "view", "view"),     // TTU parent linking type
+			closureRow("workspace", "view", "view"),  // allowed subject type
+			closureRow("aaa", "rel001", "rel001"),    // unrelated → drop
+			closureRow("organization", "own", "own"), // unrelated → drop
 		},
 		UsersetRows: []ValuesRow{
 			usersetRow("element", "view", "group", "member"),
-			usersetRow("group", "member", "user", ""),          // userset subject type kept (list_objects keys on it)
-			usersetRow("aaa", "rel001", "user", ""),            // unrelated → drop
+			usersetRow("group", "member", "user", ""), // userset subject type kept (list_objects keys on it)
+			usersetRow("aaa", "rel001", "user", ""),   // unrelated → drop
 		},
 	}
 	a := RelationAnalysis{

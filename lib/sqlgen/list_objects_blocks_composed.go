@@ -174,7 +174,7 @@ func buildComposedRecursiveTTUObjectsBlock(plan ListPlan, anchor *IndirectAnchor
 	targetRel := anchor.Path[0].TargetRelation
 	check := CheckPermissionInternalExpr(plan.DatabaseSchema, SubjectParams(), targetRel, ObjectRef{Type: Lit(recursiveType), ID: Col{Table: "t", Column: "subject_id"}}, true)
 
-	var membership Expr = check
+	membership := check
 	if composableListTarget(plan, recursiveType, targetRel) {
 		membership = composedListObjectsMembership(plan.DatabaseSchema, recursiveType, targetRel, Col{Table: "t", Column: "subject_id"}, SubjectType, SubjectID, "obj", check)
 	}
@@ -223,7 +223,7 @@ func buildComposedUsersetObjectsBlock(plan ListPlan, firstStep AnchorPathStep, e
 	usersetObjectID := Raw("split_part(t.subject_id, '#', 1)")
 	check := CheckPermissionInternalExpr(plan.DatabaseSchema, SubjectParams(), firstStep.SubjectRelation, ObjectRef{Type: Lit(firstStep.SubjectType), ID: usersetObjectID}, true)
 
-	var membership Expr = check
+	membership := check
 	if composableListTarget(plan, firstStep.SubjectType, firstStep.SubjectRelation) {
 		membership = composedListObjectsMembership(plan.DatabaseSchema, firstStep.SubjectType, firstStep.SubjectRelation, usersetObjectID, SubjectType, SubjectID, "obj", check)
 	}

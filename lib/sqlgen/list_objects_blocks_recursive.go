@@ -321,13 +321,14 @@ func buildCrossTypeTTUBlocks(plan ListPlan, parentRelations []ListParentRelation
 		var fallbackTypes []string
 		for _, parentType := range crossTypes {
 			if canUseSubjectFirstTTU(plan, parent, parentType) {
-				blocks = append(blocks, buildSubjectFirstCrossTypeTTUBlock(plan, parent, parentType, crossExclusions))
 				// Userset-typed subjects (e.g. "group:eng#member") can be
 				// provable by the parent's check function through closure arms
 				// its list function does not enumerate; keep a per-candidate
 				// check arm for exactly that case. The guard is false for
 				// plain subjects, so the check never runs on the hot path.
-				blocks = append(blocks, buildCheckPermissionCrossTypeTTUBlock(plan, parent, []string{parentType}, crossExclusions, true))
+				blocks = append(blocks,
+					buildSubjectFirstCrossTypeTTUBlock(plan, parent, parentType, crossExclusions),
+					buildCheckPermissionCrossTypeTTUBlock(plan, parent, []string{parentType}, crossExclusions, true))
 			} else {
 				fallbackTypes = append(fallbackTypes, parentType)
 			}

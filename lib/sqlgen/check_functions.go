@@ -60,15 +60,14 @@ func isInlineable(f RelationFeatures) bool {
 func renderDispatcherWithCases(databaseSchema, fnName string, cases []DispatcherCase) string {
 	internalName := fnName + "_internal"
 
-	body := []Stmt{
+	body := append([]Stmt{
 		Comment{Text: "Depth limit check: prevent excessively deep permission resolution chains"},
 		Comment{Text: "This catches both recursive TTU patterns and long userset chains"},
 		If{
 			Cond: Gte{Left: ArrayLength{Array: Visited}, Right: Int(25)},
 			Then: []Stmt{Raise{Message: "resolution too complex", ErrCode: "M2002"}},
 		},
-	}
-	body = append(body, dispatchIfChain(cases, checkDispatchCall, Int(0))...)
+	}, dispatchIfChain(cases, checkDispatchCall, Int(0))...)
 
 	internalFn := PlpgsqlFunction{
 		Schema:  databaseSchema,
