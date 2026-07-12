@@ -682,8 +682,11 @@ func buildListSubjectsRecursiveTTUBlockParentClosureUsersetPattern(plan ListPlan
 // every allowed parent type has a composable, cycle-safe list_subjects
 // function.
 func buildSubjectFirstTTUSubjectBlocks(plan ListPlan, parent ListParentRelationData) []TypedQueryBlock {
-	if parent.IsClosurePattern || plan.Analysis.Features.HasWildcard || plan.AnalysisLookup == nil {
+	if plan.Analysis.Features.HasWildcard || plan.AnalysisLookup == nil {
 		return nil
+	}
+	if parent.IsClosurePattern {
+		return buildSubjectFirstTTUClosureSubjectBlocks(plan, parent)
 	}
 	types := parent.AllowedLinkingTypesSlice
 	if len(types) == 0 {
@@ -707,6 +710,44 @@ func buildSubjectFirstTTUSubjectBlocks(plan ListPlan, parent ListParentRelationD
 		blocks = append(blocks, buildSubjectFirstTTUSubjectBlock(plan, parent, ptype))
 	}
 	return blocks
+}
+
+// buildSubjectFirstTTUClosureSubjectBlocks returns the set-oriented form of the
+// closure-pattern subject_pool block. For a closure pattern the per-row check is
+// check(subject, parent.SourceRelation, plan.ObjectType, p_object_id) — the SAME
+// target object for every (subject, link) pair — so {s : check(s, sourceRel,
+// obj) = 1} is exactly list_{objType}_{sourceRel}_sub(p_object_id,
+// p_subject_type). No linking tuples are needed: the check never varies per link.
+//
+// Returns nil (keep the subject_pool path) unless list_{objType}_{sourceRel}_sub
+// is composable and cycle-safe and no wildcards are in play (subject-side '*'
+// under-reports concrete subjects through an IN-set — same gate as
+// buildSubjectFirstTTUSubjectBlocks). The closure-pattern subject_pool block does
+// not apply plan.Exclusions, so neither does this replacement.
+func buildSubjectFirstTTUClosureSubjectBlocks(plan ListPlan, parent ListParentRelationData) []TypedQueryBlock {
+	target := plan.AnalysisLookup[plan.ObjectType+"."+parent.SourceRelation]
+	if target == nil || target.Features.HasWildcard {
+		return nil
+	}
+	if !composableListTargetLookup(plan.AnalysisLookup, plan.ObjectType, plan.Relation, plan.ObjectType, parent.SourceRelation) {
+		return nil
+	}
+
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "sub", Column: "subject_id"}},
+		FromExpr: FunctionCallExpr{
+			Schema: plan.DatabaseSchema,
+			Name:   listSubjectsFunctionName(plan.ObjectType, parent.SourceRelation),
+			Args:   []Expr{ObjectID, SubjectType},
+			Alias:  "sub",
+		},
+	}
+
+	return []TypedQueryBlock{{
+		Comments: []string{fmt.Sprintf("-- TTU subject-first: subjects via %s -> %s (closure pattern from %s - compose list_subjects)", parent.LinkingRelation, parent.Relation, parent.SourceRelation)},
+		Query:    stmt,
+	}}
 }
 
 // buildSubjectFirstTTUSubjectBlock builds one subject-first TTU block for a
