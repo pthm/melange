@@ -101,6 +101,20 @@ func GenerateKitchenSinkTuples(s KitchenSinkScale) []KitchenSinkTuple {
 				add("service_account", said(i%s.ServiceAccounts), "member", "group", g)
 			}
 		}
+
+		// active_member (self-ref userset + wildcard + exclusion) coverage.
+		add("user", umod(i*3), "active_member", "group", g)
+		if i%2 == 0 {
+			add("group", fmt.Sprintf("g%d#active_member", (i+1)%max(s.Groups, 1)), "active_member", "group", g)
+		}
+		if i%3 == 0 {
+			// wildcard active_member AND wildcard ban: '*' must be subtracted.
+			add("user", "*", "active_member", "group", g)
+			add("user", "*", "banned", "group", g)
+		}
+		if i%4 == 0 {
+			add("user", umod(i*5), "banned", "group", g)
+		}
 	}
 	grp := func(i int) string { return fmt.Sprintf("g%d#member", absi(i)%max(s.Groups, 1)) }
 

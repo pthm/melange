@@ -192,27 +192,46 @@ func buildWhereFromPredicates(predicates []Expr) Expr {
 // buildUsersetWildcardTailQuery builds the wildcard handling tail as a typed query for list_subjects functions.
 func buildUsersetWildcardTailQuery(a RelationAnalysis, databaseSchema string) SQLer {
 	if a.Features.HasWildcard {
-		// Build the wildcard handling query with permission check
 		return SelectStmt{
 			ColumnExprs: []Expr{Col{Table: "br", Column: "subject_id"}},
 			FromExpr:    TableAs("", "base_results", "br"),
 			Joins: []JoinClause{
 				{Type: "CROSS", Table: "has_wildcard", Alias: "hw"},
 			},
-			Where: Or(
-				NotExpr{Expr: Col{Table: "hw", Column: "has_wildcard"}},
-				Eq{Left: Col{Table: "br", Column: "subject_id"}, Right: Lit("*")},
-				And(
-					Ne{Left: Col{Table: "br", Column: "subject_id"}, Right: Lit("*")},
-					NoWildcardPermissionCheckCall(databaseSchema, a.Relation, a.ObjectType, Col{Table: "br", Column: "subject_id"}, ObjectID),
-				),
-			),
+			Where: wildcardSubjectsTailWhere(databaseSchema, a.Relation, a.ObjectType),
 		}
 	}
 	return SelectStmt{
 		ColumnExprs: []Expr{Col{Table: "br", Column: "subject_id"}},
 		FromExpr:    TableAs("", "base_results", "br"),
 	}
+}
+
+// wildcardSubjectsTailWhere builds the WHERE for the list_subjects
+// wildcard-completion tail (shared by the recursive and self-referential-userset
+// renderers). When the base set has no wildcard, keep every row. Otherwise keep
+// each subject the relation actually grants:
+//   - the '*' row is verified via the FULL check (check_permission_internal):
+//     '*”s access flows through wildcard ([user:*]) grants, so the no-wildcard
+//     check would wrongly drop it — but it must still be subtracted when an
+//     exclusion denies it, whether the exclusion is on this relation or reached
+//     transitively through a TTU. Verifying '*' unconditionally is correct for
+//     non-exclusion relations too (the check passes), so no gate is needed.
+//   - concrete subjects use the no-wildcard check, because wildcard-only access
+//     is already represented by the '*' row.
+func wildcardSubjectsTailWhere(schema, relation, objectType string) Expr {
+	subject := Col{Table: "br", Column: "subject_id"}
+	return Or(
+		NotExpr{Expr: Col{Table: "hw", Column: "has_wildcard"}},
+		And(
+			Eq{Left: subject, Right: Lit("*")},
+			WildcardPermissionCheckCall(schema, relation, objectType, subject, ObjectID),
+		),
+		And(
+			Ne{Left: subject, Right: Lit("*")},
+			NoWildcardPermissionCheckCall(schema, relation, objectType, subject, ObjectID),
+		),
+	)
 }
 
 // buildDispatcherBody builds the common routing logic for list dispatcher functions.

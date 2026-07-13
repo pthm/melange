@@ -16,6 +16,7 @@ import (
 // exclusion in list_subjects).
 var kitchenSinkProbes = []struct{ objType, relation string }{
 	{"group", "member"},          // self-referential userset
+	{"group", "active_member"},   // self-ref userset + wildcard + exclusion
 	{"organization", "member"},   // implied + userset
 	{"organization", "admin"},    // implied
 	{"team", "member"},           // union + userset + cross-type TTU
@@ -35,21 +36,6 @@ var kitchenSinkProbes = []struct{ objType, relation string }{
 	{"report", "inherited_view"}, // pure TTU -> Composed
 	{"report", "audience"},       // pure userset -> Composed
 	{"comment", "can_read"},      // closure-inherited exclusion via TTU
-}
-
-// kitchenSinkWildcardExclusionKnownIssue lists (objType.relation) where
-// list_subjects over-reports the user:* wildcard under an exclusion: the
-// wildcard is a viewer (via a public [user:*] grant) but is also blocked
-// ([user:*] on the exclusion subject), so no subject actually has the relation,
-// yet list_subjects still returns '*'. check_permission is correct (denies '*'
-// and every concrete user); only list_subjects over-reports. Rooted in
-// document.can_view and inherited by the two TTU relations below. Tracked in
-// specs/kitchen-sink-testing.md as the harness's first finding; remove entries
-// here once the codegen subtracts '*' under exclusion in list_subjects.
-var kitchenSinkWildcardExclusionKnownIssue = map[string]bool{
-	"document.can_view":     true,
-	"report.inherited_view": true,
-	"comment.can_read":      true,
 }
 
 // TestKitchenSink_ListVsCheck is the differential correctness harness: over the
@@ -111,12 +97,6 @@ func TestKitchenSink_ListVsCheck(t *testing.T) {
 				// that survived an exclusion (e.g. document.can_view where blocked
 				// excludes user:*) is an over-report check_permission would reject.
 				for subj := range listed {
-					if subj == "*" && kitchenSinkWildcardExclusionKnownIssue[p.objType+"."+p.relation] {
-						if checkPerm(t, db, "user", "*", p.relation, p.objType, o) != 1 {
-							t.Logf("KNOWN ISSUE (kitchen-sink finding #1): list_subjects over-reports user:* for %s:%s %s (wildcard not subtracted under exclusion)", p.objType, o, p.relation)
-						}
-						continue
-					}
 					require.Equalf(t, 1, checkPerm(t, db, "user", subj, p.relation, p.objType, o),
 						"list_subjects over-reported user:%s for %s:%s %s", subj, p.objType, o, p.relation)
 				}

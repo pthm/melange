@@ -136,6 +136,7 @@ var (
 	Optf                            = sqldsl.Optf
 	InternalPermissionCheckCall     = sqldsl.InternalPermissionCheckCall
 	NoWildcardPermissionCheckCall   = sqldsl.NoWildcardPermissionCheckCall
+	WildcardPermissionCheckCall     = sqldsl.WildcardPermissionCheckCall
 	SpecializedCheckCall            = sqldsl.SpecializedCheckCall
 	InternalCheckCall               = sqldsl.InternalCheckCall
 	VisitedKey                      = sqldsl.VisitedKey

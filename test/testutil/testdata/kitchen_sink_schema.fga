@@ -34,6 +34,11 @@ type group
   relations
     # member: [user, group#member] -> self-referential userset -> recursive CTE
     define member: [user, service_account, group#member]
+    define banned: [user, user:*]
+    # self-referential userset (group#active_member) + wildcard + exclusion:
+    # routes to the SelfRefUserset strategy and exercises its list_subjects
+    # wildcard-completion tail under an exclusion
+    define active_member: [user, user:*, group#active_member] but not banned
 
 # ---- Organization: role hierarchy (implied chains) + userset ---------------
 type organization

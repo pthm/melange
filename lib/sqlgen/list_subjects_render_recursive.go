@@ -237,21 +237,13 @@ func buildSubjectPoolCTESQL(plan ListPlan) string {
 // pagination CTE by the caller.
 func buildSubjectsWildcardTailQuery(plan ListPlan) SQLer {
 	if plan.AllowWildcard {
-		// Build the wildcard handling query with permission check
 		return SelectStmt{
 			ColumnExprs: []Expr{Col{Table: "br", Column: "subject_id"}},
 			FromExpr:    TableAs("", "base_results", "br"),
 			Joins: []JoinClause{
 				{Type: "CROSS", Table: "has_wildcard", Alias: "hw"},
 			},
-			Where: Or(
-				NotExpr{Expr: Col{Table: "hw", Column: "has_wildcard"}},
-				Eq{Left: Col{Table: "br", Column: "subject_id"}, Right: Lit("*")},
-				And(
-					Ne{Left: Col{Table: "br", Column: "subject_id"}, Right: Lit("*")},
-					NoWildcardPermissionCheckCall(plan.DatabaseSchema, plan.Relation, plan.ObjectType, Col{Table: "br", Column: "subject_id"}, ObjectID),
-				),
-			),
+			Where: wildcardSubjectsTailWhere(plan.DatabaseSchema, plan.Relation, plan.ObjectType),
 		}
 	}
 	return SelectStmt{

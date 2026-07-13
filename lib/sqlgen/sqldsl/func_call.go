@@ -84,6 +84,29 @@ func NoWildcardPermissionCheckCall(schema, relation, objectType string, subjectI
 	}
 }
 
+// WildcardPermissionCheckCall creates a full check_permission_internal call
+// (WITH wildcard grants) for a specific subject id, with an empty visited array.
+// Unlike NoWildcardPermissionCheckCall it does not exclude wildcard grants, so it
+// is the correct verifier for the '*' subject itself in list_subjects: the
+// wildcard's access legitimately flows through wildcard ([user:*]) grants, and it
+// must still be subtracted when an exclusion denies it (e.g. `viewer but not
+// blocked` with blocked:[user:*]).
+func WildcardPermissionCheckCall(schema, relation, objectType string, subjectID, objectID Expr) FuncCallEq {
+	return FuncCallEq{
+		Schema:   schema,
+		FuncName: "check_permission_internal",
+		Args: []Expr{
+			SubjectType,
+			subjectID,
+			Lit(relation),
+			Lit(objectType),
+			objectID,
+			EmptyArray{},
+		},
+		Value: Int(1),
+	}
+}
+
 // SpecializedCheckCall creates a call to a specialized check function.
 // Used for implied relations and parent relation checks.
 //
