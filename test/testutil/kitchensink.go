@@ -34,3 +34,22 @@ func AnalyzeKitchenSink() ([]compiler.RelationAnalysis, error) {
 	analyses = compiler.ComputeCanGenerate(analyses)
 	return analyses, nil
 }
+
+// KitchenSinkListSubjectsSQL compiles the kitchen-sink schema and returns the
+// generated list_subjects function bodies. DB-free; used for codegen-shape
+// assertions over a realistic mix of wildcard and non-wildcard relations.
+func KitchenSinkListSubjectsSQL() ([]string, error) {
+	types, err := parser.ParseSchemaString(kitchenSinkSchemaFGA)
+	if err != nil {
+		return nil, fmt.Errorf("parse kitchen-sink schema: %w", err)
+	}
+	closureRows := schema.ComputeRelationClosure(types)
+	analyses := compiler.AnalyzeRelations(types, closureRows)
+	analyses = compiler.ComputeCanGenerate(analyses)
+	inlineData := compiler.BuildInlineSQLData(closureRows, analyses)
+	listSQL, err := compiler.GenerateListSQL(analyses, inlineData, "")
+	if err != nil {
+		return nil, fmt.Errorf("generate list SQL: %w", err)
+	}
+	return listSQL.ListSubjectsFunctions, nil
+}

@@ -83,6 +83,24 @@ func TestKitchenSink_GeneratorCoverage(t *testing.T) {
 	t.Logf("%d distinct feature combinations:\n%s", len(combos), fmtCounts(combos))
 }
 
+// TestKitchenSink_NoDeadHasWildcardCTE guards against dead codegen: the
+// has_wildcard CTE in list_subjects functions is read only by the wildcard
+// completion tail, which is emitted only for wildcard-reaching relations. Every
+// emitted CTE must therefore have a matching CROSS JOIN reference — an
+// unreferenced ordinary CTE is dead SQL (the same class as the removed
+// depth_check preamble). DB-free.
+func TestKitchenSink_NoDeadHasWildcardCTE(t *testing.T) {
+	fns, err := testutil.KitchenSinkListSubjectsSQL()
+	require.NoError(t, err)
+	combined := strings.Join(fns, "\n")
+
+	defs := strings.Count(combined, "has_wildcard AS (")
+	refs := strings.Count(combined, "CROSS JOIN has_wildcard")
+	require.Positive(t, refs, "expected some wildcard-reaching list_subjects functions to reference has_wildcard")
+	require.Equalf(t, refs, defs,
+		"has_wildcard CTE def/ref mismatch: %d definitions vs %d references — an unreferenced CTE is dead codegen", defs, refs)
+}
+
 func fmtCounts(m map[string]int) string {
 	keys := make([]string, 0, len(m))
 	for k := range m {

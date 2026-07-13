@@ -100,16 +100,21 @@ func buildSubjectsRecursiveRegularQuery(plan ListPlan, regularBlocks, ttuBlocks 
 	// computed once instead of inlined into both reference sites.
 	ctes = append(ctes, CTEDef{Name: "base_results", Query: Raw(baseBlocksSQL), Materialized: plan.MaterializeCTEs()})
 
-	// Build the has_wildcard CTE query
-	hasWildcardQuery := SelectStmt{
-		ColumnExprs: []Expr{
-			Alias{
-				Expr: Raw("EXISTS (SELECT 1 FROM base_results br WHERE br.subject_id = '*')"),
-				Name: "has_wildcard",
+	// Build the has_wildcard CTE query. Only the wildcard tail reads it, and it
+	// only emits the CROSS JOIN has_wildcard when plan.AllowWildcard — gate the
+	// CTE on the same flag so def and ref stay lockstep (an unreferenced ordinary
+	// CTE is dead codegen).
+	if plan.AllowWildcard {
+		hasWildcardQuery := SelectStmt{
+			ColumnExprs: []Expr{
+				Alias{
+					Expr: Raw("EXISTS (SELECT 1 FROM base_results br WHERE br.subject_id = '*')"),
+					Name: "has_wildcard",
+				},
 			},
-		},
+		}
+		ctes = append(ctes, CTEDef{Name: "has_wildcard", Query: hasWildcardQuery})
 	}
-	ctes = append(ctes, CTEDef{Name: "has_wildcard", Query: hasWildcardQuery})
 
 	// Build the final query with wildcard handling
 	wildcardTailQuery := buildSubjectsWildcardTailQuery(plan)
