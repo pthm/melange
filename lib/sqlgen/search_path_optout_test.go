@@ -73,6 +73,17 @@ func TestSearchPath_DispatchersOptOut_LeavesKeep(t *testing.T) {
 	if !strings.Contains(gen.BulkDispatcher, "SET search_path = 'authz'") {
 		t.Errorf("bulk dispatcher references unqualified melange_tuples and must keep SET search_path:\n%s", gen.BulkDispatcher)
 	}
+
+	// Expand leaves reference melange_tuples only schema-qualified and have no
+	// contextual-tuple support, so they opt out (dead GUC otherwise).
+	if len(gen.ExpandFunctions) == 0 {
+		t.Fatal("expected at least one expand leaf function")
+	}
+	for _, fn := range gen.ExpandFunctions {
+		if strings.Contains(fn, "SET search_path") {
+			t.Errorf("expand leaf must NOT contain SET search_path (schema-qualified, no pg_temp shadow):\n%s", fn)
+		}
+	}
 }
 
 // #8a: the per-row list_subjects validation calls the internal dispatchers

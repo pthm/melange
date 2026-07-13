@@ -287,6 +287,12 @@ func RenderExpandFunction(plan ExpandPlan) string {
 		Returns: "JSONB",
 		Body:    []Stmt{ReturnValue{Value: Raw(body)}},
 		Header:  expandFunctionHeader(plan),
+		// Expand leaves reference melange_tuples only schema-qualified (via
+		// PrefixIdent) and expand has no contextual-tuple support, so they never
+		// depend on the pg_temp shadow the way leaf check_*/list_* do. SET
+		// search_path is therefore dead GUC overhead here — opt out, matching the
+		// expand dispatcher (see renderExpandDispatcherWithCases).
+		NoSearchPath: true,
 	}
 	return fn.SQL() + "\n"
 }
