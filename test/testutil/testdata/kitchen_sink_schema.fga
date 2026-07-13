@@ -1,0 +1,141 @@
+model
+  schema 1.1
+
+# =============================================================================
+# Melange KITCHEN-SINK SCHEMA
+# =============================================================================
+# A realistic enterprise-collaboration model designed to exercise EVERY distinct
+# SQL-generator code path (all 7 ListStrategies, all 7 features, and the hard
+# combinations where recent bugs lived). Each relation is annotated with the
+# shape(s) it triggers. Complex shapes are composed through helper relations
+# because OpenFGA DSL forbids mixing or/and/but-not at one level.
+#
+# Query directions to exercise per relation: check, list_objects, list_subjects,
+# with plain / wildcard / userset-typed query subjects.
+# =============================================================================
+
+# ---- Subject principals (multiple subject types) ----------------------------
+type user
+
+type service_account            # second concrete principal (like oidc_publisher)
+
+# ---- Platform singleton: cross-type TTU to a single object ------------------
+type platform
+  relations
+    define admin: [user]        # super-admins; reached via `admin from platform`
+
+# ---- Simple userset target (tuple-JOIN userset, NOT check_permission) -------
+type mailing_list
+  relations
+    define subscriber: [user, service_account]   # plain -> simple-userset source
+
+# ---- Self-referential userset (SelfRefUserset strategy) ---------------------
+type group
+  relations
+    # member: [user, group#member] -> self-referential userset -> recursive CTE
+    define member: [user, service_account, group#member]
+
+# ---- Organization: role hierarchy (implied chains) + userset ---------------
+type organization
+  relations
+    define owner: [user]                          # direct
+    define admin: [user] or owner                 # implied (1 level)
+    define member: [user, group#member] or admin  # implied chain + userset
+    define billing: [user]                        # padding / schema-size
+    define can_admin: admin                       # computed userset
+    define can_read: member                       # computed userset
+    define guest: [user, user:*]                  # wildcard direct (+ multi form)
+
+# ---- Team: cross-type TTU + userset + union --------------------------------
+type team
+  relations
+    define org: [organization]                    # linking relation
+    define maintainer: [user]
+    # union of direct + userset + implied + cross-type TTU
+    define member: [user, group#member] or maintainer or member from org
+    define can_read: member                       # computed
+
+# ---- Project: cross-type TTU anchor + wildcard (multi-type) -----------------
+type project
+  relations
+    define org: [organization]
+    define admin: [user] or admin from org        # union direct + cross-type TTU
+    define editor: [user, group#member]           # direct + userset
+    define viewer: [user, team#member] or editor  # userset (other type) + implied
+    define public: [user:*, service_account:*]    # wildcard, multiple types
+    define contributor: editor or admin           # computed union
+
+# ---- Folder: SELF-REFERENTIAL RECURSIVE TTU + cross-type anchor (#12 shape) --
+type folder
+  relations
+    define parent: [folder, project]              # self-ref + cross-type linking
+    define org: [organization]
+    # THE #12 shape: cross-type anchor arm (member from org) OR self-referential
+    # recursive arm (viewer from parent). Drives Recursive strategy + the
+    # parent_closure walk in list_subjects.
+    define viewer: [user, group#member] or viewer from parent or member from org
+    define editor: [user] or editor from parent   # pure self-ref recursive TTU
+    define public: [user:*]                       # wildcard reached via TTU below
+    define banned: [user]                         # TTU-exclusion subtrahend source
+    # recursive TTU minuend combined with an exclusion (Recursive+Exclusion)
+    define protected: viewer from parent but not banned
+
+# ---- Document: the combination kitchen sink --------------------------------
+type document
+  relations
+    define folder: [folder]                       # linking
+    define owner: [user]
+
+    # editor: direct + userset (own type) + userset (OTHER type) + implied + TTU
+    define editor: [user, group#member, folder#editor] or owner or editor from folder
+
+    # viewer union: direct + userset + userset-of-other-type + implied + TTU +
+    # public (wildcard reached both directly and via `viewer from folder`).
+    define viewer: [user, group#member, folder#viewer] or editor or viewer from folder or public
+    define public: [user:*]                       # wildcard direct
+
+    # gate relations for intersections
+    define active: [user]
+    define reviewer: [user]
+
+    # exclusion subjects
+    define blocked: [user, user:*]                # wildcard in exclusion subtrahend
+    define restricted: [user]
+
+    # --- INTERSECTION shapes (each via `and`) ---
+    define can_edit: editor and active            # computed AND computed
+    define gated: viewer and active               # helper: intersection base
+    define can_manage: editor and admin from folder   # intersection with TTU part
+    define audience: [group#member] and active    # intersection with userset part
+
+    # --- EXCLUSION shapes (each via `but not`) ---
+    define can_view: viewer but not blocked           # simple exclusion (+wildcard)
+    define can_comment: gated but not blocked         # intersection-then-exclusion
+    define can_review: viewer but not owner           # exclusion of computed
+    define can_read_safe: viewer but not restricted   # simple
+    define can_share: can_edit but not banned from folder  # exclusion, TTU subtrahend
+    define visible: viewer but not owner_and_blocked  # exclusion, intersection subtrahend
+    define owner_and_blocked: owner and blocked       # helper: intersection subtrahend
+
+    # --- Cross-type TTU to platform singleton (super-admin bypass) ---
+    define super_view: viewer or admin from platform
+    define platform: [platform]                       # linking to singleton
+
+    # --- Multi-group intersection groups OR'd (nested-intersection flatten) ---
+    define elevated: can_edit or can_manage           # two intersection groups OR'd
+
+# ---- Pure-TTU / pure-userset relations -> COMPOSED strategy -----------------
+type report
+  relations
+    define document: [document]
+    define audience: [group#member]               # PURE userset -> Composed anchor
+    define inherited_view: can_view from document  # PURE TTU -> Composed anchor
+
+# ---- Closure-inherited exclusion (exclusion reached through implied) --------
+type comment
+  relations
+    define document: [document]
+    define author: [user]
+    # can_read pulls in document.can_view (which carries an exclusion) via TTU
+    define can_read: can_view from document
+    define can_edit: author or can_manage from document

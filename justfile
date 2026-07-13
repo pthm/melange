@@ -565,6 +565,16 @@ test-integration:
 test-integration-all:
     ./scripts/integration-test-runner.sh
 
+# Kitchen-sink schema: differential list-vs-check correctness over the comprehensive schema
+[group('Test')]
+test-kitchensink:
+    cd {{TEST}} && {{GO_TEST}} -count=1 -timeout 10m -run 'TestKitchenSink' ./...
+
+# Kitchen-sink schema: dump the full rendered SQL for manual inspection
+[group('Test')]
+dump-kitchensink-sql:
+    go run ./cmd/melange generate migration --schema {{TEST}}/testutil/testdata/kitchen_sink_schema.fga --up
+
 # Run doctor integration tests
 [group('Test')]
 test-doctor:
@@ -615,6 +625,12 @@ bench-quick:
 [group('Test')]
 bench-save FILE="benchmark_results.txt":
     cd {{TEST}} && {{GO_TEST_BENCH_MEM}} -timeout 30m | tee {{FILE}}
+
+# Kitchen-sink schema benchmarks (check / list_objects / list_subjects across the feature matrix)
+# Use SCALE to limit: just bench-kitchensink SCALE=1K   (scales >100K need MELANGE_BENCH_LARGE_SCALE=1)
+[group('Test')]
+bench-kitchensink SCALE="":
+    cd {{TEST}} && {{GO_TEST_BENCH_MEM}} -run=^$ -timeout 30m -bench='BenchmarkKitchenSink{{ if SCALE != "" { "/" + SCALE } else { "" } }}'
 
 # Run tests with race detection
 [group('Test')]
