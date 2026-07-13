@@ -33,6 +33,7 @@ var kitchenSinkProbes = []struct{ objType, relation string }{
 	{"document", "can_comment"},  // intersection-then-exclusion
 	{"document", "can_manage"},   // intersection with TTU part
 	{"document", "can_share"},    // exclusion with TTU subtrahend
+	{"document", "visible"},      // recursive minuend but not intersection subtrahend (owner_and_blocked)
 	{"document", "super_view"},   // cross-type TTU to platform singleton
 	{"report", "inherited_view"}, // pure TTU -> Composed
 	{"report", "audience"},       // pure userset -> Composed
