@@ -101,9 +101,10 @@ func TestClosureTTUSubjects_FallbackWhenNotComposable(t *testing.T) {
 	}
 }
 
-func TestClosureTTUSubjects_FallbackWhenWildcard(t *testing.T) {
-	// Target reader HasWildcard → an IN-set drops concrete subjects granted only
-	// via '*', so composition is gated out. Keep subject_pool.
+func TestClosureTTUSubjects_ComposesWhenWildcard(t *testing.T) {
+	// Target reader reaches a wildcard, but list_doc_reader_sub surfaces '*' and
+	// the wildcard-completion tail verifies it — so the closure-TTU arm composes
+	// against list_doc_reader_sub instead of the subject_pool per-candidate check.
 	lookup := map[string]*RelationAnalysis{
 		"doc.can_read": {ObjectType: "doc", Relation: "can_read"},
 		"doc.reader": {
@@ -123,10 +124,7 @@ func TestClosureTTUSubjects_FallbackWhenWildcard(t *testing.T) {
 
 	sql := closureBlocksSQL(plan, parent)
 
-	if strings.Contains(sql, "list_doc_reader_sub") {
-		t.Errorf("wildcard target must fall back to subject_pool, got compose:\n%s", sql)
-	}
-	if !strings.Contains(sql, "subject_pool") {
-		t.Errorf("expected subject_pool fallback for wildcard target, got:\n%s", sql)
+	if !strings.Contains(sql, "list_doc_reader_sub") {
+		t.Errorf("wildcard target must compose (tail verifies '*'), got:\n%s", sql)
 	}
 }

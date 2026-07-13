@@ -97,7 +97,7 @@ func TestComplexUsersetSubjects_FallsBackWhenNotListGeneratable(t *testing.T) {
 	}
 }
 
-func TestComplexUsersetSubjects_FallsBackWhenTargetHasWildcard(t *testing.T) {
+func TestComplexUsersetSubjects_ComposesWhenTargetHasWildcard(t *testing.T) {
 	lookup := map[string]*RelationAnalysis{
 		"group.member": {
 			ObjectType:   "group",
@@ -111,11 +111,10 @@ func TestComplexUsersetSubjects_FallsBackWhenTargetHasWildcard(t *testing.T) {
 
 	sql := buildListSubjectsRecursiveComplexUsersetBlock(plan, pattern).Query.SQL()
 
-	if strings.Contains(sql, "list_group_member_sub") {
-		t.Errorf("wildcard target must fall back to per-member check, got lateral:\n%s", sql)
-	}
-	if !strings.Contains(sql, "check_permission_internal") {
-		t.Errorf("expected per-member check fallback, got:\n%s", sql)
+	// A wildcard-reaching userset target now composes: list_group_member_sub
+	// surfaces '*' and the wildcard-completion tail verifies it.
+	if !strings.Contains(sql, "list_group_member_sub") {
+		t.Errorf("wildcard target must compose (tail verifies '*'), got:\n%s", sql)
 	}
 }
 

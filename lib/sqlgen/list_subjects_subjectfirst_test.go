@@ -74,13 +74,16 @@ func TestSubjectFirstTTU_FallsBackWhenCyclic(t *testing.T) {
 	}
 }
 
-func TestSubjectFirstTTU_FallsBackWhenTargetHasWildcard(t *testing.T) {
+func TestSubjectFirstTTU_ComposesWhenTargetHasWildcard(t *testing.T) {
 	lookup := composableOrgAdmin()
 	lookup["org.admin"].Features.HasWildcard = true
 	plan, parent := subjectFirstPlan(lookup)
 
-	if blocks := buildSubjectFirstTTUSubjectBlocks(plan, parent); blocks != nil {
-		t.Errorf("wildcard target must fall back to subject_pool (subject-side '*' handling)")
+	// A wildcard-reaching target now composes: the '*' its list_subjects surfaces
+	// flows into base_results and is verified by the wildcard-completion tail
+	// (concrete subjects reachable only via '*' are represented by '*').
+	if blocks := buildSubjectFirstTTUSubjectBlocks(plan, parent); blocks == nil {
+		t.Errorf("wildcard target must compose (tail verifies '*'), got subject_pool fallback")
 	}
 }
 
@@ -103,12 +106,12 @@ func TestSubjectFirstTTU_FallsBackWhenNotListGeneratable(t *testing.T) {
 	}
 }
 
-// TestSubjectFirstTTU_FallsBackWhenTargetReachesWildcardTransitively pins the
-// fix: org.admin has HasWildcard=false itself but reaches org2.viewer=[user:*]
-// via a TTU parent, so list_org_admin_sub surfaces '*'. Composition against it
-// with an IN/LATERAL set would drop concrete subjects granted only via the
-// wildcard, so we must fall back to subject_pool.
-func TestSubjectFirstTTU_FallsBackWhenTargetReachesWildcardTransitively(t *testing.T) {
+// TestSubjectFirstTTU_ComposesWhenTargetReachesWildcardTransitively: org.admin
+// has HasWildcard=false itself but reaches org2.viewer=[user:*] via a TTU parent,
+// so list_org_admin_sub surfaces '*'. That '*' flows into base_results and is
+// verified by the wildcard-completion tail, so composition is safe — subjects
+// reachable only via the wildcard are represented by '*' (OpenFGA semantics).
+func TestSubjectFirstTTU_ComposesWhenTargetReachesWildcardTransitively(t *testing.T) {
 	lookup := composableOrgAdmin()
 	lookup["org.admin"].ParentRelations = []ParentRelationInfo{{
 		Relation: "viewer", LinkingRelation: "parent", AllowedLinkingTypes: []string{"org2"},
@@ -119,8 +122,8 @@ func TestSubjectFirstTTU_FallsBackWhenTargetReachesWildcardTransitively(t *testi
 	}
 	plan, parent := subjectFirstPlan(lookup)
 
-	if blocks := buildSubjectFirstTTUSubjectBlocks(plan, parent); blocks != nil {
-		t.Errorf("transitively-wildcard-reaching target must fall back to subject_pool")
+	if blocks := buildSubjectFirstTTUSubjectBlocks(plan, parent); blocks == nil {
+		t.Errorf("transitively-wildcard-reaching target must compose (tail verifies '*')")
 	}
 }
 
@@ -148,20 +151,23 @@ func TestReachesWildcard_Transitive(t *testing.T) {
 
 // TestComposableListSubjectsTarget pins the extracted subject-first gate (the
 // single predicate now shared by complex-closure, complex-userset and TTU
-// subject-first composition sites): composable only when the target is
-// list-generatable, cycle/DepthExceeded-safe, AND not wildcard-reachable.
+// subject-first composition sites): composable when the target is
+// list-generatable and cycle/DepthExceeded-safe. Wildcard-reachable targets ARE
+// composable — the '*' their list_subjects surfaces is verified by the
+// wildcard-completion tail.
 func TestComposableListSubjectsTarget(t *testing.T) {
 	plan, _ := subjectFirstPlan(composableOrgAdmin())
 	if !composableListSubjectsTarget(plan, "org", "admin") {
-		t.Fatal("safe, non-wildcard, generatable target must be composable")
+		t.Fatal("safe, generatable target must be composable")
 	}
 
-	// Wildcard-reachable target: list_org_admin_sub would emit '*', so skip.
+	// Wildcard-reachable target: now composable — list_org_admin_sub surfaces '*'
+	// and the wildcard-completion tail verifies it against the full relation.
 	wc := composableOrgAdmin()
 	wc["org.admin"].Features.HasWildcard = true
 	planWC, _ := subjectFirstPlan(wc)
-	if composableListSubjectsTarget(planWC, "org", "admin") {
-		t.Error("wildcard-reachable target must not be composable")
+	if !composableListSubjectsTarget(planWC, "org", "admin") {
+		t.Error("wildcard-reachable target must now be composable")
 	}
 
 	// Cyclic: target references back into the caller relation → unsafe.

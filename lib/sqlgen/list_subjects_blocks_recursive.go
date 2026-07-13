@@ -218,7 +218,9 @@ func buildListSubjectsRecursiveComplexUsersetBlock(plan ListPlan, pattern listUs
 // play (list_..._sub returns '*' for wildcard grants, not concrete subjects, so
 // an IN/LATERAL membership would drop concrete subjects that hold the relation
 // only via a wildcard) and the target relation is list-generatable and
-// cycle-safe. Mirrors buildSubjectFirstTTUSubjectBlocks / complexClosureSubjectMembership.
+// cycle-safe. Mirrors complexClosureSubjectMembership's HasWildcard gate.
+// (buildSubjectFirstTTUSubjectBlocks needs no such gate: its '*' rows flow
+// through base_results to the wildcard-completion tail.)
 func composableSubjectFirstUserset(plan ListPlan, pattern listUsersetPatternInput) bool {
 	if plan.Analysis.Features.HasWildcard {
 		return false
@@ -672,13 +674,14 @@ func buildListSubjectsRecursiveTTUBlockParentClosureUsersetPattern(plan ListPlan
 // type) is exactly that set, so the transform is a faithful equivalence — for
 // each link, enumerate the parent object's subjects directly.
 //
-// Returns nil (keep the subject_pool path) unless every case is cleanly
-// handled: direct parent pattern only, no wildcards on the current or target
-// relation (subject-side '*' needs the subject_pool wildcard handling), and
-// every allowed parent type has a composable, cycle-safe list_subjects
-// function.
+// Returns nil (keep the subject_pool path) unless every allowed parent type has
+// a composable, cycle-safe list_subjects function. Wildcards on the current
+// relation are fine: the '*' the parent's list_subjects surfaces flows into
+// base_results and is verified by the wildcard-completion tail
+// (wildcardSubjectsTailWhere), which checks '*' against the full relation rather
+// than keeping it unconditionally.
 func buildSubjectFirstTTUSubjectBlocks(plan ListPlan, parent ListParentRelationData) []TypedQueryBlock {
-	if plan.Analysis.Features.HasWildcard || plan.AnalysisLookup == nil {
+	if plan.AnalysisLookup == nil {
 		return nil
 	}
 	if parent.IsClosurePattern {
@@ -712,10 +715,11 @@ func buildSubjectFirstTTUSubjectBlocks(plan ListPlan, parent ListParentRelationD
 // p_subject_type). No linking tuples are needed: the check never varies per link.
 //
 // Returns nil (keep the subject_pool path) unless list_{objType}_{sourceRel}_sub
-// is composable and cycle-safe and no wildcards are in play (subject-side '*'
-// under-reports concrete subjects through an IN-set — same gate as
-// buildSubjectFirstTTUSubjectBlocks). The closure-pattern subject_pool block does
-// not apply plan.Exclusions, so neither does this replacement.
+// is composable and cycle-safe. Wildcards are fine, as in
+// buildSubjectFirstTTUSubjectBlocks: the '*' this list_subjects surfaces flows
+// into base_results and is verified by the wildcard-completion tail rather than
+// kept unconditionally. The closure-pattern subject_pool block does not apply
+// plan.Exclusions, so neither does this replacement.
 func buildSubjectFirstTTUClosureSubjectBlocks(plan ListPlan, parent ListParentRelationData) []TypedQueryBlock {
 	if !composableListSubjectsTarget(plan, plan.ObjectType, parent.SourceRelation) {
 		return nil
