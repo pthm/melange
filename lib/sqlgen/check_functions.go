@@ -299,25 +299,33 @@ func buildInlineCheckExpr(c DispatcherCase, rSubjectType, rSubjectID, rObjectID 
 	}
 }
 
-// buildBulkUnknownTypeFallback builds the final RETURN QUERY statement that handles
-// (object_type, relation) pairs not covered by any IF block.
+// buildBulkUnknownTypeFallback builds the final RETURN QUERY statement that
+// denies requests for object types not covered by any per-type IF block.
+//
+// It matches on object_type alone, NOT (object_type, relation). A known type is
+// always fully handled by its own IF block — including that block's
+// unknown-relation deny fallback — and the block always fires because every
+// request row's object_type is itself an element of p_object_types (the UNNEST
+// source of the gate ArrayContains(type, p_object_types)). Matching on pairs
+// would additionally re-emit a deny row for known-type/unknown-relation
+// requests, duplicating the per-type fallback's row.
 func buildBulkUnknownTypeFallback(cases []DispatcherCase) ReturnQuery {
-	notInPairs := make([][]string, 0, len(cases))
+	seen := make(map[string]bool, len(cases))
+	knownTypes := make([]string, 0, len(cases))
 	for _, c := range cases {
-		notInPairs = append(notInPairs, []string{c.ObjectType, c.Relation})
+		if !seen[c.ObjectType] {
+			seen[c.ObjectType] = true
+			knownTypes = append(knownTypes, c.ObjectType)
+		}
 	}
 
 	rObjectType := Col{Table: "t", Column: "object_type"}
-	rRelation := Col{Table: "t", Column: "relation"}
 	rIdx := Cast{Expr: Col{Table: "t", Column: "idx"}, Type: "INTEGER"}
 
 	query := SelectStmt{
 		ColumnExprs: []Expr{rIdx, Int(0)},
 		From:        bulkUnnestExpr,
-		Where: TupleNotIn{
-			Exprs: []Expr{rObjectType, rRelation},
-			Pairs: notInPairs,
-		},
+		Where:       NotIn{Expr: rObjectType, Values: knownTypes},
 	}
 	return ReturnQuery{Query: query.SQL()}
 }

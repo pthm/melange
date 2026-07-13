@@ -13,6 +13,33 @@ import (
 // expression re-initialized per call), and an IF-chain of guarded single-call
 // RETURNs (~2.6s). These tests pin the IF-chain rendering and guard against
 // regressing to either slower form.
+// The bulk dispatcher's final fallback must deny only genuinely-unknown object
+// types (object_type NOT IN known_types), never (object_type, relation) pairs:
+// a known-type/unknown-relation request is already denied once by its per-type
+// IF block's relation fallback, so matching on pairs would emit a duplicate deny
+// row for the same idx.
+func TestBulkDispatcher_UnknownTypeFallbackDenominatedByTypeOnly(t *testing.T) {
+	analyses := []RelationAnalysis{
+		mkAnalysis("document", "viewer", RelationFeatures{HasDirect: true}, true),
+		mkAnalysis("folder", "viewer", RelationFeatures{HasDirect: true}, true),
+	}
+	for i := range analyses {
+		analyses[i].DirectSubjectTypes = []string{"user"}
+	}
+
+	sql := generateBulkDispatcher(analyses, "")
+
+	// Final fallback keys on object_type alone over the distinct known types.
+	if !strings.Contains(sql, "t.object_type NOT IN ('document', 'folder')") {
+		t.Errorf("bulk fallback must deny by object_type NOT IN (known types), got:\n%s", sql)
+	}
+	// It must NOT re-introduce the (object_type, relation) tuple match that
+	// double-counted known-type/unknown-relation requests.
+	if strings.Contains(sql, "t.relation) NOT IN") || strings.Contains(sql, "(t.object_type, t.relation)") {
+		t.Errorf("bulk fallback must not match on (object_type, relation) pairs (duplicate deny rows), got:\n%s", sql)
+	}
+}
+
 func TestDispatchers_SimpleExpressionFastPath(t *testing.T) {
 	analyses := []RelationAnalysis{
 		mkAnalysis("document", "viewer", RelationFeatures{HasDirect: true}, true),
