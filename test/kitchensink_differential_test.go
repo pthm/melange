@@ -24,6 +24,7 @@ var kitchenSinkProbes = []struct{ objType, relation string }{
 	{"project", "admin"},         // cross-type TTU + union
 	{"folder", "viewer"},         // #12: self-ref recursive TTU + cross-type anchor + userset
 	{"folder", "editor"},         // pure self-ref recursive TTU
+	{"folder", "co_owner"},       // intersection composing against self-ref recursive targets
 	{"folder", "protected"},      // recursive TTU minuend + exclusion (Recursive+Exclusion)
 	{"document", "editor"},       // direct + userset + userset(other) + implied + TTU
 	{"document", "viewer"},       // the big union incl. wildcard via TTU

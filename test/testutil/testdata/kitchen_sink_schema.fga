@@ -82,6 +82,11 @@ type folder
     define editor: [user] or editor from parent   # pure self-ref recursive TTU
     define public: [user:*]                       # wildcard reached via TTU below
     define banned: [user]                         # TTU-exclusion subtrahend source
+    # intersection of two self-referential recursive relations: list_objects
+    # composes against list_folder_viewer_obj / list_folder_editor_obj (the #12
+    # recursive+cross-type-anchor shape) — the case that must stay complete for
+    # intersection composition to be sound.
+    define co_owner: viewer and editor
     # recursive TTU minuend combined with an exclusion (Recursive+Exclusion)
     define protected: viewer from parent but not banned
 

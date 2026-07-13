@@ -68,6 +68,8 @@ func BenchmarkKitchenSinkListObjects(b *testing.B) {
 		{"DocCanView", "can_view", "document", "subject"},
 		{"FolderViewer", "viewer", "folder", "subject"},
 		{"DocEditor_Member", "editor", "document", "member"},
+		{"DocCanEdit", "can_edit", "document", "subject"}, // intersection: editor and active
+		{"DocGated", "gated", "document", "subject"},      // intersection: viewer and active
 	}
 	for _, scale := range testutil.KitchenSinkScales {
 		b.Run(scale.Name, func(b *testing.B) {

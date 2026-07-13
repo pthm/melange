@@ -322,17 +322,17 @@ func complexClosureSubjectMembership(plan ListPlan, rel string) Expr {
 
 // intersectionPartComposable reports whether a list_objects intersection part
 // may compose with rel's list_objects set. INTERSECT is only sound when every
-// part is complete: if any semi-joined part under-reports, the whole object is
-// dropped. Keep this proof to direct, non-wildcard targets. Recursive/userset/
-// composed targets can make check_permission_internal true for a plain concrete
-// subject through paths their list_objects function may not enumerate; the
-// userset-parity arm cannot recover that case because its guard is false for
-// plain subjects.
+// part is complete for the query subject: if any semi-joined part under-reports,
+// the whole object is dropped (under-permissive).
+//
+// list_objects is complete for plain subjects across every strategy — including
+// wildcard-reaching relations (list_*_obj enumerates the objects a plain subject
+// reaches via a [user:*] grant) and recursive TTU (the recursive-TTU completeness
+// work closed the residual gap for the self-referential + cross-type-anchor
+// shape). So the part composes whenever it is cycle/DepthExceeded-safe
+// (composableListTarget). The userset-parity check arm in composedListObjectsMembership
+// covers userset-typed query subjects, which list_*_obj may still under-report.
 func intersectionPartComposable(plan ListPlan, rel string) bool {
-	target := plan.AnalysisLookup[plan.ObjectType+"."+rel]
-	if target == nil || target.Features.HasWildcard || target.ListStrategy != ListStrategyDirect {
-		return false
-	}
 	return composableListTarget(plan, plan.ObjectType, rel)
 }
 
