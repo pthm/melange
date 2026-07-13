@@ -7,10 +7,9 @@ import (
 
 // RecursiveBlockSet contains blocks for a recursive list function.
 type RecursiveBlockSet struct {
-	BaseBlocks              []TypedQueryBlock
-	RecursiveBlock          *TypedQueryBlock
-	SelfCandidateBlock      *TypedQueryBlock
-	SelfRefLinkingRelations []string
+	BaseBlocks         []TypedQueryBlock
+	RecursiveBlock     *TypedQueryBlock
+	SelfCandidateBlock *TypedQueryBlock
 }
 
 // BuildListObjectsRecursiveBlocks builds blocks for a recursive list_objects function.
@@ -30,9 +29,8 @@ func BuildListObjectsRecursiveBlocks(plan ListPlan) (RecursiveBlockSet, error) {
 	}
 
 	result := RecursiveBlockSet{
-		BaseBlocks:              baseBlocks,
-		SelfRefLinkingRelations: selfRefLinkingRelations,
-		SelfCandidateBlock:      buildListObjectsSelfCandidateBlock(plan),
+		BaseBlocks:         baseBlocks,
+		SelfCandidateBlock: buildListObjectsSelfCandidateBlock(plan),
 	}
 
 	if len(selfRefLinkingRelations) > 0 {

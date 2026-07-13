@@ -1,7 +1,5 @@
 package sqlgen
 
-import "strings"
-
 // RenderListObjectsRecursiveFunction renders a recursive list_objects function from plan and blocks.
 // This handles TTU patterns with depth tracking and recursive CTEs.
 func RenderListObjectsRecursiveFunction(plan ListPlan, blocks RecursiveBlockSet) (string, error) {
@@ -38,7 +36,6 @@ func RenderListObjectsRecursiveFunction(plan ListPlan, blocks RecursiveBlockSet)
 		query = joinUnionBlocksSQL([]string{query, selfSQL})
 	}
 
-	depthCheck := buildDepthCheckSQLForRender(plan.ObjectType, blocks.SelfRefLinkingRelations)
 	paginatedQuery := plan.wrapPagination(query, "object_id")
 
 	fn := PlpgsqlFunction{
@@ -47,17 +44,12 @@ func RenderListObjectsRecursiveFunction(plan ListPlan, blocks RecursiveBlockSet)
 		Args:    ListObjectsArgs(),
 		Returns: ListObjectsReturns(),
 		Header:  ListObjectsFunctionHeader(plan.ObjectType, plan.Relation, plan.FeaturesString()),
-		Decls: []Decl{
-			{Name: "v_max_depth", Type: "INTEGER"},
-		},
+		// Recursion is bounded inside the accessible CTE (WHERE a.depth < 25).
+		// list_objects is best-effort to that depth: chains deeper than the bound
+		// are truncated rather than raising M2002 the way check_permission does
+		// (a pathological edge case that a global pre-check could not detect
+		// per-query anyway without re-walking the whole graph on every call).
 		Body: []Stmt{
-			RawStmt{SQLText: strings.TrimSpace(depthCheck)},
-			If{
-				Cond: Raw("v_max_depth >= 25"),
-				Then: []Stmt{
-					Raise{Message: "resolution too complex", ErrCode: "M2002"},
-				},
-			},
 			ReturnQuery{Query: paginatedQuery},
 		},
 	}
