@@ -29,14 +29,19 @@ func RenderListObjectsRecursiveFunction(plan ListPlan, blocks RecursiveBlockSet)
 	if recursive {
 		cteColumns = []string{"object_id", "depth", "propagatable"}
 	}
+	// Hoisted list_*_obj CTEs come first so the accessible CTE (and its base
+	// blocks) can reference them. Within a WITH RECURSIVE, a CTE may reference
+	// any CTE defined earlier in the list.
+	ctes := append([]CTEDef{}, blocks.HoistedCTEs...)
+	ctes = append(ctes, CTEDef{
+		Name:    "accessible",
+		Columns: cteColumns,
+		Query:   Raw(cteBody),
+	})
 	cteQuery := WithCTE{
 		Recursive: recursive,
-		CTEs: []CTEDef{{
-			Name:    "accessible",
-			Columns: cteColumns,
-			Query:   Raw(cteBody),
-		}},
-		Query: finalStmt,
+		CTEs:      ctes,
+		Query:     finalStmt,
 	}
 
 	query := cteQuery.SQL()

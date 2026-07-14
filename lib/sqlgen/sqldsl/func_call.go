@@ -179,6 +179,24 @@ func (i InFunctionSelect) SQL() string {
 	return i.Expr.SQL() + " IN (" + subquery + ")"
 }
 
+// InCTESelect represents "expr IN (SELECT column FROM cte)". It is the
+// hoisted-CTE counterpart to InFunctionSelect: instead of inlining a
+// list_*_obj function call, it references a CTE that computed that call once.
+//
+// Renders: t.subject_id IN (SELECT object_id FROM folder_editor_objs)
+type InCTESelect struct {
+	Expr      Expr   // The expression to check (left side of IN)
+	CTEName   string // The CTE to select from
+	SelectCol string // Column to select from the CTE
+}
+
+// SQL renders the IN subquery expression against a CTE. The selected column is
+// qualified with the CTE name so it never collides with an outer query column
+// of the same name (e.g. object_id in a WITH RECURSIVE list_objects body).
+func (i InCTESelect) SQL() string {
+	return i.Expr.SQL() + " IN (SELECT " + i.CTEName + "." + i.SelectCol + " FROM " + i.CTEName + ")"
+}
+
 // ListObjectsFunctionName generates a list_TYPE_RELATION_obj function name.
 func ListObjectsFunctionName(objectType, relation string) string {
 	return SafeIdentifier("list_", objectType, relation, "_obj")

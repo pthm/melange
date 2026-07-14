@@ -32,7 +32,7 @@ func TestBuildCrossTypeTTUBlocksUsesSubjectFirstParentList(t *testing.T) {
 		LinkingRelation:       "namespace",
 		CrossTypeLinkingTypes: "'namespace'",
 		HasCrossTypeLinks:     true,
-	}}, nil)
+	}}, nil, nil)
 
 	if len(blocks) != 2 {
 		t.Fatalf("buildCrossTypeTTUBlocks() returned %d blocks, want 2 (subject-first + userset-subject parity)", len(blocks))
@@ -87,7 +87,7 @@ func TestBuildCrossTypeTTUBlocksFallsBackForRecursiveParentList(t *testing.T) {
 		LinkingRelation:       "parent",
 		CrossTypeLinkingTypes: "'folder'",
 		HasCrossTypeLinks:     true,
-	}}, nil)
+	}}, nil, nil)
 
 	if len(blocks) != 1 {
 		t.Fatalf("buildCrossTypeTTUBlocks() returned %d blocks, want 1", len(blocks))
@@ -137,7 +137,7 @@ func TestBuildCrossTypeTTUBlocksVerifiesClosureSourceRelationWhenConstrained(t *
 		HasCrossTypeLinks:     true,
 		IsClosurePattern:      true,
 		SourceRelation:        "reader",
-	}}, nil)
+	}}, nil, nil)
 
 	if len(blocks) != 2 {
 		t.Fatalf("buildCrossTypeTTUBlocks() returned %d blocks, want 2 (subject-first + userset-subject parity)", len(blocks))
@@ -182,7 +182,7 @@ func TestBuildCrossTypeTTUBlocksSkipsClosureSourceCheckWhenUnconstrained(t *test
 		HasCrossTypeLinks:     true,
 		IsClosurePattern:      true,
 		SourceRelation:        "reader",
-	}}, nil)
+	}}, nil, nil)
 
 	if len(blocks) != 2 {
 		t.Fatalf("buildCrossTypeTTUBlocks() returned %d blocks, want 2 (subject-first + userset-subject parity)", len(blocks))
@@ -237,7 +237,7 @@ func TestBuildCrossTypeTTUBlocksFallbackVerifiesClosureSourceRelation(t *testing
 		HasCrossTypeLinks:     true,
 		IsClosurePattern:      true,
 		SourceRelation:        "reader",
-	}}, nil)
+	}}, nil, nil)
 
 	if len(blocks) != 1 {
 		t.Fatalf("buildCrossTypeTTUBlocks() returned %d blocks, want 1", len(blocks))
@@ -284,7 +284,7 @@ func TestBuildCrossTypeTTUBlocksComposesAcyclicRecursiveParent(t *testing.T) {
 		LinkingRelation:       "workspace",
 		CrossTypeLinkingTypes: "'workspace'",
 		HasCrossTypeLinks:     true,
-	}}, nil)
+	}}, nil, nil)
 
 	if len(blocks) != 2 {
 		t.Fatalf("buildCrossTypeTTUBlocks() returned %d blocks, want 2 (subject-first + userset-subject parity)", len(blocks))
@@ -336,7 +336,7 @@ func TestBuildRecursiveComplexUsersetBlockComposesWhenSafe(t *testing.T) {
 		IsComplex:       true,
 	}
 
-	sql := buildRecursiveComplexUsersetBlock(plan, pattern).Query.SQL()
+	sql := buildRecursiveComplexUsersetBlock(plan, pattern, nil).Query.SQL()
 	assertContains(t, sql, "IN (SELECT obj.object_id FROM list_workspace_view_obj(p_subject_type, p_subject_id, NULL, NULL) obj)")
 	// Userset-typed subjects keep a guarded per-candidate check arm.
 	assertContains(t, sql, "position('#' in p_subject_id) > 0")
@@ -377,7 +377,7 @@ func TestBuildRecursiveComplexUsersetBlockFallsBackWhenCyclic(t *testing.T) {
 		IsComplex:       true,
 	}
 
-	sql := buildRecursiveComplexUsersetBlock(plan, pattern).Query.SQL()
+	sql := buildRecursiveComplexUsersetBlock(plan, pattern, nil).Query.SQL()
 	assertContains(t, sql, "check_permission_internal")
 	assertNotContains(t, sql, "list_group_member_obj")
 }

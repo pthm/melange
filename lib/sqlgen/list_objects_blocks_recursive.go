@@ -10,6 +10,88 @@ type RecursiveBlockSet struct {
 	BaseBlocks         []TypedQueryBlock
 	RecursiveBlock     *TypedQueryBlock
 	SelfCandidateBlock *TypedQueryBlock
+	// HoistedCTEs are shared list_*_obj computations lifted out of the base
+	// blocks. The same list_<parent>_obj(p_subject_type, p_subject_id, NULL,
+	// NULL) call was previously inlined in both the userset-subject arm and the
+	// cross-type-TTU subject-first arm; these CTEs compute each distinct call
+	// once and the arms reference them. Rendered before the accessible CTE.
+	HoistedCTEs []CTEDef
+}
+
+// hoistedListObjTargets maps "targetType.targetRelation" to the CTE name that
+// hoists that relation's list_*_obj call. Empty/nil when no hoisting applies.
+type hoistedListObjTargets map[string]string
+
+func hoistKey(targetType, targetRelation string) string {
+	return targetType + "." + targetRelation
+}
+
+// name returns the CTE name for a hoisted target, or "" if not hoisted.
+func (h hoistedListObjTargets) name(targetType, targetRelation string) string {
+	return h[hoistKey(targetType, targetRelation)]
+}
+
+// collectHoistedListObjTargets returns the distinct list_*_obj targets that the
+// base blocks would otherwise inline more than once (or that are shared between
+// the userset-subject and cross-type-TTU subject-first arms), along with the
+// CTEs computing each once. Deduplicating by (targetType, targetRelation) means
+// each distinct list_*_obj target is invoked once per generated function.
+func collectHoistedListObjTargets(plan ListPlan, parentRelations []ListParentRelationData) (targets hoistedListObjTargets, ctes []CTEDef) {
+	type target struct{ typ, rel string }
+	var order []target
+	seen := make(map[string]bool)
+
+	add := func(typ, rel string) {
+		if composableListTarget(plan, typ, rel) && !seen[hoistKey(typ, rel)] {
+			seen[hoistKey(typ, rel)] = true
+			order = append(order, target{typ, rel})
+		}
+	}
+
+	// Userset-subject arms: only complex patterns semi-join against the userset
+	// target's list_*_obj set (simple patterns JOIN membership tuples instead).
+	// composableListTarget gates composition; see usersetMembership.
+	for _, pattern := range buildListUsersetPatternInputs(plan.Analysis) {
+		if pattern.IsComplex {
+			add(pattern.SubjectType, pattern.SubjectRelation)
+		}
+	}
+
+	// Cross-type-TTU subject-first arms: parent_obj is that parent's list_*_obj set.
+	for _, parent := range parentRelations {
+		if !parent.HasCrossTypeLinks {
+			continue
+		}
+		for _, parentType := range dequoteLinkingRelations(parent.CrossTypeLinkingTypes) {
+			if canUseSubjectFirstTTU(plan, parent, parentType) {
+				add(parentType, parent.Relation)
+			}
+		}
+	}
+
+	if len(order) == 0 {
+		return nil, nil
+	}
+
+	targets = make(hoistedListObjTargets, len(order))
+	ctes = make([]CTEDef, 0, len(order))
+	for _, t := range order {
+		name := SafeIdentifier("", t.typ, t.rel, "_objs")
+		targets[hoistKey(t.typ, t.rel)] = name
+		ctes = append(ctes, CTEDef{
+			Name: name,
+			Query: SelectStmt{
+				ColumnExprs: []Expr{Col{Table: "o", Column: "object_id"}},
+				FromExpr: FunctionCallExpr{
+					Schema: plan.DatabaseSchema,
+					Name:   ListObjectsFunctionName(t.typ, t.rel),
+					Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
+					Alias:  "o",
+				},
+			},
+		})
+	}
+	return targets, ctes
 }
 
 // BuildListObjectsRecursiveBlocks builds blocks for a recursive list_objects function.
@@ -23,7 +105,11 @@ func BuildListObjectsRecursiveBlocks(plan ListPlan) (RecursiveBlockSet, error) {
 	// Only relations that satisfy a self-referential TTU target should propagate.
 	propagatableRelations := computePropagatableRelations(plan, parentRelations)
 
-	baseBlocks, err := buildRecursiveBaseBlocks(plan, parentRelations, propagatableRelations)
+	// Hoist list_*_obj calls shared between the userset-subject and cross-type-TTU
+	// subject-first arms into shared CTEs so each distinct target is invoked once.
+	hoisted, hoistedCTEs := collectHoistedListObjTargets(plan, parentRelations)
+
+	baseBlocks, err := buildRecursiveBaseBlocks(plan, parentRelations, propagatableRelations, hoisted)
 	if err != nil {
 		return RecursiveBlockSet{}, err
 	}
@@ -31,6 +117,7 @@ func BuildListObjectsRecursiveBlocks(plan ListPlan) (RecursiveBlockSet, error) {
 	result := RecursiveBlockSet{
 		BaseBlocks:         baseBlocks,
 		SelfCandidateBlock: buildListObjectsSelfCandidateBlock(plan),
+		HoistedCTEs:        hoistedCTEs,
 	}
 
 	if len(selfRefLinkingRelations) > 0 {
@@ -73,7 +160,7 @@ func computePropagatableRelations(plan ListPlan, parentRelations []ListParentRel
 // buildRecursiveBaseBlocks builds the base case blocks for the recursive CTE.
 // Each block is tagged with Propagatable based on whether its source relation
 // satisfies a self-referential TTU target.
-func buildRecursiveBaseBlocks(plan ListPlan, parentRelations []ListParentRelationData, propagatable map[string]bool) ([]TypedQueryBlock, error) {
+func buildRecursiveBaseBlocks(plan ListPlan, parentRelations []ListParentRelationData, propagatable map[string]bool, hoisted hoistedListObjTargets) ([]TypedQueryBlock, error) {
 	blocks := make([]TypedQueryBlock, 0, 8)
 
 	// Split direct block relations into propagatable and non-propagatable sets.
@@ -96,14 +183,14 @@ func buildRecursiveBaseBlocks(plan ListPlan, parentRelations []ListParentRelatio
 
 	patterns := buildListUsersetPatternInputs(plan.Analysis)
 	for _, pattern := range patterns {
-		blocks = append(blocks, buildRecursiveUsersetBlocks(plan, pattern, propagatable)...)
+		blocks = append(blocks, buildRecursiveUsersetBlocks(plan, pattern, propagatable, hoisted)...)
 	}
 
 	// Cross-type TTU blocks are a one-hop grant of the outer relation. They must
 	// propagate when that relation is itself self-referential (e.g. "local_admin:
 	// admin from org or local_admin from parent"): the object granted via the
 	// cross-type "admin from org" arm has to seed the recursive parent walk.
-	blocks = append(blocks, buildCrossTypeTTUBlocks(plan, parentRelations, propagatable)...)
+	blocks = append(blocks, buildCrossTypeTTUBlocks(plan, parentRelations, propagatable, hoisted)...)
 
 	return blocks, nil
 }
@@ -189,7 +276,7 @@ func buildRecursiveIntersectionClosureBlock(plan ListPlan, rel string) TypedQuer
 // Membership comes from usersetMembership: a semi-join against the userset
 // relation's list function when composition is safe, or a per-candidate
 // check_permission_internal call otherwise.
-func buildRecursiveComplexUsersetBlock(plan ListPlan, pattern listUsersetPatternInput) TypedQueryBlock {
+func buildRecursiveComplexUsersetBlock(plan ListPlan, pattern listUsersetPatternInput, hoisted hoistedListObjTargets) TypedQueryBlock {
 	q := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
 		Relations(pattern.SourceRelations...).
@@ -200,7 +287,7 @@ func buildRecursiveComplexUsersetBlock(plan ListPlan, pattern listUsersetPattern
 				Left:  UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}},
 				Right: Lit(pattern.SubjectRelation),
 			},
-			usersetMembership(plan, pattern),
+			recursiveUsersetMembership(plan, pattern, hoisted),
 		).
 		SelectCol("object_id").
 		Distinct()
@@ -253,15 +340,45 @@ func buildRecursiveSimpleUsersetBlock(plan ListPlan, pattern listUsersetPatternI
 
 // buildRecursiveUsersetBlocks builds userset pattern blocks, splitting by propagatability
 // when source relations contain a mix of propagatable and non-propagatable relations.
-func buildRecursiveUsersetBlocks(plan ListPlan, pattern listUsersetPatternInput, propagatable map[string]bool) []TypedQueryBlock {
+func buildRecursiveUsersetBlocks(plan ListPlan, pattern listUsersetPatternInput, propagatable map[string]bool, hoisted hoistedListObjTargets) []TypedQueryBlock {
 	return splitBlocksByPropagation(pattern.SourceRelations, propagatable, func(rels []string) TypedQueryBlock {
 		p := pattern
 		p.SourceRelations = rels
 		if p.IsComplex {
-			return buildRecursiveComplexUsersetBlock(plan, p)
+			return buildRecursiveComplexUsersetBlock(plan, p, hoisted)
 		}
 		return buildRecursiveSimpleUsersetBlock(plan, p)
 	})
+}
+
+// recursiveUsersetMembership is usersetMembership with the composed list_*_obj
+// semi-join swapped for a reference to the hoisted CTE when the target has been
+// hoisted. Behavior is identical -- the CTE computes the same list_*_obj set
+// once instead of inlining the call in this arm (and again in the subject-first
+// arm). Falls back to usersetMembership when the target is not hoisted.
+func recursiveUsersetMembership(plan ListPlan, pattern listUsersetPatternInput, hoisted hoistedListObjTargets) Expr {
+	cteName := hoisted.name(pattern.SubjectType, pattern.SubjectRelation)
+	if cteName == "" {
+		return usersetMembership(plan, pattern)
+	}
+	check := CheckPermission{
+		Schema:   plan.DatabaseSchema,
+		Subject:  SubjectParams(),
+		Relation: pattern.SubjectRelation,
+		Object: ObjectRef{
+			Type: Lit(pattern.SubjectType),
+			ID:   UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}},
+		},
+		ExpectAllow: true,
+	}
+	return Or(
+		InCTESelect{
+			Expr:      UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}},
+			CTEName:   cteName,
+			SelectCol: "object_id",
+		},
+		And(HasUserset{Source: SubjectID}, check),
+	)
 }
 
 // splitBlocksByPropagation partitions relations into propagatable and non-propagatable
@@ -302,7 +419,7 @@ func splitBlocksByPropagation(relations []string, propagatable map[string]bool, 
 // check_permission_internal for each one. Recursive parent list functions can
 // form cross-type list cycles, so those keep the check_permission_internal
 // fallback.
-func buildCrossTypeTTUBlocks(plan ListPlan, parentRelations []ListParentRelationData, propagatable map[string]bool) []TypedQueryBlock {
+func buildCrossTypeTTUBlocks(plan ListPlan, parentRelations []ListParentRelationData, propagatable map[string]bool, hoisted hoistedListObjTargets) []TypedQueryBlock {
 	var blocks []TypedQueryBlock
 
 	for _, parent := range parentRelations {
@@ -341,7 +458,7 @@ func buildCrossTypeTTUBlocks(plan ListPlan, parentRelations []ListParentRelation
 				// its list function does not enumerate; keep a per-candidate
 				// check arm for exactly that case. The guard is false for
 				// plain subjects, so the check never runs on the hot path.
-				appendBlock(buildSubjectFirstCrossTypeTTUBlock(plan, parent, parentType, crossExclusions))
+				appendBlock(buildSubjectFirstCrossTypeTTUBlock(plan, parent, parentType, crossExclusions, hoisted))
 				appendBlock(buildCheckPermissionCrossTypeTTUBlock(plan, parent, []string{parentType}, crossExclusions, true))
 			} else {
 				fallbackTypes = append(fallbackTypes, parentType)
@@ -367,21 +484,30 @@ func canUseSubjectFirstTTU(plan ListPlan, parent ListParentRelationData, parentT
 	return composableListTarget(plan, parentType, parent.Relation)
 }
 
-func buildSubjectFirstCrossTypeTTUBlock(plan ListPlan, parent ListParentRelationData, parentType string, exclusions ExclusionConfig) TypedQueryBlock {
+func buildSubjectFirstCrossTypeTTUBlock(plan ListPlan, parent ListParentRelationData, parentType string, exclusions ExclusionConfig, hoisted hoistedListObjTargets) TypedQueryBlock {
 	conditions := exclusions.BuildPredicates()
 	if sourceRelationNeedsVerification(plan, parent) {
 		conditions = append(conditions, sourceRelationCheck(plan, parent))
 	}
 
-	stmt := SelectStmt{
-		Distinct:    true,
-		ColumnExprs: []Expr{Col{Table: "child", Column: "object_id"}},
-		FromExpr: FunctionCallExpr{
+	// Reference the hoisted CTE for the parent's list_*_obj set when available,
+	// so the same call in the userset-subject arm is not evaluated twice.
+	var parentSource TableExpr
+	if cteName := hoisted.name(parentType, parent.Relation); cteName != "" {
+		parentSource = TableAs("", cteName, "parent_obj")
+	} else {
+		parentSource = FunctionCallExpr{
 			Schema: plan.DatabaseSchema,
 			Name:   ListObjectsFunctionName(parentType, parent.Relation),
 			Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
 			Alias:  "parent_obj",
-		},
+		}
+	}
+
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "child", Column: "object_id"}},
+		FromExpr:    parentSource,
 		Joins: []JoinClause{
 			{
 				Type:  "INNER",

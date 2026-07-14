@@ -86,6 +86,7 @@ type (
 	FuncCallEq       = sqldsl.FuncCallEq
 	FuncCallNe       = sqldsl.FuncCallNe
 	InFunctionSelect = sqldsl.InFunctionSelect
+	InCTESelect      = sqldsl.InCTESelect
 
 	// Array types
 	ArrayLiteral  = sqldsl.ArrayLiteral
