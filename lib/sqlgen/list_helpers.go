@@ -198,7 +198,7 @@ func buildUsersetWildcardTailQuery(a RelationAnalysis, databaseSchema string) SQ
 			Joins: []JoinClause{
 				{Type: "CROSS", Table: "has_wildcard", Alias: "hw"},
 			},
-			Where: wildcardSubjectsTailWhere(databaseSchema, a.Relation, a.ObjectType),
+			Where: wildcardSubjectsTailWhere(databaseSchema, a.Relation, a.ObjectType, a.Features.HasExclusion),
 		}
 	}
 	return SelectStmt{
@@ -219,10 +219,17 @@ func buildUsersetWildcardTailQuery(a RelationAnalysis, databaseSchema string) SQ
 //     non-exclusion relations too (the check passes), so no gate is needed.
 //   - concrete subjects use the no-wildcard check, because wildcard-only access
 //     is already represented by the '*' row.
-func wildcardSubjectsTailWhere(schema, relation, objectType string) Expr {
+//
+// The NOT(has_wildcard) short-circuit keeps every base row when there is no '*'.
+// That is safe only when the relation has no exclusion: for an exclusion-bearing
+// relation the base-set builders can over-report banned subjects (e.g. a
+// self-ref userset where a direct or intermediate-group member is banned), so
+// re-verification must always run. Gate the short-circuit on !hasExclusion so
+// concrete subjects are always validated by check_permission_nw_internal and
+// '*' by check_permission_internal.
+func wildcardSubjectsTailWhere(schema, relation, objectType string, hasExclusion bool) Expr {
 	subject := Col{Table: "br", Column: "subject_id"}
-	return Or(
-		NotExpr{Expr: Col{Table: "hw", Column: "has_wildcard"}},
+	branches := []Expr{
 		And(
 			Eq{Left: subject, Right: Lit("*")},
 			WildcardPermissionCheckCall(schema, relation, objectType, subject, ObjectID),
@@ -231,7 +238,11 @@ func wildcardSubjectsTailWhere(schema, relation, objectType string) Expr {
 			Ne{Left: subject, Right: Lit("*")},
 			NoWildcardPermissionCheckCall(schema, relation, objectType, subject, ObjectID),
 		),
-	)
+	}
+	if !hasExclusion {
+		branches = append([]Expr{NotExpr{Expr: Col{Table: "hw", Column: "has_wildcard"}}}, branches...)
+	}
+	return Or(branches...)
 }
 
 // buildDispatcherBody builds the common routing logic for list dispatcher functions.

@@ -1,0 +1,33 @@
+tests:
+  - name: selfref_userset_exclusion_listsubjects
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define banned: [user]
+              define active_member: [user, user:*, group#active_member] but not banned
+        tuples:
+          # R2: direct member of group:a who is also banned in group:a -> must NOT be listed
+          - {user: user:bob, relation: active_member, object: group:a}
+          - {user: user:bob, relation: banned, object: group:a}
+          # positive direct member (not banned) -> must be listed
+          - {user: user:carol, relation: active_member, object: group:a}
+          # R8: group:a includes group:b#active_member; alice is active in group:b but
+          # banned in group:b -> check denies, must NOT be listed
+          - {user: "group:b#active_member", relation: active_member, object: group:a}
+          - {user: user:alice, relation: active_member, object: group:b}
+          - {user: user:alice, relation: banned, object: group:b}
+          # positive intermediate member (not banned) -> must be listed
+          - {user: user:dave, relation: active_member, object: group:b}
+        checkAssertions:
+          - {name: banned_direct_denied, tuple: {user: user:bob, relation: active_member, object: group:a}, expectation: false}
+          - {name: direct_ok, tuple: {user: user:carol, relation: active_member, object: group:a}, expectation: true}
+          - {name: banned_intermediate_denied, tuple: {user: user:alice, relation: active_member, object: group:a}, expectation: false}
+          - {name: intermediate_ok, tuple: {user: user:dave, relation: active_member, object: group:a}, expectation: true}
+        listUsersAssertions:
+          - name: active_member_of_group_a
+            request: {object: group:a, relation: active_member, filters: [user]}
+            expectation: [user:carol, user:dave]

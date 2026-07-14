@@ -248,7 +248,7 @@ func buildSubjectsWildcardTailQuery(plan ListPlan) SQLer {
 			Joins: []JoinClause{
 				{Type: "CROSS", Table: "has_wildcard", Alias: "hw"},
 			},
-			Where: wildcardSubjectsTailWhere(plan.DatabaseSchema, plan.Relation, plan.ObjectType),
+			Where: wildcardSubjectsTailWhere(plan.DatabaseSchema, plan.Relation, plan.ObjectType, plan.HasExclusion),
 		}
 	}
 	return SelectStmt{
