@@ -3,7 +3,8 @@ package sqlgen
 // RenderListObjectsRecursiveFunction renders a recursive list_objects function from plan and blocks.
 // This handles TTU patterns with depth tracking and recursive CTEs.
 func RenderListObjectsRecursiveFunction(plan ListPlan, blocks RecursiveBlockSet) (string, error) {
-	cteBody := renderRecursiveCTEBody(blocks)
+	recursive := blocks.RecursiveBlock != nil
+	cteBody := renderRecursiveCTEBody(blocks, recursive)
 
 	exclusionConfig := buildExclusionInput(
 		plan.Analysis,
@@ -17,14 +18,22 @@ func RenderListObjectsRecursiveFunction(plan ListPlan, blocks RecursiveBlockSet)
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "acc", Column: "object_id"}},
 		FromExpr:    TableAs("", "accessible", "acc"),
-		Where:       And(exclusionConfig.BuildPredicates()...),
+	}
+	if predicates := exclusionConfig.BuildPredicates(); len(predicates) > 0 {
+		finalStmt.Where = And(predicates...)
 	}
 
+	// Only genuinely self-referential relations need the recursive machinery.
+	// Without a recursive block, depth/propagatable are dead and RECURSIVE is unused.
+	cteColumns := []string{"object_id"}
+	if recursive {
+		cteColumns = []string{"object_id", "depth", "propagatable"}
+	}
 	cteQuery := WithCTE{
-		Recursive: true,
+		Recursive: recursive,
 		CTEs: []CTEDef{{
 			Name:    "accessible",
-			Columns: []string{"object_id", "depth", "propagatable"},
+			Columns: cteColumns,
 			Query:   Raw(cteBody),
 		}},
 		Query: finalStmt,
@@ -57,10 +66,15 @@ func RenderListObjectsRecursiveFunction(plan ListPlan, blocks RecursiveBlockSet)
 	return fn.SQL(), nil
 }
 
-func renderRecursiveCTEBody(blocks RecursiveBlockSet) string {
+func renderRecursiveCTEBody(blocks RecursiveBlockSet, recursive bool) string {
 	baseBlocksSQL := make([]string, 0, len(blocks.BaseBlocks))
 	for _, block := range blocks.BaseBlocks {
-		wrappedSQL := wrapQueryWithDepthAndPropagatable(block.Query.SQL(), "0", "base", block.Propagatable)
+		var wrappedSQL string
+		if recursive {
+			wrappedSQL = wrapQueryWithDepthAndPropagatable(block.Query.SQL(), "0", "base", block.Propagatable)
+		} else {
+			wrappedSQL = block.Query.SQL()
+		}
 		baseBlocksSQL = append(baseBlocksSQL, formatQueryBlockSQL(block.Comments, wrappedSQL))
 	}
 
