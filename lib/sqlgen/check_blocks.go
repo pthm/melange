@@ -541,7 +541,7 @@ func buildIntersectionPartCheck(plan CheckPlan, part IntersectionPart, visitedWi
 
 	case part.IsThis:
 		pc.IsThis = true
-		pc.Check = buildThisCheck(plan, part)
+		pc.Check = buildThisCheck(plan, part, visitedWithKey)
 
 	case part.IsSimple:
 		// Optimization: inline simple relations as EXISTS instead of function calls
@@ -606,7 +606,15 @@ func buildParentCheck(plan CheckPlan, parent *ParentRelationInfo, visitedWithKey
 	return Exists{Query: q}
 }
 
-func buildThisCheck(plan CheckPlan, part IntersectionPart) Expr {
+// buildThisCheck resolves the direct-assignment ("This") leg of an intersection.
+// The leg's grants live on the wrapping relation itself, so besides the direct
+// subject_id tuple probe we must also resolve any userset assignments
+// ([group#member]) declared on that relation — otherwise a schema like
+// `audience: [group#member] and active` drops the group-membership grant and
+// denies legitimate members. plan.Analysis.UsersetPatterns are exactly this
+// relation's own userset assignments, resolved the same way buildUsersetCheck
+// resolves them for a standalone relation.
+func buildThisCheck(plan CheckPlan, part IntersectionPart, visitedWithKey Expr) Expr {
 	allowWildcard := part.HasWildcard && plan.AllowWildcard
 	subjectCol := Col{Table: "t", Column: "subject_id"}
 
@@ -633,5 +641,14 @@ func buildThisCheck(plan CheckPlan, part IntersectionPart) Expr {
 		).
 		Select("1").
 		Limit(1)
-	return Exists{Query: q}
+
+	checks := make([]Expr, 0, 1+len(plan.Analysis.UsersetPatterns))
+	checks = append(checks, Exists{Query: q})
+	for _, pattern := range plan.Analysis.UsersetPatterns {
+		checks = append(checks, buildUsersetPatternCheck(plan, pattern, visitedWithKey))
+	}
+	if len(checks) == 1 {
+		return checks[0]
+	}
+	return Or(checks...)
 }

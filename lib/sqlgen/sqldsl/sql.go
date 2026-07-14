@@ -203,22 +203,49 @@ type IntersectSubquery struct {
 
 // TableSQL renders the INTERSECT subquery as a FROM clause table expression.
 func (i IntersectSubquery) TableSQL() string {
-	if len(i.Queries) == 0 {
-		return ""
-	}
-	if len(i.Queries) == 1 {
-		return "(" + i.Queries[0].SQL() + ") AS " + i.Alias
-	}
-	parts := make([]string, len(i.Queries))
-	for j, q := range i.Queries {
-		parts[j] = q.SQL()
-	}
-	return "(\n" + strings.Join(parts, "\nINTERSECT\n") + "\n) AS " + i.Alias
+	return renderSetOpSubquery(i.Queries, i.Alias, "INTERSECT")
 }
 
 // TableAlias implements TableExpr.
 func (i IntersectSubquery) TableAlias() string {
 	return i.Alias
+}
+
+// UnionSubquery combines multiple queries with UNION as a FROM-clause table.
+// Used where a single intersection part needs several access arms OR'd
+// together (e.g. a direct-subject arm plus a userset-membership arm).
+//
+// Example: UnionSubquery{Queries: [q1, q2], Alias: "up"}
+// Renders: (q1 UNION q2) AS up
+type UnionSubquery struct {
+	Queries []SelectStmt
+	Alias   string
+}
+
+// TableSQL renders the UNION subquery as a FROM clause table expression.
+func (u UnionSubquery) TableSQL() string {
+	return renderSetOpSubquery(u.Queries, u.Alias, "UNION")
+}
+
+// TableAlias implements TableExpr.
+func (u UnionSubquery) TableAlias() string {
+	return u.Alias
+}
+
+// renderSetOpSubquery renders queries combined by a set operator (UNION,
+// INTERSECT, ...) as an aliased FROM-clause subquery.
+func renderSetOpSubquery(queries []SelectStmt, alias, op string) string {
+	if len(queries) == 0 {
+		return ""
+	}
+	if len(queries) == 1 {
+		return "(" + queries[0].SQL() + ") AS " + alias
+	}
+	parts := make([]string, len(queries))
+	for j, q := range queries {
+		parts[j] = q.SQL()
+	}
+	return "(\n" + strings.Join(parts, "\n"+op+"\n") + "\n) AS " + alias
 }
 
 // =============================================================================

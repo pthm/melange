@@ -1,0 +1,65 @@
+# Regression: intersection whose This part is USERSET-ONLY ([group#member]).
+#
+# `define audience: [group#member] and active` — the audience direct-assignment
+# leg accepts only a userset ([group#member]), no plain [user]. The generated
+# check/list for the This part must resolve group membership, not only a direct
+# subject_id tuple. Before the fix it emitted a direct-only lookup keyed on
+# subject_id=p_subject_id, dropping the [group#member] grant entirely, so a
+# legitimate member was denied.
+#
+# Test names are prefixed with "melange/" by the loader.
+
+tests:
+  - name: intersection_userset_this_part
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type group
+            relations
+              define member: [user]
+
+          type document
+            relations
+              define active: [user]
+              define audience: [group#member] and active
+        tuples:
+          # alice is a member of group:eng
+          - user: user:alice
+            relation: member
+            object: group:eng
+          # bob is a member of group:eng but the doc won't be active for him
+          - user: user:bob
+            relation: member
+            object: group:eng
+          # audience granted to the whole group via userset
+          - user: group:eng#member
+            relation: audience
+            object: document:doc1
+          # only alice is active on doc1
+          - user: user:alice
+            relation: active
+            object: document:doc1
+        checkAssertions:
+          # alice: member of group (audience leg) AND active → allowed
+          - name: alice_audience_via_group_and_active
+            tuple: { user: user:alice, relation: audience, object: document:doc1 }
+            expectation: true
+          # bob: member of group (audience leg) but NOT active → denied
+          - name: bob_no_audience_not_active
+            tuple: { user: user:bob, relation: audience, object: document:doc1 }
+            expectation: false
+        listObjectsAssertions:
+          - name: alice_lists_doc1
+            request: { user: user:alice, type: document, relation: audience }
+            expectation: [document:doc1]
+          - name: bob_lists_nothing
+            request: { user: user:bob, type: document, relation: audience }
+            expectation: []
+        listUsersAssertions:
+          - name: audience_users_only_alice
+            request: { object: document:doc1, relation: audience, filters: [user] }
+            expectation: [user:alice]

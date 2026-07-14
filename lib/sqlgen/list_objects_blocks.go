@@ -333,16 +333,7 @@ func buildIntersectionPartQuery(plan ListPlan, part IntersectionPart) SelectStmt
 
 	switch {
 	case part.IsThis:
-		q = Tuples(plan.DatabaseSchema, alias).
-			ObjectType(plan.ObjectType).
-			Relations(plan.Relation).
-			SelectCol("object_id").
-			Where(
-				Eq{Left: Col{Table: alias, Column: "subject_type"}, Right: SubjectType},
-				In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
-				SubjectIDMatch(Col{Table: alias, Column: "subject_id"}, SubjectID, part.HasWildcard),
-			).
-			Distinct()
+		return buildIntersectionThisPartQuery(plan, part)
 
 	case part.ParentRelation != nil:
 		alias = "child"
@@ -374,6 +365,74 @@ func buildIntersectionPartQuery(plan ListPlan, part IntersectionPart) SelectStmt
 		q.Where(intersectionPartExclusion(plan, part.ExcludedRelation, Col{Table: alias, Column: "object_id"}))
 	}
 
+	return q.Build()
+}
+
+// buildIntersectionThisPartQuery builds the object_id query for the
+// direct-assignment ("This") leg of an intersection. Besides the direct
+// subject_id tuple arm, it UNIONs in a membership arm for each userset
+// assignment ([group#member]) declared on the wrapping relation — without it a
+// schema like `audience: [group#member] and active` produces an empty audience
+// leg and the whole INTERSECT collapses to nothing, dropping objects that
+// check_permission allows.
+func buildIntersectionThisPartQuery(plan ListPlan, part IntersectionPart) SelectStmt {
+	alias := "t"
+	directArm := Tuples(plan.DatabaseSchema, alias).
+		ObjectType(plan.ObjectType).
+		Relations(plan.Relation).
+		SelectCol("object_id").
+		Where(
+			Eq{Left: Col{Table: alias, Column: "subject_type"}, Right: SubjectType},
+			In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
+			SubjectIDMatch(Col{Table: alias, Column: "subject_id"}, SubjectID, part.HasWildcard),
+		).
+		Distinct().
+		Build()
+
+	patterns := buildListUsersetPatternInputs(plan.Analysis)
+	if len(patterns) == 0 {
+		if part.ExcludedRelation != "" {
+			directArm.Where = And(directArm.Where, intersectionPartExclusion(plan, part.ExcludedRelation, Col{Table: alias, Column: "object_id"}))
+		}
+		return directArm
+	}
+
+	arms := make([]SelectStmt, 0, 1+len(patterns))
+	arms = append(arms, directArm)
+	for _, pattern := range patterns {
+		arms = append(arms, buildIntersectionThisUsersetArm(plan, pattern))
+	}
+
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "up", Column: "object_id"}},
+		FromExpr:    UnionSubquery{Alias: "up", Queries: arms},
+	}
+	if part.ExcludedRelation != "" {
+		stmt.Where = intersectionPartExclusion(plan, part.ExcludedRelation, Col{Table: "up", Column: "object_id"})
+	}
+	return stmt
+}
+
+// buildIntersectionThisUsersetArm builds one object_id arm resolving a
+// [group#member] grant on the wrapping relation to the querying subject via
+// group membership. Mirrors buildListObjectsSimpleUsersetBlock / its complex
+// variant, restricted to the wrapping relation's own grant tuples.
+func buildIntersectionThisUsersetArm(plan ListPlan, pattern listUsersetPatternInput) SelectStmt {
+	q := Tuples(plan.DatabaseSchema, "t").
+		ObjectType(plan.ObjectType).
+		Relations(plan.Relation).
+		Where(
+			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(pattern.SubjectType)},
+			HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
+			Eq{
+				Left:  UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}},
+				Right: Lit(pattern.SubjectRelation),
+			},
+			usersetMembership(plan, pattern),
+		).
+		SelectCol("object_id").
+		Distinct()
 	return q.Build()
 }
 

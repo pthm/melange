@@ -65,6 +65,7 @@ type (
 	JoinClause        = sqldsl.JoinClause
 	SelectStmt        = sqldsl.SelectStmt
 	IntersectSubquery = sqldsl.IntersectSubquery
+	UnionSubquery     = sqldsl.UnionSubquery
 	ValuesTable       = sqldsl.ValuesTable
 	ValuesRow         = sqldsl.ValuesRow
 	TypedValuesTable  = sqldsl.TypedValuesTable
