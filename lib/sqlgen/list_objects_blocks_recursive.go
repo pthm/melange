@@ -109,7 +109,21 @@ func BuildListObjectsRecursiveBlocks(plan ListPlan) (RecursiveBlockSet, error) {
 	// subject-first arms into shared CTEs so each distinct target is invoked once.
 	hoisted, hoistedCTEs := collectHoistedListObjTargets(plan, parentRelations)
 
-	baseBlocks, err := buildRecursiveBaseBlocks(plan, parentRelations, propagatableRelations, hoisted)
+	// The recursive renderer always emits an outer NOT-EXISTS(excluded) filter over
+	// the combined `accessible` set (list_objects_render_recursive.go). For a
+	// NON-recursive composed plan (no self-referential linking relation, so no
+	// RecursiveBlock) that outer filter is authoritative on the final object, and
+	// OpenFGA exclusion applies to the final object — so the per-arm copies on each
+	// UNION arm are pure redundancy. Strip them. For a GENUINELY recursive plan the
+	// per-step exclusion gates whether a node propagates to its descendants (the
+	// recursive block builds its own exclusion fresh), so per-arm exclusion is
+	// load-bearing there and must be kept.
+	recursive := len(selfRefLinkingRelations) > 0
+	if !recursive {
+		plan.Exclusions = ExclusionConfig{}
+	}
+
+	baseBlocks, err := buildRecursiveBaseBlocks(plan, parentRelations, propagatableRelations, hoisted, recursive)
 	if err != nil {
 		return RecursiveBlockSet{}, err
 	}
@@ -160,7 +174,7 @@ func computePropagatableRelations(plan ListPlan, parentRelations []ListParentRel
 // buildRecursiveBaseBlocks builds the base case blocks for the recursive CTE.
 // Each block is tagged with Propagatable based on whether its source relation
 // satisfies a self-referential TTU target.
-func buildRecursiveBaseBlocks(plan ListPlan, parentRelations []ListParentRelationData, propagatable map[string]bool, hoisted hoistedListObjTargets) ([]TypedQueryBlock, error) {
+func buildRecursiveBaseBlocks(plan ListPlan, parentRelations []ListParentRelationData, propagatable map[string]bool, hoisted hoistedListObjTargets, recursive bool) ([]TypedQueryBlock, error) {
 	blocks := make([]TypedQueryBlock, 0, 8)
 
 	// Split direct block relations into propagatable and non-propagatable sets.
@@ -190,7 +204,7 @@ func buildRecursiveBaseBlocks(plan ListPlan, parentRelations []ListParentRelatio
 	// propagate when that relation is itself self-referential (e.g. "local_admin:
 	// admin from org or local_admin from parent"): the object granted via the
 	// cross-type "admin from org" arm has to seed the recursive parent walk.
-	blocks = append(blocks, buildCrossTypeTTUBlocks(plan, parentRelations, propagatable, hoisted)...)
+	blocks = append(blocks, buildCrossTypeTTUBlocks(plan, parentRelations, propagatable, hoisted, recursive)...)
 
 	return blocks, nil
 }
@@ -419,7 +433,7 @@ func splitBlocksByPropagation(relations []string, propagatable map[string]bool, 
 // check_permission_internal for each one. Recursive parent list functions can
 // form cross-type list cycles, so those keep the check_permission_internal
 // fallback.
-func buildCrossTypeTTUBlocks(plan ListPlan, parentRelations []ListParentRelationData, propagatable map[string]bool, hoisted hoistedListObjTargets) []TypedQueryBlock {
+func buildCrossTypeTTUBlocks(plan ListPlan, parentRelations []ListParentRelationData, propagatable map[string]bool, hoisted hoistedListObjTargets, recursive bool) []TypedQueryBlock {
 	var blocks []TypedQueryBlock
 
 	for _, parent := range parentRelations {
@@ -437,13 +451,20 @@ func buildCrossTypeTTUBlocks(plan ListPlan, parentRelations []ListParentRelation
 		propagate := propagatable[grantedRel]
 
 		crossTypes := dequoteLinkingRelations(parent.CrossTypeLinkingTypes)
-		crossExclusions := buildExclusionInput(
-			plan.Analysis,
-			plan.DatabaseSchema,
-			Col{Table: "child", Column: "object_id"},
-			SubjectType,
-			SubjectID,
-		)
+		// Non-recursive plans get the authoritative outer exclusion filter over the
+		// combined set; per-arm exclusion here is redundant (see
+		// BuildListObjectsRecursiveBlocks). Recursive plans keep it: an excluded
+		// intermediate must not seed the parent walk.
+		var crossExclusions ExclusionConfig
+		if recursive {
+			crossExclusions = buildExclusionInput(
+				plan.Analysis,
+				plan.DatabaseSchema,
+				Col{Table: "child", Column: "object_id"},
+				SubjectType,
+				SubjectID,
+			)
+		}
 
 		appendBlock := func(b TypedQueryBlock) {
 			b.Propagatable = propagate
