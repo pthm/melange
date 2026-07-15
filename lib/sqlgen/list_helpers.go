@@ -194,7 +194,7 @@ func buildUsersetWildcardTailQuery(a RelationAnalysis, databaseSchema string) SQ
 	if a.Features.HasWildcard {
 		return SelectStmt{
 			ColumnExprs: []Expr{Col{Table: "br", Column: "subject_id"}},
-			FromExpr:    TableAs("", "base_results", "br"),
+			FromExpr:    TableAs("", "subjects", "br"),
 			Joins: []JoinClause{
 				{Type: "CROSS", Table: "has_wildcard", Alias: "hw"},
 			},
@@ -203,7 +203,7 @@ func buildUsersetWildcardTailQuery(a RelationAnalysis, databaseSchema string) SQ
 	}
 	return SelectStmt{
 		ColumnExprs: []Expr{Col{Table: "br", Column: "subject_id"}},
-		FromExpr:    TableAs("", "base_results", "br"),
+		FromExpr:    TableAs("", "subjects", "br"),
 	}
 }
 

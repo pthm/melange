@@ -92,9 +92,10 @@ func renderSelfRefUsersetRegularQuery(plan ListPlan, blocks SelfRefUsersetSubjec
 
 	ctes := []CTEDef{
 		{Name: "userset_objects", Columns: []string{"userset_object_id", "depth"}, Query: Raw(usersetObjectsCTE)},
-		// base_results is referenced by the has_wildcard EXISTS (when emitted) and
-		// the outer tail SELECT, so materialize to compute it once.
-		{Name: "base_results", Query: Raw(baseResultsSQL), Materialized: plan.MaterializeCTEs()},
+		// subjects is referenced by the has_wildcard EXISTS (when emitted) and
+		// the outer tail SELECT, so materialize to compute it once. Named "subjects"
+		// (not "base_results") to avoid shadowing the outer pagination-wrapper CTE.
+		{Name: "subjects", Query: Raw(baseResultsSQL), Materialized: plan.MaterializeCTEs()},
 	}
 
 	// The has_wildcard CTE is read only by buildUsersetWildcardTailQuery's CROSS
@@ -104,7 +105,7 @@ func renderSelfRefUsersetRegularQuery(plan ListPlan, blocks SelfRefUsersetSubjec
 		ctes = append(ctes, CTEDef{Name: "has_wildcard", Query: SelectStmt{
 			ColumnExprs: []Expr{
 				Alias{
-					Expr: Raw("EXISTS (SELECT 1 FROM base_results br WHERE br.subject_id = '*')"),
+					Expr: Raw("EXISTS (SELECT 1 FROM subjects br WHERE br.subject_id = '*')"),
 					Name: "has_wildcard",
 				},
 			},
