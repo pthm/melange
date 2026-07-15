@@ -337,20 +337,40 @@ func buildIntersectionPartQuery(plan ListPlan, part IntersectionPart) SelectStmt
 
 	case part.ParentRelation != nil:
 		alias = "child"
+		pr := part.ParentRelation
+		childType := Col{Table: alias, Column: "subject_type"}
+		childID := Col{Table: alias, Column: "subject_id"}
+		// The parent object (child.subject_id, of type child.subject_type) must
+		// satisfy pr.Relation. Compose against the parent's list_objects set (a
+		// set-based semi-join) instead of a per-row check_permission_internal when
+		// composition is cycle-safe, keeping a userset-guarded check arm for
+		// parity. Per linking type, since the list function name is per-type.
+		check := CheckPermission{
+			Schema:      plan.DatabaseSchema,
+			Subject:     SubjectParams(),
+			Relation:    pr.Relation,
+			Object:      ObjectRef{Type: childType, ID: childID},
+			ExpectAllow: true,
+		}
+		var membership Expr = check
+		if len(pr.AllowedLinkingTypes) > 0 {
+			arms := make([]Expr, 0, len(pr.AllowedLinkingTypes))
+			for _, ptype := range pr.AllowedLinkingTypes {
+				typed := Eq{Left: childType, Right: Lit(ptype)}
+				if composableListTarget(plan, ptype, pr.Relation) {
+					arms = append(arms, And(typed, composedListObjectsMembership(
+						plan.DatabaseSchema, ptype, pr.Relation, childID, SubjectType, SubjectID, "parent_obj", check)))
+				} else {
+					arms = append(arms, And(typed, check))
+				}
+			}
+			membership = Or(arms...)
+		}
 		q = Tuples(plan.DatabaseSchema, alias).
 			ObjectType(plan.ObjectType).
-			Relations(part.ParentRelation.LinkingRelation).
+			Relations(pr.LinkingRelation).
 			SelectCol("object_id").
-			Where(CheckPermission{
-				Schema:   plan.DatabaseSchema,
-				Subject:  SubjectParams(),
-				Relation: part.ParentRelation.Relation,
-				Object: ObjectRef{
-					Type: Col{Table: alias, Column: "subject_type"},
-					ID:   Col{Table: alias, Column: "subject_id"},
-				},
-				ExpectAllow: true,
-			}).
+			Where(membership).
 			Distinct()
 
 	default:
