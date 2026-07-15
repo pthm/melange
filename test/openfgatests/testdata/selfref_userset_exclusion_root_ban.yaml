@@ -1,0 +1,32 @@
+# Non-wildcard self-ref userset + exclusion. A subject banned at the ROOT object
+# but reachable via userset expansion from an intermediate where they are NOT
+# banned must still be excluded, because "but not banned" applies at the root.
+# Regression for a melange over-report: the Path-2 (userset) expansion only
+# re-checked the intermediate group's ban, never the root's.
+tests:
+  - name: selfref_userset_exclusion_root_ban
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define banned: [user]
+              define active_member: [user, group#active_member] but not banned
+        tuples:
+          # alice is an active member of group:b and NOT banned there
+          - {user: user:alice, relation: active_member, object: group:b}
+          # group:a pulls in group:b's active members via the self-ref userset
+          - {user: "group:b#active_member", relation: active_member, object: group:a}
+          # ...but alice is banned at the ROOT group:a -> must be excluded from a
+          - {user: user:alice, relation: banned, object: group:a}
+          # carol: clean member of group:a directly -> included
+          - {user: user:carol, relation: active_member, object: group:a}
+        checkAssertions:
+          - {name: root_banned_denied, tuple: {user: user:alice, relation: active_member, object: group:a}, expectation: false}
+          - {name: direct_ok, tuple: {user: user:carol, relation: active_member, object: group:a}, expectation: true}
+        listUsersAssertions:
+          - name: active_member_of_group_a
+            request: {object: group:a, relation: active_member, filters: [user]}
+            expectation: [user:carol]

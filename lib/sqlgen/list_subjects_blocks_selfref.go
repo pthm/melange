@@ -300,11 +300,15 @@ func buildSelfRefUsersetRegularExpansionBlock(plan ListPlan) TypedQueryBlock {
 	if plan.ExcludeWildcard() {
 		conditions = append(conditions, Ne{Left: Col{Table: "t", Column: "subject_id"}, Right: Lit("*")})
 	}
-	// The subject is pulled from the intermediate group uo.userset_object_id, so the
-	// exclusion must be evaluated against that group, not the root object. Binding to
-	// the root (the passed-in `exclusions`) would only subtract subjects banned in the
-	// root and leak a member banned in an intermediate group (R8). Mirror
-	// list_group_active_member_obj, which excludes per-level via excl.object_id = t.object_id.
+	// "but not banned" applies at every level of the self-referential relation,
+	// so a subject reached through the userset must be excluded if banned in the
+	// intermediate group they belong to OR in the root object being listed:
+	//   - per-group (uo.userset_object_id): a member banned in the intermediate
+	//     group is not a member there, so must not propagate up (R8).
+	//   - root (ObjectID): the root's own exclusion still applies to subjects
+	//     pulled in via the userset; without it a subject banned at the root but
+	//     active in an intermediate leaks, diverging from OpenFGA (Check denies
+	//     but list_subjects over-reports).
 	perGroupExclusions := buildExclusionInput(
 		plan.Analysis,
 		plan.DatabaseSchema,
@@ -313,6 +317,14 @@ func buildSelfRefUsersetRegularExpansionBlock(plan ListPlan) TypedQueryBlock {
 		Col{Table: "t", Column: "subject_id"},
 	)
 	conditions = append(conditions, perGroupExclusions.BuildPredicates()...)
+	rootExclusions := buildExclusionInput(
+		plan.Analysis,
+		plan.DatabaseSchema,
+		ObjectID,
+		SubjectType,
+		Col{Table: "t", Column: "subject_id"},
+	)
+	conditions = append(conditions, rootExclusions.BuildPredicates()...)
 
 	return TypedQueryBlock{
 		Comments: []string{"-- Path 2: Expand userset subjects from all reachable userset objects"},
