@@ -49,6 +49,13 @@ type CheckPlan struct {
 	// (different object type) so cheapest callees are evaluated first in OR
 	// short-circuit chains. May be nil; absent entries score zero.
 	ComplexityByRelation map[string]map[string]int
+
+	// NeedsNoWildcard maps (object_type, relation) to whether a distinct _nw
+	// check function is emitted for it. Used when NoWildcard is true to decide,
+	// for each complex-closure callee, whether to call its _nw function or its
+	// base function (identical body, no _nw emitted). Nil means "always assume a
+	// _nw variant exists" (backward-compatible for direct plan-builder callers).
+	NeedsNoWildcard map[string]map[string]bool
 }
 
 // BuildCheckPlan creates a plan for generating a check function.

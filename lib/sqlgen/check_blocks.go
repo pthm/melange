@@ -514,7 +514,7 @@ func buildImpliedFunctionCalls(plan CheckPlan) []ImpliedFunctionCheck {
 	for _, rel := range relations {
 		funcName := functionName(plan.ObjectType, rel)
 		if plan.NoWildcard {
-			funcName = functionNameNoWildcard(plan.ObjectType, rel)
+			funcName = functionNameForNoWildcardRef(plan.NeedsNoWildcard, plan.ObjectType, rel)
 		}
 
 		calls = append(calls, ImpliedFunctionCheck{

@@ -76,6 +76,10 @@ func RecommendIndexes(analyses []RelationAnalysis) []IndexRecommendation {
 	subjectKeyed := []string{"subject_type", "subject_id", "relation", "object_type", "object_id"}
 	wildcardKeyed := []string{"object_type", "object_id", "relation"}
 
+	// A _nw check function is only emitted for relations that reach a wildcard;
+	// don't list a _nw beneficiary that isn't generated.
+	needsNW := buildNoWildcardIndex(analyses)
+
 	for _, a := range analyses {
 		if !a.Capabilities.CheckAllowed && !a.Capabilities.ListAllowed {
 			continue
@@ -85,10 +89,10 @@ func RecommendIndexes(analyses []RelationAnalysis) []IndexRecommendation {
 		// is generated (check uses the same prefix as list_*_sub).
 		var objBenefits []string
 		if a.Capabilities.CheckAllowed {
-			objBenefits = append(objBenefits,
-				functionName(a.ObjectType, a.Relation),
-				functionNameNoWildcard(a.ObjectType, a.Relation),
-			)
+			objBenefits = append(objBenefits, functionName(a.ObjectType, a.Relation))
+			if needsNW[a.ObjectType][a.Relation] {
+				objBenefits = append(objBenefits, functionNameNoWildcard(a.ObjectType, a.Relation))
+			}
 		}
 		if a.Capabilities.ListAllowed {
 			objBenefits = append(objBenefits, listSubjectsFunctionName(a.ObjectType, a.Relation))

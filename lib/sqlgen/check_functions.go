@@ -7,8 +7,9 @@ import (
 	"github.com/pthm/melange/lib/sqlgen/sqldsl"
 )
 
-func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, databaseSchema string, noWildcard bool, complexityByRelation map[string]map[string]int) (string, error) {
+func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, databaseSchema string, noWildcard bool, complexityByRelation map[string]map[string]int, needsNW map[string]map[string]bool) (string, error) {
 	plan := BuildCheckPlanWithOrdering(a, filterInlineForCheck(inline, a), databaseSchema, noWildcard, complexityByRelation)
+	plan.NeedsNoWildcard = needsNW
 	blocks, err := BuildCheckBlocks(plan)
 	if err != nil {
 		return "", fmt.Errorf("building check blocks for %s.%s: %w", a.ObjectType, a.Relation, err)
@@ -30,6 +31,12 @@ func generateDispatcher(analyses []RelationAnalysis, databaseSchema string, noWi
 }
 
 func buildDispatcherCases(analyses []RelationAnalysis, databaseSchema string, noWildcard bool) []DispatcherCase {
+	// The _nw dispatcher routes to the base function for relations that reach
+	// no wildcard (no _nw variant emitted; identical body).
+	var needsNW map[string]map[string]bool
+	if noWildcard {
+		needsNW = buildNoWildcardIndex(analyses)
+	}
 	var cases []DispatcherCase
 	for _, a := range analyses {
 		if !a.Capabilities.CheckAllowed {
@@ -40,7 +47,7 @@ func buildDispatcherCases(analyses []RelationAnalysis, databaseSchema string, no
 			DatabaseSchema:    databaseSchema,
 			ObjectType:        a.ObjectType,
 			Relation:          a.Relation,
-			CheckFunctionName: functionNameForDispatcher(a, noWildcard),
+			CheckFunctionName: functionNameForDispatcher(a, noWildcard, needsNW),
 			Inlineable:        inlineable,
 		}
 		if inlineable {
@@ -330,9 +337,9 @@ func buildBulkUnknownTypeFallback(cases []DispatcherCase) ReturnQuery {
 	return ReturnQuery{Query: query.SQL()}
 }
 
-func functionNameForDispatcher(a RelationAnalysis, noWildcard bool) string {
+func functionNameForDispatcher(a RelationAnalysis, noWildcard bool, needsNW map[string]map[string]bool) string {
 	if noWildcard {
-		return functionNameNoWildcard(a.ObjectType, a.Relation)
+		return functionNameForNoWildcardRef(needsNW, a.ObjectType, a.Relation)
 	}
 	return functionName(a.ObjectType, a.Relation)
 }
