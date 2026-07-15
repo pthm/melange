@@ -73,7 +73,7 @@ func TestCase2Gate_PerRelation(t *testing.T) {
 			if err != nil {
 				t.Fatalf("BuildCheckBlocks: %v", err)
 			}
-			sql := renderStmts(buildUsersetSubjectStmts(plan, blocks))
+			sql := renderStmts(buildUsersetSubjectStmts(plan, blocks, false))
 			if got := strings.Contains(sql, case2); got != tc.wantCase2 {
 				t.Errorf("%s: Case 2 emitted=%v, want %v\n%s", tc.name, got, tc.wantCase2, sql)
 			}

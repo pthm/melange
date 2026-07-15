@@ -14,16 +14,22 @@ func RenderCheckFunction(plan CheckPlan, blocks CheckBlocks) (string, error) {
 }
 
 func renderCheckDirectFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) (string, error) {
-	body := buildUsersetSubjectStmts(plan, blocks)
+	decls := []Decl{{Name: "v_userset_check", Type: "INTEGER := 0"}}
 	accessExpr := buildAccessCheckExpr(blocks, Visited, plan.DatabaseSchema)
 
 	if plan.HasExclusion {
+		// Finding 9: converge the Case-2 userset match onto the shared exclusion
+		// guard via v_has_access instead of re-emitting "IF exclusion RETURN 0"
+		// inside the userset branch. A match sets v_has_access and falls through to
+		// the single guard below (access includes the userset path via OR).
+		decls = append(decls, Decl{Name: "v_has_access", Type: "BOOLEAN := FALSE"})
+		body := buildUsersetSubjectStmts(plan, blocks, true)
 		exclusionExpr := blocks.ExclusionCheck
 		if exclusionExpr == nil {
 			exclusionExpr = Bool(false)
 		}
 		body = append(body, If{
-			Cond: accessExpr,
+			Cond: OrExpr{Exprs: []Expr{Raw("v_has_access"), accessExpr}},
 			Then: []Stmt{
 				If{
 					Cond: exclusionExpr,
@@ -33,25 +39,29 @@ func renderCheckDirectFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) (st
 			},
 			Else: []Stmt{ReturnInt{Value: 0}},
 		})
-	} else {
-		body = append(body, If{
-			Cond: accessExpr,
-			Then: []Stmt{ReturnInt{Value: 1}},
-			Else: []Stmt{ReturnInt{Value: 0}},
-		})
+		return renderDirectFn(plan, decls, body)
 	}
 
+	body := buildUsersetSubjectStmts(plan, blocks, false)
+	body = append(body, If{
+		Cond: accessExpr,
+		Then: []Stmt{ReturnInt{Value: 1}},
+		Else: []Stmt{ReturnInt{Value: 0}},
+	})
+	return renderDirectFn(plan, decls, body)
+}
+
+func renderDirectFn(plan CheckPlan, decls []Decl, body []Stmt) (string, error) {
 	fn := PlpgsqlFunction{
 		Schema:  plan.DatabaseSchema,
 		Name:    plan.FunctionName,
 		Args:    checkFunctionArgs(),
 		Returns: "INTEGER",
-		Decls:   []Decl{{Name: "v_userset_check", Type: "INTEGER := 0"}},
+		Decls:   decls,
 		Body:    body,
 		Header:  checkFunctionHeader(plan),
 		Cost:    checkFunctionCost(plan),
 	}
-
 	return fn.SQL() + "\n", nil
 }
 
@@ -68,7 +78,7 @@ func checkFunctionCost(plan CheckPlan) int {
 }
 
 func renderCheckIntersectionFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) (string, error) {
-	body := buildUsersetSubjectStmts(plan, blocks)
+	body := buildUsersetSubjectStmts(plan, blocks, true)
 
 	if blocks.HasStandaloneAccess {
 		accessExpr := buildAccessCheckExpr(blocks, Visited, plan.DatabaseSchema)
@@ -106,7 +116,7 @@ func renderCheckRecursiveFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) 
 	visitedWithKey := Raw("p_visited || ARRAY[v_key]")
 
 	body := buildCycleDetectionStmts()
-	body = append(body, buildUsersetSubjectStmts(plan, blocks)...)
+	body = append(body, buildUsersetSubjectStmts(plan, blocks, true)...)
 	body = append(body, buildStandaloneAccessPathStmts(plan, blocks, visitedWithKey)...)
 	body = append(body, buildExclusionWithAccessStmts(plan, blocks)...)
 	body = append(body, ReturnInt{Value: 0})
@@ -129,7 +139,7 @@ func renderCheckRecursiveIntersectionFunctionFromBlocks(plan CheckPlan, blocks C
 	visitedWithKey := Raw("p_visited || ARRAY[v_key]")
 
 	body := buildCycleDetectionStmts()
-	body = append(body, buildUsersetSubjectStmts(plan, blocks)...)
+	body = append(body, buildUsersetSubjectStmts(plan, blocks, true)...)
 	body = append(body, Comment{Text: "Relation has intersection; only render standalone paths if HasStandaloneAccess is true"})
 
 	if blocks.HasStandaloneAccess {
@@ -190,7 +200,14 @@ func recursiveCheckDecls(plan CheckPlan) []Decl {
 	}
 }
 
-func buildUsersetSubjectStmts(plan CheckPlan, blocks CheckBlocks) []Stmt {
+// buildUsersetSubjectStmts renders the userset-subject (subject contains "#")
+// handling. When converge is true the caller has a v_has_access variable and a
+// shared exclusion/return convergence downstream (buildExclusionWithAccessStmts),
+// so a Case-2 match sets v_has_access and falls through — letting the single
+// shared exclusion guard run instead of re-emitting "IF exclusion RETURN 0" here
+// (Finding 9). When converge is false (direct renderer, no v_has_access) Case 2
+// returns inline with its own exclusion guard.
+func buildUsersetSubjectStmts(plan CheckPlan, blocks CheckBlocks, converge bool) []Stmt {
 	// Finding 1.1: gate Case 2 per-relation like explain (explain_render.go:539).
 	// The model-wide UsersetRows gate is non-empty for every relation on any type
 	// that has any userset relation, so ~70 of 108 relations emitted a provably
@@ -200,14 +217,20 @@ func buildUsersetSubjectStmts(plan CheckPlan, blocks CheckBlocks) []Stmt {
 	hasUsersetPatterns := len(plan.Analysis.UsersetPatterns) > 0 ||
 		len(plan.Analysis.ClosureUsersetPatterns) > 0
 
-	var exclusionStmts []Stmt
-	if plan.HasExclusion && blocks.ExclusionCheck != nil {
-		exclusionStmts = []Stmt{
-			If{
+	// case2Success is what a Case-2 userset match runs. When converging, hand off
+	// to the shared exclusion/return path via v_has_access; otherwise return
+	// inline, applying the exclusion guard here.
+	var case2Success []Stmt
+	if converge {
+		case2Success = []Stmt{Assign{Name: "v_has_access", Value: Bool(true)}}
+	} else {
+		if plan.HasExclusion && blocks.ExclusionCheck != nil {
+			case2Success = append(case2Success, If{
 				Cond: blocks.ExclusionCheck,
 				Then: []Stmt{ReturnInt{Value: 0}},
-			},
+			})
 		}
+		case2Success = append(case2Success, ReturnInt{Value: 1})
 	}
 
 	selfRefCond := AndExpr{Exprs: []Expr{
@@ -234,7 +257,7 @@ func buildUsersetSubjectStmts(plan CheckPlan, blocks CheckBlocks) []Stmt {
 		case2SelectInto := SelectInto{Query: blocks.UsersetSubjectComputedCheck, Variable: "v_userset_check"}
 		case2ResultCheck := If{
 			Cond: Eq{Left: Raw("v_userset_check"), Right: Int(1)},
-			Then: append(exclusionStmts, ReturnInt{Value: 1}),
+			Then: case2Success,
 		}
 		thenStmts = append(thenStmts,
 			Comment{Text: "Case 2: Computed userset matching"},
