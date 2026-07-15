@@ -90,9 +90,10 @@ func buildDirectCheck(plan CheckPlan) Expr {
 			Eq{Left: Col{Column: "subject_type"}, Right: SubjectType},
 			SubjectIDMatch(Col{Column: "subject_id"}, SubjectID, plan.AllowWildcard),
 		).
-		Select("1").
-		Limit(1)
+		Select("1")
 
+	// No LIMIT 1: this query is wrapped in EXISTS, which short-circuits on the
+	// first row. ponytail: same for the other Exists-wrapped probes below.
 	return Exists{Query: q}
 }
 
@@ -149,8 +150,7 @@ func buildUsersetPatternCheck(plan CheckPlan, pattern UsersetPattern, visitedWit
 				Visited:     visitedWithKey,
 				ExpectAllow: true,
 			})...).
-			Select("1").
-			Limit(1)
+			Select("1")
 		return Exists{Query: q}
 	}
 
@@ -166,8 +166,7 @@ func buildUsersetPatternCheck(plan CheckPlan, pattern UsersetPattern, visitedWit
 			Eq{Left: Col{Table: "membership", Column: "subject_type"}, Right: SubjectType},
 			SubjectIDMatch(Col{Table: "membership", Column: "subject_id"}, SubjectID, plan.AllowWildcard),
 		).
-		Select("1").
-		Limit(1)
+		Select("1")
 	return Exists{Query: q}
 }
 
@@ -192,8 +191,7 @@ func buildExclusionCheck(plan CheckPlan) Expr {
 					IsWildcard{Source: Col{Table: "excl", Column: "subject_id"}},
 				),
 			).
-			Select("1").
-			Limit(1)
+			Select("1")
 		checks = append(checks, Exists{Query: q})
 	}
 
@@ -235,8 +233,7 @@ func buildTTUExclusionCheck(plan CheckPlan, rel ExcludedParentRelation) Expr {
 				ExpectAllow: true,
 			},
 		).
-		Select("1").
-		Limit(1)
+		Select("1")
 
 	if len(rel.AllowedLinkingTypes) > 0 {
 		linkQuery.WhereSubjectTypeIn(rel.AllowedLinkingTypes...)
@@ -602,8 +599,7 @@ func buildSimpleRelationCheck(plan CheckPlan, relation string) Expr {
 				IsWildcard{Source: Col{Table: "t", Column: "subject_id"}},
 			),
 		).
-		Select("1").
-		Limit(1)
+		Select("1")
 
 	return Exists{Query: q}
 }
@@ -679,8 +675,7 @@ func buildParentCheck(plan CheckPlan, parent *ParentRelationInfo, visitedWithKey
 				ExpectAllow: true,
 			},
 		).
-		Select("1").
-		Limit(1)
+		Select("1")
 
 	if len(parent.AllowedLinkingTypes) > 0 {
 		q.WhereSubjectTypeIn(parent.AllowedLinkingTypes...)
@@ -721,8 +716,7 @@ func buildThisCheck(plan CheckPlan, part IntersectionPart, visitedWithKey Expr) 
 			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
 			subjectCheck,
 		).
-		Select("1").
-		Limit(1)
+		Select("1")
 
 	checks := make([]Expr, 0, 1+len(plan.Analysis.UsersetPatterns))
 	checks = append(checks, Exists{Query: q})
