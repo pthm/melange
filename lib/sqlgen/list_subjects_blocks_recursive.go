@@ -15,6 +15,30 @@ type SubjectsRecursiveBlockSet struct {
 	ParentRelations        []ListParentRelationData
 }
 
+// regularBranchTailValidated reports whether the recursive list_subjects regular
+// (non-userset-filter) branch ends in a tail that re-derives the full target
+// relation for EVERY emitted row. When it does, per-arm NOT EXISTS(excluded) and
+// per-arm positive check_permission_internal predicates are pure redundancy:
+// dropping them only widens the candidate set, and the tail narrows it back to
+// exactly the correct set.
+//
+// The tail (wildcardSubjectsTailWhere, emitted iff plan.AllowWildcard) validates
+// unconditionally ONLY when the relation has an exclusion. Without an exclusion it
+// carries a NOT(has_wildcard) short-circuit that, when the runtime result set
+// contains no '*' row, accepts every candidate WITHOUT any permission check — so
+// stripping the per-arm predicates there would leak subjects that do not satisfy
+// the relation. AllowWildcard is only schema reachability, not a guarantee the
+// result contains '*'. Gate on AllowWildcard AND HasExclusion so the strip
+// applies only to the wildcard-exclusion relations (can_view, can_read_safe,
+// can_review, super_view, visible), whose tail always validates.
+//
+// When false (e.g. list_document_can_comment_sub, no wildcard) the per-arm
+// predicates are load-bearing — keep them. The userset-filter branch has no tail
+// and uses different builders, so it is unaffected.
+func regularBranchTailValidated(plan ListPlan) bool {
+	return plan.AllowWildcard && plan.HasExclusion
+}
+
 // BuildListSubjectsRecursiveBlocks builds blocks for a recursive list_subjects function.
 func BuildListSubjectsRecursiveBlocks(plan ListPlan) (SubjectsRecursiveBlockSet, error) {
 	parentRelations := buildListParentRelations(plan.Analysis)
@@ -73,7 +97,11 @@ func buildListSubjectsRecursiveDirectBlock(plan ListPlan) TypedQueryBlock {
 		Distinct()
 
 	applyWildcardExclusion(q, plan, "t")
-	applyExclusionPredicates(q, plan.Exclusions, plan.UseCTEExclusion)
+	// Under the wildcard-completion tail the arm is a pure candidate generator;
+	// the tail re-applies exclusion. Keep it otherwise (load-bearing).
+	if !regularBranchTailValidated(plan) {
+		applyExclusionPredicates(q, plan.Exclusions, plan.UseCTEExclusion)
+	}
 
 	return TypedQueryBlock{
 		Comments: []string{"-- Direct tuple lookup with simple closure relations"},
@@ -87,6 +115,7 @@ func buildListSubjectsRecursiveComplexClosureBlocks(plan ListPlan) []TypedQueryB
 		return nil
 	}
 
+	tailValidated := regularBranchTailValidated(plan)
 	blocks := make([]TypedQueryBlock, 0, len(plan.ComplexClosure))
 	for _, rel := range plan.ComplexClosure {
 		q := Tuples(plan.DatabaseSchema, "t").
@@ -96,13 +125,21 @@ func buildListSubjectsRecursiveComplexClosureBlocks(plan ListPlan) []TypedQueryB
 				Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
 				Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
 				NoUserset{Source: Col{Table: "t", Column: "subject_id"}},
-				complexClosureSubjectMembership(plan, rel),
 			).
 			SelectCol("subject_id").
 			Distinct()
 
+		// The wildcard-completion tail re-derives the full target relation for
+		// every candidate, so the per-arm membership check and exclusion are
+		// redundant; emit them only when there is no tail.
+		if !tailValidated {
+			q.Where(complexClosureSubjectMembership(plan, rel))
+		}
+
 		applyWildcardExclusion(q, plan, "t")
-		applyExclusionPredicates(q, plan.Exclusions, plan.UseCTEExclusion)
+		if !tailValidated {
+			applyExclusionPredicates(q, plan.Exclusions, plan.UseCTEExclusion)
+		}
 
 		blocks = append(blocks, TypedQueryBlock{
 			Comments: []string{fmt.Sprintf("-- Complex closure relation: %s", rel)},
@@ -172,13 +209,22 @@ func buildListSubjectsRecursiveComplexUsersetBlock(plan ListPlan, pattern listUs
 		Eq{Left: Col{Table: memberAlias, Column: "subject_type"}, Right: SubjectType},
 		In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
 		NoUserset{Source: Col{Table: memberAlias, Column: "subject_id"}},
-		checkExpr,
+	}
+
+	// The wildcard-completion tail re-derives the full target relation for every
+	// candidate, so the per-member positive check and exclusion are redundant;
+	// keep them only when there is no tail (load-bearing).
+	tailValidated := regularBranchTailValidated(plan)
+	if !tailValidated {
+		whereConditions = append(whereConditions, checkExpr)
 	}
 
 	if plan.ExcludeWildcard() {
 		whereConditions = append(whereConditions, Ne{Left: Col{Table: memberAlias, Column: "subject_id"}, Right: Lit("*")})
 	}
-	whereConditions = append(whereConditions, memberExclusions.BuildPredicates()...)
+	if !tailValidated {
+		whereConditions = append(whereConditions, memberExclusions.BuildPredicates()...)
+	}
 
 	if pattern.IsClosurePattern {
 		whereConditions = append(whereConditions, CheckPermission{
@@ -254,7 +300,11 @@ func buildListSubjectsRecursiveComplexUsersetBlockComposed(plan ListPlan, patter
 	if plan.ExcludeWildcard() {
 		whereConditions = append(whereConditions, Ne{Left: Col{Table: memberAlias, Column: "subject_id"}, Right: Lit("*")})
 	}
-	whereConditions = append(whereConditions, memberExclusions.BuildPredicates()...)
+	// The wildcard-completion tail re-applies exclusion over every candidate, so
+	// the per-member exclusion is redundant; keep it only when there is no tail.
+	if !regularBranchTailValidated(plan) {
+		whereConditions = append(whereConditions, memberExclusions.BuildPredicates()...)
+	}
 
 	if pattern.IsClosurePattern {
 		whereConditions = append(whereConditions, CheckPermission{
@@ -315,7 +365,11 @@ func buildListSubjectsRecursiveSimpleUsersetBlock(plan ListPlan, pattern listUse
 	if plan.ExcludeWildcard() {
 		whereConditions = append(whereConditions, Ne{Left: Col{Table: memberAlias, Column: "subject_id"}, Right: Lit("*")})
 	}
-	whereConditions = append(whereConditions, memberExclusions.BuildPredicates()...)
+	// The wildcard-completion tail re-applies exclusion over every candidate, so
+	// the per-member exclusion is redundant; keep it only when there is no tail.
+	if !regularBranchTailValidated(plan) {
+		whereConditions = append(whereConditions, memberExclusions.BuildPredicates()...)
+	}
 
 	if pattern.IsClosurePattern {
 		whereConditions = append(whereConditions, CheckPermission{
