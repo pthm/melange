@@ -457,7 +457,7 @@ func BenchTest(b *testing.B, tc TestCase) {
 
 					filters := make([]*openfgav1.UserTypeFilter, 0, len(op.assertion.Request.Filters))
 					for _, f := range op.assertion.Request.Filters {
-						filters = append(filters, &openfgav1.UserTypeFilter{Type: f})
+						filters = append(filters, parseUserTypeFilter(f))
 					}
 
 					b.ResetTimer()
@@ -652,7 +652,7 @@ func RunTest(t *testing.T, parent *Client, tc TestCase) {
 						// Convert filters to UserTypeFilter
 						filters := make([]*openfgav1.UserTypeFilter, 0, len(assertion.Request.Filters))
 						for _, f := range assertion.Request.Filters {
-							filters = append(filters, &openfgav1.UserTypeFilter{Type: f})
+							filters = append(filters, parseUserTypeFilter(f))
 						}
 
 						resp, err := client.ListUsers(ctx, &openfgav1.ListUsersRequest{
@@ -672,8 +672,8 @@ func RunTest(t *testing.T, parent *Client, tc TestCase) {
 							// Extract user strings from response
 							var got []string
 							for _, u := range resp.GetUsers() {
-								if obj := u.GetObject(); obj != nil {
-									got = append(got, obj.GetType()+":"+obj.GetId())
+								if s := userString(u); s != "" {
+									got = append(got, s)
 								}
 							}
 

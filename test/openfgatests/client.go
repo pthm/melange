@@ -499,6 +499,31 @@ func (c *Client) ListObjects(ctx context.Context, req *openfgav1.ListObjectsRequ
 	}, nil
 }
 
+// parseUserTypeFilter converts a test filter string into an OpenFGA UserTypeFilter.
+// A userset filter is written "type#relation" (e.g. "group#member") and maps to
+// {Type:"group", Relation:"member"} — the canonical shape that makes ListUsers
+// return stored usersets; a plain type maps to {Type:type}.
+func parseUserTypeFilter(f string) *openfgav1.UserTypeFilter {
+	if i := strings.Index(f, "#"); i != -1 {
+		return &openfgav1.UserTypeFilter{Type: f[:i], Relation: f[i+1:]}
+	}
+	return &openfgav1.UserTypeFilter{Type: f}
+}
+
+// userString renders a ListUsers result User as its OpenFGA string form:
+// "type:id" for an object and "type:id#relation" for a stored userset. The
+// melange adapter only ever emits those two shapes (a type-bound wildcard
+// comes back as an object with id "*"), so no User_Wildcard arm is needed.
+func userString(u *openfgav1.User) string {
+	if o := u.GetObject(); o != nil {
+		return o.GetType() + ":" + o.GetId()
+	}
+	if us := u.GetUserset(); us != nil {
+		return us.GetType() + ":" + us.GetId() + "#" + us.GetRelation()
+	}
+	return ""
+}
+
 // ListUsers returns all users that have a relation on the given object.
 func (c *Client) ListUsers(ctx context.Context, req *openfgav1.ListUsersRequest, opts ...grpc.CallOption) (*openfgav1.ListUsersResponse, error) {
 	store, ok := c.storeByID(req.GetStoreId())
@@ -515,13 +540,18 @@ func (c *Client) ListUsers(ctx context.Context, req *openfgav1.ListUsersRequest,
 	var users []*openfgav1.User
 	for _, filter := range req.GetUserFilters() {
 		filterType := filter.GetType()
+		// A userset filter carries a relation ({type:"group", relation:"member"});
+		// melange's list_subjects addresses that as the subject_type "group#member".
+		if rel := filter.GetRelation(); rel != "" {
+			filterType = filterType + "#" + rel
+		}
 		subjectType := melange.ObjectType(filterType)
 
-		// Parse userset filter: "group#member" has type "group" and relation "member"
-		// The output type should be just "group", not "group#member"
+		// The returned object type is just the principal type, without any
+		// userset relation suffix.
 		outputType := filterType
 		if idx := strings.Index(filterType, "#"); idx != -1 {
-			outputType = filterType[:idx] // Extract just the type part
+			outputType = filterType[:idx]
 		}
 
 		validator, err := validatorForStore(store, req.GetAuthorizationModelId())
@@ -550,14 +580,25 @@ func (c *Client) ListUsers(ctx context.Context, req *openfgav1.ListUsersRequest,
 		}
 
 		for _, id := range ids {
-			users = append(users, &openfgav1.User{
-				User: &openfgav1.User_Object{
-					Object: &openfgav1.Object{
-						Type: outputType,
-						Id:   id,
+			// A stored-userset subject ("g1#member") must be returned as a
+			// User_Userset to match OpenFGA's ListUsers contract, not a User_Object.
+			if idx := strings.Index(id, "#"); idx != -1 {
+				users = append(users, &openfgav1.User{
+					User: &openfgav1.User_Userset{
+						Userset: &openfgav1.UsersetUser{
+							Type:     outputType,
+							Id:       id[:idx],
+							Relation: id[idx+1:],
+						},
 					},
-				},
-			})
+				})
+			} else {
+				users = append(users, &openfgav1.User{
+					User: &openfgav1.User_Object{
+						Object: &openfgav1.Object{Type: outputType, Id: id},
+					},
+				})
+			}
 		}
 	}
 
