@@ -106,7 +106,6 @@ func renderCheckRecursiveFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) 
 	visitedWithKey := Raw("p_visited || ARRAY[v_key]")
 
 	body := buildCycleDetectionStmts()
-	body = append(body, Assign{Name: "v_has_access", Value: Bool(false)})
 	body = append(body, buildUsersetSubjectStmts(plan, blocks)...)
 	body = append(body, buildStandaloneAccessPathStmts(plan, blocks, visitedWithKey)...)
 	body = append(body, buildExclusionWithAccessStmts(plan, blocks)...)
@@ -130,7 +129,6 @@ func renderCheckRecursiveIntersectionFunctionFromBlocks(plan CheckPlan, blocks C
 	visitedWithKey := Raw("p_visited || ARRAY[v_key]")
 
 	body := buildCycleDetectionStmts()
-	body = append(body, Assign{Name: "v_has_access", Value: Bool(false)})
 	body = append(body, buildUsersetSubjectStmts(plan, blocks)...)
 	body = append(body, Comment{Text: "Relation has intersection; only render standalone paths if HasStandaloneAccess is true"})
 
