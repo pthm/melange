@@ -51,7 +51,8 @@ func buildUsersetFilterQuery(plan ListPlan, blocks SubjectsRecursiveBlockSet) st
 	if blocks.UsersetFilterSelfBlock != nil {
 		usersetFilterParts = append(usersetFilterParts, renderTypedQueryBlock(*blocks.UsersetFilterSelfBlock))
 	}
-	return plan.wrapPaginationWildcardFirst(RenderUnionBlocks(usersetFilterParts))
+	wrapped := plan.wrapPaginationWildcardFirst(RenderUnionBlocks(usersetFilterParts))
+	return hoistClosureCTE(wrapped, plan.Inline.ClosureRows)
 }
 
 func buildRegularPaginatedQuery(plan ListPlan, blocks SubjectsRecursiveBlockSet) string {

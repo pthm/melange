@@ -944,7 +944,7 @@ func buildListSubjectsRecursiveUsersetFilterDirectBlock(plan ListPlan) TypedQuer
 
 	closureStmt := SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
-		FromExpr:    ClosureTable(plan.Inline.ClosureRows, "c"),
+		FromExpr:    closureCTERef("c"),
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Param("v_filter_type")},
 			Eq{Left: Col{Table: "c", Column: "relation"}, Right: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}},
@@ -986,7 +986,7 @@ func buildListSubjectsRecursiveUsersetFilterDirectBlock(plan ListPlan) TypedQuer
 func buildListSubjectsRecursiveUsersetFilterTTUBlock(plan ListPlan, parent ListParentRelationData) TypedQueryBlock {
 	closureRelStmt := SelectStmt{
 		Columns:  []string{"c.satisfying_relation"},
-		FromExpr: TypedClosureValuesTable(plan.Inline.ClosureRows, "c"),
+		FromExpr: closureCTERef("c"),
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Col{Table: "link", Column: "subject_type"}},
 			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(parent.Relation)},
@@ -995,7 +995,7 @@ func buildListSubjectsRecursiveUsersetFilterTTUBlock(plan ListPlan, parent ListP
 
 	closureExistsStmt := SelectStmt{
 		Columns:  []string{"1"},
-		FromExpr: TypedClosureValuesTable(plan.Inline.ClosureRows, "subj_c"),
+		FromExpr: closureCTERef("subj_c"),
 		Where: And(
 			Eq{Left: Col{Table: "subj_c", Column: "object_type"}, Right: Param("v_filter_type")},
 			Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: UsersetRelation{Source: Col{Table: "pt", Column: "subject_id"}}},
@@ -1049,7 +1049,7 @@ func buildListSubjectsRecursiveUsersetFilterTTUBlock(plan ListPlan, parent ListP
 func buildListSubjectsRecursiveUsersetFilterTTUIntermediateBlock(plan ListPlan, parent ListParentRelationData) TypedQueryBlock {
 	closureExistsStmt := SelectStmt{
 		Columns:  []string{"1"},
-		FromExpr: TypedClosureValuesTable(plan.Inline.ClosureRows, "c"),
+		FromExpr: closureCTERef("c"),
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Col{Table: "link", Column: "subject_type"}},
 			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(parent.Relation)},

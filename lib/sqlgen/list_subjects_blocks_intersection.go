@@ -268,7 +268,7 @@ func buildListSubjectsIntersectionUsersetCandidates(plan ListPlan) []TypedQueryB
 }
 
 func buildListSubjectsIntersectionUsersetFilterBaseBlock(plan ListPlan) TypedQueryBlock {
-	relationMatch := buildUsersetFilterRelationMatchExpr(plan.Inline.ClosureRows, "t.subject_id")
+	relationMatch := buildUsersetFilterRelationMatchExpr("t.subject_id")
 	subjectExpr := Alias{Expr: NormalizedUsersetSubject(Col{Table: "t", Column: "subject_id"}, Param("v_filter_relation")), Name: "subject_id"}
 
 	return TypedQueryBlock{
@@ -289,11 +289,12 @@ func buildListSubjectsIntersectionUsersetFilterBaseBlock(plan ListPlan) TypedQue
 	}
 }
 
-func buildUsersetFilterRelationMatchExpr(closureRows []ValuesRow, subjectIDExpr string) Expr {
+func buildUsersetFilterRelationMatchExpr(subjectIDExpr string) Expr {
 	relationExtract := UsersetRelation{Source: Raw(subjectIDExpr)}
+	// The closure table is hoisted into a per-function `closure` CTE (Finding 7).
 	closureExistsStmt := SelectStmt{
 		Columns:  []string{"1"},
-		FromExpr: TypedClosureValuesTable(closureRows, "subj_c"),
+		FromExpr: closureCTERef("subj_c"),
 		Where: And(
 			Eq{Left: Col{Table: "subj_c", Column: "object_type"}, Right: Param("v_filter_type")},
 			Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: relationExtract},
@@ -321,7 +322,7 @@ func buildListSubjectsIntersectionUsersetFilterPartBlocks(plan ListPlan) []Typed
 
 func buildListSubjectsIntersectionUsersetFilterPartBlock(plan ListPlan, part IntersectionPart) TypedQueryBlock {
 	if part.ParentRelation != nil {
-		relationMatch := buildUsersetFilterRelationMatchExpr(plan.Inline.ClosureRows, "pt.subject_id")
+		relationMatch := buildUsersetFilterRelationMatchExpr("pt.subject_id")
 		subjectExpr := Alias{Expr: NormalizedUsersetSubject(Col{Table: "pt", Column: "subject_id"}, Param("v_filter_relation")), Name: "subject_id"}
 
 		return TypedQueryBlock{
@@ -330,7 +331,7 @@ func buildListSubjectsIntersectionUsersetFilterPartBlock(plan ListPlan, part Int
 		}
 	}
 
-	relationMatch := buildUsersetFilterRelationMatchExpr(plan.Inline.ClosureRows, "t.subject_id")
+	relationMatch := buildUsersetFilterRelationMatchExpr("t.subject_id")
 	subjectExpr := Alias{Expr: NormalizedUsersetSubject(Col{Table: "t", Column: "subject_id"}, Param("v_filter_relation")), Name: "subject_id"}
 
 	return TypedQueryBlock{
@@ -365,7 +366,7 @@ func buildListSubjectsIntersectionUsersetFilterTTUBlocks(plan ListPlan) []TypedQ
 }
 
 func buildListSubjectsIntersectionUsersetFilterTTUBlock(plan ListPlan, parent ListParentRelationData) TypedQueryBlock {
-	relationMatch := buildUsersetFilterRelationMatchExpr(plan.Inline.ClosureRows, "pt.subject_id")
+	relationMatch := buildUsersetFilterRelationMatchExpr("pt.subject_id")
 	subjectExpr := Alias{Expr: NormalizedUsersetSubject(Col{Table: "pt", Column: "subject_id"}, Param("v_filter_relation")), Name: "subject_id"}
 
 	stmt := buildUsersetFilterTTUSelectStmt(plan.ObjectType, parent.LinkingRelation, subjectExpr, relationMatch)
