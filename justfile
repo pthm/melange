@@ -752,6 +752,14 @@ test-openfga:
     cd {{TEST}} && {{GO_TEST}} -count=1 -timeout {{OPENFGA_TEST_TIMEOUT}} \
         -run "TestOpenFGA_" {{OPENFGA_PKGS}}
 
+# Run all OpenFGA feature tests AND replay the same cases through a real
+# in-process OpenFGA server (the conformance oracle). An oracle-openfga failure
+# means a YAML case's expected values are not OpenFGA-correct.
+[group('OpenFGA Test')]
+test-openfga-oracle:
+    cd {{TEST}} && MELANGE_OPENFGA_ORACLE=1 {{GO_TEST}} -count=1 -timeout {{OPENFGA_TEST_TIMEOUT}} \
+        -run "TestOpenFGA_" {{OPENFGA_PKGS}}
+
 # Run OpenFGA tests for a specific feature (e.g., just test-openfga-feature Wildcards)
 [group('OpenFGA Test')]
 test-openfga-feature FEATURE:

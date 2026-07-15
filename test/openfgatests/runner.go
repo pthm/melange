@@ -505,9 +505,11 @@ func RunTest(t *testing.T, parent *Client, tc TestCase) {
 	t.Run(tc.Name, func(t *testing.T) {
 		t.Parallel()
 
-		// Create a new client with its own isolated database for this test,
-		// preserving the schema configuration from the parent client.
-		client := NewClientWithSchema(t, parent.DatabaseSchema())
+		// Create a new client with its own isolated store for this test,
+		// preserving the parent's configuration. In oracle mode this shares the
+		// parent's real OpenFGA server (store isolation via CreateStore); in
+		// melange mode it gets a fresh database for the schema.
+		client := parent.forSubtest(t)
 		ctx := context.Background()
 
 		resp, err := client.CreateStore(ctx, &openfgav1.CreateStoreRequest{Name: tc.Name})
@@ -587,6 +589,9 @@ func RunTest(t *testing.T, parent *Client, tc TestCase) {
 
 				// Run bulk check assertions
 				t.Run("bulk_check", func(t *testing.T) {
+					if client.openfgaBackend != nil {
+						t.Skip("check_permission_bulk is a melange-only API; the OpenFGA oracle has no equivalent")
+					}
 					bulkAssertions := bulkEligibleAssertions(stage.CheckAssertions)
 					if len(bulkAssertions) == 0 {
 						t.Skip("no assertions eligible for bulk check")

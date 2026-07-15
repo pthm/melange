@@ -49,6 +49,10 @@ import (
 func runExpandParityAssertions(t *testing.T, ctx context.Context, client *Client, storeID, modelID string, listAssertions []*ListObjectsAssertion) {
 	t.Helper()
 
+	if client.openfgaBackend != nil {
+		return // Expand is a melange-only API; the OpenFGA oracle has no equivalent.
+	}
+
 	for i, a := range listAssertions {
 		name := fmt.Sprintf("expand_parity_%d", i)
 		t.Run(name, func(t *testing.T) {
