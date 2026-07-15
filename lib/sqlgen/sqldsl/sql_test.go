@@ -161,3 +161,39 @@ func TestTrimTrailingUnderscores(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderUnionBlocks_DropsRedundantDistinct(t *testing.T) {
+	distinctArm := QueryBlock{
+		Query: SelectStmt{Distinct: true, Columns: []string{"object_id"}, From: "melange_tuples", Alias: "t"},
+	}
+	selfArm := QueryBlock{
+		Query: SelectStmt{Columns: []string{"split_part(p_subject_id, '#', 1)"}},
+	}
+
+	// Two arms under distinct UNION: the UNION owns dedup, so the arm-level
+	// DISTINCT is redundant and must be stripped.
+	multi := RenderUnionBlocks([]QueryBlock{distinctArm, selfArm})
+	if strings.Contains(multi, "SELECT DISTINCT") {
+		t.Errorf("expected no arm-level DISTINCT under UNION, got:\n%s", multi)
+	}
+	if !strings.Contains(multi, "\n    UNION\n") {
+		t.Errorf("expected UNION to still dedup the combined result, got:\n%s", multi)
+	}
+
+	// A single standalone block keeps its DISTINCT (no set operator to dedup it).
+	single := RenderUnionBlocks([]QueryBlock{distinctArm})
+	if !strings.Contains(single, "SELECT DISTINCT") {
+		t.Errorf("expected standalone block to keep DISTINCT, got:\n%s", single)
+	}
+
+	// Pointer-valued SelectStmt arms are handled too, and the caller's stmt is
+	// not mutated.
+	ptr := &SelectStmt{Distinct: true, Columns: []string{"object_id"}, From: "melange_tuples", Alias: "t"}
+	ptrMulti := RenderUnionBlocks([]QueryBlock{{Query: ptr}, selfArm})
+	if strings.Contains(ptrMulti, "SELECT DISTINCT") {
+		t.Errorf("expected no arm-level DISTINCT for *SelectStmt under UNION, got:\n%s", ptrMulti)
+	}
+	if !ptr.Distinct {
+		t.Errorf("caller's *SelectStmt was mutated; Distinct should stay true")
+	}
+}

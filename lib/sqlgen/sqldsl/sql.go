@@ -574,8 +574,42 @@ func RenderBlocks(blocks []QueryBlock) string {
 
 // RenderUnionBlocks renders query blocks joined with UNION.
 // Each block is indented and comments are rendered as SQL comments.
+//
+// UNION (distinct) already deduplicates the combined result, so when two or
+// more blocks are combined the set operator owns dedup and any per-block
+// SELECT DISTINCT is redundant work (extra HashAggregate/sort). Strip it from
+// SelectStmt blocks in that case. A lone block is returned unchanged (it may be
+// standalone or later joined under UNION ALL / a recursion frontier, where its
+// own DISTINCT still matters).
 func RenderUnionBlocks(blocks []QueryBlock) string {
+	if len(blocks) >= 2 {
+		blocks = dropBlockDistinct(blocks)
+	}
 	return renderBlocksWithSeparator(blocks, "\n    UNION\n")
+}
+
+// dropBlockDistinct returns a copy of blocks with SELECT DISTINCT cleared on any
+// SelectStmt (value or pointer) query. Non-SelectStmt queries (Raw, subqueries)
+// pass through. Pointer arms are copied so the caller's SelectStmt is untouched.
+func dropBlockDistinct(blocks []QueryBlock) []QueryBlock {
+	out := make([]QueryBlock, len(blocks))
+	for i, b := range blocks {
+		switch s := b.Query.(type) {
+		case SelectStmt:
+			if s.Distinct {
+				s.Distinct = false
+				b.Query = s
+			}
+		case *SelectStmt:
+			if s.Distinct {
+				c := *s
+				c.Distinct = false
+				b.Query = c
+			}
+		}
+		out[i] = b
+	}
+	return out
 }
 
 func renderBlocksWithSeparator(blocks []QueryBlock, sep string) string {
