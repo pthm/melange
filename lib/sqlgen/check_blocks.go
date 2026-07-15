@@ -308,7 +308,7 @@ func orExprs(exprs []Expr) Expr {
 // set for that (type, relation) is statically known: a.SatisfyingRelations
 // (populated directly from the same closure rows in analyzeRelation). This
 // replaces a VALUES scan over the whole model's closure with
-// substring(subject_id ...) IN ('rel', ...), so the emitted SQL no longer
+// split_part(subject_id, '#', 2) IN ('rel', ...), so the emitted SQL no longer
 // embeds the closure table and its size is independent of unrelated relations.
 // Empty SatisfyingRelations → `... IN ()` renders FALSE, matching the VALUES
 // scan (which also never matches when the (type, relation) has no rows).
@@ -316,10 +316,90 @@ func orExprs(exprs []Expr) Expr {
 // Shared by the check self-check (buildUsersetSubjectChecks) and the
 // list_objects self-candidate blocks (buildListObjectsSelfCandidateBlock,
 // buildComposedObjectsSelfBlock): all three key the same constant (object_type,
-// relation) on substring(subject_id ...) against the same closure rows, so they
-// fold to the identical IN-list.
+// relation) on split_part(subject_id, '#', 2) against the same closure rows, so
+// they fold to the identical IN-list.
 func usersetSelfSatisfyingExpr(a RelationAnalysis) Expr {
-	return In{Expr: SubstringUsersetRelation{Source: SubjectID}, Values: a.SatisfyingRelations}
+	return In{Expr: UsersetRelation{Source: SubjectID}, Values: a.SatisfyingRelations}
+}
+
+// usersetSubjClosureRows narrows the Case-2 subj_c closure VALUES (Finding 1.2)
+// to the statically-compatible rows. The subj_c join keys three columns against
+// the subject-side userset, whose type/relation the `m` join pins to a live
+// userset pattern:
+//   - object_type = t.subject_type = a pattern's SubjectType;
+//   - satisfying_relation = the requested userset relation split_part(p_subject_id,
+//     '#', 2), which is a pattern SubjectRelation (i.e. in its SatisfyingRelations,
+//     which include the anchor);
+//   - relation = the tuple's stored userset relation, which must closure-satisfy
+//     that — also within the pattern's SatisfyingRelations.
+//
+// Both relation columns therefore range over the same per-type pattern relation
+// set (NOT the outer relation's plan.SatisfyingRelations — that set names the
+// document-side relations, not the group-side userset relations). A closure row
+// whose type or either relation is outside these static sets can never satisfy
+// the join, so dropping it is behavior-preserving while making the embedded
+// VALUES independent of unrelated closure growth. Patterns come from both own
+// UsersetPatterns and ClosureUsersetPatterns (the two sources that keep Case 2
+// live per Finding 1.1).
+func usersetSubjClosureRows(plan CheckPlan) []ValuesRow {
+	// relationsByType[subjectType] holds the userset relations reachable for that
+	// subject type; a closure row's relation AND satisfying_relation must both be
+	// in the set keyed by its object_type.
+	relationsByType := map[string]map[string]bool{}
+	addPattern := func(p UsersetPattern) {
+		set := relationsByType[p.SubjectType]
+		if set == nil {
+			set = map[string]bool{}
+			relationsByType[p.SubjectType] = set
+		}
+		for _, rel := range p.SatisfyingRelations {
+			set[rel] = true
+		}
+	}
+	for _, p := range plan.Analysis.UsersetPatterns {
+		addPattern(p)
+	}
+	for _, p := range plan.Analysis.ClosureUsersetPatterns {
+		addPattern(p)
+	}
+
+	out := make([]ValuesRow, 0, len(plan.Inline.ClosureRows))
+	for _, r := range plan.Inline.ClosureRows {
+		// Keep rows whose columns aren't plain Lits (defensive, matches
+		// filterRowsByObjectType) so a future row shape is never silently dropped.
+		if closureRowCompatible(r, relationsByType) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// closureRowCompatible reports whether a closure VALUES row (object_type,
+// relation, satisfying_relation) can survive the subj_c join: its object_type
+// must be a userset subject type, and both its relation columns must be in that
+// type's reachable userset-relation set. Non-Lit columns are treated as
+// compatible (kept).
+func closureRowCompatible(r ValuesRow, relationsByType map[string]map[string]bool) bool {
+	lit := func(i int) (string, bool) {
+		if i >= len(r) {
+			return "", false
+		}
+		l, ok := r[i].(Lit)
+		return string(l), ok
+	}
+	objType, ok := lit(0)
+	if !ok {
+		return true // non-Lit object_type: keep defensively
+	}
+	relSet, ok := relationsByType[objType]
+	if !ok {
+		return false // object_type is not a userset subject type
+	}
+	inRelSet := func(i int) bool {
+		v, ok := lit(i)
+		return !ok || relSet[v]
+	}
+	return inRelSet(1) && inRelSet(2)
 }
 
 func buildUsersetSubjectChecks(plan CheckPlan) (selfCheck, computedCheck SelectStmt) {
@@ -349,11 +429,10 @@ func buildUsersetSubjectChecks(plan CheckPlan) (selfCheck, computedCheck SelectS
 			},
 			{
 				Type:      "INNER",
-				TableExpr: ClosureTable(plan.Inline.ClosureRows, "subj_c"),
+				TableExpr: ClosureTable(usersetSubjClosureRows(plan), "subj_c"),
 				On: And(
 					Eq{Left: Col{Table: "subj_c", Column: "object_type"}, Right: Col{Table: "t", Column: "subject_type"}},
-					Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: SubstringUsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}},
-					Eq{Left: Col{Table: "subj_c", Column: "satisfying_relation"}, Right: SubstringUsersetRelation{Source: SubjectID}},
+					Eq{Left: Col{Table: "subj_c", Column: "satisfying_relation"}, Right: UsersetRelation{Source: SubjectID}},
 				),
 			},
 		},
@@ -366,7 +445,13 @@ func buildUsersetSubjectChecks(plan CheckPlan) (selfCheck, computedCheck SelectS
 			In{Expr: Col{Table: "t", Column: "relation"}, Values: plan.Analysis.SatisfyingRelations},
 			Ne{Left: Col{Table: "t", Column: "subject_id"}, Right: Lit("*")},
 			HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
-			Eq{Left: UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}}, Right: UsersetObjectID{Source: SubjectID}},
+			// Finding 1.3: equality on the indexed t.subject_id (sargable) folds the
+			// object-id match and the subj_c.relation join into one predicate —
+			// t.subject_id = <requested object>#<satisfying userset relation>.
+			Eq{
+				Left:  Col{Table: "t", Column: "subject_id"},
+				Right: NormalizedUsersetSubject(SubjectID, Col{Table: "subj_c", Column: "relation"}),
+			},
 		),
 		Limit: 1,
 	}

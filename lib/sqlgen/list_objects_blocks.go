@@ -112,7 +112,7 @@ func usersetSubjectCandidateMatch(plan ListPlan) Expr {
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: SubjectType},
 			Eq{Left: Col{Table: "c", Column: "relation"}, Right: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}},
-			Eq{Left: Col{Table: "c", Column: "satisfying_relation"}, Right: SubstringUsersetRelation{Source: SubjectID}},
+			Eq{Left: Col{Table: "c", Column: "satisfying_relation"}, Right: UsersetRelation{Source: SubjectID}},
 		),
 	}
 

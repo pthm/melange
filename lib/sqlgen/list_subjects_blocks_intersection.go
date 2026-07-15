@@ -269,7 +269,7 @@ func buildListSubjectsIntersectionUsersetCandidates(plan ListPlan) []TypedQueryB
 
 func buildListSubjectsIntersectionUsersetFilterBaseBlock(plan ListPlan) TypedQueryBlock {
 	relationMatch := buildUsersetFilterRelationMatchExpr(plan.Inline.ClosureRows, "t.subject_id")
-	subjectExpr := Raw("substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) || '#' || v_filter_relation AS subject_id")
+	subjectExpr := Alias{Expr: NormalizedUsersetSubject(Col{Table: "t", Column: "subject_id"}, Param("v_filter_relation")), Name: "subject_id"}
 
 	return TypedQueryBlock{
 		Comments: []string{"-- Userset filter: direct userset tuples"},
@@ -290,18 +290,18 @@ func buildListSubjectsIntersectionUsersetFilterBaseBlock(plan ListPlan) TypedQue
 }
 
 func buildUsersetFilterRelationMatchExpr(closureRows []ValuesRow, subjectIDExpr string) Expr {
-	relationExtract := "substring(" + subjectIDExpr + " from position('#' in " + subjectIDExpr + ") + 1)"
+	relationExtract := UsersetRelation{Source: Raw(subjectIDExpr)}
 	closureExistsStmt := SelectStmt{
 		Columns:  []string{"1"},
 		FromExpr: TypedClosureValuesTable(closureRows, "subj_c"),
 		Where: And(
 			Eq{Left: Col{Table: "subj_c", Column: "object_type"}, Right: Param("v_filter_type")},
-			Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: Raw(relationExtract)},
+			Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: relationExtract},
 			Eq{Left: Col{Table: "subj_c", Column: "satisfying_relation"}, Right: Param("v_filter_relation")},
 		),
 	}
 	return Or(
-		Eq{Left: Raw(relationExtract), Right: Param("v_filter_relation")},
+		Eq{Left: relationExtract, Right: Param("v_filter_relation")},
 		Exists{Query: closureExistsStmt},
 	)
 }
@@ -322,7 +322,7 @@ func buildListSubjectsIntersectionUsersetFilterPartBlocks(plan ListPlan) []Typed
 func buildListSubjectsIntersectionUsersetFilterPartBlock(plan ListPlan, part IntersectionPart) TypedQueryBlock {
 	if part.ParentRelation != nil {
 		relationMatch := buildUsersetFilterRelationMatchExpr(plan.Inline.ClosureRows, "pt.subject_id")
-		subjectExpr := Raw("substring(pt.subject_id from 1 for position('#' in pt.subject_id) - 1) || '#' || v_filter_relation AS subject_id")
+		subjectExpr := Alias{Expr: NormalizedUsersetSubject(Col{Table: "pt", Column: "subject_id"}, Param("v_filter_relation")), Name: "subject_id"}
 
 		return TypedQueryBlock{
 			Comments: []string{fmt.Sprintf("-- Userset filter intersection part: via %s", part.ParentRelation.LinkingRelation)},
@@ -331,7 +331,7 @@ func buildListSubjectsIntersectionUsersetFilterPartBlock(plan ListPlan, part Int
 	}
 
 	relationMatch := buildUsersetFilterRelationMatchExpr(plan.Inline.ClosureRows, "t.subject_id")
-	subjectExpr := Raw("substring(t.subject_id from 1 for position('#' in t.subject_id) - 1) || '#' || v_filter_relation AS subject_id")
+	subjectExpr := Alias{Expr: NormalizedUsersetSubject(Col{Table: "t", Column: "subject_id"}, Param("v_filter_relation")), Name: "subject_id"}
 
 	return TypedQueryBlock{
 		Comments: []string{fmt.Sprintf("-- Userset filter intersection part: %s", part.Relation)},
@@ -366,7 +366,7 @@ func buildListSubjectsIntersectionUsersetFilterTTUBlocks(plan ListPlan) []TypedQ
 
 func buildListSubjectsIntersectionUsersetFilterTTUBlock(plan ListPlan, parent ListParentRelationData) TypedQueryBlock {
 	relationMatch := buildUsersetFilterRelationMatchExpr(plan.Inline.ClosureRows, "pt.subject_id")
-	subjectExpr := Raw("substring(pt.subject_id from 1 for position('#' in pt.subject_id) - 1) || '#' || v_filter_relation AS subject_id")
+	subjectExpr := Alias{Expr: NormalizedUsersetSubject(Col{Table: "pt", Column: "subject_id"}, Param("v_filter_relation")), Name: "subject_id"}
 
 	stmt := buildUsersetFilterTTUSelectStmt(plan.ObjectType, parent.LinkingRelation, subjectExpr, relationMatch)
 	if len(parent.AllowedLinkingTypesSlice) > 0 {

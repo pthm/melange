@@ -55,7 +55,7 @@ func buildSelfRefUsersetFilterBaseBlock(plan ListPlan) TypedQueryBlock {
 		FromExpr:    ClosureTable(plan.Inline.ClosureRows, "subj_c"),
 		Where: And(
 			Eq{Left: Col{Table: "subj_c", Column: "object_type"}, Right: Param("v_filter_type")},
-			Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: SubstringUsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}},
+			Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}},
 			Eq{Left: Col{Table: "subj_c", Column: "satisfying_relation"}, Right: Param("v_filter_relation")},
 		),
 	}
@@ -76,7 +76,7 @@ func buildSelfRefUsersetFilterBaseBlock(plan ListPlan) TypedQueryBlock {
 				Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Param("v_filter_type")},
 				HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
 				Or(
-					Eq{Left: SubstringUsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Param("v_filter_relation")},
+					Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Param("v_filter_relation")},
 					ExistsExpr(closureExistsStmt),
 				),
 				CheckPermissionExpr(

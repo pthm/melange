@@ -214,17 +214,7 @@ func buildUsersetSubjectStmts(plan CheckPlan, blocks CheckBlocks) []Stmt {
 
 	selfRefCond := AndExpr{Exprs: []Expr{
 		Eq{Left: SubjectType, Right: Lit(plan.ObjectType)},
-		Eq{
-			Left: Substring{
-				Source: SubjectID,
-				From:   Int(1),
-				For: Sub{
-					Left:  Position{Needle: Lit("#"), Haystack: SubjectID},
-					Right: Int(1),
-				},
-			},
-			Right: ObjectID,
-		},
+		Eq{Left: UsersetObjectID{Source: SubjectID}, Right: ObjectID},
 	}}
 
 	case1Body := []Stmt{

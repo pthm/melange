@@ -39,17 +39,6 @@ func (n NoUserset) SQL() string {
 	return hashPosition(n.Source) + " = 0"
 }
 
-// SubstringUsersetRelation extracts the relation portion after the '#' marker.
-// Used when the input contains a userset marker and we need just the relation.
-type SubstringUsersetRelation struct {
-	Source Expr
-}
-
-func (s SubstringUsersetRelation) SQL() string {
-	src := s.Source.SQL()
-	return "substring(" + src + " from position('#' in " + src + ") + 1)"
-}
-
 // IsWildcard checks if an expression equals the wildcard value "*".
 type IsWildcard struct {
 	Source Expr

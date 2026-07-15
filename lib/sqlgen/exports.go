@@ -75,12 +75,11 @@ type (
 	UnionAll          = sqldsl.UnionAll
 
 	// Userset types
-	UsersetObjectID          = sqldsl.UsersetObjectID
-	UsersetRelation          = sqldsl.UsersetRelation
-	HasUserset               = sqldsl.HasUserset
-	NoUserset                = sqldsl.NoUserset
-	SubstringUsersetRelation = sqldsl.SubstringUsersetRelation
-	IsWildcard               = sqldsl.IsWildcard
+	UsersetObjectID = sqldsl.UsersetObjectID
+	UsersetRelation = sqldsl.UsersetRelation
+	HasUserset      = sqldsl.HasUserset
+	NoUserset       = sqldsl.NoUserset
+	IsWildcard      = sqldsl.IsWildcard
 
 	// Function call types
 	FuncCallEq       = sqldsl.FuncCallEq

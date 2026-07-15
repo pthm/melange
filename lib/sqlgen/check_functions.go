@@ -274,7 +274,7 @@ func buildInlineCheckExpr(c DispatcherCase, rSubjectType, rSubjectID, rObjectID 
 					Eq{Left: rSubjectType, Right: Lit(c.ObjectType)},
 					HasUserset{Source: rSubjectID},
 					Eq{Left: UsersetObjectID{Source: rSubjectID}, Right: rObjectID},
-					In{Expr: SubstringUsersetRelation{Source: rSubjectID}, Values: c.SatisfyingRelations},
+					In{Expr: UsersetRelation{Source: rSubjectID}, Values: c.SatisfyingRelations},
 				),
 				Result: Int(1),
 			},

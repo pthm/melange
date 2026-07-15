@@ -80,3 +80,55 @@ func TestCase2Gate_PerRelation(t *testing.T) {
 		})
 	}
 }
+
+// Findings 1.2/1.3/4: the surviving Case-2 block must (a) reconstruct the tuple
+// subject_id as a sargable equality on the indexed column, (b) parse userset IDs
+// with the canonical split_part helpers (no substring), and (c) narrow the
+// subj_c closure VALUES to the statically-compatible rows for the userset
+// subject type — dropping unrelated closure rows without ever emptying to a
+// never-matching sentinel.
+func TestCase2_SargableNarrowedCanonical(t *testing.T) {
+	// can_view: viewer, viewer: [group#member] — closure-only userset relation.
+	a := mkAnalysis("document", "can_view", RelationFeatures{HasImplied: true}, true)
+	a.SatisfyingRelations = []string{"can_view", "viewer"}
+	a.ClosureUsersetPatterns = []UsersetPattern{{
+		SubjectType:         "group",
+		SubjectRelation:     "member",
+		SatisfyingRelations: []string{"member"},
+	}}
+
+	inline := InlineSQLData{
+		UsersetRows: []ValuesRow{usersetRow("document", "viewer", "group", "member")},
+		ClosureRows: []ValuesRow{
+			closureRow("group", "member", "member"),    // compatible → kept
+			closureRow("document", "viewer", "viewer"), // wrong type → dropped
+			closureRow("group", "admin", "admin"),      // relation not reachable → dropped
+		},
+	}
+
+	plan := BuildCheckPlan(a, inline, "", false)
+	blocks, err := BuildCheckBlocks(plan)
+	if err != nil {
+		t.Fatalf("BuildCheckBlocks: %v", err)
+	}
+	sql := blocks.UsersetSubjectComputedCheck.SQL()
+
+	// (a) sargable equality on the indexed t.subject_id.
+	if !strings.Contains(sql, "t.subject_id = split_part(p_subject_id, '#', 1) || '#' || subj_c.relation") {
+		t.Errorf("missing sargable subject_id equality:\n%s", sql)
+	}
+	// (b) canonical parse: no substring form survives.
+	if strings.Contains(sql, "substring(") {
+		t.Errorf("non-canonical substring parse survived:\n%s", sql)
+	}
+	// (c) narrowed VALUES: keep the one compatible row, drop the two unrelated.
+	if !strings.Contains(sql, "('group', 'member', 'member')") {
+		t.Errorf("compatible subj_c row missing:\n%s", sql)
+	}
+	if strings.Contains(sql, "'admin'") || strings.Contains(sql, "('document', 'viewer', 'viewer')") {
+		t.Errorf("statically-incompatible closure rows not narrowed out:\n%s", sql)
+	}
+	if strings.Contains(sql, "NULL::TEXT, NULL::TEXT, NULL::TEXT") {
+		t.Errorf("subj_c narrowed to never-matching NULL sentinel:\n%s", sql)
+	}
+}

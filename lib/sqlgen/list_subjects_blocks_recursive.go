@@ -893,7 +893,7 @@ func buildListSubjectsRecursiveUsersetFilterDirectBlock(plan ListPlan) TypedQuer
 		FromExpr:    ClosureTable(plan.Inline.ClosureRows, "c"),
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Param("v_filter_type")},
-			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Raw("substring(t.subject_id from position('#' in t.subject_id) + 1)")},
+			Eq{Left: Col{Table: "c", Column: "relation"}, Right: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}},
 			Eq{Left: Col{Table: "c", Column: "satisfying_relation"}, Right: Param("v_filter_relation")},
 		),
 	}
@@ -944,7 +944,7 @@ func buildListSubjectsRecursiveUsersetFilterTTUBlock(plan ListPlan, parent ListP
 		FromExpr: TypedClosureValuesTable(plan.Inline.ClosureRows, "subj_c"),
 		Where: And(
 			Eq{Left: Col{Table: "subj_c", Column: "object_type"}, Right: Param("v_filter_type")},
-			Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: Raw("substring(pt.subject_id from position('#' in pt.subject_id) + 1)")},
+			Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: UsersetRelation{Source: Col{Table: "pt", Column: "subject_id"}}},
 			Eq{Left: Col{Table: "subj_c", Column: "satisfying_relation"}, Right: Param("v_filter_relation")},
 		),
 	}
@@ -956,7 +956,7 @@ func buildListSubjectsRecursiveUsersetFilterTTUBlock(plan ListPlan, parent ListP
 		Eq{Left: Col{Table: "pt", Column: "subject_type"}, Right: Param("v_filter_type")},
 		Gt{Left: Raw("position('#' in pt.subject_id)"), Right: Int(0)},
 		Or(
-			Eq{Left: Raw("substring(pt.subject_id from position('#' in pt.subject_id) + 1)"), Right: Param("v_filter_relation")},
+			Eq{Left: UsersetRelation{Source: Col{Table: "pt", Column: "subject_id"}}, Right: Param("v_filter_relation")},
 			Exists{Query: closureExistsStmt},
 		),
 	}
@@ -965,7 +965,7 @@ func buildListSubjectsRecursiveUsersetFilterTTUBlock(plan ListPlan, parent ListP
 		whereConditions = append(whereConditions, In{Expr: Col{Table: "link", Column: "subject_type"}, Values: parent.AllowedLinkingTypesSlice})
 	}
 
-	subjectExpr := Raw("substring(pt.subject_id from 1 for position('#' in pt.subject_id) - 1) || '#' || v_filter_relation AS subject_id")
+	subjectExpr := Alias{Expr: NormalizedUsersetSubject(Col{Table: "pt", Column: "subject_id"}, Param("v_filter_relation")), Name: "subject_id"}
 
 	stmt := SelectStmt{
 		Distinct:    true,
