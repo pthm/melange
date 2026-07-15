@@ -323,33 +323,27 @@ func usersetSelfSatisfyingExpr(a RelationAnalysis) Expr {
 }
 
 func buildUsersetSubjectChecks(plan CheckPlan) (selfCheck, computedCheck SelectStmt) {
-	closureTable := ClosureTable(plan.Inline.ClosureRows, "c")
-
 	selfCheck = SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
 		Where:       usersetSelfSatisfyingExpr(plan.Analysis),
 		Limit:       1,
 	}
 
+	// The `c` closure join only kept tuples whose relation satisfies plan.Relation
+	// (c.object_type/relation are compile-time constants, c.satisfying_relation =
+	// t.relation) and fed c.satisfying_relation to the m join. That set is exactly
+	// plan.Analysis.SatisfyingRelations, so test t.relation against it directly and
+	// drop the `c` closure VALUES entirely — leaving only the subject-side subj_c.
 	computedCheck = SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
 		FromExpr:    TableAs("", "melange_tuples", "t"),
 		Joins: []JoinClause{
 			{
 				Type:      "INNER",
-				TableExpr: closureTable,
-				On: And(
-					Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(plan.ObjectType)},
-					Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(plan.Relation)},
-					Eq{Left: Col{Table: "c", Column: "satisfying_relation"}, Right: Col{Table: "t", Column: "relation"}},
-				),
-			},
-			{
-				Type:      "INNER",
 				TableExpr: UsersetTable(plan.Inline.UsersetRows, "m"),
 				On: And(
 					Eq{Left: Col{Table: "m", Column: "object_type"}, Right: Lit(plan.ObjectType)},
-					Eq{Left: Col{Table: "m", Column: "relation"}, Right: Col{Table: "c", Column: "satisfying_relation"}},
+					Eq{Left: Col{Table: "m", Column: "relation"}, Right: Col{Table: "t", Column: "relation"}},
 					Eq{Left: Col{Table: "m", Column: "subject_type"}, Right: Col{Table: "t", Column: "subject_type"}},
 				),
 			},
@@ -367,6 +361,9 @@ func buildUsersetSubjectChecks(plan CheckPlan) (selfCheck, computedCheck SelectS
 			Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 			Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
 			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
+			// t.relation must satisfy plan.Relation (previously enforced by the c
+			// closure join; now tested directly against the static satisfying set).
+			In{Expr: Col{Table: "t", Column: "relation"}, Values: plan.Analysis.SatisfyingRelations},
 			Ne{Left: Col{Table: "t", Column: "subject_id"}, Right: Lit("*")},
 			HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
 			Eq{Left: UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}}, Right: UsersetObjectID{Source: SubjectID}},
