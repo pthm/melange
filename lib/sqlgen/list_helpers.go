@@ -249,17 +249,32 @@ func wildcardSubjectsTailWhere(schema, relation, objectType string, hasExclusion
 func buildDispatcherBody(cases []ListDispatcherCase, callArgs string) []Stmt {
 	var stmts []Stmt
 	if len(cases) > 0 {
-		stmts = append(stmts, Comment{Text: "Route to specialized functions for all type/relation pairs"})
+		stmts = append(stmts, Comment{Text: "Route to specialized functions, nested by object type then relation"})
+		// Group by object type (preserving order) and emit an outer IF per type
+		// wrapping inner per-relation IFs — mirrors the check dispatcher, so a
+		// non-matching object type skips its whole relation block in one compare.
+		var order []string
+		byType := make(map[string][]ListDispatcherCase)
 		for _, c := range cases {
+			if _, seen := byType[c.ObjectType]; !seen {
+				order = append(order, c.ObjectType)
+			}
+			byType[c.ObjectType] = append(byType[c.ObjectType], c)
+		}
+		for _, ot := range order {
+			inner := make([]Stmt, 0, len(byType[ot]))
+			for _, c := range byType[ot] {
+				inner = append(inner, If{
+					Cond: Eq{Left: Param("p_relation"), Right: Lit(c.Relation)},
+					Then: []Stmt{
+						ReturnQuery{Query: "SELECT * FROM " + sqldsl.PrefixIdent(c.FunctionName, c.DatabaseSchema) + "(" + callArgs + ")"},
+						Return{},
+					},
+				})
+			}
 			stmts = append(stmts, If{
-				Cond: And(
-					Eq{Left: ObjectType, Right: Lit(c.ObjectType)},
-					Eq{Left: Param("p_relation"), Right: Lit(c.Relation)},
-				),
-				Then: []Stmt{
-					ReturnQuery{Query: "SELECT * FROM " + sqldsl.PrefixIdent(c.FunctionName, c.DatabaseSchema) + "(" + callArgs + ")"},
-					Return{},
-				},
+				Cond: Eq{Left: ObjectType, Right: Lit(ot)},
+				Then: inner,
 			})
 		}
 	}
