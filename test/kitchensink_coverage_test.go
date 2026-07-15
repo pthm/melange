@@ -83,6 +83,41 @@ func TestKitchenSink_GeneratorCoverage(t *testing.T) {
 	t.Logf("%d distinct feature combinations:\n%s", len(combos), fmtCounts(combos))
 }
 
+// TestKitchenSink_TupleSubjectShapes proves — DB-free — that the tuple generator
+// still emits the non-plain query-subject shapes the benchmarks and differential
+// subset checks depend on: userset-typed subjects (subject_id contains '#'),
+// service_account subjects, and wildcard ('*') subjects. If a future generator
+// edit drops one, the corresponding bench would silently go vacuous (or Fatal on
+// setup); this fails first, naming the gap.
+func TestKitchenSink_TupleSubjectShapes(t *testing.T) {
+	tuples := testutil.GenerateKitchenSinkTuples(testutil.KitchenSinkScaleSmall)
+	require.NotEmpty(t, tuples)
+
+	var userset, svcAcct, wildcard, usersetOrgMember, svcGroupMember int
+	for _, tp := range tuples {
+		if strings.Contains(tp.SubjectID, "#") {
+			userset++
+			if tp.SubjectType == "group" && tp.Relation == "member" && tp.ObjectType == "organization" {
+				usersetOrgMember++
+			}
+		}
+		if tp.SubjectType == "service_account" && tp.SubjectID != "*" {
+			svcAcct++
+			if tp.Relation == "member" && tp.ObjectType == "group" {
+				svcGroupMember++
+			}
+		}
+		if tp.SubjectID == "*" {
+			wildcard++
+		}
+	}
+	require.Positive(t, userset, "no userset-typed subjects — F4 bench would be vacuous")
+	require.Positive(t, svcAcct, "no service_account subjects — ServiceAccount bench would be vacuous")
+	require.Positive(t, wildcard, "no wildcard subjects — Wildcard bench/exclusion coverage lost")
+	require.Positivef(t, usersetOrgMember, "no group#member -> organization member tuple — the F4 userset-subject bench pair (setupKitchenSinkBench) would Fatal")
+	require.Positivef(t, svcGroupMember, "no service_account -> group member tuple — the ServiceAccount bench pair would Fatal")
+}
+
 // TestKitchenSink_NoDeadHasWildcardCTE guards against dead codegen: the
 // has_wildcard CTE in list_subjects functions is read only by the wildcard
 // completion tail, which is emitted only for wildcard-reaching relations. Every

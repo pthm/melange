@@ -121,6 +121,38 @@ func TestKitchenSink_ListVsCheck(t *testing.T) {
 	require.Greater(t, totalAllow, 100, "differential test is vacuous: too few granted (subject,object) pairs")
 	require.Greater(t, totalDeny, 100, "differential test is vacuous: too few denied (subject,object) pairs")
 	require.Greater(t, listedTotal, 50, "differential test is vacuous: list_objects returned almost nothing")
+
+	// ---- non-plain query subjects: list ⊆ check (subset, not exact) ----
+	// list functions may legitimately under-report userset-typed and wildcard
+	// query subjects, so we only assert soundness (everything listed is granted)
+	// plus non-vacuity (at least one grant listed), never completeness. This is
+	// what would have caught an F4 sargable-join rewrite that dropped rows.
+	assertListSubsetOfCheck(t, db, "userset group#member", "group",
+		`SELECT subject_id FROM kitchen_sink_tuples WHERE subject_type='group' AND subject_id LIKE '%#member' AND relation='member' AND object_type='organization' LIMIT 1`,
+		"member", "organization")
+	assertListSubsetOfCheck(t, db, "service_account", "service_account",
+		`SELECT subject_id FROM kitchen_sink_tuples WHERE subject_type='service_account' AND subject_id <> '*' AND relation='member' AND object_type='group' LIMIT 1`,
+		"member", "group")
+}
+
+// assertListSubsetOfCheck picks one representative subject via idQuery and asserts
+// that every object list_accessible_objects returns for it under (rel, objType)
+// also passes check_permission (soundness), and that at least one object is
+// listed (non-vacuity). Subset only — see the caller comment.
+func assertListSubsetOfCheck(t *testing.T, db *sql.DB, label, subjType, idQuery, rel, objType string) {
+	t.Helper()
+	t.Run("subset/"+label, func(t *testing.T) {
+		var sid string
+		if err := db.QueryRow(idQuery).Scan(&sid); err != nil {
+			t.Fatalf("no representative %s subject: %v", label, err)
+		}
+		listed := listObjects(t, db, subjType, sid, rel, objType)
+		require.NotEmptyf(t, listed, "list_objects returned nothing for %s:%s %s %s — case is vacuous", subjType, sid, rel, objType)
+		for _, o := range listed {
+			require.Equalf(t, 1, checkPerm(t, db, subjType, sid, rel, objType, o),
+				"list_objects over-reported %s:%s for %s:%s %s", subjType, sid, objType, o, rel)
+		}
+	})
 }
 
 // ---- SQL helpers ----
