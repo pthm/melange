@@ -193,9 +193,14 @@ func recursiveCheckDecls(plan CheckPlan) []Decl {
 }
 
 func buildUsersetSubjectStmts(plan CheckPlan, blocks CheckBlocks) []Stmt {
-	// Quick Win #3: Early exit if no userset patterns exist
-	// When UsersetRows is empty, the computed check will never match due to NULL VALUES
-	hasUsersetPatterns := len(plan.Inline.UsersetRows) > 0
+	// Finding 1.1: gate Case 2 per-relation like explain (explain_render.go:539).
+	// The model-wide UsersetRows gate is non-empty for every relation on any type
+	// that has any userset relation, so ~70 of 108 relations emitted a provably
+	// dead block (their satisfying set is disjoint from stored-userset relations).
+	// Check needs BOTH: closure-only relations (e.g. document.can_view) have empty
+	// own UsersetPatterns but a live Case 2 via ClosureUsersetPatterns.
+	hasUsersetPatterns := len(plan.Analysis.UsersetPatterns) > 0 ||
+		len(plan.Analysis.ClosureUsersetPatterns) > 0
 
 	var exclusionStmts []Stmt
 	if plan.HasExclusion && blocks.ExclusionCheck != nil {
