@@ -123,7 +123,7 @@ func TestPlpgsqlFunction(t *testing.T) {
 		if !strings.Contains(got, "END;") {
 			t.Error("missing END")
 		}
-		if !strings.Contains(got, "$$ LANGUAGE plpgsql STABLE;") {
+		if !strings.Contains(got, "$$ LANGUAGE plpgsql STABLE PARALLEL RESTRICTED;") {
 			t.Error("missing language spec")
 		}
 	})

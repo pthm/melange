@@ -227,7 +227,14 @@ func (f PlpgsqlFunction) SQL() string {
 		}
 	}
 	sb.WriteString("END;\n")
-	sb.WriteString("$$ LANGUAGE plpgsql STABLE")
+	// PARALLEL RESTRICTED (not the pg default UNSAFE): unlocks parallelism in the
+	// rest of a query that calls these functions, while keeping them in the leader
+	// process. RESTRICTED (never SAFE) is required because they read the
+	// unqualified melange_tuples, which may resolve to the pg_temp contextual-tuple
+	// shadow — inaccessible to parallel workers — and the schema-qualified
+	// dispatchers/wrappers transitively call those leaves, so a SAFE marking would
+	// be unsound (a SAFE function may not call a RESTRICTED one).
+	sb.WriteString("$$ LANGUAGE plpgsql STABLE PARALLEL RESTRICTED")
 	if f.Cost > 0 {
 		fmt.Fprintf(&sb, " COST %d", f.Cost)
 	}
@@ -342,7 +349,7 @@ func (f SqlFunction) SQL() string {
 	sb.WriteString("    ")
 	sb.WriteString(f.Body.SQL())
 	sb.WriteString(";\n")
-	sb.WriteString("$$ LANGUAGE sql STABLE")
+	sb.WriteString("$$ LANGUAGE sql STABLE PARALLEL RESTRICTED")
 	if !f.NoSearchPath {
 		writeSearchPath(&sb, f.SearchPath, f.Schema)
 	}
