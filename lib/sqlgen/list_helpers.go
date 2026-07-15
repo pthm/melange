@@ -272,6 +272,10 @@ func buildDispatcherBody(cases []ListDispatcherCase, callArgs string) []Stmt {
 					},
 				})
 			}
+			// Known type, unknown relation → return empty immediately, mirroring
+			// dispatchIfChain's per-type sentinel: a matched object type never
+			// falls through to walk the remaining per-type IF blocks.
+			inner = append(inner, Return{})
 			stmts = append(stmts, If{
 				Cond: Eq{Left: ObjectType, Right: Lit(ot)},
 				Then: inner,
