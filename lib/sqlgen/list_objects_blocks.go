@@ -374,6 +374,9 @@ func buildIntersectionPartQuery(plan ListPlan, part IntersectionPart) SelectStmt
 			Distinct()
 
 	default:
+		if intersectionPartComposable(plan, part.Relation) {
+			return buildIntersectionComposedPartQuery(plan, part)
+		}
 		q = Tuples(plan.DatabaseSchema, alias).
 			ObjectType(plan.ObjectType).
 			SelectCol("object_id").
@@ -386,6 +389,53 @@ func buildIntersectionPartQuery(plan ListPlan, part IntersectionPart) SelectStmt
 	}
 
 	return q.Build()
+}
+
+// buildIntersectionComposedPartQuery builds a composable positive intersection
+// part as the specialized list-set directly, dropping the object-type-wide
+// melange_tuples scan the membership predicate otherwise filters against.
+//
+// The membership predicate is `object_id IN (SELECT list_rel_obj(...)) OR
+// (userset-guarded check)`. For plain subjects the first arm is exactly
+// list_rel_obj's output — every object it returns has a rel tuple, so it is
+// already restricted to this object type — so we select it as the FROM source
+// with no scan. The userset-guarded check arm still needs candidate object_ids
+// to evaluate against; it stays as the original tuple scan, gated to userset
+// query subjects, UNIONed in for parity. Behavior-preserving: the union of the
+// two arms is the same object_id set the OR-over-scan produced.
+func buildIntersectionComposedPartQuery(plan ListPlan, part IntersectionPart) SelectStmt {
+	setArm := SelectStmt{
+		ColumnExprs: []Expr{Col{Table: "obj", Column: "object_id"}},
+		FromExpr: FunctionCallExpr{
+			Schema: plan.DatabaseSchema,
+			Name:   ListObjectsFunctionName(plan.ObjectType, part.Relation),
+			Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
+			Alias:  "obj",
+		},
+	}
+
+	usersetCheck := CheckPermission{
+		Schema:      plan.DatabaseSchema,
+		Subject:     SubjectParams(),
+		Relation:    part.Relation,
+		Object:      LiteralObject(plan.ObjectType, Col{Table: "t", Column: "object_id"}),
+		ExpectAllow: true,
+	}
+	usersetArm := Tuples(plan.DatabaseSchema, "t").
+		ObjectType(plan.ObjectType).
+		SelectCol("object_id").
+		Where(And(HasUserset{Source: SubjectID}, usersetCheck)).
+		Distinct().
+		Build()
+
+	stmt := SelectStmt{
+		ColumnExprs: []Expr{Col{Table: "up", Column: "object_id"}},
+		FromExpr:    UnionSubquery{Alias: "up", Queries: []SelectStmt{setArm, usersetArm}},
+	}
+	if part.ExcludedRelation != "" {
+		stmt.Where = intersectionPartExclusion(plan, part.ExcludedRelation, Col{Table: "up", Column: "object_id"})
+	}
+	return stmt
 }
 
 // buildIntersectionThisPartQuery builds the object_id query for the
