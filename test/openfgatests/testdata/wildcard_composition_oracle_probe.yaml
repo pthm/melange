@@ -1,0 +1,101 @@
+# Targeted probes for two code-review findings about wildcard-reaching
+# composition gates. The real-OpenFGA oracle adjudicates: if melange matches
+# OpenFGA on every assertion, the findings are disproven for these shapes.
+tests:
+  # Finding 2: list_subjects complex-closure over a wildcard-reaching target.
+  # `super` is a non-wildcard computed-userset closure whose reachable `member`
+  # grants [user:*]. OpenFGA reports public access as the type-bound wildcard,
+  # so list_users(super, [user]) must return user:* (+ concrete admins), NOT an
+  # enumeration. A concrete user (bob) held only via the wildcard must be
+  # covered by user:*, and check must still allow him.
+  - name: wildcard_closure_listsubjects_probe
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type org
+            relations
+              define admin: [user]
+              define member: [user:*]
+              define staff: admin or member
+              define super: staff
+        tuples:
+          - {user: user:alice, relation: admin, object: org:1}
+          - {user: "user:*", relation: member, object: org:1}
+        checkAssertions:
+          - {name: admin_is_super, tuple: {user: user:alice, relation: super, object: org:1}, expectation: true}
+          - {name: wildcard_user_is_super, tuple: {user: user:bob, relation: super, object: org:1}, expectation: true}
+        listUsersAssertions:
+          - name: super_users
+            request: {object: org:1, relation: super, filters: [user]}
+            expectation: [user:alice, "user:*"]
+
+  # Finding 3: list_objects intersection with a wildcard-reaching exclusion.
+  # viewer = (a and b) but not banned, where `banned` reaches [user:*]. A user
+  # (alice) satisfies a and b but is banned only via the wildcard grant, so she
+  # must NOT see doc:1. If list_*_obj under-reported the wildcard-held exclusion,
+  # the negation would flip and doc:1 would wrongly appear (over-permissive).
+  - name: wildcard_exclusion_listobjects_probe
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type doc
+            relations
+              define a: [user]
+              define b: [user]
+              define banned_base: [user:*]
+              define banned: banned_base
+              define viewer: (a and b) but not banned
+        tuples:
+          - {user: user:alice, relation: a, object: doc:1}
+          - {user: user:alice, relation: b, object: doc:1}
+          - {user: "user:*", relation: banned_base, object: doc:1}
+          - {user: user:carol, relation: a, object: doc:2}
+          - {user: user:carol, relation: b, object: doc:2}
+        checkAssertions:
+          - {name: alice_banned_via_wildcard, tuple: {user: user:alice, relation: viewer, object: doc:1}, expectation: false}
+          - {name: carol_can_view, tuple: {user: user:carol, relation: viewer, object: doc:2}, expectation: true}
+        listObjectsAssertions:
+          - name: alice_viewable_docs
+            request: {user: user:alice, relation: viewer, type: doc}
+            expectation: []
+          - name: carol_viewable_docs
+            request: {user: user:carol, relation: viewer, type: doc}
+            expectation: [doc:2]
+
+  # Finding 2 (recursive complex-closure trigger): `viewer` is recursive
+  # (viewer from parent) with a complex-closure arm `editor` that reaches a
+  # [user:*] grant via `wild`. This routes list_subjects through the recursive
+  # strategy's complexClosureSubjectMembership IN-set. bob is a viewer only via
+  # the wildcard; dave has a direct editor tuple; alice is a direct viewer.
+  - name: wildcard_recursive_closure_listsubjects_probe
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type folder
+            relations
+              define parent: [folder]
+              define wild: [user:*]
+              define editor: [user] or wild
+              define viewer: [user] or editor or viewer from parent
+        tuples:
+          - {user: user:alice, relation: viewer, object: folder:root}
+          - {user: user:dave, relation: editor, object: folder:root}
+          - {user: "user:*", relation: wild, object: folder:root}
+          - {user: folder:root, relation: parent, object: folder:child}
+        checkAssertions:
+          - {name: wildcard_user_is_viewer, tuple: {user: user:bob, relation: viewer, object: folder:root}, expectation: true}
+          - {name: editor_is_viewer, tuple: {user: user:dave, relation: viewer, object: folder:root}, expectation: true}
+          - {name: inherited_via_parent, tuple: {user: user:dave, relation: viewer, object: folder:child}, expectation: true}
+        listUsersAssertions:
+          - name: viewer_users_root
+            request: {object: folder:root, relation: viewer, filters: [user]}
+            expectation: [user:alice, user:dave, "user:*"]
+          - name: viewer_users_child
+            request: {object: folder:child, relation: viewer, filters: [user]}
+            expectation: [user:alice, user:dave, "user:*"]
