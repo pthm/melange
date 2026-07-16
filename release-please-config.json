@@ -27,10 +27,6 @@
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
         {
-          "type": "generic",
-          "path": "VERSION"
-        },
-        {
           "type": "json",
           "path": "clients/typescript/package.json",
           "jsonpath": "$.version"
