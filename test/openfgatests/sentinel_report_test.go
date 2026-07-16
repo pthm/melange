@@ -10,7 +10,7 @@ import (
 	"github.com/openfga/openfga/pkg/testutils"
 	"github.com/openfga/openfga/pkg/typesystem"
 
-	"github.com/pthm/melange/lib/sqlgen"
+	"github.com/pthm/melange/internal/sqlgen"
 	"github.com/pthm/melange/pkg/compiler"
 	"github.com/pthm/melange/pkg/schema"
 )

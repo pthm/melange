@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/pthm/melange/lib/sqlgen/sqldsl"
+	"github.com/pthm/melange/internal/sqlgen/sqldsl"
 )
 
 // MigrationSQL holds the UP and DOWN SQL for a single versioned migration.

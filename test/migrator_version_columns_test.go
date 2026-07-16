@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/pthm/melange/lib/version"
+	"github.com/pthm/melange/internal/version"
 	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/test/testutil"
 )

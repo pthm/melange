@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pthm/melange/lib/doctor"
+	"github.com/pthm/melange/internal/doctor"
 	"github.com/pthm/melange/pkg/compiler"
 	"github.com/pthm/melange/pkg/parser"
 	"github.com/pthm/melange/pkg/schema"

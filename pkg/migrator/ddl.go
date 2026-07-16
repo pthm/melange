@@ -3,7 +3,7 @@ package migrator
 import (
 	"fmt"
 
-	"github.com/pthm/melange/lib/sqlgen/sqldsl"
+	"github.com/pthm/melange/internal/sqlgen/sqldsl"
 )
 
 // migrationsDDL returns a query that defines the melange_migrations table for

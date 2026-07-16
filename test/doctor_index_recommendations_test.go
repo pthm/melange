@@ -8,7 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pthm/melange/lib/doctor"
+	"github.com/pthm/melange/internal/doctor"
 	"github.com/pthm/melange/test/testutil"
 )
 

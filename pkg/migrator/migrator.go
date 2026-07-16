@@ -14,9 +14,9 @@ import (
 
 	"github.com/lib/pq"
 
-	"github.com/pthm/melange/lib/sqlgen"
-	"github.com/pthm/melange/lib/sqlgen/sqldsl"
-	"github.com/pthm/melange/lib/version"
+	"github.com/pthm/melange/internal/sqlgen"
+	"github.com/pthm/melange/internal/sqlgen/sqldsl"
+	"github.com/pthm/melange/internal/version"
 	"github.com/pthm/melange/pkg/schema"
 )
 

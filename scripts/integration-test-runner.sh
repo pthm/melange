@@ -125,7 +125,7 @@ else
                 echo -e "${GREEN}✓ Tuples view created${NC}"
 
                 # Run melange migrate with explicit database URL
-                if ! go run ./cmd/melange migrate --db "${TS_DATABASE_URL}" --schema test/testutil/testdata/schema.fga >/dev/null 2>&1; then
+                if ! go run . migrate --db "${TS_DATABASE_URL}" --schema test/testutil/testdata/schema.fga >/dev/null 2>&1; then
                     echo -e "${RED}✗ Failed to run melange migrate${NC}"
                     TS_RESULT=1
                 else
