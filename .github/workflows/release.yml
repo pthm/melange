@@ -127,21 +127,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-go-
 
-      # go.work is gitignored (each contributor owns theirs) but goreleaser
-      # builds cmd/melange, which lives in a separate module. Synthesize a
-      # workspace so cross-module builds resolve.
-      - name: Setup Go workspace
-        run: |
-          go work init . ./cmd/melange ./docs ./melange
-          # Compatibility shim for the v0.8.6 tag, which predates the go.mod
-          # genproto replace (commit a5c96d32). go-grpc-middleware@v1.4.0 pins the
-          # pre-split genproto monolith, whose googleapis/{api,rpc,annotations}
-          # collide with the split genproto/googleapis/* modules when goreleaser
-          # builds cmd/melange in workspace mode. A go.work replace (gitignored)
-          # fixes the release build without mutating the immutable tag. Drop this
-          # once every release tag carries the fix in its own go.mod (post-0.8.6).
-          go work edit -replace=google.golang.org/genproto@v0.0.0-20200423170343-7949de9c1215=google.golang.org/genproto@v0.0.0-20231106174013-bbf56f31fb17
-
+      # No go.work needed: goreleaser builds the root module (main: .), which
+      # resolves the runtime (melange/) from the proxy after the bump step below,
+      # and the genproto replace now lives in root go.mod. The old workspace shim
+      # existed only to build the separate cmd/melange module.
       - uses: docker/setup-buildx-action@v4
 
       - uses: docker/login-action@v4
@@ -287,44 +276,9 @@ jobs:
             pnpm publish --access public --no-git-checks
           fi
 
-      - name: Wait for goproxy to index root
-        if: env.DRY_RUN != 'true'
-        run: |
-          for i in $(seq 1 30); do
-            if GOPROXY=https://proxy.golang.org go list -m "github.com/pthm/melange@${VERSION}" >/dev/null 2>&1; then
-              echo "✓ root ${VERSION} indexed"
-              exit 0
-            fi
-            echo "  waiting for goproxy... (${i}/30)"
-            sleep 10
-          done
-          echo "❌ goproxy did not index ${VERSION} within 5 minutes"
-          exit 1
-
-      - name: Bump and tag cmd/melange
-        if: env.DRY_RUN != 'true'
-        run: |
-          cmd_tag="cmd/melange/${VERSION}"
-          if git ls-remote --tags origin | grep -q "refs/tags/${cmd_tag}$"; then
-            echo "✓ remote tag ${cmd_tag} already exists — skipping"
-            exit 0
-          fi
-          git pull origin main --ff-only
-          go mod edit -require="github.com/pthm/melange@${VERSION}" cmd/melange/go.mod
-          GOPROXY=https://proxy.golang.org GOWORK=off go mod tidy -C cmd/melange
-          if ! git diff --quiet cmd/melange/go.mod cmd/melange/go.sum; then
-            git add cmd/melange/go.mod cmd/melange/go.sum
-            git commit -m "chore(release): cmd/melange ${VERSION}"
-            git push origin HEAD:main
-          fi
-          git tag -a "${cmd_tag}" -m "${cmd_tag}"
-          git push origin "${cmd_tag}"
-
-      - name: Bump and tag cmd/melange (dry run preview)
-        if: env.DRY_RUN == 'true'
-        run: |
-          echo "↪ dry-run: would bump cmd/melange/go.mod to require github.com/pthm/melange@${VERSION}"
-          echo "↪ dry-run: would tag and push cmd/melange/${VERSION}"
+      # No cmd/melange stage: the CLI ships from the root module (tagged above).
+      # cmd/melange is a retired error-shim published once as a terminal manual
+      # tag, not on every release — see specs/module-layout-proposal.md.
 
       # release-please tracks the lifecycle of its own release PRs via two
       # labels: `autorelease: pending` (PR merged, tag not yet created) and
