@@ -17,24 +17,25 @@ func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, databaseSch
 	return RenderCheckFunction(plan, blocks)
 }
 
-func generateDispatcher(analyses []RelationAnalysis, databaseSchema string, noWildcard bool) (string, error) {
+func generateDispatcher(analyses []RelationAnalysis, databaseSchema string, noWildcard bool, needsNW map[string]map[string]bool) (string, error) {
 	fnName := "check_permission"
 	if noWildcard {
 		fnName = "check_permission_nw"
 	}
 
-	cases := buildDispatcherCases(analyses, databaseSchema, noWildcard)
+	cases := buildDispatcherCases(analyses, databaseSchema, noWildcard, needsNW)
 	if len(cases) == 0 {
 		return renderEmptyDispatcher(databaseSchema, fnName), nil
 	}
 	return renderDispatcherWithCases(databaseSchema, fnName, cases), nil
 }
 
-func buildDispatcherCases(analyses []RelationAnalysis, databaseSchema string, noWildcard bool) []DispatcherCase {
+func buildDispatcherCases(analyses []RelationAnalysis, databaseSchema string, noWildcard bool, needsNW map[string]map[string]bool) []DispatcherCase {
 	// The _nw dispatcher routes to the base function for relations that reach
-	// no wildcard (no _nw variant emitted; identical body).
-	var needsNW map[string]map[string]bool
-	if noWildcard {
+	// no wildcard (no _nw variant emitted; identical body). needsNW is supplied
+	// by callers that already computed it; fall back to computing it here so
+	// standalone callers (and tests) need not thread it.
+	if noWildcard && needsNW == nil {
 		needsNW = buildNoWildcardIndex(analyses)
 	}
 	var cases []DispatcherCase
@@ -142,7 +143,7 @@ func renderEmptyDispatcher(databaseSchema, fnName string) string {
 }
 
 func generateBulkDispatcher(analyses []RelationAnalysis, databaseSchema string) string {
-	cases := buildDispatcherCases(analyses, databaseSchema, false)
+	cases := buildDispatcherCases(analyses, databaseSchema, false, nil)
 	if len(cases) == 0 {
 		return renderEmptyBulkDispatcher(databaseSchema)
 	}

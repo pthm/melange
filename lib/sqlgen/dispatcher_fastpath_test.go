@@ -91,7 +91,7 @@ func TestDispatchers_SimpleExpressionFastPath(t *testing.T) {
 		analyses[i].DirectSubjectTypes = []string{"user"}
 	}
 
-	checkSQL, err := generateDispatcher(analyses, "", false)
+	checkSQL, err := generateDispatcher(analyses, "", false, nil)
 	if err != nil {
 		t.Fatalf("generateDispatcher: %v", err)
 	}

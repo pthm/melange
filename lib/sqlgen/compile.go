@@ -48,6 +48,13 @@ type GeneratedSQL struct {
 	// These skip wildcard matching for performance-critical paths.
 	NoWildcardFunctions []string
 
+	// NoWildcardIndex maps object_type -> relation -> whether a distinct _nw
+	// variant was emitted (true) or the base function is reused (false). It is the
+	// buildNoWildcardIndex result computed once during generation, exposed so
+	// callers (e.g. CollectNamedFunctions) need not recompute the per-relation
+	// wildcard-reachability walk.
+	NoWildcardIndex map[string]map[string]bool
+
 	// Dispatcher contains the check_permission dispatcher function
 	// that routes requests to specialized functions based on object type and relation.
 	Dispatcher string
@@ -149,6 +156,7 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 	// every other _nw reference (dispatcher, complex-closure calls, index recs)
 	// to the base function.
 	needsNW := buildNoWildcardIndex(analyses)
+	result.NoWildcardIndex = needsNW
 	// explainEligible is the schema-wide fixed point over local feature
 	// support + transitive ComplexClosureRelations dependencies. The
 	// dispatcher and per-relation generation loop both gate against the
@@ -201,11 +209,11 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 
 	// Generate dispatchers
 	var err error
-	result.Dispatcher, err = generateDispatcher(analyses, databaseSchema, false)
+	result.Dispatcher, err = generateDispatcher(analyses, databaseSchema, false, nil)
 	if err != nil {
 		return GeneratedSQL{}, fmt.Errorf("generating dispatcher: %w", err)
 	}
-	result.DispatcherNoWildcard, err = generateDispatcher(analyses, databaseSchema, true)
+	result.DispatcherNoWildcard, err = generateDispatcher(analyses, databaseSchema, true, needsNW)
 	if err != nil {
 		return GeneratedSQL{}, fmt.Errorf("generating no-wildcard dispatcher: %w", err)
 	}
@@ -348,7 +356,12 @@ func CollectNamedFunctions(
 	listObjIdx, listSubjIdx := 0, 0
 	explainEligible := generatedSQL.ExplainEligible
 	expandEligible := generatedSQL.ExpandEligible
-	needsNW := buildNoWildcardIndex(analyses)
+	// Reuse the index computed during generation; fall back for callers that
+	// construct GeneratedSQL without it.
+	needsNW := generatedSQL.NoWildcardIndex
+	if needsNW == nil {
+		needsNW = buildNoWildcardIndex(analyses)
+	}
 
 	for _, a := range analyses {
 		if a.Capabilities.CheckAllowed {
