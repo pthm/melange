@@ -38,7 +38,6 @@ release-prepare VERSION ALLOW_DIRTY="":
         version="v$version"
     fi
     just _assert-clean ALLOW_DIRTY={{ALLOW_DIRTY}}
-    printf "%s # x-release-please-version\n" "$version" > VERSION
     npm_version="${version#v}"
     NPM_VERSION="$npm_version" node -e "
       const fs = require('fs');
@@ -125,18 +124,8 @@ release VERSION="" ALLOW_DIRTY="":
     sleep 5
     GOPROXY=direct GONOSUMDB=github.com/pthm/melange go mod tidy
 
-    # Validate version consistency
-    version_from_file="$(awk '{print $1}' VERSION)"
-    if [ -z "$version_from_file" ]; then
-        echo "❌ VERSION file is empty"
-        echo ""
-        echo "To clean up:"
-        echo "  git push origin --delete $melange_tag"
-        exit 1
-    fi
-    if [ "${version_from_file#v}" = "$version_from_file" ]; then
-        version_from_file="v$version_from_file"
-    fi
+    # The release version is the VERSION arg, normalised to $version above.
+    version_from_file="$version"
 
     melange_version="$(awk '$1 == "github.com/pthm/melange/melange" { print $2; exit }' go.mod)"
     if [ -z "$melange_version" ]; then
@@ -155,7 +144,7 @@ release VERSION="" ALLOW_DIRTY="":
     fi
 
     # Commit version changes
-    git add VERSION go.mod go.sum clients/typescript/package.json
+    git add go.mod go.sum clients/typescript/package.json
     git commit -m "chore(release): $version_from_file"
 
     # Tag root LOCALLY (don't push yet - this is the critical one)
@@ -605,7 +594,7 @@ test-race:
 build:
     #!/usr/bin/env bash
     set -euo pipefail
-    version=$(cat VERSION 2>/dev/null || echo "dev")
+    version=$(git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo "dev")
     commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
     date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     go build -ldflags "-X github.com/pthm/melange/internal/version.Version=$version -X github.com/pthm/melange/internal/version.Commit=$commit -X github.com/pthm/melange/internal/version.Date=$date" -o bin/melange .
@@ -636,7 +625,7 @@ licenses:
 install:
     #!/usr/bin/env bash
     set -euo pipefail
-    version=$(cat VERSION 2>/dev/null || echo "dev")
+    version=$(git describe --tags --match 'v[0-9]*' --always --dirty 2>/dev/null || echo "dev")
     commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
     date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     go install -ldflags "-X github.com/pthm/melange/internal/version.Version=$version -X github.com/pthm/melange/internal/version.Commit=$commit -X github.com/pthm/melange/internal/version.Date=$date" .

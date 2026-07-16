@@ -15,7 +15,7 @@ git:
 
 before:
   hooks:
-    - ./scripts/verify-release.sh
+    - ./scripts/verify-release.sh {{ .Tag }}
     - go mod tidy
 
 builds:
