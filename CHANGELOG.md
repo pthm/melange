@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.8.6](https://github.com/pthm/melange/compare/v0.8.5...v0.8.6) (2026-07-16)
+
+
+### Bug Fixes
+
+* **openfgatests:** honor OpenFGA userset user-filters in ListUsers ([c264d51](https://github.com/pthm/melange/commit/c264d517cece811e136a728358b2e45bc154f08f))
+* **sqlgen:** apply root exclusion to userset-expanded list_subjects ([b59a8f8](https://github.com/pthm/melange/commit/b59a8f81c01d79c504a23a09734ff20f38b20203))
+* **sqlgen:** name-anchor the closure CTE hoist reference guard ([502d758](https://github.com/pthm/melange/commit/502d758a7593d8e9b950ddecd9539b18fc04a240))
+* **sqlgen:** resolve userset assignments in intersection This part ([3a6dffc](https://github.com/pthm/melange/commit/3a6dffc975eb72b73a75455d5255442f5c9c9d5c))
+* **sqlgen:** stop check_permission_bulk emitting duplicate deny rows ([5c97716](https://github.com/pthm/melange/commit/5c9771695b73b486bfe6cafb5085a3991a3b34ff))
+* **sqlgen:** subtract exclusions in self-ref-userset list_subjects ([5f13db9](https://github.com/pthm/melange/commit/5f13db9bbbac1a7d2d24747a6e8a5c32d6ae09e5))
+* **sqlgen:** subtract user:* under exclusion in list_subjects ([686c493](https://github.com/pthm/melange/commit/686c49335be18a4cffa55ceab76c8e386f64feb7))
+
+
+### Performance
+
+* **sqlgen:** add per-type sentinel to list dispatchers (Finding 3) ([9645ed1](https://github.com/pthm/melange/commit/9645ed1c510576b19c97a24e8c772e5ccca8eef2))
+* **sqlgen:** canonicalize userset parsing, narrow + sargable Case-2 join ([1452f3a](https://github.com/pthm/melange/commit/1452f3ac333bd9cab94a2d54a301e5ca37d40855))
+* **sqlgen:** compose cross-type TTU intersection parts as a semi-join ([78d37f4](https://github.com/pthm/melange/commit/78d37f446b89ee12aebff11bd75620140f2c031a))
+* **sqlgen:** compose recursive/userset/wildcard intersection parts in list_objects ([ad3536a](https://github.com/pthm/melange/commit/ad3536a41f13febe26776b99ac3eaba2e9431787))
+* **sqlgen:** compose wildcard-reaching targets in list_subjects subject-first ([189d378](https://github.com/pthm/melange/commit/189d3785f2bfe66e3ca0fed4f9885c15455443fb))
+* **sqlgen:** compute the no-wildcard index once and thread it ([a745731](https://github.com/pthm/melange/commit/a7457310b3d4da6a9a3f2259ffbcf0fcbc3c3220))
+* **sqlgen:** drop dead recursive scaffolding in non-recursive list_objects ([4789969](https://github.com/pthm/melange/commit/4789969653342d5e9010dfe28d5c3d07d4c6d396))
+* **sqlgen:** drop dead SET search_path from expand leaf functions ([a8c3cbc](https://github.com/pthm/melange/commit/a8c3cbcdbe388ac1a0cd2ab4751c19255bea1fc4))
+* **sqlgen:** drop LIMIT 1 inside EXISTS check subqueries (Finding 5) ([f79b65e](https://github.com/pthm/melange/commit/f79b65ec29ddfeda47b7a0a965cfa6c80c1bb158))
+* **sqlgen:** drop per-arm exclusion in non-recursive composed list_objects ([a28c837](https://github.com/pthm/melange/commit/a28c837d84252b8fe8562115de63fe6d143ed123))
+* **sqlgen:** drop redundant list_subjects arm filters under wildcard tail ([ffd8e03](https://github.com/pthm/melange/commit/ffd8e0320b981129f3ecb74196bd681f6cae958e))
+* **sqlgen:** drop redundant per-arm DISTINCT under UNION ([13e4005](https://github.com/pthm/melange/commit/13e40058424a0228587ce6f1668e5d70f30479ac))
+* **sqlgen:** drop the duplicate closure VALUES in check userset blocks ([34118b5](https://github.com/pthm/melange/commit/34118b52e9053407fc9dc98253d9fe8daff9c097))
+* **sqlgen:** emit check _nw only when relation reaches a wildcard ([6792168](https://github.com/pthm/melange/commit/6792168aa96224865c559b6199c177bfded22f0a))
+* **sqlgen:** emit intersection list_*_obj parts as direct sets ([d225b4d](https://github.com/pthm/melange/commit/d225b4d495dfb09a5943e64588bc30f0eeff7665))
+* **sqlgen:** filter inline model VALUES in explain leaf functions ([95ea7bb](https://github.com/pthm/melange/commit/95ea7bbf7f7f786950d7edfefd422be5fa8493ec))
+* **sqlgen:** fold composed list_objects self-candidate into union ([be4c248](https://github.com/pthm/melange/commit/be4c248c5869c12af1df3591afe189c58f8f0e0e))
+* **sqlgen:** fold list_subjects self-candidate closure to an IN-list ([f7080eb](https://github.com/pthm/melange/commit/f7080eb95e40bf796b6017d435155aed83181ba8))
+* **sqlgen:** gate check Case 2 per-relation, dropping dead blocks ([195daa3](https://github.com/pthm/melange/commit/195daa3676f9994c7f0e26ae95b2c3debeba3442))
+* **sqlgen:** hoist closure VALUES to one CTE per list_subjects fn ([f5d989a](https://github.com/pthm/melange/commit/f5d989ab66e07394063c7a965b1ec5b2d64df366))
+* **sqlgen:** hoist duplicate list_*_obj calls in recursive list_objects ([36b90a5](https://github.com/pthm/melange/commit/36b90a56e7053616f7d63daddbb03cdf809c85f5))
+* **sqlgen:** mark generated functions PARALLEL RESTRICTED ([adbf975](https://github.com/pthm/melange/commit/adbf9750e4f00278475338688d43138040e28450))
+* **sqlgen:** nest list dispatchers by object type then relation ([040e00c](https://github.com/pthm/melange/commit/040e00c06bda0772c7f137223c935640ddffdd35))
+* **sqlgen:** stop emitting dead has_wildcard CTE in list_subjects ([6de08c6](https://github.com/pthm/melange/commit/6de08c6e3f111de23aa524075b6e85534bdf1072))
+
 ## [0.8.5](https://github.com/pthm/melange/compare/v0.8.4...v0.8.5) (2026-07-12)
 
 
