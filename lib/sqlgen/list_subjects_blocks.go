@@ -77,7 +77,7 @@ func buildListSubjectsUsersetFilterDirectBlock(plan ListPlan) TypedQueryBlock {
 		FromExpr:    ClosureTable(plan.Inline.ClosureRows, "subj_c"),
 		Where: And(
 			Eq{Left: Col{Table: "subj_c", Column: "object_type"}, Right: Param("v_filter_type")},
-			Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: SubstringUsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}},
+			Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}},
 			Eq{Left: Col{Table: "subj_c", Column: "satisfying_relation"}, Right: Param("v_filter_relation")},
 		),
 	}
@@ -98,7 +98,7 @@ func buildListSubjectsUsersetFilterDirectBlock(plan ListPlan) TypedQueryBlock {
 			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Param("v_filter_type")},
 			HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
 			Or(
-				Eq{Left: SubstringUsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Param("v_filter_relation")},
+				Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Param("v_filter_relation")},
 				ExistsExpr(closureExistsStmt),
 			),
 			CheckPermission{
@@ -122,16 +122,10 @@ func buildListSubjectsUsersetFilterDirectBlock(plan ListPlan) TypedQueryBlock {
 // buildListSubjectsUsersetFilterSelfBlock builds the self-referential userset filter block.
 // Returns the object itself as a userset reference when filter type matches object type.
 func buildListSubjectsUsersetFilterSelfBlock(plan ListPlan) *TypedQueryBlock {
-	closureStmt := SelectStmt{
-		ColumnExprs: []Expr{Int(1)},
-		FromExpr:    ClosureTable(plan.Inline.ClosureRows, "c"),
-		Where: And(
-			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: Lit(plan.ObjectType)},
-			Eq{Left: Col{Table: "c", Column: "relation"}, Right: Lit(plan.Relation)},
-			Eq{Left: Col{Table: "c", Column: "satisfying_relation"}, Right: Param("v_filter_relation")},
-		),
-	}
-
+	// The self-candidate arm is valid when v_filter_relation satisfies plan.Relation
+	// on plan.ObjectType. That set is exactly plan.Analysis.SatisfyingRelations, so
+	// test it with a static IN-list instead of an EXISTS over the full inlined
+	// closure VALUES (same fold usersetSelfSatisfyingExpr applies check-side).
 	subjectExpr := Alias{
 		Expr: Concat{Parts: []Expr{ObjectID, Lit("#"), Param("v_filter_relation")}},
 		Name: "subject_id",
@@ -141,7 +135,7 @@ func buildListSubjectsUsersetFilterSelfBlock(plan ListPlan) *TypedQueryBlock {
 		ColumnExprs: []Expr{subjectExpr},
 		Where: And(
 			Eq{Left: Param("v_filter_type"), Right: Lit(plan.ObjectType)},
-			Raw(closureStmt.Exists()),
+			In{Expr: Param("v_filter_relation"), Values: plan.Analysis.SatisfyingRelations},
 		),
 	}
 

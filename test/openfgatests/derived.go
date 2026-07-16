@@ -233,7 +233,7 @@ func runDerivedListUsersAssertions(t *testing.T, ctx context.Context, client *Cl
 
 			filters := make([]*openfgav1.UserTypeFilter, 0, len(assertion.Request.Filters))
 			for _, f := range assertion.Request.Filters {
-				filters = append(filters, &openfgav1.UserTypeFilter{Type: f})
+				filters = append(filters, parseUserTypeFilter(f))
 			}
 
 			resp, err := client.ListUsers(ctx, &openfgav1.ListUsersRequest{
@@ -252,8 +252,8 @@ func runDerivedListUsersAssertions(t *testing.T, ctx context.Context, client *Cl
 
 			var got []string
 			for _, u := range resp.GetUsers() {
-				if obj := u.GetObject(); obj != nil {
-					got = append(got, obj.GetType()+":"+obj.GetId())
+				if s := userString(u); s != "" {
+					got = append(got, s)
 				}
 			}
 

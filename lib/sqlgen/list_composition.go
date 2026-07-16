@@ -213,18 +213,17 @@ func composableListTarget(plan ListPlan, targetType, targetRelation string) bool
 
 // composableListSubjectsTarget reports whether this plan's list_subjects
 // function may compose against the target's list_{targetType}_{targetRelation}_sub
-// function. It is composableListTarget plus the list_subjects-only wildcard skip:
-// list_*_sub emits '*' for wildcard grants rather than the concrete subjects, so
-// an IN/LATERAL membership against a wildcard-reachable target would drop
-// concrete subjects that hold the relation only via a wildcard. This is the one
-// gate shared by every subject-first composition site (complex closure, complex
-// userset, TTU subject-first direct + closure patterns). Callers still apply the
-// caller-side plan.Analysis.Features.HasWildcard guard separately, since that
-// concerns the CALLER relation's own wildcards, not the target's.
+// function (complex closure, complex userset, TTU subject-first direct + closure
+// patterns).
+//
+// A wildcard-reaching target is composable: its list_*_sub emits '*' for wildcard
+// grants, that '*' flows into base_results, and the wildcard-completion tail
+// (wildcardSubjectsTailWhere) verifies it against the full relation. Concrete
+// subjects that hold the relation only via that wildcard are represented by the
+// '*' row — which is the OpenFGA list_subjects semantics (public access is
+// reported as the type-bound wildcard, not enumerated). Cycle/depth safety is
+// still enforced by composableListTarget.
 func composableListSubjectsTarget(plan ListPlan, targetType, targetRelation string) bool {
-	if reachesWildcard(plan.AnalysisLookup, targetType, targetRelation) {
-		return false
-	}
 	return composableListTarget(plan, targetType, targetRelation)
 }
 
@@ -287,13 +286,13 @@ func complexClosureMembership(plan ListPlan, rel string) Expr {
 // check_permission_internal with a semi-join against rel's list_subjects set —
 // list_{type}_{rel}_sub(p_object_id, p_subject_type) is exactly the set of
 // subjects holding rel on the object. The list_objects mirror keeps a userset-
-// guarded check arm, but list_subjects composition is gated OUT entirely when
-// wildcards are in play: list_{type}_{rel}_sub returns '*' for wildcard grants,
-// not the concrete subjects, so an IN membership would drop a concrete
-// candidate that holds rel only via a wildcard (under-report). The gate mirrors
-// buildSubjectFirstTTUSubjectBlocks: skip composition when this relation
-// HasWildcard or the target relation can surface '*' (own or transitively
-// reachable via TTU parents — reachesWildcard).
+// guarded check arm, but list_subjects composition is gated OUT here when
+// this relation HasWildcard: list_{type}_{rel}_sub returns '*' for wildcard
+// grants, not the concrete subjects, so an IN membership would drop a concrete
+// candidate that holds rel only via a wildcard (under-report). Mirrors
+// composableSubjectFirstUserset's HasWildcard gate. (Unlike
+// buildSubjectFirstTTUSubjectBlocks, whose '*' rows flow through base_results to
+// the wildcard-completion tail, there is no such tail on an IN-set membership.)
 //
 // When composition is unsafe it returns the per-candidate check alone, which is
 // always correct. Mirrors complexClosureMembership.
@@ -323,17 +322,17 @@ func complexClosureSubjectMembership(plan ListPlan, rel string) Expr {
 
 // intersectionPartComposable reports whether a list_objects intersection part
 // may compose with rel's list_objects set. INTERSECT is only sound when every
-// part is complete: if any semi-joined part under-reports, the whole object is
-// dropped. Keep this proof to direct, non-wildcard targets. Recursive/userset/
-// composed targets can make check_permission_internal true for a plain concrete
-// subject through paths their list_objects function may not enumerate; the
-// userset-parity arm cannot recover that case because its guard is false for
-// plain subjects.
+// part is complete for the query subject: if any semi-joined part under-reports,
+// the whole object is dropped (under-permissive).
+//
+// list_objects is complete for plain subjects across every strategy — including
+// wildcard-reaching relations (list_*_obj enumerates the objects a plain subject
+// reaches via a [user:*] grant) and recursive TTU (the recursive-TTU completeness
+// work closed the residual gap for the self-referential + cross-type-anchor
+// shape). So the part composes whenever it is cycle/DepthExceeded-safe
+// (composableListTarget). The userset-parity check arm in composedListObjectsMembership
+// covers userset-typed query subjects, which list_*_obj may still under-report.
 func intersectionPartComposable(plan ListPlan, rel string) bool {
-	target := plan.AnalysisLookup[plan.ObjectType+"."+rel]
-	if target == nil || target.Features.HasWildcard || target.ListStrategy != ListStrategyDirect {
-		return false
-	}
 	return composableListTarget(plan, plan.ObjectType, rel)
 }
 

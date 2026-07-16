@@ -1,0 +1,72 @@
+# Regression guard: intersection list_objects candidate universe is complete
+# for recursive parts.
+#
+# co_owner = viewer AND editor, where viewer/editor are recursive-TTU
+# (inherited down a parent chain). Each INTERSECT arm draws its candidate
+# universe from folder-typed tuple object_ids and then filters by the part's
+# list_objects set. This asserts a folder reachable by BOTH legs purely via
+# parent inheritance (mid, leaf) is still returned.
+#
+# Note: the candidate universe is provably complete for this shape. Any folder
+# F for which check(user, viewer, F) = TRUE must be the object_id of some
+# folder-typed tuple: either a direct/wildcard/userset grant tuple on F, or the
+# parent linking tuple {user: <parent>, relation: parent, object: F} that seeds
+# the recursive inheritance. So folders reached "purely via inheritance" are
+# always object_ids of the parent tuples that carry that inheritance, and the
+# universe never drops them. This case locks that invariant in.
+#
+# Test names are prefixed with "melange/" by the loader.
+
+tests:
+  - name: intersection_recursive_part_candidate_universe
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type folder
+            relations
+              define parent: [folder]
+              define viewer: [user] or viewer from parent
+              define editor: [user] or editor from parent
+              define co_owner: viewer and editor
+        tuples:
+          # viewer + editor both granted ONLY on the top ancestor (root),
+          # and inherited down the chain root -> mid -> leaf via parent.
+          - user: user:alice
+            relation: viewer
+            object: folder:root
+          - user: user:alice
+            relation: editor
+            object: folder:root
+          # parent chain: leaf's parent is mid, mid's parent is root
+          - user: folder:mid
+            relation: parent
+            object: folder:leaf
+          - user: folder:root
+            relation: parent
+            object: folder:mid
+        checkAssertions:
+          # alice is co_owner on root (direct), and on mid + leaf via inheritance
+          - name: alice_co_owner_root
+            tuple: { user: user:alice, relation: co_owner, object: folder:root }
+            expectation: true
+          - name: alice_co_owner_mid
+            tuple: { user: user:alice, relation: co_owner, object: folder:mid }
+            expectation: true
+          - name: alice_co_owner_leaf
+            tuple: { user: user:alice, relation: co_owner, object: folder:leaf }
+            expectation: true
+        listObjectsAssertions:
+          # co_owner list_objects must match check: root, mid, leaf.
+          - name: alice_co_owner_objects
+            request:
+              user: user:alice
+              type: folder
+              relation: co_owner
+            expectation:
+              - folder:root
+              - folder:mid
+              - folder:leaf

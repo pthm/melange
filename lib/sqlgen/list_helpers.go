@@ -192,44 +192,93 @@ func buildWhereFromPredicates(predicates []Expr) Expr {
 // buildUsersetWildcardTailQuery builds the wildcard handling tail as a typed query for list_subjects functions.
 func buildUsersetWildcardTailQuery(a RelationAnalysis, databaseSchema string) SQLer {
 	if a.Features.HasWildcard {
-		// Build the wildcard handling query with permission check
 		return SelectStmt{
 			ColumnExprs: []Expr{Col{Table: "br", Column: "subject_id"}},
-			FromExpr:    TableAs("", "base_results", "br"),
+			FromExpr:    TableAs("", "subjects", "br"),
 			Joins: []JoinClause{
 				{Type: "CROSS", Table: "has_wildcard", Alias: "hw"},
 			},
-			Where: Or(
-				NotExpr{Expr: Col{Table: "hw", Column: "has_wildcard"}},
-				Eq{Left: Col{Table: "br", Column: "subject_id"}, Right: Lit("*")},
-				And(
-					Ne{Left: Col{Table: "br", Column: "subject_id"}, Right: Lit("*")},
-					NoWildcardPermissionCheckCall(databaseSchema, a.Relation, a.ObjectType, Col{Table: "br", Column: "subject_id"}, ObjectID),
-				),
-			),
+			Where: wildcardSubjectsTailWhere(databaseSchema, a.Relation, a.ObjectType, a.Features.HasExclusion),
 		}
 	}
 	return SelectStmt{
 		ColumnExprs: []Expr{Col{Table: "br", Column: "subject_id"}},
-		FromExpr:    TableAs("", "base_results", "br"),
+		FromExpr:    TableAs("", "subjects", "br"),
 	}
+}
+
+// wildcardSubjectsTailWhere builds the WHERE for the list_subjects
+// wildcard-completion tail (shared by the recursive and self-referential-userset
+// renderers). When the base set has no wildcard, keep every row. Otherwise keep
+// each subject the relation actually grants:
+//   - the '*' row is verified via the FULL check (check_permission_internal):
+//     '*”s access flows through wildcard ([user:*]) grants, so the no-wildcard
+//     check would wrongly drop it — but it must still be subtracted when an
+//     exclusion denies it, whether the exclusion is on this relation or reached
+//     transitively through a TTU. Verifying '*' unconditionally is correct for
+//     non-exclusion relations too (the check passes), so no gate is needed.
+//   - concrete subjects use the no-wildcard check, because wildcard-only access
+//     is already represented by the '*' row.
+//
+// The NOT(has_wildcard) short-circuit keeps every base row when there is no '*'.
+// That is safe only when the relation has no exclusion: for an exclusion-bearing
+// relation the base-set builders can over-report banned subjects (e.g. a
+// self-ref userset where a direct or intermediate-group member is banned), so
+// re-verification must always run. Gate the short-circuit on !hasExclusion so
+// concrete subjects are always validated by check_permission_nw_internal and
+// '*' by check_permission_internal.
+func wildcardSubjectsTailWhere(schema, relation, objectType string, hasExclusion bool) Expr {
+	subject := Col{Table: "br", Column: "subject_id"}
+	branches := []Expr{
+		And(
+			Eq{Left: subject, Right: Lit("*")},
+			WildcardPermissionCheckCall(schema, relation, objectType, subject, ObjectID),
+		),
+		And(
+			Ne{Left: subject, Right: Lit("*")},
+			NoWildcardPermissionCheckCall(schema, relation, objectType, subject, ObjectID),
+		),
+	}
+	if !hasExclusion {
+		branches = append([]Expr{NotExpr{Expr: Col{Table: "hw", Column: "has_wildcard"}}}, branches...)
+	}
+	return Or(branches...)
 }
 
 // buildDispatcherBody builds the common routing logic for list dispatcher functions.
 func buildDispatcherBody(cases []ListDispatcherCase, callArgs string) []Stmt {
 	var stmts []Stmt
 	if len(cases) > 0 {
-		stmts = append(stmts, Comment{Text: "Route to specialized functions for all type/relation pairs"})
+		stmts = append(stmts, Comment{Text: "Route to specialized functions, nested by object type then relation"})
+		// Group by object type (preserving order) and emit an outer IF per type
+		// wrapping inner per-relation IFs — mirrors the check dispatcher, so a
+		// non-matching object type skips its whole relation block in one compare.
+		var order []string
+		byType := make(map[string][]ListDispatcherCase)
 		for _, c := range cases {
+			if _, seen := byType[c.ObjectType]; !seen {
+				order = append(order, c.ObjectType)
+			}
+			byType[c.ObjectType] = append(byType[c.ObjectType], c)
+		}
+		for _, ot := range order {
+			inner := make([]Stmt, 0, len(byType[ot]))
+			for _, c := range byType[ot] {
+				inner = append(inner, If{
+					Cond: Eq{Left: Param("p_relation"), Right: Lit(c.Relation)},
+					Then: []Stmt{
+						ReturnQuery{Query: "SELECT * FROM " + sqldsl.PrefixIdent(c.FunctionName, c.DatabaseSchema) + "(" + callArgs + ")"},
+						Return{},
+					},
+				})
+			}
+			// Known type, unknown relation → return empty immediately, mirroring
+			// dispatchIfChain's per-type sentinel: a matched object type never
+			// falls through to walk the remaining per-type IF blocks.
+			inner = append(inner, Return{})
 			stmts = append(stmts, If{
-				Cond: And(
-					Eq{Left: ObjectType, Right: Lit(c.ObjectType)},
-					Eq{Left: Param("p_relation"), Right: Lit(c.Relation)},
-				),
-				Then: []Stmt{
-					ReturnQuery{Query: "SELECT * FROM " + sqldsl.PrefixIdent(c.FunctionName, c.DatabaseSchema) + "(" + callArgs + ")"},
-					Return{},
-				},
+				Cond: Eq{Left: ObjectType, Right: Lit(ot)},
+				Then: inner,
 			})
 		}
 	}

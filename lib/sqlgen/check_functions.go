@@ -7,8 +7,9 @@ import (
 	"github.com/pthm/melange/lib/sqlgen/sqldsl"
 )
 
-func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, databaseSchema string, noWildcard bool, complexityByRelation map[string]map[string]int) (string, error) {
+func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, databaseSchema string, noWildcard bool, complexityByRelation map[string]map[string]int, needsNW map[string]map[string]bool) (string, error) {
 	plan := BuildCheckPlanWithOrdering(a, filterInlineForCheck(inline, a), databaseSchema, noWildcard, complexityByRelation)
+	plan.NeedsNoWildcard = needsNW
 	blocks, err := BuildCheckBlocks(plan)
 	if err != nil {
 		return "", fmt.Errorf("building check blocks for %s.%s: %w", a.ObjectType, a.Relation, err)
@@ -16,20 +17,27 @@ func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, databaseSch
 	return RenderCheckFunction(plan, blocks)
 }
 
-func generateDispatcher(analyses []RelationAnalysis, databaseSchema string, noWildcard bool) (string, error) {
+func generateDispatcher(analyses []RelationAnalysis, databaseSchema string, noWildcard bool, needsNW map[string]map[string]bool) (string, error) {
 	fnName := "check_permission"
 	if noWildcard {
 		fnName = "check_permission_nw"
 	}
 
-	cases := buildDispatcherCases(analyses, databaseSchema, noWildcard)
+	cases := buildDispatcherCases(analyses, databaseSchema, noWildcard, needsNW)
 	if len(cases) == 0 {
 		return renderEmptyDispatcher(databaseSchema, fnName), nil
 	}
 	return renderDispatcherWithCases(databaseSchema, fnName, cases), nil
 }
 
-func buildDispatcherCases(analyses []RelationAnalysis, databaseSchema string, noWildcard bool) []DispatcherCase {
+func buildDispatcherCases(analyses []RelationAnalysis, databaseSchema string, noWildcard bool, needsNW map[string]map[string]bool) []DispatcherCase {
+	// The _nw dispatcher routes to the base function for relations that reach
+	// no wildcard (no _nw variant emitted; identical body). needsNW is supplied
+	// by callers that already computed it; fall back to computing it here so
+	// standalone callers (and tests) need not thread it.
+	if noWildcard && needsNW == nil {
+		needsNW = buildNoWildcardIndex(analyses)
+	}
 	var cases []DispatcherCase
 	for _, a := range analyses {
 		if !a.Capabilities.CheckAllowed {
@@ -40,7 +48,7 @@ func buildDispatcherCases(analyses []RelationAnalysis, databaseSchema string, no
 			DatabaseSchema:    databaseSchema,
 			ObjectType:        a.ObjectType,
 			Relation:          a.Relation,
-			CheckFunctionName: functionNameForDispatcher(a, noWildcard),
+			CheckFunctionName: functionNameForDispatcher(a, noWildcard, needsNW),
 			Inlineable:        inlineable,
 		}
 		if inlineable {
@@ -135,7 +143,7 @@ func renderEmptyDispatcher(databaseSchema, fnName string) string {
 }
 
 func generateBulkDispatcher(analyses []RelationAnalysis, databaseSchema string) string {
-	cases := buildDispatcherCases(analyses, databaseSchema, false)
+	cases := buildDispatcherCases(analyses, databaseSchema, false, nil)
 	if len(cases) == 0 {
 		return renderEmptyBulkDispatcher(databaseSchema)
 	}
@@ -274,7 +282,7 @@ func buildInlineCheckExpr(c DispatcherCase, rSubjectType, rSubjectID, rObjectID 
 					Eq{Left: rSubjectType, Right: Lit(c.ObjectType)},
 					HasUserset{Source: rSubjectID},
 					Eq{Left: UsersetObjectID{Source: rSubjectID}, Right: rObjectID},
-					In{Expr: SubstringUsersetRelation{Source: rSubjectID}, Values: c.SatisfyingRelations},
+					In{Expr: UsersetRelation{Source: rSubjectID}, Values: c.SatisfyingRelations},
 				),
 				Result: Int(1),
 			},
@@ -299,32 +307,40 @@ func buildInlineCheckExpr(c DispatcherCase, rSubjectType, rSubjectID, rObjectID 
 	}
 }
 
-// buildBulkUnknownTypeFallback builds the final RETURN QUERY statement that handles
-// (object_type, relation) pairs not covered by any IF block.
+// buildBulkUnknownTypeFallback builds the final RETURN QUERY statement that
+// denies requests for object types not covered by any per-type IF block.
+//
+// It matches on object_type alone, NOT (object_type, relation). A known type is
+// always fully handled by its own IF block — including that block's
+// unknown-relation deny fallback — and the block always fires because every
+// request row's object_type is itself an element of p_object_types (the UNNEST
+// source of the gate ArrayContains(type, p_object_types)). Matching on pairs
+// would additionally re-emit a deny row for known-type/unknown-relation
+// requests, duplicating the per-type fallback's row.
 func buildBulkUnknownTypeFallback(cases []DispatcherCase) ReturnQuery {
-	notInPairs := make([][]string, 0, len(cases))
+	seen := make(map[string]bool, len(cases))
+	knownTypes := make([]string, 0, len(cases))
 	for _, c := range cases {
-		notInPairs = append(notInPairs, []string{c.ObjectType, c.Relation})
+		if !seen[c.ObjectType] {
+			seen[c.ObjectType] = true
+			knownTypes = append(knownTypes, c.ObjectType)
+		}
 	}
 
 	rObjectType := Col{Table: "t", Column: "object_type"}
-	rRelation := Col{Table: "t", Column: "relation"}
 	rIdx := Cast{Expr: Col{Table: "t", Column: "idx"}, Type: "INTEGER"}
 
 	query := SelectStmt{
 		ColumnExprs: []Expr{rIdx, Int(0)},
 		From:        bulkUnnestExpr,
-		Where: TupleNotIn{
-			Exprs: []Expr{rObjectType, rRelation},
-			Pairs: notInPairs,
-		},
+		Where:       NotIn{Expr: rObjectType, Values: knownTypes},
 	}
 	return ReturnQuery{Query: query.SQL()}
 }
 
-func functionNameForDispatcher(a RelationAnalysis, noWildcard bool) string {
+func functionNameForDispatcher(a RelationAnalysis, noWildcard bool, needsNW map[string]map[string]bool) string {
 	if noWildcard {
-		return functionNameNoWildcard(a.ObjectType, a.Relation)
+		return functionNameForNoWildcardRef(needsNW, a.ObjectType, a.Relation)
 	}
 	return functionName(a.ObjectType, a.Relation)
 }

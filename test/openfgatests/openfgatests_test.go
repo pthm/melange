@@ -20,6 +20,17 @@ func runWithSchema(t *testing.T, fn func(t *testing.T, client *openfgatests.Clie
 			fn(t, client)
 		})
 	}
+
+	// Oracle mode: run the SAME cases against a real in-process OpenFGA server.
+	// A failure here means a YAML case's expected values are not OpenFGA-correct
+	// (a test bug); a melange-mode failure on a case the oracle passes means
+	// melange diverges from OpenFGA. Opt-in (MELANGE_OPENFGA_ORACLE=1) so the
+	// default run stays melange-only and fast; `just test-openfga-oracle` enables it.
+	if os.Getenv("MELANGE_OPENFGA_ORACLE") != "" {
+		t.Run("oracle-openfga", func(t *testing.T) {
+			fn(t, openfgatests.NewOpenFGAClient(t))
+		})
+	}
 }
 
 // =============================================================================

@@ -111,11 +111,11 @@ func TestRecommendIndexes_DeduplicatesAcrossRelations(t *testing.T) {
 	}
 
 	objKeyed := findRec(t, recs, []string{"object_type", "object_id", "relation", "subject_type", "subject_id"}, "")
+	// viewer/editor are plain [user] direct relations that reach no wildcard, so
+	// no _nw variant is emitted for them and none is listed as a beneficiary.
 	wantFns := []string{
 		"check_document_editor",
-		"check_document_editor_nw",
 		"check_document_viewer",
-		"check_document_viewer_nw",
 		"list_document_editor_sub",
 		"list_document_viewer_sub",
 	}

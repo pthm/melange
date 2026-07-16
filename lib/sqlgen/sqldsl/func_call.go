@@ -84,6 +84,29 @@ func NoWildcardPermissionCheckCall(schema, relation, objectType string, subjectI
 	}
 }
 
+// WildcardPermissionCheckCall creates a full check_permission_internal call
+// (WITH wildcard grants) for a specific subject id, with an empty visited array.
+// Unlike NoWildcardPermissionCheckCall it does not exclude wildcard grants, so it
+// is the correct verifier for the '*' subject itself in list_subjects: the
+// wildcard's access legitimately flows through wildcard ([user:*]) grants, and it
+// must still be subtracted when an exclusion denies it (e.g. `viewer but not
+// blocked` with blocked:[user:*]).
+func WildcardPermissionCheckCall(schema, relation, objectType string, subjectID, objectID Expr) FuncCallEq {
+	return FuncCallEq{
+		Schema:   schema,
+		FuncName: "check_permission_internal",
+		Args: []Expr{
+			SubjectType,
+			subjectID,
+			Lit(relation),
+			Lit(objectType),
+			objectID,
+			EmptyArray{},
+		},
+		Value: Int(1),
+	}
+}
+
 // SpecializedCheckCall creates a call to a specialized check function.
 // Used for implied relations and parent relation checks.
 //
@@ -154,6 +177,24 @@ func (i InFunctionSelect) SQL() string {
 	funcCall := Func{Schema: i.Schema, Name: i.FuncName, Args: i.Args}.SQL()
 	subquery := "SELECT " + i.Alias + "." + i.SelectCol + " FROM " + funcCall + " " + i.Alias
 	return i.Expr.SQL() + " IN (" + subquery + ")"
+}
+
+// InCTESelect represents "expr IN (SELECT column FROM cte)". It is the
+// hoisted-CTE counterpart to InFunctionSelect: instead of inlining a
+// list_*_obj function call, it references a CTE that computed that call once.
+//
+// Renders: t.subject_id IN (SELECT object_id FROM folder_editor_objs)
+type InCTESelect struct {
+	Expr      Expr   // The expression to check (left side of IN)
+	CTEName   string // The CTE to select from
+	SelectCol string // Column to select from the CTE
+}
+
+// SQL renders the IN subquery expression against a CTE. The selected column is
+// qualified with the CTE name so it never collides with an outer query column
+// of the same name (e.g. object_id in a WITH RECURSIVE list_objects body).
+func (i InCTESelect) SQL() string {
+	return i.Expr.SQL() + " IN (SELECT " + i.CTEName + "." + i.SelectCol + " FROM " + i.CTEName + ")"
 }
 
 // ListObjectsFunctionName generates a list_TYPE_RELATION_obj function name.

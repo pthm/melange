@@ -27,6 +27,8 @@ import (
 
 	"github.com/lib/pq"
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
+	openfgaserver "github.com/openfga/openfga/pkg/server"
+	"github.com/openfga/openfga/pkg/storage/memory"
 	"google.golang.org/grpc"
 
 	"github.com/pthm/melange/lib/sqlgen/sqldsl"
@@ -54,6 +56,30 @@ type Client struct {
 	sharedDBOnce    sync.Once
 	sharedDBInitErr error
 	dbCreateMu      sync.Mutex
+
+	// openfgaBackend, when non-nil, makes this Client a thin passthrough to a
+	// real in-process OpenFGA server instead of melange — the conformance
+	// "oracle". The six gRPC methods delegate to it verbatim, so the same test
+	// runner validates a YAML case's expected values against real OpenFGA.
+	openfgaBackend *openfgaserver.Server
+}
+
+// NewOpenFGAClient returns a Client backed by a real in-process OpenFGA server
+// (memory datastore) instead of melange. Used as the conformance oracle: running
+// the same YAML cases through it proves the expected values are OpenFGA-correct,
+// and any melange divergence shows up as a melange-mode failure on the same case.
+func NewOpenFGAClient(tb testing.TB) *Client {
+	tb.Helper()
+	srv, err := openfgaserver.NewServerWithOpts(openfgaserver.WithDatastore(memory.New()))
+	if err != nil {
+		tb.Fatalf("new openfga server: %v", err)
+	}
+	tb.Cleanup(srv.Close)
+	return &Client{
+		tb:             tb,
+		stores:         make(map[string]*store),
+		openfgaBackend: srv,
+	}
 }
 
 // store represents an isolated OpenFGA store with its own model and tuples.
@@ -82,6 +108,22 @@ func NewClient(tb testing.TB) *Client {
 		tb:     tb,
 		stores: make(map[string]*store),
 	}
+}
+
+// forSubtest returns a client for an isolated per-test run. When this client is
+// an OpenFGA oracle it shares the same in-process server (each test isolates via
+// its own CreateStore); otherwise it returns a fresh melange client for the
+// configured schema. Preserving the backend is what makes oracle mode actually
+// exercise real OpenFGA rather than silently falling back to melange.
+func (c *Client) forSubtest(tb testing.TB) *Client {
+	if c.openfgaBackend != nil {
+		return &Client{
+			tb:             tb,
+			stores:         make(map[string]*store),
+			openfgaBackend: c.openfgaBackend,
+		}
+	}
+	return NewClientWithSchema(tb, c.databaseSchema)
 }
 
 // NewClientWithSchema creates a test client that installs melange objects
@@ -217,6 +259,9 @@ type user
 // CreateStore creates a new isolated store for testing.
 // Each store has its own authorization model and tuples.
 func (c *Client) CreateStore(ctx context.Context, req *openfgav1.CreateStoreRequest, opts ...grpc.CallOption) (*openfgav1.CreateStoreResponse, error) {
+	if c.openfgaBackend != nil {
+		return c.openfgaBackend.CreateStore(ctx, req)
+	}
 	id := fmt.Sprintf("store_%d", c.storeCounter.Add(1))
 
 	db, err := c.storeDB()
@@ -243,6 +288,9 @@ func (c *Client) CreateStore(ctx context.Context, req *openfgav1.CreateStoreRequ
 // WriteAuthorizationModel writes an authorization model to the store.
 // The model is parsed and stored for use in permission checks.
 func (c *Client) WriteAuthorizationModel(ctx context.Context, req *openfgav1.WriteAuthorizationModelRequest, opts ...grpc.CallOption) (*openfgav1.WriteAuthorizationModelResponse, error) {
+	if c.openfgaBackend != nil {
+		return c.openfgaBackend.WriteAuthorizationModel(ctx, req)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -278,6 +326,9 @@ func (c *Client) WriteAuthorizationModel(ctx context.Context, req *openfgav1.Wri
 
 // Write writes or deletes tuples in the store.
 func (c *Client) Write(ctx context.Context, req *openfgav1.WriteRequest, opts ...grpc.CallOption) (*openfgav1.WriteResponse, error) {
+	if c.openfgaBackend != nil {
+		return c.openfgaBackend.Write(ctx, req)
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -308,6 +359,9 @@ func (c *Client) Write(ctx context.Context, req *openfgav1.WriteRequest, opts ..
 
 // Check evaluates whether a user has a specific relation on an object.
 func (c *Client) Check(ctx context.Context, req *openfgav1.CheckRequest, opts ...grpc.CallOption) (*openfgav1.CheckResponse, error) {
+	if c.openfgaBackend != nil {
+		return c.openfgaBackend.Check(ctx, req)
+	}
 	store, ok := c.storeByID(req.GetStoreId())
 	if !ok {
 		return nil, fmt.Errorf("store not found: %s", req.GetStoreId())
@@ -454,6 +508,9 @@ func (c *Client) Expand(ctx context.Context, storeID, modelID, object, relation 
 
 // ListObjects returns all objects of a given type that the user has a relation on.
 func (c *Client) ListObjects(ctx context.Context, req *openfgav1.ListObjectsRequest, opts ...grpc.CallOption) (*openfgav1.ListObjectsResponse, error) {
+	if c.openfgaBackend != nil {
+		return c.openfgaBackend.ListObjects(ctx, req)
+	}
 	store, ok := c.storeByID(req.GetStoreId())
 	if !ok {
 		return nil, fmt.Errorf("store not found: %s", req.GetStoreId())
@@ -499,8 +556,40 @@ func (c *Client) ListObjects(ctx context.Context, req *openfgav1.ListObjectsRequ
 	}, nil
 }
 
+// parseUserTypeFilter converts a test filter string into an OpenFGA UserTypeFilter.
+// A userset filter is written "type#relation" (e.g. "group#member") and maps to
+// {Type:"group", Relation:"member"} — the canonical shape that makes ListUsers
+// return stored usersets; a plain type maps to {Type:type}.
+func parseUserTypeFilter(f string) *openfgav1.UserTypeFilter {
+	if i := strings.Index(f, "#"); i != -1 {
+		return &openfgav1.UserTypeFilter{Type: f[:i], Relation: f[i+1:]}
+	}
+	return &openfgav1.UserTypeFilter{Type: f}
+}
+
+// userString renders a ListUsers result User as its OpenFGA string form:
+// "type:id" for an object, "type:id#relation" for a stored userset, and
+// "type:*" for a typed wildcard. The melange adapter emits a wildcard as an
+// object with id "*", but real OpenFGA (the oracle backend) returns a
+// User_Wildcard, so both arms are required for the oracle to see wildcards.
+func userString(u *openfgav1.User) string {
+	if o := u.GetObject(); o != nil {
+		return o.GetType() + ":" + o.GetId()
+	}
+	if w := u.GetWildcard(); w != nil {
+		return w.GetType() + ":*"
+	}
+	if us := u.GetUserset(); us != nil {
+		return us.GetType() + ":" + us.GetId() + "#" + us.GetRelation()
+	}
+	return ""
+}
+
 // ListUsers returns all users that have a relation on the given object.
 func (c *Client) ListUsers(ctx context.Context, req *openfgav1.ListUsersRequest, opts ...grpc.CallOption) (*openfgav1.ListUsersResponse, error) {
+	if c.openfgaBackend != nil {
+		return c.openfgaBackend.ListUsers(ctx, req)
+	}
 	store, ok := c.storeByID(req.GetStoreId())
 	if !ok {
 		return nil, fmt.Errorf("store not found: %s", req.GetStoreId())
@@ -514,15 +603,17 @@ func (c *Client) ListUsers(ctx context.Context, req *openfgav1.ListUsersRequest,
 	// Get all user filters and list subjects for each
 	var users []*openfgav1.User
 	for _, filter := range req.GetUserFilters() {
-		filterType := filter.GetType()
-		subjectType := melange.ObjectType(filterType)
+		// The returned object type is just the principal type, without any
+		// userset relation suffix.
+		outputType := filter.GetType()
 
-		// Parse userset filter: "group#member" has type "group" and relation "member"
-		// The output type should be just "group", not "group#member"
-		outputType := filterType
-		if idx := strings.Index(filterType, "#"); idx != -1 {
-			outputType = filterType[:idx] // Extract just the type part
+		// A userset filter carries a relation ({type:"group", relation:"member"});
+		// melange's list_subjects addresses that as the subject_type "group#member".
+		filterType := outputType
+		if rel := filter.GetRelation(); rel != "" {
+			filterType = filterType + "#" + rel
 		}
+		subjectType := melange.ObjectType(filterType)
 
 		validator, err := validatorForStore(store, req.GetAuthorizationModelId())
 		if err != nil {
@@ -550,14 +641,25 @@ func (c *Client) ListUsers(ctx context.Context, req *openfgav1.ListUsersRequest,
 		}
 
 		for _, id := range ids {
-			users = append(users, &openfgav1.User{
-				User: &openfgav1.User_Object{
-					Object: &openfgav1.Object{
-						Type: outputType,
-						Id:   id,
+			// A stored-userset subject ("g1#member") must be returned as a
+			// User_Userset to match OpenFGA's ListUsers contract, not a User_Object.
+			if idx := strings.Index(id, "#"); idx != -1 {
+				users = append(users, &openfgav1.User{
+					User: &openfgav1.User_Userset{
+						Userset: &openfgav1.UsersetUser{
+							Type:     outputType,
+							Id:       id[:idx],
+							Relation: id[idx+1:],
+						},
 					},
-				},
-			})
+				})
+			} else {
+				users = append(users, &openfgav1.User{
+					User: &openfgav1.User_Object{
+						Object: &openfgav1.Object{Type: outputType, Id: id},
+					},
+				})
+			}
 		}
 	}
 

@@ -65,6 +65,7 @@ type (
 	JoinClause        = sqldsl.JoinClause
 	SelectStmt        = sqldsl.SelectStmt
 	IntersectSubquery = sqldsl.IntersectSubquery
+	UnionSubquery     = sqldsl.UnionSubquery
 	ValuesTable       = sqldsl.ValuesTable
 	ValuesRow         = sqldsl.ValuesRow
 	TypedValuesTable  = sqldsl.TypedValuesTable
@@ -74,17 +75,17 @@ type (
 	UnionAll          = sqldsl.UnionAll
 
 	// Userset types
-	UsersetObjectID          = sqldsl.UsersetObjectID
-	UsersetRelation          = sqldsl.UsersetRelation
-	HasUserset               = sqldsl.HasUserset
-	NoUserset                = sqldsl.NoUserset
-	SubstringUsersetRelation = sqldsl.SubstringUsersetRelation
-	IsWildcard               = sqldsl.IsWildcard
+	UsersetObjectID = sqldsl.UsersetObjectID
+	UsersetRelation = sqldsl.UsersetRelation
+	HasUserset      = sqldsl.HasUserset
+	NoUserset       = sqldsl.NoUserset
+	IsWildcard      = sqldsl.IsWildcard
 
 	// Function call types
 	FuncCallEq       = sqldsl.FuncCallEq
 	FuncCallNe       = sqldsl.FuncCallNe
 	InFunctionSelect = sqldsl.InFunctionSelect
+	InCTESelect      = sqldsl.InCTESelect
 
 	// Array types
 	ArrayLiteral  = sqldsl.ArrayLiteral
@@ -136,6 +137,7 @@ var (
 	Optf                            = sqldsl.Optf
 	InternalPermissionCheckCall     = sqldsl.InternalPermissionCheckCall
 	NoWildcardPermissionCheckCall   = sqldsl.NoWildcardPermissionCheckCall
+	WildcardPermissionCheckCall     = sqldsl.WildcardPermissionCheckCall
 	SpecializedCheckCall            = sqldsl.SpecializedCheckCall
 	InternalCheckCall               = sqldsl.InternalCheckCall
 	VisitedKey                      = sqldsl.VisitedKey

@@ -20,7 +20,10 @@ func RenderListSubjectsIntersectionFunction(plan ListPlan, blocks SubjectsInters
 
 	// Build userset filter query with check_permission filter and self block
 	usersetFilterQuery := buildIntersectionUsersetFilterQuery(plan, usersetCandidatesSQL, blocks.UsersetFilterSelfBlock)
-	usersetFilterPaginatedQuery := plan.wrapPaginationWildcardFirst(usersetFilterQuery)
+	usersetFilterPaginatedQuery := hoistClosureCTE(
+		plan.wrapPaginationWildcardFirst(usersetFilterQuery),
+		plan.Inline.ClosureRows,
+	)
 
 	// Build the THEN branch (userset filter path)
 	thenBranch := renderUsersetFilterThenBranch(usersetFilterPaginatedQuery)

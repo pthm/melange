@@ -55,7 +55,7 @@ func buildSelfRefUsersetFilterBaseBlock(plan ListPlan) TypedQueryBlock {
 		FromExpr:    ClosureTable(plan.Inline.ClosureRows, "subj_c"),
 		Where: And(
 			Eq{Left: Col{Table: "subj_c", Column: "object_type"}, Right: Param("v_filter_type")},
-			Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: SubstringUsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}},
+			Eq{Left: Col{Table: "subj_c", Column: "relation"}, Right: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}},
 			Eq{Left: Col{Table: "subj_c", Column: "satisfying_relation"}, Right: Param("v_filter_relation")},
 		),
 	}
@@ -76,7 +76,7 @@ func buildSelfRefUsersetFilterBaseBlock(plan ListPlan) TypedQueryBlock {
 				Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Param("v_filter_type")},
 				HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
 				Or(
-					Eq{Left: SubstringUsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Param("v_filter_relation")},
+					Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Param("v_filter_relation")},
 					ExistsExpr(closureExistsStmt),
 				),
 				CheckPermissionExpr(
@@ -196,7 +196,7 @@ func buildSelfRefUsersetRegularBlocks(plan ListPlan) (blocks []TypedQueryBlock, 
 	blocks = append(blocks, buildSelfRefUsersetRegularDirectBlock(plan, exclusions))
 	blocks = append(blocks, buildSelfRefUsersetRegularComplexClosureBlocks(plan, exclusions)...)
 	blocks = append(blocks, buildSelfRefUsersetRegularIntersectionClosureBlocks(plan)...)
-	blocks = append(blocks, buildSelfRefUsersetRegularExpansionBlock(plan, exclusions))
+	blocks = append(blocks, buildSelfRefUsersetRegularExpansionBlock(plan))
 	blocks = append(blocks, buildSelfRefUsersetRegularPatternBlocks(plan)...)
 
 	return blocks, buildSelfRefUsersetObjectsBaseBlock(plan), buildSelfRefUsersetObjectsRecursiveBlock(plan)
@@ -213,7 +213,11 @@ func buildSelfRefUsersetRegularDirectBlock(plan ListPlan, exclusions ExclusionCo
 		Distinct()
 
 	applyWildcardExclusion(q, plan, "t")
-	applyExclusionPredicates(q, exclusions, plan.UseCTEExclusion)
+	// Path 1 exclusions must always render inline: the self-ref renderer
+	// (renderSelfRefUsersetRegularQuery) uses wrapPaginationWildcardFirst and never
+	// emits the compensating CTE anti-join, so honoring UseCTEExclusion here would
+	// drop the predicate entirely and leak banned direct members (R2).
+	applyExclusionPredicates(q, exclusions, false)
 
 	return TypedQueryBlock{
 		Comments: []string{"-- Path 1: Direct tuple lookup on the object itself"},
@@ -247,7 +251,8 @@ func buildSelfRefUsersetRegularComplexClosureBlocks(plan ListPlan, exclusions Ex
 			Distinct()
 
 		applyWildcardExclusion(q, plan, "t")
-		applyExclusionPredicates(q, exclusions, plan.UseCTEExclusion)
+		// Same as Path 1: render inline, the self-ref path has no compensating CTE.
+		applyExclusionPredicates(q, exclusions, false)
 
 		blocks = append(blocks, TypedQueryBlock{
 			Comments: []string{fmt.Sprintf("-- Complex closure relation: %s", rel)},
@@ -283,7 +288,7 @@ func buildSelfRefUsersetRegularIntersectionClosureBlocks(plan ListPlan) []TypedQ
 	return blocks
 }
 
-func buildSelfRefUsersetRegularExpansionBlock(plan ListPlan, exclusions ExclusionConfig) TypedQueryBlock {
+func buildSelfRefUsersetRegularExpansionBlock(plan ListPlan) TypedQueryBlock {
 	conditions := []Expr{
 		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "uo", Column: "userset_object_id"}},
@@ -295,7 +300,31 @@ func buildSelfRefUsersetRegularExpansionBlock(plan ListPlan, exclusions Exclusio
 	if plan.ExcludeWildcard() {
 		conditions = append(conditions, Ne{Left: Col{Table: "t", Column: "subject_id"}, Right: Lit("*")})
 	}
-	conditions = append(conditions, exclusions.BuildPredicates()...)
+	// "but not banned" applies at every level of the self-referential relation,
+	// so a subject reached through the userset must be excluded if banned in the
+	// intermediate group they belong to OR in the root object being listed:
+	//   - per-group (uo.userset_object_id): a member banned in the intermediate
+	//     group is not a member there, so must not propagate up (R8).
+	//   - root (ObjectID): the root's own exclusion still applies to subjects
+	//     pulled in via the userset; without it a subject banned at the root but
+	//     active in an intermediate leaks, diverging from OpenFGA (Check denies
+	//     but list_subjects over-reports).
+	perGroupExclusions := buildExclusionInput(
+		plan.Analysis,
+		plan.DatabaseSchema,
+		Col{Table: "uo", Column: "userset_object_id"},
+		SubjectType,
+		Col{Table: "t", Column: "subject_id"},
+	)
+	conditions = append(conditions, perGroupExclusions.BuildPredicates()...)
+	rootExclusions := buildExclusionInput(
+		plan.Analysis,
+		plan.DatabaseSchema,
+		ObjectID,
+		SubjectType,
+		Col{Table: "t", Column: "subject_id"},
+	)
+	conditions = append(conditions, rootExclusions.BuildPredicates()...)
 
 	return TypedQueryBlock{
 		Comments: []string{"-- Path 2: Expand userset subjects from all reachable userset objects"},

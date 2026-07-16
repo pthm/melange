@@ -41,6 +41,10 @@ import (
 func runExplainParityAssertions(t *testing.T, ctx context.Context, client *Client, storeID, modelID string, checks []*CheckAssertion) {
 	t.Helper()
 
+	if client.openfgaBackend != nil {
+		return // Explain is a melange-only API; the OpenFGA oracle has no equivalent.
+	}
+
 	eligible := explainParityEligible(checks)
 	if len(eligible) == 0 {
 		return

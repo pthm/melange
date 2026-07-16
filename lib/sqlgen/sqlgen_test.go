@@ -190,11 +190,6 @@ func TestUsersetOperations(t *testing.T) {
 			expect: "position('#' in p_subject_id) = 0",
 		},
 		{
-			name:   "substring userset relation",
-			expr:   SubstringUsersetRelation{Source: SubjectID},
-			expect: "substring(p_subject_id from position('#' in p_subject_id) + 1)",
-		},
-		{
 			name:   "is wildcard",
 			expr:   IsWildcard{Source: Col{Column: "subject_id"}},
 			expect: "subject_id = '*'",

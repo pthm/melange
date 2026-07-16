@@ -112,7 +112,7 @@ func usersetSubjectCandidateMatch(plan ListPlan) Expr {
 		Where: And(
 			Eq{Left: Col{Table: "c", Column: "object_type"}, Right: SubjectType},
 			Eq{Left: Col{Table: "c", Column: "relation"}, Right: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}},
-			Eq{Left: Col{Table: "c", Column: "satisfying_relation"}, Right: SubstringUsersetRelation{Source: SubjectID}},
+			Eq{Left: Col{Table: "c", Column: "satisfying_relation"}, Right: UsersetRelation{Source: SubjectID}},
 		),
 	}
 
@@ -333,36 +333,50 @@ func buildIntersectionPartQuery(plan ListPlan, part IntersectionPart) SelectStmt
 
 	switch {
 	case part.IsThis:
-		q = Tuples(plan.DatabaseSchema, alias).
-			ObjectType(plan.ObjectType).
-			Relations(plan.Relation).
-			SelectCol("object_id").
-			Where(
-				Eq{Left: Col{Table: alias, Column: "subject_type"}, Right: SubjectType},
-				In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
-				SubjectIDMatch(Col{Table: alias, Column: "subject_id"}, SubjectID, part.HasWildcard),
-			).
-			Distinct()
+		return buildIntersectionThisPartQuery(plan, part)
 
 	case part.ParentRelation != nil:
 		alias = "child"
+		pr := part.ParentRelation
+		childType := Col{Table: alias, Column: "subject_type"}
+		childID := Col{Table: alias, Column: "subject_id"}
+		// The parent object (child.subject_id, of type child.subject_type) must
+		// satisfy pr.Relation. Compose against the parent's list_objects set (a
+		// set-based semi-join) instead of a per-row check_permission_internal when
+		// composition is cycle-safe, keeping a userset-guarded check arm for
+		// parity. Per linking type, since the list function name is per-type.
+		check := CheckPermission{
+			Schema:      plan.DatabaseSchema,
+			Subject:     SubjectParams(),
+			Relation:    pr.Relation,
+			Object:      ObjectRef{Type: childType, ID: childID},
+			ExpectAllow: true,
+		}
+		var membership Expr = check
+		if len(pr.AllowedLinkingTypes) > 0 {
+			arms := make([]Expr, 0, len(pr.AllowedLinkingTypes))
+			for _, ptype := range pr.AllowedLinkingTypes {
+				typed := Eq{Left: childType, Right: Lit(ptype)}
+				if composableListTarget(plan, ptype, pr.Relation) {
+					arms = append(arms, And(typed, composedListObjectsMembership(
+						plan.DatabaseSchema, ptype, pr.Relation, childID, SubjectType, SubjectID, "parent_obj", check)))
+				} else {
+					arms = append(arms, And(typed, check))
+				}
+			}
+			membership = Or(arms...)
+		}
 		q = Tuples(plan.DatabaseSchema, alias).
 			ObjectType(plan.ObjectType).
-			Relations(part.ParentRelation.LinkingRelation).
+			Relations(pr.LinkingRelation).
 			SelectCol("object_id").
-			Where(CheckPermission{
-				Schema:   plan.DatabaseSchema,
-				Subject:  SubjectParams(),
-				Relation: part.ParentRelation.Relation,
-				Object: ObjectRef{
-					Type: Col{Table: alias, Column: "subject_type"},
-					ID:   Col{Table: alias, Column: "subject_id"},
-				},
-				ExpectAllow: true,
-			}).
+			Where(membership).
 			Distinct()
 
 	default:
+		if intersectionPartComposable(plan, part.Relation) {
+			return buildIntersectionComposedPartQuery(plan, part)
+		}
 		q = Tuples(plan.DatabaseSchema, alias).
 			ObjectType(plan.ObjectType).
 			SelectCol("object_id").
@@ -374,6 +388,121 @@ func buildIntersectionPartQuery(plan ListPlan, part IntersectionPart) SelectStmt
 		q.Where(intersectionPartExclusion(plan, part.ExcludedRelation, Col{Table: alias, Column: "object_id"}))
 	}
 
+	return q.Build()
+}
+
+// buildIntersectionComposedPartQuery builds a composable positive intersection
+// part as the specialized list-set directly, dropping the object-type-wide
+// melange_tuples scan the membership predicate otherwise filters against.
+//
+// The membership predicate is `object_id IN (SELECT list_rel_obj(...)) OR
+// (userset-guarded check)`. For plain subjects the first arm is exactly
+// list_rel_obj's output — every object it returns has a rel tuple, so it is
+// already restricted to this object type — so we select it as the FROM source
+// with no scan. The userset-guarded check arm still needs candidate object_ids
+// to evaluate against; it stays as the original tuple scan, gated to userset
+// query subjects, UNIONed in for parity. Behavior-preserving: the union of the
+// two arms is the same object_id set the OR-over-scan produced.
+func buildIntersectionComposedPartQuery(plan ListPlan, part IntersectionPart) SelectStmt {
+	setArm := SelectStmt{
+		ColumnExprs: []Expr{Col{Table: "obj", Column: "object_id"}},
+		FromExpr: FunctionCallExpr{
+			Schema: plan.DatabaseSchema,
+			Name:   ListObjectsFunctionName(plan.ObjectType, part.Relation),
+			Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
+			Alias:  "obj",
+		},
+	}
+
+	usersetCheck := CheckPermission{
+		Schema:      plan.DatabaseSchema,
+		Subject:     SubjectParams(),
+		Relation:    part.Relation,
+		Object:      LiteralObject(plan.ObjectType, Col{Table: "t", Column: "object_id"}),
+		ExpectAllow: true,
+	}
+	usersetArm := Tuples(plan.DatabaseSchema, "t").
+		ObjectType(plan.ObjectType).
+		SelectCol("object_id").
+		Where(And(HasUserset{Source: SubjectID}, usersetCheck)).
+		Distinct().
+		Build()
+
+	stmt := SelectStmt{
+		ColumnExprs: []Expr{Col{Table: "up", Column: "object_id"}},
+		FromExpr:    UnionSubquery{Alias: "up", Queries: []SelectStmt{setArm, usersetArm}},
+	}
+	if part.ExcludedRelation != "" {
+		stmt.Where = intersectionPartExclusion(plan, part.ExcludedRelation, Col{Table: "up", Column: "object_id"})
+	}
+	return stmt
+}
+
+// buildIntersectionThisPartQuery builds the object_id query for the
+// direct-assignment ("This") leg of an intersection. Besides the direct
+// subject_id tuple arm, it UNIONs in a membership arm for each userset
+// assignment ([group#member]) declared on the wrapping relation — without it a
+// schema like `audience: [group#member] and active` produces an empty audience
+// leg and the whole INTERSECT collapses to nothing, dropping objects that
+// check_permission allows.
+func buildIntersectionThisPartQuery(plan ListPlan, part IntersectionPart) SelectStmt {
+	alias := "t"
+	directArm := Tuples(plan.DatabaseSchema, alias).
+		ObjectType(plan.ObjectType).
+		Relations(plan.Relation).
+		SelectCol("object_id").
+		Where(
+			Eq{Left: Col{Table: alias, Column: "subject_type"}, Right: SubjectType},
+			In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
+			SubjectIDMatch(Col{Table: alias, Column: "subject_id"}, SubjectID, part.HasWildcard),
+		).
+		Distinct().
+		Build()
+
+	patterns := buildListUsersetPatternInputs(plan.Analysis)
+	if len(patterns) == 0 {
+		if part.ExcludedRelation != "" {
+			directArm.Where = And(directArm.Where, intersectionPartExclusion(plan, part.ExcludedRelation, Col{Table: alias, Column: "object_id"}))
+		}
+		return directArm
+	}
+
+	arms := make([]SelectStmt, 0, 1+len(patterns))
+	arms = append(arms, directArm)
+	for _, pattern := range patterns {
+		arms = append(arms, buildIntersectionThisUsersetArm(plan, pattern))
+	}
+
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "up", Column: "object_id"}},
+		FromExpr:    UnionSubquery{Alias: "up", Queries: arms},
+	}
+	if part.ExcludedRelation != "" {
+		stmt.Where = intersectionPartExclusion(plan, part.ExcludedRelation, Col{Table: "up", Column: "object_id"})
+	}
+	return stmt
+}
+
+// buildIntersectionThisUsersetArm builds one object_id arm resolving a
+// [group#member] grant on the wrapping relation to the querying subject via
+// group membership. Mirrors buildListObjectsSimpleUsersetBlock / its complex
+// variant, restricted to the wrapping relation's own grant tuples.
+func buildIntersectionThisUsersetArm(plan ListPlan, pattern listUsersetPatternInput) SelectStmt {
+	q := Tuples(plan.DatabaseSchema, "t").
+		ObjectType(plan.ObjectType).
+		Relations(plan.Relation).
+		Where(
+			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(pattern.SubjectType)},
+			HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
+			Eq{
+				Left:  UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}},
+				Right: Lit(pattern.SubjectRelation),
+			},
+			usersetMembership(plan, pattern),
+		).
+		SelectCol("object_id").
+		Distinct()
 	return q.Build()
 }
 

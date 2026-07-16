@@ -1,0 +1,55 @@
+# ListUsers with a userset filter must return the stored usersets (type#relation)
+# UNEXPANDED, matching OpenFGA's List Users contract. A filter targeting the
+# terminal `user` type instead expands the userset into its concrete members.
+# This exercises the userset user-filter path end to end against BOTH real
+# OpenFGA (schema-public) and the melange adapter (schema-melange).
+
+tests:
+  - name: listusers_userset_filter_stored_usersets
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type group
+            relations
+              define member: [user]
+
+          type doc
+            relations
+              define viewer: [user, group#member]
+        tuples:
+          - user: group:eng#member
+            relation: viewer
+            object: doc:1
+          - user: group:fga#member
+            relation: viewer
+            object: doc:1
+          - user: user:bob
+            relation: viewer
+            object: doc:1
+          - user: user:alice
+            relation: member
+            object: group:eng
+        listUsersAssertions:
+          # userset filter {type:group, relation:member} -> the stored usersets, NOT expanded
+          - request:
+              object: doc:1
+              relation: viewer
+              filters:
+                - group#member
+            expectation:
+              - group:eng#member
+              - group:fga#member
+          # terminal-type filter {type:user} -> expands the userset into concrete
+          # members (alice via group:eng#member) plus direct users (bob)
+          - request:
+              object: doc:1
+              relation: viewer
+              filters:
+                - user
+            expectation:
+              - user:bob
+              - user:alice

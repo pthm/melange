@@ -205,7 +205,7 @@ func TestComplexClosureSubjects_FallsBackWhenCyclic(t *testing.T) {
 	}
 }
 
-func TestComplexClosureSubjects_FallsBackWhenTargetHasWildcard(t *testing.T) {
+func TestComplexClosureSubjects_ComposesWhenTargetHasWildcard(t *testing.T) {
 	lookup := map[string]*RelationAnalysis{
 		"doc.reader": {
 			ObjectType:   "doc",
@@ -222,11 +222,10 @@ func TestComplexClosureSubjects_FallsBackWhenTargetHasWildcard(t *testing.T) {
 
 	sql := complexClosureSubjectsSQL(t, closureSubjectsPlan(lookup, RelationFeatures{}))
 
-	if strings.Contains(sql, "list_doc_reader_sub") {
-		t.Errorf("target HasWildcard must fall back to per-candidate check, got composition:\n%s", sql)
-	}
-	if !strings.Contains(sql, "check_permission_internal") {
-		t.Errorf("expected per-candidate check fallback, got:\n%s", sql)
+	// A wildcard-reaching target now composes: list_doc_reader_sub surfaces '*'
+	// and the wildcard-completion tail verifies it, so no per-candidate check.
+	if !strings.Contains(sql, "list_doc_reader_sub") {
+		t.Errorf("wildcard target must compose (tail verifies '*'), got:\n%s", sql)
 	}
 }
 

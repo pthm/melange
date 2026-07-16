@@ -51,11 +51,11 @@ type organization
 	err = m.MigrateWithTypesAndOptions(ctx, types, opts)
 	require.NoError(t, err)
 
+	// No _nw variants: neither Member nor Viewer reaches a wildcard, so the _nw
+	// body would be identical to the base and is not emitted (routed to base).
 	expectedFunctions := []string{
 		"check_organization_member",
-		"check_organization_member_nw",
 		"check_organization_viewer",
-		"check_organization_viewer_nw",
 		"list_organization_member_obj",
 		"list_organization_member_sub",
 		"list_organization_viewer_obj",

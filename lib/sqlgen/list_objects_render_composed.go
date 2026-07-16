@@ -16,20 +16,21 @@ func RenderListObjectsComposedFunction(plan ListPlan, blocks ComposedObjectsBloc
 	mainBlocks := renderTypedQueryBlocks(blocks.MainBlocks)
 	mainQuery := RenderUnionBlocks(mainBlocks)
 
-	// Wrap with pagination
-	selfPaginatedSQL := plan.wrapPagination(selfSQL, "object_id")
-	mainPaginatedSQL := plan.wrapPagination(mainQuery, "object_id")
+	// Fold the same-type userset self-candidate (OpenFGA's userset-defines-itself
+	// reflexivity: a userset subject "objectType:X#rel" satisfies rel on
+	// objectType:X) into the main UNION rather than an IF EXISTS gate that
+	// re-evaluated the identical predicate twice. Its WHERE requires
+	// position('#' in p_subject_id) > 0, so the type guard below (which only
+	// bails for plain subjects) never suppresses it. Mirrors the Recursive
+	// renderer, which already unions its self-candidate arm.
+	query := mainQuery
+	if selfSQL != "" {
+		query = joinUnionBlocksSQL([]string{mainQuery, selfSQL})
+	}
+	paginatedSQL := plan.wrapPagination(query, "object_id")
 
 	// Build the body using plpgsql DSL types
 	body := []Stmt{
-		Comment{Text: "Self-candidate check: when subject is a userset on the same object type"},
-		If{
-			Cond: Exists{Query: Raw(selfSQL)},
-			Then: []Stmt{
-				ReturnQuery{Query: selfPaginatedSQL},
-				Return{},
-			},
-		},
 		Comment{Text: "Type guard: only return results if subject type is allowed"},
 		Comment{Text: "Skip the guard for userset subjects since composed inner calls handle userset subjects"},
 		If{
@@ -39,7 +40,7 @@ func RenderListObjectsComposedFunction(plan ListPlan, blocks ComposedObjectsBloc
 			),
 			Then: []Stmt{Return{}},
 		},
-		ReturnQuery{Query: mainPaginatedSQL},
+		ReturnQuery{Query: paginatedSQL},
 	}
 
 	fn := PlpgsqlFunction{

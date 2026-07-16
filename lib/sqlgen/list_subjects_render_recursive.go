@@ -51,7 +51,8 @@ func buildUsersetFilterQuery(plan ListPlan, blocks SubjectsRecursiveBlockSet) st
 	if blocks.UsersetFilterSelfBlock != nil {
 		usersetFilterParts = append(usersetFilterParts, renderTypedQueryBlock(*blocks.UsersetFilterSelfBlock))
 	}
-	return plan.wrapPaginationWildcardFirst(RenderUnionBlocks(usersetFilterParts))
+	wrapped := plan.wrapPaginationWildcardFirst(RenderUnionBlocks(usersetFilterParts))
+	return hoistClosureCTE(wrapped, plan.Inline.ClosureRows)
 }
 
 func buildRegularPaginatedQuery(plan ListPlan, blocks SubjectsRecursiveBlockSet) string {
@@ -100,16 +101,21 @@ func buildSubjectsRecursiveRegularQuery(plan ListPlan, regularBlocks, ttuBlocks 
 	// computed once instead of inlined into both reference sites.
 	ctes = append(ctes, CTEDef{Name: "base_results", Query: Raw(baseBlocksSQL), Materialized: plan.MaterializeCTEs()})
 
-	// Build the has_wildcard CTE query
-	hasWildcardQuery := SelectStmt{
-		ColumnExprs: []Expr{
-			Alias{
-				Expr: Raw("EXISTS (SELECT 1 FROM base_results br WHERE br.subject_id = '*')"),
-				Name: "has_wildcard",
+	// Build the has_wildcard CTE query. Only the wildcard tail reads it, and it
+	// only emits the CROSS JOIN has_wildcard when plan.AllowWildcard — gate the
+	// CTE on the same flag so def and ref stay lockstep (an unreferenced ordinary
+	// CTE is dead codegen).
+	if plan.AllowWildcard {
+		hasWildcardQuery := SelectStmt{
+			ColumnExprs: []Expr{
+				Alias{
+					Expr: Raw("EXISTS (SELECT 1 FROM base_results br WHERE br.subject_id = '*')"),
+					Name: "has_wildcard",
+				},
 			},
-		},
+		}
+		ctes = append(ctes, CTEDef{Name: "has_wildcard", Query: hasWildcardQuery})
 	}
-	ctes = append(ctes, CTEDef{Name: "has_wildcard", Query: hasWildcardQuery})
 
 	// Build the final query with wildcard handling
 	wildcardTailQuery := buildSubjectsWildcardTailQuery(plan)
@@ -237,21 +243,13 @@ func buildSubjectPoolCTESQL(plan ListPlan) string {
 // pagination CTE by the caller.
 func buildSubjectsWildcardTailQuery(plan ListPlan) SQLer {
 	if plan.AllowWildcard {
-		// Build the wildcard handling query with permission check
 		return SelectStmt{
 			ColumnExprs: []Expr{Col{Table: "br", Column: "subject_id"}},
 			FromExpr:    TableAs("", "base_results", "br"),
 			Joins: []JoinClause{
 				{Type: "CROSS", Table: "has_wildcard", Alias: "hw"},
 			},
-			Where: Or(
-				NotExpr{Expr: Col{Table: "hw", Column: "has_wildcard"}},
-				Eq{Left: Col{Table: "br", Column: "subject_id"}, Right: Lit("*")},
-				And(
-					Ne{Left: Col{Table: "br", Column: "subject_id"}, Right: Lit("*")},
-					NoWildcardPermissionCheckCall(plan.DatabaseSchema, plan.Relation, plan.ObjectType, Col{Table: "br", Column: "subject_id"}, ObjectID),
-				),
-			),
+			Where: wildcardSubjectsTailWhere(plan.DatabaseSchema, plan.Relation, plan.ObjectType, plan.HasExclusion),
 		}
 	}
 	return SelectStmt{

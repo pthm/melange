@@ -457,7 +457,7 @@ func BenchTest(b *testing.B, tc TestCase) {
 
 					filters := make([]*openfgav1.UserTypeFilter, 0, len(op.assertion.Request.Filters))
 					for _, f := range op.assertion.Request.Filters {
-						filters = append(filters, &openfgav1.UserTypeFilter{Type: f})
+						filters = append(filters, parseUserTypeFilter(f))
 					}
 
 					b.ResetTimer()
@@ -505,9 +505,11 @@ func RunTest(t *testing.T, parent *Client, tc TestCase) {
 	t.Run(tc.Name, func(t *testing.T) {
 		t.Parallel()
 
-		// Create a new client with its own isolated database for this test,
-		// preserving the schema configuration from the parent client.
-		client := NewClientWithSchema(t, parent.DatabaseSchema())
+		// Create a new client with its own isolated store for this test,
+		// preserving the parent's configuration. In oracle mode this shares the
+		// parent's real OpenFGA server (store isolation via CreateStore); in
+		// melange mode it gets a fresh database for the schema.
+		client := parent.forSubtest(t)
 		ctx := context.Background()
 
 		resp, err := client.CreateStore(ctx, &openfgav1.CreateStoreRequest{Name: tc.Name})
@@ -587,6 +589,9 @@ func RunTest(t *testing.T, parent *Client, tc TestCase) {
 
 				// Run bulk check assertions
 				t.Run("bulk_check", func(t *testing.T) {
+					if client.openfgaBackend != nil {
+						t.Skip("check_permission_bulk is a melange-only API; the OpenFGA oracle has no equivalent")
+					}
 					bulkAssertions := bulkEligibleAssertions(stage.CheckAssertions)
 					if len(bulkAssertions) == 0 {
 						t.Skip("no assertions eligible for bulk check")
@@ -652,7 +657,7 @@ func RunTest(t *testing.T, parent *Client, tc TestCase) {
 						// Convert filters to UserTypeFilter
 						filters := make([]*openfgav1.UserTypeFilter, 0, len(assertion.Request.Filters))
 						for _, f := range assertion.Request.Filters {
-							filters = append(filters, &openfgav1.UserTypeFilter{Type: f})
+							filters = append(filters, parseUserTypeFilter(f))
 						}
 
 						resp, err := client.ListUsers(ctx, &openfgav1.ListUsersRequest{
@@ -672,8 +677,8 @@ func RunTest(t *testing.T, parent *Client, tc TestCase) {
 							// Extract user strings from response
 							var got []string
 							for _, u := range resp.GetUsers() {
-								if obj := u.GetObject(); obj != nil {
-									got = append(got, obj.GetType()+":"+obj.GetId())
+								if s := userString(u); s != "" {
+									got = append(got, s)
 								}
 							}
 

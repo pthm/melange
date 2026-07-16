@@ -48,6 +48,13 @@ type GeneratedSQL struct {
 	// These skip wildcard matching for performance-critical paths.
 	NoWildcardFunctions []string
 
+	// NoWildcardIndex maps object_type -> relation -> whether a distinct _nw
+	// variant was emitted (true) or the base function is reused (false). It is the
+	// buildNoWildcardIndex result computed once during generation, exposed so
+	// callers (e.g. CollectNamedFunctions) need not recompute the per-relation
+	// wildcard-reachability walk.
+	NoWildcardIndex map[string]map[string]bool
+
 	// Dispatcher contains the check_permission dispatcher function
 	// that routes requests to specialized functions based on object type and relation.
 	Dispatcher string
@@ -143,6 +150,13 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 	var result GeneratedSQL
 
 	complexityByRelation := buildClosureComplexityIndex(analyses)
+	// needsNW maps type->relation->whether a distinct _nw check function is
+	// emitted. A _nw body is byte-identical to its base unless the relation can
+	// surface a wildcard grant to strip, so we emit _nw only for those and route
+	// every other _nw reference (dispatcher, complex-closure calls, index recs)
+	// to the base function.
+	needsNW := buildNoWildcardIndex(analyses)
+	result.NoWildcardIndex = needsNW
 	// explainEligible is the schema-wide fixed point over local feature
 	// support + transitive ComplexClosureRelations dependencies. The
 	// dispatcher and per-relation generation loop both gate against the
@@ -163,16 +177,18 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 		if !a.Capabilities.CheckAllowed {
 			continue
 		}
-		fn, err := generateCheckFunction(a, inline, databaseSchema, false, complexityByRelation)
+		fn, err := generateCheckFunction(a, inline, databaseSchema, false, complexityByRelation, needsNW)
 		if err != nil {
 			return GeneratedSQL{}, fmt.Errorf("generating check function: %w", err)
 		}
 		result.Functions = append(result.Functions, fn)
-		noWildcardFn, err := generateCheckFunction(a, inline, databaseSchema, true, complexityByRelation)
-		if err != nil {
-			return GeneratedSQL{}, fmt.Errorf("generating no-wildcard check function: %w", err)
+		if needsNW[a.ObjectType][a.Relation] {
+			noWildcardFn, err := generateCheckFunction(a, inline, databaseSchema, true, complexityByRelation, needsNW)
+			if err != nil {
+				return GeneratedSQL{}, fmt.Errorf("generating no-wildcard check function: %w", err)
+			}
+			result.NoWildcardFunctions = append(result.NoWildcardFunctions, noWildcardFn)
 		}
-		result.NoWildcardFunctions = append(result.NoWildcardFunctions, noWildcardFn)
 		if expandFn, ok := generateExpandFunction(a, databaseSchema); ok {
 			result.ExpandFunctions = append(result.ExpandFunctions, expandFn)
 			if expandEligible[a.ObjectType] == nil {
@@ -193,11 +209,11 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 
 	// Generate dispatchers
 	var err error
-	result.Dispatcher, err = generateDispatcher(analyses, databaseSchema, false)
+	result.Dispatcher, err = generateDispatcher(analyses, databaseSchema, false, nil)
 	if err != nil {
 		return GeneratedSQL{}, fmt.Errorf("generating dispatcher: %w", err)
 	}
-	result.DispatcherNoWildcard, err = generateDispatcher(analyses, databaseSchema, true)
+	result.DispatcherNoWildcard, err = generateDispatcher(analyses, databaseSchema, true, needsNW)
 	if err != nil {
 		return GeneratedSQL{}, fmt.Errorf("generating no-wildcard dispatcher: %w", err)
 	}
@@ -215,6 +231,50 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 	result.IndexRecommendations = RecommendIndexes(analyses)
 
 	return result, nil
+}
+
+// emitsNoWildcard reports whether relation (type.relation) needs a distinct
+// _nw check function. A _nw body differs from its base ONLY when the relation
+// can surface a wildcard ('*') grant to strip — i.e. the relation itself
+// HasWildcard or transitively reaches one via TTU/closure/userset edges (the
+// same condition reachesWildcard tests). For every other relation the _nw body
+// is byte-identical to the base, so we skip emitting it and route the _nw
+// dispatcher / complex-closure call sites to the base function instead.
+func emitsNoWildcard(lookup map[string]*RelationAnalysis, a RelationAnalysis) bool {
+	return a.Features.HasWildcard || reachesWildcard(lookup, a.ObjectType, a.Relation)
+}
+
+// buildNoWildcardIndex maps object_type -> relation -> whether a _nw variant is
+// emitted. Absent/false entries mean the _nw name resolves to the base function.
+func buildNoWildcardIndex(analyses []RelationAnalysis) map[string]map[string]bool {
+	lookup := buildAnalysisLookup(analyses)
+	byType := make(map[string]map[string]bool, len(analyses))
+	for _, a := range analyses {
+		if !a.Capabilities.CheckAllowed {
+			continue
+		}
+		if !emitsNoWildcard(lookup, a) {
+			continue
+		}
+		m, ok := byType[a.ObjectType]
+		if !ok {
+			m = make(map[string]bool)
+			byType[a.ObjectType] = m
+		}
+		m[a.Relation] = true
+	}
+	return byType
+}
+
+// functionNameForNoWildcardRef returns the check function name to call for the
+// _nw variant of (objectType, relation): the _nw function when one is emitted,
+// otherwise the base function (whose body is identical). needsNW may be nil, in
+// which case the _nw name is always used (assume emitted).
+func functionNameForNoWildcardRef(needsNW map[string]map[string]bool, objectType, relation string) string {
+	if needsNW == nil || needsNW[objectType][relation] {
+		return functionNameNoWildcard(objectType, relation)
+	}
+	return functionName(objectType, relation)
 }
 
 // functionName returns the name for a specialized check function.
@@ -296,6 +356,12 @@ func CollectNamedFunctions(
 	listObjIdx, listSubjIdx := 0, 0
 	explainEligible := generatedSQL.ExplainEligible
 	expandEligible := generatedSQL.ExpandEligible
+	// Reuse the index computed during generation; fall back for callers that
+	// construct GeneratedSQL without it.
+	needsNW := generatedSQL.NoWildcardIndex
+	if needsNW == nil {
+		needsNW = buildNoWildcardIndex(analyses)
+	}
 
 	for _, a := range analyses {
 		if a.Capabilities.CheckAllowed {
@@ -304,11 +370,13 @@ func CollectNamedFunctions(
 				SQL:  generatedSQL.Functions[checkIdx],
 			})
 			checkIdx++
-			result = append(result, NamedFunction{
-				Name: functionNameNoWildcard(a.ObjectType, a.Relation),
-				SQL:  generatedSQL.NoWildcardFunctions[noWildcardIdx],
-			})
-			noWildcardIdx++
+			if needsNW[a.ObjectType][a.Relation] {
+				result = append(result, NamedFunction{
+					Name: functionNameNoWildcard(a.ObjectType, a.Relation),
+					SQL:  generatedSQL.NoWildcardFunctions[noWildcardIdx],
+				})
+				noWildcardIdx++
+			}
 			if expandEligible[a.ObjectType][a.Relation] {
 				result = append(result, NamedFunction{
 					Name: expandFunctionName(a.ObjectType, a.Relation),
@@ -377,13 +445,14 @@ func CollectFunctionNames(analyses []RelationAnalysis) []string {
 	var names []string
 	explainEligible := ComputeExplainEligibility(analyses)
 	expandEligible := ComputeExpandEligibility(analyses)
+	needsNW := buildNoWildcardIndex(analyses)
 
 	for _, a := range analyses {
 		if a.Capabilities.CheckAllowed {
-			names = append(names,
-				functionName(a.ObjectType, a.Relation),
-				functionNameNoWildcard(a.ObjectType, a.Relation),
-			)
+			names = append(names, functionName(a.ObjectType, a.Relation))
+			if needsNW[a.ObjectType][a.Relation] {
+				names = append(names, functionNameNoWildcard(a.ObjectType, a.Relation))
+			}
 			if expandEligible[a.ObjectType][a.Relation] {
 				names = append(names, expandFunctionName(a.ObjectType, a.Relation))
 			}

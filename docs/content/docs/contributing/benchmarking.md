@@ -67,68 +67,62 @@ BenchmarkOpenFGA_DirectAssignment/this_and_union-12    1   11305875 ns/op   4.00
 
 ## Scale Benchmarks
 
-Test performance at different tuple volumes:
+The kitchen-sink benchmark measures performance across dataset sizes using a
+single model that exercises every generator code path (all seven relation
+features and all seven list strategies). It is the source for the numbers in the
+[Performance Reference](../../reference/performance/).
 
 ```bash
-# Run benchmarks at all scales (1K, 10K, 100K, 1M)
-just bench
+# Run at all default scales (1K, 10K, 100K)
+just bench-kitchensink
 
-# Run at specific scale
-just bench SCALE=1K
-just bench SCALE=10K
-just bench SCALE=100K
-just bench SCALE=1M
+# Run at a specific scale
+just bench-kitchensink 1K
+just bench-kitchensink 10K
+just bench-kitchensink 100K
 
-# Quick scale check
-just bench-quick
+# The 1M scale (~840K tuples) is opt-in because setup is slow:
+MELANGE_BENCH_LARGE_SCALE=1 just bench-kitchensink 1M
 ```
 
-### Test Schema
+For stable numbers, run several iterations and average with `benchstat`:
 
-Scale benchmarks use a GitHub-like model with organizations, repositories, and pull requests. See [Performance Reference](../../reference/performance/#test-schema) for the full schema.
+```bash
+cd test && go test -run='^$' -bench='BenchmarkKitchenSink' -benchmem -count=6 . > bench.txt
+benchstat bench.txt
+```
 
 ### Test Data Configuration
 
-| Scale    | Users  | Orgs | Repos/Org | Members/Org | PRs/Repo | Total Repos | Total PRs | ~Tuples   |
-| -------- | ------ | ---- | --------- | ----------- | -------- | ----------- | --------- | --------- |
-| **1K**   | 100    | 5    | 10        | 20          | 10       | 50          | 500       | 1,150     |
-| **10K**  | 500    | 10   | 50        | 50          | 20       | 500         | 10,000    | 21,000    |
-| **100K** | 2,000  | 20   | 100       | 100         | 50       | 2,000       | 100,000   | 204,000   |
-| **1M**   | 10,000 | 50   | 200       | 200         | 100      | 10,000      | 1,000,000 | 2,020,000 |
+Each scale grows users, groups, orgs, folder depth, and documents together
+(`test/testutil/kitchensink_fixtures.go`). Scale names are round-number labels;
+actual tuple counts are shown.
 
-### Expected Performance
+| Scale    | Users  | Orgs | Groups | Group chain | Folder depth | ~Tuples   |
+| -------- | ------ | ---- | ------ | ----------- | ------------ | --------- |
+| **1K**   | 200    | 5    | 40     | 4           | 4            | 3,824     |
+| **10K**  | 1,000  | 15   | 120    | 5           | 5            | 25,386    |
+| **100K** | 5,000  | 40   | 400    | 6           | 6            | 155,692   |
+| **1M**   | 25,000 | 100  | 2,000  | 6           | 7            | 840,877   |
 
-**Check Operations** (specialized SQL code generation):
+### Benchmark Surfaces
 
-| Operation            | Description                                  | 1K      | 10K     | 100K    | 1M      | Scaling |
-| -------------------- | -------------------------------------------- | ------- | ------- | ------- | ------- | ------- |
-| Direct Membership    | `user` → `can_read` → `organization`         | 357 µs  | 329 µs  | 296 µs  | 304 µs  | O(1)    |
-| Inherited Permission | `user` → `can_read` → `repository` (via org) | 412 µs  | 410 µs  | 420 µs  | 418 µs  | O(1)    |
-| Exclusion Pattern    | `user` → `can_review` → `pull_request`       | 515 µs  | 520 µs  | 533 µs  | 505 µs  | O(1)    |
-| Denied Permission    | Non-member checking org access               | 275 µs  | 277 µs  | 291 µs  | 281 µs  | O(1)    |
+The benchmark measures each generated surface across a matrix of query subject
+types and relation shapes:
 
-**ListObjects Operations** (performance varies by result count):
+- `BenchmarkKitchenSinkCheck`: `check_permission` for plain-user, userset-typed
+  (`group#member`), service-account, and wildcard subjects.
+- `BenchmarkKitchenSinkListObjects`: `list_accessible_objects` for direct,
+  recursive-TTU, userset, and intersection relations, plus non-plain subjects.
+- `BenchmarkKitchenSinkListSubjects`: `list_accessible_subjects` for recursive
+  `viewer` and exclusion `can_view`.
+- `BenchmarkKitchenSinkExpand`, `Explain`, `Bulk`: the `expand_*`, `explain_*`,
+  and `check_permission_bulk` surfaces.
 
-| Operation             | Description                          | 1K      | 10K     | 100K    | 1M      | Scaling    |
-| --------------------- | ------------------------------------ | ------- | ------- | ------- | ------- | ---------- |
-| List Accessible Repos | All repos user can read (via org)    | 3.9 ms  | 34.1 ms | 133.9 ms| 672 ms  | O(results) |
-| List Accessible Orgs  | All orgs user is member of           | 299 µs  | 300 µs  | 316 µs  | 278 µs  | O(1)       |
-| List Accessible PRs   | All PRs user can read (via repo→org) | 4.1 ms  | 36.8 ms | 153.1 ms| 843 ms  | O(results) |
-
-**ListSubjects Operations** (performance varies by relation complexity):
-
-| Operation         | Description                             | 1K      | 10K     | 100K    | 1M      | Scaling  |
-| ----------------- | --------------------------------------- | ------- | ------- | ------- | ------- | -------- |
-| List Org Members  | All users who can read an org           | 288 µs  | 335 µs  | 399 µs  | 480 µs  | O(log n) |
-| List Repo Readers | All users who can read a repo (via org) | 413 µs  | 346 µs  | 346 µs  | 339 µs  | O(1)     |
-| List Repo Writers | All users who can write to a repo       | 269 µs  | 333 µs  | 266 µs  | 259 µs  | O(1)     |
-
-**Parallel Check Operations**:
-
-| Operation                | Time per Op | Speedup vs Sequential |
-| ------------------------ | ----------- | --------------------- |
-| Parallel Direct Check    | 89 µs       | ~3.7x                 |
-| Parallel Inherited Check | 143 µs      | ~2.9x                 |
+See the [Performance Reference](../../reference/performance/) for averaged results
+and per-surface scaling. `check`, `expand`, `explain`, and bulk are O(1).
+`ListObjects` scales with the result set. `ListSubjects` scales with the subject
+population.
 
 ### Caching Benchmark
 

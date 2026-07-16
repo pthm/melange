@@ -90,22 +90,29 @@ func renderSelfRefUsersetRegularQuery(plan ListPlan, blocks SelfRefUsersetSubjec
 	usersetObjectsCTE := buildUsersetObjectsCTE(blocks)
 	baseResultsSQL := RenderUnionBlocks(renderTypedQueryBlocks(blocks.RegularBlocks))
 
-	hasWildcardQuery := SelectStmt{
-		ColumnExprs: []Expr{
-			Alias{
-				Expr: Raw("EXISTS (SELECT 1 FROM base_results br WHERE br.subject_id = '*')"),
-				Name: "has_wildcard",
-			},
-		},
+	ctes := []CTEDef{
+		{Name: "userset_objects", Columns: []string{"userset_object_id", "depth"}, Query: Raw(usersetObjectsCTE)},
+		// subjects is referenced by the has_wildcard EXISTS (when emitted) and
+		// the outer tail SELECT, so materialize to compute it once. Named "subjects"
+		// (not "base_results") to avoid shadowing the outer pagination-wrapper CTE.
+		{Name: "subjects", Query: Raw(baseResultsSQL), Materialized: plan.MaterializeCTEs()},
 	}
 
-	// base_results is referenced twice (has_wildcard EXISTS + outer tail SELECT),
-	// so materialize to compute it once instead of inlining at both sites.
-	cteQuery := MultiCTE(true, []CTEDef{
-		{Name: "userset_objects", Columns: []string{"userset_object_id", "depth"}, Query: Raw(usersetObjectsCTE)},
-		{Name: "base_results", Query: Raw(baseResultsSQL), Materialized: plan.MaterializeCTEs()},
-		{Name: "has_wildcard", Query: hasWildcardQuery},
-	}, buildUsersetWildcardTailQuery(plan.Analysis, plan.DatabaseSchema))
+	// The has_wildcard CTE is read only by buildUsersetWildcardTailQuery's CROSS
+	// JOIN, which it emits only when Features.HasWildcard — gate the CTE on the
+	// same flag so def and ref stay lockstep (an unreferenced CTE is dead codegen).
+	if plan.Analysis.Features.HasWildcard {
+		ctes = append(ctes, CTEDef{Name: "has_wildcard", Query: SelectStmt{
+			ColumnExprs: []Expr{
+				Alias{
+					Expr: Raw("EXISTS (SELECT 1 FROM subjects br WHERE br.subject_id = '*')"),
+					Name: "has_wildcard",
+				},
+			},
+		}})
+	}
+
+	cteQuery := MultiCTE(true, ctes, buildUsersetWildcardTailQuery(plan.Analysis, plan.DatabaseSchema))
 
 	return cteQuery.SQL()
 }
