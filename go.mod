@@ -310,3 +310,10 @@ tool (
 	github.com/golangci/golangci-lint/v2/cmd/golangci-lint
 	mvdan.cc/gofumpt
 )
+
+// go-grpc-middleware@v1.4.0 (indirect) pins the pre-split genproto monolith,
+// whose googleapis/{api,rpc,annotations} packages collide with the split
+// genproto/googleapis/* modules when the release builds cmd/melange in
+// workspace mode (ambiguous import). Pin to a post-split monolith that dropped
+// those packages.
+replace google.golang.org/genproto v0.0.0-20200423170343-7949de9c1215 => google.golang.org/genproto v0.0.0-20231106174013-bbf56f31fb17
