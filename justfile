@@ -160,7 +160,6 @@ release VERSION="" ALLOW_DIRTY="":
 
     # Tag root LOCALLY (don't push yet - this is the critical one)
     root_tag="$version_from_file"
-    cmd_tag="cmd/melange/$version_from_file"
     if git rev-parse -q --verify "refs/tags/$root_tag" >/dev/null 2>&1; then
         echo "❌ Tag already exists: $root_tag"
         echo ""
@@ -258,45 +257,9 @@ release VERSION="" ALLOW_DIRTY="":
 
     git push origin "$original_branch"
 
-    echo ""
-    echo "════════════════════════════════════════════════════════════════"
-    echo "Publishing cmd/melange sub-module"
-    echo "════════════════════════════════════════════════════════════════"
-
-    # Wait for Go proxy to index the root module
-    echo "Waiting for Go proxy to index root module..."
-    for i in $(seq 1 12); do
-        if GOPROXY=https://proxy.golang.org go list -m "github.com/pthm/melange@$version_from_file" >/dev/null 2>&1; then
-            echo "✓ Root module $version_from_file available on Go proxy"
-            break
-        fi
-        if [ "$i" -eq 12 ]; then
-            echo "⚠️  Go proxy hasn't indexed $version_from_file yet"
-            echo "You can manually release cmd/melange later:"
-            echo "  go mod edit -require=github.com/pthm/melange@$version_from_file cmd/melange/go.mod"
-            echo "  GOPROXY=direct go mod tidy -C cmd/melange"
-            echo "  git add cmd/melange/go.mod cmd/melange/go.sum"
-            echo "  git commit -m 'chore(release): cmd/melange $version_from_file'"
-            echo "  git tag -a $cmd_tag -m $cmd_tag && git push origin $cmd_tag"
-            echo "  git push origin $original_branch"
-            break
-        fi
-        sleep 5
-    done
-
-    # Update cmd/melange to require the published root module version
-    if git rev-parse -q --verify "refs/tags/$cmd_tag" >/dev/null 2>&1; then
-        echo "❌ Tag already exists: $cmd_tag (skipping cmd/melange release)"
-    elif GOPROXY=https://proxy.golang.org go list -m "github.com/pthm/melange@$version_from_file" >/dev/null 2>&1; then
-        go mod edit -require="github.com/pthm/melange@$version_from_file" cmd/melange/go.mod
-        GOPROXY=direct GONOSUMDB=github.com/pthm/melange GOWORK=off go mod tidy -C cmd/melange
-        git add cmd/melange/go.mod cmd/melange/go.sum
-        git commit -m "chore(release): cmd/melange $version_from_file"
-        git tag -a "$cmd_tag" -m "$cmd_tag"
-        git push origin "$cmd_tag"
-        git push origin "$original_branch"
-        echo "✓ Published cmd/melange $version_from_file"
-    fi
+    # No cmd/melange sub-module stage: the CLI ships from the root module tagged
+    # above. cmd/melange is a retired error-shim, published once as a terminal
+    # manual tag — see specs/module-layout-proposal.md.
 
     echo ""
     echo "════════════════════════════════════════════════════════════════"
