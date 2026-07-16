@@ -131,7 +131,16 @@ jobs:
       # builds cmd/melange, which lives in a separate module. Synthesize a
       # workspace so cross-module builds resolve.
       - name: Setup Go workspace
-        run: go work init . ./cmd/melange ./docs ./melange
+        run: |
+          go work init . ./cmd/melange ./docs ./melange
+          # Compatibility shim for the v0.8.6 tag, which predates the go.mod
+          # genproto replace (commit a5c96d32). go-grpc-middleware@v1.4.0 pins the
+          # pre-split genproto monolith, whose googleapis/{api,rpc,annotations}
+          # collide with the split genproto/googleapis/* modules when goreleaser
+          # builds cmd/melange in workspace mode. A go.work replace (gitignored)
+          # fixes the release build without mutating the immutable tag. Drop this
+          # once every release tag carries the fix in its own go.mod (post-0.8.6).
+          go work edit -replace=google.golang.org/genproto@v0.0.0-20200423170343-7949de9c1215=google.golang.org/genproto@v0.0.0-20231106174013-bbf56f31fb17
 
       - uses: docker/setup-buildx-action@v4
 
