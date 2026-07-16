@@ -31,7 +31,7 @@ import (
 	"github.com/openfga/openfga/pkg/storage/memory"
 	"google.golang.org/grpc"
 
-	"github.com/pthm/melange/lib/sqlgen/sqldsl"
+	"github.com/pthm/melange/internal/sqlgen/sqldsl"
 	"github.com/pthm/melange/melange"
 	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/pkg/parser"

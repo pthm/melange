@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pthm/melange/lib/sqlgen/sqldsl"
+	"github.com/pthm/melange/internal/sqlgen/sqldsl"
 	"github.com/pthm/melange/melange"
 	"github.com/pthm/melange/test/testutil"
 )

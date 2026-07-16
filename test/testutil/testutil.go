@@ -23,7 +23,7 @@ import (
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/pthm/melange/lib/sqlgen/sqldsl"
+	"github.com/pthm/melange/internal/sqlgen/sqldsl"
 	"github.com/pthm/melange/pkg/clientgen"
 	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/pkg/parser"

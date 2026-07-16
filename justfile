@@ -573,7 +573,7 @@ test-kitchensink:
 # Kitchen-sink schema: dump the full rendered SQL for manual inspection
 [group('Test')]
 dump-kitchensink-sql:
-    go run ./cmd/melange generate migration --schema {{TEST}}/testutil/testdata/kitchen_sink_schema.fga --up
+    go run . generate migration --schema {{TEST}}/testutil/testdata/kitchen_sink_schema.fga --up
 
 # Run doctor integration tests
 [group('Test')]
@@ -645,12 +645,12 @@ build:
     version=$(cat VERSION 2>/dev/null || echo "dev")
     commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
     date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    go build -ldflags "-X github.com/pthm/melange/lib/version.Version=$version -X github.com/pthm/melange/lib/version.Commit=$commit -X github.com/pthm/melange/lib/version.Date=$date" -o bin/melange ./cmd/melange
+    go build -ldflags "-X github.com/pthm/melange/internal/version.Version=$version -X github.com/pthm/melange/internal/version.Commit=$commit -X github.com/pthm/melange/internal/version.Date=$date" -o bin/melange .
 
 # Build the CLI without version info (faster for development)
 [group('Build')]
 build-dev:
-    go build -o bin/melange ./cmd/melange
+    go build -o bin/melange .
 
 # Build and sign the binary (macOS only)
 [group('Build')]
@@ -666,7 +666,7 @@ build-notarized: _check-1password build
 [group('Release')]
 [doc('Generate THIRD_PARTY_NOTICES from go-licenses data')]
 licenses:
-    go generate ./lib/licenses
+    go generate ./internal/licenses
 
 # Install the CLI locally
 [group('Build')]
@@ -676,7 +676,7 @@ install:
     version=$(cat VERSION 2>/dev/null || echo "dev")
     commit=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
     date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    go install -ldflags "-X github.com/pthm/melange/lib/version.Version=$version -X github.com/pthm/melange/lib/version.Commit=$commit -X github.com/pthm/melange/lib/version.Date=$date" ./cmd/melange
+    go install -ldflags "-X github.com/pthm/melange/internal/version.Version=$version -X github.com/pthm/melange/internal/version.Commit=$commit -X github.com/pthm/melange/internal/version.Date=$date" .
 
 # =============================================================================
 # Linting and Formatting

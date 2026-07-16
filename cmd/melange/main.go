@@ -1,35 +1,27 @@
-// Package main provides the melange CLI for managing authorization schemas.
+// Command melange (deprecated install path) prints a migration notice.
 //
-// The CLI supports:
-//   - validate: Check .fga schema syntax using the OpenFGA parser
-//   - generate client: Produce type-safe client code for Go or TypeScript
-//   - migrate: Load schema into PostgreSQL (creates tables and functions)
-//   - status: Check current migration state
-//   - doctor: Run health checks on authorization infrastructure
-//   - version: Print version information
-//   - license: Print license and third-party notices
-//   - config show: Display effective configuration
+// The melange CLI now lives in the root module and installs from there:
 //
-// Configuration can be provided via:
-//   - Command-line flags (highest priority)
-//   - Environment variables with MELANGE_ prefix
-//   - melange.yaml config file (auto-discovered)
-//   - Built-in defaults (lowest priority)
+//	go install github.com/pthm/melange@latest
 //
-// This tool is typically run during development and deployment to keep
-// the database schema synchronized with .fga files.
-//
-// Usage:
-//
-//	melange [flags] <command>
-//
-// Commands that require database access (migrate, status) need -db or MELANGE_DATABASE_URL.
-// Commands that only work with files (validate, generate) do not need database access.
+// This shim is the terminal version of the github.com/pthm/melange/cmd/melange
+// module. It carries no build dependencies and exists only so that the old
+// install path fails loudly with guidance instead of silently installing a
+// frozen binary. See specs/module-layout-proposal.md.
 package main
 
-func main() {
-	Execute()
+import (
+	"fmt"
+	"os"
+)
 
-	// Show update notice after command execution (works even when commands fail)
-	ShowUpdateNoticeIfAvailable()
+func main() {
+	fmt.Fprintln(os.Stderr, `melange: this install path is deprecated.
+
+The melange CLI now installs from the module root:
+
+    go install github.com/pthm/melange@latest
+
+(or use Homebrew: brew install pthm/tap/melange)`)
+	os.Exit(1)
 }

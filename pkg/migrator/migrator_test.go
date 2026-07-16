@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/pthm/melange/lib/version"
+	"github.com/pthm/melange/internal/version"
 )
 
 // withVersion temporarily overrides the build version so tests can exercise

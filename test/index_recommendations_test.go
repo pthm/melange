@@ -8,8 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/pthm/melange/lib/sqlgen"
-	"github.com/pthm/melange/lib/sqlgen/analysis"
+	"github.com/pthm/melange/internal/sqlgen"
+	"github.com/pthm/melange/internal/sqlgen/analysis"
 	"github.com/pthm/melange/pkg/compiler"
 	"github.com/pthm/melange/pkg/parser"
 	"github.com/pthm/melange/pkg/schema"

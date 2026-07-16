@@ -1,0 +1,1028 @@
+// Package doctor provides health checks for melange authorization infrastructure.
+//
+// The doctor command validates that the authorization system is properly configured
+// by checking schema files, database state, generated functions, and data health.
+//
+// Example usage:
+//
+//	d := doctor.New(db, "schemas")
+//	report, err := d.Run(ctx)
+//	if err != nil {
+//		log.Fatal(err)
+//	}
+//	report.Print(os.Stdout, true) // verbose=true
+package doctor
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"io"
+	"os"
+	"sort"
+	"strings"
+
+	"github.com/pthm/melange/internal/sqlgen"
+	"github.com/pthm/melange/internal/sqlgen/sqldsl"
+	"github.com/pthm/melange/pkg/migrator"
+	"github.com/pthm/melange/pkg/parser"
+	"github.com/pthm/melange/pkg/schema"
+)
+
+// Status represents the result of a health check.
+type Status int
+
+const (
+	// StatusPass indicates the check passed.
+	StatusPass Status = iota
+	// StatusWarn indicates a non-critical issue.
+	StatusWarn
+	// StatusFail indicates a critical issue that will cause failures.
+	StatusFail
+)
+
+// Symbol returns a status indicator symbol for terminal output.
+func (s Status) Symbol() string {
+	switch s {
+	case StatusPass:
+		return "✓"
+	case StatusWarn:
+		return "⚠"
+	case StatusFail:
+		return "✗"
+	default:
+		return "?"
+	}
+}
+
+// CheckResult represents the outcome of a single health check.
+type CheckResult struct {
+	// Category groups related checks (e.g., "schema", "functions", "tuples").
+	Category string
+
+	// Name is a short identifier for the check.
+	Name string
+
+	// Status is the check outcome.
+	Status Status
+
+	// Message is a human-readable description of the result.
+	Message string
+
+	// Details provides additional information for verbose output.
+	Details string
+
+	// FixHint suggests how to resolve issues.
+	FixHint string
+}
+
+// Report contains all health check results.
+type Report struct {
+	Checks []CheckResult
+
+	// Summary counts.
+	Passed   int
+	Warnings int
+	Errors   int
+}
+
+// AddCheck adds a check result and updates summary counts.
+func (r *Report) AddCheck(check CheckResult) {
+	r.Checks = append(r.Checks, check)
+	switch check.Status {
+	case StatusPass:
+		r.Passed++
+	case StatusWarn:
+		r.Warnings++
+	case StatusFail:
+		r.Errors++
+	}
+}
+
+// Print writes the report to the given writer.
+func (r *Report) Print(w io.Writer, verbose bool) {
+	// Group checks by category
+	categories := make(map[string][]CheckResult)
+	var categoryOrder []string
+	for _, check := range r.Checks {
+		if _, exists := categories[check.Category]; !exists {
+			categoryOrder = append(categoryOrder, check.Category)
+		}
+		categories[check.Category] = append(categories[check.Category], check)
+	}
+
+	// Print each category
+	for _, cat := range categoryOrder {
+		_, _ = fmt.Fprintf(w, "\n%s\n", cat)
+		for _, check := range categories[cat] {
+			_, _ = fmt.Fprintf(w, "  %s %s\n", check.Status.Symbol(), check.Message)
+			if verbose && check.Details != "" {
+				// Indent details
+				for _, line := range strings.Split(check.Details, "\n") {
+					_, _ = fmt.Fprintf(w, "      %s\n", line)
+				}
+			}
+			if check.Status != StatusPass && check.FixHint != "" {
+				_, _ = fmt.Fprintf(w, "      Fix: %s\n", check.FixHint)
+			}
+		}
+	}
+
+	// Print summary
+	_, _ = fmt.Fprintf(w, "\nSummary: %d passed, %d warnings, %d errors\n",
+		r.Passed, r.Warnings, r.Errors)
+}
+
+// HasErrors returns true if any check failed.
+func (r *Report) HasErrors() bool {
+	return r.Errors > 0
+}
+
+// Options configures doctor behavior.
+type Options struct {
+	SkipPerformance bool
+}
+
+// Doctor performs health checks on the melange authorization infrastructure.
+type Doctor struct {
+	db             *sql.DB
+	databaseSchema string
+	schemaPath     string
+	opts           Options
+
+	// Cached data from checks (populated during Run)
+	parsedTypes   []schema.TypeDefinition
+	schemaContent string
+	lastMigration *migrator.MigrationRecord
+	expectedFuncs []string
+	currentFuncs  []string
+	tuplesInfo    *TuplesInfo
+	viewDef       *ViewDefinition
+
+	// analyses is the parsed schema run through sqlgen's analysis pipeline.
+	// Lazily computed on first call to getAnalyses(); shared by checks that
+	// need RelationAnalysis (generated-functions check, index recommendations).
+	analyses []sqlgen.RelationAnalysis
+}
+
+// getAnalyses returns the cached schema analyses or computes them on demand.
+// Returns nil if the schema couldn't be parsed (checkSchemaFile already
+// reported that as a separate error).
+func (d *Doctor) getAnalyses() []sqlgen.RelationAnalysis {
+	if d.analyses != nil {
+		return d.analyses
+	}
+	if d.parsedTypes == nil {
+		return nil
+	}
+	closureRows := schema.ComputeRelationClosure(d.parsedTypes)
+	analyses := sqlgen.AnalyzeRelations(d.parsedTypes, closureRows)
+	analyses = sqlgen.ComputeCanGenerate(analyses)
+	d.analyses = analyses
+	return analyses
+}
+
+// TuplesInfo contains information about the melange_tuples relation.
+type TuplesInfo struct {
+	Exists     bool
+	RelKind    string // 'r' = table, 'v' = view, 'm' = materialized view
+	RelKindStr string // human-readable
+	Columns    []string
+	RowCount   int64 // -1 if unknown/expensive to compute
+}
+
+// New creates a new Doctor instance.
+func New(db *sql.DB, schemaPath string, opts ...Options) *Doctor {
+	var o Options
+	if len(opts) > 0 {
+		o = opts[0]
+	}
+	return &Doctor{
+		db:         db,
+		schemaPath: schemaPath,
+		opts:       o,
+	}
+}
+
+// SetDatabaseSchema sets the PostgreSQL schema for melange objects.
+func (d *Doctor) SetDatabaseSchema(databaseSchema string) {
+	d.databaseSchema = databaseSchema
+}
+
+// DatabaseSchema returns the database schema.
+func (d *Doctor) DatabaseSchema() string {
+	return d.databaseSchema
+}
+
+// Run executes all health checks and returns a report.
+func (d *Doctor) Run(ctx context.Context) (*Report, error) {
+	report := &Report{}
+
+	// Run checks in order, building up cached data
+	d.checkSchemaFile(report)
+	if err := d.checkMigrationState(ctx, report); err != nil {
+		return nil, fmt.Errorf("checking migration state: %w", err)
+	}
+	if err := d.checkGeneratedFunctions(ctx, report); err != nil {
+		return nil, fmt.Errorf("checking generated functions: %w", err)
+	}
+	if err := d.checkTuplesSource(ctx, report); err != nil {
+		return nil, fmt.Errorf("checking tuples source: %w", err)
+	}
+	if err := d.checkDataHealth(ctx, report); err != nil {
+		return nil, fmt.Errorf("checking data health: %w", err)
+	}
+
+	// Performance checks (skip if disabled)
+	if !d.opts.SkipPerformance && d.tuplesInfo != nil && d.tuplesInfo.Exists {
+		switch d.tuplesInfo.RelKind {
+		case "v":
+			if err := d.checkViewDefinition(ctx, report); err != nil {
+				return nil, fmt.Errorf("checking view definition: %w", err)
+			}
+			if err := d.checkExpressionIndexes(ctx, report); err != nil {
+				return nil, fmt.Errorf("checking expression indexes: %w", err)
+			}
+			if err := d.checkSourceTableIndexAdvisory(ctx, report); err != nil {
+				return nil, fmt.Errorf("checking source-table indexes: %w", err)
+			}
+		case "r":
+			if err := d.checkTableIndexes(ctx, report); err != nil {
+				return nil, fmt.Errorf("checking table indexes: %w", err)
+			}
+		}
+		if err := d.checkExpandFanoutAdvisory(ctx, report); err != nil {
+			return nil, fmt.Errorf("checking Expand fan-out advisory: %w", err)
+		}
+	}
+
+	return report, nil
+}
+
+// checkSchemaFile validates the schema file exists and is valid.
+func (d *Doctor) checkSchemaFile(report *Report) {
+	m := migrator.NewMigrator(d.db, d.schemaPath)
+	m.SetDatabaseSchema(d.databaseSchema)
+
+	schemaPath := m.SchemaPath()
+
+	// Check file exists
+	if !m.HasSchema() {
+		report.AddCheck(CheckResult{
+			Category: "Schema File",
+			Name:     "exists",
+			Status:   StatusFail,
+			Message:  fmt.Sprintf("Schema file not found at %s", schemaPath),
+			FixHint:  "Create a schema.fga file in your schemas directory",
+		})
+		return
+	}
+
+	report.AddCheck(CheckResult{
+		Category: "Schema File",
+		Name:     "exists",
+		Status:   StatusPass,
+		Message:  fmt.Sprintf("Schema file exists at %s", schemaPath),
+	})
+
+	// Try to parse the schema
+	types, err := parser.ParseSchema(schemaPath)
+	if err != nil {
+		report.AddCheck(CheckResult{
+			Category: "Schema File",
+			Name:     "valid",
+			Status:   StatusFail,
+			Message:  "Schema has syntax errors",
+			Details:  err.Error(),
+			FixHint:  "Run 'fga model validate' to see detailed errors",
+		})
+		return
+	}
+
+	d.parsedTypes = types
+
+	// Count types and relations
+	relationCount := 0
+	for _, t := range types {
+		relationCount += len(t.Relations)
+	}
+
+	report.AddCheck(CheckResult{
+		Category: "Schema File",
+		Name:     "valid",
+		Status:   StatusPass,
+		Message:  fmt.Sprintf("Schema is valid (%d types, %d relations)", len(types), relationCount),
+	})
+
+	// Check for cycles
+	if err := schema.DetectCycles(types); err != nil {
+		report.AddCheck(CheckResult{
+			Category: "Schema File",
+			Name:     "cycles",
+			Status:   StatusFail,
+			Message:  "Schema contains cyclic dependencies",
+			Details:  err.Error(),
+			FixHint:  "Review implied-by relationships for cycles",
+		})
+		return
+	}
+
+	report.AddCheck(CheckResult{
+		Category: "Schema File",
+		Name:     "cycles",
+		Status:   StatusPass,
+		Message:  "No cyclic dependencies detected",
+	})
+}
+
+// checkMigrationState validates the migration tracking table and state.
+func (d *Doctor) checkMigrationState(ctx context.Context, report *Report) error {
+	m := migrator.NewMigrator(d.db, d.schemaPath)
+	m.SetDatabaseSchema(d.databaseSchema)
+
+	// Check if migrations table exists
+	var tableExists bool
+	err := d.db.QueryRowContext(ctx, fmt.Sprintf(
+		`
+			SELECT EXISTS (
+				SELECT 1 FROM pg_class c
+				JOIN pg_namespace n ON n.oid = c.relnamespace
+				WHERE c.relname = 'melange_migrations'
+				AND n.nspname = %s
+			)
+		`,
+		d.postgresSchema(),
+	)).Scan(&tableExists)
+	if err != nil {
+		return fmt.Errorf("checking migrations table: %w", err)
+	}
+
+	if !tableExists {
+		report.AddCheck(CheckResult{
+			Category: "Migration State",
+			Name:     "table_exists",
+			Status:   StatusWarn,
+			Message:  "melange_migrations table does not exist",
+			Details:  "Migration tracking is not set up",
+			FixHint:  "Run 'melange migrate' to create it",
+		})
+		return nil
+	}
+
+	report.AddCheck(CheckResult{
+		Category: "Migration State",
+		Name:     "table_exists",
+		Status:   StatusPass,
+		Message:  "melange_migrations table exists",
+	})
+
+	// Get last migration
+	lastMigration, err := m.GetLastMigration(ctx)
+	if err != nil {
+		return fmt.Errorf("getting last migration: %w", err)
+	}
+
+	if lastMigration == nil {
+		report.AddCheck(CheckResult{
+			Category: "Migration State",
+			Name:     "migrated",
+			Status:   StatusWarn,
+			Message:  "No migration records found",
+			FixHint:  "Run 'melange migrate' to apply the schema",
+		})
+		return nil
+	}
+
+	d.lastMigration = lastMigration
+
+	report.AddCheck(CheckResult{
+		Category: "Migration State",
+		Name:     "migrated",
+		Status:   StatusPass,
+		Message:  fmt.Sprintf("Schema migrated (%d functions tracked)", len(lastMigration.FunctionNames)),
+	})
+
+	// Check if schema has changed since last migration
+	if d.parsedTypes != nil {
+		// Read schema content for checksum
+		schemaPath := m.SchemaPath()
+		content, err := readFileContent(schemaPath)
+		if err == nil {
+			d.schemaContent = content
+			currentChecksum := migrator.ComputeSchemaChecksum(content)
+
+			switch {
+			case currentChecksum != lastMigration.SchemaChecksum:
+				report.AddCheck(CheckResult{
+					Category: "Migration State",
+					Name:     "schema_sync",
+					Status:   StatusWarn,
+					Message:  "Schema file has changed since last migration",
+					Details:  fmt.Sprintf("File checksum: %s...\nDB checksum:   %s...", currentChecksum[:16], lastMigration.SchemaChecksum[:16]),
+					FixHint:  "Run 'melange migrate' to apply changes",
+				})
+			case lastMigration.CodegenVersion != migrator.CodegenVersion():
+				report.AddCheck(CheckResult{
+					Category: "Migration State",
+					Name:     "schema_sync",
+					Status:   StatusWarn,
+					Message:  "Codegen version has changed",
+					Details:  fmt.Sprintf("Current: %s, DB: %s", migrator.CodegenVersion(), lastMigration.CodegenVersion),
+					FixHint:  "Run 'melange migrate' to regenerate functions",
+				})
+			default:
+				report.AddCheck(CheckResult{
+					Category: "Migration State",
+					Name:     "schema_sync",
+					Status:   StatusPass,
+					Message:  "Schema is in sync with database",
+				})
+			}
+		}
+	}
+
+	return nil
+}
+
+// checkGeneratedFunctions validates that expected functions exist.
+func (d *Doctor) checkGeneratedFunctions(ctx context.Context, report *Report) error {
+	// Get current functions from database
+	currentFuncs, err := d.getCurrentFunctions(ctx)
+	if err != nil {
+		return fmt.Errorf("getting current functions: %w", err)
+	}
+	d.currentFuncs = currentFuncs
+
+	// Check dispatchers exist
+	dispatchers := []string{
+		"check_permission",
+		"check_permission_internal",
+		"check_permission_nw",
+		"check_permission_nw_internal",
+		"explain_permission",
+		"explain_permission_internal",
+		"expand_permission",
+		"expand_permission_internal",
+		"list_accessible_objects",
+		"list_accessible_subjects",
+	}
+
+	currentSet := make(map[string]bool)
+	for _, fn := range currentFuncs {
+		currentSet[fn] = true
+	}
+
+	var missingDispatchers []string
+	for _, name := range dispatchers {
+		if !currentSet[name] {
+			missingDispatchers = append(missingDispatchers, name)
+		}
+	}
+
+	if len(missingDispatchers) > 0 {
+		report.AddCheck(CheckResult{
+			Category: "Generated Functions",
+			Name:     "dispatchers",
+			Status:   StatusFail,
+			Message:  fmt.Sprintf("Missing dispatcher functions: %s", strings.Join(missingDispatchers, ", ")),
+			FixHint:  "Run 'melange migrate' to create functions",
+		})
+	} else {
+		report.AddCheck(CheckResult{
+			Category: "Generated Functions",
+			Name:     "dispatchers",
+			Status:   StatusPass,
+			Message:  "All dispatcher functions present",
+		})
+	}
+
+	// If we have parsed types, check for expected functions
+	if analyses := d.getAnalyses(); analyses != nil {
+		expectedFuncs := sqlgen.CollectFunctionNames(analyses)
+		d.expectedFuncs = expectedFuncs
+
+		// Build expected set and find missing functions in a single pass.
+		expectedSet := make(map[string]bool, len(expectedFuncs))
+		var missing []string
+		for _, fn := range expectedFuncs {
+			expectedSet[fn] = true
+			if !currentSet[fn] {
+				missing = append(missing, fn)
+			}
+		}
+
+		// Find orphan functions (in DB but not expected)
+		var orphans []string
+		for _, fn := range currentFuncs {
+			if !expectedSet[fn] {
+				orphans = append(orphans, fn)
+			}
+		}
+
+		if len(missing) > 0 {
+			sort.Strings(missing)
+			report.AddCheck(CheckResult{
+				Category: "Generated Functions",
+				Name:     "missing",
+				Status:   StatusFail,
+				Message:  fmt.Sprintf("%d expected functions missing from database", len(missing)),
+				Details:  truncatedJoin(missing, 10),
+				FixHint:  "Run 'melange migrate' to create functions",
+			})
+		} else {
+			report.AddCheck(CheckResult{
+				Category: "Generated Functions",
+				Name:     "complete",
+				Status:   StatusPass,
+				Message:  fmt.Sprintf("All %d expected functions present", len(expectedFuncs)),
+			})
+		}
+
+		if len(orphans) > 0 {
+			sort.Strings(orphans)
+			report.AddCheck(CheckResult{
+				Category: "Generated Functions",
+				Name:     "orphans",
+				Status:   StatusWarn,
+				Message:  fmt.Sprintf("%d orphan functions from previous schema", len(orphans)),
+				Details:  truncatedJoin(orphans, 10),
+				FixHint:  "Run 'melange migrate' to clean up orphans",
+			})
+		}
+	} else {
+		// No schema to compare against, just report function count
+		checkFuncs := 0
+		listFuncs := 0
+		for _, fn := range currentFuncs {
+			if strings.HasPrefix(fn, "check_") {
+				checkFuncs++
+			} else if strings.HasPrefix(fn, "list_") {
+				listFuncs++
+			}
+		}
+		report.AddCheck(CheckResult{
+			Category: "Generated Functions",
+			Name:     "count",
+			Status:   StatusPass,
+			Message:  fmt.Sprintf("Found %d check functions, %d list functions", checkFuncs, listFuncs),
+		})
+	}
+
+	return nil
+}
+
+// checkTuplesSource validates the melange_tuples view/table.
+func (d *Doctor) checkTuplesSource(ctx context.Context, report *Report) error {
+	info, err := d.getTuplesInfo(ctx)
+	if err != nil {
+		return fmt.Errorf("getting tuples info: %w", err)
+	}
+	d.tuplesInfo = info
+
+	if !info.Exists {
+		report.AddCheck(CheckResult{
+			Category: "Tuples Source",
+			Name:     "exists",
+			Status:   StatusFail,
+			Message:  "melange_tuples does not exist",
+			FixHint:  "Create a view/table named melange_tuples over your domain tables",
+		})
+		return nil
+	}
+
+	report.AddCheck(CheckResult{
+		Category: "Tuples Source",
+		Name:     "exists",
+		Status:   StatusPass,
+		Message:  fmt.Sprintf("melange_tuples exists (%s)", info.RelKindStr),
+	})
+
+	// Check required columns
+	requiredCols := []string{"object_type", "object_id", "relation", "subject_type", "subject_id"}
+	colSet := make(map[string]bool)
+	for _, col := range info.Columns {
+		colSet[col] = true
+	}
+
+	var missingCols []string
+	for _, col := range requiredCols {
+		if !colSet[col] {
+			missingCols = append(missingCols, col)
+		}
+	}
+
+	if len(missingCols) > 0 {
+		report.AddCheck(CheckResult{
+			Category: "Tuples Source",
+			Name:     "columns",
+			Status:   StatusFail,
+			Message:  fmt.Sprintf("Missing required columns: %s", strings.Join(missingCols, ", ")),
+			Details:  fmt.Sprintf("Found columns: %s", strings.Join(info.Columns, ", ")),
+			FixHint:  "Update melange_tuples to include all required columns",
+		})
+	} else {
+		report.AddCheck(CheckResult{
+			Category: "Tuples Source",
+			Name:     "columns",
+			Status:   StatusPass,
+			Message:  "All required columns present",
+		})
+	}
+
+	// For materialized views, suggest refresh consideration
+	if info.RelKind == "m" {
+		report.AddCheck(CheckResult{
+			Category: "Tuples Source",
+			Name:     "refresh",
+			Status:   StatusWarn,
+			Message:  "melange_tuples is a materialized view",
+			Details:  "Materialized views require manual refresh to see data changes",
+			FixHint:  "Ensure you have a refresh strategy (e.g., REFRESH MATERIALIZED VIEW CONCURRENTLY)",
+		})
+	}
+
+	return nil
+}
+
+// checkDataHealth validates the data in melange_tuples.
+func (d *Doctor) checkDataHealth(ctx context.Context, report *Report) error {
+	if d.tuplesInfo == nil || !d.tuplesInfo.Exists {
+		return nil // Already reported in tuples check
+	}
+
+	// Check if there's any data
+	var count int64
+	err := d.db.QueryRowContext(ctx, fmt.Sprintf(`SELECT COUNT(*) FROM %s`, d.prefixIdent("melange_tuples"))).Scan(&count)
+	if err != nil {
+		// May fail if columns are wrong - just skip
+		report.AddCheck(CheckResult{
+			Category: "Data Health",
+			Name:     "query",
+			Status:   StatusWarn,
+			Message:  "Could not query melange_tuples",
+			Details:  err.Error(),
+		})
+		return nil
+	}
+
+	if count == 0 {
+		report.AddCheck(CheckResult{
+			Category: "Data Health",
+			Name:     "data",
+			Status:   StatusWarn,
+			Message:  "melange_tuples is empty",
+			Details:  "No authorization data to evaluate permissions against",
+		})
+	} else {
+		report.AddCheck(CheckResult{
+			Category: "Data Health",
+			Name:     "data",
+			Status:   StatusPass,
+			Message:  fmt.Sprintf("melange_tuples contains %d tuples", count),
+		})
+	}
+
+	// If we have a schema, validate tuple data against the model.
+	if d.parsedTypes != nil && count > 0 {
+		if err := d.validateTupleData(ctx, report); err != nil {
+			return fmt.Errorf("validating tuple data: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// tupleSignature holds an aggregated (object_type, relation, subject_type) group
+// with its tuple count, used for classifying orphaned tuples.
+type tupleSignature struct {
+	objectType  string
+	relation    string
+	subjectType string
+	count       int64
+}
+
+// validateTupleData checks all tuples against the schema model and reports
+// unknown object types, relations, subject types, and invalid subject type
+// assignments. This replaces the earlier sampling-based check with a
+// comprehensive GROUP BY aggregation.
+func (d *Doctor) validateTupleData(ctx context.Context, report *Report) error {
+	// Build validity maps from parsed schema.
+	validTypes := make(map[string]bool)
+	validRelations := make(map[string]map[string]bool)
+	// allowedSubjects: objectType -> relation -> set of allowed subject types.
+	// Only populated for relations with explicit SubjectTypeRefs (direct assignments).
+	allowedSubjects := make(map[string]map[string]map[string]bool)
+
+	for _, t := range d.parsedTypes {
+		validTypes[t.Name] = true
+		rels := make(map[string]bool, len(t.Relations))
+		for _, r := range t.Relations {
+			rels[r.Name] = true
+			if len(r.SubjectTypeRefs) > 0 {
+				allowed := make(map[string]bool, len(r.SubjectTypeRefs))
+				for _, ref := range r.SubjectTypeRefs {
+					allowed[ref.Type] = true
+				}
+				if allowedSubjects[t.Name] == nil {
+					allowedSubjects[t.Name] = make(map[string]map[string]bool)
+				}
+				allowedSubjects[t.Name][r.Name] = allowed
+			}
+		}
+		validRelations[t.Name] = rels
+	}
+
+	// Single aggregation query returns all distinct tuple signatures with counts.
+	rows, err := d.db.QueryContext(ctx, fmt.Sprintf(
+		`
+			SELECT object_type, relation, subject_type, COUNT(*) AS cnt
+			FROM %s
+			GROUP BY object_type, relation, subject_type
+		`,
+		d.prefixIdent("melange_tuples"),
+	))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var sigs []tupleSignature
+	for rows.Next() {
+		var s tupleSignature
+		if err := rows.Scan(&s.objectType, &s.relation, &s.subjectType, &s.count); err != nil {
+			return err
+		}
+		sigs = append(sigs, s)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	findings := classifyTupleSignatures(sigs, validTypes, validRelations, allowedSubjects)
+	emitTupleFindings(report, findings)
+	return nil
+}
+
+// tupleFindings holds categorized orphaned tuple data.
+type tupleFindings struct {
+	unknownObjectTypes []string // "widget (100 tuples)"
+	unknownRelations   []string // "document:publish (42 tuples)"
+	unknownSubjects    []string // "device (30 tuples)"
+	invalidSubjects    []string // "organization:member subject_type=team (5 tuples)"
+
+	unknownObjectTypeCount int64
+	unknownRelationCount   int64
+	unknownSubjectCount    int64
+	invalidSubjectCount    int64
+}
+
+// classifyTupleSignatures categorizes aggregated tuple signatures against the
+// schema validity maps. This is a pure function for testability.
+func classifyTupleSignatures(
+	sigs []tupleSignature,
+	validTypes map[string]bool,
+	validRelations map[string]map[string]bool,
+	allowedSubjects map[string]map[string]map[string]bool,
+) tupleFindings {
+	var f tupleFindings
+
+	// Accumulate counts per unique key. Multiple signatures can share the same
+	// unknown value (e.g., same unknown object_type with different relations).
+	objTypeCounts := make(map[string]int64)
+	relationCounts := make(map[string]int64)
+	subjectCounts := make(map[string]int64)
+
+	for _, s := range sigs {
+		// Unknown object type.
+		if !validTypes[s.objectType] {
+			objTypeCounts[s.objectType] += s.count
+			f.unknownObjectTypeCount += s.count
+			continue // Skip further checks — relation/subject are meaningless.
+		}
+
+		// Unknown relation for this object type.
+		if !validRelations[s.objectType][s.relation] {
+			key := s.objectType + ":" + s.relation
+			relationCounts[key] += s.count
+			f.unknownRelationCount += s.count
+			continue // Skip subject check — relation is already invalid.
+		}
+
+		// Unknown subject type.
+		if !validTypes[s.subjectType] {
+			subjectCounts[s.subjectType] += s.count
+			f.unknownSubjectCount += s.count
+			continue
+		}
+
+		// Invalid subject type for this relation (only when relation has explicit constraints).
+		if allowed := allowedSubjects[s.objectType][s.relation]; allowed != nil {
+			if !allowed[s.subjectType] {
+				key := fmt.Sprintf("%s:%s subject_type=%s", s.objectType, s.relation, s.subjectType)
+				f.invalidSubjects = append(f.invalidSubjects, fmt.Sprintf("%s (%d tuples)", key, s.count))
+				f.invalidSubjectCount += s.count
+			}
+		}
+	}
+
+	// Build display strings from accumulated counts.
+	for val, count := range objTypeCounts {
+		f.unknownObjectTypes = append(f.unknownObjectTypes, fmt.Sprintf("%s (%d tuples)", val, count))
+	}
+	for val, count := range relationCounts {
+		f.unknownRelations = append(f.unknownRelations, fmt.Sprintf("%s (%d tuples)", val, count))
+	}
+	for val, count := range subjectCounts {
+		f.unknownSubjects = append(f.unknownSubjects, fmt.Sprintf("%s (%d tuples)", val, count))
+	}
+
+	return f
+}
+
+// emitTupleFindings adds check results to the report based on classified findings.
+func emitTupleFindings(report *Report, f tupleFindings) {
+	anyIssue := false
+
+	if len(f.unknownObjectTypes) > 0 {
+		anyIssue = true
+		report.AddCheck(CheckResult{
+			Category: "Data Health",
+			Name:     "unknown_object_types",
+			Status:   StatusWarn,
+			Message:  fmt.Sprintf("Found %d unknown object types affecting %d tuples", len(f.unknownObjectTypes), f.unknownObjectTypeCount),
+			Details:  truncatedJoin(f.unknownObjectTypes, 10),
+			FixHint:  "Update melange_tuples to exclude rows with unknown object types, or add missing types to schema.fga",
+		})
+	}
+
+	if len(f.unknownRelations) > 0 {
+		anyIssue = true
+		report.AddCheck(CheckResult{
+			Category: "Data Health",
+			Name:     "unknown_relations",
+			Status:   StatusWarn,
+			Message:  fmt.Sprintf("Found %d unknown relations affecting %d tuples", len(f.unknownRelations), f.unknownRelationCount),
+			Details:  truncatedJoin(f.unknownRelations, 10),
+			FixHint:  "Update melange_tuples to exclude rows with unknown relations, or add missing relations to schema.fga",
+		})
+	}
+
+	if len(f.unknownSubjects) > 0 {
+		anyIssue = true
+		report.AddCheck(CheckResult{
+			Category: "Data Health",
+			Name:     "unknown_subject_types",
+			Status:   StatusWarn,
+			Message:  fmt.Sprintf("Found %d unknown subject types affecting %d tuples", len(f.unknownSubjects), f.unknownSubjectCount),
+			Details:  truncatedJoin(f.unknownSubjects, 10),
+			FixHint:  "Update melange_tuples to exclude rows with unknown subject types, or add missing types to schema.fga",
+		})
+	}
+
+	if len(f.invalidSubjects) > 0 {
+		anyIssue = true
+		report.AddCheck(CheckResult{
+			Category: "Data Health",
+			Name:     "invalid_subject_types",
+			Status:   StatusWarn,
+			Message:  fmt.Sprintf("Found %d invalid subject type assignments affecting %d tuples", len(f.invalidSubjects), f.invalidSubjectCount),
+			Details:  truncatedJoin(f.invalidSubjects, 10),
+			FixHint:  "These tuples have subject types not allowed by the relation definition in schema.fga",
+		})
+	}
+
+	if !anyIssue {
+		report.AddCheck(CheckResult{
+			Category: "Data Health",
+			Name:     "valid",
+			Status:   StatusPass,
+			Message:  "All tuples reference valid types, relations, and subject types",
+		})
+	}
+}
+
+// getCurrentFunctions returns all melange-generated function names.
+func (d *Doctor) getCurrentFunctions(ctx context.Context) ([]string, error) {
+	rows, err := d.db.QueryContext(ctx, fmt.Sprintf(
+		`
+			SELECT p.proname
+			FROM pg_proc p
+			JOIN pg_namespace n ON p.pronamespace = n.oid
+			WHERE n.nspname = %s
+			AND (
+				p.proname LIKE 'check_%%'
+				OR p.proname LIKE 'list_%%'
+				OR p.proname LIKE 'explain_%%'
+				OR p.proname LIKE 'expand_%%'
+			)
+		`,
+		d.postgresSchema(),
+	))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var functions []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		functions = append(functions, name)
+	}
+	return functions, rows.Err()
+}
+
+// getTuplesInfo retrieves information about the melange_tuples relation.
+func (d *Doctor) getTuplesInfo(ctx context.Context) (*TuplesInfo, error) {
+	info := &TuplesInfo{RowCount: -1}
+
+	// Check if relation exists and get type
+	var relKind string
+	err := d.db.QueryRowContext(ctx, fmt.Sprintf(
+		`
+			SELECT c.relkind
+			FROM pg_class c
+			JOIN pg_namespace n ON n.oid = c.relnamespace
+			WHERE c.relname = 'melange_tuples'
+			AND n.nspname = %s
+			AND c.relkind IN ('r', 'v', 'm')
+		`,
+		d.postgresSchema(),
+	)).Scan(&relKind)
+
+	if err == sql.ErrNoRows {
+		return info, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	info.Exists = true
+	info.RelKind = relKind
+	switch relKind {
+	case "r":
+		info.RelKindStr = "table"
+	case "v":
+		info.RelKindStr = "view"
+	case "m":
+		info.RelKindStr = "materialized view"
+	}
+
+	// Get columns
+	rows, err := d.db.QueryContext(ctx, fmt.Sprintf(
+		`
+			SELECT a.attname
+			FROM pg_attribute a
+			JOIN pg_class c ON a.attrelid = c.oid
+			JOIN pg_namespace n ON c.relnamespace = n.oid
+			WHERE c.relname = 'melange_tuples'
+			AND n.nspname = %s
+			AND a.attnum > 0
+			AND NOT a.attisdropped
+			ORDER BY a.attnum
+		`,
+		d.postgresSchema(),
+	))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var col string
+		if err := rows.Scan(&col); err != nil {
+			return nil, err
+		}
+		info.Columns = append(info.Columns, col)
+	}
+
+	return info, rows.Err()
+}
+
+// truncatedJoin joins items with newlines, truncating after maxItems with a
+// summary of the remainder. Returns all items when maxItems <= 0.
+func truncatedJoin(items []string, maxItems int) string {
+	if maxItems <= 0 || len(items) <= maxItems {
+		return strings.Join(items, "\n")
+	}
+	return strings.Join(items[:maxItems], "\n") + fmt.Sprintf("\n... and %d more", len(items)-maxItems)
+}
+
+// readFileContent reads file content as string.
+func readFileContent(path string) (string, error) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return string(content), nil
+}
+
+func (d *Doctor) prefixIdent(identifier string) string {
+	return sqldsl.PrefixIdent(identifier, d.databaseSchema)
+}
+
+func (d *Doctor) postgresSchema() string {
+	return sqldsl.PostgresSchemaExpr(d.databaseSchema)
+}
