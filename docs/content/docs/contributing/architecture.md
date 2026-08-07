@@ -50,7 +50,7 @@ For each relation, the closure includes all relations that imply it (directly or
 
 The closure computation also detects cycles. Cyclic implied-by chains (e.g., `define a: b` and `define b: a`) return `ErrCyclicSchema`.
 
-## SQL Generation (`lib/sqlgen/`)
+## SQL Generation (`internal/sqlgen/`)
 
 ### SQL DSL
 

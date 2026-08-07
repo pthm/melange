@@ -70,7 +70,7 @@ brew install pthm/tap/melange
 **Go install:**
 
 ```bash
-go install github.com/pthm/melange/cmd/melange@latest
+go install github.com/pthm/melange@latest
 ```
 
 **Pre-built binaries:**
@@ -83,7 +83,7 @@ Download from [GitHub Releases](https://github.com/pthm/melange/releases) (macOS
 brew upgrade melange
 
 # Go install
-go install github.com/pthm/melange/cmd/melange@latest
+go install github.com/pthm/melange@latest
 ```
 
 Melange automatically checks for updates and notifies you when a new version is available. Use `--no-update-check` to disable.

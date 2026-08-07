@@ -23,7 +23,7 @@ brew install pthm/tap/melange
 
 {{< tab name="Go" >}}
 ```bash
-go install github.com/pthm/melange/cmd/melange@latest
+go install github.com/pthm/melange@latest
 ```
 
 Requires Go 1.21 or later.
@@ -59,7 +59,7 @@ brew upgrade melange
 
 {{< tab name="Go" >}}
 ```bash
-go install github.com/pthm/melange/cmd/melange@latest
+go install github.com/pthm/melange@latest
 ```
 {{< /tab >}}
 

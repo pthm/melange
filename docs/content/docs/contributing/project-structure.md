@@ -11,21 +11,32 @@ Melange is organized as multiple Go modules for clean dependency isolation:
 
 ```
 melange/
-├── go.mod                 # Root module (github.com/pthm/melange)
+├── go.mod                 # Root module (github.com/pthm/melange) — also the CLI
+├── main.go                # CLI entrypoint (package main)
 ├── melange/
 │   └── go.mod             # Runtime module (github.com/pthm/melange/melange)
 ├── clients/
-│   └── typescript/        # TypeScript client (future)
-├── pkg/                   # Public packages
-├── lib/                   # Library packages (non-public API)
-├── cmd/melange/           # CLI (separate module)
-└── test/                  # Tests (part of root module)
+│   └── typescript/        # TypeScript client
+├── pkg/                   # Public packages (extension surface)
+├── internal/              # Sealed implementation (CLI, sqlgen, clientgen, …)
+├── cmd/melange/
+│   └── go.mod             # Retired error-shim module (deprecated install path)
+└── test/
+    └── go.mod             # Integration-test module (never released)
 ```
 
 | Module | Purpose | Dependencies |
 |--------|---------|--------------|
-| Root (`github.com/pthm/melange`) | CLI, schema parsing, code generation | OpenFGA parser, pq driver |
+| Root (`github.com/pthm/melange`) | CLI + schema parsing, code generation | OpenFGA parser, pq driver |
 | Runtime (`github.com/pthm/melange/melange`) | Checker, cache, types, errors | stdlib only |
+| Test (`github.com/pthm/melange/test`) | Integration tests + OpenFGA oracle | testcontainers, pgx, openfga-server (never released) |
+| `cmd/melange` | Retired error-shim pointing at the root install path | stdlib only |
+
+Install the CLI from the root module:
+
+```bash
+go install github.com/pthm/melange@latest
+```
 
 ## Runtime Module (`melange/`)
 
@@ -98,10 +109,10 @@ pkg/
 - `Generate(runtime, types, cfg)` - Generate client code
 - `ListRuntimes()` - Available generators
 
-### Library Packages (`lib/`)
+### Library Packages (`internal/`)
 
 ```
-lib/
+internal/
 ├── clientgen/         # Generator registry and implementations
 │   ├── generator.go   # Generator interface
 │   ├── go/            # Go generator
@@ -112,10 +123,10 @@ lib/
 
 ## SQL Generation
 
-SQL is generated from the lib/sqlgen package:
+SQL is generated from the internal/sqlgen package:
 
 ```
-lib/sqlgen/
+internal/sqlgen/
 ├── sql.go             # SQL DSL core
 ├── expr.go            # Expression types
 ├── query.go           # Query builders
@@ -141,12 +152,20 @@ lib/sqlgen/
 
 ## CLI
 
-The CLI is part of the root module:
+The CLI is part of the root module: a thin `main.go` at the module root delegates
+to the command package under `internal/`.
 
 ```
-cmd/melange/
-└── main.go
+main.go                    # package main → internal/cli/command.Execute()
+internal/cli/
+├── config.go              # config resolution, exit codes (package cli)
+├── command/               # cobra commands (validate, migrate, doctor, …)
+└── render/                # explain/expand rendering
 ```
+
+`cmd/melange/` is a retired error-shim module — its `main.go` prints the new
+install path and exits non-zero, so `go install …/cmd/melange@latest` fails loudly
+instead of installing a stale binary.
 
 Commands:
 - `validate` - Check schema syntax
@@ -157,10 +176,15 @@ Commands:
 
 ## Test Module
 
-Tests are part of the root module:
+The integration tests live in a separate `github.com/pthm/melange/test` module so
+their heavy dependencies (testcontainers, pgx, the OpenFGA server oracle) stay out
+of the root module's graph. It is wired via `go.work` for local/CI development and
+is never released. In-package unit tests (`*_test.go` under `pkg/`, `internal/`,
+`melange/`) stay in their own modules.
 
 ```
 test/
+├── go.mod                 # github.com/pthm/melange/test (never released)
 ├── benchmark_test.go       # Performance benchmarks
 ├── integration_test.go     # Integration tests
 ├── openfgatests/           # OpenFGA compatibility suite
@@ -228,12 +252,12 @@ docs/
 
 1. **Runtime changes** go in `melange/`
 2. **Parser changes** go in `pkg/parser/`
-3. **SQL generation** changes go in `lib/sqlgen/`
+3. **SQL generation** changes go in `internal/sqlgen/`
 4. **Tests** go in `test/` or the appropriate `*_test.go` file
 
 ### SQL Generation Changes
 
-When modifying SQL generation in `lib/sqlgen/`:
+When modifying SQL generation in `internal/sqlgen/`:
 
 1. Update the query builder
 2. Run `just test-openfga` to verify compatibility
@@ -241,7 +265,7 @@ When modifying SQL generation in `lib/sqlgen/`:
 
 ### Adding a Language Generator
 
-1. Create `lib/clientgen/<language>/generate.go`
+1. Create `internal/clientgen/<language>/generate.go`
 2. Implement the `Generator` interface
 3. Register in `init()` function
 4. Import in `pkg/clientgen/api.go`
