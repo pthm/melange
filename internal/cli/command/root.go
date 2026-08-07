@@ -187,5 +187,5 @@ func showUpdateNotice(info *update.Info) {
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintf(os.Stderr, "* A new version of melange is available: v%s (current: %s)\n",
 		info.LatestVersion, info.CurrentVersion)
-	fmt.Fprintln(os.Stderr, "  brew upgrade melange  or  go install github.com/pthm/melange/cmd/melange@latest")
+	fmt.Fprintln(os.Stderr, "  brew upgrade melange  or  go install github.com/pthm/melange@latest")
 }

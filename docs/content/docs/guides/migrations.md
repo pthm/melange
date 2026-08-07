@@ -424,7 +424,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install Melange
-        run: go install github.com/pthm/melange/cmd/melange@latest
+        run: go install github.com/pthm/melange@latest
       - name: Validate schema
         run: melange validate
       - name: Check migration drift

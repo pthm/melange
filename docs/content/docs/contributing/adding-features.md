@@ -30,13 +30,13 @@ If the OpenFGA parser doesn't handle the syntax yet, you may need to update the 
 
 If the new feature requires new data in `RelationDefinition`, add fields to the struct in `pkg/schema/schema.go`. Update `ToAuthzModels()` to generate the corresponding `melange_model` rows.
 
-### 3. Add SQL Generation (`lib/sqlgen/`)
+### 3. Add SQL Generation (`internal/sqlgen/`)
 
 This is the core of the work. Add a new code path in the SQL generation that produces the correct SQL for your pattern. Key files:
 
-- `lib/sqlgen/check_queries.go` for check functions.
-- `lib/sqlgen/list_queries.go` for list functions.
-- `lib/sqlgen/sql.go` and `lib/sqlgen/expr.go` for the SQL DSL.
+- `internal/sqlgen/check_queries.go` for check functions.
+- `internal/sqlgen/list_queries.go` for list functions.
+- `internal/sqlgen/sql.go` and `internal/sqlgen/expr.go` for the SQL DSL.
 
 Use `PlpgsqlFunction` (not `SqlFunction`) for any function that references `melange_tuples`.
 

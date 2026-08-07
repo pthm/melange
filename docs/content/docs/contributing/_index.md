@@ -21,7 +21,7 @@ go install github.com/gotesttools/gotestfmt/v2/cmd/gotestfmt@latest
 
 ```bash
 # Build the CLI
-go build -o bin/melange ./cmd/melange
+go build -o bin/melange .
 
 # Build test utilities
 go build -o bin/dumptest ./test/cmd/dumptest

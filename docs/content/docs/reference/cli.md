@@ -8,7 +8,7 @@ The Melange CLI provides commands for validating schemas, generating client code
 ## Installation
 
 ```bash
-go install github.com/pthm/melange/cmd/melange@latest
+go install github.com/pthm/melange@latest
 ```
 
 ## Global Flags
@@ -38,7 +38,7 @@ $ melange migrate
 Migration completed successfully
 
 * A new version of melange is available: v1.2.3 (current: v1.2.0)
-  brew upgrade melange  or  go install github.com/pthm/melange/cmd/melange@latest
+  brew upgrade melange  or  go install github.com/pthm/melange@latest
 ```
 
 **To disable update checks:**
@@ -970,37 +970,8 @@ if skipped {
 }
 ```
 
-**Running health checks programmatically:**
-
-```go
-import (
-    "os"
-    "github.com/pthm/melange/lib/doctor"
-)
-
-d := doctor.New(db, "schemas/schema.fga", doctor.Options{})
-report, err := d.Run(ctx)
-if err != nil {
-    log.Fatal(err)
-}
-
-// Print report (verbose=true for detailed output)
-report.Print(os.Stdout, true)
-
-// Check for critical failures
-if report.HasErrors() {
-    os.Exit(1)
-}
-
-// Access individual check results
-for _, check := range report.Checks {
-    if check.Status == doctor.StatusFail {
-        log.Printf("FAIL: %s - %s", check.Name, check.Message)
-        if check.FixHint != "" {
-            log.Printf("  Fix: %s", check.FixHint)
-        }
-    }
-}
-```
+Run health checks with the `melange doctor` command (see above). The doctor
+package is internal to the CLI and is not a supported programmatic API; for
+automation, run the command and check its exit code (non-zero on failure).
 
 See [Checking Permissions](../../guides/checking-permissions/) for the full Go API reference.

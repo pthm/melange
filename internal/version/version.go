@@ -16,7 +16,7 @@ var (
 // init fills Version/Commit/Date from the embedded build info when they were
 // not stamped via ldflags. This makes "go install github.com/pthm/melange/...@v"
 // builds report their real module version, and — importantly — lets library
-// consumers of pkg/migrator (who never run cmd/melange's init) get a real
+// consumers of pkg/migrator (who never run the CLI's init) get a real
 // CodegenVersion so the phase-1 migration fast-path skip is not permanently
 // disabled. ldflags-stamped builds are left untouched (Version != "dev").
 func init() {
