@@ -37,13 +37,13 @@ jobs:
             ${{ runner.os }}-go-
 
       - name: Setup Go workspace
-        run: go work init . ./cmd/melange ./docs ./melange
+        run: go work init . ./cmd/melange ./docs ./melange ./test
 
       - name: Install tools
         run: go install tool
 
       - name: Generate test authz package
-        run: go run ./cmd/melange generate client --runtime go --schema test/testutil/testdata/schema.fga --output test/authz/ --package authz --id-type int64
+        run: go run . generate client --runtime go --schema test/testutil/testdata/schema.fga --output test/authz/ --package authz --id-type int64
 
       - name: Lint all modules
         run: |
@@ -52,6 +52,7 @@ jobs:
           golangci-lint run ./...
           cd melange && golangci-lint run ./...
           cd ../cmd/melange && golangci-lint run ./...
+          cd ../../test && golangci-lint run ./...
 
   unit-tests:
     name: Unit Tests
@@ -76,10 +77,10 @@ jobs:
             ${{ runner.os }}-go-
 
       - name: Setup Go workspace
-        run: go work init . ./cmd/melange ./docs ./melange
+        run: go work init . ./cmd/melange ./docs ./melange ./test
 
       - name: Generate test authz package
-        run: go run ./cmd/melange generate client --runtime go --schema test/testutil/testdata/schema.fga --output test/authz/ --package authz --id-type int64
+        run: go run . generate client --runtime go --schema test/testutil/testdata/schema.fga --output test/authz/ --package authz --id-type int64
 
       - name: Run unit tests (root module)
         run: go test -short -race -coverprofile=coverage-root.out -covermode=atomic ./...
@@ -88,9 +89,7 @@ jobs:
         working-directory: melange
         run: go test -short -race -coverprofile=coverage-runtime.out -covermode=atomic ./...
 
-      - name: Run unit tests (cmd/melange module)
-        working-directory: cmd/melange
-        run: go test -short -race -coverprofile=coverage-cmd.out -covermode=atomic ./...
+      # cmd/melange is now a stdlib-only error-shim with no tests — nothing to run.
 
       - name: Install TypeScript dependencies
         working-directory: clients/typescript
@@ -104,7 +103,7 @@ jobs:
         uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
-          files: ./coverage-root.out,./melange/coverage-runtime.out,./cmd/melange/coverage-cmd.out
+          files: ./coverage-root.out,./melange/coverage-runtime.out
           flags: unit
           fail_ci_if_error: false
 
@@ -148,10 +147,10 @@ jobs:
             ${{ runner.os }}-go-
 
       - name: Setup Go workspace
-        run: go work init . ./cmd/melange ./docs ./melange
+        run: go work init . ./cmd/melange ./docs ./melange ./test
 
       - name: Generate test authz package
-        run: go run ./cmd/melange generate client --runtime go --schema test/testutil/testdata/schema.fga --output test/authz/ --package authz --id-type int64
+        run: go run . generate client --runtime go --schema test/testutil/testdata/schema.fga --output test/authz/ --package authz --id-type int64
 
       - name: Install TypeScript dependencies
         working-directory: clients/typescript

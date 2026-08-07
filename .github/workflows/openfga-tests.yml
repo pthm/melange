@@ -34,7 +34,7 @@ jobs:
             ${{ runner.os }}-go-
 
       - name: Setup Go workspace
-        run: go work init . ./cmd/melange ./docs ./melange
+        run: go work init . ./cmd/melange ./docs ./melange ./test
 
       - name: Run OpenFGA feature tests
         working-directory: test
