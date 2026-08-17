@@ -18,7 +18,7 @@ require (
 	github.com/lib/pq v1.12.3
 	github.com/openfga/api/proto v0.0.0-20260319214821-f153694bfc20
 	github.com/openfga/language/pkg/go v0.2.1
-	github.com/pthm/melange/melange v0.9.0
+	github.com/pthm/melange/melange v0.9.1
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.11.1
