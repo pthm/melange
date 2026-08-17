@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.9.0](https://github.com/pthm/melange/compare/v0.8.6...v0.9.0) (2026-08-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **modules:** the CLI install path changed. Install with `go install github.com/pthm/melange@latest` instead of `go install github.com/pthm/melange/cmd/melange@latest`. The cmd/melange module is retired to a deprecated error-shim and its prior versions are retracted.
+
+### Refactoring
+
+* **modules:** seal lib/-&gt;internal/ and collapse CLI into root (§4+§1) ([d7580dd](https://github.com/pthm/melange/commit/d7580dd61640b82f070cf9d1d5f1929bd1ff638c))
+
 ## [0.8.6](https://github.com/pthm/melange/compare/v0.8.5...v0.8.6) (2026-07-16)
 
 
