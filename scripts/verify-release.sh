@@ -18,6 +18,16 @@ if ! echo "$version" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
 fi
 echo "  release version: $version"
 
+# A replace directive in the root go.mod breaks `go install pkg@version` for
+# consumers, and the CLI installs via `go install github.com/pthm/melange@latest`.
+# Guard in every mode — this is exactly what broke v0.9.0.
+if grep -qE '^replace ' go.mod; then
+  echo "ERROR: root go.mod has replace directive(s) — breaks 'go install github.com/pthm/melange@latest':"
+  grep -E '^replace ' go.mod
+  exit 1
+fi
+echo "  no replace directives in go.mod (go install safe)"
+
 # In dry-run mode the release job intentionally does NOT bump go.mod or
 # package.json (it can't `go mod tidy` against the unpublished runtime tag), so
 # the version cross-checks below would spuriously fail. They only guard a real

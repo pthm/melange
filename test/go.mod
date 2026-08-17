@@ -8,7 +8,7 @@ require (
 	github.com/openfga/api/proto v0.0.0-20260319214821-f153694bfc20
 	github.com/openfga/openfga v1.16.1
 	github.com/pthm/melange v0.8.6
-	github.com/pthm/melange/melange v0.8.6
+	github.com/pthm/melange/melange v0.9.0
 	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.42.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.42.0
@@ -132,3 +132,11 @@ replace (
 	github.com/pthm/melange => ../
 	github.com/pthm/melange/melange => ../melange
 )
+
+// openfga-server (test oracle) pulls go-grpc-middleware@v1.4.0 (the last v1
+// release; no openfga version drops it), which requires the pre-split genproto
+// monolith. In the go.work workspace that collides with the split
+// genproto/googleapis/* modules ("ambiguous import"). Pin genproto past the
+// split here — in the test module, not root — so `go install github.com/pthm/melange`
+// stays free of replace directives.
+replace google.golang.org/genproto v0.0.0-20200423170343-7949de9c1215 => google.golang.org/genproto v0.0.0-20231106174013-bbf56f31fb17
