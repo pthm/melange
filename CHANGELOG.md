@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/pthm/melange/compare/v0.9.0...v0.9.1) (2026-08-17)
+
+
+### Bug Fixes
+
+* **build:** move the genproto replace out of root go.mod so go install works ([08d8aeb](https://github.com/pthm/melange/commit/08d8aeb85192dc03af2c0fcc971ea3febc1051bb))
+
 ## [0.9.0](https://github.com/pthm/melange/compare/v0.8.6...v0.9.0) (2026-08-17)
 
 
