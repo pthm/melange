@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.2](https://github.com/pthm/melange/compare/v0.9.1...v0.9.2) (2026-08-18)
+
+
+### Bug Fixes
+
+* **list_subjects:** apply exclusion to TTU-composed arms in recursive path ([46c7042](https://github.com/pthm/melange/commit/46c70427be431920670b22febceff39afff4c3e4))
+* **list_subjects:** apply exclusion to TTU-composed arms in recursive path ([84d884b](https://github.com/pthm/melange/commit/84d884be24d14a8958d71f6cf5aa9420c6abf8a6)), closes [#80](https://github.com/pthm/melange/issues/80)
+
 ## [0.9.1](https://github.com/pthm/melange/compare/v0.9.0...v0.9.1) (2026-08-17)
 
 
