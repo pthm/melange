@@ -772,8 +772,13 @@ func buildSubjectFirstTTUSubjectBlocks(plan ListPlan, parent ListParentRelationD
 // is composable and cycle-safe. Wildcards are fine, as in
 // buildSubjectFirstTTUSubjectBlocks: the '*' this list_subjects surfaces flows
 // into base_results and is verified by the wildcard-completion tail rather than
-// kept unconditionally. The closure-pattern subject_pool block does not apply
-// plan.Exclusions, so neither does this replacement.
+// kept unconditionally.
+//
+// The composed list_subjects yields the source relation's positive subjects; the
+// outer relation's exclusion (`but not …`) still has to be subtracted or blocked
+// subjects reached through this arm leak into the result. Apply plan.Exclusions
+// here for exactly the same reason the sibling arms do — skip only when the
+// wildcard-completion tail re-validates every row (regularBranchTailValidated).
 func buildSubjectFirstTTUClosureSubjectBlocks(plan ListPlan, parent ListParentRelationData) []TypedQueryBlock {
 	if !composableListSubjectsTarget(plan, plan.ObjectType, parent.SourceRelation) {
 		return nil
@@ -789,6 +794,12 @@ func buildSubjectFirstTTUClosureSubjectBlocks(plan ListPlan, parent ListParentRe
 			Alias:  "sub",
 		},
 	}
+	if !regularBranchTailValidated(plan) {
+		exclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sub", Column: "subject_id"})
+		if preds := exclusions.BuildPredicates(); len(preds) > 0 {
+			stmt.Where = And(preds...)
+		}
+	}
 
 	return []TypedQueryBlock{{
 		Comments: []string{fmt.Sprintf("-- TTU subject-first: subjects via %s -> %s (closure pattern from %s - compose list_subjects)", parent.LinkingRelation, parent.Relation, parent.SourceRelation)},
@@ -801,6 +812,20 @@ func buildSubjectFirstTTUClosureSubjectBlocks(plan ListPlan, parent ListParentRe
 // enumerate the subjects holding parent.Relation on it via the parent's
 // list_subjects function.
 func buildSubjectFirstTTUSubjectBlock(plan ListPlan, parent ListParentRelationData, parentType string) TypedQueryBlock {
+	whereConditions := []Expr{
+		Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+		Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
+		Eq{Left: Col{Table: "link", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
+		Eq{Left: Col{Table: "link", Column: "subject_type"}, Right: Lit(parentType)},
+	}
+	// Subtract the outer relation's exclusion from the composed subjects; without
+	// it, subjects reached via this TTU arm bypass `but not …`. The
+	// wildcard-completion tail, when present, re-validates instead.
+	if !regularBranchTailValidated(plan) {
+		exclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sub", Column: "subject_id"})
+		whereConditions = append(whereConditions, exclusions.BuildPredicates()...)
+	}
+
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "sub", Column: "subject_id"}},
@@ -814,12 +839,7 @@ func buildSubjectFirstTTUSubjectBlock(plan ListPlan, parent ListParentRelationDa
 				Alias:  "sub",
 			},
 		}},
-		Where: And(
-			Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(plan.ObjectType)},
-			Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
-			Eq{Left: Col{Table: "link", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
-			Eq{Left: Col{Table: "link", Column: "subject_type"}, Right: Lit(parentType)},
-		),
+		Where: And(whereConditions...),
 	}
 
 	return TypedQueryBlock{
@@ -877,6 +897,16 @@ func buildListSubjectsRecursiveTTUBlockSubjectPool(plan ListPlan, parent ListPar
 		comment = fmt.Sprintf("-- TTU: subjects via %s -> %s (complex parent relation - using subject_pool)", parent.LinkingRelation, parent.Relation)
 	}
 
+	// The per-row check validates the parent/source relation, which does not carry
+	// the outer relation's exclusion (`but not …`). Subtract plan.Exclusions so
+	// subjects reached through this arm can't bypass it; the wildcard-completion
+	// tail, when present, re-validates instead.
+	linkWhere = append(linkWhere, Raw(checkCallSQL))
+	if !regularBranchTailValidated(plan) {
+		exclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sp", Column: "subject_id"})
+		linkWhere = append(linkWhere, exclusions.BuildPredicates()...)
+	}
+
 	// Build the query: CROSS JOIN subject_pool with parent links, filter by permission check
 	stmt := SelectStmt{
 		Distinct:    true,
@@ -888,7 +918,7 @@ func buildListSubjectsRecursiveTTUBlockSubjectPool(plan ListPlan, parent ListPar
 			Table:  "melange_tuples",
 			Alias:  "link",
 		}},
-		Where: And(append(linkWhere, Raw(checkCallSQL))...),
+		Where: And(linkWhere...),
 	}
 
 	return TypedQueryBlock{
@@ -982,6 +1012,24 @@ func buildListSubjectsRecursiveUsersetFilterDirectBlock(plan ListPlan) TypedQuer
 	}
 }
 
+// usersetFilterFullCheck returns a check_permission guard validating that an
+// emitted userset subject actually satisfies the full target relation. The
+// userset-filter TTU arms are otherwise flat unions that never re-apply the
+// relation's exclusion, so a userset reached via a TTU/parent/nested hop but
+// excluded by `but not …` would leak (issue #80, userset-filter branch). The
+// direct userset-filter arm already carries this guard; the TTU arms did not.
+// Gated by the caller on plan.HasExclusion so non-exclusion relations keep their
+// pure-union SQL (and avoid the per-row check cost).
+func usersetFilterFullCheck(plan ListPlan, subjectID Expr) Expr {
+	return CheckPermission{
+		Schema:      plan.DatabaseSchema,
+		Subject:     SubjectRef{Type: Param("v_filter_type"), ID: subjectID},
+		Relation:    plan.Relation,
+		Object:      LiteralObject(plan.ObjectType, Param("p_object_id")),
+		ExpectAllow: true,
+	}
+}
+
 // buildListSubjectsRecursiveUsersetFilterTTUBlock builds the TTU path block for userset filter.
 func buildListSubjectsRecursiveUsersetFilterTTUBlock(plan ListPlan, parent ListParentRelationData) TypedQueryBlock {
 	closureRelStmt := SelectStmt{
@@ -1017,6 +1065,11 @@ func buildListSubjectsRecursiveUsersetFilterTTUBlock(plan ListPlan, parent ListP
 
 	if len(parent.AllowedLinkingTypesSlice) > 0 {
 		whereConditions = append(whereConditions, In{Expr: Col{Table: "link", Column: "subject_type"}, Values: parent.AllowedLinkingTypesSlice})
+	}
+
+	if plan.HasExclusion {
+		whereConditions = append(whereConditions, usersetFilterFullCheck(plan,
+			NormalizedUsersetSubject(Col{Table: "pt", Column: "subject_id"}, Param("v_filter_relation"))))
 	}
 
 	subjectExpr := Alias{Expr: NormalizedUsersetSubject(Col{Table: "pt", Column: "subject_id"}, Param("v_filter_relation")), Name: "subject_id"}
@@ -1069,6 +1122,11 @@ func buildListSubjectsRecursiveUsersetFilterTTUIntermediateBlock(plan ListPlan, 
 		whereConditions = append(whereConditions, In{Expr: Col{Table: "link", Column: "subject_type"}, Values: parent.AllowedLinkingTypesSlice})
 	}
 
+	if plan.HasExclusion {
+		whereConditions = append(whereConditions, usersetFilterFullCheck(plan,
+			Concat{Parts: []Expr{Col{Table: "link", Column: "subject_id"}, Lit("#"), Param("v_filter_relation")}}))
+	}
+
 	subjectExpr := Raw("link.subject_id || '#' || v_filter_relation AS subject_id")
 
 	stmt := SelectStmt{
@@ -1106,6 +1164,11 @@ func buildListSubjectsRecursiveUsersetFilterTTUNestedBlock(plan ListPlan, parent
 
 	if len(parent.AllowedLinkingTypesSlice) > 0 {
 		whereConditions = append(whereConditions, In{Expr: Col{Table: "link", Column: "subject_type"}, Values: parent.AllowedLinkingTypesSlice})
+	}
+
+	if plan.HasExclusion {
+		whereConditions = append(whereConditions, usersetFilterFullCheck(plan,
+			Col{Table: "nested", Column: "subject_id"}))
 	}
 
 	stmt := SelectStmt{
