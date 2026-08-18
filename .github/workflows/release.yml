@@ -280,6 +280,31 @@ jobs:
       # cmd/melange is a retired error-shim published once as a terminal manual
       # tag, not on every release — see specs/module-layout-proposal.md.
 
+      - name: Smoke-test go install (post-publish)
+        if: env.DRY_RUN != 'true'
+        run: |
+          # End-to-end check that the published module is actually installable —
+          # catches replace/exclude directives or other module-graph issues that
+          # only surface against the real proxy (a stray replace broke this in
+          # v0.9.0). The release is already published here, so a failure means
+          # "roll forward with a fix", not "abort" — but it fails loudly.
+          echo "Waiting for goproxy to index ${VERSION}..."
+          for i in $(seq 1 30); do
+            if GOPROXY=https://proxy.golang.org go list -m "github.com/pthm/melange@${VERSION}" >/dev/null 2>&1; then break; fi
+            sleep 10
+          done
+          bindir="$(mktemp -d)"
+          if ! GOBIN="$bindir" GOPROXY=https://proxy.golang.org go install "github.com/pthm/melange@${VERSION}"; then
+            echo "❌ 'go install github.com/pthm/melange@${VERSION}' FAILED — the CLI install path is broken. Roll forward with a fix."
+            exit 1
+          fi
+          if ! "$bindir/melange" version | grep -q "${VERSION#v}"; then
+            echo "❌ installed binary did not report ${VERSION}:"
+            "$bindir/melange" version
+            exit 1
+          fi
+          echo "✓ go install github.com/pthm/melange@${VERSION} works: $("$bindir/melange" version | head -1)"
+
       # release-please tracks the lifecycle of its own release PRs via two
       # labels: `autorelease: pending` (PR merged, tag not yet created) and
       # `autorelease: tagged` (release complete). When release-please owns
