@@ -20,12 +20,14 @@ import (
 	"github.com/pthm/melange/pkg/schema"
 )
 
-// Type aliases for cleaner code.
-type (
-	TypeDefinition   = schema.TypeDefinition
-	GeneratedSQL     = sqlgen.GeneratedSQL
-	ListGeneratedSQL = sqlgen.ListGeneratedSQL
-)
+// TypeDefinition re-exports [schema.TypeDefinition] for callers of this package.
+type TypeDefinition = schema.TypeDefinition
+
+// GeneratedSQL re-exports [sqlgen.GeneratedSQL].
+type GeneratedSQL = sqlgen.GeneratedSQL
+
+// ListGeneratedSQL re-exports [sqlgen.ListGeneratedSQL].
+type ListGeneratedSQL = sqlgen.ListGeneratedSQL
 
 // NamedFunction pairs a function name with its generated SQL body.
 type NamedFunction = sqlgen.NamedFunction

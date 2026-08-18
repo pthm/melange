@@ -19,7 +19,15 @@ linters:
     - prealloc
     - unconvert
     - unparam
+    - revive
   settings:
+    revive:
+      rules:
+        # Require doc comments on exported symbols and a package comment.
+        - name: exported
+          arguments:
+            - disableStutteringCheck
+        - name: package-comments
     gocritic:
       enabled-tags:
         - diagnostic
@@ -35,6 +43,11 @@ linters:
       for-loops: true
   exclusions:
     rules:
+      # Doc comments are only required on the public API surface, not on
+      # internal/ (unimportable externally) or test files.
+      - path: (internal/|_test\.go)
+        linters:
+          - revive
       # Allow unchecked errors in tests
       - path: _test\.go
         linters:

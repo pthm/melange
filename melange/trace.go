@@ -41,25 +41,25 @@ type Trace struct {
 type NodeType string
 
 const (
-	// NodeDirect: satisfied by a direct tuple in melange_tuples.
+	// NodeDirect is satisfied by a direct tuple in melange_tuples.
 	NodeDirect NodeType = "direct"
-	// NodeImplied: satisfied by a rewrite (e.g. viewer ← editor).
+	// NodeImplied is satisfied by a rewrite (e.g. viewer ← editor).
 	NodeImplied NodeType = "implied"
-	// NodeUserset: satisfied via a [type#relation] subject reference.
+	// NodeUserset is satisfied via a [type#relation] subject reference.
 	NodeUserset NodeType = "userset"
-	// NodeTTU: satisfied via "relation from parent" traversal.
+	// NodeTTU is satisfied via "relation from parent" traversal.
 	NodeTTU NodeType = "ttu"
-	// NodeUnion: OR aggregation node. Appears in Expand output only.
+	// NodeUnion is an OR aggregation node. Appears in Expand output only.
 	NodeUnion NodeType = "union"
-	// NodeIntersection: AND aggregation node.
+	// NodeIntersection is an AND aggregation node.
 	NodeIntersection NodeType = "intersection"
-	// NodeExclusion: BUT NOT aggregation node.
+	// NodeExclusion is a BUT NOT aggregation node.
 	NodeExclusion NodeType = "exclusion"
-	// NodeWildcard: a [type:*] sentinel; never enumerated.
+	// NodeWildcard is a [type:*] sentinel; never enumerated.
 	NodeWildcard NodeType = "wildcard"
-	// NodeCycle: cycle detected during recursive resolution; subtree omitted.
+	// NodeCycle marks a cycle detected during recursive resolution; subtree omitted.
 	NodeCycle NodeType = "cycle"
-	// NodeTruncated: p_max_nodes hit; subtree omitted.
+	// NodeTruncated marks that p_max_nodes was hit; subtree omitted.
 	NodeTruncated NodeType = "truncated"
 )
 

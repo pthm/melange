@@ -1,3 +1,5 @@
+// Package migrator applies compiled OpenFGA schemas to a PostgreSQL database,
+// installing the generated PL/pgSQL functions and tracking applied migrations.
 package migrator
 
 import (
