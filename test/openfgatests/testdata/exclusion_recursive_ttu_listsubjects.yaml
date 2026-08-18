@@ -1,0 +1,151 @@
+# Regression tests for issue #80:
+# list_accessible_subjects returned subjects that check_permission denies when a
+# `but not` relation's positive base reached subjects through a recursive TTU
+# combined with a second arm (cross-type TTU or nested userset). The subject-first
+# TTU compose blocks enumerated the source relation's subjects without subtracting
+# the outer exclusion, so blocked subjects leaked into the list.
+#
+# The harness derives list_subjects (ListUsers) assertions from the checkAssertions
+# below (DENY -> must-not-contain), which is what catches the leak; the explicit
+# listUsersAssertions pin the full expected set.
+
+tests:
+  # Issue #80 canonical repro: recursive TTU (viewer from parent) + cross-type TTU
+  # (member from org), all behind `viewer but not blocked`.
+  - name: recursive_ttu_exclusion_listsubjects
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type org
+            relations
+              define member: [user]
+          type folder
+            relations
+              define org: [org]
+              define parent: [folder]
+              define viewer: [user] or viewer from parent or member from org
+              define blocked: [user]
+              define can_see: viewer but not blocked
+        tuples:
+          - {user: user:alice, relation: member, object: org:o1}
+          - {user: org:o1, relation: org, object: folder:f1}
+          - {user: user:alice, relation: blocked, object: folder:f1}
+          - {user: user:bob, relation: viewer, object: folder:f1}
+          - {user: user:bob, relation: blocked, object: folder:f1}
+          - {user: user:carol, relation: member, object: org:o1}
+        checkAssertions:
+          - {name: alice_denied, tuple: {user: user:alice, relation: can_see, object: folder:f1}, expectation: false}
+          - {name: bob_denied, tuple: {user: user:bob, relation: can_see, object: folder:f1}, expectation: false}
+          - {name: carol_allowed, tuple: {user: user:carol, relation: can_see, object: folder:f1}, expectation: true}
+        listUsersAssertions:
+          - name: can_see_of_folder_f1
+            request: {object: folder:f1, relation: can_see, filters: [user]}
+            expectation: [user:carol]
+
+  # Isolated cross-type TTU leak: alice/dave reach viewer via member-from-org and
+  # are blocked; carol reaches it via member-from-org and is not.
+  - name: recursive_ttu_crosstype_exclusion_listsubjects
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type org
+            relations
+              define member: [user]
+          type folder
+            relations
+              define org: [org]
+              define parent: [folder]
+              define viewer: [user] or viewer from parent or member from org
+              define blocked: [user]
+              define can_see: viewer but not blocked
+        tuples:
+          - {user: folder:f0, relation: parent, object: folder:f1}
+          - {user: org:o1, relation: org, object: folder:f1}
+          - {user: user:alice, relation: viewer, object: folder:f0}
+          - {user: user:alice, relation: blocked, object: folder:f1}
+          - {user: user:dave, relation: member, object: org:o1}
+          - {user: user:dave, relation: blocked, object: folder:f1}
+          - {user: user:carol, relation: member, object: org:o1}
+        checkAssertions:
+          - {name: blocked_via_parent_denied, tuple: {user: user:alice, relation: can_see, object: folder:f1}, expectation: false}
+          - {name: blocked_via_org_denied, tuple: {user: user:dave, relation: can_see, object: folder:f1}, expectation: false}
+          - {name: unblocked_allowed, tuple: {user: user:carol, relation: can_see, object: folder:f1}, expectation: true}
+        listUsersAssertions:
+          - name: can_see_of_folder_f1
+            request: {object: folder:f1, relation: can_see, filters: [user]}
+            expectation: [user:carol]
+
+  # Isolated nested-userset leak: bob reaches viewer via a self-referential
+  # grp#member chain and is blocked; carol reaches it via the same chain and is not.
+  - name: recursive_ttu_nested_userset_exclusion_listsubjects
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type grp
+            relations
+              define member: [user, grp#member]
+          type folder
+            relations
+              define parent: [folder]
+              define viewer: [user, grp#member] or viewer from parent
+              define blocked: [user]
+              define can_see: viewer but not blocked
+        tuples:
+          - {user: folder:f0, relation: parent, object: folder:f1}
+          - {user: user:alice, relation: viewer, object: folder:f0}
+          - {user: user:alice, relation: blocked, object: folder:f1}
+          - {user: "grp:g1#member", relation: viewer, object: folder:f1}
+          - {user: "grp:g2#member", relation: member, object: grp:g1}
+          - {user: user:bob, relation: member, object: grp:g2}
+          - {user: user:bob, relation: blocked, object: folder:f1}
+          - {user: user:carol, relation: member, object: grp:g2}
+        checkAssertions:
+          - {name: blocked_via_parent_denied, tuple: {user: user:alice, relation: can_see, object: folder:f1}, expectation: false}
+          - {name: blocked_via_nested_userset_denied, tuple: {user: user:bob, relation: can_see, object: folder:f1}, expectation: false}
+          - {name: unblocked_allowed, tuple: {user: user:carol, relation: can_see, object: folder:f1}, expectation: true}
+        listUsersAssertions:
+          - name: can_see_of_folder_f1
+            request: {object: folder:f1, relation: can_see, filters: [user]}
+            expectation: [user:carol]
+
+  # Same bug class on the USERSET-FILTER branch of the recursive list_subjects
+  # path (querying with a grp#member filter). The TTU/parent/nested arms of that
+  # branch enumerated usersets without re-applying the exclusion, so a userset that
+  # reaches `viewer` via parent-recursion but is `blocked` leaked. grp:g1#member is
+  # viewer of f1 via parent(f0) and blocked -> excluded; grp:g2#member is a direct
+  # viewer and not blocked -> present.
+  - name: recursive_ttu_exclusion_usersetfilter_listsubjects
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type grp
+            relations
+              define member: [user, grp#member]
+          type folder
+            relations
+              define parent: [folder]
+              define viewer: [grp#member] or viewer from parent
+              define blocked: [grp#member]
+              define can_see: viewer but not blocked
+        tuples:
+          - {user: folder:f0, relation: parent, object: folder:f1}
+          - {user: "grp:g1#member", relation: viewer, object: folder:f0}
+          - {user: "grp:g1#member", relation: blocked, object: folder:f1}
+          - {user: "grp:g2#member", relation: viewer, object: folder:f1}
+          - {user: user:a, relation: member, object: grp:g1}
+          - {user: user:b, relation: member, object: grp:g2}
+        checkAssertions:
+          - {name: blocked_userset_denied, tuple: {user: "grp:g1#member", relation: can_see, object: folder:f1}, expectation: false}
+          - {name: unblocked_userset_allowed, tuple: {user: "grp:g2#member", relation: can_see, object: folder:f1}, expectation: true}
+        listUsersAssertions:
+          - name: can_see_usersets_of_folder_f1
+            request: {object: folder:f1, relation: can_see, filters: [grp#member]}
+            expectation: ["grp:g2#member"]

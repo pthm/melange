@@ -714,6 +714,13 @@ func RunTest(t *testing.T, parent *Client, tc TestCase) {
 				// Sentinel responses (relation not yet eligible for
 				// Expand) skip — see expand_parity.go.
 				runExpandParityAssertions(t, ctx, client, storeID, modelID, stage.ListObjectsAssertions)
+
+				// Cross-reference every list assertion against Check: the list
+				// result and Check must agree on the same data, both directions
+				// (no over- or under-report). This is the list -> check mirror of
+				// the derived-assertion sweep (check -> list), over a tuple-derived
+				// candidate universe. See list_check_parity.go.
+				runListCheckParityAssertions(t, ctx, client, storeID, modelID, stage)
 			})
 		}
 	})
