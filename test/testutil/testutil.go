@@ -228,6 +228,8 @@ func DSN(tb testing.TB) string {
 	return DSNWithDatabaseSchema(tb, "")
 }
 
+// DSNWithDatabaseSchema is like DSN but seeds the isolated test database from
+// the given database schema. An empty databaseSchema uses the default template.
 func DSNWithDatabaseSchema(tb testing.TB, databaseSchema string) string {
 	tb.Helper()
 
@@ -270,6 +272,8 @@ func DB(tb testing.TB) *sql.DB {
 	return DBWithDatabaseSchema(tb, "")
 }
 
+// DBWithDatabaseSchema is like DB but seeds the isolated test database from the
+// given database schema. An empty databaseSchema uses the default template.
 func DBWithDatabaseSchema(tb testing.TB, databaseSchema string) *sql.DB {
 	tb.Helper()
 

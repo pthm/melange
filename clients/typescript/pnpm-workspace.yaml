@@ -17,6 +17,12 @@ overrides:
   # (GHSA-gv7w-rqvm-qjhr) and the Windows dev-server arbitrary file read
   # (GHSA-g7r4-m6w7-qqqr).
   esbuild: "^0.28.1"
+  # Dev-only postcss advisory pulled in transitively via vite. vite's range
+  # (^8.5.6) already permits the fix but has no higher floor to upgrade to, so
+  # pin the fixed line. postcss >=8.5.23 fixes the sourceMappingURL path
+  # traversal disclosing arbitrary .map files (GHSA-6g55-p6wh-862q and its
+  # incomplete-fix follow-up).
+  postcss: ">=8.5.23"
 
 # pnpm v11+ blocks transitive dependencies with build scripts by default.
 # esbuild is a trusted vitest/vite dependency; pre-approve so CI installs
