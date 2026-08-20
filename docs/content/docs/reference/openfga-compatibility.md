@@ -168,6 +168,18 @@ condition ip_allowed(user_ip: ipaddress) {
 define viewer: [user with ip_allowed]
 ```
 
+Melange rejects these schemas rather than dropping the condition, since a
+dropped condition would silently widen access:
+
+```
+$ melange validate --schema schema.fga
+Error: parsing schema: melange: invalid schema: conditions are not supported
+and would be silently dropped: document#viewer allows [user with ip_allowed].
+```
+
+Remove the condition (and tighten the relation another way) to use the schema
+with Melange.
+
 ## Migration Path to OpenFGA
 
 Melange is designed to be a stepping stone. If you outgrow its capabilities, you can migrate to the full OpenFGA service.

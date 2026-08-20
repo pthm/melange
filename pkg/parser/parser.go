@@ -29,9 +29,12 @@ package parser
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strings"
 
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/language/pkg/go/transformer"
@@ -97,6 +100,10 @@ func ParseModularSchema(manifestPath string) ([]schema.TypeDefinition, error) {
 		return nil, fmt.Errorf("compiling modules: %w", err)
 	}
 
+	if err := checkUnsupported(model); err != nil {
+		return nil, err
+	}
+
 	return convertModel(model), nil
 }
 
@@ -109,7 +116,62 @@ func ParseSchemaString(content string) ([]schema.TypeDefinition, error) {
 		return nil, fmt.Errorf("%w: %v", melange.ErrInvalidSchema, err)
 	}
 
+	if err := checkUnsupported(model); err != nil {
+		return nil, err
+	}
+
 	return convertModel(model), nil
+}
+
+// compatibilityDocsURL documents which OpenFGA features melange supports.
+const compatibilityDocsURL = "https://melange.sh/docs/reference/openfga-compatibility/"
+
+// checkUnsupported rejects models using OpenFGA features melange cannot
+// compile. Conditions are the only one: convertModel drops them, so a schema
+// relying on a condition to narrow access would compile to a broader grant.
+// Failing closed is the only safe option until conditions are supported.
+func checkUnsupported(model *openfgav1.AuthorizationModel) error {
+	var found []string
+
+	for _, td := range model.GetTypeDefinitions() {
+		relMeta := td.GetMetadata().GetRelations()
+		for _, relName := range slices.Sorted(maps.Keys(relMeta)) {
+			for _, t := range relMeta[relName].GetDirectlyRelatedUserTypes() {
+				if cond := t.GetCondition(); cond != "" {
+					found = append(found, fmt.Sprintf("%s#%s allows [%s with %s]",
+						td.GetType(), relName, subjectRefString(t), cond))
+				}
+			}
+		}
+	}
+
+	// A condition can be declared but never applied to a type restriction.
+	// Still unsupported, and reporting it beats a confusing silent pass.
+	if len(found) == 0 {
+		for _, name := range slices.Sorted(maps.Keys(model.GetConditions())) {
+			found = append(found, fmt.Sprintf("condition %q is declared", name))
+		}
+	}
+
+	if len(found) == 0 {
+		return nil
+	}
+
+	return fmt.Errorf("%w: conditions are not supported and would be silently dropped: %s. Remove them or see %s",
+		melange.ErrInvalidSchema, strings.Join(found, "; "), compatibilityDocsURL)
+}
+
+// subjectRefString renders a type restriction the way it appears in the DSL:
+// "user", "user:*", or "group#member".
+func subjectRefString(t *openfgav1.RelationReference) string {
+	switch v := t.GetRelationOrWildcard().(type) {
+	case *openfgav1.RelationReference_Wildcard:
+		return t.GetType() + ":*"
+	case *openfgav1.RelationReference_Relation:
+		return t.GetType() + "#" + v.Relation
+	default:
+		return t.GetType()
+	}
 }
 
 // ConvertProtoModel converts an OpenFGA protobuf AuthorizationModel to schema
@@ -117,7 +179,9 @@ func ParseSchemaString(content string) ([]schema.TypeDefinition, error) {
 // (e.g., from the OpenFGA API) rather than DSL text.
 //
 // This function is used by the OpenFGA test suite adapter to convert test
-// models without re-implementing the parsing logic.
+// models without re-implementing the parsing logic. Unlike the DSL
+// entrypoints it does not reject unsupported features: conditions on a model
+// passed here are still dropped silently.
 func ConvertProtoModel(model *openfgav1.AuthorizationModel) []schema.TypeDefinition {
 	return convertModel(model)
 }

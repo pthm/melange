@@ -80,6 +80,10 @@ func ParseModularSchemaFromStrings(modules map[string]string, schemaVersion stri
 		return nil, fmt.Errorf("compiling modules: %w", err)
 	}
 
+	if err := checkUnsupported(model); err != nil {
+		return nil, err
+	}
+
 	return convertModel(model), nil
 }
 
