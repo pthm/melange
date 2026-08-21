@@ -235,9 +235,9 @@ Opt-in via `ExpandCache` — see [Caching](./caching/#expandcache).
 
 ## See Also
 
-- [Explaining Decisions](./explaining-decisions/): the companion `Explain` API for "why (or why not)?"
-- [Listing Subjects](./listing-subjects/): request-path listing without the tree structure
-- [Caching](./caching/): opt-in caching for Expand trees via `ExpandCache`
+- [Explaining Decisions](../explaining-decisions/): the companion `Explain` API for "why (or why not)?"
+- [Listing Subjects](../listing-subjects/): request-path listing without the tree structure
+- [Caching](../caching/): opt-in caching for Expand trees via `ExpandCache`
 - [Go API reference](../reference/go-api/#expand): `Checker.Expand` / `ExpandRecursive` signatures
 - [SQL API reference](../reference/sql-api/#expand_permission): `expand_permission` SQL function
 - [CLI reference](../reference/cli/#expand): `melange expand` command

@@ -29,7 +29,7 @@ model. Tools prefer `model_json` (already parsed) and fall back to parsing
 ## What reads it
 
 The deployed model is the single source of truth behind a family of commands
-(see the [CLI reference](cli) for each):
+(see the [CLI reference](../cli/) for each):
 
 | Command                          | Uses the deployed model to…                                        |
 | -------------------------------- | ------------------------------------------------------------------ |
@@ -52,12 +52,12 @@ The deployed model is the single source of truth behind a family of commands
 
 ## Compatibility
 
-Model storage was introduced in melange v0.9. Databases migrated by an earlier
-version have no recorded model; the commands above detect this and report it
-plainly (for example, `schema pull` distinguishes "never migrated" from
-"migrated before model storage existed"). Re-running `melange migrate` after
-upgrading backfills the model without re-applying the generated functions, so a
-plain rerun makes these commands work — no `--force` needed.
+Databases migrated before model storage existed have no recorded model. The
+commands above detect that and report it plainly — `schema pull`, for example,
+distinguishes "never migrated" from "migrated before the model was recorded".
+Re-running `melange migrate` after upgrading backfills the model without
+re-applying the generated functions, so a plain rerun makes these commands work,
+with no `--force` needed.
 
 A **modular** (`fga.mod`) schema is stored as its manifest plus module bundle for
 reference and recovery. That combined form does not re-parse as a single `.fga`,

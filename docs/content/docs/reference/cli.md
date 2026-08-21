@@ -300,7 +300,7 @@ every version:
 Treat it as a prompt to look, not a verdict: it reports what git could see, and
 git cannot see every place a model may have come from.
 
-Databases migrated before v0.9 (or by `MigrateWithTypes`) have no recorded model
+Databases migrated before model storage existed (or by `MigrateWithTypes`) have no recorded model
 DSL; status notes this and `melange schema pull` cannot recover them. Reading the
 migration record is non-fatal — if it fails, status still reports schema/tuples
 presence and adds a `Note:` line.
@@ -392,7 +392,7 @@ bundle for reference/recovery. That combined form does **not** re-parse as a
 single `.fga`, and splitting it back into module files is not supported.
 {{< /callout >}}
 
-Requires a database migrated by melange v0.9 or later. Older databases did not
+Requires a database migrated by a version that records the model. Older databases did not
 record the model; pull reports whether the database was never migrated or was
 migrated before model storage existed.
 
@@ -432,8 +432,8 @@ source instead and are mutually exclusive with a database source.
 ```
 Comparing deployed → melange/schema.fga
 
-  BREAKING  document.legacy removed
   additive  type audit_log added
+  BREAKING  relation document.legacy removed
   additive  document.viewer grants [org]
 
 1 breaking, 2 additive
@@ -486,7 +486,7 @@ melange doctor \
 | Flag                 | Default              | Description                                  |
 | -------------------- | -------------------- | -------------------------------------------- |
 | `--db`               | (from config)        | PostgreSQL connection string                 |
-| `--db-schema`        | `""`                 | Database schema                              |
+| `--db-schema`        | (config, else `public`) | PostgreSQL schema for melange objects     |
 | `--schema`           | `schemas/schema.fga` | Path to schema.fga file                      |
 | `--verbose`          | `false`              | Show detailed output with additional context |
 | `--skip-performance` | `false`              | Skip performance checks (view analysis)      |
@@ -621,7 +621,7 @@ melange explain user:alice viewer document:1 --db postgres://localhost/mydb
 | Flag           | Default       | Description                                                                                          |
 | -------------- | ------------- | ---------------------------------------------------------------------------------------------------- |
 | `--db`         | (from config) | PostgreSQL connection string                                                                          |
-| `--db-schema`  | `"public"`    | Database schema                                                                                       |
+| `--db-schema`  | (config, else `public`) | PostgreSQL schema for melange objects                                                       |
 | `--format`     | `tree`        | `tree` (unicode pretty-print) or `json` (raw `Trace` JSONB)                                          |
 | `--max-nodes`  | `0`           | Cap on trace nodes. `0` defers to the session GUC `melange.max_explain_nodes`, then to 100           |
 | `--color`      | `auto`        | `auto` (TTY + `NO_COLOR` unset), `always`, or `never`. See [Colour Output](#colour-output) below.    |
@@ -661,10 +661,10 @@ melange expand document:1 viewer --db postgres://localhost/mydb
 | Flag             | Default       | Description                                                                                                      |
 | ---------------- | ------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `--db`           | (from config) | PostgreSQL connection string                                                                                     |
-| `--db-schema`   | `"public"`    | Database schema                                                                                                  |
+| `--db-schema`   | (config, else `public`) | PostgreSQL schema for melange objects                                                                  |
 | `--format`       | `tree`        | `tree` (unicode pretty-print) or `json` (raw `UsersetTree` JSONB)                                                |
-| `--flatten`      | `false`       | Call `ExpandRecursive` and print the flat, deduplicated user list (chases `Leaf.Computed` and TTU pointers)      |
-| `--recursive`    | `false`       | Alias for `--flatten`                                                                                            |
+| `--flatten`      | `false`       | Print the flat, deduplicated user list instead of the tree. `Leaf.Users` only — computed and TTU pointers are not chased |
+| `--recursive`    | `false`       | Print the flat list *and* chase `Leaf.Computed` / TTU pointers with follow-up Expand calls (implies `--flatten`) |
 | `--subject-type` | (unset)       | Melange extension. Narrow `Leaf.Users` to a single subject type                                                  |
 | `--max-leaf`     | `0`           | Melange extension. Cap each `Leaf.Users` list. `0` defers to session GUC `melange.max_expand_leaf`, then unbounded |
 | `--color`        | `auto`        | `auto` (TTY + `NO_COLOR` unset), `always`, or `never`. See [Colour Output](#colour-output) below.                |
@@ -808,7 +808,7 @@ melange generate migration \
 | Flag                  | Default              | Description                                                    |
 | --------------------- | -------------------- | -------------------------------------------------------------- |
 | `--schema`            | `schemas/schema.fga` | Path to current `.fga` schema file (required)                  |
-| `--db-schema`         | `""`                 | PostgreSQL schema for melange objects                          |
+| `--db-schema`         | (config, else `public`) | PostgreSQL schema for melange objects                       |
 | `--output`            | (stdout)             | Output directory for migration files                           |
 | `--name`              | `melange`            | Migration name suffix used in filenames                        |
 | `--format`            | `split`              | Output format: `split` (`.up.sql`/`.down.sql`) or `single`    |
@@ -917,6 +917,10 @@ melange init
 | `--output` | `internal/authz` (Go) / `src/authz` (TS) | Client output directory |
 | `--package` | `authz` | Client package name (Go only) |
 | `--id-type` | `string` | Client ID type: `string`, `int64`, `uuid.UUID` |
+| `--migration-strategy` | (prompted) | How migrations are applied: `builtin` (`melange migrate`) or `versioned` (generated SQL files) |
+| `--migration-output` | `migrations/` | Output directory for versioned migration files |
+| `--migration-format` | `split` | Versioned migration format: `split` (`.up.sql`/`.down.sql`) or `single` |
+| `--migration-name` | `melange` | Versioned migration name suffix used in filenames |
 
 **Project detection:**
 
@@ -1260,10 +1264,15 @@ if err != nil {
     log.Fatal(err)
 }
 
-// Create migrator and apply
-m := migrator.NewMigrator(db, "schemas/schema.fga")
-err = m.MigrateWithTypes(ctx, types)
+// Apply, recording the deployed model in melange_migrations
+err = migrator.Migrate(ctx, db, "schemas/schema.fga")
 ```
+
+`migrator.Migrate` and `migrator.MigrateFromString` record the schema they
+applied, so the database stays self-describing and `status`, `schema pull`, and
+`diff` keep working against it. `Migrator.MigrateWithTypes` (used with
+pre-parsed types) deliberately skips that bookkeeping — reach for it only when
+you don't want a migration record, such as in test fixtures.
 
 **With options (dry-run, force, skip-if-unchanged):**
 
@@ -1290,6 +1299,17 @@ opts := migrator.MigrateOptions{}
 skipped, err := migrator.MigrateWithOptions(ctx, db, "schemas/schema.fga", opts)
 if skipped {
     log.Println("Schema unchanged, migration skipped")
+}
+
+// Compare-and-swap: apply only if the database is still at this checksum
+deployed := "3f9a...c21b"
+opts := migrator.MigrateOptions{
+    IfDeployedChecksum: &deployed,
+}
+skipped, err := migrator.MigrateWithOptions(ctx, db, "schemas/schema.fga", opts)
+var changed *migrator.DeployedModelChangedError
+if errors.As(err, &changed) {
+    log.Printf("database drifted: expected %s, found %s", changed.Expected, changed.Actual)
 }
 ```
 

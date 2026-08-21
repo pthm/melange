@@ -50,7 +50,7 @@ When you run `melange migrate` (or `melange generate migration`), the compiler:
 4. **Generates** specialized SQL functions for each relation
 5. **Installs** the functions into PostgreSQL (`migrate`) or writes them as versioned SQL files (`generate migration`)
 
-See [Running Migrations](../migrations/) for guidance on choosing between the two approaches.
+See [Running Migrations](../../guides/migrations/) for guidance on choosing between the two approaches.
 
 ### Runtime
 

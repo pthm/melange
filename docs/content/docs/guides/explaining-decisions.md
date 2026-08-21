@@ -207,10 +207,10 @@ A sentinel response means the requested pair has no generated function. Check wh
 
 ## See Also
 
-- [Expanding Permissions](./expanding-permissions/): the companion `Expand` API for "who has access?"
-- [Checking Permissions](./checking-permissions/): the request-path `Check` API
-- [Caching](./caching/): opt-in caching for Explain traces via `ExplainCache`
-- [Troubleshooting](./troubleshooting/): when checks return the wrong answer
+- [Expanding Permissions](../expanding-permissions/): the companion `Expand` API for "who has access?"
+- [Checking Permissions](../checking-permissions/): the request-path `Check` API
+- [Caching](../caching/): opt-in caching for Explain traces via `ExplainCache`
+- [Troubleshooting](../troubleshooting/): when checks return the wrong answer
 - [Go API reference](../reference/go-api/#explain): `Checker.Explain` signature
 - [SQL API reference](../reference/sql-api/#explain_permission): `explain_permission` SQL function
 - [CLI reference](../reference/cli/#explain): `melange explain` command
