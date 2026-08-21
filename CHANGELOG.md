@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.9.3](https://github.com/pthm/melange/compare/v0.9.2...v0.9.3) (2026-08-21)
+
+
+### Features
+
+* add schema diff engine and `melange diff` command ([a0821ec](https://github.com/pthm/melange/commit/a0821ecbb0b03b5fa37064f65e3a87140ced66b0))
+* **cli:** add `melange history` to list the migration audit trail ([f32319d](https://github.com/pthm/melange/commit/f32319da6e8e0b8a3d89592194f089e5c5a5376f))
+* **cli:** add `schema pull` and enrich `status` with deployed-model state ([c30a618](https://github.com/pthm/melange/commit/c30a6185d23b04276006a9897104e2acaf9fd406))
+* **cli:** add a semantic-diff header to generated migrations ([519f2a1](https://github.com/pthm/melange/commit/519f2a145963fcaee97fccb55c5e4acb03f44d09))
+* **cli:** add named environment profiles ([51a2dcf](https://github.com/pthm/melange/commit/51a2dcf60f71208b6c0892707f7e24ea269b51bd))
+* **cli:** add the database-ahead sync state to status ([ceca7d9](https://github.com/pthm/melange/commit/ceca7d9e29ce1f98a844ef0c7992682bbfdc54a6))
+* **cli:** show semantic drift detail in status ([d3a4e76](https://github.com/pthm/melange/commit/d3a4e76382065851983e48fcf4082ef3e4bb4dcb))
+* deployed model storage, environment profiles, and drift-safe migrate ([1c9c696](https://github.com/pthm/melange/commit/1c9c696c01612c3da2a3a295c8028fd60180ba20))
+* **doctor:** add deployed-model and breaking-drift checks ([b961e06](https://github.com/pthm/melange/commit/b961e064dfbc9e4c1a358c8089ca81299b3f6aee))
+* **migrator:** add --if-deployed-checksum drift guard to migrate ([896a261](https://github.com/pthm/melange/commit/896a261d0c4ddd9083b8dc302c168382387b5540))
+* **migrator:** record the deployed model in melange_migrations ([a26ddd5](https://github.com/pthm/melange/commit/a26ddd53008687b86f0e77094075e7f9d7f280ff))
+
+
+### Bug Fixes
+
+* **cli:** drop premature v0.9 claims from deployed-model messages ([55e2d60](https://github.com/pthm/melange/commit/55e2d60e701324e305e067a4aeee86884e8692c9))
+* **parser:** reject schemas containing conditions instead of dropping them ([ff65f9e](https://github.com/pthm/melange/commit/ff65f9e07c6a4c8cebe4bc05e3416f5e15c58f29))
+* **parser:** reject schemas containing conditions instead of dropping them ([538764e](https://github.com/pthm/melange/commit/538764e7f9735a48008899463a38450918967406)), closes [#81](https://github.com/pthm/melange/issues/81)
+
 ## [0.9.2](https://github.com/pthm/melange/compare/v0.9.1...v0.9.2) (2026-08-18)
 
 
