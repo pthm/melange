@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -62,7 +63,7 @@ Three comparison modes determine orphaned functions to drop:
   melange generate migration --schema schema.fga --output migrations/ --previous-schema old.fga`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Resolve values: flags > config > defaults
-		databaseSchema := resolveString(genMigrationDBSchema, cfg.Database.Schema)
+		databaseSchema := resolveString(genMigrationDBSchema, cfg.Database.Schema, "public")
 		schemaPath := resolveString(genMigrationSchema, cfg.Schema)
 		output := resolveString(genMigrationOutput, cfg.Generate.Migration.Output)
 		name := resolveString(genMigrationName, cfg.Generate.Migration.Name, "melange")
@@ -136,6 +137,10 @@ Three comparison modes determine orphaned functions to drop:
 			NamedFunctions: namedFunctions,
 		}
 
+		// previousTypes drives the semantic-diff header, when a previous model can
+		// be reconstructed from the chosen comparison source.
+		var previousTypes []schema.TypeDefinition
+
 		if genMigrationDB != "" {
 			prevState, err := previousStateFromDB(genMigrationDB, databaseSchema)
 			if err != nil {
@@ -145,6 +150,7 @@ Three comparison modes determine orphaned functions to drop:
 				opts.PreviousFunctionNames = prevState.FunctionNames
 				opts.PreviousChecksums = prevState.FunctionChecksums
 				opts.PreviousSource = "database"
+				previousTypes = prevState.Types
 			}
 		} else if genMigrationGitRef != "" {
 			prevState, err := previousStateFromSchema(genMigrationGitRef, schemaPath, databaseSchema, true)
@@ -154,6 +160,7 @@ Three comparison modes determine orphaned functions to drop:
 			opts.PreviousFunctionNames = prevState.FunctionNames
 			opts.PreviousChecksums = prevState.FunctionChecksums
 			opts.PreviousSource = fmt.Sprintf("git:%s", genMigrationGitRef)
+			previousTypes = prevState.Types
 		} else if genMigrationPreviousSchema != "" {
 			if parser.IsModularSchema(genMigrationPreviousSchema) {
 				return cli.ConfigError("--previous-schema does not support modular schemas (fga.mod); use --db or --git-ref instead", nil)
@@ -165,10 +172,16 @@ Three comparison modes determine orphaned functions to drop:
 			opts.PreviousFunctionNames = prevState.FunctionNames
 			opts.PreviousChecksums = prevState.FunctionChecksums
 			opts.PreviousSource = fmt.Sprintf("file:%s", genMigrationPreviousSchema)
+			previousTypes = prevState.Types
 		}
 
 		// Generate migration SQL
 		result := compiler.GenerateMigrationSQL(generatedSQL, listSQL, expectedFunctions, opts)
+
+		// Document what the migration changes, when a previous model is known.
+		if previousTypes != nil {
+			result.Up = semanticDiffHeader(schema.Diff(previousTypes, types)) + result.Up
+		}
 
 		// Write output
 		if output == "" {
@@ -187,7 +200,7 @@ func init() {
 	f.BoolVar(&genMigrationUp, "up", false, "output only the UP migration")
 	f.BoolVar(&genMigrationDown, "down", false, "output only the DOWN migration")
 	f.StringVar(&genMigrationDB, "db", "", "database URL for comparison (reads previous state)")
-	f.StringVar(&genMigrationDBSchema, "db-schema", "public", "database schema")
+	f.StringVar(&genMigrationDBSchema, "db-schema", "", "database schema (default: config database.schema, else public)")
 	f.StringVar(&genMigrationGitRef, "git-ref", "", "git ref for comparison (reads previous schema)")
 	f.StringVar(&genMigrationPreviousSchema, "previous-schema", "", "path to previous .fga file for comparison (modular schemas not supported)")
 }
@@ -255,12 +268,34 @@ func writeFiles(result compiler.MigrationSQL, output, name, format string) error
 	return nil
 }
 
+// semanticDiffHeader renders a SQL comment block summarizing how the migration
+// changes the model relative to the previous one. Returns "" when there are no
+// changes, so an unchanged (version-only) migration gets no header.
+func semanticDiffHeader(diff schema.SchemaDiff) string {
+	if diff.Empty() {
+		return ""
+	}
+	additive, breaking := diff.Counts()
+	var b strings.Builder
+	fmt.Fprintf(&b, "-- Schema changes vs previous model: %d breaking, %d additive\n", breaking, additive)
+	for _, c := range diff.Changes {
+		fmt.Fprintf(&b, "--   [%s] %s\n", c.Class, c.Summary)
+	}
+	b.WriteString("--\n")
+	return b.String()
+}
+
 // previousState holds the function inventory from a prior migration.
 // It normalises the output of all three comparison modes (--db, --git-ref,
 // --previous-schema) so the caller can handle them uniformly.
 type previousState struct {
 	FunctionNames     []string
 	FunctionChecksums map[string]string
+
+	// Types is the previous parsed model, when it can be reconstructed. It drives
+	// the semantic-diff header. Nil when unavailable (e.g. a database migrated
+	// before model storage existed), in which case no header is emitted.
+	Types []schema.TypeDefinition
 }
 
 // previousStateFromDB reads function names and checksums from the most recent
@@ -292,9 +327,19 @@ func previousStateFromDB(dsn, databaseSchema string) (*previousState, error) {
 		fmt.Fprintln(os.Stderr)
 	}
 
+	// Reconstruct the previous model for the semantic-diff header (best-effort).
+	// A model that can't be recovered — never recorded, or a modular DSL, which
+	// won't parse as a single schema — leaves prevTypes nil, and the migration is
+	// generated without a header rather than failing.
+	prevTypes, terr := deployedTypesFromRecord(rec)
+	if terr != nil {
+		prevTypes = nil
+	}
+
 	return &previousState{
 		FunctionNames:     rec.FunctionNames,
 		FunctionChecksums: rec.FunctionChecksums,
+		Types:             prevTypes,
 	}, nil
 }
 
@@ -333,6 +378,7 @@ func previousStateFromSchema(pathOrRef, schemaPath, databaseSchema string, isGit
 	return &previousState{
 		FunctionNames:     names,
 		FunctionChecksums: checksums,
+		Types:             types,
 	}, nil
 }
 
@@ -415,4 +461,23 @@ func gitShowFile(ref, path string) (string, error) {
 		return "", err
 	}
 	return string(out), nil
+}
+
+// gitRelativePath converts a schema path to one relative to the git repo root,
+// as required by "git show ref:path". A relative path is resolved against the
+// current working directory first, so it works from any subdirectory.
+func gitRelativePath(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", cli.GeneralError("resolving schema path", err)
+	}
+	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output() //nolint:gosec // no user input
+	if err != nil {
+		return "", cli.GeneralError("locating git repository root", err)
+	}
+	rel, err := filepath.Rel(strings.TrimSpace(string(out)), abs)
+	if err != nil {
+		return "", cli.GeneralError("resolving schema path relative to repo root", err)
+	}
+	return rel, nil
 }

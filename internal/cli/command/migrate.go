@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -16,11 +17,12 @@ import (
 )
 
 var (
-	migrateDB       string
-	migrateDBSchema string
-	migrateSchema   string
-	migrateDryRun   bool
-	migrateForce    bool
+	migrateDB                 string
+	migrateDBSchema           string
+	migrateSchema             string
+	migrateDryRun             bool
+	migrateForce              bool
+	migrateIfDeployedChecksum string
 )
 
 var migrateCmd = &cobra.Command{
@@ -37,7 +39,10 @@ var migrateCmd = &cobra.Command{
   melange migrate --db postgres://localhost/mydb --dry-run
 
   # Force re-apply even if schema unchanged
-  melange migrate --db postgres://localhost/mydb --force`,
+  melange migrate --db postgres://localhost/mydb --force
+
+  # Drift-safe apply: abort unless the deployed checksum matches (CI gate)
+  melange migrate --env production --if-deployed-checksum "$CURRENT"`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// Warn if generate.migration.output is configured
 		if cfg.Generate.Migration.Output != "" && !quiet {
@@ -49,7 +54,7 @@ var migrateCmd = &cobra.Command{
 		}
 
 		// Resolve values
-		databaseSchema := resolveString(migrateDBSchema, cfg.Database.Schema)
+		databaseSchema := resolveString(migrateDBSchema, cfg.Database.Schema, "public")
 		schemaPath := resolveString(migrateSchema, cfg.Schema)
 		dryRun := resolveBool(migrateDryRun, cfg.Migrate.DryRun)
 		force := resolveBool(migrateForce, cfg.Migrate.Force)
@@ -60,23 +65,38 @@ var migrateCmd = &cobra.Command{
 			return err
 		}
 
-		return runMigrate(dsn, schemaPath, dryRun, force, databaseSchema)
+		// A pointer distinguishes "not set" from an explicit empty value (which
+		// matches a database with no migration recorded).
+		var ifDeployedChecksum *string
+		if cmd.Flags().Changed("if-deployed-checksum") {
+			ifDeployedChecksum = &migrateIfDeployedChecksum
+		}
+
+		return runMigrate(dsn, schemaPath, dryRun, force, databaseSchema, ifDeployedChecksum)
 	},
 }
 
 func init() {
 	f := migrateCmd.Flags()
 	f.StringVar(&migrateDB, "db", "", "database URL")
-	f.StringVar(&migrateDBSchema, "db-schema", "public", "database schema")
+	f.StringVar(&migrateDBSchema, "db-schema", "", "database schema (default: config database.schema, else public)")
 	f.StringVar(&migrateSchema, "schema", "", "path to schema.fga or fga.mod file")
 	f.BoolVar(&migrateDryRun, "dry-run", false, "output migration SQL without applying")
 	f.BoolVar(&migrateForce, "force", false, "force migration even if schema unchanged")
+	f.StringVar(&migrateIfDeployedChecksum, "if-deployed-checksum", "", "apply only if the deployed schema checksum matches this value (from `melange status --format json`)")
 }
 
 // resolveDSN gets the database DSN from flag or config.
 func resolveDSN(flagDSN string) (string, error) {
 	if flagDSN != "" {
 		return flagDSN, nil
+	}
+
+	// A deferred environment-resolution failure (e.g. an unset ${VAR} secret)
+	// becomes an error only now, when a command actually needs to connect. An
+	// explicit --db above bypasses it.
+	if envResolveErr != nil {
+		return "", cli.ConfigError("resolving environment", envResolveErr)
 	}
 
 	dsn, err := cfg.DSN()
@@ -89,7 +109,7 @@ func resolveDSN(flagDSN string) (string, error) {
 	return dsn, nil
 }
 
-func runMigrate(dsn, schemaPath string, dryRun, force bool, databaseSchema string) error {
+func runMigrate(dsn, schemaPath string, dryRun, force bool, databaseSchema string, ifDeployedChecksum *string) error {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return cli.DBConnectError("connecting to database", err)
@@ -99,9 +119,10 @@ func runMigrate(dsn, schemaPath string, dryRun, force bool, databaseSchema strin
 	ctx := context.Background()
 
 	opts := migrator.MigrateOptions{
-		Force:          force,
-		Version:        version.Version,
-		DatabaseSchema: databaseSchema,
+		Force:              force,
+		Version:            version.Version,
+		DatabaseSchema:     databaseSchema,
+		IfDeployedChecksum: ifDeployedChecksum,
 	}
 
 	if dryRun {
@@ -116,6 +137,12 @@ func runMigrate(dsn, schemaPath string, dryRun, force bool, databaseSchema strin
 
 	skipped, err := migrator.MigrateWithOptions(ctx, db, schemaPath, opts)
 	if err != nil {
+		// Drift guard failed — the database is not at the expected checksum.
+		// Preserve the typed error in the chain (like the sibling mappings below).
+		var driftErr *migrator.DeployedModelChangedError
+		if errors.As(err, &driftErr) {
+			return cli.GeneralError("migration aborted", driftErr)
+		}
 		// Classify error
 		errStr := err.Error()
 		if strings.Contains(errStr, "parsing schema") {

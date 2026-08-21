@@ -8,6 +8,7 @@ Technical reference documentation for Melange. Find detailed information on CLI 
 {{< cards >}}
 {{< card link="cli" title="CLI Reference" subtitle="Commands for migrations, code generation, and validation" icon="terminal" >}}
 {{< card link="configuration" title="Configuration" subtitle="Config files, environment variables, and precedence" icon="cog" >}}
+{{< card link="deployed-model" title="Deployed Model" subtitle="What a migration records, and the commands that read it back" icon="database" >}}
 {{< card link="go-api" title="Go API" subtitle="Runtime types, Checker, bulk checks, caching, and decision overrides" icon="code" >}}
 {{< card link="typescript-api" title="TypeScript API" subtitle="TypeScript runtime client (in development)" icon="code" >}}
 {{< card link="sql-api" title="SQL API" subtitle="Direct SQL functions for permission checks without a client library" icon="database" >}}

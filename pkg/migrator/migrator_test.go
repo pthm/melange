@@ -111,6 +111,7 @@ func TestShouldSkipMigration(t *testing.T) {
 		rec := &MigrationRecord{
 			SchemaChecksum: checksum,
 			CodegenVersion: CodegenVersion(),
+			SchemaDSL:      "model", // model already recorded
 		}
 		if !shouldSkipMigration(rec, checksum) {
 			t.Error("should skip when checksum and codegen version match")
@@ -122,9 +123,22 @@ func TestShouldSkipMigration(t *testing.T) {
 		rec := &MigrationRecord{
 			SchemaChecksum: checksum,
 			CodegenVersion: CodegenVersion(),
+			SchemaDSL:      "model",
 		}
 		if shouldSkipMigration(rec, checksum) {
 			t.Error("dev builds must fall through to phase 2: codegen can change without a version bump")
+		}
+	})
+
+	t.Run("matching but model not recorded does not skip (backfill)", func(t *testing.T) {
+		withVersion(t, "v9.9.9")
+		rec := &MigrationRecord{
+			SchemaChecksum: checksum,
+			CodegenVersion: CodegenVersion(),
+			// SchemaDSL empty: an older record with no deployed model.
+		}
+		if shouldSkipMigration(rec, checksum) {
+			t.Error("should not skip when the deployed model has not been recorded")
 		}
 	})
 
@@ -274,8 +288,27 @@ func TestOutputDryRun(t *testing.T) {
 		}
 		expected := []string{"check_repo_viewer", "check_permission"}
 
-		m.outputDryRun(&buf, "v0.5.0", "abc123", gen, listSQL, expected)
+		m.outputDryRun(&buf, migrationWrite{
+			MelangeVersion: "v0.5.0",
+			SchemaChecksum: "abc123",
+			FunctionNames:  expected,
+			SchemaDSL:      "model\n  schema 1.1\n-- it's fine", // embedded quote exercises escaping
+			SchemaFormat:   "single",
+			ModelJSON:      []byte(`[{"Name":"user"}]`),
+		}, gen, listSQL)
 		output := buf.String()
+
+		// Deployed-model columns are emitted so an applied dry-run script is
+		// self-describing; the embedded single quote must be doubled.
+		if !strings.Contains(output, "function_checksums, schema_dsl, schema_format, model_json") {
+			t.Error("INSERT should include function_checksums and the deployed-model columns")
+		}
+		if !strings.Contains(output, "-- it''s fine") {
+			t.Errorf("single quotes in DSL should be escaped, got:\n%s", output)
+		}
+		if !strings.Contains(output, `[{"Name":"user"}]`) {
+			t.Error("INSERT should include the model JSON")
+		}
 
 		// Header
 		if !strings.Contains(output, "-- Melange Migration (dry-run)") {
@@ -324,7 +357,7 @@ func TestOutputDryRun(t *testing.T) {
 
 	t.Run("omits version when empty", func(t *testing.T) {
 		var buf bytes.Buffer
-		m.outputDryRun(&buf, "", "abc", GeneratedSQL{}, ListGeneratedSQL{}, nil)
+		m.outputDryRun(&buf, migrationWrite{SchemaChecksum: "abc"}, GeneratedSQL{}, ListGeneratedSQL{})
 		output := buf.String()
 
 		if strings.Contains(output, "-- Melange version:") {
@@ -335,7 +368,7 @@ func TestOutputDryRun(t *testing.T) {
 	t.Run("sorts function names in migration record", func(t *testing.T) {
 		var buf bytes.Buffer
 		expected := []string{"check_z_viewer", "check_a_owner", "check_m_editor"}
-		m.outputDryRun(&buf, "", "abc", GeneratedSQL{}, ListGeneratedSQL{}, expected)
+		m.outputDryRun(&buf, migrationWrite{SchemaChecksum: "abc", FunctionNames: expected}, GeneratedSQL{}, ListGeneratedSQL{})
 		output := buf.String()
 
 		// Should appear sorted in the INSERT
@@ -372,6 +405,17 @@ func TestMigrateNoSchemaFile(t *testing.T) {
 			t.Errorf("error should mention 'no schema found', got: %v", err)
 		}
 	})
+}
+
+func TestDeployedModelChangedError(t *testing.T) {
+	e := &DeployedModelChangedError{Expected: "aaa", Actual: "bbb"}
+	if !strings.Contains(e.Error(), "aaa") || !strings.Contains(e.Error(), "bbb") {
+		t.Errorf("error should mention both checksums, got %q", e.Error())
+	}
+	empty := &DeployedModelChangedError{Expected: "aaa", Actual: ""}
+	if !strings.Contains(empty.Error(), "no migration recorded") {
+		t.Errorf("empty actual should be described, got %q", empty.Error())
+	}
 }
 
 func TestMigrationsDDL(t *testing.T) {
@@ -428,13 +472,40 @@ func TestAddFunctionChecksumsColumn(t *testing.T) {
 	})
 }
 
+func TestAddSchemaModelColumns(t *testing.T) {
+	t.Run("adds all three columns", func(t *testing.T) {
+		sql := addSchemaModelColumns("")
+		for _, col := range []string{"schema_dsl", "schema_format", "model_json"} {
+			if !strings.Contains(sql, "ADD COLUMN IF NOT EXISTS "+col) {
+				t.Errorf("should add column %q, got:\n%s", col, sql)
+			}
+		}
+	})
+
+	t.Run("with schema qualifies table name", func(t *testing.T) {
+		sql := addSchemaModelColumns("authz")
+		if !strings.Contains(sql, `ALTER TABLE "authz"."melange_migrations"`) {
+			t.Errorf("should schema-qualify table name, got:\n%s", sql)
+		}
+	})
+}
+
+func TestMigrationsDDL_IncludesModelColumns(t *testing.T) {
+	sql := migrationsDDL("")
+	for _, col := range []string{"schema_dsl", "schema_format", "model_json"} {
+		if !strings.Contains(sql, col) {
+			t.Errorf("base DDL should define column %q, got:\n%s", col, sql)
+		}
+	}
+}
+
 func TestOutputDryRun_DatabaseSchema(t *testing.T) {
 	t.Run("with schema shows hint comment", func(t *testing.T) {
 		m := NewMigrator(nil, "")
 		m.SetDatabaseSchema("authz")
 
 		var buf bytes.Buffer
-		m.outputDryRun(&buf, "", "abc", GeneratedSQL{}, ListGeneratedSQL{}, nil)
+		m.outputDryRun(&buf, migrationWrite{SchemaChecksum: "abc"}, GeneratedSQL{}, ListGeneratedSQL{})
 		output := buf.String()
 
 		if !strings.Contains(output, "Database schema: authz") {
@@ -452,7 +523,7 @@ func TestOutputDryRun_DatabaseSchema(t *testing.T) {
 		m := NewMigrator(nil, "")
 
 		var buf bytes.Buffer
-		m.outputDryRun(&buf, "", "abc", GeneratedSQL{}, ListGeneratedSQL{}, nil)
+		m.outputDryRun(&buf, migrationWrite{SchemaChecksum: "abc"}, GeneratedSQL{}, ListGeneratedSQL{})
 		output := buf.String()
 
 		if !strings.Contains(output, "public") {

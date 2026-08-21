@@ -14,11 +14,15 @@ import (
 
 var (
 	// Global state set during PersistentPreRunE
-	cfg        *cli.Config
-	configPath string
+	cfg           *cli.Config
+	baseCfg       *cli.Config // config before environment overlay (for 'env list')
+	configPath    string
+	activeEnv     string // environment applied to cfg (empty = base config)
+	envResolveErr error  // deferred environment-resolution failure, surfaced at connect time
 
 	// Persistent flags
 	cfgFile       string
+	envFlag       string
 	verbose       int
 	quiet         bool
 	noUpdateCheck bool
@@ -57,10 +61,74 @@ from OpenFGA schemas, enabling single-query permission checks in PostgreSQL.`,
 			return cli.ConfigError("loading configuration", err)
 		}
 
+		// Resolve the active environment and overlay it onto cfg. Downstream
+		// resolution (resolveDSN, cfg.DSN) operates on the resolved config.
+		baseCfg = cfg
+		res, err := resolveEnvironment(cfg, envFlag, os.Getenv("MELANGE_ENV"))
+		if err != nil {
+			return err
+		}
+		cfg, activeEnv, envResolveErr = res.Config, res.Active, res.Deferred
+		if res.Warning != "" {
+			fmt.Fprintf(os.Stderr, "warning: %s\n", res.Warning)
+		}
+
+		// Surface the target so a command running against a non-base environment
+		// (especially one selected via default_environment) is never silent.
+		if activeEnv != "" && !quiet {
+			fmt.Fprintf(os.Stderr, "→ environment: %s\n", activeEnv)
+		}
+
 		return nil
 	},
 	SilenceUsage:  true, // Don't show usage on errors
 	SilenceErrors: true, // We handle errors ourselves
+}
+
+// envResolution is the outcome of selecting an environment profile and applying
+// it to the loaded configuration.
+type envResolution struct {
+	Config   *cli.Config // configuration with the environment overlaid (best effort)
+	Active   string      // selected environment; empty means the base config
+	Deferred error       // resolution failure to surface when a command connects
+	Warning  string      // non-fatal note for the user
+}
+
+// resolveEnvironment picks the environment profile to run against and overlays
+// it, following the documented precedence: --env, then MELANGE_ENV, then
+// default_environment, then the base config.
+//
+// It distinguishes three failure modes deliberately. An explicitly named
+// environment that does not exist is a hard error, so `--env prod` cannot
+// silently run against a local database after a typo. A *stale*
+// default_environment — one naming a profile that no longer exists — only warns
+// and falls back to base. Anything else (almost always an unset ${VAR} secret)
+// is deferred rather than fatal, so diagnostic commands such as `env list`,
+// `config show`, and `validate` still run; commands that connect surface it
+// through resolveDSN.
+func resolveEnvironment(base *cli.Config, flagEnv, osEnv string) (envResolution, error) {
+	explicit := resolveString(flagEnv, osEnv)
+	active := resolveString(explicit, base.DefaultEnvironment)
+
+	if explicit != "" && !base.HasEnvironment(explicit) {
+		return envResolution{}, cli.ConfigError("resolving environment",
+			fmt.Errorf("environment %q is not defined in configuration", explicit))
+	}
+
+	out := envResolution{Active: active}
+	resolved, err := base.ForEnvironment(active)
+	if err != nil && explicit == "" && active != "" && !base.HasEnvironment(active) {
+		out.Warning = fmt.Sprintf("default_environment %q is not defined; using base config", active)
+		out.Active = ""
+		resolved, err = base.ForEnvironment("")
+	}
+	if err != nil {
+		// Keep the best-effort config: a non-connection overlay (schema, say)
+		// still applies, and an explicit --db can still proceed.
+		out.Deferred = err
+	}
+	out.Config = resolved
+	return out, nil
 }
 
 // Command group IDs
@@ -73,6 +141,7 @@ const (
 func init() {
 	// Persistent flags (available to all commands)
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default: auto-discover melange.yaml)")
+	rootCmd.PersistentFlags().StringVar(&envFlag, "env", "", "environment profile to target (see 'environments' in config)")
 	rootCmd.PersistentFlags().CountVarP(&verbose, "verbose", "v", "increase verbosity (can be repeated)")
 	rootCmd.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false, "suppress non-error output")
 	rootCmd.PersistentFlags().BoolVar(&noUpdateCheck, "no-update-check", false, "disable update check")
@@ -88,12 +157,18 @@ func init() {
 	validateCmd.GroupID = groupSchema
 	migrateCmd.GroupID = groupSchema
 	statusCmd.GroupID = groupSchema
+	schemaCmd.GroupID = groupSchema
+	diffCmd.GroupID = groupSchema
+	historyCmd.GroupID = groupSchema
 	doctorCmd.GroupID = groupSchema
 	explainCmd.GroupID = groupSchema
 	expandCmd.GroupID = groupSchema
 	rootCmd.AddCommand(validateCmd)
 	rootCmd.AddCommand(migrateCmd)
 	rootCmd.AddCommand(statusCmd)
+	rootCmd.AddCommand(schemaCmd)
+	rootCmd.AddCommand(diffCmd)
+	rootCmd.AddCommand(historyCmd)
 	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(explainCmd)
 	rootCmd.AddCommand(expandCmd)
@@ -105,10 +180,12 @@ func init() {
 	// Utility commands
 	initCmd.GroupID = groupUtility
 	configCmd.GroupID = groupUtility
+	envCmd.GroupID = groupUtility
 	versionCmd.GroupID = groupUtility
 	licenseCmd.GroupID = groupUtility
 	rootCmd.AddCommand(initCmd)
 	rootCmd.AddCommand(configCmd)
+	rootCmd.AddCommand(envCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(licenseCmd)
 }

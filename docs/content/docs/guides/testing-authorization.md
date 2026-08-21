@@ -14,8 +14,7 @@ func TestPermissions(t *testing.T) {
     ctx := context.Background()
 
     // Apply melange migration
-    m := migrator.NewMigrator(db, "schemas/schema.fga")
-    _, err := m.Migrate(ctx)
+    err := migrator.Migrate(ctx, db, "schemas/schema.fga")
     require.NoError(t, err)
 
     // Insert test data into domain tables

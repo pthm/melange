@@ -10,6 +10,10 @@ Melange supports configuration via YAML files, environment variables, and comman
 3. **Configuration file** (`melange.yaml` or `melange.yml`)
 4. **Built-in defaults**
 
+A selected [environment profile](#environments) overlays the base configuration
+before this precedence is applied, so an explicit flag still wins over the
+environment's value.
+
 ## Configuration File
 
 Melange automatically discovers a configuration file by checking each directory for the following names (in order):
@@ -41,7 +45,8 @@ Create a `melange.yaml` in your project root, or use `melange init` to generate 
 # Path to OpenFGA schema file (used by all commands)
 schema: schemas/schema.fga
 
-# Database connection (used by migrate, status, doctor)
+# Database connection (used by migrate, status, doctor, schema pull, explain, expand)
+# See "Environments" below for per-environment overrides selected with --env.
 database:
   # Option 1: Full connection URL
   url: postgres://user:password@localhost:5432/mydb?sslmode=prefer
@@ -238,6 +243,10 @@ Or via CLI flag:
 melange migrate --db postgres://localhost/mydb --db-schema authz
 ```
 
+When `--db-schema` is not passed, every database command resolves it from
+`database.schema` in the config (or the selected environment), falling back to
+`public`.
+
 ### Tuples view setup
 
 Create your `melange_tuples` view in the target schema. The view itself lives in the custom schema but can reference tables in any schema:
@@ -269,6 +278,108 @@ checker := melange.NewChecker(db, melange.WithDatabaseSchema("authz"))
 const checker = new Checker({ db, databaseSchema: 'authz' });
 ```
 
+## Environments
+
+Named **environment profiles** let a single `--env` flag point a command at a
+specific database — `local`, `staging`, `production` — instead of hand-swapping
+`--db` connection strings. Each profile overlays the base configuration.
+
+```yaml
+schema: melange/schema.fga
+
+# Base connection — used when no environment is selected, and the fallback
+# for any field an environment leaves unset.
+database:
+  url: postgres://localhost:5432/mydb_dev
+
+default_environment: local        # optional; used when --env / MELANGE_ENV absent
+
+environments:
+  local:
+    database:
+      url: postgres://localhost:5432/mydb_dev
+  staging:
+    database:
+      host: staging.db.internal
+      name: app
+      user: melange
+      password: ${STAGING_DB_PASSWORD}   # expanded from the OS environment
+      schema: public
+  production:
+    database:
+      url: ${PROD_DATABASE_URL}
+```
+
+Then target an environment on any database command:
+
+```bash
+melange status --env production
+melange migrate --env staging
+melange schema pull --env production -o recovered.fga
+```
+
+### Selecting an environment
+
+The active environment is resolved with this precedence (highest first):
+
+1. `--env <name>` flag
+2. `MELANGE_ENV` environment variable
+3. `default_environment` config key
+4. none → the base `database` block (behaviour identical to configs without an `environments:` map)
+
+An explicitly selected environment (`--env` or `MELANGE_ENV`) that isn't defined
+is a hard error, so a typo can't silently run against the wrong database. A
+`default_environment` that names a missing environment is treated leniently: a
+warning is printed and the base config is used, so a stale default never blocks
+diagnostic commands.
+
+### Overlay semantics
+
+An environment's `database` block overlays the base one — fields it sets win,
+fields it omits fall through. To keep behaviour predictable, when an environment
+supplies a discrete connection (`host`/`name`) on top of a base that uses a
+`url`, the base URL is dropped rather than decomposed. In that case the
+environment must provide a complete connection (including `user`); melange does
+not split a base URL into its parts.
+
+### Secrets with `${VAR}`
+
+Environment values may reference OS environment variables with `${VAR}` syntax,
+so production credentials stay out of the committed config file:
+
+```yaml
+environments:
+  production:
+    database:
+      url: ${PROD_DATABASE_URL}
+```
+
+Only the braced `${VAR}` form is expanded; a literal `$` (e.g. in a password) is
+left untouched. An unset variable referenced by a database field is reported
+**when a command actually connects** — not at startup — so diagnostic commands
+like `melange env list`, `melange config show`, and `melange validate` still run
+even if a secret is missing from the current shell.
+
+### Inspecting environments
+
+`melange env list` prints the defined profiles and their targets (with the
+active one marked `*`); `${VAR}` references are shown literally and passwords
+redacted:
+
+```bash
+$ melange env list
+Environments:
+* local            postgres://localhost:5432/mydb_dev
+  production       ${PROD_DATABASE_URL}
+  staging          staging.db.internal:5432/app
+
+Default: local
+```
+
+`melange config show --env production` prints the fully-resolved configuration
+for a profile, with passwords masked by default (pass `--reveal-secrets` to see
+them). See the [CLI reference](../cli/#config-show).
+
 ## Environment Variables
 
 All configuration options can be set via environment variables with the `MELANGE_` prefix. Use underscores to separate nested keys:
@@ -297,6 +408,7 @@ All configuration options can be set via environment variables with the `MELANGE
 | `MELANGE_MIGRATE_FORCE` | `migrate.force` |
 | `MELANGE_DOCTOR_VERBOSE` | `doctor.verbose` |
 | `MELANGE_DOCTOR_SKIP_PERFORMANCE` | `doctor.skip_performance` |
+| `MELANGE_ENV` | selects an [environment profile](#environments) (like `--env`) |
 | `CI` | _(special)_ |
 
 Setting `CI` to any value disables the automatic update check. Most CI providers set this automatically.
@@ -326,23 +438,29 @@ generate:
 
 ## Viewing Effective Configuration
 
-Use `melange config show` to see the effective configuration after merging all sources:
+Use `melange config show` to see the effective configuration after merging all
+sources (and any selected environment). Passwords are masked by default; pass
+`--reveal-secrets` to print them.
 
 ```bash
 # Show effective configuration
 melange config show
 
-# Show with config file path
+# Show with config file path and active environment
 melange config show --source
+
+# Show the resolved production profile
+melange config show --env production
 ```
 
 **Output:**
 ```
 Config file: /path/to/project/melange.yaml
+Environment: production
 
 schema: schemas/schema.fga
 database:
-  url: postgres://localhost/mydb
+  url: postgres://prod-user:****@prod-db:5432/app
   host: ""
   port: 5432
   ...
@@ -350,10 +468,11 @@ database:
 
 ## Security Considerations
 
-- **Prefer environment variables for secrets** in production environments
+- **Prefer environment variables for secrets** in production environments — reference them from an [environment profile](#environments) with `${VAR}` (e.g. `url: ${PROD_DATABASE_URL}`) so the config file stays credential-free
 - Avoid committing `melange.yaml` files containing `database.password` to version control
 - Consider using connection URLs with credentials stored in secure secret management systems
 - For local development, discrete fields in a `.gitignore`d config file are acceptable
+- `melange config show` masks passwords by default; `--reveal-secrets` is opt-in
 
 ## Example Configurations
 
@@ -395,29 +514,31 @@ generate:
 
 ### Multi-Environment
 
-Use different config files per environment:
-
-```bash
-# Development
-melange --config melange.dev.yaml migrate
-
-# Production
-melange --config melange.prod.yaml migrate
-```
-
-Or use environment variable overrides with a shared base config:
+Define [environment profiles](#environments) in one config and select them with
+`--env`:
 
 ```yaml
-# melange.yaml (shared)
+# melange.yaml
 schema: schemas/schema.fga
 
-generate:
-  client:
-    runtime: go
-    output: internal/authz
+database:
+  url: postgres://localhost:5432/myapp_dev   # base / default
+
+default_environment: local
+
+environments:
+  local:
+    database:
+      url: postgres://localhost:5432/myapp_dev
+  production:
+    database:
+      url: ${PROD_DATABASE_URL}   # from CI secrets, never committed
 ```
 
 ```bash
-# Override database per environment
-MELANGE_DATABASE_URL="postgres://prod-host/myapp" melange migrate
+melange status --env production
+melange migrate --env production
 ```
+
+Alternatively, use separate config files (`melange --config melange.prod.yaml
+migrate`) or override the connection with `MELANGE_DATABASE_URL` per invocation.

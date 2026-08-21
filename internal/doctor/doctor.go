@@ -223,6 +223,7 @@ func (d *Doctor) Run(ctx context.Context) (*Report, error) {
 	if err := d.checkMigrationState(ctx, report); err != nil {
 		return nil, fmt.Errorf("checking migration state: %w", err)
 	}
+	d.checkDeployedModel(report)
 	if err := d.checkGeneratedFunctions(ctx, report); err != nil {
 		return nil, fmt.Errorf("checking generated functions: %w", err)
 	}
@@ -442,6 +443,107 @@ func (d *Doctor) checkMigrationState(ctx context.Context, report *Report) error 
 	}
 
 	return nil
+}
+
+// checkDeployedModel reports whether the database has recorded its authorization
+// model, and — when the local schema differs — whether the pending change is
+// breaking. It reuses the record checkMigrationState already fetched into
+// d.lastMigration, so it issues no further queries.
+func (d *Doctor) checkDeployedModel(report *Report) {
+	// Only meaningful once a migration has been recorded.
+	rec := d.lastMigration
+	if rec == nil {
+		return
+	}
+
+	if rec.SchemaDSL == "" {
+		report.AddCheck(CheckResult{
+			Category: "Deployed Model",
+			Name:     "recorded",
+			Status:   StatusWarn,
+			Message:  "Deployed model not recorded",
+			Details:  "This database was migrated before model storage existed.",
+			FixHint:  "Re-run 'melange migrate' to record it (enables 'schema pull' and 'diff')",
+		})
+		return
+	}
+
+	deployedTypes, err := schema.UnmarshalModel(rec.ModelJSON)
+	if err != nil {
+		// Degrade to a warning rather than aborting: doctor must still run
+		// against the broken deployment it exists to diagnose.
+		report.AddCheck(CheckResult{
+			Category: "Deployed Model",
+			Name:     "recorded",
+			Status:   StatusWarn,
+			Message:  "Deployed model could not be decoded",
+			Details:  err.Error(),
+			FixHint:  "Re-run 'melange migrate' to rewrite the stored model",
+		})
+		return
+	}
+	// Fall back to parsing the stored DSL when the JSON model is absent (older or
+	// partial records), mirroring `melange diff`. A modular DSL is a non-parseable
+	// bundle; on a parse failure deployedTypes stays empty and the drift advisory
+	// below is skipped rather than run against an empty model.
+	if len(deployedTypes) == 0 && rec.SchemaDSL != "" {
+		if parsed, perr := parser.ParseSchemaString(rec.SchemaDSL); perr == nil {
+			deployedTypes = parsed
+		}
+	}
+
+	version := rec.MelangeVersion
+	if version == "" {
+		version = "unknown version"
+	}
+	report.AddCheck(CheckResult{
+		Category: "Deployed Model",
+		Name:     "recorded",
+		Status:   StatusPass,
+		Message:  fmt.Sprintf("Deployed model recorded (melange %s)", version),
+	})
+
+	// Breaking-drift advisory: classify a pending local change against the
+	// deployed model. schema.Diff over the parsed types is the source of truth —
+	// an empty diff means the local schema is in sync. Skip when either side has
+	// no parsed model: without a previous model to compare, a removed relation
+	// would misreport as additive (a false-safe advisory), so no advisory is
+	// safer than a wrong one.
+	if d.parsedTypes == nil || len(deployedTypes) == 0 {
+		return
+	}
+	diff := schema.Diff(deployedTypes, d.parsedTypes)
+	if diff.Empty() {
+		return
+	}
+	additive, breaking := diff.Counts()
+	if breaking == 0 {
+		report.AddCheck(CheckResult{
+			Category: "Deployed Model",
+			Name:     "drift_safety",
+			Status:   StatusPass,
+			Message:  fmt.Sprintf("Local changes vs deployed are additive (%d)", additive),
+		})
+		return
+	}
+	report.AddCheck(CheckResult{
+		Category: "Deployed Model",
+		Name:     "drift_safety",
+		Status:   StatusWarn,
+		Message:  fmt.Sprintf("Local schema has %d breaking change(s) vs deployed", breaking),
+		Details:  breakingDetails(diff),
+		FixHint:  "Review with 'melange diff'; migrating will apply these changes",
+	})
+}
+
+// breakingDetails lists a diff's breaking changes, one bullet per line.
+func breakingDetails(diff schema.SchemaDiff) string {
+	summaries := diff.BreakingSummaries()
+	lines := make([]string, 0, len(summaries))
+	for _, s := range summaries {
+		lines = append(lines, "- "+s)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // checkGeneratedFunctions validates that expected functions exist.

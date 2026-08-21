@@ -18,9 +18,15 @@ These flags are available on all commands:
 | Flag                | Description                                                                                         |
 | ------------------- | --------------------------------------------------------------------------------------------------- |
 | `--config`          | Path to config file (default: auto-discover `melange.yaml`). See [Configuration](../configuration/). |
+| `--env`             | Select a named environment profile. See [Configuration → Environments](../configuration/#environments). |
 | `-v`, `--verbose`   | Increase verbosity (can be repeated: `-vv`, `-vvv`)                                                 |
 | `-q`, `--quiet`     | Suppress non-error output                                                                           |
 | `--no-update-check` | Disable automatic update checking                                                                   |
+
+Any command that connects to a database accepts `--env <name>` to target one of
+the [environment profiles](../configuration/#environments) defined in your
+config (e.g. `melange status --env production`). An explicit `--db` still wins
+over the environment's connection.
 
 ### Update Notifications
 
@@ -59,9 +65,9 @@ The cache respects the `XDG_CACHE_HOME` environment variable if set.
 
 Commands are organized into logical groups:
 
-**Schema Commands:** `validate`, `migrate`, `status`, `doctor`
+**Schema Commands:** `validate`, `migrate`, `status`, `schema pull`, `diff`, `history`, `doctor`, `explain`, `expand`
 **Client Commands:** `generate client`, `generate migration`
-**Utility Commands:** `init`, `config`, `version`, `license`
+**Utility Commands:** `init`, `config show`, `env list`, `version`, `license`
 
 ---
 
@@ -106,20 +112,23 @@ melange migrate \
 
 **Flags:**
 
-| Flag          | Default              | Description                                   |
-| ------------- | -------------------- | --------------------------------------------- |
-| `--db`        | (from config)        | PostgreSQL connection string                  |
-| `--db-schema` | `""`                 | PostgreSQL schema for melange objects          |
-| `--schema`    | `schemas/schema.fga` | Path to schema.fga file                       |
-| `--dry-run`   | `false`              | Output SQL to stdout without applying changes |
-| `--force`     | `false`              | Force migration even if schema is unchanged   |
+| Flag                     | Default              | Description                                                    |
+| ------------------------ | -------------------- | ------------------------------------------------------------- |
+| `--db`                   | (from config)        | PostgreSQL connection string                                  |
+| `--db-schema`            | (config, else `public`) | PostgreSQL schema for melange objects                      |
+| `--schema`               | `schemas/schema.fga` | Path to schema.fga file                                       |
+| `--dry-run`              | `false`              | Output SQL to stdout without applying changes                 |
+| `--force`                | `false`              | Force migration even if schema is unchanged                   |
+| `--if-deployed-checksum` | (unset)              | Apply only if the deployed schema checksum matches (see below) |
 
 This command:
 
 1. Checks if the schema has changed since the last migration
 2. Installs generated SQL functions (`check_permission`, `list_accessible_objects`, etc.)
 3. Cleans up orphaned functions from removed relations
-4. Records the migration in `melange_migrations` table
+4. Records the migration in `melange_migrations` table — including the schema
+   DSL and parsed model, so the database is self-describing. This is what
+   `melange status` and `melange schema pull` read back.
 
 **Skip-if-unchanged behavior:**
 
@@ -131,6 +140,40 @@ Use --force to re-apply.
 ```
 
 Use `--force` to re-apply the migration anyway (useful after updating Melange itself).
+
+**Drift-safe apply (`--if-deployed-checksum`):**
+
+`--if-deployed-checksum` turns migrate into a compare-and-swap: it applies only if
+the database is currently at the schema checksum you pass, otherwise it aborts
+having changed nothing and exits non-zero. This closes the window where someone
+else migrates the database between the time you plan a change and the time your
+deploy applies — which last-writer-wins would silently clobber.
+
+The intended CI pattern reads the current checksum from `status`, then gates the
+apply on it:
+
+```bash
+CURRENT=$(melange status --env production --format json | jq -r .deployed.schema_checksum)
+# review / plan the change …
+melange migrate --env production --if-deployed-checksum "$CURRENT"
+```
+
+On a mismatch:
+
+```
+Error: migration aborted: deployed model changed: expected checksum abc… but database has def…; nothing was applied
+```
+
+An empty value (`--if-deployed-checksum ""`) matches a database with no migration
+recorded (a fresh database). The guard is enforced in `--dry-run` too, so a
+drift-gated preview aborts rather than printing SQL against a drifted database.
+
+{{< callout type="info" >}}
+The guard is verified up front and again inside the apply transaction, so a
+change committed while your migration runs aborts it. It is not a hard lock
+against two migrations that verify at the exact same instant, but concurrent
+migrations against one database are unsupported regardless.
+{{< /callout >}}
 
 **Dry-run mode:**
 
@@ -171,7 +214,8 @@ See [Tuples View](../../concepts/tuples-view/) for setup instructions.
 
 ### status
 
-Check the current migration status.
+Show whether the schema file and `melange_tuples` view are present, what model
+the database has deployed, and whether the local schema file is in sync with it.
 
 ```bash
 melange status \
@@ -181,23 +225,251 @@ melange status \
 
 **Flags:**
 
-| Flag          | Default              | Description                  |
-| ------------- | -------------------- | ---------------------------- |
-| `--db`        | (from config)        | PostgreSQL connection string |
-| `--db-schema` | `""`                 | Database schema              |
-| `--schema`    | `schemas/schema.fga` | Path to schema.fga file      |
+| Flag          | Default              | Description                                                     |
+| ------------- | -------------------- | -------------------------------------------------------------- |
+| `--db`        | (from config)        | PostgreSQL connection string                                   |
+| `--db-schema` | (config, else `public`) | PostgreSQL schema for melange objects                       |
+| `--schema`    | `schemas/schema.fga` | Path to schema.fga file                                        |
+| `--format`    | `text`               | Output format: `text` or `json`                                |
 
 **Output:**
 
 ```
 Schema file:  present
 Tuples view:  present
+Deployed:     checksum d0c1746f7e26… · melange v0.9.0 · 2026-07-01T20:46:10Z
+Sync:         in sync — local schema matches deployed
 ```
 
-This helps you verify that:
+When the local schema has drifted, the change summary follows the Sync line:
 
-- Your schema file exists
-- The tuples view exists in the database
+```
+Schema file:  present
+Tuples view:  present
+Deployed:     checksum d0c1746f7e26… · melange v0.9.0 · 2026-07-01T20:46:10Z
+Sync:         drift — local schema differs from deployed (`melange diff` to see changes, `melange migrate` to apply)
+              1 breaking, 2 additive
+              + type audit_log added
+              + relation document.can_export added
+              - relation document.legacy_viewer removed
+```
+
+At most five changes are listed; run `melange diff` for the full list. The
+summary is omitted when the deployed model was never recorded, when either side
+fails to parse (a `Note:` explains why), or when the two models are semantically
+equivalent — reformatting or a comment edit moves the checksum without changing
+behavior, and that is reported as drift with no changes to show.
+
+The **Deployed** line reports the model recorded by the most recent migration
+(checksum, melange version, and time). The **Sync** state compares the local
+schema file's checksum against the deployed one:
+
+| Sync state       | Meaning                                                                   |
+| ---------------- | ------------------------------------------------------------------------- |
+| `in_sync`        | The local schema matches what's deployed                                     |
+| `drift`          | The local schema differs — run `melange migrate` to apply                    |
+| `database_ahead` | Drift where the deployed model is in no recent commit of your schema file    |
+| `unknown`        | No local schema file to compare against                                      |
+| `not_recorded`   | The database has no migration record                                         |
+
+`database_ahead` is the warning case: the deployed model is not the local file
+and is not any version of it in your schema's git history, so someone migrated
+that database from a different checkout — applying your local schema would
+overwrite their model rather than move the database forward. Check with
+`melange schema pull` before migrating, and use
+`melange migrate --if-deployed-checksum` to make the apply conditional.
+
+The probe is advisory and errs toward plain `drift`. It follows the schema across
+renames and reads each revision as a checkout would (so end-of-line conversion
+doesn't cause spurious mismatches), and it stays silent whenever it cannot search
+every version:
+
+- outside a git repository, or without git installed
+- in a shallow (`--depth`) or partial clone — CI checkouts are shallow by
+  default, so this is the common case in automation
+- when the schema is uncommitted or has local modifications: migrating from a
+  dirty working tree is routine, so the deployed model may be a version git
+  never saw
+- for modular (`fga.mod`) schemas, whose checksum covers the manifest plus every
+  module
+- for a schema with more than 50 commits of history, past which the search is no
+  longer exhaustive
+- when the two models are semantically equivalent — a checksum that moved on
+  formatting or comments alone is drift, never an allegation
+
+Treat it as a prompt to look, not a verdict: it reports what git could see, and
+git cannot see every place a model may have come from.
+
+Databases migrated before model storage existed (or by `MigrateWithTypes`) have no recorded model
+DSL; status notes this and `melange schema pull` cannot recover them. Reading the
+migration record is non-fatal — if it fails, status still reports schema/tuples
+presence and adds a `Note:` line.
+
+**JSON output** (`--format json`) emits the machine-readable report, including a
+`notes` array for any non-fatal warnings:
+
+```json
+{
+  "schema_file": "present",
+  "tuples_view": "present",
+  "sync": "in_sync",
+  "deployed": {
+    "melange_version": "v0.9.0",
+    "migrated_at": "2026-07-01T20:46:10Z",
+    "schema_checksum": "d0c1746f7e26ea40027a24b1c0e0c5f34e279e7c27f6fa17e4611ce2f1ec0962",
+    "schema_format": "single",
+    "model_recorded": true
+  }
+}
+```
+
+When the sync state is `drift` or `database_ahead` and both models are
+available, a `drift` object
+carries the same detail as the text output — the counts plus every change, not
+just the first five. Changes are sorted by type, then relation, so the order is
+stable across runs:
+
+```json
+{
+  "sync": "drift",
+  "deployed": { "schema_checksum": "d0c1746f7e26…", "model_recorded": true },
+  "drift": {
+    "additive": 2,
+    "breaking": 1,
+    "changes": [
+      { "class": "additive", "type": "audit_log", "summary": "type audit_log added" },
+      { "class": "additive", "type": "document", "relation": "can_export", "summary": "relation document.can_export added" },
+      { "class": "breaking", "type": "document", "relation": "legacy_viewer", "summary": "relation document.legacy_viewer removed" }
+    ]
+  }
+}
+```
+
+### schema pull
+
+Reconstruct the OpenFGA schema recorded by the most recent migration. Use it to
+recover a schema whose source file was lost, or to see exactly what model a
+database is running.
+
+```bash
+# Print the deployed schema
+melange schema pull --db postgres://localhost/mydb
+
+# Recover it to a file, targeting a named environment
+melange schema pull --env production -o recovered.fga
+```
+
+**Flags:**
+
+| Flag             | Default              | Description                                            |
+| ---------------- | -------------------- | ------------------------------------------------------ |
+| `--db`           | (from config)        | PostgreSQL connection string                           |
+| `--db-schema`    | (config, else `public`) | PostgreSQL schema for melange objects               |
+| `-o`, `--output` | (stdout)             | Write to this file instead of stdout                   |
+| `--no-header`    | `false`              | Omit the provenance header comment                     |
+
+**Output:**
+
+```
+# Pulled from a melange-migrated database by `melange schema pull`
+# Deployed: 2026-07-01T20:46:10Z by melange v0.9.0
+# Schema checksum: d0c1746f7e26ea40027a24b1c0e0c5f34e279e7c27f6fa17e4611ce2f1ec0962
+
+model
+  schema 1.1
+
+type user
+...
+```
+
+The provenance header is written as `#` comments (valid DSL), so the output still
+parses; the database URL is never included. Pass `--no-header` for the bare
+schema, which for a single-file schema is byte-identical to what you migrated.
+
+{{< callout type="info" >}}
+A **modular** (`fga.mod`) schema is emitted as the stored manifest + module
+bundle for reference/recovery. That combined form does **not** re-parse as a
+single `.fga`, and splitting it back into module files is not supported.
+{{< /callout >}}
+
+Requires a database migrated by a version that records the model. Older databases did not
+record the model; pull reports whether the database was never migrated or was
+migrated before model storage existed.
+
+### diff
+
+Show what changed between a deployed (or previous) model and your local schema,
+with each change classified **additive** (safe — widens access or adds structure)
+or **breaking** (narrows access or removes structure).
+
+```bash
+# What would migrating apply to production?
+melange diff --env production
+
+# Compare against the schema on main, or a previous file
+melange diff --git-ref main
+melange diff --previous-schema old.fga
+```
+
+**Flags:**
+
+| Flag                | Default              | Description                                                          |
+| ------------------- | -------------------- | ------------------------------------------------------------------- |
+| `--db`              | (from config)        | Database to compare against (the default source)                    |
+| `--db-schema`       | (config, else `public`) | PostgreSQL schema for melange objects                            |
+| `--schema`          | `schemas/schema.fga` | Local `.fga` — the new side of the diff                             |
+| `--git-ref`         | (unset)              | Compare against your schema at a git commit/branch/tag              |
+| `--previous-schema` | (unset)              | Compare against a previous `.fga` file (modular not supported)      |
+| `--format`          | `tree`               | Output format: `tree` (default) or `json`                           |
+| `--exit-code`       | `false`              | Exit 1 if any change is breaking (CI gate)                          |
+
+The comparison source is the deployed model by default (`--db`/`--env`, or the
+configured database); `--git-ref` and `--previous-schema` select a file/git
+source instead and are mutually exclusive with a database source.
+
+**Output:**
+
+```
+Comparing deployed → melange/schema.fga
+
+  additive  type audit_log added
+  BREAKING  relation document.legacy removed
+  additive  document.viewer grants [org]
+
+1 breaking, 2 additive
+```
+
+Classification reflects melange's compiled model and is deliberately conservative:
+it accounts for implied-by closure, intersection subsumption, and exclusion
+polarity, and it never under-reports a breaking change — so `--exit-code` is safe
+as a CI gate. `--format=json` emits the structured `SchemaDiff` for tooling.
+
+### history
+
+List recent entries from the `melange_migrations` table — when each migration
+ran, the melange version, the schema checksum, and how many functions it
+installed. An audit trail of how a database's model has evolved.
+
+```bash
+melange history --db postgres://localhost/mydb
+```
+
+**Flags:**
+
+| Flag          | Default              | Description                              |
+| ------------- | -------------------- | ---------------------------------------- |
+| `--db`        | (from config)        | PostgreSQL connection string             |
+| `--db-schema` | (config, else `public`) | PostgreSQL schema for melange objects |
+| `--format`    | `text`               | Output format: `text` (default) or `json` |
+| `--limit`     | `20`                 | Maximum number of entries to show        |
+
+**Output:**
+
+```
+Migration history (most recent first):
+  2026-07-02T20:46:10Z · melange v0.9.1 · checksum 550b0008a779… · single · 23 functions
+  2026-07-01T18:12:03Z · melange v0.9.0 · checksum 0ba53b1429e9… · single · 17 functions
+```
 
 ### doctor
 
@@ -214,7 +486,7 @@ melange doctor \
 | Flag                 | Default              | Description                                  |
 | -------------------- | -------------------- | -------------------------------------------- |
 | `--db`               | (from config)        | PostgreSQL connection string                 |
-| `--db-schema`        | `""`                 | Database schema                              |
+| `--db-schema`        | (config, else `public`) | PostgreSQL schema for melange objects     |
 | `--schema`           | `schemas/schema.fga` | Path to schema.fga file                      |
 | `--verbose`          | `false`              | Show detailed output with additional context |
 | `--skip-performance` | `false`              | Skip performance checks (view analysis)      |
@@ -349,7 +621,7 @@ melange explain user:alice viewer document:1 --db postgres://localhost/mydb
 | Flag           | Default       | Description                                                                                          |
 | -------------- | ------------- | ---------------------------------------------------------------------------------------------------- |
 | `--db`         | (from config) | PostgreSQL connection string                                                                          |
-| `--db-schema`  | `"public"`    | Database schema                                                                                       |
+| `--db-schema`  | (config, else `public`) | PostgreSQL schema for melange objects                                                       |
 | `--format`     | `tree`        | `tree` (unicode pretty-print) or `json` (raw `Trace` JSONB)                                          |
 | `--max-nodes`  | `0`           | Cap on trace nodes. `0` defers to the session GUC `melange.max_explain_nodes`, then to 100           |
 | `--color`      | `auto`        | `auto` (TTY + `NO_COLOR` unset), `always`, or `never`. See [Colour Output](#colour-output) below.    |
@@ -389,10 +661,10 @@ melange expand document:1 viewer --db postgres://localhost/mydb
 | Flag             | Default       | Description                                                                                                      |
 | ---------------- | ------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `--db`           | (from config) | PostgreSQL connection string                                                                                     |
-| `--db-schema`   | `"public"`    | Database schema                                                                                                  |
+| `--db-schema`   | (config, else `public`) | PostgreSQL schema for melange objects                                                                  |
 | `--format`       | `tree`        | `tree` (unicode pretty-print) or `json` (raw `UsersetTree` JSONB)                                                |
-| `--flatten`      | `false`       | Call `ExpandRecursive` and print the flat, deduplicated user list (chases `Leaf.Computed` and TTU pointers)      |
-| `--recursive`    | `false`       | Alias for `--flatten`                                                                                            |
+| `--flatten`      | `false`       | Print the flat, deduplicated user list instead of the tree. `Leaf.Users` only — computed and TTU pointers are not chased |
+| `--recursive`    | `false`       | Print the flat list *and* chase `Leaf.Computed` / TTU pointers with follow-up Expand calls (implies `--flatten`) |
 | `--subject-type` | (unset)       | Melange extension. Narrow `Leaf.Users` to a single subject type                                                  |
 | `--max-leaf`     | `0`           | Melange extension. Cap each `Leaf.Users` list. `0` defers to session GUC `melange.max_expand_leaf`, then unbounded |
 | `--color`        | `auto`        | `auto` (TTY + `NO_COLOR` unset), `always`, or `never`. See [Colour Output](#colour-output) below.                |
@@ -536,7 +808,7 @@ melange generate migration \
 | Flag                  | Default              | Description                                                    |
 | --------------------- | -------------------- | -------------------------------------------------------------- |
 | `--schema`            | `schemas/schema.fga` | Path to current `.fga` schema file (required)                  |
-| `--db-schema`         | `""`                 | PostgreSQL schema for melange objects                          |
+| `--db-schema`         | (config, else `public`) | PostgreSQL schema for melange objects                       |
 | `--output`            | (stdout)             | Output directory for migration files                           |
 | `--name`              | `melange`            | Migration name suffix used in filenames                        |
 | `--format`            | `split`              | Output format: `split` (`.up.sql`/`.down.sql`) or `single`    |
@@ -645,6 +917,10 @@ melange init
 | `--output` | `internal/authz` (Go) / `src/authz` (TS) | Client output directory |
 | `--package` | `authz` | Client package name (Go only) |
 | `--id-type` | `string` | Client ID type: `string`, `int64`, `uuid.UUID` |
+| `--migration-strategy` | (prompted) | How migrations are applied: `builtin` (`melange migrate`) or `versioned` (generated SQL files) |
+| `--migration-output` | `migrations/` | Output directory for versioned migration files |
+| `--migration-format` | `split` | Versioned migration format: `split` (`.up.sql`/`.down.sql`) or `single` |
+| `--migration-name` | `melange` | Versioned migration name suffix used in filenames |
 
 **Project detection:**
 
@@ -705,7 +981,8 @@ melange init -y --template minimal
 
 ### config show
 
-Display the effective configuration after merging defaults, config file, and environment variables.
+Display the effective configuration after merging defaults, config file,
+environment variables, and any selected environment profile.
 
 ```bash
 melange config show
@@ -713,30 +990,59 @@ melange config show
 
 **Flags:**
 
-| Flag       | Default | Description                          |
-| ---------- | ------- | ------------------------------------ |
-| `--source` | `false` | Show the config file path being used |
+| Flag              | Default | Description                                                 |
+| ----------------- | ------- | ----------------------------------------------------------- |
+| `--source`        | `false` | Show the config file path and active environment            |
+| `--reveal-secrets`| `false` | Print passwords in cleartext instead of masking them        |
 
-**Example with source:**
+Passwords — in both `database.url` and the discrete `password` field, across the
+base config and every environment profile — are **masked by default**, including
+values resolved from `${VAR}` references. Pass `--reveal-secrets` to print them.
+
+**Example — inspect the resolved production profile:**
 
 ```bash
-melange config show --source
+melange config show --env production --source
 ```
 
 **Output:**
 
 ```
 Config file: /path/to/project/melange.yaml
+Environment: production
 
 schema: schemas/schema.fga
 database:
-  url: postgres://localhost/mydb
-  host: ""
-  port: 5432
+  url: postgres://prod-user:****@prod-db:5432/app
   ...
 ```
 
-This is useful for debugging configuration issues and understanding which values are in effect.
+This is useful for debugging configuration issues and understanding which values
+are in effect for a given environment.
+
+### env list
+
+List the [environment profiles](../configuration/#environments) defined in your
+config and their connection targets. The active environment is marked with `*`.
+
+```bash
+melange env list
+```
+
+**Output:**
+
+```
+Environments:
+* local            postgres://localhost:5432/mydb_dev
+  production       ${PROD_DATABASE_URL}
+  staging          staging.db.internal:5432/app
+
+Default: local
+Active:  local (marked with *)
+```
+
+Targets are shown as configured — `${VAR}` references are left literal (not
+expanded) and any URL password is redacted, so the listing is safe to share.
 
 ### version
 
@@ -773,6 +1079,11 @@ This displays the Melange license and attribution for all embedded third-party d
 | 2    | Configuration error (invalid config file, missing required settings) |
 | 3    | Schema parse error                                                   |
 | 4    | Database connection error                                            |
+
+The CI gates exit non-zero on an intentional gate failure, not just tool errors:
+`melange diff --exit-code` exits 1 when a change is breaking, and `melange migrate
+--if-deployed-checksum` exits 1 when the deployed model has drifted. In both cases
+the accompanying message explains the condition.
 
 ## Common Workflows
 
@@ -841,6 +1152,22 @@ For pipelines where you want to ensure migrations are always applied (e.g., afte
 
 ```bash
 melange migrate --force
+```
+
+**Gated deploy against a live environment.** Fail the build on a breaking change,
+then apply only if the environment hasn't drifted since you inspected it:
+
+```bash
+# Fail review if the change narrows access
+melange diff --env production --exit-code
+
+# Capture the state you reviewed
+CURRENT=$(melange status --env production --format json | jq -r .deployed.schema_checksum)
+
+# … approval gate …
+
+# Apply only if production is still at that checksum
+melange migrate --env production --if-deployed-checksum "$CURRENT"
 ```
 
 ### Schema Updates
@@ -937,10 +1264,15 @@ if err != nil {
     log.Fatal(err)
 }
 
-// Create migrator and apply
-m := migrator.NewMigrator(db, "schemas/schema.fga")
-err = m.MigrateWithTypes(ctx, types)
+// Apply, recording the deployed model in melange_migrations
+err = migrator.Migrate(ctx, db, "schemas/schema.fga")
 ```
+
+`migrator.Migrate` and `migrator.MigrateFromString` record the schema they
+applied, so the database stays self-describing and `status`, `schema pull`, and
+`diff` keep working against it. `Migrator.MigrateWithTypes` (used with
+pre-parsed types) deliberately skips that bookkeeping — reach for it only when
+you don't want a migration record, such as in test fixtures.
 
 **With options (dry-run, force, skip-if-unchanged):**
 
@@ -967,6 +1299,17 @@ opts := migrator.MigrateOptions{}
 skipped, err := migrator.MigrateWithOptions(ctx, db, "schemas/schema.fga", opts)
 if skipped {
     log.Println("Schema unchanged, migration skipped")
+}
+
+// Compare-and-swap: apply only if the database is still at this checksum
+deployed := "3f9a...c21b"
+opts := migrator.MigrateOptions{
+    IfDeployedChecksum: &deployed,
+}
+skipped, err := migrator.MigrateWithOptions(ctx, db, "schemas/schema.fga", opts)
+var changed *migrator.DeployedModelChangedError
+if errors.As(err, &changed) {
+    log.Printf("database drifted: expected %s, found %s", changed.Expected, changed.Actual)
 }
 ```
 

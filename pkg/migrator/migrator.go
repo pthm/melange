@@ -11,6 +11,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/lib/pq"
 
@@ -69,6 +70,19 @@ type MigrateOptions struct {
 
 	// DatabaseSchema is the Postgres schema where the objects will be created.
 	DatabaseSchema string
+
+	// IfDeployedChecksum, when non-nil, makes migration a compare-and-swap: it
+	// proceeds only if the currently-deployed schema checksum equals the pointed-to
+	// value, otherwise it aborts with *DeployedModelChangedError without applying
+	// anything. An empty string matches a database with no migration recorded. It
+	// is enforced in dry-run too, so a drift-gated preview aborts rather than
+	// printing SQL against a drifted database.
+	//
+	// The checksum is verified up front and again inside the apply transaction, so
+	// a migration committed while this one runs aborts it. It is not a hard lock:
+	// two migrations that verify at the exact same instant could both proceed, but
+	// concurrent migrations against one database are unsupported regardless.
+	IfDeployedChecksum *string
 }
 
 // InternalMigrateOptions extends MigrateOptions with internal fields.
@@ -83,10 +97,57 @@ type InternalMigrateOptions struct {
 	// SchemaContent is the raw schema text used for checksum calculation to detect schema changes.
 	// If empty, skip-if-unchanged optimization is disabled.
 	SchemaContent string
+
+	// SchemaFormat records how the schema was authored: "single" for a .fga
+	// file or "modular" for an fga.mod manifest. Stored alongside the DSL so
+	// `melange schema pull` can annotate its output.
+	SchemaFormat string
+
+	// IfDeployedChecksum is the compare-and-swap precondition; see MigrateOptions.
+	IfDeployedChecksum *string
+}
+
+// DeployedModelChangedError is returned by migrate when --if-deployed-checksum
+// does not match the currently-deployed schema checksum: the database drifted
+// from the expected state, so nothing was applied.
+type DeployedModelChangedError struct {
+	Expected string // checksum the caller expected to be deployed
+	Actual   string // checksum actually deployed ("" when no migration is recorded)
+}
+
+func (e *DeployedModelChangedError) Error() string {
+	actual := e.Actual
+	if actual == "" {
+		actual = "none (no migration recorded)"
+	}
+	return fmt.Sprintf("deployed model changed: expected checksum %s but database has %s; nothing was applied",
+		e.Expected, actual)
+}
+
+// driftGuardError returns a *DeployedModelChangedError when expected is non-nil
+// and does not match the deployed checksum (rec's checksum, or "" when rec is
+// nil). It returns nil when the guard is unset or satisfied.
+func driftGuardError(expected *string, rec *MigrationRecord) error {
+	if expected == nil {
+		return nil
+	}
+	deployed := ""
+	if rec != nil {
+		deployed = rec.SchemaChecksum
+	}
+	if deployed != *expected {
+		return &DeployedModelChangedError{Expected: *expected, Actual: deployed}
+	}
+	return nil
 }
 
 // MigrationRecord represents a row in the melange_migrations table.
 type MigrationRecord struct {
+	// ID and MigratedAt identify the row and when it was written. Populated by
+	// reads (getLastMigration); ignored on writes (the DB assigns them).
+	ID         int
+	MigratedAt time.Time
+
 	MelangeVersion string
 	SchemaChecksum string
 	CodegenVersion string
@@ -97,6 +158,14 @@ type MigrationRecord struct {
 	// older versions; callers should treat nil as "no checksum data available" and
 	// fall back to full-mode generation.
 	FunctionChecksums map[string]string
+
+	// SchemaDSL, SchemaFormat, and ModelJSON make the database self-describing.
+	// They are populated only when the corresponding columns exist and were
+	// written by a version that records the model. On older records SchemaDSL is
+	// "" (treat as "no model recorded") and ModelJSON is nil.
+	SchemaDSL    string
+	SchemaFormat string
+	ModelJSON    []byte
 }
 
 // Migrator handles loading authorization schemas into PostgreSQL.
@@ -402,9 +471,92 @@ func (m *Migrator) GetLastMigration(ctx context.Context) (*MigrationRecord, erro
 }
 
 // getLastMigration returns the most recent migration record, or nil if none exists.
+//
+// Optional columns (function_checksums, schema_dsl, schema_format, model_json)
+// were added after the original DDL, so the SELECT is built from the columns
+// that actually exist. This keeps reads compatible with databases migrated by
+// any earlier version without a branch per column combination.
 func (m *Migrator) getLastMigration(ctx context.Context, db Execer) (*MigrationRecord, error) {
 	// First check if the migrations table exists
-	var tableExists bool
+	tableExists, err := m.migrationTableExists(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	if !tableExists {
+		return nil, nil // No migrations table yet
+	}
+
+	cols, err := m.migrationColumns(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+
+	// id, migrated_at, and the original three columns are always present.
+	// melange_version, function_checksums, and the model columns were each added
+	// later, so probe for them; a database migrated by an old version that lacks
+	// one must still read cleanly (status now depends on this).
+	var (
+		rec            MigrationRecord
+		melangeVersion sql.NullString
+		checksumsJSON  sql.NullString
+		schemaDSL      sql.NullString
+		schemaFormat   sql.NullString
+		modelJSON      sql.NullString
+	)
+	selects := []string{"id", "migrated_at", "schema_checksum", "codegen_version", "function_names"}
+	targets := []any{&rec.ID, &rec.MigratedAt, &rec.SchemaChecksum, &rec.CodegenVersion, pq.Array(&rec.FunctionNames)}
+	if cols["melange_version"] {
+		selects = append(selects, "melange_version")
+		targets = append(targets, &melangeVersion)
+	}
+	if cols["function_checksums"] {
+		selects = append(selects, "function_checksums::TEXT")
+		targets = append(targets, &checksumsJSON)
+	}
+	if cols["schema_dsl"] {
+		selects = append(selects, "schema_dsl")
+		targets = append(targets, &schemaDSL)
+	}
+	if cols["schema_format"] {
+		selects = append(selects, "schema_format")
+		targets = append(targets, &schemaFormat)
+	}
+	if cols["model_json"] {
+		selects = append(selects, "model_json::TEXT")
+		targets = append(targets, &modelJSON)
+	}
+
+	query := fmt.Sprintf("SELECT %s FROM %s ORDER BY id DESC LIMIT 1",
+		strings.Join(selects, ", "), m.prefixIdent("melange_migrations"))
+	err = db.QueryRowContext(ctx, query).Scan(targets...)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("querying last migration: %w", err)
+	}
+
+	if checksumsJSON.Valid && checksumsJSON.String != "" {
+		rec.FunctionChecksums = make(map[string]string)
+		if err := json.Unmarshal([]byte(checksumsJSON.String), &rec.FunctionChecksums); err != nil {
+			return nil, fmt.Errorf("unmarshaling function checksums: %w", err)
+		}
+	}
+	rec.MelangeVersion = melangeVersion.String
+	rec.SchemaDSL = schemaDSL.String
+	rec.SchemaFormat = schemaFormat.String
+	if modelJSON.Valid && modelJSON.String != "" && modelJSON.String != "{}" {
+		rec.ModelJSON = []byte(modelJSON.String)
+	}
+	return &rec, nil
+}
+
+// migrationTableExists reports whether the melange_migrations table exists in
+// the configured schema. Used to distinguish an un-migrated database from one
+// whose columns are merely hidden by privileges (which would make an
+// information_schema probe misleadingly return nothing).
+func (m *Migrator) migrationTableExists(ctx context.Context, db Execer) (bool, error) {
+	var exists bool
 	err := db.QueryRowContext(ctx, fmt.Sprintf(
 		`
 			SELECT EXISTS (
@@ -415,83 +567,168 @@ func (m *Migrator) getLastMigration(ctx context.Context, db Execer) (*MigrationR
 			)
 		`,
 		m.postgresSchema(),
-	)).Scan(&tableExists)
+	)).Scan(&exists)
 	if err != nil {
-		return nil, fmt.Errorf("checking melange_migrations table: %w", err)
+		return false, fmt.Errorf("checking melange_migrations table: %w", err)
 	}
-	if !tableExists {
-		return nil, nil // No migrations table yet
-	}
+	return exists, nil
+}
 
-	// Check if function_checksums column exists (may be absent on older installations)
-	var hasChecksumsCol bool
-	err = db.QueryRowContext(ctx, fmt.Sprintf(
+// driftGuardInTx re-evaluates the drift guard against the latest record visible
+// to db (a transaction). Read-committed visibility means a migration committed
+// since the up-front check is seen here, so a concurrent change that lands while
+// this migration applies is caught before the record is written.
+func (m *Migrator) driftGuardInTx(ctx context.Context, db Execer, expected *string) error {
+	if expected == nil {
+		return nil
+	}
+	rec, err := m.getLastMigration(ctx, db)
+	if err != nil {
+		return err
+	}
+	return driftGuardError(expected, rec)
+}
+
+// migrationColumns returns the set of column names present in the
+// melange_migrations table, used to build a compatible SELECT.
+func (m *Migrator) migrationColumns(ctx context.Context, db Execer) (map[string]bool, error) {
+	rows, err := db.QueryContext(ctx, fmt.Sprintf(
 		`
-			SELECT EXISTS (
-				SELECT 1 FROM information_schema.columns
-				WHERE table_name = 'melange_migrations'
-				AND column_name = 'function_checksums'
-				AND table_schema = %s
-			)
+			SELECT column_name FROM information_schema.columns
+			WHERE table_name = 'melange_migrations'
+			AND table_schema = %s
 		`,
 		m.postgresSchema(),
-	)).Scan(&hasChecksumsCol)
+	))
 	if err != nil {
-		return nil, fmt.Errorf("checking function_checksums column: %w", err)
+		return nil, fmt.Errorf("listing melange_migrations columns: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	cols := make(map[string]bool)
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("scanning column name: %w", err)
+		}
+		cols[name] = true
+	}
+	return cols, rows.Err()
+}
+
+// DeployedModel is the authorization model recorded by the most recent
+// migration — the source for `melange schema pull`, drift detection, and diffs.
+type DeployedModel struct {
+	DSL            string                  // OpenFGA DSL that produced the deployment
+	Format         string                  // "single" or "modular"
+	Types          []schema.TypeDefinition // parsed model (nil if only DSL was recorded)
+	SchemaChecksum string
+	MelangeVersion string
+	MigratedAt     time.Time
+}
+
+// GetDeployedModel returns the model recorded by the most recent migration, or
+// nil if none has been recorded — either because the database has never been
+// migrated or because it was migrated before model storage existed (SchemaDSL
+// empty). Callers surface a "re-run migrate to record the model" hint for nil.
+func (m *Migrator) GetDeployedModel(ctx context.Context) (*DeployedModel, error) {
+	rec, err := m.GetLastMigration(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if rec == nil || rec.SchemaDSL == "" {
+		return nil, nil
+	}
+	types, err := schema.UnmarshalModel(rec.ModelJSON)
+	if err != nil {
+		return nil, fmt.Errorf("decoding deployed model: %w", err)
+	}
+	return &DeployedModel{
+		DSL:            rec.SchemaDSL,
+		Format:         rec.SchemaFormat,
+		Types:          types,
+		SchemaChecksum: rec.SchemaChecksum,
+		MelangeVersion: rec.MelangeVersion,
+		MigratedAt:     rec.MigratedAt,
+	}, nil
+}
+
+// GetMigrationHistory returns up to limit migration records, most recent first.
+// It reads a lightweight subset (no DSL or model JSON) suitable for an audit
+// listing, and tolerates databases migrated by older versions that lack the
+// melange_version or schema_format columns. Returns nil when no migrations table
+// exists.
+func (m *Migrator) GetMigrationHistory(ctx context.Context, limit int) ([]MigrationRecord, error) {
+	if limit < 1 {
+		return nil, fmt.Errorf("limit must be at least 1, got %d", limit)
+	}
+	exists, err := m.migrationTableExists(ctx, m.db)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
+	cols, err := m.migrationColumns(ctx, m.db)
+	if err != nil {
+		return nil, err
 	}
 
-	var rec MigrationRecord
-	if hasChecksumsCol {
-		var checksumsJSON sql.NullString
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`
-				SELECT melange_version, schema_checksum, codegen_version, function_names, function_checksums::TEXT
-				FROM %s
-				ORDER BY id DESC
-				LIMIT 1
-			`,
-			m.prefixIdent("melange_migrations"),
-		)).Scan(&rec.MelangeVersion, &rec.SchemaChecksum, &rec.CodegenVersion, pq.Array(&rec.FunctionNames), &checksumsJSON)
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		if err != nil {
-			return nil, fmt.Errorf("querying last migration: %w", err)
-		}
-		if checksumsJSON.Valid && checksumsJSON.String != "" {
-			rec.FunctionChecksums = make(map[string]string)
-			if err := json.Unmarshal([]byte(checksumsJSON.String), &rec.FunctionChecksums); err != nil {
-				return nil, fmt.Errorf("unmarshaling function checksums: %w", err)
-			}
-		}
-	} else {
-		err = db.QueryRowContext(ctx, fmt.Sprintf(
-			`
-				SELECT melange_version, schema_checksum, codegen_version, function_names
-				FROM %s
-				ORDER BY id DESC
-				LIMIT 1
-			`,
-			m.prefixIdent("melange_migrations"),
-		)).Scan(&rec.MelangeVersion, &rec.SchemaChecksum, &rec.CodegenVersion, pq.Array(&rec.FunctionNames))
-		if err == sql.ErrNoRows {
-			return nil, nil
-		}
-		if err != nil {
-			return nil, fmt.Errorf("querying last migration: %w", err)
-		}
+	selects := []string{"id", "migrated_at", "schema_checksum", "codegen_version", "function_names"}
+	hasVersion := cols["melange_version"]
+	hasFormat := cols["schema_format"]
+	if hasVersion {
+		selects = append(selects, "melange_version")
 	}
-	return &rec, nil
+	if hasFormat {
+		selects = append(selects, "schema_format")
+	}
+
+	query := fmt.Sprintf("SELECT %s FROM %s ORDER BY id DESC LIMIT $1",
+		strings.Join(selects, ", "), m.prefixIdent("melange_migrations"))
+	rows, err := m.db.QueryContext(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("querying migration history: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var history []MigrationRecord
+	for rows.Next() {
+		var (
+			rec                MigrationRecord
+			melangeVer, format sql.NullString
+		)
+		targets := []any{&rec.ID, &rec.MigratedAt, &rec.SchemaChecksum, &rec.CodegenVersion, pq.Array(&rec.FunctionNames)}
+		if hasVersion {
+			targets = append(targets, &melangeVer)
+		}
+		if hasFormat {
+			targets = append(targets, &format)
+		}
+		if err := rows.Scan(targets...); err != nil {
+			return nil, fmt.Errorf("scanning migration row: %w", err)
+		}
+		rec.MelangeVersion = melangeVer.String
+		rec.SchemaFormat = format.String
+		history = append(history, rec)
+	}
+	return history, rows.Err()
 }
 
 // migrationRecordMatches reports whether the last migration was recorded with
 // the same schema checksum and codegen version as the current run.
+//
+// A record written before model storage existed (SchemaDSL empty) never
+// matches: falling through lets phase 2 backfill schema_dsl/model_json without
+// re-applying the generated functions, so a plain rerun after upgrading makes
+// GetDeployedModel / schema pull work without --force.
 func migrationRecordMatches(lastMigration *MigrationRecord, schemaChecksum string) bool {
 	if lastMigration == nil {
 		return false
 	}
 	return lastMigration.SchemaChecksum == schemaChecksum &&
-		lastMigration.CodegenVersion == CodegenVersion()
+		lastMigration.CodegenVersion == CodegenVersion() &&
+		lastMigration.SchemaDSL != ""
 }
 
 // shouldSkipMigration returns true if the schema and codegen version are unchanged.
@@ -602,10 +839,33 @@ func (m *Migrator) applyMigrationsDDL(ctx context.Context, db Execer) error {
 	return nil
 }
 
+// migrationWrite carries the fields persisted to a new melange_migrations row.
+type migrationWrite struct {
+	MelangeVersion    string
+	SchemaChecksum    string
+	FunctionNames     []string
+	FunctionChecksums map[string]string
+	SchemaDSL         string
+	SchemaFormat      string
+	ModelJSON         []byte
+}
+
+// modelJSONOrEmpty returns the model JSON, substituting an empty JSON object for
+// the NOT NULL model_json column when no model was captured (e.g. embedded-string
+// migrations without content).
+func (w migrationWrite) modelJSONOrEmpty() []byte {
+	if len(w.ModelJSON) == 0 {
+		return []byte("{}")
+	}
+	return w.ModelJSON
+}
+
 // recordMigrationOnly inserts a migration record without re-applying functions.
 // Used when phase 2 skip determines the generated SQL is identical to what's
-// already installed — only the melange version or schema checksum changed.
-func (m *Migrator) recordMigrationOnly(ctx context.Context, melangeVersion, schemaChecksum string, functionNames []string, functionChecksums map[string]string) error {
+// already installed — only the melange version or schema checksum changed. The
+// drift guard is re-verified in-transaction before the insert, like the full
+// apply path, so a concurrent change is not overwritten.
+func (m *Migrator) recordMigrationOnly(ctx context.Context, w migrationWrite, ifDeployed *string) error {
 	if txer, ok := m.db.(interface {
 		BeginTx(ctx context.Context, opts *sql.TxOptions) (*sql.Tx, error)
 	}); ok {
@@ -618,7 +878,10 @@ func (m *Migrator) recordMigrationOnly(ctx context.Context, melangeVersion, sche
 		if err := m.applyMigrationsDDL(ctx, tx); err != nil {
 			return err
 		}
-		if err := m.insertMigrationRecord(ctx, tx, melangeVersion, schemaChecksum, functionNames, functionChecksums); err != nil {
+		if err := m.driftGuardInTx(ctx, tx, ifDeployed); err != nil {
+			return err
+		}
+		if err := m.insertMigrationRecord(ctx, tx, w); err != nil {
 			return err
 		}
 		return tx.Commit()
@@ -627,22 +890,26 @@ func (m *Migrator) recordMigrationOnly(ctx context.Context, melangeVersion, sche
 	if err := m.applyMigrationsDDL(ctx, m.db); err != nil {
 		return err
 	}
-	return m.insertMigrationRecord(ctx, m.db, melangeVersion, schemaChecksum, functionNames, functionChecksums)
+	if err := m.driftGuardInTx(ctx, m.db, ifDeployed); err != nil {
+		return err
+	}
+	return m.insertMigrationRecord(ctx, m.db, w)
 }
 
 // insertMigrationRecord records the migration in melange_migrations.
-func (m *Migrator) insertMigrationRecord(ctx context.Context, db Execer, melangeVersion, schemaChecksum string, functionNames []string, functionChecksums map[string]string) error {
-	checksumsJSON, err := json.Marshal(functionChecksums)
+func (m *Migrator) insertMigrationRecord(ctx context.Context, db Execer, w migrationWrite) error {
+	checksumsJSON, err := json.Marshal(w.FunctionChecksums)
 	if err != nil {
 		return fmt.Errorf("marshaling function checksums: %w", err)
 	}
 	_, err = db.ExecContext(ctx, fmt.Sprintf(
 		`
-			INSERT INTO %s (melange_version, schema_checksum, codegen_version, function_names, function_checksums)
-			VALUES ($1, $2, $3, $4, $5)
+			INSERT INTO %s (melange_version, schema_checksum, codegen_version, function_names, function_checksums, schema_dsl, schema_format, model_json)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		`,
 		m.prefixIdent("melange_migrations"),
-	), melangeVersion, schemaChecksum, CodegenVersion(), pq.Array(functionNames), string(checksumsJSON))
+	), w.MelangeVersion, w.SchemaChecksum, CodegenVersion(), pq.Array(w.FunctionNames), string(checksumsJSON),
+		w.SchemaDSL, w.SchemaFormat, string(w.modelJSONOrEmpty()))
 	if err != nil {
 		return fmt.Errorf("inserting migration record: %w", err)
 	}
@@ -682,14 +949,28 @@ func (m *Migrator) migrateWithTypesAndOptions(ctx context.Context, types []TypeD
 		schemaChecksum = ComputeSchemaChecksum(opts.SchemaContent)
 	}
 
-	// 3. Fetch last migration record (needed for both skip phases)
+	// 3. Fetch last migration record (needed for the drift guard and both skip
+	// phases). The guard needs it even under --force and --dry-run.
 	var lastMigration *MigrationRecord
-	if !opts.Force && opts.DryRun == nil && schemaChecksum != "" {
+	if opts.IfDeployedChecksum != nil ||
+		(!opts.Force && opts.DryRun == nil && schemaChecksum != "") {
 		lastMigration, err = m.getLastMigration(ctx, m.db)
 		if err != nil {
 			return false, fmt.Errorf("checking last migration: %w", err)
 		}
-		// Phase 1 skip: schema + codegen version unchanged → skip entirely
+	}
+
+	// Drift guard: --if-deployed-checksum makes migrate a compare-and-swap. Abort
+	// early if the database isn't at the expected checksum — including in dry-run,
+	// so a drift-gated preview fails rather than printing SQL against a drifted
+	// database. The apply path re-checks inside its transaction (see below) to
+	// catch drift committed while this migration runs.
+	if err := driftGuardError(opts.IfDeployedChecksum, lastMigration); err != nil {
+		return false, err
+	}
+
+	// Phase 1 skip: schema + codegen version unchanged → skip entirely
+	if !opts.Force && opts.DryRun == nil && schemaChecksum != "" {
 		if shouldSkipMigration(lastMigration, schemaChecksum) {
 			return true, nil
 		}
@@ -722,9 +1003,24 @@ func (m *Migrator) migrateWithTypesAndOptions(ctx context.Context, types []TypeD
 	namedFunctions = append(namedFunctions, collectDispatcherFunctions(generatedSQL, listSQL)...)
 	functionChecksums := ComputeFunctionChecksums(namedFunctions)
 
+	// Serialize the parsed model so the migration record is self-describing.
+	modelJSON, err := schema.MarshalModel(types)
+	if err != nil {
+		return false, fmt.Errorf("marshaling model: %w", err)
+	}
+	write := migrationWrite{
+		MelangeVersion:    opts.Version,
+		SchemaChecksum:    schemaChecksum,
+		FunctionNames:     expectedFunctions,
+		FunctionChecksums: functionChecksums,
+		SchemaDSL:         opts.SchemaContent,
+		SchemaFormat:      opts.SchemaFormat,
+		ModelJSON:         modelJSON,
+	}
+
 	// 8. Handle dry-run mode
 	if opts.DryRun != nil {
-		m.outputDryRun(opts.DryRun, opts.Version, schemaChecksum, generatedSQL, listSQL, expectedFunctions)
+		m.outputDryRun(opts.DryRun, write, generatedSQL, listSQL)
 		return false, nil
 	}
 
@@ -738,7 +1034,7 @@ func (m *Migrator) migrateWithTypesAndOptions(ctx context.Context, types []TypeD
 		if migrationRecordMatches(lastMigration, schemaChecksum) {
 			return true, nil
 		}
-		return false, m.recordMigrationOnly(ctx, opts.Version, schemaChecksum, expectedFunctions, functionChecksums)
+		return false, m.recordMigrationOnly(ctx, write, opts.IfDeployedChecksum)
 	}
 
 	// 10. Apply everything atomically
@@ -777,9 +1073,15 @@ func (m *Migrator) migrateWithTypesAndOptions(ctx context.Context, types []TypeD
 			return false, err
 		}
 
+		// Re-verify the drift guard inside the transaction before recording, so a
+		// migration committed while we were applying aborts this one (rollback).
+		if err := m.driftGuardInTx(ctx, tx, opts.IfDeployedChecksum); err != nil {
+			return false, err
+		}
+
 		// Record migration
 		if schemaChecksum != "" {
-			if err := m.insertMigrationRecord(ctx, tx, opts.Version, schemaChecksum, expectedFunctions, functionChecksums); err != nil {
+			if err := m.insertMigrationRecord(ctx, tx, write); err != nil {
 				return false, err
 			}
 		}
@@ -787,8 +1089,13 @@ func (m *Migrator) migrateWithTypesAndOptions(ctx context.Context, types []TypeD
 		return false, tx.Commit()
 	}
 
-	// Fall back to non-transactional (for *sql.Conn)
+	// Fall back to non-transactional (for *sql.Conn). Without a transaction there
+	// is no rollback, so the drift guard is re-checked BEFORE any function is
+	// applied — a failure then leaves nothing applied, matching the error.
 	if err := m.applyMigrationsDDL(ctx, m.db); err != nil {
+		return false, err
+	}
+	if err := m.driftGuardInTx(ctx, m.db, opts.IfDeployedChecksum); err != nil {
 		return false, err
 	}
 	currentFunctions, err := m.getCurrentFunctions(ctx, m.db)
@@ -805,7 +1112,7 @@ func (m *Migrator) migrateWithTypesAndOptions(ctx context.Context, types []TypeD
 		return false, err
 	}
 	if schemaChecksum != "" {
-		if err := m.insertMigrationRecord(ctx, m.db, opts.Version, schemaChecksum, expectedFunctions, functionChecksums); err != nil {
+		if err := m.insertMigrationRecord(ctx, m.db, write); err != nil {
 			return false, err
 		}
 	}
@@ -813,7 +1120,11 @@ func (m *Migrator) migrateWithTypesAndOptions(ctx context.Context, types []TypeD
 }
 
 // outputDryRun writes the migration SQL to the provided writer.
-func (m *Migrator) outputDryRun(w io.Writer, melangeVersion, schemaChecksum string, generatedSQL GeneratedSQL, listSQL ListGeneratedSQL, expectedFunctions []string) {
+func (m *Migrator) outputDryRun(w io.Writer, write migrationWrite, generatedSQL GeneratedSQL, listSQL ListGeneratedSQL) {
+	melangeVersion := write.MelangeVersion
+	schemaChecksum := write.SchemaChecksum
+	expectedFunctions := write.FunctionNames
+
 	// Header
 	_, _ = fmt.Fprintf(w, "-- Melange Migration (dry-run)\n")
 	if melangeVersion != "" {
@@ -939,10 +1250,31 @@ func (m *Migrator) outputDryRun(w io.Writer, melangeVersion, schemaChecksum stri
 	// Format as SQL array literal
 	quotedFunctions := make([]string, len(sortedFunctions))
 	for i, fn := range sortedFunctions {
-		quotedFunctions[i] = fmt.Sprintf("'%s'", fn)
+		quotedFunctions[i] = sqldsl.Lit(fn).SQL()
 	}
-	_, _ = fmt.Fprintf(w, "INSERT INTO %s (melange_version, schema_checksum, codegen_version, function_names)\n", m.prefixIdent("melange_migrations"))
-	_, _ = fmt.Fprintf(w, "VALUES ('%s', '%s', '%s', ARRAY[%s]);\n", melangeVersion, schemaChecksum, CodegenVersion(), strings.Join(quotedFunctions, ", "))
+
+	// Emit every persisted column — including function_checksums and the
+	// deployed-model columns — so a separately-applied dry-run script records a
+	// migration identical to a normal migrate. Without function_checksums a later
+	// real migrate could not take the phase-2 "skip-apply" fast path. sqldsl.Lit
+	// escapes single quotes, so multi-line DSL and JSON are safe; the JSON text is
+	// cast to the JSONB columns implicitly.
+	checksumsJSON, err := json.Marshal(write.FunctionChecksums)
+	if err != nil {
+		// FunctionChecksums is a plain map[string]string; marshaling cannot fail.
+		checksumsJSON = []byte("{}")
+	}
+	_, _ = fmt.Fprintf(w, "INSERT INTO %s (melange_version, schema_checksum, codegen_version, function_names, function_checksums, schema_dsl, schema_format, model_json)\n", m.prefixIdent("melange_migrations"))
+	_, _ = fmt.Fprintf(w, "VALUES (%s, %s, %s, ARRAY[%s], %s, %s, %s, %s);\n",
+		sqldsl.Lit(melangeVersion).SQL(),
+		sqldsl.Lit(schemaChecksum).SQL(),
+		sqldsl.Lit(CodegenVersion()).SQL(),
+		strings.Join(quotedFunctions, ", "),
+		sqldsl.Lit(string(checksumsJSON)).SQL(),
+		sqldsl.Lit(write.SchemaDSL).SQL(),
+		sqldsl.Lit(write.SchemaFormat).SQL(),
+		sqldsl.Lit(string(write.modelJSONOrEmpty())).SQL(),
+	)
 }
 
 func (m *Migrator) prefixIdent(identifier string) string {

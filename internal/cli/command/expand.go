@@ -67,7 +67,7 @@ Leaf.Users array; capped leaves carry users_truncated: true.`,
   melange expand document:1 viewer --format=json`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		databaseSchema := resolveString(expandDBSchema, cfg.Database.Schema)
+		databaseSchema := resolveString(expandDBSchema, cfg.Database.Schema, "public")
 
 		dsn, err := resolveDSN(expandDB)
 		if err != nil {
@@ -88,7 +88,7 @@ Leaf.Users array; capped leaves carry users_truncated: true.`,
 func init() {
 	f := expandCmd.Flags()
 	f.StringVar(&expandDB, "db", "", "database URL")
-	f.StringVar(&expandDBSchema, "db-schema", "public", "database schema")
+	f.StringVar(&expandDBSchema, "db-schema", "", "database schema (default: config database.schema, else public)")
 	f.StringVar(&expandFormat, "format", "tree", "output format: tree (default) or json")
 	f.StringVar(&expandSubjectType, "subject-type", "", "Melange extension: narrow Leaf.Users to this subject type (empty = no filter)")
 	f.IntVar(&expandMaxLeaf, "max-leaf", 0, "Melange extension: cap entries per Leaf.Users (0 = unbounded, OpenFGA-equivalent)")
