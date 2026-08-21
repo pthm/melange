@@ -7,7 +7,7 @@ var schemaCmd = &cobra.Command{
 	Short: "Inspect the model deployed in a database",
 	Long: `Work with the authorization model recorded in a migrated database.
 
-Since v0.9 every migration stores the schema it applied, so a live database
+Every migration stores the schema it applied, so a live database
 can describe itself. Use 'schema pull' to reconstruct the .fga from it.`,
 }
 

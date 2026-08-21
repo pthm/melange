@@ -44,7 +44,7 @@ func readDeployedModel(dsn, databaseSchema string) (*migrator.DeployedModel, err
 	case rerr != nil:
 		return nil, cli.GeneralError("reading migration record", rerr)
 	case rec != nil:
-		return nil, cli.GeneralError("this database was migrated before melange v0.9, so the model was not recorded — re-run `melange migrate` with a current version to record it", nil)
+		return nil, cli.GeneralError("this database was migrated before melange recorded deployed models, so the model is not available — re-run `melange migrate` with a current version to record it", nil)
 	default:
 		return nil, cli.GeneralError("no melange migration found in this database", nil)
 	}

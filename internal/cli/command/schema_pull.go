@@ -32,8 +32,9 @@ schema. A modular (fga.mod) schema is emitted as the stored manifest + module
 bundle for reference/recovery; that combined form does not re-parse as a single
 .fga, and splitting it back into module files is not supported.
 
-Requires a database migrated by melange v0.9 or later; older databases did not
-record the model, and pull reports that they cannot be recovered.`,
+Requires a database migrated by a melange version that records the deployed
+model; older databases did not record it, and pull reports that they cannot be
+recovered.`,
 	Example: `  # Print the deployed schema
   melange schema pull --db postgres://localhost/mydb
 
