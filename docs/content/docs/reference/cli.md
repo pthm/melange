@@ -264,12 +264,41 @@ The **Deployed** line reports the model recorded by the most recent migration
 (checksum, melange version, and time). The **Sync** state compares the local
 schema file's checksum against the deployed one:
 
-| Sync state     | Meaning                                                          |
-| -------------- | --------------------------------------------------------------- |
-| `in_sync`      | The local schema matches what's deployed                        |
-| `drift`        | The local schema differs — run `melange migrate` to apply       |
-| `unknown`      | No local schema file to compare against                         |
-| `not_recorded` | The database has no migration record                            |
+| Sync state       | Meaning                                                                   |
+| ---------------- | ------------------------------------------------------------------------- |
+| `in_sync`        | The local schema matches what's deployed                                     |
+| `drift`          | The local schema differs — run `melange migrate` to apply                    |
+| `database_ahead` | Drift where the deployed model is in no recent commit of your schema file    |
+| `unknown`        | No local schema file to compare against                                      |
+| `not_recorded`   | The database has no migration record                                         |
+
+`database_ahead` is the warning case: the deployed model is not the local file
+and is not any version of it in your schema's git history, so someone migrated
+that database from a different checkout — applying your local schema would
+overwrite their model rather than move the database forward. Check with
+`melange schema pull` before migrating, and use
+`melange migrate --if-deployed-checksum` to make the apply conditional.
+
+The probe is advisory and errs toward plain `drift`. It follows the schema across
+renames and reads each revision as a checkout would (so end-of-line conversion
+doesn't cause spurious mismatches), and it stays silent whenever it cannot search
+every version:
+
+- outside a git repository, or without git installed
+- in a shallow (`--depth`) or partial clone — CI checkouts are shallow by
+  default, so this is the common case in automation
+- when the schema is uncommitted or has local modifications: migrating from a
+  dirty working tree is routine, so the deployed model may be a version git
+  never saw
+- for modular (`fga.mod`) schemas, whose checksum covers the manifest plus every
+  module
+- for a schema with more than 50 commits of history, past which the search is no
+  longer exhaustive
+- when the two models are semantically equivalent — a checksum that moved on
+  formatting or comments alone is drift, never an allegation
+
+Treat it as a prompt to look, not a verdict: it reports what git could see, and
+git cannot see every place a model may have come from.
 
 Databases migrated before v0.9 (or by `MigrateWithTypes`) have no recorded model
 DSL; status notes this and `melange schema pull` cannot recover them. Reading the
@@ -294,7 +323,8 @@ presence and adds a `Note:` line.
 }
 ```
 
-When the sync state is `drift` and both models are available, a `drift` object
+When the sync state is `drift` or `database_ahead` and both models are
+available, a `drift` object
 carries the same detail as the text output — the counts plus every change, not
 just the first five. Changes are sorted by type, then relation, so the order is
 stable across runs:
