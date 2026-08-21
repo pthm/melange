@@ -65,10 +65,7 @@ func runSchemaPull(dsn, databaseSchema, output string, noHeader bool) error {
 		return err
 	}
 
-	content := model.DSL
-	if !noHeader {
-		content = pullHeader(model) + content
-	}
+	content := pullContent(model, noHeader)
 
 	if output == "" || output == "-" {
 		fmt.Print(content)
@@ -81,6 +78,15 @@ func runSchemaPull(dsn, databaseSchema, output string, noHeader bool) error {
 		fmt.Fprintf(os.Stderr, "Wrote deployed schema to %s\n", output)
 	}
 	return nil
+}
+
+// pullContent assembles what `schema pull` emits: the recorded DSL, prefixed
+// with the provenance header unless it was suppressed.
+func pullContent(model *migrator.DeployedModel, noHeader bool) string {
+	if noHeader {
+		return model.DSL
+	}
+	return pullHeader(model) + model.DSL
 }
 
 // pullHeader renders the provenance of a pulled schema as '#' comment lines.

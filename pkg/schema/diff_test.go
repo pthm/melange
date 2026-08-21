@@ -324,3 +324,82 @@ func TestDiff_CountsAndHasBreaking(t *testing.T) {
 		t.Error("expected HasBreaking to be true")
 	}
 }
+
+// BreakingSummaries feeds the doctor advisory and status drift block, which show
+// only what narrows access.
+func TestBreakingSummaries_SelectsOnlyBreaking(t *testing.T) {
+	d := schema.SchemaDiff{Changes: []schema.Change{
+		{Class: schema.ClassAdditive, Type: "audit_log", Summary: "type audit_log added"},
+		{Class: schema.ClassBreaking, Type: "document", Relation: "viewer", Summary: "relation document.viewer removed"},
+		{Class: schema.ClassBreaking, Type: "folder", Relation: "editor", Summary: "relation folder.editor removed"},
+	}}
+
+	got := d.BreakingSummaries()
+	if len(got) != 2 {
+		t.Fatalf("got %d summaries, want 2: %v", len(got), got)
+	}
+	for _, s := range got {
+		if strings.Contains(s, "audit_log") {
+			t.Errorf("additive change leaked into breaking summaries: %q", s)
+		}
+	}
+	if len(schema.SchemaDiff{}.BreakingSummaries()) != 0 {
+		t.Error("an empty diff must produce no summaries")
+	}
+}
+
+// A TTU grant renders as "relation from parent" on both sides of the diff, so a
+// change to the linking relation reads as a real change rather than a rename.
+func TestDiff_TupleToUsersetGrant(t *testing.T) {
+	deployed := []schema.TypeDefinition{{Name: "document", Relations: []schema.RelationDefinition{{
+		Name:            "viewer",
+		ParentRelations: []schema.ParentRelationCheck{{Relation: "viewer", LinkingRelation: "parent"}},
+	}}}}
+	local := []schema.TypeDefinition{{Name: "document", Relations: []schema.RelationDefinition{{
+		Name:            "viewer",
+		ParentRelations: []schema.ParentRelationCheck{{Relation: "viewer", LinkingRelation: "owner"}},
+	}}}}
+
+	d := schema.Diff(deployed, local)
+	additive, breaking := d.Counts()
+	if breaking != 1 || additive != 1 {
+		t.Fatalf("counts = %d breaking, %d additive; want 1 and 1: %+v", breaking, additive, d.Changes)
+	}
+	joined := strings.Join(summaries(d), " | ")
+	if !strings.Contains(joined, "viewer from parent") || !strings.Contains(joined, "viewer from owner") {
+		t.Errorf("summaries should name both TTU tokens, got: %s", joined)
+	}
+}
+
+// An intersection member carrying its own exclusion is rendered with that
+// exclusion, so tightening it is not mistaken for an unrelated grant.
+func TestDiff_IntersectionMemberExclusion(t *testing.T) {
+	deployed := []schema.TypeDefinition{{Name: "document", Relations: []schema.RelationDefinition{{
+		Name:               "viewer",
+		IntersectionGroups: []schema.IntersectionGroup{{Relations: []string{"editor", "member"}}},
+	}}}}
+	local := []schema.TypeDefinition{{Name: "document", Relations: []schema.RelationDefinition{{
+		Name: "viewer",
+		IntersectionGroups: []schema.IntersectionGroup{{
+			Relations:  []string{"editor", "member"},
+			Exclusions: map[string][]string{"editor": {"banned"}},
+		}},
+	}}}}
+
+	d := schema.Diff(deployed, local)
+	if d.Empty() {
+		t.Fatal("narrowing an intersection member must register as a change")
+	}
+	joined := strings.Join(summaries(d), " | ")
+	if !strings.Contains(joined, "editor but not banned") {
+		t.Errorf("summary should render the member exclusion, got: %s", joined)
+	}
+}
+
+func summaries(d schema.SchemaDiff) []string {
+	out := make([]string, 0, len(d.Changes))
+	for _, c := range d.Changes {
+		out = append(out, c.Summary)
+	}
+	return out
+}

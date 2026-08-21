@@ -2,6 +2,8 @@ package command
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"sort"
 
 	"github.com/spf13/cobra"
@@ -39,42 +41,47 @@ func init() {
 }
 
 func runEnvList() error {
-	// baseCfg holds the configuration before any --env overlay, so each profile
-	// is summarized against the same base.
-	names := make([]string, 0, len(baseCfg.Environments))
-	for name := range baseCfg.Environments {
+	return printEnvironments(os.Stdout, baseCfg, activeEnv)
+}
+
+// printEnvironments writes one line per configured profile, marking the active
+// one. cfg is the configuration before any --env overlay, so every profile is
+// summarized against the same base.
+func printEnvironments(w io.Writer, cfg *cli.Config, active string) error {
+	names := make([]string, 0, len(cfg.Environments))
+	for name := range cfg.Environments {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 
 	if len(names) == 0 {
-		fmt.Println("No environments defined.")
-		fmt.Println("\nAdd them under 'environments:' in your config, e.g.:")
-		fmt.Println("  environments:")
-		fmt.Println("    production:")
-		fmt.Println("      database:")
-		fmt.Println("        url: ${PROD_DATABASE_URL}")
+		_, _ = fmt.Fprintln(w, "No environments defined.")
+		_, _ = fmt.Fprintln(w, "\nAdd them under 'environments:' in your config, e.g.:")
+		_, _ = fmt.Fprintln(w, "  environments:")
+		_, _ = fmt.Fprintln(w, "    production:")
+		_, _ = fmt.Fprintln(w, "      database:")
+		_, _ = fmt.Fprintln(w, "        url: ${PROD_DATABASE_URL}")
 		return nil
 	}
 
-	fmt.Println("Environments:")
+	_, _ = fmt.Fprintln(w, "Environments:")
 	for _, name := range names {
-		summary, err := baseCfg.EnvironmentSummary(name)
+		summary, err := cfg.EnvironmentSummary(name)
 		if err != nil {
 			return cli.ConfigError("summarizing environment", err)
 		}
 		marker := "  "
-		if name == activeEnv {
+		if name == active {
 			marker = "* "
 		}
-		fmt.Printf("%s%-16s %s\n", marker, name, summary)
+		_, _ = fmt.Fprintf(w, "%s%-16s %s\n", marker, name, summary)
 	}
 
-	if baseCfg.DefaultEnvironment != "" {
-		fmt.Printf("\nDefault: %s\n", baseCfg.DefaultEnvironment)
+	if cfg.DefaultEnvironment != "" {
+		_, _ = fmt.Fprintf(w, "\nDefault: %s\n", cfg.DefaultEnvironment)
 	}
-	if activeEnv != "" {
-		fmt.Printf("Active:  %s (marked with *)\n", activeEnv)
+	if active != "" {
+		_, _ = fmt.Fprintf(w, "Active:  %s (marked with *)\n", active)
 	}
 	return nil
 }

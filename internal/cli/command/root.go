@@ -64,37 +64,14 @@ from OpenFGA schemas, enabling single-query permission checks in PostgreSQL.`,
 		// Resolve the active environment and overlay it onto cfg. Downstream
 		// resolution (resolveDSN, cfg.DSN) operates on the resolved config.
 		baseCfg = cfg
-		explicitEnv := resolveString(envFlag, os.Getenv("MELANGE_ENV"))
-		activeEnv = resolveString(explicitEnv, cfg.DefaultEnvironment)
-
-		// Typo protection: an explicitly named environment must exist. A stale
-		// default_environment is handled leniently below instead.
-		if explicitEnv != "" && !cfg.HasEnvironment(explicitEnv) {
-			return cli.ConfigError("resolving environment",
-				fmt.Errorf("environment %q is not defined in configuration", explicitEnv))
-		}
-
-		resolved, err := cfg.ForEnvironment(activeEnv)
+		res, err := resolveEnvironment(cfg, envFlag, os.Getenv("MELANGE_ENV"))
 		if err != nil {
-			if explicitEnv == "" && activeEnv != "" && !cfg.HasEnvironment(activeEnv) {
-				// Only a *stale* default_environment (naming an environment that
-				// no longer exists) is lenient: warn and use base. A defined
-				// default with an unset secret must NOT silently fall through to
-				// base — it is deferred below so a connecting command fails loud.
-				fmt.Fprintf(os.Stderr, "warning: default_environment %q is not defined; using base config\n", activeEnv)
-				activeEnv = ""
-				resolved, err = cfg.ForEnvironment("")
-			}
-			if err != nil {
-				// Almost always an unset ${VAR} secret. Defer to connect time so
-				// diagnostic commands (env list, config show, validate) still run;
-				// resolveDSN surfaces this for commands that actually connect. Keep
-				// the best-effort resolved config (non-connection overlay such as
-				// schema still applies, and an explicit --db can proceed).
-				envResolveErr = err
-			}
+			return err
 		}
-		cfg = resolved
+		cfg, activeEnv, envResolveErr = res.Config, res.Active, res.Deferred
+		if res.Warning != "" {
+			fmt.Fprintf(os.Stderr, "warning: %s\n", res.Warning)
+		}
 
 		// Surface the target so a command running against a non-base environment
 		// (especially one selected via default_environment) is never silent.
@@ -106,6 +83,52 @@ from OpenFGA schemas, enabling single-query permission checks in PostgreSQL.`,
 	},
 	SilenceUsage:  true, // Don't show usage on errors
 	SilenceErrors: true, // We handle errors ourselves
+}
+
+// envResolution is the outcome of selecting an environment profile and applying
+// it to the loaded configuration.
+type envResolution struct {
+	Config   *cli.Config // configuration with the environment overlaid (best effort)
+	Active   string      // selected environment; empty means the base config
+	Deferred error       // resolution failure to surface when a command connects
+	Warning  string      // non-fatal note for the user
+}
+
+// resolveEnvironment picks the environment profile to run against and overlays
+// it, following the documented precedence: --env, then MELANGE_ENV, then
+// default_environment, then the base config.
+//
+// It distinguishes three failure modes deliberately. An explicitly named
+// environment that does not exist is a hard error, so `--env prod` cannot
+// silently run against a local database after a typo. A *stale*
+// default_environment — one naming a profile that no longer exists — only warns
+// and falls back to base. Anything else (almost always an unset ${VAR} secret)
+// is deferred rather than fatal, so diagnostic commands such as `env list`,
+// `config show`, and `validate` still run; commands that connect surface it
+// through resolveDSN.
+func resolveEnvironment(base *cli.Config, flagEnv, osEnv string) (envResolution, error) {
+	explicit := resolveString(flagEnv, osEnv)
+	active := resolveString(explicit, base.DefaultEnvironment)
+
+	if explicit != "" && !base.HasEnvironment(explicit) {
+		return envResolution{}, cli.ConfigError("resolving environment",
+			fmt.Errorf("environment %q is not defined in configuration", explicit))
+	}
+
+	out := envResolution{Active: active}
+	resolved, err := base.ForEnvironment(active)
+	if err != nil && explicit == "" && active != "" && !base.HasEnvironment(active) {
+		out.Warning = fmt.Sprintf("default_environment %q is not defined; using base config", active)
+		out.Active = ""
+		resolved, err = base.ForEnvironment("")
+	}
+	if err != nil {
+		// Keep the best-effort config: a non-connection overlay (schema, say)
+		// still applies, and an explicit --db can still proceed.
+		out.Deferred = err
+	}
+	out.Config = resolved
+	return out, nil
 }
 
 // Command group IDs

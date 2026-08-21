@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -693,4 +695,77 @@ func TestLoadConfig_MigrateAndGenerateMigrationDefaults(t *testing.T) {
 	assert.Equal(t, "melange", cfg.Generate.Migration.Name)
 	assert.Equal(t, "split", cfg.Generate.Migration.Format)
 	assert.Empty(t, cfg.Generate.Migration.Output)
+}
+
+// `config show` prints the resolved configuration, so every password — in the
+// base block and in every profile, as a discrete field or inside a URL — must
+// be masked unless --reveal-secrets was passed.
+func TestRedacted_MasksEverySecret(t *testing.T) {
+	cfg := &Config{
+		Database: DatabaseConfig{
+			URL:      "postgres://admin:basesecret@localhost:5432/app",
+			Password: "basefield",
+		},
+		Environments: map[string]EnvironmentConfig{
+			"production": {Database: DatabaseConfig{URL: "postgres://app:prodsecret@prod/app?sslmode=require"}},
+			"staging":    {Database: DatabaseConfig{Host: "staging", Password: "stagingfield"}},
+			"query":      {Database: DatabaseConfig{URL: "postgres://prod/app?password=querysecret&sslmode=require"}},
+		},
+	}
+
+	got := cfg.Redacted()
+
+	for _, secret := range []string{"basesecret", "basefield", "prodsecret", "stagingfield", "querysecret"} {
+		if strings.Contains(fmt.Sprintf("%+v", got), secret) {
+			t.Errorf("secret %q survived redaction: %+v", secret, got)
+		}
+	}
+	if !strings.Contains(got.Database.URL, "admin") || !strings.Contains(got.Database.URL, "localhost:5432/app") {
+		t.Errorf("redaction should keep the non-secret parts of the URL, got %q", got.Database.URL)
+	}
+	if !strings.Contains(got.Environments["query"].Database.URL, "sslmode=require") {
+		t.Errorf("redaction should keep other query parameters, got %q", got.Environments["query"].Database.URL)
+	}
+
+	// The original must not be mutated — `config show` redacts a copy while the
+	// live config keeps the credentials it needs to connect.
+	if cfg.Database.Password != "basefield" || cfg.Environments["staging"].Database.Password != "stagingfield" {
+		t.Error("Redacted mutated the original config")
+	}
+}
+
+// An unexpanded ${VAR} reference is not a secret, and mangling it would make
+// `config show` misleading about what the file actually says.
+func TestRedacted_LeavesUnexpandedReferences(t *testing.T) {
+	cfg := &Config{Database: DatabaseConfig{URL: "${PROD_DATABASE_URL}"}}
+
+	if got := cfg.Redacted().Database.URL; got != "${PROD_DATABASE_URL}" {
+		t.Errorf("URL = %q, want the reference unchanged", got)
+	}
+}
+
+func TestRedacted_NoEnvironments(t *testing.T) {
+	cfg := &Config{Database: DatabaseConfig{Password: "secret"}}
+
+	got := cfg.Redacted()
+	if got.Database.Password != "****" {
+		t.Errorf("password = %q, want masked", got.Database.Password)
+	}
+	if got.Environments != nil {
+		t.Errorf("environments = %+v, want nil preserved", got.Environments)
+	}
+}
+
+func TestHasEnvironment(t *testing.T) {
+	cfg := &Config{Environments: map[string]EnvironmentConfig{"production": {}}}
+
+	if !cfg.HasEnvironment("production") {
+		t.Error("HasEnvironment(production) = false, want true")
+	}
+	if cfg.HasEnvironment("prod") {
+		t.Error("HasEnvironment(prod) = true; a near-miss must not match")
+	}
+	if (&Config{}).HasEnvironment("anything") {
+		t.Error("HasEnvironment on a config without environments = true, want false")
+	}
 }

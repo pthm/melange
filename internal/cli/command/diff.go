@@ -3,6 +3,7 @@ package command
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/spf13/cobra"
@@ -51,21 +52,9 @@ Use --exit-code in CI to fail the build when a change is breaking.`,
 		schemaPath := resolveString(diffSchema, cfg.Schema)
 		databaseSchema := resolveString(diffDBSchema, cfg.Database.Schema, "public")
 
-		if schemaPath == "" {
-			return cli.ConfigError("no schema path — set --schema or `schema` in config", nil)
-		}
-		if diffFormat != "tree" && diffFormat != "json" {
-			return cli.ConfigError(fmt.Sprintf("invalid --format %q (want tree or json)", diffFormat), nil)
-		}
-		if boolCount(diffGitRef != "", diffPreviousSchema != "") > 1 {
-			return cli.ConfigError("--git-ref and --previous-schema are mutually exclusive", nil)
-		}
-		// An explicitly requested database source (--db, or an explicit --env /
-		// MELANGE_ENV) can't be combined with a file/git source. A passive
-		// default_environment does not count — git/file still wins there.
 		explicitDBSource := diffDB != "" || resolveString(envFlag, os.Getenv("MELANGE_ENV")) != ""
-		if explicitDBSource && (diffGitRef != "" || diffPreviousSchema != "") {
-			return cli.ConfigError("a database source (--db/--env) cannot be combined with --git-ref or --previous-schema", nil)
+		if err := validateDiffFlags(schemaPath, diffFormat, diffGitRef, diffPreviousSchema, explicitDBSource); err != nil {
+			return err
 		}
 
 		newTypes, err := parser.ParseSchema(schemaPath)
@@ -79,7 +68,7 @@ Use --exit-code in CI to fail the build when a change is breaking.`,
 		}
 
 		d := schema.Diff(oldTypes, newTypes)
-		renderDiff(d, source, schemaPath)
+		renderDiff(os.Stdout, d, source, schemaPath)
 
 		if diffExitCode && d.HasBreaking() {
 			// git-diff-style signal for CI gates; errors already exited above.
@@ -98,6 +87,29 @@ func init() {
 	f.StringVar(&diffPreviousSchema, "previous-schema", "", "compare against a previous .fga file (modular not supported)")
 	f.StringVar(&diffFormat, "format", "tree", "output format: tree (default) or json")
 	f.BoolVar(&diffExitCode, "exit-code", false, "exit 1 if any change is breaking")
+}
+
+// validateDiffFlags rejects flag combinations that have no single answer, before
+// any database connection is attempted.
+//
+// explicitDBSource means the user actively chose a database (--db, or --env /
+// MELANGE_ENV): only then does a database source conflict with --git-ref or
+// --previous-schema. A passive default_environment does not conflict, so
+// `melange diff --git-ref main` still works in a repo that has one configured.
+func validateDiffFlags(schemaPath, format, gitRef, previousSchema string, explicitDBSource bool) error {
+	if schemaPath == "" {
+		return cli.ConfigError("no schema path — set --schema or `schema` in config", nil)
+	}
+	if format != "tree" && format != "json" {
+		return cli.ConfigError(fmt.Sprintf("invalid --format %q (want tree or json)", format), nil)
+	}
+	if boolCount(gitRef != "", previousSchema != "") > 1 {
+		return cli.ConfigError("--git-ref and --previous-schema are mutually exclusive", nil)
+	}
+	if explicitDBSource && (gitRef != "" || previousSchema != "") {
+		return cli.ConfigError("a database source (--db/--env) cannot be combined with --git-ref or --previous-schema", nil)
+	}
+	return nil
 }
 
 // diffPreviousModel resolves the "old" side of the diff and a label for it.
@@ -144,20 +156,20 @@ func deployedModelTypes(dsn, databaseSchema string) ([]schema.TypeDefinition, er
 	return model.Types, nil
 }
 
-func renderDiff(d schema.SchemaDiff, source, schemaPath string) {
+func renderDiff(w io.Writer, d schema.SchemaDiff, source, schemaPath string) {
 	if diffFormat == "json" {
 		out, err := json.MarshalIndent(d, "", "  ")
 		if err != nil {
 			// SchemaDiff is plain data; marshaling cannot fail.
 			out = []byte("{}")
 		}
-		fmt.Println(string(out))
+		_, _ = fmt.Fprintln(w, string(out))
 		return
 	}
 
-	fmt.Printf("Comparing %s → %s\n\n", source, schemaPath)
+	_, _ = fmt.Fprintf(w, "Comparing %s → %s\n\n", source, schemaPath)
 	if d.Empty() {
-		fmt.Println("No changes — schemas are equivalent.")
+		_, _ = fmt.Fprintln(w, "No changes — schemas are equivalent.")
 		return
 	}
 	for _, c := range d.Changes {
@@ -165,8 +177,8 @@ func renderDiff(d schema.SchemaDiff, source, schemaPath string) {
 		if c.Class == schema.ClassBreaking {
 			label = "BREAKING"
 		}
-		fmt.Printf("  %-9s %s\n", label, c.Summary)
+		_, _ = fmt.Fprintf(w, "  %-9s %s\n", label, c.Summary)
 	}
 	additive, breaking := d.Counts()
-	fmt.Printf("\n%d breaking, %d additive\n", breaking, additive)
+	_, _ = fmt.Fprintf(w, "\n%d breaking, %d additive\n", breaking, additive)
 }

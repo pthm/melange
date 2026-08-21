@@ -74,3 +74,48 @@ func TestDiffPreviousModel_UnknownGitRefErrors(t *testing.T) {
 		t.Error("expected an error for an unknown git ref")
 	}
 }
+
+func TestValidateDiffFlags(t *testing.T) {
+	cases := []struct {
+		name                   string
+		schemaPath, format     string
+		gitRef, previousSchema string
+		explicitDB             bool
+		wantErr                string
+	}{
+		{name: "database source by default", schemaPath: "schema.fga", format: "tree"},
+		{name: "git ref source", schemaPath: "schema.fga", format: "tree", gitRef: "main"},
+		{name: "json format", schemaPath: "schema.fga", format: "json"},
+		// A configured default_environment must not block a git comparison.
+		{name: "passive environment with git ref", schemaPath: "schema.fga", format: "tree", gitRef: "main", explicitDB: false},
+
+		{name: "no schema", format: "tree", wantErr: "no schema path"},
+		{name: "bad format", schemaPath: "schema.fga", format: "yaml", wantErr: "invalid --format"},
+		{
+			name: "two file sources", schemaPath: "schema.fga", format: "tree",
+			gitRef: "main", previousSchema: "old.fga", wantErr: "mutually exclusive",
+		},
+		{
+			name: "explicit database plus git ref", schemaPath: "schema.fga", format: "tree",
+			gitRef: "main", explicitDB: true, wantErr: "cannot be combined",
+		},
+		{
+			name: "explicit database plus previous schema", schemaPath: "schema.fga", format: "tree",
+			previousSchema: "old.fga", explicitDB: true, wantErr: "cannot be combined",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateDiffFlags(tc.schemaPath, tc.format, tc.gitRef, tc.previousSchema, tc.explicitDB)
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Fatalf("unexpected error: %v", err)
+			case tc.wantErr != "" && err == nil:
+				t.Fatalf("expected an error containing %q", tc.wantErr)
+			case tc.wantErr != "" && !strings.Contains(err.Error(), tc.wantErr):
+				t.Errorf("error = %v, want it to mention %q", err, tc.wantErr)
+			}
+		})
+	}
+}

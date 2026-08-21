@@ -458,3 +458,29 @@ func TestDatabaseAhead_UnreadableRevisionsAreInconclusive(t *testing.T) {
 		t.Error("no revision could be read, so the search proves nothing and must fall back to drift")
 	}
 }
+
+// A local schema that does not parse leaves the checksum-level drift verdict
+// standing, with a note explaining why there is no detail.
+func TestDriftDetail_UnparseableLocalSchemaNotes(t *testing.T) {
+	dir := tempDir(t)
+	t.Chdir(dir)
+	writeFile(t, "broken.fga", "this is not a schema")
+
+	encoded, err := schema.MarshalModel(model("user"))
+	if err != nil {
+		t.Fatalf("MarshalModel: %v", err)
+	}
+
+	var notes []string
+	detail, equivalent := driftDetail(&migrator.MigrationRecord{
+		SchemaDSL: "model\n  schema 1.1\ntype user\n",
+		ModelJSON: encoded,
+	}, "broken.fga", &notes)
+
+	if detail != nil || equivalent {
+		t.Errorf("detail = %+v, equivalent = %v; want nil, false", detail, equivalent)
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], "could not parse local schema") {
+		t.Errorf("notes = %v, want one naming the parse failure", notes)
+	}
+}

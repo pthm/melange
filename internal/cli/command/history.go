@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -64,11 +66,8 @@ type historyEntry struct {
 }
 
 func runHistory(dsn, databaseSchema, format string, limit int) error {
-	if format != "text" && format != "json" {
-		return cli.ConfigError(fmt.Sprintf("invalid --format %q (want text or json)", format), nil)
-	}
-	if limit < 1 {
-		return cli.ConfigError("--limit must be at least 1", nil)
+	if err := validateHistoryFlags(format, limit); err != nil {
+		return err
 	}
 
 	db, err := sql.Open("postgres", dsn)
@@ -86,6 +85,38 @@ func runHistory(dsn, databaseSchema, format string, limit int) error {
 		return cli.GeneralError("reading migration history", err)
 	}
 
+	entries := historyEntries(records)
+
+	if format == "json" {
+		out, merr := json.MarshalIndent(entries, "", "  ")
+		if merr != nil {
+			return cli.GeneralError("encoding history", merr)
+		}
+		fmt.Println(string(out))
+		return nil
+	}
+
+	printHistory(os.Stdout, entries)
+	return nil
+}
+
+// validateHistoryFlags rejects unusable option values before connecting. The
+// limit is also checked in the migrator, but failing here keeps the error a
+// configuration error rather than a database one.
+func validateHistoryFlags(format string, limit int) error {
+	if format != "text" && format != "json" {
+		return cli.ConfigError(fmt.Sprintf("invalid --format %q (want text or json)", format), nil)
+	}
+	if limit < 1 {
+		return cli.ConfigError("--limit must be at least 1", nil)
+	}
+	return nil
+}
+
+// historyEntries maps migration records to the stable text/JSON shape, filling
+// the fields a legacy record may lack with empty values rather than omitting
+// them, so the JSON schema does not change shape per row.
+func historyEntries(records []migrator.MigrationRecord) []historyEntry {
 	entries := make([]historyEntry, 0, len(records))
 	for _, r := range records {
 		e := historyEntry{
@@ -100,21 +131,17 @@ func runHistory(dsn, databaseSchema, format string, limit int) error {
 		}
 		entries = append(entries, e)
 	}
+	return entries
+}
 
-	if format == "json" {
-		out, merr := json.MarshalIndent(entries, "", "  ")
-		if merr != nil {
-			return cli.GeneralError("encoding history", merr)
-		}
-		fmt.Println(string(out))
-		return nil
-	}
-
+// printHistory writes the audit trail as one line per migration, most recent
+// first. Unknown values from legacy records are labeled rather than left blank.
+func printHistory(w io.Writer, entries []historyEntry) {
 	if len(entries) == 0 {
-		fmt.Println("No migrations recorded in this database.")
-		return nil
+		_, _ = fmt.Fprintln(w, "No migrations recorded in this database.")
+		return
 	}
-	fmt.Println("Migration history (most recent first):")
+	_, _ = fmt.Fprintln(w, "Migration history (most recent first):")
 	for _, e := range entries {
 		when := e.MigratedAt
 		if when == "" {
@@ -129,7 +156,6 @@ func runHistory(dsn, databaseSchema, format string, limit int) error {
 			line += " · " + e.Format
 		}
 		line += fmt.Sprintf(" · %d functions", e.FunctionCount)
-		fmt.Println(line)
+		_, _ = fmt.Fprintln(w, line)
 	}
-	return nil
 }

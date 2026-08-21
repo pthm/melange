@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -180,7 +182,7 @@ func runStatus(dsn, databaseSchema, schemaPath, format string) error {
 		return nil
 	}
 
-	printStatusText(report, s, schemaPath)
+	printStatusText(os.Stdout, report, s, schemaPath)
 	return nil
 }
 
@@ -375,39 +377,39 @@ func shortChecksum(sum string) string {
 	return sum[:12] + "…"
 }
 
-func printStatusText(r statusReport, s *migrator.Status, schemaPath string) {
-	fmt.Printf("Schema file:  %s\n", r.SchemaFile)
-	fmt.Printf("Tuples view:  %s\n", r.TuplesView)
+func printStatusText(w io.Writer, r statusReport, s *migrator.Status, schemaPath string) {
+	_, _ = fmt.Fprintf(w, "Schema file:  %s\n", r.SchemaFile)
+	_, _ = fmt.Fprintf(w, "Tuples view:  %s\n", r.TuplesView)
 
 	if r.Deployed == nil {
-		fmt.Println("Deployed:     no migration recorded")
+		_, _ = fmt.Fprintln(w, "Deployed:     no migration recorded")
 	} else {
 		d := r.Deployed
-		fmt.Printf("Deployed:     checksum %s", shortChecksum(d.Checksum))
+		_, _ = fmt.Fprintf(w, "Deployed:     checksum %s", shortChecksum(d.Checksum))
 		if d.MelangeVersion != "" {
-			fmt.Printf(" · melange %s", d.MelangeVersion)
+			_, _ = fmt.Fprintf(w, " · melange %s", d.MelangeVersion)
 		}
 		if d.MigratedAt != "" {
-			fmt.Printf(" · %s", d.MigratedAt)
+			_, _ = fmt.Fprintf(w, " · %s", d.MigratedAt)
 		}
-		fmt.Println()
-		fmt.Printf("Sync:         %s\n", syncDescription(r.Sync))
-		printDriftDetail(r.Drift)
+		_, _ = fmt.Fprintln(w)
+		_, _ = fmt.Fprintf(w, "Sync:         %s\n", syncDescription(r.Sync))
+		printDriftDetail(w, r.Drift)
 		if !d.ModelRecorded {
-			fmt.Println("              model DSL not recorded — re-migrate to enable `melange schema pull`")
+			_, _ = fmt.Fprintln(w, "              model DSL not recorded — re-migrate to enable `melange schema pull`")
 		}
 	}
 
 	for _, note := range r.Notes {
-		fmt.Printf("Note:         %s\n", note)
+		_, _ = fmt.Fprintf(w, "Note:         %s\n", note)
 	}
 
 	// Actionable hints, matching the pre-enrichment behavior.
 	if !s.SchemaExists {
-		fmt.Printf("\nNo schema found at %s\n", schemaPath)
+		_, _ = fmt.Fprintf(w, "\nNo schema found at %s\n", schemaPath)
 	} else if !s.TuplesExists {
-		fmt.Println("\nTuples view not found.")
-		fmt.Println("Create melange_tuples before running checks.")
+		_, _ = fmt.Fprintln(w, "\nTuples view not found.")
+		_, _ = fmt.Fprintln(w, "Create melange_tuples before running checks.")
 	}
 }
 
@@ -418,21 +420,21 @@ const maxDriftLines = 5
 
 // printDriftDetail prints the change summary under the Sync line. Nil (no
 // detail available) prints nothing — the Sync line already says drift.
-func printDriftDetail(d *driftReport) {
+func printDriftDetail(w io.Writer, d *driftReport) {
 	if d == nil {
 		return
 	}
-	fmt.Printf("              %d breaking, %d additive\n", d.Breaking, d.Additive)
+	_, _ = fmt.Fprintf(w, "              %d breaking, %d additive\n", d.Breaking, d.Additive)
 	for i, c := range d.Changes {
 		if i == maxDriftLines {
-			fmt.Printf("              … and %d more (`melange diff` for the full list)\n", len(d.Changes)-maxDriftLines)
+			_, _ = fmt.Fprintf(w, "              … and %d more (`melange diff` for the full list)\n", len(d.Changes)-maxDriftLines)
 			break
 		}
 		marker := "+"
 		if c.Class == schema.ClassBreaking {
 			marker = "-"
 		}
-		fmt.Printf("              %s %s\n", marker, c.Summary)
+		_, _ = fmt.Fprintf(w, "              %s %s\n", marker, c.Summary)
 	}
 }
 
