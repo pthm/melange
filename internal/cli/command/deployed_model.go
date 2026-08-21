@@ -3,11 +3,14 @@ package command
 import (
 	"context"
 	"database/sql"
+	"fmt"
 
 	_ "github.com/lib/pq"
 
 	"github.com/pthm/melange/internal/cli"
 	"github.com/pthm/melange/pkg/migrator"
+	"github.com/pthm/melange/pkg/parser"
+	"github.com/pthm/melange/pkg/schema"
 )
 
 // readDeployedModel opens dsn and returns the model recorded by the most recent
@@ -45,4 +48,25 @@ func readDeployedModel(dsn, databaseSchema string) (*migrator.DeployedModel, err
 	default:
 		return nil, cli.GeneralError("no melange migration found in this database", nil)
 	}
+}
+
+// deployedTypesFromRecord returns the parsed model stored in a migration row,
+// preferring model_json and falling back to parsing the recorded DSL when the
+// JSON is absent or empty — the same order `doctor` uses, so both agree on what
+// a database has deployed.
+//
+// Returns nil types and nil error when the row predates model storage (no DSL
+// recorded), which callers report as "not recorded" rather than as an error.
+func deployedTypesFromRecord(rec *migrator.MigrationRecord) ([]schema.TypeDefinition, error) {
+	if rec == nil || rec.SchemaDSL == "" {
+		return nil, nil
+	}
+	if types, err := schema.UnmarshalModel(rec.ModelJSON); err == nil && len(types) > 0 {
+		return types, nil
+	}
+	types, err := parser.ParseSchemaString(rec.SchemaDSL)
+	if err != nil {
+		return nil, fmt.Errorf("parsing recorded schema DSL: %w", err)
+	}
+	return types, nil
 }

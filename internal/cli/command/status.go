@@ -13,6 +13,7 @@ import (
 	"github.com/pthm/melange/internal/cli"
 	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/pkg/parser"
+	"github.com/pthm/melange/pkg/schema"
 )
 
 var (
@@ -68,7 +69,18 @@ type statusReport struct {
 	TuplesView string          `json:"tuples_view"` // present|missing
 	Sync       string          `json:"sync"`
 	Deployed   *deployedReport `json:"deployed,omitempty"`
+	Drift      *driftReport    `json:"drift,omitempty"`
 	Notes      []string        `json:"notes,omitempty"` // non-fatal warnings
+}
+
+// driftReport is the semantic detail behind a `drift` sync state: what the
+// local schema would change if migrated. Absent when the schemas match, when
+// the deployed model was never recorded, or when either side could not be
+// parsed — status stays a reachability report, so none of those are errors.
+type driftReport struct {
+	Additive int             `json:"additive"`
+	Breaking int             `json:"breaking"`
+	Changes  []schema.Change `json:"changes"`
 }
 
 type deployedReport struct {
@@ -137,6 +149,9 @@ func runStatus(dsn, databaseSchema, schemaPath, format string) error {
 		if !rec.MigratedAt.IsZero() {
 			report.Deployed.MigratedAt = rec.MigratedAt.Format(time.RFC3339)
 		}
+		if report.Sync == syncDrift {
+			report.Drift = driftDetail(rec, schemaPath, &report.Notes)
+		}
 	default:
 		report.Sync = classifySync(localChecksum, nil) // not_recorded
 	}
@@ -152,6 +167,40 @@ func runStatus(dsn, databaseSchema, schemaPath, format string) error {
 
 	printStatusText(report, s, schemaPath)
 	return nil
+}
+
+// driftDetail diffs the deployed model against the local schema so `status` can
+// say what drifted, not just that something did. Every failure to get there
+// (a record predating model storage, an unparseable side) yields nil plus a
+// note: the checksum-level drift verdict already stands on its own.
+func driftDetail(rec *migrator.MigrationRecord, schemaPath string, notes *[]string) *driftReport {
+	deployed, derr := deployedTypesFromRecord(rec)
+	if derr != nil {
+		*notes = append(*notes, fmt.Sprintf("could not read the deployed model for a detailed diff: %v", derr))
+		return nil
+	}
+	if deployed == nil {
+		return nil // pre-storage record; the ModelRecorded hint already covers it
+	}
+	local, lerr := parser.ParseSchema(schemaPath)
+	if lerr != nil {
+		*notes = append(*notes, fmt.Sprintf("could not parse local schema for a detailed diff: %v", lerr))
+		return nil
+	}
+	return summarizeDrift(deployed, local)
+}
+
+// summarizeDrift renders a diff of the two models as a drift report, or nil
+// when they are semantically equivalent. Equivalence with differing checksums
+// is real and worth reporting as such: formatting or comment changes move the
+// checksum without changing behavior.
+func summarizeDrift(deployed, local []schema.TypeDefinition) *driftReport {
+	d := schema.Diff(deployed, local)
+	if d.Empty() {
+		return nil
+	}
+	additive, breaking := d.Counts()
+	return &driftReport{Additive: additive, Breaking: breaking, Changes: d.Changes}
 }
 
 // classifySync compares a local schema checksum against the deployed record.
@@ -201,6 +250,7 @@ func printStatusText(r statusReport, s *migrator.Status, schemaPath string) {
 		}
 		fmt.Println()
 		fmt.Printf("Sync:         %s\n", syncDescription(r.Sync))
+		printDriftDetail(r.Drift)
 		if !d.ModelRecorded {
 			fmt.Println("              model DSL not recorded — re-migrate to enable `melange schema pull`")
 		}
@@ -216,6 +266,31 @@ func printStatusText(r statusReport, s *migrator.Status, schemaPath string) {
 	} else if !s.TuplesExists {
 		fmt.Println("\nTuples view not found.")
 		fmt.Println("Create melange_tuples before running checks.")
+	}
+}
+
+// maxDriftLines caps the change list in text output. A full model rewrite can
+// produce hundreds of changes; status is a summary, and `melange diff` prints
+// the complete list.
+const maxDriftLines = 5
+
+// printDriftDetail prints the change summary under the Sync line. Nil (no
+// detail available) prints nothing — the Sync line already says drift.
+func printDriftDetail(d *driftReport) {
+	if d == nil {
+		return
+	}
+	fmt.Printf("              %d breaking, %d additive\n", d.Breaking, d.Additive)
+	for i, c := range d.Changes {
+		if i == maxDriftLines {
+			fmt.Printf("              … and %d more (`melange diff` for the full list)\n", len(d.Changes)-maxDriftLines)
+			break
+		}
+		marker := "+"
+		if c.Class == schema.ClassBreaking {
+			marker = "-"
+		}
+		fmt.Printf("              %s %s\n", marker, c.Summary)
 	}
 }
 

@@ -241,6 +241,25 @@ Deployed:     checksum d0c1746f7e26… · melange v0.9.0 · 2026-07-01T20:46:10Z
 Sync:         in sync — local schema matches deployed
 ```
 
+When the local schema has drifted, the change summary follows the Sync line:
+
+```
+Schema file:  present
+Tuples view:  present
+Deployed:     checksum d0c1746f7e26… · melange v0.9.0 · 2026-07-01T20:46:10Z
+Sync:         drift — local schema differs from deployed (`melange diff` to see changes, `melange migrate` to apply)
+              1 breaking, 2 additive
+              + type audit_log added
+              + relation document.can_export added
+              - relation document.legacy_viewer removed
+```
+
+At most five changes are listed; run `melange diff` for the full list. The
+summary is omitted when the deployed model was never recorded, when either side
+fails to parse (a `Note:` explains why), or when the two models are semantically
+equivalent — reformatting or a comment edit moves the checksum without changing
+behavior, and that is reported as drift with no changes to show.
+
 The **Deployed** line reports the model recorded by the most recent migration
 (checksum, melange version, and time). The **Sync** state compares the local
 schema file's checksum against the deployed one:
@@ -271,6 +290,27 @@ presence and adds a `Note:` line.
     "schema_checksum": "d0c1746f7e26ea40027a24b1c0e0c5f34e279e7c27f6fa17e4611ce2f1ec0962",
     "schema_format": "single",
     "model_recorded": true
+  }
+}
+```
+
+When the sync state is `drift` and both models are available, a `drift` object
+carries the same detail as the text output — the counts plus every change, not
+just the first five. Changes are sorted by type, then relation, so the order is
+stable across runs:
+
+```json
+{
+  "sync": "drift",
+  "deployed": { "schema_checksum": "d0c1746f7e26…", "model_recorded": true },
+  "drift": {
+    "additive": 2,
+    "breaking": 1,
+    "changes": [
+      { "class": "additive", "type": "audit_log", "summary": "type audit_log added" },
+      { "class": "additive", "type": "document", "relation": "can_export", "summary": "relation document.can_export added" },
+      { "class": "breaking", "type": "document", "relation": "legacy_viewer", "summary": "relation document.legacy_viewer removed" }
+    ]
   }
 }
 ```

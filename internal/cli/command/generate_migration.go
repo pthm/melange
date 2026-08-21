@@ -328,17 +328,12 @@ func previousStateFromDB(dsn, databaseSchema string) (*previousState, error) {
 	}
 
 	// Reconstruct the previous model for the semantic-diff header (best-effort).
-	// Prefer the parsed model; fall back to parsing the stored DSL when the JSON
-	// model is absent, mirroring `melange diff`/`doctor`. A modular DSL won't
-	// parse as a single schema, leaving prevTypes nil (no header). Absent
-	// entirely on databases migrated before model storage existed.
-	var prevTypes []schema.TypeDefinition
-	if rec.SchemaDSL != "" {
-		if t, uerr := schema.UnmarshalModel(rec.ModelJSON); uerr == nil && len(t) > 0 {
-			prevTypes = t
-		} else if parsed, perr := parser.ParseSchemaString(rec.SchemaDSL); perr == nil {
-			prevTypes = parsed
-		}
+	// A model that can't be recovered — never recorded, or a modular DSL, which
+	// won't parse as a single schema — leaves prevTypes nil, and the migration is
+	// generated without a header rather than failing.
+	prevTypes, terr := deployedTypesFromRecord(rec)
+	if terr != nil {
+		prevTypes = nil
 	}
 
 	return &previousState{
