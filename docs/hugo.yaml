@@ -10,6 +10,13 @@ module:
 enableRobotsTXT: true
 enableGitInfo: true
 
+# Machine-readable outputs: /llms.txt indexes the docs for LLM agents,
+# and every page gets a raw-markdown twin at <page>.md.
+outputs:
+  home: [HTML, RSS, llms]
+  page: [HTML, markdown]
+  section: [HTML, RSS, markdown]
+
 markup:
   goldmark:
     renderer:
