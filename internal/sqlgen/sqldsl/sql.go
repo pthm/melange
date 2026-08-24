@@ -706,14 +706,30 @@ func WrapWithPagination(query, idColumn string) string {
 // paged and returned render without "AS MATERIALIZED" — matches PG ≤11 behavior
 // and the legacy default for users that profile and prefer inlining.
 func WrapWithPaginationOpts(query, idColumn string, materialize bool) string {
+	return WrapWithPaginationFilteredOpts(query, idColumn, materialize, "")
+}
+
+// WrapWithPaginationFilteredOpts is WrapWithPaginationOpts plus an extra
+// qualifier ANDed into the paged CTE. Callers pass a non-empty extraQual to
+// enforce a filter that could not be pushed into every arm of the wrapped
+// query; an empty string reproduces WrapWithPaginationOpts exactly.
+//
+// A qualifier applied here is a post-filter: correct, but it does not spare the
+// wrapped query from computing its unfiltered result set first. Prefer pushing
+// the predicate into the query's own arms and use this only as the floor that
+// guarantees a filter is never silently ignored.
+func WrapWithPaginationFilteredOpts(query, idColumn string, materialize bool, extraQual string) string {
 	mat := materializedKeyword(materialize)
+	if extraQual != "" {
+		extraQual = "\n          AND " + extraQual
+	}
 	return fmt.Sprintf(`WITH base_results AS (
 %s
     ),
     paged AS%s (
         SELECT br.%s
         FROM base_results br
-        WHERE (p_after IS NULL OR br.%s > p_after)
+        WHERE (p_after IS NULL OR br.%s > p_after)%s
         ORDER BY br.%s
         LIMIT CASE WHEN p_limit IS NULL THEN NULL ELSE p_limit + 1 END
     ),
@@ -729,7 +745,7 @@ func WrapWithPaginationOpts(query, idColumn string, materialize bool) string {
     SELECT r.%s, n.next_cursor
     FROM returned r
     CROSS JOIN next n`,
-		IndentLines(query, "        "), mat, idColumn, idColumn, idColumn,
+		IndentLines(query, "        "), mat, idColumn, idColumn, extraQual, idColumn,
 		mat, idColumn, idColumn, idColumn, idColumn)
 }
 

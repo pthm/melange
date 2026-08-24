@@ -67,6 +67,21 @@ func (p ListPlan) wrapPagination(query, idColumn string) string {
 	return wrapWithPaginationOpts(query, idColumn, p.MaterializeCTEs())
 }
 
+// wrapPaginationFiltered applies plan-aware materialization to the list_objects
+// cursor pagination wrapper, ANDing the object filter into the paged CTE unless
+// pushdown already constrained every arm of the wrapped query.
+//
+// The post-filter is the correctness floor: a strategy whose arms cannot take
+// the predicate inline still honours p_filter, it just pays for the unfiltered
+// enumeration first.
+func (p ListPlan) wrapPaginationFiltered(query string, pushedDown bool) string {
+	qual := ""
+	if !pushedDown {
+		qual = objectFilterPredicate(p, Col{Table: "br", Column: "object_id"}).SQL()
+	}
+	return wrapWithPaginationFilteredOpts(query, "object_id", p.MaterializeCTEs(), qual)
+}
+
 // wrapPaginationWildcardFirst applies plan-aware materialization to the
 // wildcard-first pagination wrapper used by list_subjects.
 func (p ListPlan) wrapPaginationWildcardFirst(query string) string {

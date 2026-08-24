@@ -94,7 +94,8 @@ func buildListObjectsDirectBlock(plan ListPlan) (TypedQueryBlock, error) {
 			"-- Direct tuple lookup with simple closure relations",
 			"-- Type guard: only return results if subject type is in allowed subject types",
 		},
-		Query: q.Build(),
+		Query:        q.Build(),
+		FilterIDExpr: Col{Table: "t", Column: "object_id"},
 	}, nil
 }
 
@@ -173,7 +174,8 @@ func buildListObjectsUsersetSubjectBlock(plan ListPlan) (TypedQueryBlock, error)
 			"-- Userset subject matching: subject IS a userset (e.g., group:fga#member)",
 			"-- matches tuples where subject_id has equivalent or satisfying relation via closure",
 		},
-		Query: q.Build(),
+		Query:        q.Build(),
+		FilterIDExpr: Col{Table: "t", Column: "object_id"},
 	}, nil
 }
 
@@ -206,7 +208,8 @@ func buildTypedListObjectsComplexClosureBlocks(plan ListPlan) ([]TypedQueryBlock
 				"-- Complex closure relations: find candidates via tuples, validate via list composition (or check_permission_internal fallback)",
 				"-- These relations have exclusions or other complex features that require full permission check",
 			},
-			Query: q.Build(),
+			Query:        q.Build(),
+			FilterIDExpr: Col{Table: "t", Column: "object_id"},
 		})
 	}
 
@@ -227,8 +230,11 @@ func buildListObjectsIntersectionClosureBlocks(plan ListPlan) ([]TypedQueryBlock
 			FromExpr: FunctionCallExpr{
 				Schema: plan.DatabaseSchema,
 				Name:   funcName,
-				Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
-				Alias:  "icr",
+				// Same object type, so this relation's object filter applies
+				// verbatim to the composed set — pass it down rather than
+				// filtering what comes back.
+				Args:  []Expr{SubjectType, SubjectID, Null{}, Null{}, ParamRef("p_filter")},
+				Alias: "icr",
 			},
 		}
 
@@ -253,7 +259,8 @@ func buildListObjectsIntersectionClosureBlocks(plan ListPlan) ([]TypedQueryBlock
 			Comments: []string{
 				"-- Compose with intersection closure relation: " + rel,
 			},
-			Query: stmt,
+			Query:        stmt,
+			FilterIDExpr: Col{Table: "icr", Column: "object_id"},
 		})
 	}
 
@@ -563,7 +570,8 @@ func buildListObjectsComplexUsersetBlock(plan ListPlan, pattern listUsersetPatte
 		Comments: []string{
 			"-- Via " + pattern.SubjectType + "#" + pattern.SubjectRelation + " (complex userset, validated by check_permission)",
 		},
-		Query: q.Build(),
+		Query:        q.Build(),
+		FilterIDExpr: Col{Table: "t", Column: "object_id"},
 	}, nil
 }
 
@@ -601,7 +609,8 @@ func buildListObjectsSimpleUsersetBlock(plan ListPlan, pattern listUsersetPatter
 		Comments: []string{
 			"-- Via " + pattern.SubjectType + "#" + pattern.SubjectRelation + " (simple userset, JOIN with membership tuples)",
 		},
-		Query: q.Build(),
+		Query:        q.Build(),
+		FilterIDExpr: Col{Table: "t", Column: "object_id"},
 	}, nil
 }
 
@@ -619,7 +628,8 @@ func buildListObjectsSelfCandidateBlock(plan ListPlan) *TypedQueryBlock {
 	}
 
 	return &TypedQueryBlock{
-		Comments: []string{"-- Self-candidate: subject is userset on same object type"},
-		Query:    stmt,
+		Comments:     []string{"-- Self-candidate: subject is userset on same object type"},
+		Query:        stmt,
+		FilterIDExpr: UsersetObjectID{Source: SubjectID},
 	}
 }

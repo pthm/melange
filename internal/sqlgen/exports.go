@@ -86,6 +86,7 @@ type (
 	FuncCallNe       = sqldsl.FuncCallNe
 	InFunctionSelect = sqldsl.InFunctionSelect
 	InCTESelect      = sqldsl.InCTESelect
+	InSelect         = sqldsl.InSelect
 
 	// Array types
 	ArrayLiteral  = sqldsl.ArrayLiteral
@@ -239,6 +240,10 @@ var (
 // inlining vs materialization on its own).
 func wrapWithPaginationOpts(query, idColumn string, materialize bool) string {
 	return sqldsl.WrapWithPaginationOpts(query, idColumn, materialize)
+}
+
+func wrapWithPaginationFilteredOpts(query, idColumn string, materialize bool, extraQual string) string {
+	return sqldsl.WrapWithPaginationFilteredOpts(query, idColumn, materialize, extraQual)
 }
 
 func wrapWithPaginationWildcardFirstOpts(query string, materialize bool) string {

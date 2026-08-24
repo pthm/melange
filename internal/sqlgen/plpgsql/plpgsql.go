@@ -257,6 +257,7 @@ func ListObjectsArgs() []FuncArg {
 		{Name: "p_subject_id", Type: "TEXT"},
 		{Name: "p_limit", Type: "INT", Default: sqldsl.Null{}},
 		{Name: "p_after", Type: "TEXT", Default: sqldsl.Null{}},
+		{Name: "p_filter", Type: "TEXT", Default: sqldsl.Null{}},
 	}
 }
 
@@ -305,6 +306,7 @@ func ListObjectsDispatcherArgs() []FuncArg {
 		{Name: "p_object_type", Type: "TEXT"},
 		{Name: "p_limit", Type: "INT", Default: sqldsl.Null{}},
 		{Name: "p_after", Type: "TEXT", Default: sqldsl.Null{}},
+		{Name: "p_filter", Type: "TEXT", Default: sqldsl.Null{}},
 	}
 }
 
