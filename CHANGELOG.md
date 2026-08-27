@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.4](https://github.com/pthm/melange/compare/v0.9.3...v0.9.4) (2026-08-27)
+
+
+### Bug Fixes
+
+* **parser:** preserve pure TTU intersections ([5cd5ccc](https://github.com/pthm/melange/commit/5cd5ccc87998a6c7fcb5a1d5d260d7a7b68f0ffb))
+* **parser:** preserve pure TTU intersections ([ee17f38](https://github.com/pthm/melange/commit/ee17f380e64e589e63fe688cc1697cb6ff120b6d))
+
 ## [0.9.3](https://github.com/pthm/melange/compare/v0.9.2...v0.9.3) (2026-08-21)
 
 
