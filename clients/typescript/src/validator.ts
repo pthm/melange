@@ -5,7 +5,7 @@
  * requests have valid structure before executing database queries.
  */
 
-import type { MelangeObject, Relation } from './types.js';
+import type { MelangeObject, Relation, ObjectFilter } from './types.js';
 import { ValidationError } from './errors.js';
 
 /**
@@ -60,4 +60,47 @@ export function validateRelation(relation: Relation): void {
   if (relation.trim() === '') {
     throw new ValidationError('relation cannot be empty');
   }
+}
+
+/**
+ * Build the wire form of an object filter: `relation@subject_type:subject_id`.
+ *
+ * The generated SQL function parses this single parameter back into its three
+ * parts, so a delimiter appearing inside a part would reach the database as a
+ * filter naming a different relation or subject than the caller asked for.
+ * Rejecting them here turns that into a client-side error instead of a silently
+ * mis-scoped result.
+ *
+ * Returns null for an absent filter, which binds as SQL NULL and disables
+ * filtering entirely.
+ *
+ * @param filter - The filter to encode, or undefined for no filter
+ * @returns The encoded filter string, or null
+ * @throws {ValidationError} If the filter is malformed
+ */
+export function buildObjectFilter(filter?: ObjectFilter): string | null {
+  if (!filter) {
+    return null;
+  }
+  validateRelation(filter.relation);
+  validateObject(filter.subject, 'filter.subject');
+
+  if (/[@:#]/.test(filter.relation)) {
+    throw new ValidationError(
+      `filter.relation ${JSON.stringify(filter.relation)} cannot contain '@', ':' or '#'`
+    );
+  }
+  if (/[@#]/.test(filter.subject.type)) {
+    throw new ValidationError(
+      `filter.subject.type ${JSON.stringify(filter.subject.type)} cannot contain '@' or '#'`
+    );
+  }
+  // A userset subject would need a filtered expansion to resolve; only direct
+  // relations are filterable.
+  if (filter.subject.id.includes('#')) {
+    throw new ValidationError(
+      `filter.subject.id ${JSON.stringify(filter.subject.id)} names a userset; only direct relations are filterable`
+    );
+  }
+  return `${filter.relation}@${filter.subject.type}:${filter.subject.id}`;
 }

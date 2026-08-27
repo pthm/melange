@@ -14,7 +14,7 @@ export { Cache, NoopCache, MemoryCache } from './cache.js';
 export { MelangeError, NotFoundError, ValidationError, BulkCheckDeniedError, isBulkCheckDeniedError } from './errors.js';
 export { BulkCheckBuilder, BulkCheckResult, BulkCheckResults, MAX_BULK_CHECK_SIZE } from './bulk-check.js';
 export type { Queryable, QueryResult } from './database.js';
-export { validateObject, validateRelation } from './validator.js';
+export { validateObject, validateRelation, buildObjectFilter } from './validator.js';
 export type {
   ObjectType,
   Relation,
@@ -23,6 +23,8 @@ export type {
   CheckRequest,
   ContextualTuple,
   PageOptions,
+  ObjectFilter,
+  ListObjectsOptions,
   ListResult,
 } from './types.js';
 export type {
