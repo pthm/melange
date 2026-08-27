@@ -322,7 +322,7 @@ func extractUserset(us *openfgav1.Userset, rel *schema.RelationDefinition) {
 		// E.g., "a and (b or c)" expands to [[a,b], [a,c]]
 		groups := expandIntersection(v.Intersection, rel.Name)
 		for _, group := range groups {
-			if len(group.Relations) > 0 {
+			if len(group.Relations) > 0 || len(group.ParentRelations) > 0 {
 				rel.IntersectionGroups = append(rel.IntersectionGroups, group)
 			}
 		}

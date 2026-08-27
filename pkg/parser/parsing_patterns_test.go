@@ -221,3 +221,45 @@ type folder
 	require.True(t, parentRels["member"], "should have 'member from group' parent relation")
 	require.True(t, parentRels["owner"], "should have 'owner from group' parent relation")
 }
+
+func TestIntersectionWithOnlyTTUParsing(t *testing.T) {
+	dsl := `
+model
+  schema 1.1
+
+type user
+
+type project
+  relations
+    define reader: [user]
+
+type document
+  relations
+    define primary_project: [project]
+    define secondary_project: [project]
+    define can_view: reader from primary_project and reader from secondary_project
+`
+
+	types, err := parser.ParseSchemaString(dsl)
+	require.NoError(t, err)
+
+	var canViewRel *schema.RelationDefinition
+	for i := range types {
+		if types[i].Name != "document" {
+			continue
+		}
+		for j := range types[i].Relations {
+			if types[i].Relations[j].Name == "can_view" {
+				canViewRel = &types[i].Relations[j]
+				break
+			}
+		}
+	}
+	require.NotNil(t, canViewRel, "can_view relation not found")
+	require.Equal(t, []schema.IntersectionGroup{{
+		ParentRelations: []schema.ParentRelationCheck{
+			{Relation: "reader", LinkingRelation: "primary_project"},
+			{Relation: "reader", LinkingRelation: "secondary_project"},
+		},
+	}}, canViewRel.IntersectionGroups)
+}
