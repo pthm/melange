@@ -1,0 +1,91 @@
+# Regression: intersection whose operands are ALL tuple-to-userset checks.
+#
+# `define can_view: reader from primary_project and reader from secondary_project`
+# — every operand lands in the group's ParentRelations, none in Relations.
+# The parser dropped such groups (it kept a group only when Relations was
+# non-empty), so can_view parsed as having no intersection at all: no
+# specialized check function was generated and no dispatcher route registered,
+# and every check denied.
+#
+# doc2 is the AND guard: alice is a reader on its primary_project but it has no
+# secondary_project link, so an OR-instead-of-AND regression would surface here.
+#
+# Test names are prefixed with "melange/" by the loader.
+
+tests:
+  - name: pure_ttu_intersection
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type project
+            relations
+              define reader: [user]
+
+          type document
+            relations
+              define primary_project: [project]
+              define secondary_project: [project]
+              define can_view: reader from primary_project and reader from secondary_project
+        tuples:
+          # alice reads both projects; bob only alpha; carol only beta
+          - user: user:alice
+            relation: reader
+            object: project:alpha
+          - user: user:bob
+            relation: reader
+            object: project:alpha
+          - user: user:alice
+            relation: reader
+            object: project:beta
+          - user: user:carol
+            relation: reader
+            object: project:beta
+          # doc1 links both projects
+          - user: project:alpha
+            relation: primary_project
+            object: document:doc1
+          - user: project:beta
+            relation: secondary_project
+            object: document:doc1
+          # doc2 links only a primary project
+          - user: project:alpha
+            relation: primary_project
+            object: document:doc2
+        checkAssertions:
+          # alice: reader on both linked projects → allowed
+          - name: alice_reader_of_both_projects
+            tuple: { user: user:alice, relation: can_view, object: document:doc1 }
+            expectation: true
+          # bob: reader on the primary project only → denied
+          - name: bob_primary_project_only
+            tuple: { user: user:bob, relation: can_view, object: document:doc1 }
+            expectation: false
+          # carol: reader on the secondary project only → denied
+          - name: carol_secondary_project_only
+            tuple: { user: user:carol, relation: can_view, object: document:doc1 }
+            expectation: false
+          # doc2 has no secondary_project link, so the AND cannot be satisfied
+          - name: alice_denied_without_secondary_link
+            tuple: { user: user:alice, relation: can_view, object: document:doc2 }
+            expectation: false
+        listObjectsAssertions:
+          - name: alice_lists_doc1_only
+            request: { user: user:alice, type: document, relation: can_view }
+            expectation: [document:doc1]
+          - name: bob_lists_nothing
+            request: { user: user:bob, type: document, relation: can_view }
+            expectation: []
+          - name: carol_lists_nothing
+            request: { user: user:carol, type: document, relation: can_view }
+            expectation: []
+        listUsersAssertions:
+          - name: doc1_can_view_users_only_alice
+            request: { object: document:doc1, relation: can_view, filters: [user] }
+            expectation: [user:alice]
+          - name: doc2_can_view_users_empty
+            request: { object: document:doc2, relation: can_view, filters: [user] }
+            expectation: []
