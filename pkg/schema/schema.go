@@ -426,10 +426,8 @@ func ToAuthzModels(types []TypeDefinition) []AuthzModel {
 			//   - {relation: viewer, check_relation: writer, rule_group_id: 1, rule_group_mode: intersection}
 			//   - {relation: viewer, check_relation: editor, check_excluded_relation: owner, rule_group_id: 1, rule_group_mode: intersection}
 			for _, group := range r.IntersectionGroups {
-				if len(group.Relations) == 0 {
-					if len(group.ParentRelations) == 0 {
-						continue
-					}
+				if len(group.Relations) == 0 && len(group.ParentRelations) == 0 {
+					continue
 				}
 				groupID := ruleGroupIDCounter
 				ruleGroupIDCounter++
