@@ -137,3 +137,36 @@ func TestObjectFilter_RecursiveFallsBackToPostFilter(t *testing.T) {
 		t.Error("post-filter variant should add a qualifier")
 	}
 }
+
+// An intersection group is an INTERSECT of parts. Postgres does not push a
+// qualifier through a set operation, so a predicate on the group's result would
+// only run once every part had been enumerated — the filter has to go on each
+// part instead.
+func TestObjectFilter_PushedIntoIntersectionParts(t *testing.T) {
+	plan := planWithIntersectionGroup(composableLookup())
+	blocks, err := BuildListObjectsBlocks(plan)
+	if err != nil {
+		t.Fatalf("BuildListObjectsBlocks: %v", err)
+	}
+	if !applyObjectFilter(plan, blocks.Primary) {
+		t.Error("intersection blocks should report full filter coverage")
+	}
+
+	sql, err := RenderListObjectsFunction(plan, blocks)
+	if err != nil {
+		t.Fatalf("RenderListObjectsFunction: %v", err)
+	}
+
+	parts := strings.Count(sql, "INTERSECT") + 1
+	if got := strings.Count(sql, "p_filter IS NULL OR"); got < parts {
+		t.Errorf("filter on %d of %d INTERSECT parts:\n%s", got, parts, sql)
+	}
+	// The group result itself must not carry a redundant post-filter.
+	if strings.Contains(sql, "p_filter IS NULL OR ig.object_id") {
+		t.Errorf("filter applied to INTERSECT result instead of its parts:\n%s", sql)
+	}
+	paged := sql[strings.Index(sql, "paged AS"):]
+	if strings.Contains(paged, "p_filter IS NULL OR") {
+		t.Errorf("post-filter emitted despite full pushdown:\n%s", paged)
+	}
+}

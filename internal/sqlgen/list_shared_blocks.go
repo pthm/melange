@@ -22,6 +22,13 @@ type TypedQueryBlock struct {
 	// are produced by a nested set rather than a scannable column — and the
 	// pagination wrapper's post-filter covers it instead.
 	FilterIDExpr sqldsl.Expr
+
+	// FilterApplied marks a block that already carries the object filter
+	// internally — an intersection group pushes it into each INTERSECT part
+	// rather than onto the group's result, since Postgres will not push a
+	// qualifier through a set operation. Such a block needs no injection but
+	// still counts as covered, so no post-filter is added on its behalf.
+	FilterApplied bool
 }
 
 // BlockSet contains query blocks for a list function.

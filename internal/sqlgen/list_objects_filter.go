@@ -94,6 +94,42 @@ func objectFilterPredicate(plan ListPlan, idExpr Expr) Expr {
 	)
 }
 
+// partObjectIDExpr returns the expression a query projects as its object id.
+// Queries assembled from the tuple builder carry it as a prefixed string column
+// ("t.object_id"); queries wrapping a UNION or INTERSECT carry it as a typed
+// column expression. Returns nil for anything that does not project exactly one
+// column, which the caller treats as "not filterable".
+func partObjectIDExpr(stmt SelectStmt) Expr {
+	switch {
+	case len(stmt.ColumnExprs) == 1:
+		return stmt.ColumnExprs[0]
+	case len(stmt.Columns) == 1:
+		return Raw(stmt.Columns[0])
+	default:
+		return nil
+	}
+}
+
+// filterPartQuery ANDs the object filter onto a query using whatever it
+// projects as its object id.
+//
+// Used for INTERSECT parts: filter(A INTERSECT B) equals
+// filter(A) INTERSECT filter(B), so constraining every part is sound and bounds
+// each input before the set operation, where the cost actually is.
+func filterPartQuery(plan ListPlan, stmt SelectStmt) SelectStmt {
+	idExpr := partObjectIDExpr(stmt)
+	if idExpr == nil {
+		return stmt
+	}
+	pred := objectFilterPredicate(plan, idExpr)
+	if stmt.Where == nil {
+		stmt.Where = pred
+	} else {
+		stmt.Where = And(stmt.Where, pred)
+	}
+	return stmt
+}
+
 // applyObjectFilter pushes the filter predicate into every block that declared
 // an object-id expression for it. Blocks leaving FilterIDExpr nil are not
 // pushdown-eligible and rely on the pagination wrapper's post-filter instead —
@@ -105,6 +141,9 @@ func objectFilterPredicate(plan ListPlan, idExpr Expr) Expr {
 func applyObjectFilter(plan ListPlan, blocks []TypedQueryBlock) bool {
 	pushedDown := true
 	for i := range blocks {
+		if blocks[i].FilterApplied {
+			continue
+		}
 		if blocks[i].FilterIDExpr == nil {
 			pushedDown = false
 			continue

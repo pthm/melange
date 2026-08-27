@@ -294,7 +294,10 @@ func buildIntersectionGroupBlock(plan ListPlan, idx int, group IntersectionGroup
 	// Build query for each part
 	partQueries := make([]SelectStmt, 0, len(group.Parts))
 	for _, part := range group.Parts {
-		partQuery := buildIntersectionPartQuery(plan, part)
+		// Filter each part rather than the INTERSECT result: Postgres does not
+		// push a qualifier through a set operation, so a predicate on
+		// ig.object_id would only run after every part had been enumerated.
+		partQuery := filterPartQuery(plan, buildIntersectionPartQuery(plan, part))
 		partQueries = append(partQueries, partQuery)
 	}
 
@@ -329,7 +332,8 @@ func buildIntersectionGroupBlock(plan ListPlan, idx int, group IntersectionGroup
 		Comments: []string{
 			fmt.Sprintf("-- Intersection group %d: all parts must be satisfied", idx),
 		},
-		Query: intersectQuery,
+		Query:         intersectQuery,
+		FilterApplied: true,
 	}, nil
 }
 
@@ -416,8 +420,12 @@ func buildIntersectionComposedPartQuery(plan ListPlan, part IntersectionPart) Se
 		FromExpr: FunctionCallExpr{
 			Schema: plan.DatabaseSchema,
 			Name:   ListObjectsFunctionName(plan.ObjectType, part.Relation),
-			Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
-			Alias:  "obj",
+			// This arm IS the composed set, so without passing the filter down
+			// the inner call would enumerate every object before the outer
+			// predicate trimmed it. Same object type, so the filter means the
+			// same thing on both sides.
+			Args:  []Expr{SubjectType, SubjectID, Null{}, Null{}, ParamRef("p_filter")},
+			Alias: "obj",
 		},
 	}
 
