@@ -162,7 +162,8 @@ list_accessible_objects(
     p_relation TEXT,
     p_object_type TEXT,
     p_limit INT DEFAULT NULL,
-    p_after TEXT DEFAULT NULL
+    p_after TEXT DEFAULT NULL,
+    p_filter TEXT DEFAULT NULL
 ) RETURNS TABLE(object_id TEXT, next_cursor TEXT)
 ```
 
@@ -176,6 +177,41 @@ list_accessible_objects(
 | `p_object_type` | TEXT | Type of objects to list |
 | `p_limit` | INT | Maximum results per page (NULL = no limit) |
 | `p_after` | TEXT | Cursor from previous page (NULL = first page) |
+| `p_filter` | TEXT | Narrow to objects holding a direct relation to a subject, as `relation@subject_type:subject_id` (NULL = no filter) |
+
+### Object filtering
+
+`p_filter` scopes the query to objects that hold a given **directly-assignable**
+relation to a given subject — "documents this user can view, but only inside
+folder:7". It is written in tuple notation minus the object side, which
+`p_object_type` already supplies:
+
+```sql
+-- Only documents whose folder is folder:7
+SELECT object_id
+FROM list_accessible_objects('user', '123', 'viewer', 'document', NULL, NULL, 'folder@folder:7');
+```
+
+The filter is applied *inside* the query rather than to its results, so it
+narrows the work instead of the output: the planner drives from the filter set
+rather than enumerating everything the subject can reach. It runs before
+pagination, so `p_limit` and `p_after` count filtered rows.
+
+{{< callout type="warning" >}}
+**Direct relations only.** The relation named in `p_filter` must be directly
+assignable on the object type being listed (`define folder: [folder]`), not
+computed or derived through `from`. A malformed filter, or one naming a userset
+subject such as `folder:7#viewer`, raises `22023` rather than silently returning
+a mis-scoped list.
+{{< /callout >}}
+
+{{< callout type="info" >}}
+**Speedup depends on the relation's strategy.** Relations resolved by recursive
+or composed strategies — self-referential parent chains, or access anchored on a
+different object type — return the correct filtered set, but reach it by
+filtering after enumeration. Direct, userset and intersection relations push the
+filter into the scan itself.
+{{< /callout >}}
 
 ### Return Value
 
@@ -213,6 +249,10 @@ JOIN list_accessible_objects('user', '123', 'viewer', 'document', NULL, NULL) a
 -- Count accessible objects
 SELECT COUNT(*)
 FROM list_accessible_objects('user', '123', 'viewer', 'document', NULL, NULL);
+
+-- Scope to one folder instead of every document the user can view
+SELECT object_id
+FROM list_accessible_objects('user', '123', 'viewer', 'document', 100, NULL, 'folder@folder:7');
 ```
 
 ## list_accessible_subjects

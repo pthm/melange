@@ -217,14 +217,41 @@ Panics if the check is denied or returns an error. Use for internal invariants, 
 ### List Objects
 
 ```go
-func (c *Checker) ListObjects(ctx context.Context, subject SubjectLike, relation RelationLike, objectType ObjectType, page PageOptions) (ids []string, nextCursor *string, err error)
+func (c *Checker) ListObjects(ctx context.Context, subject SubjectLike, relation RelationLike, objectType ObjectType, page PageOptions, opts ...ListObjectsOption) (ids []string, nextCursor *string, err error)
 
-func (c *Checker) ListObjectsAll(ctx context.Context, subject SubjectLike, relation RelationLike, objectType ObjectType) ([]string, error)
+func (c *Checker) ListObjectsAll(ctx context.Context, subject SubjectLike, relation RelationLike, objectType ObjectType, opts ...ListObjectsOption) ([]string, error)
 
-func (c *Checker) ListObjectsWithContextualTuples(ctx context.Context, subject SubjectLike, relation RelationLike, objectType ObjectType, tuples []ContextualTuple, page PageOptions) (ids []string, nextCursor *string, err error)
+func (c *Checker) ListObjectsWithContextualTuples(ctx context.Context, subject SubjectLike, relation RelationLike, objectType ObjectType, tuples []ContextualTuple, page PageOptions, opts ...ListObjectsOption) (ids []string, nextCursor *string, err error)
 ```
 
 `ListObjects` returns object IDs of the given type that the subject can access. `ListObjectsAll` auto-paginates to return all results.
+
+#### Object filtering
+
+```go
+func WithObjectFilter(relation RelationLike, subject ObjectLike) ListObjectsOption
+```
+
+Narrows results to objects holding a **directly-assignable** relation to a given
+subject, so a broad "everything this user can see" query can be scoped without
+first enumerating it:
+
+```go
+ids, cursor, err := checker.ListObjects(ctx,
+    authz.User("123"), authz.RelViewer, authz.TypeDocument,
+    melange.PageOptions{Limit: 100},
+    melange.WithObjectFilter(authz.RelFolder, authz.Folder("7")))
+```
+
+The filter is applied inside the query, not to its results, and runs before
+pagination — `Limit` and `After` count filtered rows.
+
+A malformed filter, or one naming a userset subject such as `folder:7#viewer`,
+returns an error wrapping `ErrInvalidObjectFilter`. Only direct relations are
+filterable; see [`p_filter`](/docs/reference/sql-api/#object-filtering) for the
+strategies that push the filter into the scan versus applying it afterwards.
+
+This is a Melange extension — OpenFGA's ListObjects has no object-side filter.
 
 ### List Subjects
 
