@@ -183,7 +183,7 @@ with Melange.
 ## Melange Extensions
 
 These go beyond the OpenFGA API. Each is opt-in and defaults to OpenFGA-equivalent
-behaviour, so a query that does not use them behaves identically — but code that
+behavior, so a query that does not use them behaves identically — but code that
 does use them needs rework before [migrating to OpenFGA](#migration-path-to-openfga).
 
 | Extension | Surface | OpenFGA equivalent |

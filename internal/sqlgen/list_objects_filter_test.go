@@ -24,6 +24,29 @@ func directPlan() ListPlan {
 	}
 }
 
+// section returns everything from marker onward. A missing marker means the
+// generator changed shape, which should read as a clear failure rather than a
+// slice-bounds panic on Index's -1.
+func section(t *testing.T, s, marker string) string {
+	t.Helper()
+	i := strings.Index(s, marker)
+	if i < 0 {
+		t.Fatalf("marker %q not found in:\n%s", marker, s)
+	}
+	return s[i:]
+}
+
+// between returns the text from the start marker up to the end marker.
+func between(t *testing.T, s, start, end string) string {
+	t.Helper()
+	from := section(t, s, start)
+	i := strings.Index(from, end)
+	if i < 0 {
+		t.Fatalf("marker %q not found after %q in:\n%s", end, start, from)
+	}
+	return from[:i]
+}
+
 func renderDirect(t *testing.T, plan ListPlan) string {
 	t.Helper()
 	blocks, err := BuildListObjectsBlocks(plan)
@@ -53,7 +76,7 @@ func TestObjectFilter_ParsedOnceIntoLocals(t *testing.T) {
 	}
 	// The parse must happen in DECLARE, not per-row: no split_part over
 	// p_filter should survive into the query body.
-	body := sql[strings.Index(sql, "BEGIN"):]
+	body := section(t, sql, "BEGIN")
 	if strings.Contains(body, "split_part(p_filter") {
 		t.Errorf("p_filter is re-parsed inside the query body:\n%s", body)
 	}
@@ -85,7 +108,7 @@ func TestObjectFilter_RejectsMalformed(t *testing.T) {
 func TestObjectFilter_PushedIntoEveryArm(t *testing.T) {
 	sql := renderDirect(t, directPlan())
 
-	base := sql[strings.Index(sql, "WITH base_results"):strings.Index(sql, "paged AS")]
+	base := between(t, sql, "WITH base_results", "paged AS")
 	arms := strings.Count(base, "SELECT t.object_id") + strings.Count(base, "-- Self-candidate")
 	pushed := strings.Count(base, "p_filter IS NULL OR")
 	if arms == 0 {
@@ -96,7 +119,7 @@ func TestObjectFilter_PushedIntoEveryArm(t *testing.T) {
 	}
 
 	// Fully pushed down means no redundant post-filter in the paged CTE.
-	paged := sql[strings.Index(sql, "paged AS"):]
+	paged := section(t, sql, "paged AS")
 	if strings.Contains(paged, "p_filter IS NULL OR") {
 		t.Errorf("post-filter emitted despite full pushdown:\n%s", paged)
 	}
@@ -115,7 +138,7 @@ func TestObjectFilter_NoOpWhenNull(t *testing.T) {
 	}
 }
 
-// Strategies that cannot take the filter inline must still honour it. The
+// Strategies that cannot take the filter inline must still honor it. The
 // recursive renderer walks parent chains through its CTE, so seeding it with a
 // filtered set would truncate the walk — it post-filters instead.
 func TestObjectFilter_RecursiveFallsBackToPostFilter(t *testing.T) {
@@ -129,7 +152,7 @@ func TestObjectFilter_RecursiveFallsBackToPostFilter(t *testing.T) {
 	withPost := plan.wrapPaginationFiltered(query, false)
 	withoutPost := plan.wrapPaginationFiltered(query, true)
 
-	paged := withPost[strings.Index(withPost, "paged AS"):]
+	paged := section(t, withPost, "paged AS")
 	if !strings.Contains(paged, "p_filter IS NULL OR") {
 		t.Errorf("post-filter missing when pushdown unavailable:\n%s", paged)
 	}
@@ -165,7 +188,7 @@ func TestObjectFilter_PushedIntoIntersectionParts(t *testing.T) {
 	if strings.Contains(sql, "p_filter IS NULL OR ig.object_id") {
 		t.Errorf("filter applied to INTERSECT result instead of its parts:\n%s", sql)
 	}
-	paged := sql[strings.Index(sql, "paged AS"):]
+	paged := section(t, sql, "paged AS")
 	if strings.Contains(paged, "p_filter IS NULL OR") {
 		t.Errorf("post-filter emitted despite full pushdown:\n%s", paged)
 	}

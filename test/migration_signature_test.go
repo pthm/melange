@@ -148,7 +148,7 @@ func TestMigration_KeepsSoleSignature(t *testing.T) {
 		`SELECT count(*) FROM list_accessible_objects('user','1','viewer','document')`).Scan(&n))
 }
 
-// TestObjectFilter_SQLGuardRejects covers the last line of defence for callers
+// TestObjectFilter_SQLGuardRejects covers the last line of defense for callers
 // that reach the generated functions directly rather than through a client.
 // Both the Go and TypeScript clients reject a bad filter before it hits the
 // database, so without this the SQL guard is only asserted by string matching

@@ -75,17 +75,12 @@ func (p ListPlan) MaterializeCTEs() bool {
 	return p.EnableMaterializedCTEs
 }
 
-// wrapPagination applies plan-aware materialization to the cursor pagination wrapper.
-func (p ListPlan) wrapPagination(query, idColumn string) string {
-	return wrapWithPaginationOpts(query, idColumn, p.MaterializeCTEs())
-}
-
 // wrapPaginationFiltered applies plan-aware materialization to the list_objects
 // cursor pagination wrapper, ANDing the object filter into the paged CTE unless
 // pushdown already constrained every arm of the wrapped query.
 //
 // The post-filter is the correctness floor: a strategy whose arms cannot take
-// the predicate inline still honours p_filter, it just pays for the unfiltered
+// the predicate inline still honors p_filter, it just pays for the unfiltered
 // enumeration first.
 func (p ListPlan) wrapPaginationFiltered(query string, pushedDown bool) string {
 	var qual Expr

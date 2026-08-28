@@ -33,7 +33,7 @@ const (
 )
 
 // objectFilterDecls returns the DECLARE entries that split p_filter into its
-// three parts. Declarations initialise in order, so later entries may reference
+// three parts. Declarations initialize in order, so later entries may reference
 // earlier ones. With p_filter NULL every split_part yields NULL, which is what
 // objectFilterPredicate's short-circuit expects.
 func objectFilterDecls() []plpgsql.Decl {
@@ -48,7 +48,7 @@ func objectFilterDecls() []plpgsql.Decl {
 }
 
 // objectFilterGuard returns the prelude statement rejecting a filter this
-// function cannot honour. A filter that parsed to garbage, or that names a
+// function cannot honor. A filter that parsed to garbage, or that names a
 // relation carrying no plain-subject tuples, would match nothing and return an
 // empty list — indistinguishable from "you have access to nothing". For a
 // scoping mechanism that is the wrong failure: a typo should be loud.
@@ -85,7 +85,7 @@ func objectFilterPrelude(plan ListPlan) ([]plpgsql.Decl, []plpgsql.Stmt) {
 
 // newListObjectsFunction assembles a list_objects function with the object
 // filter wired in: the p_filter argument, the DECLARE entries that parse it,
-// and the guard that rejects one this function cannot honour, with body
+// and the guard that rejects one this function cannot honor, with body
 // appended after.
 //
 // Every list_objects renderer goes through here so the three cannot drift

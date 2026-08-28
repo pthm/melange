@@ -238,10 +238,6 @@ var (
 // callers pass plan.MaterializeCTEs() which reflects the
 // GenerateSQLOptions.EnableMaterializedCTEs opt-in (default false: PG decides
 // inlining vs materialization on its own).
-func wrapWithPaginationOpts(query, idColumn string, materialize bool) string {
-	return sqldsl.WrapWithPaginationOpts(query, idColumn, materialize)
-}
-
 func wrapWithPaginationFilteredOpts(query, idColumn string, materialize bool, extraQual Expr) string {
 	return sqldsl.WrapWithPaginationFilteredOpts(query, idColumn, materialize, extraQual)
 }
