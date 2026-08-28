@@ -455,6 +455,13 @@ func sqlState(err error) string {
 //	// Get next page
 //	ids2, cursor2, _ := checker.ListObjects(ctx, authz.User("123"), authz.RelCanRead, authz.TypeRepository, melange.PageOptions{Limit: 10, After: cursor})
 //
+// Pass WithObjectFilter to scope results to objects holding a direct relation
+// to a subject, instead of everything the subject can reach:
+//
+//	ids, cursor, _ := checker.ListObjects(ctx, authz.User("123"), authz.RelCanRead, authz.TypeRepository,
+//	    melange.PageOptions{Limit: 10},
+//	    melange.WithObjectFilter(authz.RelOrg, authz.Organization("9")))
+//
 // Note: This method does NOT use the permission cache because it returns a list
 // rather than a single boolean result.
 //
@@ -526,7 +533,7 @@ func (c *Checker) ListObjects(ctx context.Context, subject SubjectLike, relation
 }
 
 // ListObjectsAll returns all object IDs by automatically paginating through
-// all results. This is equivalent to the previous ListObjects behavior.
+// all results, forwarding any ListObjectsOption to every page.
 //
 // Example:
 //
@@ -554,6 +561,8 @@ func (c *Checker) ListObjectsAll(ctx context.Context, subject SubjectLike, relat
 // ListObjectsWithContextualTuples returns object IDs for a subject using contextual tuples,
 // with cursor-based pagination support.
 // Contextual tuples are validated against the loaded model before evaluation.
+// Accepts the same ListObjectsOption values as ListObjects, including
+// WithObjectFilter.
 func (c *Checker) ListObjectsWithContextualTuples(
 	ctx context.Context,
 	subject SubjectLike,
