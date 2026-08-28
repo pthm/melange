@@ -779,10 +779,29 @@ func shouldSkipApply(lastMigration *MigrationRecord, currentChecksums map[string
 	return true
 }
 
-// getCurrentFunctions returns all melange-generated function names from pg_proc.
-func (m *Migrator) getCurrentFunctions(ctx context.Context, db Execer) ([]string, error) {
+// deployedFunction is one melange-generated function as PostgreSQL sees it:
+// a bare name plus the full signature that actually identifies it.
+//
+// The distinction matters. Melange names functions, but PostgreSQL identifies
+// them by (name, argument types), so CREATE OR REPLACE with a changed argument
+// list produces a second overload rather than replacing the first. Tracking
+// only names cannot see that, which is how a stale overload survives a
+// migration and makes every existing call ambiguous.
+type deployedFunction struct {
+	// Name is proname, e.g. "list_accessible_objects".
+	Name string
+
+	// Signature is the schema-qualified identity, e.g.
+	// `public.list_accessible_objects(text,text,text,text,integer,text)`.
+	// Already rendered for use directly in DROP FUNCTION.
+	Signature string
+}
+
+// getCurrentFunctions returns all melange-generated functions from pg_proc,
+// with the signature that identifies each one.
+func (m *Migrator) getCurrentFunctions(ctx context.Context, db Execer) ([]deployedFunction, error) {
 	rows, err := db.QueryContext(ctx, fmt.Sprintf(`
-		SELECT p.proname
+		SELECT p.proname, p.oid::regprocedure::text
 		FROM pg_proc p
 		JOIN pg_namespace n ON p.pronamespace = n.oid
 		WHERE n.nspname = %s
@@ -796,32 +815,86 @@ func (m *Migrator) getCurrentFunctions(ctx context.Context, db Execer) ([]string
 	}
 	defer func() { _ = rows.Close() }()
 
-	functions := make([]string, 0, 32)
+	functions := make([]deployedFunction, 0, 32)
 	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, fmt.Errorf("scanning function name: %w", err)
+		var fn deployedFunction
+		if err := rows.Scan(&fn.Name, &fn.Signature); err != nil {
+			return nil, fmt.Errorf("scanning function: %w", err)
 		}
-		functions = append(functions, name)
+		functions = append(functions, fn)
 	}
 	return functions, rows.Err()
 }
 
-// dropOrphanedFunctions drops functions that exist but are not in the expected list.
-func (m *Migrator) dropOrphanedFunctions(ctx context.Context, db Execer, currentFunctions, expectedFunctions []string) error {
-	expected := make(map[string]bool)
+// dropOrphanedFunctions drops generated functions the current schema no longer
+// produces. It must run AFTER the new SQL has been applied, and takes the
+// pre-apply snapshot so it can tell a stale overload from a live one.
+//
+// Two kinds of orphan:
+//
+//   - Orphaned by name: the relation was removed from the schema, so nothing
+//     regenerates the function. Dropped by name, which removes every overload.
+//
+//   - Orphaned by signature: the function is still generated, but its argument
+//     list changed, so CREATE OR REPLACE added an overload beside the old one
+//     instead of replacing it. Left in place, every existing call becomes
+//     ambiguous ("function ... is not unique") — including calls the generated
+//     functions make to each other, which breaks the whole API rather than just
+//     the changed part.
+//
+// Identifying the second kind needs no signature bookkeeping from the
+// generator. Applying the schema creates exactly one signature per expected
+// name, so for any expected name now carrying more than one signature, the
+// stale ones are precisely those that already existed before the apply.
+func (m *Migrator) dropOrphanedFunctions(ctx context.Context, db Execer, before []deployedFunction, expectedFunctions []string) error {
+	expected := make(map[string]bool, len(expectedFunctions))
 	for _, fn := range expectedFunctions {
 		expected[fn] = true
 	}
 
-	for _, fn := range currentFunctions {
-		if !expected[fn] {
-			// Use CASCADE to handle any edge case dependencies
-			query := fmt.Sprintf("DROP FUNCTION IF EXISTS %s CASCADE", m.prefixIdent(fn))
+	drop := func(target, describe string) error {
+		// CASCADE to handle any edge case dependencies.
+		if _, err := db.ExecContext(ctx, "DROP FUNCTION IF EXISTS "+target+" CASCADE"); err != nil {
+			return fmt.Errorf("dropping orphaned function %s: %w", describe, err)
+		}
+		return nil
+	}
 
-			_, err := db.ExecContext(ctx, query)
-			if err != nil {
-				return fmt.Errorf("dropping orphaned function %s: %w", fn, err)
+	preexisting := make(map[string]bool, len(before))
+	seenName := make(map[string]bool, len(before))
+	for _, fn := range before {
+		preexisting[fn.Signature] = true
+		if seenName[fn.Name] || expected[fn.Name] {
+			seenName[fn.Name] = true
+			continue
+		}
+		seenName[fn.Name] = true
+		// No longer generated: drop every overload by bare name.
+		if err := drop(m.prefixIdent(fn.Name), fn.Name); err != nil {
+			return err
+		}
+	}
+
+	after, err := m.getCurrentFunctions(ctx, db)
+	if err != nil {
+		return fmt.Errorf("re-reading functions after apply: %w", err)
+	}
+
+	byName := make(map[string][]deployedFunction, len(after))
+	for _, fn := range after {
+		byName[fn.Name] = append(byName[fn.Name], fn)
+	}
+
+	for name, overloads := range byName {
+		if !expected[name] || len(overloads) < 2 {
+			continue
+		}
+		for _, fn := range overloads {
+			if !preexisting[fn.Signature] {
+				continue // just created by this apply — the live one
+			}
+			if err := drop(fn.Signature, fn.Signature); err != nil {
+				return err
 			}
 		}
 	}
