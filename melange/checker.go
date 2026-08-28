@@ -465,8 +465,8 @@ func sqlState(err error) string {
 // Uses a recursive CTE to walk the permission graph in a single query,
 // providing 10-50x improvement over N+1 patterns on large datasets.
 func (c *Checker) ListObjects(ctx context.Context, subject SubjectLike, relation RelationLike, objectType ObjectType, page PageOptions, opts ...ListObjectsOption) (ids []string, nextCursor *string, err error) {
-	listOpts := applyListObjects(opts)
-	if err := validateObjectFilter(listOpts.filter); err != nil {
+	listOpts, err := applyListObjects(opts)
+	if err != nil {
 		return nil, nil, err
 	}
 
@@ -567,8 +567,8 @@ func (c *Checker) ListObjectsWithContextualTuples(
 		return c.ListObjects(ctx, subject, relation, objectType, page, opts...)
 	}
 
-	listOpts := applyListObjects(opts)
-	if err := validateObjectFilter(listOpts.filter); err != nil {
+	listOpts, err := applyListObjects(opts)
+	if err != nil {
 		return nil, nil, err
 	}
 

@@ -200,9 +200,11 @@ pagination, so `p_limit` and `p_after` count filtered rows.
 {{< callout type="warning" >}}
 **Direct relations only.** The relation named in `p_filter` must be directly
 assignable on the object type being listed (`define folder: [folder]`), not
-computed or derived through `from`. A malformed filter, or one naming a userset
-subject such as `folder:7#viewer`, raises `22023` rather than silently returning
-a mis-scoped list.
+computed or derived through `from`. The generated function knows that set, so a
+computed relation, a tuple-to-userset relation, a misspelled one, a malformed
+filter, or a userset subject such as `folder:7#viewer` all raise `22023`. None
+of them quietly return an empty list, which would be indistinguishable from
+"you have access to nothing".
 {{< /callout >}}
 
 {{< callout type="info" >}}

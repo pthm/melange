@@ -1,5 +1,7 @@
 package sqlgen
 
+import "sort"
+
 // ListPlan contains all computed data needed to generate a list function.
 type ListPlan struct {
 	// Input data
@@ -41,6 +43,17 @@ type ListPlan struct {
 	// Optimization flags
 	UseCTEExclusion bool // Use CTE-based exclusion optimization (precompute + anti-join)
 
+	// FilterableRelations lists this object type's directly-assignable
+	// relations, sorted. These are exactly the relations that can carry a
+	// plain-subject tuple, so they are exactly the ones an object filter can
+	// match. The generated guard rejects anything else, turning a filter on a
+	// computed or misspelled relation into an error instead of an empty list.
+	//
+	// Empty when the plan was built without an analysis lookup (hand-built
+	// plans in tests), in which case the guard omits the relation check rather
+	// than rejecting every filter.
+	FilterableRelations []string
+
 	// Analysis lookup for checking parent relation complexity (TTU optimization)
 	// Maps "objectType.relation" -> *RelationAnalysis
 	// Used by TTU block generation to determine if parent relations are simple or complex
@@ -75,9 +88,9 @@ func (p ListPlan) wrapPagination(query, idColumn string) string {
 // the predicate inline still honours p_filter, it just pays for the unfiltered
 // enumeration first.
 func (p ListPlan) wrapPaginationFiltered(query string, pushedDown bool) string {
-	qual := ""
+	var qual Expr
 	if !pushedDown {
-		qual = objectFilterPredicate(p, Col{Table: "br", Column: "object_id"}).SQL()
+		qual = objectFilterPredicate(p, Col{Table: "br", Column: "object_id"})
 	}
 	return wrapWithPaginationFilteredOpts(query, "object_id", p.MaterializeCTEs(), qual)
 }
@@ -172,8 +185,29 @@ func buildBasePlan(a RelationAnalysis, inline InlineSQLData, databaseSchema, fun
 		HasComplexUsersets:  a.HasComplexUsersetPatterns,
 		HasStandaloneAccess: computeHasStandaloneAccess(a),
 
+		FilterableRelations: directlyAssignableRelations(lookup, a.ObjectType),
+
 		AnalysisLookup: lookup,
 	}
+}
+
+// directlyAssignableRelations returns the relations on objectType that accept
+// direct subject assignment ([user], [workspace]), sorted for deterministic
+// codegen.
+//
+// Features.HasDirect is the right test: it is set from DirectSubjectTypes,
+// which excludes userset restrictions, so the result is the set of relations
+// that can appear in melange_tuples paired with a plain subject — which is what
+// an object filter matches on.
+func directlyAssignableRelations(lookup map[string]*RelationAnalysis, objectType string) []string {
+	var rels []string
+	for _, a := range lookup {
+		if a.ObjectType == objectType && a.Features.HasDirect {
+			rels = append(rels, a.Relation)
+		}
+	}
+	sort.Strings(rels)
+	return rels
 }
 
 func (p ListPlan) ExcludeWildcard() bool {

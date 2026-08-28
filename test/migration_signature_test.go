@@ -147,3 +147,54 @@ func TestMigration_KeepsSoleSignature(t *testing.T) {
 	assert.NoError(t, db.QueryRowContext(ctx,
 		`SELECT count(*) FROM list_accessible_objects('user','1','viewer','document')`).Scan(&n))
 }
+
+// TestObjectFilter_SQLGuardRejects covers the last line of defence for callers
+// that reach the generated functions directly rather than through a client.
+// Both the Go and TypeScript clients reject a bad filter before it hits the
+// database, so without this the SQL guard is only asserted by string matching
+// on generated output.
+func TestObjectFilter_SQLGuardRejects(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+	m := migrator.NewMigrator(db, "")
+	createTuplesTable(t, ctx, db)
+	migrateSchema(t, ctx, m, signatureSchema, migrator.InternalMigrateOptions{Version: "v0.9.4"})
+
+	rejected := []struct {
+		name   string
+		filter string
+	}{
+		{"no delimiter", "folder"},
+		{"empty subject", "folder@"},
+		{"empty relation", "@folder:1"},
+		{"subject is not type:id", "folder@folder"},
+		{"userset subject", "folder@folder:1#viewer"},
+		// The relation whitelist: "viewer" exists on document but is not what
+		// the caller wants to filter by; "nonexistent" is a typo. Neither has
+		// plain-subject tuples that could scope the result, so both are errors
+		// rather than an empty list.
+		{"relation not on this type", "parent@folder:1"},
+		{"misspelled relation", "foldr@folder:1"},
+	}
+
+	for _, tc := range rejected {
+		t.Run(tc.name, func(t *testing.T) {
+			var n int
+			err := db.QueryRowContext(ctx,
+				`SELECT count(*) FROM list_accessible_objects('user','1','viewer','document',NULL,NULL,$1)`,
+				tc.filter).Scan(&n)
+			require.Error(t, err, "filter %q should have been rejected", tc.filter)
+			assert.Contains(t, err.Error(), "invalid object filter",
+				"should raise the melange guard, not fail some other way")
+		})
+	}
+
+	// The valid filter still works, so the guard is not simply rejecting.
+	var n int
+	assert.NoError(t, db.QueryRowContext(ctx,
+		`SELECT count(*) FROM list_accessible_objects('user','1','viewer','document',NULL,NULL,'folder@folder:1')`).Scan(&n))
+}

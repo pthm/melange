@@ -41,19 +41,10 @@ func RenderListObjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUserse
 
 	// Self-referential userset expansion is a recursive walk; same reason as the
 	// recursive renderer, the filter can only be applied to the final rows.
-	decls, prelude := objectFilterPrelude()
-
-	fn := PlpgsqlFunction{
-		Schema:  plan.DatabaseSchema,
-		Name:    plan.FunctionName,
-		Args:    ListObjectsArgs(),
-		Returns: ListObjectsReturns(),
-		Header:  ListObjectsFunctionHeader(plan.ObjectType, plan.Relation, plan.FeaturesString()+" (self-referential userset)"),
-		Decls:   decls,
-		Body: append(prelude,
-			ReturnQuery{Query: plan.wrapPaginationFiltered(query, false)},
-		),
-	}
+	fn := newListObjectsFunction(plan,
+		ListObjectsFunctionHeader(plan.ObjectType, plan.Relation, plan.FeaturesString()+" (self-referential userset)"),
+		ReturnQuery{Query: plan.wrapPaginationFiltered(query, false)},
+	)
 
 	return fn.SQL(), nil
 }

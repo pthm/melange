@@ -32,9 +32,12 @@ func RenderListObjectsComposedFunction(plan ListPlan, blocks ComposedObjectsBloc
 	// blocks. Post-filter only.
 	paginatedSQL := plan.wrapPaginationFiltered(query, false)
 
-	// Build the body using plpgsql DSL types
-	decls, prelude := objectFilterPrelude()
-	body := append(prelude,
+	fn := newListObjectsFunction(plan,
+		[]string{
+			fmt.Sprintf("Generated list_objects function for %s.%s", plan.ObjectType, plan.Relation),
+			fmt.Sprintf("Features: %s", plan.FeaturesString()),
+			fmt.Sprintf("Indirect anchor: %s.%s via %s", blocks.AnchorType, blocks.AnchorRelation, blocks.FirstStepType),
+		},
 		Comment{Text: "Type guard: only return results if subject type is allowed"},
 		Comment{Text: "Skip the guard for userset subjects since composed inner calls handle userset subjects"},
 		If{
@@ -46,19 +49,5 @@ func RenderListObjectsComposedFunction(plan ListPlan, blocks ComposedObjectsBloc
 		},
 		ReturnQuery{Query: paginatedSQL},
 	)
-
-	fn := PlpgsqlFunction{
-		Schema:  plan.DatabaseSchema,
-		Name:    plan.FunctionName,
-		Args:    ListObjectsArgs(),
-		Returns: ListObjectsReturns(),
-		Header: []string{
-			fmt.Sprintf("Generated list_objects function for %s.%s", plan.ObjectType, plan.Relation),
-			fmt.Sprintf("Features: %s", plan.FeaturesString()),
-			fmt.Sprintf("Indirect anchor: %s.%s via %s", blocks.AnchorType, blocks.AnchorRelation, blocks.FirstStepType),
-		},
-		Decls: decls,
-		Body:  body,
-	}
 	return fn.SQL(), nil
 }

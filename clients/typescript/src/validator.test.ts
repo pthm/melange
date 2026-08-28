@@ -152,6 +152,7 @@ describe('buildObjectFilter', () => {
     ['relation containing #', { relation: 'a#b', subject: { type: 'workspace', id: '7' } }],
     ['subject type containing @', { relation: 'workspace', subject: { type: 'a@b', id: '7' } }],
     ['subject type containing #', { relation: 'workspace', subject: { type: 'a#b', id: '7' } }],
+    ['subject type containing :', { relation: 'workspace', subject: { type: 'a:b', id: '7' } }],
   ])('rejects a %s', (_name, filter) => {
     expect(() => buildObjectFilter(filter)).toThrow(ValidationError);
   });

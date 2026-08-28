@@ -90,7 +90,10 @@ export function buildObjectFilter(filter?: ObjectFilter): string | null {
       `filter.relation ${JSON.stringify(filter.relation)} cannot contain '@', ':' or '#'`
     );
   }
-  if (/[@#]/.test(filter.subject.type)) {
+  // ':' matters as much as '@' and '#': it is where the SQL side splits the
+  // subject, so a colon in the type would re-parse as a different subject than
+  // the caller named.
+  if (/[@:#]/.test(filter.subject.type)) {
     throw new ValidationError(
       `filter.subject.type ${JSON.stringify(filter.subject.type)} cannot contain '@' or '#'`
     );

@@ -6,20 +6,10 @@ func RenderListObjectsFunction(plan ListPlan, blocks BlockSet) (string, error) {
 
 	queryBlocks := renderTypedQueryBlocks(blocks.Primary)
 	query := RenderUnionBlocks(queryBlocks)
-	paginatedQuery := plan.wrapPaginationFiltered(query, pushedDown)
 
-	decls, prelude := objectFilterPrelude()
-
-	fn := PlpgsqlFunction{
-		Schema:  plan.DatabaseSchema,
-		Name:    plan.FunctionName,
-		Args:    ListObjectsArgs(),
-		Returns: ListObjectsReturns(),
-		Header:  ListObjectsFunctionHeader(plan.ObjectType, plan.Relation, plan.FeaturesString()),
-		Decls:   decls,
-		Body: append(prelude,
-			ReturnQuery{Query: paginatedQuery},
-		),
-	}
+	fn := newListObjectsFunction(plan,
+		ListObjectsFunctionHeader(plan.ObjectType, plan.Relation, plan.FeaturesString()),
+		ReturnQuery{Query: plan.wrapPaginationFiltered(query, pushedDown)},
+	)
 	return fn.SQL(), nil
 }

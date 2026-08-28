@@ -1,6 +1,10 @@
 package sqlgen
 
-import "github.com/pthm/melange/internal/sqlgen/plpgsql"
+import (
+	"strings"
+
+	"github.com/pthm/melange/internal/sqlgen/plpgsql"
+)
 
 // Object filtering narrows list_objects results to objects that hold a given
 // direct relation to a given subject — "elements the user can view, but only
@@ -43,29 +47,61 @@ func objectFilterDecls() []plpgsql.Decl {
 	}
 }
 
-// objectFilterGuard returns the prelude statement rejecting a malformed filter.
-// A filter that parsed to garbage would silently widen the result set past what
-// the caller scoped, so a bad filter is an error rather than a no-op.
-func objectFilterGuard() plpgsql.Stmt {
+// objectFilterGuard returns the prelude statement rejecting a filter this
+// function cannot honour. A filter that parsed to garbage, or that names a
+// relation carrying no plain-subject tuples, would match nothing and return an
+// empty list — indistinguishable from "you have access to nothing". For a
+// scoping mechanism that is the wrong failure: a typo should be loud.
+func objectFilterGuard(plan ListPlan) plpgsql.Stmt {
+	checks := []string{
+		"position('@' in p_filter) = 0",
+		"OR position(':' in " + filterSubjectVar + ") = 0",
+		"OR " + filterRelationVar + " = ''",
+		"OR " + filterSubjectTypeVar + " = ''",
+		"OR " + filterSubjectIDVar + " = ''",
+		"OR position('#' in " + filterSubjectIDVar + ") > 0",
+	}
+	if len(plan.FilterableRelations) > 0 {
+		checks = append(checks,
+			"OR "+filterRelationVar+" NOT IN ("+formatSQLStringList(plan.FilterableRelations)+")")
+	}
+
 	return plpgsql.RawStmt{SQLText: `IF p_filter IS NOT NULL AND (
-        position('@' in p_filter) = 0
-        OR position(':' in ` + filterSubjectVar + `) = 0
-        OR ` + filterRelationVar + ` = ''
-        OR ` + filterSubjectTypeVar + ` = ''
-        OR ` + filterSubjectIDVar + ` = ''
-        OR position('#' in ` + filterSubjectIDVar + `) > 0
-    ) THEN
-        RAISE EXCEPTION 'melange: invalid object filter %, expected "relation@subject_type:subject_id" naming a direct relation', p_filter
-            USING ERRCODE = '22023';
-    END IF;`}
+    ` + strings.Join(checks, "\n    ") + `
+) THEN
+    RAISE EXCEPTION 'melange: invalid object filter %, expected "relation@subject_type:subject_id" naming a relation directly assignable on this object type', p_filter
+        USING ERRCODE = '22023';
+END IF;`}
 }
 
 // objectFilterPrelude returns the declarations and guard every generated
 // list_objects function needs before its query body.
-func objectFilterPrelude() ([]plpgsql.Decl, []plpgsql.Stmt) {
+func objectFilterPrelude(plan ListPlan) ([]plpgsql.Decl, []plpgsql.Stmt) {
 	return objectFilterDecls(), []plpgsql.Stmt{
 		Comment{Text: `Object filter: "relation@subject_type:subject_id" (NULL = no filter)`},
-		objectFilterGuard(),
+		objectFilterGuard(plan),
+	}
+}
+
+// newListObjectsFunction assembles a list_objects function with the object
+// filter wired in: the p_filter argument, the DECLARE entries that parse it,
+// and the guard that rejects one this function cannot honour, with body
+// appended after.
+//
+// Every list_objects renderer goes through here so the three cannot drift
+// apart. A renderer taking ListObjectsArgs() (and so accepting p_filter) while
+// forgetting the prelude would parse nothing and silently ignore the filter;
+// routing them all through one constructor makes that unrepresentable.
+func newListObjectsFunction(plan ListPlan, header []string, body ...Stmt) PlpgsqlFunction {
+	decls, prelude := objectFilterPrelude(plan)
+	return PlpgsqlFunction{
+		Schema:  plan.DatabaseSchema,
+		Name:    plan.FunctionName,
+		Args:    ListObjectsArgs(),
+		Returns: ListObjectsReturns(),
+		Header:  header,
+		Decls:   decls,
+		Body:    append(prelude, body...),
 	}
 }
 
@@ -94,40 +130,25 @@ func objectFilterPredicate(plan ListPlan, idExpr Expr) Expr {
 	)
 }
 
-// partObjectIDExpr returns the expression a query projects as its object id.
-// Queries assembled from the tuple builder carry it as a prefixed string column
-// ("t.object_id"); queries wrapping a UNION or INTERSECT carry it as a typed
-// column expression. Returns nil for anything that does not project exactly one
-// column, which the caller treats as "not filterable".
-func partObjectIDExpr(stmt SelectStmt) Expr {
-	switch {
-	case len(stmt.ColumnExprs) == 1:
-		return stmt.ColumnExprs[0]
-	case len(stmt.Columns) == 1:
-		return Raw(stmt.Columns[0])
-	default:
-		return nil
-	}
-}
-
 // filterPartQuery ANDs the object filter onto a query using whatever it
-// projects as its object id.
+// projects as its object id, reporting whether it could.
 //
 // Used for INTERSECT parts: filter(A INTERSECT B) equals
 // filter(A) INTERSECT filter(B), so constraining every part is sound and bounds
 // each input before the set operation, where the cost actually is.
-func filterPartQuery(plan ListPlan, stmt SelectStmt) SelectStmt {
-	idExpr := partObjectIDExpr(stmt)
+//
+// The caller must not claim coverage unless every part reported true. A part
+// projecting something other than a single object id cannot take the filter,
+// and treating that as covered would drop the filter silently.
+func filterPartQuery(plan ListPlan, stmt SelectStmt) (SelectStmt, bool) {
+	idExpr := stmt.SoleColumn()
 	if idExpr == nil {
-		return stmt
+		return stmt, false
 	}
-	pred := objectFilterPredicate(plan, idExpr)
-	if stmt.Where == nil {
-		stmt.Where = pred
-	} else {
-		stmt.Where = And(stmt.Where, pred)
-	}
-	return stmt
+	// And() drops nil operands and renders a single-element AND bare, so this
+	// is correct whether or not the statement already had a WHERE.
+	stmt.Where = And(stmt.Where, objectFilterPredicate(plan, idExpr))
+	return stmt, true
 }
 
 // applyObjectFilter pushes the filter predicate into every block that declared
@@ -148,12 +169,9 @@ func applyObjectFilter(plan ListPlan, blocks []TypedQueryBlock) bool {
 			pushedDown = false
 			continue
 		}
-		pred := objectFilterPredicate(plan, blocks[i].FilterIDExpr)
-		if blocks[i].Query.Where == nil {
-			blocks[i].Query.Where = pred
-		} else {
-			blocks[i].Query.Where = And(blocks[i].Query.Where, pred)
-		}
+		blocks[i].Query.Where = And(blocks[i].Query.Where, objectFilterPredicate(plan, blocks[i].FilterIDExpr))
+		// Mark applied so a second pass is a no-op rather than ANDing twice.
+		blocks[i].FilterApplied = true
 	}
 	return pushedDown
 }

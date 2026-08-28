@@ -124,9 +124,10 @@ rows.
 {{< callout type="warning" >}}
 **Direct relations only.** The filter relation must be directly assignable on the
 object type you are listing (`define workspace: [workspace]`), not computed or
-derived through `from`. A malformed filter, or one naming a userset subject like
-`workspace:7#view`, raises an error rather than quietly returning a mis-scoped
-list.
+derived through `from`. The generated function knows that set, so a computed
+relation, a misspelled one, or a userset subject like `workspace:7#view` raises
+an error. A typo will not quietly return an empty list that reads like "no
+access".
 {{< /callout >}}
 
 {{< callout type="info" >}}

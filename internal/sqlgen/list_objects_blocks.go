@@ -293,11 +293,13 @@ func buildListObjectsIntersectionGroupBlocks(plan ListPlan) ([]TypedQueryBlock, 
 func buildIntersectionGroupBlock(plan ListPlan, idx int, group IntersectionGroupInfo) (TypedQueryBlock, error) {
 	// Build query for each part
 	partQueries := make([]SelectStmt, 0, len(group.Parts))
+	// Filter each part rather than the INTERSECT result: Postgres does not push
+	// a qualifier through a set operation, so a predicate on ig.object_id would
+	// only run after every part had been enumerated.
+	filtered := true
 	for _, part := range group.Parts {
-		// Filter each part rather than the INTERSECT result: Postgres does not
-		// push a qualifier through a set operation, so a predicate on
-		// ig.object_id would only run after every part had been enumerated.
-		partQuery := filterPartQuery(plan, buildIntersectionPartQuery(plan, part))
+		partQuery, ok := filterPartQuery(plan, buildIntersectionPartQuery(plan, part))
+		filtered = filtered && ok
 		partQueries = append(partQueries, partQuery)
 	}
 
@@ -332,8 +334,10 @@ func buildIntersectionGroupBlock(plan ListPlan, idx int, group IntersectionGroup
 		Comments: []string{
 			fmt.Sprintf("-- Intersection group %d: all parts must be satisfied", idx),
 		},
-		Query:         intersectQuery,
-		FilterApplied: true,
+		Query: intersectQuery,
+		// Only claim coverage if every part actually took the predicate;
+		// otherwise fall back to the wrapper's post-filter.
+		FilterApplied: filtered,
 	}, nil
 }
 

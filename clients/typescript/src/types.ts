@@ -74,9 +74,10 @@ export interface PageOptions {
  * ObjectFilter narrows listObjects results to objects holding a direct relation
  * to a given subject.
  *
- * The relation must be directly assignable on the object type being listed. A
- * computed or tuple-to-userset relation is rejected rather than silently
- * mis-scoping the result.
+ * The relation must be directly assignable on the object type being listed. The
+ * generated function knows that set and rejects anything else — including a
+ * computed or tuple-to-userset relation, or a typo — rather than matching no
+ * tuples and returning an empty list that reads like "no access".
  */
 export interface ObjectFilter {
   /** A directly-assignable relation on the object type being listed. */

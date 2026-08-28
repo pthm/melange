@@ -242,7 +242,7 @@ func wrapWithPaginationOpts(query, idColumn string, materialize bool) string {
 	return sqldsl.WrapWithPaginationOpts(query, idColumn, materialize)
 }
 
-func wrapWithPaginationFilteredOpts(query, idColumn string, materialize bool, extraQual string) string {
+func wrapWithPaginationFilteredOpts(query, idColumn string, materialize bool, extraQual Expr) string {
 	return sqldsl.WrapWithPaginationFilteredOpts(query, idColumn, materialize, extraQual)
 }
 

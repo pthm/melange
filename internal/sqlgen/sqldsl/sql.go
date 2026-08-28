@@ -177,6 +177,24 @@ func (s SelectStmt) limitSQL() string {
 	return fmt.Sprintf("LIMIT %d", s.Limit)
 }
 
+// SoleColumn returns the single expression this statement projects, or nil if
+// it projects anything other than exactly one column.
+//
+// Callers that need to constrain a subquery by what it returns should not have
+// to know that a statement carries its projection either as typed ColumnExprs
+// or as the older prefixed Columns strings — that duality is this type's own,
+// and columnsSQL already branches on it.
+func (s SelectStmt) SoleColumn() Expr {
+	switch {
+	case len(s.ColumnExprs) == 1:
+		return s.ColumnExprs[0]
+	case len(s.Columns) == 1:
+		return Raw(s.Columns[0])
+	default:
+		return nil
+	}
+}
+
 // Exists wraps a query in EXISTS(...).
 func (s SelectStmt) Exists() string {
 	return fmt.Sprintf("EXISTS (\n%s\n)", s.SQL())
@@ -706,22 +724,23 @@ func WrapWithPagination(query, idColumn string) string {
 // paged and returned render without "AS MATERIALIZED" — matches PG ≤11 behavior
 // and the legacy default for users that profile and prefer inlining.
 func WrapWithPaginationOpts(query, idColumn string, materialize bool) string {
-	return WrapWithPaginationFilteredOpts(query, idColumn, materialize, "")
+	return WrapWithPaginationFilteredOpts(query, idColumn, materialize, nil)
 }
 
 // WrapWithPaginationFilteredOpts is WrapWithPaginationOpts plus an extra
-// qualifier ANDed into the paged CTE. Callers pass a non-empty extraQual to
+// qualifier ANDed into the paged CTE. Callers pass a non-nil extraQual to
 // enforce a filter that could not be pushed into every arm of the wrapped
-// query; an empty string reproduces WrapWithPaginationOpts exactly.
+// query; nil reproduces WrapWithPaginationOpts exactly.
 //
 // A qualifier applied here is a post-filter: correct, but it does not spare the
 // wrapped query from computing its unfiltered result set first. Prefer pushing
 // the predicate into the query's own arms and use this only as the floor that
 // guarantees a filter is never silently ignored.
-func WrapWithPaginationFilteredOpts(query, idColumn string, materialize bool, extraQual string) string {
+func WrapWithPaginationFilteredOpts(query, idColumn string, materialize bool, extraQual Expr) string {
 	mat := materializedKeyword(materialize)
-	if extraQual != "" {
-		extraQual = "\n          AND " + extraQual
+	qual := ""
+	if extraQual != nil {
+		qual = "\n          AND " + extraQual.SQL()
 	}
 	return fmt.Sprintf(`WITH base_results AS (
 %s
@@ -745,7 +764,7 @@ func WrapWithPaginationFilteredOpts(query, idColumn string, materialize bool, ex
     SELECT r.%s, n.next_cursor
     FROM returned r
     CROSS JOIN next n`,
-		IndentLines(query, "        "), mat, idColumn, idColumn, extraQual, idColumn,
+		IndentLines(query, "        "), mat, idColumn, idColumn, qual, idColumn,
 		mat, idColumn, idColumn, idColumn, idColumn)
 }
 
