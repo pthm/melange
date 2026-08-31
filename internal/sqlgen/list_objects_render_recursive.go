@@ -50,23 +50,20 @@ func RenderListObjectsRecursiveFunction(plan ListPlan, blocks RecursiveBlockSet)
 		query = joinUnionBlocksSQL([]string{query, selfSQL})
 	}
 
-	paginatedQuery := plan.wrapPagination(query, "object_id")
+	// Recursive walks cannot take the object filter inline: the CTE's
+	// intermediate rows are parents being traversed, not results, so seeding it
+	// with a filtered set would truncate the walk. Post-filter only.
+	paginatedQuery := plan.wrapPaginationFiltered(query, false)
 
-	fn := PlpgsqlFunction{
-		Schema:  plan.DatabaseSchema,
-		Name:    plan.FunctionName,
-		Args:    ListObjectsArgs(),
-		Returns: ListObjectsReturns(),
-		Header:  ListObjectsFunctionHeader(plan.ObjectType, plan.Relation, plan.FeaturesString()),
-		// Recursion is bounded inside the accessible CTE (WHERE a.depth < 25).
-		// list_objects is best-effort to that depth: chains deeper than the bound
-		// are truncated rather than raising M2002 the way check_permission does
-		// (a pathological edge case that a global pre-check could not detect
-		// per-query anyway without re-walking the whole graph on every call).
-		Body: []Stmt{
-			ReturnQuery{Query: paginatedQuery},
-		},
-	}
+	// Recursion is bounded inside the accessible CTE (WHERE a.depth < 25).
+	// list_objects is best-effort to that depth: chains deeper than the bound
+	// are truncated rather than raising M2002 the way check_permission does
+	// (a pathological edge case that a global pre-check could not detect
+	// per-query anyway without re-walking the whole graph on every call).
+	fn := newListObjectsFunction(plan,
+		ListObjectsFunctionHeader(plan.ObjectType, plan.Relation, plan.FeaturesString()),
+		ReturnQuery{Query: paginatedQuery},
+	)
 
 	return fn.SQL(), nil
 }

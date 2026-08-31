@@ -230,8 +230,14 @@ func TestPlpgsqlFunction(t *testing.T) {
 
 func TestListObjectsHelpers(t *testing.T) {
 	args := ListObjectsArgs()
-	if len(args) != 4 {
-		t.Errorf("ListObjectsArgs() = %d args, want 4", len(args))
+	if len(args) != 5 {
+		t.Errorf("ListObjectsArgs() = %d args, want 5", len(args))
+	}
+	// p_filter must stay last and defaulted so existing 4-arg call sites,
+	// including the nested list_*_obj calls the generator emits, keep resolving.
+	last := args[len(args)-1]
+	if last.Name != "p_filter" || last.Default == nil {
+		t.Errorf("last arg = %+v, want p_filter with a default", last)
 	}
 
 	returns := ListObjectsReturns()

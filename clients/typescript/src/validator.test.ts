@@ -2,8 +2,9 @@
  * Unit tests for validators.
  */
 
-import { describe, test, expect } from 'vitest';
-import { validateObject, validateRelation } from './validator.js';
+import { describe, test, it, expect } from 'vitest';
+import { validateObject, validateRelation, buildObjectFilter } from './validator.js';
+import { ValidationError } from './errors.js';
 import type { MelangeObject } from './types.js';
 
 describe('validateObject', () => {
@@ -123,5 +124,51 @@ describe('validateRelation', () => {
     expect(() => validateRelation('   ')).toThrow(
       'relation cannot be empty'
     );
+  });
+});
+
+describe('buildObjectFilter', () => {
+  it('returns null for an absent filter so SQL binds NULL', () => {
+    expect(buildObjectFilter(undefined)).toBeNull();
+  });
+
+  it('encodes a filter as relation@type:id', () => {
+    expect(
+      buildObjectFilter({ relation: 'workspace', subject: { type: 'workspace', id: '7' } })
+    ).toBe('workspace@workspace:7');
+  });
+
+  it('keeps colons in the subject id, which the SQL side splits on the first only', () => {
+    expect(
+      buildObjectFilter({ relation: 'tenant', subject: { type: 'tenant', id: 'eu:west:1' } })
+    ).toBe('tenant@tenant:eu:west:1');
+  });
+
+  // A delimiter inside a part would re-parse server-side into a different
+  // relation or subject than the caller asked for.
+  it.each([
+    ['relation containing @', { relation: 'a@b', subject: { type: 'workspace', id: '7' } }],
+    ['relation containing :', { relation: 'a:b', subject: { type: 'workspace', id: '7' } }],
+    ['relation containing #', { relation: 'a#b', subject: { type: 'workspace', id: '7' } }],
+    ['subject type containing @', { relation: 'workspace', subject: { type: 'a@b', id: '7' } }],
+    ['subject type containing #', { relation: 'workspace', subject: { type: 'a#b', id: '7' } }],
+    ['subject type containing :', { relation: 'workspace', subject: { type: 'a:b', id: '7' } }],
+  ])('rejects a %s', (_name, filter) => {
+    expect(() => buildObjectFilter(filter)).toThrow(ValidationError);
+  });
+
+  it('rejects a userset subject, since only direct relations are filterable', () => {
+    expect(() =>
+      buildObjectFilter({ relation: 'workspace', subject: { type: 'workspace', id: '7#view' } })
+    ).toThrow(ValidationError);
+  });
+
+  it('rejects an empty relation or subject', () => {
+    expect(() =>
+      buildObjectFilter({ relation: '', subject: { type: 'workspace', id: '7' } })
+    ).toThrow(ValidationError);
+    expect(() =>
+      buildObjectFilter({ relation: 'workspace', subject: { type: 'workspace', id: '' } })
+    ).toThrow(ValidationError);
   });
 });

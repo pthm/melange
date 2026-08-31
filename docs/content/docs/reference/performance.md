@@ -85,6 +85,8 @@ Each check allocates ~1 KiB and 21 allocations at every scale. There is no runti
 | Document `gated` (intersection)              | 3.3 ms | 7.6 ms | 22 ms  | 104 ms | O(paths) |
 | Document `can_view` (large union, wildcard)  | 6.2 ms | 15 ms  | 45 ms  | 212 ms | O(paths) |
 
+These figures are for an unfiltered query. An [object filter](/docs/guides/listing-objects/#scoping-with-an-object-filter) narrows the scan itself for Direct, Userset and Intersection relations, so cost tracks the filtered slice rather than everything the subject can reach. Recursive and Composed relations return the same filtered result but reach it by filtering after the walk, so the numbers above still describe their cost.
+
 The service-account query returns few objects and stays ~170 µs from 4K to 840K tuples. `can_view` unions direct grants, userset membership, recursive folder inheritance, and a public wildcard, so it grows with the number of accessible paths. Intersections cost more than unions because each candidate object is validated against multiple sub-relations.
 
 ## ListSubjects

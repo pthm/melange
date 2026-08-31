@@ -60,8 +60,10 @@ func TestIntersectionGroup_ComposesWhenComposable(t *testing.T) {
 	sql := groupBlockSQL(t, planWithIntersectionGroup(composableLookup()))
 
 	// Positive part "editor" → emit the specialized list set directly as the
-	// FROM source, no object-type-wide melange_tuples scan.
-	if !strings.Contains(sql, "FROM list_doc_editor_obj(p_subject_type, p_subject_id, NULL, NULL) AS obj") {
+	// FROM source, no object-type-wide melange_tuples scan. p_filter rides along
+	// because the composed set is the same object type, so the inner call
+	// narrows instead of enumerating and being trimmed afterwards.
+	if !strings.Contains(sql, "FROM list_doc_editor_obj(p_subject_type, p_subject_id, NULL, NULL, p_filter) AS obj") {
 		t.Errorf("expected direct list set for positive part editor, got:\n%s", sql)
 	}
 	// Positive part keeps a userset-guarded per-candidate check arm for parity.
