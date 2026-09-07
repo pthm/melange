@@ -207,7 +207,7 @@ func TestObjectFilter_RejectsAllWhenNoDirectRelationsOnRealPlan(t *testing.T) {
 
 	sql := renderDirect(t, plan)
 
-	guard := between(t, sql, "IF p_filter IS NOT NULL AND (", ") THEN")
+	guard := between(t, sql, "IF (p_filter IS NOT NULL AND (", ") THEN")
 	if !strings.Contains(guard, "OR TRUE") {
 		t.Errorf("guard should unconditionally reject filters when a real plan has no filterable relations:\n%s", guard)
 	}

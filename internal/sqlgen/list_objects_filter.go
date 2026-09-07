@@ -1,8 +1,6 @@
 package sqlgen
 
 import (
-	"strings"
-
 	"github.com/pthm/melange/internal/sqlgen/plpgsql"
 )
 
@@ -53,34 +51,41 @@ func objectFilterDecls() []plpgsql.Decl {
 // empty list — indistinguishable from "you have access to nothing". For a
 // scoping mechanism that is the wrong failure: a typo should be loud.
 func objectFilterGuard(plan ListPlan) plpgsql.Stmt {
-	checks := []string{
-		"position('@' in p_filter) = 0",
-		"OR position(':' in " + filterSubjectVar + ") = 0",
-		"OR " + filterRelationVar + " = ''",
-		"OR " + filterSubjectTypeVar + " = ''",
-		"OR " + filterSubjectIDVar + " = ''",
-		"OR position('#' in " + filterSubjectIDVar + ") > 0",
-	}
+	relation, subject := Raw(filterRelationVar), Raw(filterSubjectVar)
+	subjectType, subjectID := Raw(filterSubjectTypeVar), Raw(filterSubjectIDVar)
+
+	malformed := Or(
+		Eq{Left: Position{Needle: Lit("@"), Haystack: Raw("p_filter")}, Right: Raw("0")},
+		Eq{Left: Position{Needle: Lit(":"), Haystack: subject}, Right: Raw("0")},
+		Eq{Left: relation, Right: Lit("")},
+		Eq{Left: subjectType, Right: Lit("")},
+		Eq{Left: subjectID, Right: Lit("")},
+		Gt{Left: Position{Needle: Lit("#"), Haystack: subjectID}, Right: Raw("0")},
+	)
+
 	switch {
 	case plan.AnalysisLookup != nil && len(plan.FilterableRelations) == 0:
 		// A real schema whose object type has no directly-assignable
 		// relations at all: no filter could ever be valid here, so reject
 		// unconditionally rather than silently matching nothing (which would
 		// read as "no access" for every filter, typo or not).
-		checks = append(checks, "OR TRUE")
+		malformed = Or(malformed, Raw("TRUE"))
 	case len(plan.FilterableRelations) > 0:
-		checks = append(checks,
-			"OR "+filterRelationVar+" NOT IN ("+formatSQLStringList(plan.FilterableRelations)+")")
+		malformed = Or(malformed, NotIn{Expr: relation, Values: plan.FilterableRelations})
 	}
 	// The remaining case — AnalysisLookup == nil — is a hand-built test plan;
 	// omit the relation check entirely, as documented on FilterableRelations.
 
-	return plpgsql.RawStmt{SQLText: `IF p_filter IS NOT NULL AND (
-    ` + strings.Join(checks, "\n    ") + `
-) THEN
-    RAISE EXCEPTION 'melange: invalid object filter %, expected "relation@subject_type:subject_id" naming a relation directly assignable on this object type', p_filter
-        USING ERRCODE = '22023';
-END IF;`}
+	return plpgsql.If{
+		Cond: And(Raw("p_filter IS NOT NULL"), malformed),
+		Then: []plpgsql.Stmt{
+			plpgsql.Raise{
+				Message: `melange: invalid object filter %, expected "relation@subject_type:subject_id" naming a relation directly assignable on this object type`,
+				Args:    []string{"p_filter"},
+				ErrCode: "22023",
+			},
+		},
+	}
 }
 
 // objectFilterPrelude returns the declarations and guard every generated

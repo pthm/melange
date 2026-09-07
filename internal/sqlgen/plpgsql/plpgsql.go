@@ -163,14 +163,29 @@ func (f ForLoop) StmtSQL() string {
 	return sb.String()
 }
 
-// Raise renders RAISE EXCEPTION 'message' USING ERRCODE = 'code';
+// Raise renders RAISE EXCEPTION 'message'[, arg, ...] USING ERRCODE = 'code';
+// Message may contain Postgres RAISE '%' format placeholders, filled
+// positionally by Args (plain SQL expressions/identifiers, rendered verbatim
+// and comma-separated, exactly as Postgres RAISE's own syntax expects — no
+// value quoting is applied here, callers pass identifiers or already-quoted
+// literals as needed).
 type Raise struct {
 	Message string
+	Args    []string
 	ErrCode string
 }
 
 func (r Raise) StmtSQL() string {
-	return fmt.Sprintf("RAISE EXCEPTION '%s' USING ERRCODE = '%s';", r.Message, r.ErrCode)
+	var sb strings.Builder
+	sb.WriteString("RAISE EXCEPTION '")
+	sb.WriteString(r.Message)
+	sb.WriteString("'")
+	for _, arg := range r.Args {
+		sb.WriteString(", ")
+		sb.WriteString(arg)
+	}
+	fmt.Fprintf(&sb, " USING ERRCODE = '%s';", r.ErrCode)
+	return sb.String()
 }
 
 // Comment renders a SQL comment line.
