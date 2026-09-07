@@ -259,8 +259,9 @@ func buildListObjectsIntersectionClosureBlocks(plan ListPlan) ([]TypedQueryBlock
 			Comments: []string{
 				"-- Compose with intersection closure relation: " + rel,
 			},
-			Query:        stmt,
-			FilterIDExpr: Col{Table: "icr", Column: "object_id"},
+			Query:         stmt,
+			FilterIDExpr:  Col{Table: "icr", Column: "object_id"},
+			FilterApplied: true,
 		})
 	}
 
@@ -298,7 +299,11 @@ func buildIntersectionGroupBlock(plan ListPlan, idx int, group IntersectionGroup
 	// only run after every part had been enumerated.
 	filtered := true
 	for _, part := range group.Parts {
-		partQuery, ok := filterPartQuery(plan, buildIntersectionPartQuery(plan, part))
+		partQuery := buildIntersectionPartQuery(plan, part)
+		ok := true
+		if !isComposedIntersectionPart(plan, part) {
+			partQuery, ok = filterPartQuery(plan, partQuery)
+		}
 		filtered = filtered && ok
 		partQueries = append(partQueries, partQuery)
 	}
@@ -389,7 +394,7 @@ func buildIntersectionPartQuery(plan ListPlan, part IntersectionPart) SelectStmt
 			Distinct()
 
 	default:
-		if intersectionPartComposable(plan, part.Relation) {
+		if isComposedIntersectionPart(plan, part) {
 			return buildIntersectionComposedPartQuery(plan, part)
 		}
 		q = Tuples(plan.DatabaseSchema, alias).
@@ -404,6 +409,13 @@ func buildIntersectionPartQuery(plan ListPlan, part IntersectionPart) SelectStmt
 	}
 
 	return q.Build()
+}
+
+// isComposedIntersectionPart reports whether part routes through
+// buildIntersectionComposedPartQuery, which filters both of its arms
+// internally — callers must not re-apply the object filter on top of it.
+func isComposedIntersectionPart(plan ListPlan, part IntersectionPart) bool {
+	return !part.IsThis && part.ParentRelation == nil && intersectionPartComposable(plan, part.Relation)
 }
 
 // buildIntersectionComposedPartQuery builds a composable positive intersection
@@ -424,10 +436,13 @@ func buildIntersectionComposedPartQuery(plan ListPlan, part IntersectionPart) Se
 		FromExpr: FunctionCallExpr{
 			Schema: plan.DatabaseSchema,
 			Name:   ListObjectsFunctionName(plan.ObjectType, part.Relation),
-			// This arm IS the composed set, so without passing the filter down
-			// the inner call would enumerate every object before the outer
-			// predicate trimmed it. Same object type, so the filter means the
-			// same thing on both sides.
+			// This arm IS the composed set, so pushing the filter down here
+			// lets the inner call skip unfiltered rows instead of enumerating
+			// everything before the caller trims it. usersetArm below carries
+			// the same predicate directly, since it isn't backed by a nested
+			// call that could take it as an argument. buildIntersectionGroupBlock
+			// skips its generic per-part filter for a composed part, since both
+			// arms here are already filtered.
 			Args:  []Expr{SubjectType, SubjectID, Null{}, Null{}, ParamRef("p_filter")},
 			Alias: "obj",
 		},
@@ -443,7 +458,10 @@ func buildIntersectionComposedPartQuery(plan ListPlan, part IntersectionPart) Se
 	usersetArm := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
 		SelectCol("object_id").
-		Where(And(HasUserset{Source: SubjectID}, usersetCheck)).
+		Where(
+			And(HasUserset{Source: SubjectID}, usersetCheck),
+			objectFilterPredicate(plan, Col{Table: "t", Column: "object_id"}),
+		).
 		Distinct().
 		Build()
 
