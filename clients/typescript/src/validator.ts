@@ -95,7 +95,7 @@ export function buildObjectFilter(filter?: ObjectFilter): string | null {
   // the caller named.
   if (/[@:#]/.test(filter.subject.type)) {
     throw new ValidationError(
-      `filter.subject.type ${JSON.stringify(filter.subject.type)} cannot contain '@' or '#'`
+      `filter.subject.type ${JSON.stringify(filter.subject.type)} cannot contain '@', ':' or '#'`
     );
   }
   // A userset subject would need a filtered expansion to resolve; only direct

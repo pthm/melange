@@ -157,6 +157,12 @@ describe('buildObjectFilter', () => {
     expect(() => buildObjectFilter(filter)).toThrow(ValidationError);
   });
 
+  it('names all three forbidden characters when subject.type contains a colon', () => {
+    expect(() =>
+      buildObjectFilter({ relation: 'workspace', subject: { type: 'a:b', id: '7' } })
+    ).toThrow("filter.subject.type \"a:b\" cannot contain '@', ':' or '#'");
+  });
+
   it('rejects a userset subject, since only direct relations are filterable', () => {
     expect(() =>
       buildObjectFilter({ relation: 'workspace', subject: { type: 'workspace', id: '7#view' } })
