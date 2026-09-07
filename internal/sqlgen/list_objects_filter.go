@@ -61,10 +61,19 @@ func objectFilterGuard(plan ListPlan) plpgsql.Stmt {
 		"OR " + filterSubjectIDVar + " = ''",
 		"OR position('#' in " + filterSubjectIDVar + ") > 0",
 	}
-	if len(plan.FilterableRelations) > 0 {
+	switch {
+	case plan.AnalysisLookup != nil && len(plan.FilterableRelations) == 0:
+		// A real schema whose object type has no directly-assignable
+		// relations at all: no filter could ever be valid here, so reject
+		// unconditionally rather than silently matching nothing (which would
+		// read as "no access" for every filter, typo or not).
+		checks = append(checks, "OR TRUE")
+	case len(plan.FilterableRelations) > 0:
 		checks = append(checks,
 			"OR "+filterRelationVar+" NOT IN ("+formatSQLStringList(plan.FilterableRelations)+")")
 	}
+	// The remaining case — AnalysisLookup == nil — is a hand-built test plan;
+	// omit the relation check entirely, as documented on FilterableRelations.
 
 	return plpgsql.RawStmt{SQLText: `IF p_filter IS NOT NULL AND (
     ` + strings.Join(checks, "\n    ") + `

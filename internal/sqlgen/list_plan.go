@@ -49,9 +49,12 @@ type ListPlan struct {
 	// match. The generated guard rejects anything else, turning a filter on a
 	// computed or misspelled relation into an error instead of an empty list.
 	//
-	// Empty when the plan was built without an analysis lookup (hand-built
-	// plans in tests), in which case the guard omits the relation check rather
-	// than rejecting every filter.
+	// Empty in two cases, handled differently by the guard: a hand-built plan
+	// in tests with no analysis lookup at all (AnalysisLookup is nil), where
+	// the guard omits the relation check entirely; or a real object type whose
+	// relations are all userset-typed (AnalysisLookup is set but this list is
+	// still empty), where the guard rejects every non-null filter, since none
+	// could ever match.
 	FilterableRelations []string
 
 	// Analysis lookup for checking parent relation complexity (TTU optimization)

@@ -193,3 +193,22 @@ func TestObjectFilter_PushedIntoIntersectionParts(t *testing.T) {
 		t.Errorf("post-filter emitted despite full pushdown:\n%s", paged)
 	}
 }
+
+// A real object type whose relations are all userset-typed (e.g. only
+// `define viewer: [team#member]`, no bare `[user]` anywhere) legitimately has
+// no directly-assignable relations: FilterableRelations comes back empty just
+// like a hand-built test plan with no AnalysisLookup. The guard must tell
+// these apart — AnalysisLookup is set here — and reject every filter outright,
+// not silently omit the check the way it would for a test plan.
+func TestObjectFilter_RejectsAllWhenNoDirectRelationsOnRealPlan(t *testing.T) {
+	plan := directPlan()
+	plan.FilterableRelations = nil
+	plan.AnalysisLookup = map[string]*RelationAnalysis{} // non-nil: a real, looked-up plan
+
+	sql := renderDirect(t, plan)
+
+	guard := between(t, sql, "IF p_filter IS NOT NULL AND (", ") THEN")
+	if !strings.Contains(guard, "OR TRUE") {
+		t.Errorf("guard should unconditionally reject filters when a real plan has no filterable relations:\n%s", guard)
+	}
+}
