@@ -79,6 +79,33 @@ func TestValidateObjectFilter_RejectsDelimiters(t *testing.T) {
 	}
 }
 
+// Later options fully determine the result, including clearing an earlier
+// option's error: applying an invalid filter then a valid one must not leave
+// the invalid call's error lying around once the valid call has overwritten
+// the filter it would have applied to.
+func TestWithObjectFilter_LaterOptionWins(t *testing.T) {
+	o, err := applyListObjects([]ListObjectsOption{
+		WithObjectFilter(Relation("a@b"), Object{Type: "workspace", ID: "7"}),       // invalid: sets o.err
+		WithObjectFilter(Relation("workspace"), Object{Type: "workspace", ID: "7"}), // valid: must clear o.err
+	})
+	if err != nil {
+		t.Fatalf("applyListObjects: %v, want nil (later valid option should win)", err)
+	}
+	if want := "workspace@workspace:7"; o.filter != want {
+		t.Errorf("filter = %q, want %q", o.filter, want)
+	}
+
+	// Reverse order: the invalid call is last, so its error must still surface
+	// even though an earlier call succeeded.
+	_, err = applyListObjects([]ListObjectsOption{
+		WithObjectFilter(Relation("workspace"), Object{Type: "workspace", ID: "7"}), // valid
+		WithObjectFilter(Relation("a@b"), Object{Type: "workspace", ID: "7"}),       // invalid: must surface
+	})
+	if !errors.Is(err, ErrInvalidObjectFilter) {
+		t.Errorf("err = %v, want ErrInvalidObjectFilter", err)
+	}
+}
+
 // A colon in the subject type is the subtle one, and the reason validation runs
 // on the parts rather than the encoded string: encoding is lossy here. A type
 // of "a:b" with id "c" encodes to exactly the same string as the legitimate

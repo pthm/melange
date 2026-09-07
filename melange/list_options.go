@@ -72,6 +72,7 @@ func WithObjectFilter(relation RelationLike, subject ObjectLike) ListObjectsOpti
 			return
 		}
 		o.filter = fmt.Sprintf("%s@%s:%s", rel, obj.Type, obj.ID)
+		o.err = nil
 	}
 }
 
