@@ -148,6 +148,54 @@ func TestMigration_KeepsSoleSignature(t *testing.T) {
 		`SELECT count(*) FROM list_accessible_objects('user','1','viewer','document')`).Scan(&n))
 }
 
+// TestMigration_DropsRemovedFunctionWithMultipleOverloads covers a function
+// whose name is no longer generated at all, while 2+ overloads for that name
+// already exist in the database (e.g. left behind by pre-fix migrations that
+// stacked overloads instead of replacing them).
+//
+// Dropping "orphaned by name" functions via a bare name is ambiguous once
+// PostgreSQL already holds multiple overloads for that name, and the DROP
+// FUNCTION fails with 42725 "function ... is not unique" — taking the whole
+// migration down with it. The fix drops each overload by its own signature.
+func TestMigration_DropsRemovedFunctionWithMultipleOverloads(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+	m := migrator.NewMigrator(db, "")
+	createTuplesTable(t, ctx, db)
+
+	// A function name signatureSchema will never generate, with two overloads
+	// already stacked up the way a pre-fix migration could have left behind.
+	_, err := db.ExecContext(ctx, `
+		CREATE FUNCTION list_removed_relation_obj(
+			p_subject_type TEXT, p_subject_id TEXT
+		) RETURNS TABLE(object_id TEXT, next_cursor TEXT) AS $$
+			SELECT NULL::TEXT, NULL::TEXT WHERE FALSE;
+		$$ LANGUAGE sql STABLE`)
+	require.NoError(t, err, "seeding the first overload")
+
+	_, err = db.ExecContext(ctx, `
+		CREATE FUNCTION list_removed_relation_obj(
+			p_subject_type TEXT, p_subject_id TEXT, p_relation TEXT
+		) RETURNS TABLE(object_id TEXT, next_cursor TEXT) AS $$
+			SELECT NULL::TEXT, NULL::TEXT WHERE FALSE;
+		$$ LANGUAGE sql STABLE`)
+	require.NoError(t, err, "seeding the second overload")
+
+	require.Len(t, functionSignatures(t, ctx, db, "list_removed_relation_obj"), 2,
+		"precondition: two overloads are deployed")
+
+	// migrateSchema itself asserts success — before the fix, this fails with
+	// 42725 "function ... is not unique" because the drop targets a bare name.
+	migrateSchema(t, ctx, m, signatureSchema, migrator.InternalMigrateOptions{Version: "v0.9.4"})
+
+	assert.Empty(t, functionSignatures(t, ctx, db, "list_removed_relation_obj"),
+		"both overloads of the removed function should have been dropped")
+}
+
 // TestObjectFilter_SQLGuardRejects covers the last line of defense for callers
 // that reach the generated functions directly rather than through a client.
 // Both the Go and TypeScript clients reject a bad filter before it hits the

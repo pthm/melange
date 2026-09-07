@@ -527,7 +527,7 @@ func (m *Migrator) getLastMigration(ctx context.Context, db Execer) (*MigrationR
 	}
 
 	query := fmt.Sprintf("SELECT %s FROM %s ORDER BY id DESC LIMIT 1",
-		strings.Join(selects, ", "), m.prefixIdent("melange_migrations"))
+		strings.Join(selects, ", "), m.migrationsTable())
 	err = db.QueryRowContext(ctx, query).Scan(targets...)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -685,7 +685,7 @@ func (m *Migrator) GetMigrationHistory(ctx context.Context, limit int) ([]Migrat
 	}
 
 	query := fmt.Sprintf("SELECT %s FROM %s ORDER BY id DESC LIMIT $1",
-		strings.Join(selects, ", "), m.prefixIdent("melange_migrations"))
+		strings.Join(selects, ", "), m.migrationsTable())
 	rows, err := m.db.QueryContext(ctx, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("querying migration history: %w", err)
@@ -861,16 +861,14 @@ func (m *Migrator) dropOrphanedFunctions(ctx context.Context, db Execer, before 
 	}
 
 	preexisting := make(map[string]bool, len(before))
-	seenName := make(map[string]bool, len(before))
 	for _, fn := range before {
 		preexisting[fn.Signature] = true
-		if seenName[fn.Name] || expected[fn.Name] {
-			seenName[fn.Name] = true
+		if expected[fn.Name] {
 			continue
 		}
-		seenName[fn.Name] = true
-		// No longer generated: drop every overload by bare name.
-		if err := drop(m.prefixIdent(fn.Name), fn.Name); err != nil {
+		// No longer generated: drop this overload by its full signature — a
+		// bare name is ambiguous once 2+ overloads already exist for it.
+		if err := drop(fn.Signature, fn.Signature); err != nil {
 			return err
 		}
 	}
@@ -980,7 +978,7 @@ func (m *Migrator) insertMigrationRecord(ctx context.Context, db Execer, w migra
 			INSERT INTO %s (melange_version, schema_checksum, codegen_version, function_names, function_checksums, schema_dsl, schema_format, model_json)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		`,
-		m.prefixIdent("melange_migrations"),
+		m.migrationsTable(),
 	), w.MelangeVersion, w.SchemaChecksum, CodegenVersion(), pq.Array(w.FunctionNames), string(checksumsJSON),
 		w.SchemaDSL, w.SchemaFormat, string(w.modelJSONOrEmpty()))
 	if err != nil {
@@ -1337,7 +1335,7 @@ func (m *Migrator) outputDryRun(w io.Writer, write migrationWrite, generatedSQL 
 		// FunctionChecksums is a plain map[string]string; marshaling cannot fail.
 		checksumsJSON = []byte("{}")
 	}
-	_, _ = fmt.Fprintf(w, "INSERT INTO %s (melange_version, schema_checksum, codegen_version, function_names, function_checksums, schema_dsl, schema_format, model_json)\n", m.prefixIdent("melange_migrations"))
+	_, _ = fmt.Fprintf(w, "INSERT INTO %s (melange_version, schema_checksum, codegen_version, function_names, function_checksums, schema_dsl, schema_format, model_json)\n", m.migrationsTable())
 	_, _ = fmt.Fprintf(w, "VALUES (%s, %s, %s, ARRAY[%s], %s, %s, %s, %s);\n",
 		sqldsl.Lit(melangeVersion).SQL(),
 		sqldsl.Lit(schemaChecksum).SQL(),
@@ -1350,8 +1348,8 @@ func (m *Migrator) outputDryRun(w io.Writer, write migrationWrite, generatedSQL 
 	)
 }
 
-func (m *Migrator) prefixIdent(identifier string) string {
-	return sqldsl.PrefixIdent(identifier, m.databaseSchema)
+func (m *Migrator) migrationsTable() string {
+	return sqldsl.PrefixIdent("melange_migrations", m.databaseSchema)
 }
 
 func (m *Migrator) postgresSchema() string {
