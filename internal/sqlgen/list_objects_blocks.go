@@ -94,7 +94,8 @@ func buildListObjectsDirectBlock(plan ListPlan) (TypedQueryBlock, error) {
 			"-- Direct tuple lookup with simple closure relations",
 			"-- Type guard: only return results if subject type is in allowed subject types",
 		},
-		Query: q.Build(),
+		Query:        q.Build(),
+		FilterIDExpr: Col{Table: "t", Column: "object_id"},
 	}, nil
 }
 
@@ -173,7 +174,8 @@ func buildListObjectsUsersetSubjectBlock(plan ListPlan) (TypedQueryBlock, error)
 			"-- Userset subject matching: subject IS a userset (e.g., group:fga#member)",
 			"-- matches tuples where subject_id has equivalent or satisfying relation via closure",
 		},
-		Query: q.Build(),
+		Query:        q.Build(),
+		FilterIDExpr: Col{Table: "t", Column: "object_id"},
 	}, nil
 }
 
@@ -206,7 +208,8 @@ func buildTypedListObjectsComplexClosureBlocks(plan ListPlan) ([]TypedQueryBlock
 				"-- Complex closure relations: find candidates via tuples, validate via list composition (or check_permission_internal fallback)",
 				"-- These relations have exclusions or other complex features that require full permission check",
 			},
-			Query: q.Build(),
+			Query:        q.Build(),
+			FilterIDExpr: Col{Table: "t", Column: "object_id"},
 		})
 	}
 
@@ -227,8 +230,11 @@ func buildListObjectsIntersectionClosureBlocks(plan ListPlan) ([]TypedQueryBlock
 			FromExpr: FunctionCallExpr{
 				Schema: plan.DatabaseSchema,
 				Name:   funcName,
-				Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
-				Alias:  "icr",
+				// Same object type, so this relation's object filter applies
+				// verbatim to the composed set — pass it down rather than
+				// filtering what comes back.
+				Args:  []Expr{SubjectType, SubjectID, Null{}, Null{}, ParamRef("p_filter")},
+				Alias: "icr",
 			},
 		}
 
@@ -253,7 +259,9 @@ func buildListObjectsIntersectionClosureBlocks(plan ListPlan) ([]TypedQueryBlock
 			Comments: []string{
 				"-- Compose with intersection closure relation: " + rel,
 			},
-			Query: stmt,
+			Query:         stmt,
+			FilterIDExpr:  Col{Table: "icr", Column: "object_id"},
+			FilterApplied: true,
 		})
 	}
 
@@ -286,8 +294,17 @@ func buildListObjectsIntersectionGroupBlocks(plan ListPlan) ([]TypedQueryBlock, 
 func buildIntersectionGroupBlock(plan ListPlan, idx int, group IntersectionGroupInfo) (TypedQueryBlock, error) {
 	// Build query for each part
 	partQueries := make([]SelectStmt, 0, len(group.Parts))
+	// Filter each part rather than the INTERSECT result: Postgres does not push
+	// a qualifier through a set operation, so a predicate on ig.object_id would
+	// only run after every part had been enumerated.
+	filtered := true
 	for _, part := range group.Parts {
 		partQuery := buildIntersectionPartQuery(plan, part)
+		ok := true
+		if !isComposedIntersectionPart(plan, part) {
+			partQuery, ok = filterPartQuery(plan, partQuery)
+		}
+		filtered = filtered && ok
 		partQueries = append(partQueries, partQuery)
 	}
 
@@ -323,6 +340,9 @@ func buildIntersectionGroupBlock(plan ListPlan, idx int, group IntersectionGroup
 			fmt.Sprintf("-- Intersection group %d: all parts must be satisfied", idx),
 		},
 		Query: intersectQuery,
+		// Only claim coverage if every part actually took the predicate;
+		// otherwise fall back to the wrapper's post-filter.
+		FilterApplied: filtered,
 	}, nil
 }
 
@@ -374,7 +394,7 @@ func buildIntersectionPartQuery(plan ListPlan, part IntersectionPart) SelectStmt
 			Distinct()
 
 	default:
-		if intersectionPartComposable(plan, part.Relation) {
+		if isComposedIntersectionPart(plan, part) {
 			return buildIntersectionComposedPartQuery(plan, part)
 		}
 		q = Tuples(plan.DatabaseSchema, alias).
@@ -389,6 +409,13 @@ func buildIntersectionPartQuery(plan ListPlan, part IntersectionPart) SelectStmt
 	}
 
 	return q.Build()
+}
+
+// isComposedIntersectionPart reports whether part routes through
+// buildIntersectionComposedPartQuery, which filters both of its arms
+// internally — callers must not re-apply the object filter on top of it.
+func isComposedIntersectionPart(plan ListPlan, part IntersectionPart) bool {
+	return !part.IsThis && part.ParentRelation == nil && intersectionPartComposable(plan, part.Relation)
 }
 
 // buildIntersectionComposedPartQuery builds a composable positive intersection
@@ -409,8 +436,15 @@ func buildIntersectionComposedPartQuery(plan ListPlan, part IntersectionPart) Se
 		FromExpr: FunctionCallExpr{
 			Schema: plan.DatabaseSchema,
 			Name:   ListObjectsFunctionName(plan.ObjectType, part.Relation),
-			Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
-			Alias:  "obj",
+			// This arm IS the composed set, so pushing the filter down here
+			// lets the inner call skip unfiltered rows instead of enumerating
+			// everything before the caller trims it. usersetArm below carries
+			// the same predicate directly, since it isn't backed by a nested
+			// call that could take it as an argument. buildIntersectionGroupBlock
+			// skips its generic per-part filter for a composed part, since both
+			// arms here are already filtered.
+			Args:  []Expr{SubjectType, SubjectID, Null{}, Null{}, ParamRef("p_filter")},
+			Alias: "obj",
 		},
 	}
 
@@ -424,7 +458,10 @@ func buildIntersectionComposedPartQuery(plan ListPlan, part IntersectionPart) Se
 	usersetArm := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
 		SelectCol("object_id").
-		Where(And(HasUserset{Source: SubjectID}, usersetCheck)).
+		Where(
+			And(HasUserset{Source: SubjectID}, usersetCheck),
+			objectFilterPredicate(plan, Col{Table: "t", Column: "object_id"}),
+		).
 		Distinct().
 		Build()
 
@@ -563,7 +600,8 @@ func buildListObjectsComplexUsersetBlock(plan ListPlan, pattern listUsersetPatte
 		Comments: []string{
 			"-- Via " + pattern.SubjectType + "#" + pattern.SubjectRelation + " (complex userset, validated by check_permission)",
 		},
-		Query: q.Build(),
+		Query:        q.Build(),
+		FilterIDExpr: Col{Table: "t", Column: "object_id"},
 	}, nil
 }
 
@@ -601,7 +639,8 @@ func buildListObjectsSimpleUsersetBlock(plan ListPlan, pattern listUsersetPatter
 		Comments: []string{
 			"-- Via " + pattern.SubjectType + "#" + pattern.SubjectRelation + " (simple userset, JOIN with membership tuples)",
 		},
-		Query: q.Build(),
+		Query:        q.Build(),
+		FilterIDExpr: Col{Table: "t", Column: "object_id"},
 	}, nil
 }
 
@@ -619,7 +658,8 @@ func buildListObjectsSelfCandidateBlock(plan ListPlan) *TypedQueryBlock {
 	}
 
 	return &TypedQueryBlock{
-		Comments: []string{"-- Self-candidate: subject is userset on same object type"},
-		Query:    stmt,
+		Comments:     []string{"-- Self-candidate: subject is userset on same object type"},
+		Query:        stmt,
+		FilterIDExpr: UsersetObjectID{Source: SubjectID},
 	}
 }

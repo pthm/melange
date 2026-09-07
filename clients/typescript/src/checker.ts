@@ -12,6 +12,7 @@ import type {
   Decision,
   ContextualTuple,
   PageOptions,
+  ListObjectsOptions,
   ListResult,
 } from './types.js';
 import type { Trace, ExplainOptions } from './trace.js';
@@ -19,7 +20,7 @@ import type { UsersetTree, ExpandOptions, Computed } from './expand.js';
 import { flattenUsers } from './expand.js';
 import type { Queryable } from './database.js';
 import { Cache, NoopCache } from './cache.js';
-import { validateObject, validateRelation } from './validator.js';
+import { validateObject, validateRelation, buildObjectFilter } from './validator.js';
 import { MelangeError } from './errors.js';
 import { BulkCheckBuilder } from './bulk-check.js';
 import { prefixIdent } from './identifier.js';
@@ -199,7 +200,7 @@ export class Checker {
    * @param subject - The subject to check
    * @param relation - The relation to check
    * @param objectType - The type of objects to list
-   * @param options - Pagination options
+   * @param options - Pagination options, plus an optional object filter
    * @returns List of object IDs
    *
    * @example
@@ -225,13 +226,22 @@ export class Checker {
    *     { limit: 100, after: result.nextCursor }
    *   );
    * }
+   *
+   * // Only repositories belonging to one organization. The filter is applied
+   * // before pagination, and narrows the query rather than the result set.
+   * const scoped = await checker.listObjects(
+   *   { type: 'user', id: '123' },
+   *   'can_read',
+   *   'repository',
+   *   { limit: 100, filter: { relation: 'org', subject: { type: 'organization', id: '9' } } }
+   * );
    * ```
    */
   async listObjects(
     subject: MelangeObject,
     relation: Relation,
     objectType: ObjectType,
-    options?: PageOptions
+    options?: ListObjectsOptions
   ): Promise<ListResult<string>> {
     if (this.validateRequest) {
       validateObject(subject, 'subject');
@@ -247,12 +257,13 @@ export class Checker {
     }
 
     const after = options?.after;
+    const filter = buildObjectFilter(options?.filter);
 
     const func = prefixIdent('list_accessible_objects', this.databaseSchema);
 
     const result = await this.db.query<{ object_id: string; next_cursor: string }>(
-      `SELECT * FROM ${func}($1, $2, $3, $4, $5, $6)`,
-      [subject.type, subject.id, relation, objectType, limit, after ?? null]
+      `SELECT * FROM ${func}($1, $2, $3, $4, $5, $6, $7)`,
+      [subject.type, subject.id, relation, objectType, limit, after ?? null, filter]
     );
 
     const items = result.rows.map((row) => row.object_id);

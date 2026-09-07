@@ -30,12 +30,28 @@ class Checker {
 
 ```typescript
 class Checker {
-  listObjects(subject: MelangeObject, relation: Relation, objectType: ObjectType, page?: PageOptions): Promise<{ ids: string[]; nextCursor: string | null }>
+  listObjects(subject: MelangeObject, relation: Relation, objectType: ObjectType, options?: ListObjectsOptions): Promise<{ ids: string[]; nextCursor: string | null }>
   listSubjects(object: MelangeObject, relation: Relation, subjectType: ObjectType, page?: PageOptions): Promise<{ ids: string[]; nextCursor: string | null }>
 }
 ```
 
-Cursor-paginated. Pass `page.after` (the previous page's `nextCursor`) to continue.
+Cursor-paginated. Pass `options.after` (the previous page's `nextCursor`) to continue.
+
+`ListObjectsOptions` extends `PageOptions` with an optional object filter, which
+narrows results to objects holding a **directly-assignable** relation to a given
+subject:
+
+```typescript
+const scoped = await checker.listObjects({ type: 'user', id: '123' }, 'viewer', 'document', {
+  limit: 100,
+  filter: { relation: 'folder', subject: { type: 'folder', id: '7' } },
+});
+```
+
+The filter is applied inside the query rather than to its results, and runs
+before pagination. A malformed filter, or one naming a userset subject, throws
+`ValidationError` before reaching the database. This is a Melange extension —
+OpenFGA's ListObjects has no object-side filter.
 
 ### Explain
 

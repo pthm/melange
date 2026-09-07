@@ -180,6 +180,40 @@ and would be silently dropped: document#viewer allows [user with ip_allowed].
 Remove the condition (and tighten the relation another way) to use the schema
 with Melange.
 
+## Melange Extensions
+
+These go beyond the OpenFGA API. Each is opt-in and defaults to OpenFGA-equivalent
+behavior, so a query that does not use them behaves identically — but code that
+does use them needs rework before [migrating to OpenFGA](#migration-path-to-openfga).
+
+| Extension | Surface | OpenFGA equivalent |
+| --------- | ------- | ------------------ |
+| **Object filter** on ListObjects | `p_filter`, `WithObjectFilter`, `options.filter` | None. [Requested and declined upstream](https://github.com/openfga/openfga/issues/301) |
+| **Subject-type filter** on Expand | `p_subject_type`, `WithSubjectTypeFilter`, `options.subjectType` | None; OpenFGA returns all types and leaves filtering to the client |
+| **Leaf cap** on Expand | `p_max_leaf`, `WithExpandMaxLeaf`, `options.maxLeaf` | None; OpenFGA returns all matching subjects uncapped |
+| **Node cap** on Explain | `p_max_nodes`, `WithExplainMaxNodes` | None; Explain itself has no OpenFGA equivalent |
+| **Cursor pagination** on list operations | `p_limit` / `p_after` | None; ListObjects returns one unpaginated array |
+
+### Object filtering
+
+Narrows ListObjects to objects holding a **directly-assignable** relation to a
+given subject — "documents this user can view, but only inside `folder:7`":
+
+```sql
+SELECT object_id
+FROM list_accessible_objects('user', '123', 'viewer', 'document', NULL, NULL, 'folder@folder:7');
+```
+
+OpenFGA declined this in [openfga/openfga#301](https://github.com/openfga/openfga/issues/301)
+because filtering by a general relation would need a second graph expansion per
+query. Melange restricts the filter to direct relations, where it compiles to a
+semi-join the query planner resolves alongside the main scan. A filter naming a
+computed or tuple-to-userset relation, or a userset subject, is rejected rather
+than silently mis-scoping the result.
+
+See [`p_filter`](/docs/reference/sql-api/#object-filtering) for the full
+semantics.
+
 ## Migration Path to OpenFGA
 
 Melange is designed to be a stepping stone. If you outgrow its capabilities, you can migrate to the full OpenFGA service.
@@ -245,6 +279,11 @@ Melange is designed to be a stepping stone. If you outgrow its capabilities, you
 - Relation names and semantics
 - Subject/object/relation model
 - Basic permission patterns
+
+Anything under [Melange Extensions](#melange-extensions) does not carry over.
+Object-filtered ListObjects calls in particular have no OpenFGA counterpart and
+have to be reworked — usually into a domain-table query joined against an
+unfiltered ListObjects result.
 
 ## Testing Compatibility
 

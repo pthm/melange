@@ -303,7 +303,7 @@ func generateListObjectsDispatcher(analyses []RelationAnalysis, databaseSchema s
 			"Generated dispatcher for list_accessible_objects",
 			"Routes to specialized functions for all type/relation pairs",
 		},
-		Body: buildDispatcherBody(cases, "p_subject_type, p_subject_id, p_limit, p_after"),
+		Body: buildDispatcherBody(cases, "p_subject_type, p_subject_id, p_limit, p_after, p_filter"),
 		// Routes only to schema-qualified list_{type}_{rel}_obj calls, no
 		// unqualified melange_tuples.
 		NoSearchPath: true,

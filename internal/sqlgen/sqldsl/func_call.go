@@ -206,3 +206,19 @@ func ListObjectsFunctionName(objectType, relation string) string {
 func ListSubjectsFunctionName(objectType, relation string) string {
 	return SafeIdentifier("list_", objectType, relation, "_sub")
 }
+
+// InSelect represents "expr IN (<select>)" for an arbitrary subquery. It is the
+// general-purpose sibling of InFunctionSelect / InCTESelect, used where the
+// right-hand set is a plain SELECT rather than a function call or CTE
+// reference.
+//
+// Renders: t.object_id IN (SELECT flt.object_id FROM melange_tuples AS flt WHERE ...)
+type InSelect struct {
+	Expr  Expr       // The expression to check (left side of IN)
+	Query SelectStmt // The subquery producing the right-hand set
+}
+
+// SQL renders the IN subquery expression.
+func (i InSelect) SQL() string {
+	return i.Expr.SQL() + " IN (" + i.Query.SQL() + ")"
+}

@@ -33,6 +33,11 @@ var (
 	// ErrInvalidContextualTuple is returned when contextual tuples fail validation.
 	ErrInvalidContextualTuple = errors.New("melange: contextual tuple invalid")
 
+	// ErrInvalidObjectFilter is returned when a ListObjects object filter is
+	// malformed or names a userset subject. Only direct relations are
+	// filterable; see WithObjectFilter.
+	ErrInvalidObjectFilter = errors.New("melange: object filter invalid")
+
 	// ErrCyclicSchema is returned when the schema contains a cycle in the relation graph.
 	// Cycles in implied-by or parent relations would cause infinite recursion at runtime.
 	// Fix the schema by removing one of the relationships forming the cycle.

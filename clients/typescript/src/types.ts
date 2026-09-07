@@ -71,6 +71,40 @@ export interface PageOptions {
 }
 
 /**
+ * ObjectFilter narrows listObjects results to objects holding a direct relation
+ * to a given subject.
+ *
+ * The relation must be directly assignable on the object type being listed. The
+ * generated function knows that set and rejects anything else — including a
+ * computed or tuple-to-userset relation, or a typo — rather than matching no
+ * tuples and returning an empty list that reads like "no access".
+ */
+export interface ObjectFilter {
+  /** A directly-assignable relation on the object type being listed. */
+  readonly relation: Relation;
+
+  /** The subject that relation must point at, e.g. { type: 'workspace', id: '7' }. */
+  readonly subject: MelangeObject;
+}
+
+/**
+ * ListObjectsOptions configures a listObjects call: pagination plus the
+ * optional object filter.
+ *
+ * Filtering is applied before pagination, so limit and after count filtered
+ * rows.
+ */
+export interface ListObjectsOptions extends PageOptions {
+  /**
+   * Narrow results to objects holding this relation to this subject.
+   *
+   * This is a Melange extension — OpenFGA's ListObjects has no object-side
+   * filter.
+   */
+  filter?: ObjectFilter;
+}
+
+/**
  * ListResult contains paginated list results.
  */
 export interface ListResult<T> {

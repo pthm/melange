@@ -64,6 +64,7 @@ FROM list_accessible_objects('user', '123', 'viewer', 'document', 100, NULL);
 | `object_type` | `text` | Type of objects to return |
 | `p_limit` | `int` | Maximum number of results per page (NULL = no limit) |
 | `p_after` | `text` | Cursor from previous page (NULL = start from beginning) |
+| `p_filter` | `text` | Scope to objects holding a direct relation to a subject, as `relation@subject_type:subject_id` (NULL = no filter) |
 
 ## Return Value
 
@@ -71,6 +72,70 @@ Returns a table with `object_id` and `next_cursor` columns. The `next_cursor` va
 
 {{< callout type="info" >}}
 **Ordering**: Results are ordered deterministically by `object_id` to ensure stable pagination across requests.
+{{< /callout >}}
+
+## Scoping with an Object Filter
+
+ListObjects answers "everything this subject can reach", which gets expensive
+when a user has access to a lot. If you already know the slice you care about —
+one workspace, one folder, one tenant — an object filter says so up front:
+
+{{< tabs >}}
+
+{{< tab name="Go" >}}
+```go
+// Only elements inside workspace:7, not every element the user can view
+elementIDs, cursor, err := checker.ListObjects(ctx,
+    authz.User("123"),
+    authz.RelView,
+    "element",
+    melange.PageOptions{Limit: 100},
+    melange.WithObjectFilter(authz.RelWorkspace, authz.Workspace("7")),
+)
+```
+{{< /tab >}}
+
+{{< tab name="TypeScript" >}}
+```typescript
+// Only elements inside workspace:7, not every element the user can view
+const result = await checker.listObjects({ type: 'user', id: '123' }, 'view', 'element', {
+  limit: 100,
+  filter: { relation: 'workspace', subject: { type: 'workspace', id: '7' } },
+});
+```
+{{< /tab >}}
+
+{{< tab name="SQL" >}}
+```sql
+-- Only elements inside workspace:7
+SELECT object_id, next_cursor
+FROM list_accessible_objects('user', '123', 'view', 'element', 100, NULL, 'workspace@workspace:7');
+```
+{{< /tab >}}
+
+{{< /tabs >}}
+
+The filter is applied **inside** the query, not to its results. The planner
+drives from the filter set instead of enumerating everything the subject can
+reach, which is the difference between scanning a workspace and scanning an
+account. It runs before pagination, so `p_limit` and `p_after` count filtered
+rows.
+
+{{< callout type="warning" >}}
+**Direct relations only.** The filter relation must be directly assignable on the
+object type you are listing (`define workspace: [workspace]`), not computed or
+derived through `from`. The generated function knows that set, so a computed
+relation, a misspelled one, or a userset subject like `workspace:7#view` raises
+an error. A typo will not quietly return an empty list that reads like "no
+access".
+{{< /callout >}}
+
+{{< callout type="info" >}}
+**The speedup depends on the relation.** Relations resolved recursively (a
+self-referential parent chain) or through an anchor on another object type
+return the correct filtered set, but reach it by filtering after enumeration.
+Direct, userset and intersection relations push the filter into the scan itself.
+Correctness is the same either way.
 {{< /callout >}}
 
 ## Pagination
@@ -399,7 +464,7 @@ ListObjects uses a recursive CTE that walks the permission graph in a single que
 Performance scales with result set size. For large datasets:
 
 1. **Use pagination** - Use `p_limit` to control result size and avoid loading unbounded data
-2. **Pre-filter candidates** - If you know the user only cares about certain objects, filter at the application layer first
+2. **Scope with an object filter** - If the user only cares about one workspace, folder or tenant, pass an [object filter](#scoping-with-an-object-filter) so the database narrows the query instead of you narrowing the results
 3. **Cache results** - Cache ListObjects results for repeated queries
 
 ## Decision Override Behavior

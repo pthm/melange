@@ -114,8 +114,11 @@ func buildSelfRefUsersetIntersectionClosureBlocks(plan ListPlan) []TypedQueryBlo
 				FromExpr: FunctionCallExpr{
 					Schema: plan.DatabaseSchema,
 					Name:   listObjectsFunctionName(plan.ObjectType, rel),
-					Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
-					Alias:  "icr",
+					// Same object type, so this relation's object filter applies
+					// verbatim to the composed set — pass it down rather than
+					// filtering what comes back.
+					Args:  []Expr{SubjectType, SubjectID, Null{}, Null{}, ParamRef("p_filter")},
+					Alias: "icr",
 				},
 			},
 		})

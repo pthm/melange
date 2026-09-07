@@ -27,10 +27,17 @@ func RenderListObjectsComposedFunction(plan ListPlan, blocks ComposedObjectsBloc
 	if selfSQL != "" {
 		query = joinUnionBlocksSQL([]string{mainQuery, selfSQL})
 	}
-	paginatedSQL := plan.wrapPagination(query, "object_id")
+	// Composed access resolves through an anchor of a different object type, so
+	// this relation's object filter has no column to bind to in the inner
+	// blocks. Post-filter only.
+	paginatedSQL := plan.wrapPaginationFiltered(query, false)
 
-	// Build the body using plpgsql DSL types
-	body := []Stmt{
+	fn := newListObjectsFunction(plan,
+		[]string{
+			fmt.Sprintf("Generated list_objects function for %s.%s", plan.ObjectType, plan.Relation),
+			fmt.Sprintf("Features: %s", plan.FeaturesString()),
+			fmt.Sprintf("Indirect anchor: %s.%s via %s", blocks.AnchorType, blocks.AnchorRelation, blocks.FirstStepType),
+		},
 		Comment{Text: "Type guard: only return results if subject type is allowed"},
 		Comment{Text: "Skip the guard for userset subjects since composed inner calls handle userset subjects"},
 		If{
@@ -41,19 +48,6 @@ func RenderListObjectsComposedFunction(plan ListPlan, blocks ComposedObjectsBloc
 			Then: []Stmt{Return{}},
 		},
 		ReturnQuery{Query: paginatedSQL},
-	}
-
-	fn := PlpgsqlFunction{
-		Schema:  plan.DatabaseSchema,
-		Name:    plan.FunctionName,
-		Args:    ListObjectsArgs(),
-		Returns: ListObjectsReturns(),
-		Header: []string{
-			fmt.Sprintf("Generated list_objects function for %s.%s", plan.ObjectType, plan.Relation),
-			fmt.Sprintf("Features: %s", plan.FeaturesString()),
-			fmt.Sprintf("Indirect anchor: %s.%s via %s", blocks.AnchorType, blocks.AnchorRelation, blocks.FirstStepType),
-		},
-		Body: body,
-	}
+	)
 	return fn.SQL(), nil
 }
