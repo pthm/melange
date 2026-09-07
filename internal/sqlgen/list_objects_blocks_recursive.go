@@ -275,8 +275,11 @@ func buildRecursiveIntersectionClosureBlock(plan ListPlan, rel string) TypedQuer
 		FromExpr: FunctionCallExpr{
 			Schema: plan.DatabaseSchema,
 			Name:   funcName,
-			Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
-			Alias:  "icr",
+			// Same object type, so this relation's object filter applies
+			// verbatim to the composed set — pass it down rather than
+			// filtering what comes back.
+			Args:  []Expr{SubjectType, SubjectID, Null{}, Null{}, ParamRef("p_filter")},
+			Alias: "icr",
 		},
 	}
 
