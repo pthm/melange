@@ -108,6 +108,8 @@ tests:
             expectation: [group:inner, group:outer]
           - request: { user: user:carol, type: group, relation: staff }
             expectation: []
+          - request: { user: group:inner#member, type: group, relation: member }
+            expectation: [group:inner, group:outer]
           - request: { user: user:carol, type: group, relation: member2 }
             expectation: [group:inner]
         listUsersAssertions:

@@ -41,11 +41,7 @@ func buildStandaloneAccessBlocks(plan ListPlan) ([]TypedQueryBlock, error) {
 	blocks = append(blocks, directBlock)
 
 	if plan.HasUsersetSubject {
-		usersetBlock, err := buildListObjectsUsersetSubjectBlock(plan)
-		if err != nil {
-			return nil, err
-		}
-		blocks = append(blocks, usersetBlock)
+		blocks = append(blocks, buildListObjectsUsersetSubjectBlock(plan))
 	}
 
 	complexBlocks, err := buildTypedListObjectsComplexClosureBlocks(plan)
@@ -152,7 +148,7 @@ func complexClosureCandidateMatch(plan ListPlan) Expr {
 }
 
 // buildListObjectsUsersetSubjectBlock builds the userset subject matching block.
-func buildListObjectsUsersetSubjectBlock(plan ListPlan) (TypedQueryBlock, error) {
+func buildListObjectsUsersetSubjectBlock(plan ListPlan) TypedQueryBlock {
 	q := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
 		Relations(plan.RelationList...).
@@ -174,7 +170,7 @@ func buildListObjectsUsersetSubjectBlock(plan ListPlan) (TypedQueryBlock, error)
 			"-- matches tuples where subject_id has equivalent or satisfying relation via closure",
 		},
 		Query: q.Build(),
-	}, nil
+	}
 }
 
 // buildTypedListObjectsComplexClosureBlocks builds blocks for complex closure relations.
@@ -609,8 +605,7 @@ func buildListObjectsSimpleUsersetBlock(plan ListPlan, pattern listUsersetPatter
 // the subject is a userset on the same object type (e.g., document:1#writer).
 func buildListObjectsSelfCandidateBlock(plan ListPlan) *TypedQueryBlock {
 	stmt := SelectStmt{
-		ColumnExprs: []Expr{UsersetObjectID{Source: SubjectID}},
-		Alias:       "object_id",
+		ColumnExprs: []Expr{Alias{Expr: UsersetObjectID{Source: SubjectID}, Name: "object_id"}},
 		Where: And(
 			HasUserset{Source: SubjectID},
 			Eq{Left: SubjectType, Right: Lit(plan.ObjectType)},
