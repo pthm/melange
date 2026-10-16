@@ -54,11 +54,11 @@ func buildStandaloneAccessBlocks(plan ListPlan) ([]TypedQueryBlock, error) {
 	}
 	blocks = append(blocks, complexBlocks...)
 
-	intersectionClosureBlocks, err := buildListObjectsIntersectionClosureBlocks(plan)
+	composedClosureBlocks, err := buildListObjectsComposedClosureBlocks(plan)
 	if err != nil {
 		return nil, err
 	}
-	blocks = append(blocks, intersectionClosureBlocks...)
+	blocks = append(blocks, composedClosureBlocks...)
 
 	if plan.HasUsersetPatterns {
 		usersetPatternBlocks, err := buildListObjectsUsersetPatternBlocks(plan)
@@ -213,14 +213,14 @@ func buildTypedListObjectsComplexClosureBlocks(plan ListPlan) ([]TypedQueryBlock
 	return blocks, nil
 }
 
-// buildListObjectsIntersectionClosureBlocks builds blocks for intersection closure relations.
-func buildListObjectsIntersectionClosureBlocks(plan ListPlan) ([]TypedQueryBlock, error) {
-	if len(plan.Analysis.IntersectionClosureRelations) == 0 {
+// buildListObjectsComposedClosureBlocks builds blocks for composed closure relations.
+func buildListObjectsComposedClosureBlocks(plan ListPlan) ([]TypedQueryBlock, error) {
+	if len(composedClosureRelations(plan.Analysis)) == 0 {
 		return nil, nil
 	}
 
 	var blocks []TypedQueryBlock
-	for _, rel := range plan.Analysis.IntersectionClosureRelations {
+	for _, rel := range composedClosureRelations(plan.Analysis) {
 		funcName := listObjectsFunctionName(plan.ObjectType, rel)
 		stmt := SelectStmt{
 			ColumnExprs: []Expr{Col{Table: "icr", Column: "object_id"}},
@@ -251,7 +251,7 @@ func buildListObjectsIntersectionClosureBlocks(plan ListPlan) ([]TypedQueryBlock
 
 		blocks = append(blocks, TypedQueryBlock{
 			Comments: []string{
-				"-- Compose with intersection closure relation: " + rel,
+				"-- Compose with closure relation: " + rel,
 			},
 			Query: stmt,
 		})

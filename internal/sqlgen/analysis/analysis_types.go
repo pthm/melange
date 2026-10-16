@@ -327,6 +327,12 @@ type RelationAnalysis struct {
 	// Computed by computeCanGenerateList.
 	IntersectionClosureRelations []string
 
+	// ExclusionClosureRelations contains list-generatable closure relations with
+	// exclusions over implied relations. Compose their list functions to enumerate
+	// grants without flattening across an exclusion boundary.
+	// Relations already in IntersectionClosureRelations are omitted.
+	ExclusionClosureRelations []string
+
 	// ClosureUsersetPatterns contains userset patterns from closure relations.
 	// For example, if `can_view: viewer` and `viewer: [group#member]`, then
 	// can_view's ClosureUsersetPatterns includes group#member.
@@ -1610,12 +1616,13 @@ func computeCanGenerateList(a *RelationAnalysis, lookup map[string]map[string]*R
 			return false, "closure relation " + rel + " is not list-generatable: " + relAnalysis.Capabilities.ListReason
 		}
 
-		// Phase 9C: Closure relations with intersection are now supported.
-		// These are handled by composing with their list function (they are list-generatable).
-		// We track them in IntersectionClosureRelations so templates can compose correctly.
-		// Note: The check at line 1553 already ensures the closure relation IS list-generatable.
+		// Intersections and exclusions over implied relations can grant access
+		// without tuples on the relation itself. Compose their list functions
+		// to enumerate grants without flattening across an exclusion boundary.
 		if relAnalysis.Features.HasIntersection {
 			a.IntersectionClosureRelations = append(a.IntersectionClosureRelations, rel)
+		} else if relAnalysis.Features.HasExclusion && relAnalysis.Features.HasImplied {
+			a.ExclusionClosureRelations = append(a.ExclusionClosureRelations, rel)
 		}
 
 		// Phase 9B: Self-referential usersets in closure relations are now supported.

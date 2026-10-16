@@ -21,6 +21,7 @@ var relationReferencesReviewedFields = map[string]bool{
 	"SimpleClosureRelations":       true,
 	"ComplexClosureRelations":      true,
 	"IntersectionClosureRelations": true,
+	"ExclusionClosureRelations":    true,
 	"ExcludedRelations":            true,
 	"SimpleExcludedRelations":      true,
 	"ComplexExcludedRelations":     true,
@@ -74,6 +75,7 @@ func TestRelationReferencesEdgeExtraction(t *testing.T) {
 		SimpleClosureRelations:       []string{"simple"},
 		ComplexClosureRelations:      []string{"complex"},
 		IntersectionClosureRelations: []string{"inter"},
+		ExclusionClosureRelations:    []string{"excluded_base"},
 		ExcludedRelations:            []string{"banned"},
 		SimpleExcludedRelations:      []string{"sbanned"},
 		ComplexExcludedRelations:     []string{"cbanned"},
@@ -116,6 +118,7 @@ func TestRelationReferencesEdgeExtraction(t *testing.T) {
 
 	want := []string{
 		"doc.view", "doc.edit", "doc.simple", "doc.complex", "doc.inter",
+		"doc.excluded_base",
 		"doc.banned", "doc.sbanned", "doc.cbanned", "doc.clbanned",
 		"folder.view", "org.admin", "org.blocked",
 		"group.member", "team.member",

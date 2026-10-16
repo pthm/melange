@@ -68,11 +68,11 @@ func buildListSubjectsRecursiveRegularBlocks(plan ListPlan) ([]TypedQueryBlock, 
 
 	blocks = append(blocks, buildListSubjectsRecursiveComplexClosureBlocks(plan)...)
 
-	intersectionBlocks, err := buildListSubjectsIntersectionClosureBlocks(plan, "p_subject_type", "p_subject_type", plan.HasExclusion)
+	composedBlocks, err := buildListSubjectsComposedClosureBlocks(plan, "p_subject_type", "p_subject_type", plan.HasExclusion)
 	if err != nil {
 		return nil, err
 	}
-	blocks = append(blocks, intersectionBlocks...)
+	blocks = append(blocks, composedBlocks...)
 
 	usersetBlocks, err := buildListSubjectsRecursiveUsersetPatternBlocks(plan)
 	if err != nil {
@@ -941,7 +941,7 @@ func buildSubjectsRecursiveUsersetFilterTypedBlocks(plan ListPlan, parentRelatio
 	}
 
 	filterUsersetExpr := Concat{Parts: []Expr{Param("v_filter_type"), Lit("#"), Param("v_filter_relation")}}
-	for _, rel := range plan.Analysis.IntersectionClosureRelations {
+	for _, rel := range composedClosureRelations(plan.Analysis) {
 		funcName := listSubjectsFunctionName(plan.ObjectType, rel)
 		stmt := SelectStmt{
 			Distinct:    true,
@@ -954,7 +954,7 @@ func buildSubjectsRecursiveUsersetFilterTypedBlocks(plan ListPlan, parentRelatio
 			},
 		}
 		blocks = append(blocks, TypedQueryBlock{
-			Comments: []string{fmt.Sprintf("-- Intersection closure: %s", rel)},
+			Comments: []string{fmt.Sprintf("-- Composed closure: %s", rel)},
 			Query:    stmt,
 		})
 	}

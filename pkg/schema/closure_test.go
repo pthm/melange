@@ -1,10 +1,68 @@
 package schema_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/pthm/melange/pkg/schema"
 )
+
+func TestComputeRelationClosure_ExclusionBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		reader schema.RelationDefinition
+	}{
+		{
+			name:   "relation exclusion",
+			reader: schema.RelationDefinition{ExcludedRelations: []string{"blocked"}},
+		},
+		{
+			name: "parent exclusion",
+			reader: schema.RelationDefinition{ExcludedParentRelations: []schema.ParentRelationCheck{
+				{Relation: "blocked", LinkingRelation: "parent"},
+			}},
+		},
+		{
+			name: "intersection exclusion",
+			reader: schema.RelationDefinition{ExcludedIntersectionGroups: []schema.IntersectionGroup{
+				{Relations: []string{"blocked", "active"}},
+			}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := tc.reader
+			reader.Name = "reader"
+			reader.ImpliedBy = []string{"writer"}
+			types := []schema.TypeDefinition{{
+				Name: "document",
+				Relations: []schema.RelationDefinition{
+					{Name: "owner"}, {Name: "writer"}, {Name: "blocked"}, {Name: "active"},
+					reader,
+					{Name: "alias", ImpliedBy: []string{"reader"}},
+					{Name: "can_read", ImpliedBy: []string{"owner", "alias"}},
+					{Name: "override", ImpliedBy: []string{"can_read", "writer"}},
+				},
+			}}
+			rows := schema.ComputeRelationClosure(types)
+			for relation, want := range map[string][]string{
+				"reader":   {"reader", "writer"},
+				"alias":    {"alias", "reader"},
+				"can_read": {"alias", "can_read", "owner", "reader"},
+				"override": {"alias", "can_read", "override", "owner", "reader", "writer"},
+			} {
+				var got []string
+				for _, row := range rows {
+					if row.Relation == relation {
+						got = append(got, row.SatisfyingRelation)
+					}
+				}
+				if !slices.Equal(got, want) {
+					t.Errorf("%s satisfying relations = %v, want %v", relation, got, want)
+				}
+			}
+		})
+	}
+}
 
 func TestComputeRelationClosure_Simple(t *testing.T) {
 	types := []schema.TypeDefinition{

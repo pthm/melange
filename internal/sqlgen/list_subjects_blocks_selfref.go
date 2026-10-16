@@ -44,7 +44,7 @@ func BuildListSubjectsSelfRefUsersetBlocks(plan ListPlan) (SelfRefUsersetSubject
 func buildSelfRefUsersetFilterBlocks(plan ListPlan) (blocks []TypedQueryBlock, selfBlock, recursiveBlock *TypedQueryBlock) {
 	blocks = make([]TypedQueryBlock, 0, 8)
 	blocks = append(blocks, buildSelfRefUsersetFilterBaseBlock(plan))
-	blocks = append(blocks, buildSelfRefUsersetFilterIntersectionBlocks(plan)...)
+	blocks = append(blocks, buildSelfRefUsersetFilterComposedClosureBlocks(plan)...)
 
 	return blocks, buildSelfRefUsersetFilterSelfBlock(plan), buildSelfRefUsersetFilterRecursiveBlock(plan)
 }
@@ -92,18 +92,18 @@ func buildSelfRefUsersetFilterBaseBlock(plan ListPlan) TypedQueryBlock {
 	}
 }
 
-func buildSelfRefUsersetFilterIntersectionBlocks(plan ListPlan) []TypedQueryBlock {
-	intersectionRels := plan.Analysis.IntersectionClosureRelations
-	if len(intersectionRels) == 0 {
+func buildSelfRefUsersetFilterComposedClosureBlocks(plan ListPlan) []TypedQueryBlock {
+	composedRels := composedClosureRelations(plan.Analysis)
+	if len(composedRels) == 0 {
 		return nil
 	}
 
 	filterUsersetExpr := Concat{Parts: []Expr{Param("v_filter_type"), Lit("#"), Param("v_filter_relation")}}
-	blocks := make([]TypedQueryBlock, 0, len(intersectionRels))
+	blocks := make([]TypedQueryBlock, 0, len(composedRels))
 
-	for _, rel := range intersectionRels {
+	for _, rel := range composedRels {
 		blocks = append(blocks, TypedQueryBlock{
-			Comments: []string{fmt.Sprintf("-- Compose with intersection closure relation: %s", rel)},
+			Comments: []string{fmt.Sprintf("-- Compose with closure relation: %s", rel)},
 			Query: SelectStmt{
 				Distinct: true,
 				ColumnExprs: []Expr{
@@ -195,7 +195,7 @@ func buildSelfRefUsersetRegularBlocks(plan ListPlan) (blocks []TypedQueryBlock, 
 	blocks = make([]TypedQueryBlock, 0, 8)
 	blocks = append(blocks, buildSelfRefUsersetRegularDirectBlock(plan, exclusions))
 	blocks = append(blocks, buildSelfRefUsersetRegularComplexClosureBlocks(plan, exclusions)...)
-	blocks = append(blocks, buildSelfRefUsersetRegularIntersectionClosureBlocks(plan)...)
+	blocks = append(blocks, buildSelfRefUsersetRegularComposedClosureBlocks(plan)...)
 	blocks = append(blocks, buildSelfRefUsersetRegularExpansionBlock(plan))
 	blocks = append(blocks, buildSelfRefUsersetRegularPatternBlocks(plan)...)
 
@@ -263,16 +263,16 @@ func buildSelfRefUsersetRegularComplexClosureBlocks(plan ListPlan, exclusions Ex
 	return blocks
 }
 
-func buildSelfRefUsersetRegularIntersectionClosureBlocks(plan ListPlan) []TypedQueryBlock {
-	intersectionRels := plan.Analysis.IntersectionClosureRelations
-	if len(intersectionRels) == 0 {
+func buildSelfRefUsersetRegularComposedClosureBlocks(plan ListPlan) []TypedQueryBlock {
+	composedRels := composedClosureRelations(plan.Analysis)
+	if len(composedRels) == 0 {
 		return nil
 	}
 
-	blocks := make([]TypedQueryBlock, 0, len(intersectionRels))
-	for _, rel := range intersectionRels {
+	blocks := make([]TypedQueryBlock, 0, len(composedRels))
+	for _, rel := range composedRels {
 		blocks = append(blocks, TypedQueryBlock{
-			Comments: []string{fmt.Sprintf("-- Compose with intersection closure relation: %s", rel)},
+			Comments: []string{fmt.Sprintf("-- Compose with closure relation: %s", rel)},
 			Query: SelectStmt{
 				ColumnExprs: []Expr{Col{Table: "icr", Column: "subject_id"}},
 				FromExpr: FunctionCallExpr{
