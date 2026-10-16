@@ -36,7 +36,10 @@ func TestComputeRelationClosure_ExclusionBoundary(t *testing.T) {
 			types := []schema.TypeDefinition{{
 				Name: "document",
 				Relations: []schema.RelationDefinition{
-					{Name: "owner"}, {Name: "writer"}, {Name: "blocked"}, {Name: "active"},
+					{Name: "owner"},
+					{Name: "writer"},
+					{Name: "blocked"},
+					{Name: "active"},
 					reader,
 					{Name: "alias", ImpliedBy: []string{"reader"}},
 					{Name: "can_read", ImpliedBy: []string{"owner", "alias"}},
