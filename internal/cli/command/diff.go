@@ -1,6 +1,7 @@
 package command
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -68,7 +69,9 @@ Use --exit-code in CI to fail the build when a change is breaking.`,
 		}
 
 		d := schema.Diff(oldTypes, newTypes)
-		renderDiff(os.Stdout, d, source, schemaPath)
+		if err := renderDiff(os.Stdout, d, source, schemaPath); err != nil {
+			return cli.GeneralError("writing diff", err)
+		}
 
 		if diffExitCode && d.HasBreaking() {
 			// git-diff-style signal for CI gates; errors already exited above.
@@ -156,7 +159,12 @@ func deployedModelTypes(dsn, databaseSchema string) ([]schema.TypeDefinition, er
 	return model.Types, nil
 }
 
-func renderDiff(w io.Writer, d schema.SchemaDiff, source, schemaPath string) {
+// renderDiff writes d to dst and reports any write failure (e.g. a closed pipe),
+// so a truncated diff is never mistaken for a complete one.
+func renderDiff(dst io.Writer, d schema.SchemaDiff, source, schemaPath string) error {
+	// bufio keeps the first write error and returns it from Flush, so the
+	// individual writes below need no checks of their own.
+	w := bufio.NewWriter(dst)
 	if diffFormat == "json" {
 		out, err := json.MarshalIndent(d, "", "  ")
 		if err != nil {
@@ -164,13 +172,13 @@ func renderDiff(w io.Writer, d schema.SchemaDiff, source, schemaPath string) {
 			out = []byte("{}")
 		}
 		_, _ = fmt.Fprintln(w, string(out))
-		return
+		return w.Flush()
 	}
 
 	_, _ = fmt.Fprintf(w, "Comparing %s → %s\n\n", source, schemaPath)
 	if d.Empty() {
 		_, _ = fmt.Fprintln(w, "No changes — schemas are equivalent.")
-		return
+		return w.Flush()
 	}
 	for _, c := range d.Changes {
 		label := "additive"
@@ -181,4 +189,5 @@ func renderDiff(w io.Writer, d schema.SchemaDiff, source, schemaPath string) {
 	}
 	additive, breaking := d.Counts()
 	_, _ = fmt.Fprintf(w, "\n%d breaking, %d additive\n", breaking, additive)
+	return w.Flush()
 }

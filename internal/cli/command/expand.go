@@ -1,10 +1,12 @@
 package command
 
 import (
+	"bufio"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 
 	_ "github.com/lib/pq"
@@ -124,10 +126,7 @@ func runExpand(dsn, databaseSchema string, object melange.Object, relation melan
 		if err != nil {
 			return cli.GeneralError("expand", err)
 		}
-		for _, u := range users {
-			fmt.Println(u)
-		}
-		return nil
+		return printLines(os.Stdout, users)
 	}
 
 	tree, err := checker.Expand(ctx, object, relation, opts...)
@@ -136,10 +135,7 @@ func runExpand(dsn, databaseSchema string, object melange.Object, relation melan
 	}
 
 	if flatten {
-		for _, u := range tree.FlattenUsers() {
-			fmt.Println(u)
-		}
-		return nil
+		return printLines(os.Stdout, tree.FlattenUsers())
 	}
 
 	switch format {
@@ -153,4 +149,17 @@ func runExpand(dsn, databaseSchema string, object melange.Object, relation melan
 	default:
 		return cli.GeneralError("output format", fmt.Errorf("unknown format %q (want tree|json)", format))
 	}
+}
+
+// printLines writes one line per entry to dst, reporting write failures so
+// a script consuming the list never sees a silently truncated one.
+func printLines(dst io.Writer, lines []string) error {
+	w := bufio.NewWriter(dst)
+	for _, l := range lines {
+		_, _ = fmt.Fprintln(w, l)
+	}
+	if err := w.Flush(); err != nil {
+		return cli.GeneralError("writing output", err)
+	}
+	return nil
 }

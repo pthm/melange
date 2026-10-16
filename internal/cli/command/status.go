@@ -178,7 +178,9 @@ func runStatus(dsn, databaseSchema, schemaPath, format string) error {
 		if merr != nil {
 			return cli.GeneralError("encoding status", merr)
 		}
-		fmt.Println(string(out))
+		if _, err := fmt.Println(string(out)); err != nil {
+			return cli.GeneralError("writing status", err)
+		}
 		return nil
 	}
 
