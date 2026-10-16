@@ -56,7 +56,9 @@ default; pass --reveal-secrets to print them in cleartext.`,
 		if err != nil {
 			return err
 		}
-		fmt.Print(string(out))
+		if _, err := fmt.Print(string(out)); err != nil {
+			return err
+		}
 		return nil
 	},
 }

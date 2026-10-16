@@ -68,7 +68,9 @@ func runSchemaPull(dsn, databaseSchema, output string, noHeader bool) error {
 	content := pullContent(model, noHeader)
 
 	if output == "" || output == "-" {
-		fmt.Print(content)
+		if _, err := fmt.Print(content); err != nil {
+			return cli.GeneralError("writing schema", err)
+		}
 		return nil
 	}
 	if err := os.WriteFile(output, []byte(content), 0o644); err != nil { //nolint:gosec // schema is not sensitive

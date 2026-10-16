@@ -3,6 +3,8 @@ package migrator
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -355,6 +357,13 @@ func TestOutputDryRun(t *testing.T) {
 		}
 	})
 
+	t.Run("reports write errors", func(t *testing.T) {
+		err := m.outputDryRun(failWriter{}, migrationWrite{SchemaChecksum: "abc"}, GeneratedSQL{}, ListGeneratedSQL{})
+		if !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatalf("got %v, want io.ErrClosedPipe", err)
+		}
+	})
+
 	t.Run("omits version when empty", func(t *testing.T) {
 		var buf bytes.Buffer
 		m.outputDryRun(&buf, migrationWrite{SchemaChecksum: "abc"}, GeneratedSQL{}, ListGeneratedSQL{})
@@ -541,3 +550,7 @@ func TestMigrateFromString_InvalidSchema(t *testing.T) {
 		t.Errorf("error should mention 'parsing schema', got: %v", err)
 	}
 }
+
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }

@@ -2,6 +2,8 @@ package command
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -145,7 +147,9 @@ func TestRenderDiff_TreeOutput(t *testing.T) {
 	}}
 
 	var b strings.Builder
-	renderDiff(&b, d, "deployed", "melange/schema.fga")
+	if err := renderDiff(&b, d, "deployed", "melange/schema.fga"); err != nil {
+		t.Fatal(err)
+	}
 	out := b.String()
 
 	for _, want := range []string{
@@ -162,7 +166,9 @@ func TestRenderDiff_TreeOutput(t *testing.T) {
 
 func TestRenderDiff_EquivalentSchemas(t *testing.T) {
 	var b strings.Builder
-	renderDiff(&b, schema.SchemaDiff{}, "git:main", "melange/schema.fga")
+	if err := renderDiff(&b, schema.SchemaDiff{}, "git:main", "melange/schema.fga"); err != nil {
+		t.Fatal(err)
+	}
 
 	if !strings.Contains(b.String(), "No changes — schemas are equivalent.") {
 		t.Errorf("unexpected output:\n%s", b.String())
@@ -303,7 +309,9 @@ func TestRenderDiff_JSONOutput(t *testing.T) {
 	}}
 
 	var b strings.Builder
-	renderDiff(&b, d, "deployed", "melange/schema.fga")
+	if err := renderDiff(&b, d, "deployed", "melange/schema.fga"); err != nil {
+		t.Fatal(err)
+	}
 
 	var decoded schema.SchemaDiff
 	if err := json.Unmarshal([]byte(b.String()), &decoded); err != nil {
@@ -329,5 +337,28 @@ func TestValidateHistoryFlags(t *testing.T) {
 	}
 	if err := validateHistoryFlags("text", 0); err == nil || !strings.Contains(err.Error(), "--limit") {
 		t.Errorf("error = %v, want a limit error", err)
+	}
+}
+
+type failWriter struct{}
+
+func (failWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+func TestRenderDiff_ReportsWriteError(t *testing.T) {
+	if err := renderDiff(failWriter{}, schema.SchemaDiff{}, "git:main", "melange/schema.fga"); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("got %v, want io.ErrClosedPipe", err)
+	}
+}
+
+func TestPrintLines(t *testing.T) {
+	var b strings.Builder
+	if err := printLines(&b, []string{"user:alice", "user:bob"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := b.String(), "user:alice\nuser:bob\n"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if err := printLines(failWriter{}, []string{"user:alice"}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("got %v, want io.ErrClosedPipe", err)
 	}
 }

@@ -1,6 +1,7 @@
 package migrator
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -1020,7 +1021,9 @@ func (m *Migrator) migrateWithTypesAndOptions(ctx context.Context, types []TypeD
 
 	// 8. Handle dry-run mode
 	if opts.DryRun != nil {
-		m.outputDryRun(opts.DryRun, write, generatedSQL, listSQL)
+		if err := m.outputDryRun(opts.DryRun, write, generatedSQL, listSQL); err != nil {
+			return false, fmt.Errorf("writing dry-run SQL: %w", err)
+		}
 		return false, nil
 	}
 
@@ -1119,8 +1122,12 @@ func (m *Migrator) migrateWithTypesAndOptions(ctx context.Context, types []TypeD
 	return false, nil
 }
 
-// outputDryRun writes the migration SQL to the provided writer.
-func (m *Migrator) outputDryRun(w io.Writer, write migrationWrite, generatedSQL GeneratedSQL, listSQL ListGeneratedSQL) {
+// outputDryRun writes the migration SQL to dst and reports any write failure,
+// so a truncated script (full disk, closed pipe) is never mistaken for a complete one.
+func (m *Migrator) outputDryRun(dst io.Writer, write migrationWrite, generatedSQL GeneratedSQL, listSQL ListGeneratedSQL) error {
+	// bufio keeps the first write error and returns it from Flush, so the
+	// individual writes below need no checks of their own.
+	w := bufio.NewWriter(dst)
 	melangeVersion := write.MelangeVersion
 	schemaChecksum := write.SchemaChecksum
 	expectedFunctions := write.FunctionNames
@@ -1275,6 +1282,7 @@ func (m *Migrator) outputDryRun(w io.Writer, write migrationWrite, generatedSQL 
 		sqldsl.Lit(write.SchemaFormat).SQL(),
 		sqldsl.Lit(string(write.modelJSONOrEmpty())).SQL(),
 	)
+	return w.Flush()
 }
 
 func (m *Migrator) prefixIdent(identifier string) string {
