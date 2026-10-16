@@ -269,18 +269,44 @@ func buildSelfRefUsersetRegularComposedClosureBlocks(plan ListPlan) []TypedQuery
 		return nil
 	}
 
-	blocks := make([]TypedQueryBlock, 0, len(composedRels))
+	// The relation's own exclusion applies to composed grants too.
+	var rootCheck Expr
+	if plan.HasExclusion {
+		rootCheck = CheckPermission{
+			Schema:      plan.DatabaseSchema,
+			Subject:     SubjectRef{Type: SubjectType, ID: Col{Table: "icr", Column: "subject_id"}},
+			Relation:    plan.Relation,
+			Object:      LiteralObject(plan.ObjectType, ObjectID),
+			ExpectAllow: true,
+		}
+	}
+
+	blocks := make([]TypedQueryBlock, 0, 2*len(composedRels))
 	for _, rel := range composedRels {
+		fn := listSubjectsFunctionName(plan.ObjectType, rel)
 		blocks = append(blocks, TypedQueryBlock{
 			Comments: []string{fmt.Sprintf("-- Compose with closure relation: %s", rel)},
 			Query: SelectStmt{
 				ColumnExprs: []Expr{Col{Table: "icr", Column: "subject_id"}},
-				FromExpr: FunctionCallExpr{
-					Schema: plan.DatabaseSchema,
-					Name:   listSubjectsFunctionName(plan.ObjectType, rel),
-					Args:   []Expr{ObjectID, SubjectType},
-					Alias:  "icr",
-				},
+				FromExpr:    FunctionCallExpr{Schema: plan.DatabaseSchema, Name: fn, Args: []Expr{ObjectID, SubjectType}, Alias: "icr"},
+				Where:       rootCheck,
+			},
+		}, TypedQueryBlock{
+			// Members of a nested group include its closure relation's grants.
+			Comments: []string{fmt.Sprintf("-- Compose with closure relation on reachable userset objects: %s", rel)},
+			Query: SelectStmt{
+				ColumnExprs: []Expr{Col{Table: "icr", Column: "subject_id"}},
+				FromExpr:    TableAs("", "userset_objects", "uo"),
+				Joins: []JoinClause{{
+					Type: "CROSS",
+					TableExpr: LateralFunction{
+						Schema: plan.DatabaseSchema,
+						Name:   fn,
+						Args:   []Expr{Col{Table: "uo", Column: "userset_object_id"}, SubjectType},
+						Alias:  "icr",
+					},
+				}},
+				Where: rootCheck,
 			},
 		})
 	}
