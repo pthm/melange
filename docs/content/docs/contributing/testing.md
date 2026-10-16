@@ -69,6 +69,59 @@ Failed tests show red X marks with details:
       Messages: check user:alice:viewer on document:1
 ```
 
+## Generated differential testing
+
+`TestOpenFGA_GeneratedAlgebra` generates small authorization models and compares
+the generated PostgreSQL `check_permission` function directly with a real
+in-process OpenFGA server. Expected decisions come from OpenFGA, not from another
+Melange API or imported fixture assertions. It runs with the normal
+`just test-openfga` command and the OpenFGA CI job; no oracle opt-in is required.
+
+```bash
+just test-openfga-generated
+
+# Explore a different deterministic sequence, or replay a reported seed.
+MELANGE_ALGEBRA_SEED=123 MELANGE_ALGEBRA_MODELS=30 just test-openfga-generated
+
+# Restrict a replay to one tuple mask printed in a failure.
+MELANGE_ALGEBRA_SEED=123 MELANGE_ALGEBRA_MODELS=1 MELANGE_ALGEBRA_MASK=82 \
+  just test-openfga-generated
+```
+
+Each model contains aliases, unions, intersections, exclusions, and parent
+inheritance. Earlier expressions can occur on either side of later operators,
+including inside an exclusion's subtract branch. OpenFGA's validator determines
+which generated models are valid. Rejected candidates are logged and replaced;
+the test fails if it cannot reach its requested count of valid models. A
+Melange compilation error or evaluator error on an accepted model always fails.
+
+The default run evaluates 12 valid models. For each, it enumerates all 128
+subsets of seven possible tuples: three direct grants on a document, three on
+a folder, and a parent link. Assignments use disconnected objects so they can
+be loaded together. Every generated user-valued relation is checked for both the
+grant recipient and a user with no grants, including objects with no tuples.
+Failures print the model, tuple assignment, query, and both decisions.
+
+For mutation-based exploration and automatic input shrinking, use Go fuzzing:
+
+```bash
+cd test
+go test ./openfgatests -run '^$' -fuzz '^FuzzAuthorizationAlgebra$' \
+  -fuzztime 5m -parallel 1 -timeout 10m
+```
+
+The fuzz target varies model choices and a tuple-assignment mask. Invalid models
+are excluded using OpenFGA validation; valid counterexamples fail and are saved
+by Go under `testdata/fuzz/FuzzAuthorizationAlgebra` with a replay command.
+Use one worker to bound the number of disposable databases. Both test modes
+require Docker and are skipped by `-short`.
+
+This is exhaustive over the tuple subsets for each generated model, not over
+all authorization models. The initial domain uses acyclic named relations,
+one parent object, and concrete users. Inline expression variants, recursive
+inheritance, multiple parents, userset subjects, wildcards, conditions, and
+list-operation equivalence are outside this generator's scope.
+
 ## Inspecting Test Cases
 
 Use the `dumptest` utility to understand what a test does:

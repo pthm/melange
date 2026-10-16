@@ -436,6 +436,12 @@ const (
 // subject_pool, all paths must use subject_pool to keep the result set
 // consistent.
 func classifyParentRelation(plan ListPlan, parent ListParentRelationData) parentRelationStrategy {
+	if sourceRelationNeedsVerification(plan, parent) {
+		// An inherited TTU must preserve constraints on its source relation,
+		// even when the parent target itself is simple. The subject-pool path
+		// composes with the source list function when safe, or checks it per row.
+		return parentStrategySubjectPool
+	}
 	if plan.AnalysisLookup == nil {
 		// Without analysis, mirror the historical default: closure path.
 		return parentStrategyClosure

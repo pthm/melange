@@ -48,12 +48,10 @@ func TestClosureTTUSubjects_ComposeWhenComposable(t *testing.T) {
 			ListStrategy: ListStrategyRecursive,
 			Features:     RelationFeatures{HasExclusion: true},
 		},
-		// repo.repo_admin is what classifyParentRelation inspects; give it
-		// exclusion so the parent is routed to subject_pool (closure branch).
+		// A simple parent target must not bypass the source's exclusion.
 		"repo.repo_admin": {
 			ObjectType: "repo",
 			Relation:   "repo_admin",
-			Features:   RelationFeatures{HasExclusion: true},
 		},
 	}
 	plan, parent := closureTTUPlan(lookup)
