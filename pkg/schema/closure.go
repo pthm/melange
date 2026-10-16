@@ -38,6 +38,11 @@ type ClosureRow struct {
 //
 // The closure table enables O(1) lookups instead of O(depth) recursion,
 // which is critical for deeply nested role hierarchies.
+//
+// Expansion stops at an intermediate relation with exclusions: that relation
+// must be evaluated as a whole, rather than letting its positive branches
+// independently grant access. The starting relation's positive branches are
+// still expanded because its generated function applies its own exclusions.
 func ComputeRelationClosure(types []TypeDefinition) []ClosureRow {
 	// Estimate capacity: each relation typically has a few satisfying relations
 	totalRelations := 0
@@ -50,13 +55,16 @@ func ComputeRelationClosure(types []TypeDefinition) []ClosureRow {
 		// Build adjacency: relation -> relations that imply it
 		// impliedBy[A] = [B, C] means B and C both imply A
 		impliedBy := make(map[string][]string)
+		hasExclusion := make(map[string]bool)
 		for _, r := range t.Relations {
 			impliedBy[r.Name] = append(impliedBy[r.Name], r.ImpliedBy...)
+			hasExclusion[r.Name] = len(r.ExcludedRelations) > 0 ||
+				len(r.ExcludedParentRelations) > 0 || len(r.ExcludedIntersectionGroups) > 0
 		}
 
 		// For each relation, compute transitive closure via BFS
 		for _, r := range t.Relations {
-			satisfying := computeTransitiveSatisfiers(r.Name, impliedBy)
+			satisfying := computeTransitiveSatisfiers(r.Name, impliedBy, hasExclusion)
 
 			// Sort map keys for deterministic output order.
 			// This ensures consistent ordering of SatisfyingRelations in
@@ -82,11 +90,11 @@ func ComputeRelationClosure(types []TypeDefinition) []ClosureRow {
 }
 
 // computeTransitiveSatisfiers computes all relations that transitively satisfy the start relation.
-// Uses BFS to traverse the implied-by graph and collect all reachable relations.
+// Uses BFS to traverse the implied-by graph, stopping at exclusion boundaries.
 //
 // Returns a map of satisfying_relation -> path from start to that relation.
 // The start relation always satisfies itself with path [start].
-func computeTransitiveSatisfiers(start string, impliedBy map[string][]string) map[string][]string {
+func computeTransitiveSatisfiers(start string, impliedBy map[string][]string, hasExclusion map[string]bool) map[string][]string {
 	// result maps satisfying_relation -> path from start
 	result := map[string][]string{
 		start: {start}, // relation always satisfies itself
@@ -97,6 +105,12 @@ func computeTransitiveSatisfiers(start string, impliedBy map[string][]string) ma
 	for len(queue) > 0 {
 		current := queue[0]
 		queue = queue[1:]
+
+		// Keep the excluded relation in the closure so code generation can
+		// delegate to its check function, but do not flatten its base relations.
+		if current != start && hasExclusion[current] {
+			continue
+		}
 
 		for _, implied := range impliedBy[current] {
 			if _, seen := result[implied]; seen {

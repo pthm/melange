@@ -189,8 +189,8 @@ func buildRecursiveBaseBlocks(plan ListPlan, parentRelations []ListParentRelatio
 		blocks = append(blocks, block)
 	}
 
-	for _, rel := range plan.Analysis.IntersectionClosureRelations {
-		block := buildRecursiveIntersectionClosureBlock(plan, rel)
+	for _, rel := range composedClosureRelations(plan.Analysis) {
+		block := buildRecursiveComposedClosureBlock(plan, rel)
 		block.Propagatable = propagatable[rel]
 		blocks = append(blocks, block)
 	}
@@ -267,8 +267,8 @@ func buildRecursiveComplexClosureBlock(plan ListPlan, rel string) TypedQueryBloc
 	}
 }
 
-// buildRecursiveIntersectionClosureBlock builds a block for a single intersection closure relation.
-func buildRecursiveIntersectionClosureBlock(plan ListPlan, rel string) TypedQueryBlock {
+// buildRecursiveComposedClosureBlock builds a block for a single composed closure relation.
+func buildRecursiveComposedClosureBlock(plan ListPlan, rel string) TypedQueryBlock {
 	funcName := listObjectsFunctionName(plan.ObjectType, rel)
 	stmt := SelectStmt{
 		ColumnExprs: []Expr{Col{Table: "icr", Column: "object_id"}},
@@ -281,7 +281,7 @@ func buildRecursiveIntersectionClosureBlock(plan ListPlan, rel string) TypedQuer
 	}
 
 	return TypedQueryBlock{
-		Comments: []string{fmt.Sprintf("-- Intersection closure: %s", rel)},
+		Comments: []string{fmt.Sprintf("-- Composed closure: %s", rel)},
 		Query:    stmt,
 	}
 }

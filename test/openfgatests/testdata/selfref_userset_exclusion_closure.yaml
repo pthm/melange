@@ -1,0 +1,153 @@
+# Regression: a self-referential userset relation whose closure contains an
+# excluded or intersected relation. The self-ref list strategy must compose
+# that relation's list function instead of flattening past its boundary, so
+# blocked subjects stay out of nested-group results.
+#
+# member: [user, group#member] or eligible, eligible: candidate but not banned.
+# outer includes inner#member, so inner's eligible members are outer members.
+# mallory is an inner candidate but banned there; bob is outer's direct member.
+# staff uses an intersection boundary instead (approved: candidate and vetted).
+# member2 adds the relation's own exclusion: carol is blocked on outer, so she
+# must not be listed there even though inner's eligible set includes her.
+#
+# Test names are prefixed with "melange/" by the loader.
+
+tests:
+  - name: selfref_userset_exclusion_closure
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type group
+            relations
+              define candidate: [user]
+              define banned: [user]
+              define vetted: [user]
+              define eligible: candidate but not banned
+              define approved: candidate and vetted
+              define member: [user, group#member] or eligible
+              define staff: [user, group#staff] or approved
+              define blocked: [user]
+              define member2: ([user, group#member2] or eligible) but not blocked
+        tuples:
+          - user: user:alice
+            relation: candidate
+            object: group:inner
+          - user: user:mallory
+            relation: candidate
+            object: group:inner
+          - user: user:mallory
+            relation: banned
+            object: group:inner
+          - user: user:alice
+            relation: vetted
+            object: group:inner
+          - user: user:mallory
+            relation: vetted
+            object: group:inner
+          - user: user:carol
+            relation: candidate
+            object: group:inner
+          - user: group:inner#member
+            relation: member
+            object: group:outer
+          - user: group:inner#staff
+            relation: staff
+            object: group:outer
+          - user: user:bob
+            relation: member
+            object: group:outer
+          - user: group:inner#member2
+            relation: member2
+            object: group:outer
+          - user: user:carol
+            relation: blocked
+            object: group:outer
+        checkAssertions:
+          - name: alice_inner_member
+            tuple: { user: user:alice, relation: member, object: group:inner }
+            expectation: true
+          - name: alice_outer_member_via_inner
+            tuple: { user: user:alice, relation: member, object: group:outer }
+            expectation: true
+          - name: mallory_banned_inner
+            tuple: { user: user:mallory, relation: member, object: group:inner }
+            expectation: false
+          - name: mallory_banned_outer
+            tuple: { user: user:mallory, relation: member, object: group:outer }
+            expectation: false
+          - name: bob_outer_direct
+            tuple: { user: user:bob, relation: member, object: group:outer }
+            expectation: true
+          - name: alice_outer_staff
+            tuple: { user: user:alice, relation: staff, object: group:outer }
+            expectation: true
+          - name: mallory_outer_staff_vetted_candidate
+            tuple: { user: user:mallory, relation: staff, object: group:outer }
+            expectation: true
+          - name: carol_outer_staff_unvetted
+            tuple: { user: user:carol, relation: staff, object: group:outer }
+            expectation: false
+          - name: alice_outer_member2
+            tuple: { user: user:alice, relation: member2, object: group:outer }
+            expectation: true
+          - name: carol_blocked_outer_member2
+            tuple: { user: user:carol, relation: member2, object: group:outer }
+            expectation: false
+        listObjectsAssertions:
+          - request: { user: user:alice, type: group, relation: member }
+            expectation: [group:inner, group:outer]
+          - request: { user: user:mallory, type: group, relation: member }
+            expectation: []
+          - request: { user: user:bob, type: group, relation: member }
+            expectation: [group:outer]
+          - request: { user: user:mallory, type: group, relation: staff }
+            expectation: [group:inner, group:outer]
+          - request: { user: user:carol, type: group, relation: staff }
+            expectation: []
+          - request: { user: user:carol, type: group, relation: member2 }
+            expectation: [group:inner]
+        listUsersAssertions:
+          - request:
+              object: group:outer
+              relation: member
+              filters:
+                - user
+            expectation:
+              - user:alice
+              - user:bob
+              - user:carol
+          - request:
+              object: group:inner
+              relation: member
+              filters:
+                - user
+            expectation:
+              - user:alice
+              - user:carol
+          - request:
+              object: group:outer
+              relation: staff
+              filters:
+                - user
+            expectation:
+              - user:alice
+              - user:mallory
+          - request:
+              object: group:outer
+              relation: member
+              filters:
+                - group#member
+            expectation:
+              - group:inner#member
+              - group:outer#member
+          - request:
+              object: group:outer
+              relation: member2
+              filters:
+                - user
+            expectation:
+              - user:alice

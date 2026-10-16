@@ -44,7 +44,7 @@ func BuildListSubjectsSelfRefUsersetBlocks(plan ListPlan) (SelfRefUsersetSubject
 func buildSelfRefUsersetFilterBlocks(plan ListPlan) (blocks []TypedQueryBlock, selfBlock, recursiveBlock *TypedQueryBlock) {
 	blocks = make([]TypedQueryBlock, 0, 8)
 	blocks = append(blocks, buildSelfRefUsersetFilterBaseBlock(plan))
-	blocks = append(blocks, buildSelfRefUsersetFilterIntersectionBlocks(plan)...)
+	blocks = append(blocks, buildSelfRefUsersetFilterComposedClosureBlocks(plan)...)
 
 	return blocks, buildSelfRefUsersetFilterSelfBlock(plan), buildSelfRefUsersetFilterRecursiveBlock(plan)
 }
@@ -92,18 +92,18 @@ func buildSelfRefUsersetFilterBaseBlock(plan ListPlan) TypedQueryBlock {
 	}
 }
 
-func buildSelfRefUsersetFilterIntersectionBlocks(plan ListPlan) []TypedQueryBlock {
-	intersectionRels := plan.Analysis.IntersectionClosureRelations
-	if len(intersectionRels) == 0 {
+func buildSelfRefUsersetFilterComposedClosureBlocks(plan ListPlan) []TypedQueryBlock {
+	composedRels := composedClosureRelations(plan.Analysis)
+	if len(composedRels) == 0 {
 		return nil
 	}
 
 	filterUsersetExpr := Concat{Parts: []Expr{Param("v_filter_type"), Lit("#"), Param("v_filter_relation")}}
-	blocks := make([]TypedQueryBlock, 0, len(intersectionRels))
+	blocks := make([]TypedQueryBlock, 0, len(composedRels))
 
-	for _, rel := range intersectionRels {
+	for _, rel := range composedRels {
 		blocks = append(blocks, TypedQueryBlock{
-			Comments: []string{fmt.Sprintf("-- Compose with intersection closure relation: %s", rel)},
+			Comments: []string{fmt.Sprintf("-- Compose with closure relation: %s", rel)},
 			Query: SelectStmt{
 				Distinct: true,
 				ColumnExprs: []Expr{
@@ -195,7 +195,7 @@ func buildSelfRefUsersetRegularBlocks(plan ListPlan) (blocks []TypedQueryBlock, 
 	blocks = make([]TypedQueryBlock, 0, 8)
 	blocks = append(blocks, buildSelfRefUsersetRegularDirectBlock(plan, exclusions))
 	blocks = append(blocks, buildSelfRefUsersetRegularComplexClosureBlocks(plan, exclusions)...)
-	blocks = append(blocks, buildSelfRefUsersetRegularIntersectionClosureBlocks(plan)...)
+	blocks = append(blocks, buildSelfRefUsersetRegularComposedClosureBlocks(plan)...)
 	blocks = append(blocks, buildSelfRefUsersetRegularExpansionBlock(plan))
 	blocks = append(blocks, buildSelfRefUsersetRegularPatternBlocks(plan)...)
 
@@ -263,24 +263,50 @@ func buildSelfRefUsersetRegularComplexClosureBlocks(plan ListPlan, exclusions Ex
 	return blocks
 }
 
-func buildSelfRefUsersetRegularIntersectionClosureBlocks(plan ListPlan) []TypedQueryBlock {
-	intersectionRels := plan.Analysis.IntersectionClosureRelations
-	if len(intersectionRels) == 0 {
+func buildSelfRefUsersetRegularComposedClosureBlocks(plan ListPlan) []TypedQueryBlock {
+	composedRels := composedClosureRelations(plan.Analysis)
+	if len(composedRels) == 0 {
 		return nil
 	}
 
-	blocks := make([]TypedQueryBlock, 0, len(intersectionRels))
-	for _, rel := range intersectionRels {
+	// The relation's own exclusion applies to composed grants too.
+	var rootCheck Expr
+	if plan.HasExclusion {
+		rootCheck = CheckPermission{
+			Schema:      plan.DatabaseSchema,
+			Subject:     SubjectRef{Type: SubjectType, ID: Col{Table: "icr", Column: "subject_id"}},
+			Relation:    plan.Relation,
+			Object:      LiteralObject(plan.ObjectType, ObjectID),
+			ExpectAllow: true,
+		}
+	}
+
+	blocks := make([]TypedQueryBlock, 0, 2*len(composedRels))
+	for _, rel := range composedRels {
+		fn := listSubjectsFunctionName(plan.ObjectType, rel)
 		blocks = append(blocks, TypedQueryBlock{
-			Comments: []string{fmt.Sprintf("-- Compose with intersection closure relation: %s", rel)},
+			Comments: []string{fmt.Sprintf("-- Compose with closure relation: %s", rel)},
 			Query: SelectStmt{
 				ColumnExprs: []Expr{Col{Table: "icr", Column: "subject_id"}},
-				FromExpr: FunctionCallExpr{
-					Schema: plan.DatabaseSchema,
-					Name:   listSubjectsFunctionName(plan.ObjectType, rel),
-					Args:   []Expr{ObjectID, SubjectType},
-					Alias:  "icr",
-				},
+				FromExpr:    FunctionCallExpr{Schema: plan.DatabaseSchema, Name: fn, Args: []Expr{ObjectID, SubjectType}, Alias: "icr"},
+				Where:       rootCheck,
+			},
+		}, TypedQueryBlock{
+			// Members of a nested group include its closure relation's grants.
+			Comments: []string{fmt.Sprintf("-- Compose with closure relation on reachable userset objects: %s", rel)},
+			Query: SelectStmt{
+				ColumnExprs: []Expr{Col{Table: "icr", Column: "subject_id"}},
+				FromExpr:    TableAs("", "userset_objects", "uo"),
+				Joins: []JoinClause{{
+					Type: "CROSS",
+					TableExpr: LateralFunction{
+						Schema: plan.DatabaseSchema,
+						Name:   fn,
+						Args:   []Expr{Col{Table: "uo", Column: "userset_object_id"}, SubjectType},
+						Alias:  "icr",
+					},
+				}},
+				Where: rootCheck,
 			},
 		})
 	}

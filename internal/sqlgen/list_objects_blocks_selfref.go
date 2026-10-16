@@ -34,7 +34,7 @@ func buildSelfRefUsersetBaseBlocks(plan ListPlan) ([]TypedQueryBlock, error) {
 	blocks := make([]TypedQueryBlock, 0, 8)
 	blocks = append(blocks, buildSelfRefUsersetDirectBlock(plan))
 	blocks = append(blocks, buildSelfRefUsersetComplexClosureBlocks(plan)...)
-	blocks = append(blocks, buildSelfRefUsersetIntersectionClosureBlocks(plan)...)
+	blocks = append(blocks, buildSelfRefUsersetComposedClosureBlocks(plan)...)
 	blocks = append(blocks, buildSelfRefUsersetPatternBlocks(plan)...)
 	return blocks, nil
 }
@@ -99,16 +99,16 @@ func buildSelfRefUsersetComplexClosureBlocks(plan ListPlan) []TypedQueryBlock {
 	return blocks
 }
 
-func buildSelfRefUsersetIntersectionClosureBlocks(plan ListPlan) []TypedQueryBlock {
-	intersectionRels := plan.Analysis.IntersectionClosureRelations
-	if len(intersectionRels) == 0 {
+func buildSelfRefUsersetComposedClosureBlocks(plan ListPlan) []TypedQueryBlock {
+	composedRels := composedClosureRelations(plan.Analysis)
+	if len(composedRels) == 0 {
 		return nil
 	}
 
-	blocks := make([]TypedQueryBlock, 0, len(intersectionRels))
-	for _, rel := range intersectionRels {
+	blocks := make([]TypedQueryBlock, 0, len(composedRels))
+	for _, rel := range composedRels {
 		blocks = append(blocks, TypedQueryBlock{
-			Comments: []string{fmt.Sprintf("-- Compose with intersection closure relation: %s", rel)},
+			Comments: []string{fmt.Sprintf("-- Compose with closure relation: %s", rel)},
 			Query: SelectStmt{
 				ColumnExprs: []Expr{Col{Table: "icr", Column: "object_id"}},
 				FromExpr: FunctionCallExpr{

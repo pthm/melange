@@ -47,8 +47,8 @@ func BuildListSubjectsBlocks(plan ListPlan) (BlockSet, error) {
 func buildListSubjectsUsersetFilterBlocks(plan ListPlan) (blocks []TypedQueryBlock, selfBlock *TypedQueryBlock, err error) {
 	directBlock := buildListSubjectsUsersetFilterDirectBlock(plan)
 
-	var intersectionBlocks []TypedQueryBlock
-	intersectionBlocks, err = buildListSubjectsIntersectionClosureBlocks(
+	var composedBlocks []TypedQueryBlock
+	composedBlocks, err = buildListSubjectsComposedClosureBlocks(
 		plan,
 		"v_filter_type || '#' || v_filter_relation",
 		"v_filter_type",
@@ -60,9 +60,9 @@ func buildListSubjectsUsersetFilterBlocks(plan ListPlan) (blocks []TypedQueryBlo
 
 	selfBlock = buildListSubjectsUsersetFilterSelfBlock(plan)
 
-	blocks = make([]TypedQueryBlock, 0, 1+len(intersectionBlocks))
+	blocks = make([]TypedQueryBlock, 0, 1+len(composedBlocks))
 	blocks = append(blocks, directBlock)
-	blocks = append(blocks, intersectionBlocks...)
+	blocks = append(blocks, composedBlocks...)
 
 	return blocks, selfBlock, nil
 }
@@ -155,13 +155,13 @@ func buildListSubjectsRegularBlocks(plan ListPlan) ([]TypedQueryBlock, error) {
 
 	blocks = append(blocks, buildTypedListSubjectsComplexClosureBlocks(plan)...)
 
-	intersectionBlocks, err := buildListSubjectsIntersectionClosureBlocks(
+	composedBlocks, err := buildListSubjectsComposedClosureBlocks(
 		plan, "p_subject_type", "p_subject_type", plan.HasExclusion,
 	)
 	if err != nil {
 		return nil, err
 	}
-	blocks = append(blocks, intersectionBlocks...)
+	blocks = append(blocks, composedBlocks...)
 
 	if plan.HasUsersetPatterns {
 		usersetBlocks, err := buildListSubjectsUsersetPatternBlocks(plan)
@@ -237,16 +237,16 @@ func buildTypedListSubjectsComplexClosureBlocks(plan ListPlan) []TypedQueryBlock
 	return blocks
 }
 
-// buildListSubjectsIntersectionClosureBlocks builds blocks for intersection closure relations.
-// Calls list_subjects for each intersection relation to get candidates.
+// buildListSubjectsComposedClosureBlocks builds blocks for composed closure relations.
+// Calls list_subjects for each composed relation to get candidates.
 // When validate is true and checkSubjectTypeExpr is non-empty, wraps with check_permission.
-func buildListSubjectsIntersectionClosureBlocks(plan ListPlan, subjectTypeExpr, checkSubjectTypeExpr string, validate bool) ([]TypedQueryBlock, error) {
-	if len(plan.Analysis.IntersectionClosureRelations) == 0 {
+func buildListSubjectsComposedClosureBlocks(plan ListPlan, subjectTypeExpr, checkSubjectTypeExpr string, validate bool) ([]TypedQueryBlock, error) {
+	if len(composedClosureRelations(plan.Analysis)) == 0 {
 		return nil, nil
 	}
 
-	blocks := make([]TypedQueryBlock, 0, len(plan.Analysis.IntersectionClosureRelations))
-	for _, rel := range plan.Analysis.IntersectionClosureRelations {
+	blocks := make([]TypedQueryBlock, 0, len(composedClosureRelations(plan.Analysis)))
+	for _, rel := range composedClosureRelations(plan.Analysis) {
 		funcCall := FunctionCallExpr{
 			Schema: plan.DatabaseSchema,
 			Name:   listSubjectsFunctionName(plan.ObjectType, rel),
@@ -271,7 +271,7 @@ func buildListSubjectsIntersectionClosureBlocks(plan ListPlan, subjectTypeExpr, 
 		}
 
 		blocks = append(blocks, TypedQueryBlock{
-			Comments: []string{fmt.Sprintf("-- Compose with intersection closure: %s", rel)},
+			Comments: []string{fmt.Sprintf("-- Compose with closure: %s", rel)},
 			Query:    stmt,
 		})
 	}

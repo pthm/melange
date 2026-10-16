@@ -52,6 +52,7 @@ func TestEmitsNoWildcardCoversAllReferenceEdges(t *testing.T) {
 		{"SimpleClosureRelations", func(a *RelationAnalysis) { a.SimpleClosureRelations = []string{"wild"} }},
 		{"ComplexClosureRelations", func(a *RelationAnalysis) { a.ComplexClosureRelations = []string{"wild"} }},
 		{"IntersectionClosureRelations", func(a *RelationAnalysis) { a.IntersectionClosureRelations = []string{"wild"} }},
+		{"ExclusionClosureRelations", func(a *RelationAnalysis) { a.ExclusionClosureRelations = []string{"wild"} }},
 		{"ExcludedRelations", func(a *RelationAnalysis) { a.ExcludedRelations = []string{"wild"} }},
 		{"SimpleExcludedRelations", func(a *RelationAnalysis) { a.SimpleExcludedRelations = []string{"wild"} }},
 		{"ComplexExcludedRelations", func(a *RelationAnalysis) { a.ComplexExcludedRelations = []string{"wild"} }},

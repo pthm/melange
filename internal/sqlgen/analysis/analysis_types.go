@@ -270,11 +270,11 @@ type RelationAnalysis struct {
 	// For Exclusion patterns
 	ExcludedRelations []string // Relations to exclude (for simple "but not X" patterns)
 
-	// SimpleExcludedRelations are excluded relations that can be checked with
+	// SimpleExcludedRelations are this relation's own exclusions that can be checked with
 	// a direct tuple lookup (no userset, TTU, exclusion, or intersection).
 	SimpleExcludedRelations []string
 
-	// ComplexExcludedRelations are excluded relations that need function calls
+	// ComplexExcludedRelations are this relation's own exclusions that need function calls
 	// (have userset, TTU, exclusion, intersection, or implied closure).
 	// The generated code will call check_permission_internal for these.
 	ComplexExcludedRelations []string
@@ -327,6 +327,12 @@ type RelationAnalysis struct {
 	// Computed by computeCanGenerateList.
 	IntersectionClosureRelations []string
 
+	// ExclusionClosureRelations contains list-generatable closure relations with
+	// exclusions. Compose their list functions to enumerate
+	// grants without flattening across an exclusion boundary.
+	// Relations already in IntersectionClosureRelations are omitted.
+	ExclusionClosureRelations []string
+
 	// ClosureUsersetPatterns contains userset patterns from closure relations.
 	// For example, if `can_view: viewer` and `viewer: [group#member]`, then
 	// can_view's ClosureUsersetPatterns includes group#member.
@@ -344,7 +350,8 @@ type RelationAnalysis struct {
 	// ClosureExcludedRelations contains excluded relations from closure relations.
 	// For example, if `can_read: reader` and `reader: [user] but not restricted`,
 	// then can_read's ClosureExcludedRelations includes "restricted".
-	// This ensures exclusions are applied when accessing through implied relations.
+	// These are dependencies only: each closure relation applies its own exclusions.
+	// Applying them to the enclosing relation would incorrectly restrict other union branches.
 	// Computed by ComputeCanGenerate.
 	ClosureExcludedRelations []string
 
@@ -1156,8 +1163,8 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 			}
 
 			// Collect closure exclusions from this satisfying relation.
-			// This allows implied relations like `can_read: reader` to inherit exclusions
-			// from reader (e.g., "but not restricted").
+			// Retain these dependencies without promoting branch-local exclusions
+			// to predicates on the enclosing relation.
 			for _, excl := range relAnalysis.ExcludedRelations {
 				if !seenClosureExcl[excl] {
 					seenClosureExcl[excl] = true
@@ -1169,7 +1176,8 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		// Third check: classify excluded relations as simple or complex.
 		// Simple exclusions use direct tuple lookup; complex exclusions use function calls.
 		// Unknown excluded relations still prevent generation.
-		// This includes both the relation's own exclusions AND closure-inherited exclusions.
+		// Only classify this relation's own exclusions. Closure relations enforce
+		// their exclusions through delegated calls, within their own union branches.
 		var simpleExcluded, complexExcluded []string
 		seenExcluded := make(map[string]bool) // Avoid duplicates
 		classifyExcluded := func(excludedRel string) bool {
@@ -1196,17 +1204,6 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		// Classify the relation's own exclusions
 		if canGenerate && a.Features.HasExclusion {
 			for _, excludedRel := range a.ExcludedRelations {
-				if !classifyExcluded(excludedRel) {
-					break
-				}
-			}
-		}
-
-		// Also classify closure-inherited exclusions (for list functions).
-		// These are exclusions from implied relations like `can_read: reader`
-		// where reader has "but not restricted".
-		if canGenerate {
-			for _, excludedRel := range a.ClosureExcludedRelations {
 				if !classifyExcluded(excludedRel) {
 					break
 				}
@@ -1324,7 +1321,9 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 					continue
 				}
 				relAnalysis, ok := lookup[a.ObjectType][rel]
-				if !ok {
+				// An excluded closure relation is an exclusion boundary: its
+				// grants are enumerated by composing its own list function.
+				if !ok || relAnalysis.Features.HasExclusion {
 					continue
 				}
 				for _, pattern := range relAnalysis.UsersetPatterns {
@@ -1351,7 +1350,7 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 					continue
 				}
 				relAnalysis, ok := lookup[a.ObjectType][rel]
-				if !ok {
+				if !ok || relAnalysis.Features.HasExclusion { // exclusion boundary, see above
 					continue
 				}
 				for _, parent := range relAnalysis.ParentRelations {
@@ -1368,10 +1367,6 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 				}
 			}
 			a.ClosureParentRelations = closureParentRelations
-
-			// Note: ClosureExcludedRelations is now collected earlier in the "Second check"
-			// loop, before exclusion classification. This ensures exclusions from closure
-			// relations are properly classified as simple or complex.
 		}
 
 		// Design decision: Always generate specialized functions for all relations.
@@ -1610,12 +1605,14 @@ func computeCanGenerateList(a *RelationAnalysis, lookup map[string]map[string]*R
 			return false, "closure relation " + rel + " is not list-generatable: " + relAnalysis.Capabilities.ListReason
 		}
 
-		// Phase 9C: Closure relations with intersection are now supported.
-		// These are handled by composing with their list function (they are list-generatable).
-		// We track them in IntersectionClosureRelations so templates can compose correctly.
-		// Note: The check at line 1553 already ensures the closure relation IS list-generatable.
+		// Intersections and exclusions can grant access without tuples on the
+		// relation itself (implied relations, usersets, TTU). Compose their list
+		// functions to enumerate grants without flattening across an exclusion
+		// boundary.
 		if relAnalysis.Features.HasIntersection {
 			a.IntersectionClosureRelations = append(a.IntersectionClosureRelations, rel)
+		} else if relAnalysis.Features.HasExclusion {
+			a.ExclusionClosureRelations = append(a.ExclusionClosureRelations, rel)
 		}
 
 		// Phase 9B: Self-referential usersets in closure relations are now supported.

@@ -1,10 +1,17 @@
 package sqlgen
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/pthm/melange/internal/sqlgen/sqldsl"
 )
+
+// composedClosureRelations identifies relations whose grants must be enumerated
+// by their own list functions rather than by looking up tuples on the relation.
+func composedClosureRelations(a RelationAnalysis) []string {
+	return slices.Concat(a.IntersectionClosureRelations, a.ExclusionClosureRelations)
+}
 
 // listUsersetPatternInput contains data for building userset pattern blocks.
 // Used by both list_objects and list_subjects block builders.
@@ -21,13 +28,14 @@ type listUsersetPatternInput struct {
 }
 
 // filterComplexClosureRelations returns complex closure relations excluding those
-// that are already handled by intersection closure blocks.
+// that are already handled by composed closure blocks.
 func filterComplexClosureRelations(a RelationAnalysis) []string {
-	if len(a.IntersectionClosureRelations) == 0 {
+	composed := composedClosureRelations(a)
+	if len(composed) == 0 {
 		return a.ComplexClosureRelations
 	}
-	excluded := make(map[string]bool, len(a.IntersectionClosureRelations))
-	for _, rel := range a.IntersectionClosureRelations {
+	excluded := make(map[string]bool, len(composed))
+	for _, rel := range composed {
 		excluded[rel] = true
 	}
 	var result []string

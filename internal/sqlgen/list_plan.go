@@ -115,8 +115,11 @@ func BuildListSubjectsPlanWithLookup(a RelationAnalysis, inline InlineSQLData, d
 			Col{Table: "t", Column: "subject_id"},
 		)
 		// Enable CTE optimization when eligible and relation has userset patterns
-		// (JOIN expansion benefits from precomputed exclusions)
-		plan.UseCTEExclusion = plan.Exclusions.CanUseCTEOptimization() && a.Features.HasUserset
+		// (JOIN expansion benefits from precomputed exclusions). Blocks omit their
+		// inline exclusion under this flag, so only enable it for strategies whose
+		// renderer (RenderListSubjectsFunction) emits the compensating anti-join.
+		plan.UseCTEExclusion = plan.Exclusions.CanUseCTEOptimization() && a.Features.HasUserset &&
+			(a.ListStrategy == ListStrategyDirect || a.ListStrategy == ListStrategyUserset)
 	}
 	return plan
 }

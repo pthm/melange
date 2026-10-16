@@ -712,6 +712,12 @@ test-openfga-oracle:
     cd {{TEST}} && MELANGE_OPENFGA_ORACLE=1 {{GO_TEST}} -count=1 -timeout {{OPENFGA_TEST_TIMEOUT}} \
         -run "TestOpenFGA_" {{OPENFGA_PKGS}}
 
+# Generate models and compare every bounded tuple assignment with real OpenFGA
+[group('OpenFGA Test')]
+test-openfga-generated:
+    cd {{TEST}} && {{GO_TEST}} -count=1 -timeout {{OPENFGA_TEST_TIMEOUT}} \
+        -run '^TestOpenFGA_GeneratedAlgebra$' {{OPENFGA_PKGS}}
+
 # Run OpenFGA tests for a specific feature (e.g., just test-openfga-feature Wildcards)
 [group('OpenFGA Test')]
 test-openfga-feature FEATURE:

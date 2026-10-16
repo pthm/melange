@@ -93,7 +93,7 @@ func relationReferences(a *RelationAnalysis) []string {
 	sameType(a.DirectImpliedBy...)
 	sameType(a.SimpleClosureRelations...)
 	sameType(a.ComplexClosureRelations...)
-	sameType(a.IntersectionClosureRelations...)
+	sameType(composedClosureRelations(*a)...)
 	sameType(a.ExcludedRelations...)
 	sameType(a.SimpleExcludedRelations...)
 	sameType(a.ComplexExcludedRelations...)

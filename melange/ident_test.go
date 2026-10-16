@@ -90,7 +90,7 @@ func (s *stubQuerier) QueryContext(_ context.Context, _ string, _ ...any) (*sql.
 // short-circuited via the cached field directly so we don't need a working
 // QueryRow stub.
 func TestBaseTuplesSchema_CacheHit(t *testing.T) {
-	c := &Checker{}
+	c := &Checker{databaseSchema: "public"}
 
 	// Seed the cache directly to simulate a successful first lookup.
 	c.tuplesSchema = "public"

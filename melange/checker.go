@@ -79,9 +79,9 @@ type Checker struct {
 	validator          Validator
 	databaseSchema     string
 
-	// tuplesSchema caches the result of lookupTuplesSchema. The schema does
-	// not move during the Checker's lifetime, so the lookup query (a join
-	// across pg_class and pg_namespace) can be amortized to once per Checker.
+	// tuplesSchema caches the result of lookupTuplesSchema for an explicitly
+	// configured schema. That schema does not move during the Checker's lifetime,
+	// so the lookup query can be amortized to once per Checker.
 	// Failures aren't cached — a transient lookup error should not poison
 	// the Checker for its lifetime.
 	tuplesSchemaMu sync.Mutex
@@ -160,6 +160,7 @@ func WithRequestValidation() Option {
 }
 
 // WithDatabaseSchema sets the database schema where melange objects live.
+// It defaults to public. An empty schema uses the connection's search_path.
 func WithDatabaseSchema(databaseSchema string) Option {
 	return func(ch *Checker) {
 		ch.databaseSchema = databaseSchema
@@ -932,9 +933,14 @@ func (c *Checker) cleanupContextualTuples(ctx context.Context, q Execer) {
 }
 
 // baseTuplesSchema returns the schema containing the melange_tuples relation,
-// caching the result on the Checker so subsequent contextual-tuple calls do
-// not re-query pg_class. The lookup itself is implemented by lookupTuplesSchema.
+// caching the result for a configured schema so subsequent contextual-tuple
+// calls do not re-query pg_class. Unqualified lookups depend on search_path.
 func (c *Checker) baseTuplesSchema(ctx context.Context, q Querier) (string, error) {
+	// An unqualified checker can be used on connections with different search
+	// paths, or after SET search_path. Resolve that source for each request.
+	if c.databaseSchema == "" {
+		return c.lookupTuplesSchema(ctx, q)
+	}
 	c.tuplesSchemaMu.Lock()
 	defer c.tuplesSchemaMu.Unlock()
 	if c.tuplesSchema != "" {
@@ -948,7 +954,9 @@ func (c *Checker) baseTuplesSchema(ctx context.Context, q Querier) (string, erro
 	return schema, nil
 }
 
-// lookupTuplesSchema finds the schema containing the melange_tuples relation.
+// lookupTuplesSchema finds the intended non-temporary melange_tuples relation.
+// A configured schema is authoritative; it must never fall back to another
+// schema. Unqualified checkers follow search_path order, excluding temp sources.
 // This is needed when creating the temp view to properly qualify the base relation
 // in the UNION query. Returns the schema name or ErrNoTuplesTable if not found.
 func (c *Checker) lookupTuplesSchema(ctx context.Context, q Querier) (string, error) {
@@ -959,9 +967,11 @@ func (c *Checker) lookupTuplesSchema(ctx context.Context, q Querier) (string, er
 		JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
 		WHERE c.relname = 'melange_tuples'
 		  AND c.relkind IN ('r', 'v', 'm')
-		ORDER BY n.nspname
+		  AND c.relpersistence <> 't'
+		  AND (n.nspname = $1 OR ($1 = '' AND n.nspname = ANY(pg_catalog.current_schemas(true))))
+		ORDER BY pg_catalog.array_position(pg_catalog.current_schemas(true), n.nspname)
 		LIMIT 1
-	`).Scan(&schema)
+	`, c.databaseSchema).Scan(&schema)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return "", ErrNoTuplesTable

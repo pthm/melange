@@ -1,0 +1,371 @@
+# Regression: an excluded relation reached through an alias or union must
+# keep its exclusion on every grant path it owns: direct tuples, usersets,
+# wildcards, tuple-to-userset, mixed unions, parent-side exclusions, userset
+# subjects whose source relation has an exclusion, and intersections.
+#
+# Check: relation closure flattened past r_mixed and folder.freader, so
+# blocked writers/viewers were allowed a_mixed, u_mixed and a_via_parent.
+# Lists: closure userset/TTU patterns were inherited from excluded closure
+# relations without their exclusion, so list_objects returned document:1 to
+# mallory via group#member, and list_subjects returned mallory.
+#
+# mallory holds every grant alice holds but is blocked on each path, so every
+# a_*/u_* relation must allow alice and deny mallory for check, listObjects
+# and listUsers.
+#
+# Test names are prefixed with "melange/" by the loader.
+
+tests:
+  - name: exclusion_boundary_grant_paths
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type group
+            relations
+              define member: [user]
+              define banned: [user]
+              define eligible: member but not banned
+
+          type folder
+            relations
+              define viewer: [user]
+              define fblocked: [user]
+              define freader: viewer but not fblocked
+              define falias: freader
+
+          type document
+            relations
+              define parent: [folder]
+              define owner: [user]
+              define writer: [user]
+              define active: [user]
+              define blocked: [user]
+              define r_direct: [user] but not blocked
+              define a_direct: r_direct
+              define u_direct: owner or r_direct
+              define r_userset: [group#member] but not blocked
+              define a_userset: r_userset
+              define u_userset: owner or r_userset
+              define r_wild: [user:*] but not blocked
+              define a_wild: r_wild
+              define r_ttu: viewer from parent but not blocked
+              define a_ttu: r_ttu
+              define u_ttu: owner or r_ttu
+              define r_mixed: ([user, group#member] or writer or viewer from parent) but not blocked
+              define a_mixed: r_mixed
+              define u_mixed: owner or a_mixed
+              define via_parent: falias from parent
+              define a_via_parent: via_parent
+              define ug: [group#eligible]
+              define a_ug: ug
+              define r_int: writer and r_direct
+              define a_int: r_int
+              define u_int: owner or r_int
+        tuples:
+          - user: user:alice
+            relation: member
+            object: group:g
+          - user: user:alice
+            relation: viewer
+            object: folder:f
+          - user: user:alice
+            relation: r_direct
+            object: document:1
+          - user: user:alice
+            relation: r_mixed
+            object: document:1
+          - user: user:alice
+            relation: writer
+            object: document:1
+          - user: user:alice
+            relation: active
+            object: document:1
+          - user: user:mallory
+            relation: member
+            object: group:g
+          - user: user:mallory
+            relation: viewer
+            object: folder:f
+          - user: user:mallory
+            relation: r_direct
+            object: document:1
+          - user: user:mallory
+            relation: r_mixed
+            object: document:1
+          - user: user:mallory
+            relation: writer
+            object: document:1
+          - user: user:mallory
+            relation: active
+            object: document:1
+          - user: user:mallory
+            relation: blocked
+            object: document:1
+          - user: user:mallory
+            relation: fblocked
+            object: folder:f
+          - user: user:mallory
+            relation: banned
+            object: group:g
+          - user: group:g#member
+            relation: r_userset
+            object: document:1
+          - user: group:g#member
+            relation: r_mixed
+            object: document:1
+          - user: group:g#eligible
+            relation: ug
+            object: document:1
+          - user: user:*
+            relation: r_wild
+            object: document:1
+          - user: folder:f
+            relation: parent
+            object: document:1
+        checkAssertions:
+          - name: alice_a_direct
+            tuple: { user: user:alice, relation: a_direct, object: document:1 }
+            expectation: true
+          - name: mallory_a_direct
+            tuple: { user: user:mallory, relation: a_direct, object: document:1 }
+            expectation: false
+          - name: alice_u_direct
+            tuple: { user: user:alice, relation: u_direct, object: document:1 }
+            expectation: true
+          - name: mallory_u_direct
+            tuple: { user: user:mallory, relation: u_direct, object: document:1 }
+            expectation: false
+          - name: alice_a_userset
+            tuple: { user: user:alice, relation: a_userset, object: document:1 }
+            expectation: true
+          - name: mallory_a_userset
+            tuple: { user: user:mallory, relation: a_userset, object: document:1 }
+            expectation: false
+          - name: alice_u_userset
+            tuple: { user: user:alice, relation: u_userset, object: document:1 }
+            expectation: true
+          - name: mallory_u_userset
+            tuple: { user: user:mallory, relation: u_userset, object: document:1 }
+            expectation: false
+          - name: alice_a_ttu
+            tuple: { user: user:alice, relation: a_ttu, object: document:1 }
+            expectation: true
+          - name: mallory_a_ttu
+            tuple: { user: user:mallory, relation: a_ttu, object: document:1 }
+            expectation: false
+          - name: alice_u_ttu
+            tuple: { user: user:alice, relation: u_ttu, object: document:1 }
+            expectation: true
+          - name: mallory_u_ttu
+            tuple: { user: user:mallory, relation: u_ttu, object: document:1 }
+            expectation: false
+          - name: alice_a_mixed
+            tuple: { user: user:alice, relation: a_mixed, object: document:1 }
+            expectation: true
+          - name: mallory_a_mixed
+            tuple: { user: user:mallory, relation: a_mixed, object: document:1 }
+            expectation: false
+          - name: alice_u_mixed
+            tuple: { user: user:alice, relation: u_mixed, object: document:1 }
+            expectation: true
+          - name: mallory_u_mixed
+            tuple: { user: user:mallory, relation: u_mixed, object: document:1 }
+            expectation: false
+          - name: alice_a_via_parent
+            tuple: { user: user:alice, relation: a_via_parent, object: document:1 }
+            expectation: true
+          - name: mallory_a_via_parent
+            tuple: { user: user:mallory, relation: a_via_parent, object: document:1 }
+            expectation: false
+          - name: alice_a_ug
+            tuple: { user: user:alice, relation: a_ug, object: document:1 }
+            expectation: true
+          - name: mallory_a_ug
+            tuple: { user: user:mallory, relation: a_ug, object: document:1 }
+            expectation: false
+          - name: alice_a_int
+            tuple: { user: user:alice, relation: a_int, object: document:1 }
+            expectation: true
+          - name: mallory_a_int
+            tuple: { user: user:mallory, relation: a_int, object: document:1 }
+            expectation: false
+          - name: alice_u_int
+            tuple: { user: user:alice, relation: u_int, object: document:1 }
+            expectation: true
+          - name: mallory_u_int
+            tuple: { user: user:mallory, relation: u_int, object: document:1 }
+            expectation: false
+          - name: alice_a_wild
+            tuple: { user: user:alice, relation: a_wild, object: document:1 }
+            expectation: true
+          - name: mallory_a_wild
+            tuple: { user: user:mallory, relation: a_wild, object: document:1 }
+            expectation: false
+        listObjectsAssertions:
+          - name: alice_lists_a_direct
+            request: { user: user:alice, type: document, relation: a_direct }
+            expectation: [document:1]
+          - name: mallory_lists_a_direct
+            request: { user: user:mallory, type: document, relation: a_direct }
+            expectation: []
+          - name: alice_lists_u_direct
+            request: { user: user:alice, type: document, relation: u_direct }
+            expectation: [document:1]
+          - name: mallory_lists_u_direct
+            request: { user: user:mallory, type: document, relation: u_direct }
+            expectation: []
+          - name: alice_lists_a_userset
+            request: { user: user:alice, type: document, relation: a_userset }
+            expectation: [document:1]
+          - name: mallory_lists_a_userset
+            request: { user: user:mallory, type: document, relation: a_userset }
+            expectation: []
+          - name: alice_lists_u_userset
+            request: { user: user:alice, type: document, relation: u_userset }
+            expectation: [document:1]
+          - name: mallory_lists_u_userset
+            request: { user: user:mallory, type: document, relation: u_userset }
+            expectation: []
+          - name: alice_lists_a_ttu
+            request: { user: user:alice, type: document, relation: a_ttu }
+            expectation: [document:1]
+          - name: mallory_lists_a_ttu
+            request: { user: user:mallory, type: document, relation: a_ttu }
+            expectation: []
+          - name: alice_lists_u_ttu
+            request: { user: user:alice, type: document, relation: u_ttu }
+            expectation: [document:1]
+          - name: mallory_lists_u_ttu
+            request: { user: user:mallory, type: document, relation: u_ttu }
+            expectation: []
+          - name: alice_lists_a_mixed
+            request: { user: user:alice, type: document, relation: a_mixed }
+            expectation: [document:1]
+          - name: mallory_lists_a_mixed
+            request: { user: user:mallory, type: document, relation: a_mixed }
+            expectation: []
+          - name: alice_lists_u_mixed
+            request: { user: user:alice, type: document, relation: u_mixed }
+            expectation: [document:1]
+          - name: mallory_lists_u_mixed
+            request: { user: user:mallory, type: document, relation: u_mixed }
+            expectation: []
+          - name: alice_lists_a_via_parent
+            request: { user: user:alice, type: document, relation: a_via_parent }
+            expectation: [document:1]
+          - name: mallory_lists_a_via_parent
+            request: { user: user:mallory, type: document, relation: a_via_parent }
+            expectation: []
+          - name: alice_lists_a_ug
+            request: { user: user:alice, type: document, relation: a_ug }
+            expectation: [document:1]
+          - name: mallory_lists_a_ug
+            request: { user: user:mallory, type: document, relation: a_ug }
+            expectation: []
+          - name: alice_lists_a_int
+            request: { user: user:alice, type: document, relation: a_int }
+            expectation: [document:1]
+          - name: mallory_lists_a_int
+            request: { user: user:mallory, type: document, relation: a_int }
+            expectation: []
+          - name: alice_lists_u_int
+            request: { user: user:alice, type: document, relation: u_int }
+            expectation: [document:1]
+          - name: mallory_lists_u_int
+            request: { user: user:mallory, type: document, relation: u_int }
+            expectation: []
+          - name: alice_lists_a_wild
+            request: { user: user:alice, type: document, relation: a_wild }
+            expectation: [document:1]
+          - name: mallory_lists_a_wild
+            request: { user: user:mallory, type: document, relation: a_wild }
+            expectation: []
+        listUsersAssertions:
+          - request:
+              object: document:1
+              relation: a_direct
+              filters:
+                - user
+            expectation:
+              - user:alice
+          - request:
+              object: document:1
+              relation: u_direct
+              filters:
+                - user
+            expectation:
+              - user:alice
+          - request:
+              object: document:1
+              relation: a_userset
+              filters:
+                - user
+            expectation:
+              - user:alice
+          - request:
+              object: document:1
+              relation: u_userset
+              filters:
+                - user
+            expectation:
+              - user:alice
+          - request:
+              object: document:1
+              relation: a_ttu
+              filters:
+                - user
+            expectation:
+              - user:alice
+          - request:
+              object: document:1
+              relation: u_ttu
+              filters:
+                - user
+            expectation:
+              - user:alice
+          - request:
+              object: document:1
+              relation: a_mixed
+              filters:
+                - user
+            expectation:
+              - user:alice
+          - request:
+              object: document:1
+              relation: u_mixed
+              filters:
+                - user
+            expectation:
+              - user:alice
+          - request:
+              object: document:1
+              relation: a_via_parent
+              filters:
+                - user
+            expectation:
+              - user:alice
+          - request:
+              object: document:1
+              relation: a_ug
+              filters:
+                - user
+            expectation:
+              - user:alice
+          - request:
+              object: document:1
+              relation: a_int
+              filters:
+                - user
+            expectation:
+              - user:alice
+          - request:
+              object: document:1
+              relation: u_int
+              filters:
+                - user
+            expectation:
+              - user:alice

@@ -68,11 +68,11 @@ func buildListSubjectsRecursiveRegularBlocks(plan ListPlan) ([]TypedQueryBlock, 
 
 	blocks = append(blocks, buildListSubjectsRecursiveComplexClosureBlocks(plan)...)
 
-	intersectionBlocks, err := buildListSubjectsIntersectionClosureBlocks(plan, "p_subject_type", "p_subject_type", plan.HasExclusion)
+	composedBlocks, err := buildListSubjectsComposedClosureBlocks(plan, "p_subject_type", "p_subject_type", plan.HasExclusion)
 	if err != nil {
 		return nil, err
 	}
-	blocks = append(blocks, intersectionBlocks...)
+	blocks = append(blocks, composedBlocks...)
 
 	usersetBlocks, err := buildListSubjectsRecursiveUsersetPatternBlocks(plan)
 	if err != nil {
@@ -436,6 +436,12 @@ const (
 // subject_pool, all paths must use subject_pool to keep the result set
 // consistent.
 func classifyParentRelation(plan ListPlan, parent ListParentRelationData) parentRelationStrategy {
+	if sourceRelationNeedsVerification(plan, parent) {
+		// An inherited TTU must preserve constraints on its source relation,
+		// even when the parent target itself is simple. The subject-pool path
+		// composes with the source list function when safe, or checks it per row.
+		return parentStrategySubjectPool
+	}
 	if plan.AnalysisLookup == nil {
 		// Without analysis, mirror the historical default: closure path.
 		return parentStrategyClosure
@@ -458,6 +464,7 @@ func classifyParentRelation(plan ListPlan, parent ListParentRelationData) parent
 //
 // Conditions that force subject_pool:
 //   - Parent target relation has intersection or exclusion.
+//   - Parent target relation's closure contains an intersection or exclusion.
 //   - Parent target relation has complex userset patterns.
 //   - Parent target relation has nested TTUs that are not (a) self-referential
 //     on the target's own object type AND (b) using the same linking relation
@@ -467,6 +474,11 @@ func parentTargetNeedsSubjectPool(target *RelationAnalysis, currentParent ListPa
 		return true
 	}
 	if target.Features.HasIntersection || target.Features.HasExclusion {
+		return true
+	}
+	// The closure path looks up tuples on the target's satisfying relations,
+	// which cannot evaluate an intersection or exclusion boundary in its closure.
+	if len(composedClosureRelations(*target)) > 0 {
 		return true
 	}
 	if target.HasComplexUsersetPatterns {
@@ -941,7 +953,7 @@ func buildSubjectsRecursiveUsersetFilterTypedBlocks(plan ListPlan, parentRelatio
 	}
 
 	filterUsersetExpr := Concat{Parts: []Expr{Param("v_filter_type"), Lit("#"), Param("v_filter_relation")}}
-	for _, rel := range plan.Analysis.IntersectionClosureRelations {
+	for _, rel := range composedClosureRelations(plan.Analysis) {
 		funcName := listSubjectsFunctionName(plan.ObjectType, rel)
 		stmt := SelectStmt{
 			Distinct:    true,
@@ -954,7 +966,7 @@ func buildSubjectsRecursiveUsersetFilterTypedBlocks(plan ListPlan, parentRelatio
 			},
 		}
 		blocks = append(blocks, TypedQueryBlock{
-			Comments: []string{fmt.Sprintf("-- Intersection closure: %s", rel)},
+			Comments: []string{fmt.Sprintf("-- Composed closure: %s", rel)},
 			Query:    stmt,
 		})
 	}

@@ -1,0 +1,1370 @@
+# Regression: a relation that imports an excluded relation through a union
+# or alias must not flatten past it. ComputeRelationClosure expanded
+# can_read: owner or reader through reader: writer but not blocked to writer,
+# so the generated check accepted relation IN ('can_read','owner','writer')
+# and a blocked writer was allowed can_read, alias and forwarded.
+# eligible/can_edit are intersection controls that were already correct.
+#
+# Each subject (named after its case) holds only the tuples its name lists.
+# Mirrors test/check_exclusion_closure_test.go, which also covers check_permission_nw.
+#
+# Test names are prefixed with "melange/" by the loader.
+
+tests:
+  - name: exclusion_closure_boundary
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type document
+            relations
+              define owner: [user]
+              define writer: [user]
+              define blocked: [user]
+              define active: [user]
+              define reader: writer but not blocked
+              define eligible: writer and active
+              define can_read: owner or reader
+              define can_edit: owner or eligible
+              define alias: reader
+              define forwarded: owner or alias
+              define writer_override: forwarded or writer
+        tuples:
+          - user: user:blocked_writer
+            relation: writer
+            object: document:doc
+          - user: user:blocked_writer
+            relation: blocked
+            object: document:doc
+          - user: user:writer
+            relation: writer
+            object: document:doc
+          - user: user:owner
+            relation: owner
+            object: document:doc
+          - user: user:blocked_owner_writer
+            relation: owner
+            object: document:doc
+          - user: user:blocked_owner_writer
+            relation: writer
+            object: document:doc
+          - user: user:blocked_owner_writer
+            relation: blocked
+            object: document:doc
+          - user: user:active_writer
+            relation: writer
+            object: document:doc
+          - user: user:active_writer
+            relation: active
+            object: document:doc
+          - user: user:blocked_active_writer
+            relation: writer
+            object: document:doc
+          - user: user:blocked_active_writer
+            relation: active
+            object: document:doc
+          - user: user:blocked_active_writer
+            relation: blocked
+            object: document:doc
+        checkAssertions:
+          - name: blocked_writer_reader
+            tuple: { user: user:blocked_writer, relation: reader, object: document:doc }
+            expectation: false
+          - name: blocked_writer_can_read
+            tuple: { user: user:blocked_writer, relation: can_read, object: document:doc }
+            expectation: false
+          - name: blocked_writer_eligible
+            tuple: { user: user:blocked_writer, relation: eligible, object: document:doc }
+            expectation: false
+          - name: blocked_writer_can_edit
+            tuple: { user: user:blocked_writer, relation: can_edit, object: document:doc }
+            expectation: false
+          - name: blocked_writer_alias
+            tuple: { user: user:blocked_writer, relation: alias, object: document:doc }
+            expectation: false
+          - name: blocked_writer_forwarded
+            tuple: { user: user:blocked_writer, relation: forwarded, object: document:doc }
+            expectation: false
+          - name: blocked_writer_writer_override
+            tuple: { user: user:blocked_writer, relation: writer_override, object: document:doc }
+            expectation: true
+          - name: writer_reader
+            tuple: { user: user:writer, relation: reader, object: document:doc }
+            expectation: true
+          - name: writer_can_read
+            tuple: { user: user:writer, relation: can_read, object: document:doc }
+            expectation: true
+          - name: writer_eligible
+            tuple: { user: user:writer, relation: eligible, object: document:doc }
+            expectation: false
+          - name: writer_can_edit
+            tuple: { user: user:writer, relation: can_edit, object: document:doc }
+            expectation: false
+          - name: writer_alias
+            tuple: { user: user:writer, relation: alias, object: document:doc }
+            expectation: true
+          - name: writer_forwarded
+            tuple: { user: user:writer, relation: forwarded, object: document:doc }
+            expectation: true
+          - name: writer_writer_override
+            tuple: { user: user:writer, relation: writer_override, object: document:doc }
+            expectation: true
+          - name: owner_reader
+            tuple: { user: user:owner, relation: reader, object: document:doc }
+            expectation: false
+          - name: owner_can_read
+            tuple: { user: user:owner, relation: can_read, object: document:doc }
+            expectation: true
+          - name: owner_eligible
+            tuple: { user: user:owner, relation: eligible, object: document:doc }
+            expectation: false
+          - name: owner_can_edit
+            tuple: { user: user:owner, relation: can_edit, object: document:doc }
+            expectation: true
+          - name: owner_alias
+            tuple: { user: user:owner, relation: alias, object: document:doc }
+            expectation: false
+          - name: owner_forwarded
+            tuple: { user: user:owner, relation: forwarded, object: document:doc }
+            expectation: true
+          - name: owner_writer_override
+            tuple: { user: user:owner, relation: writer_override, object: document:doc }
+            expectation: true
+          - name: blocked_owner_writer_reader
+            tuple: { user: user:blocked_owner_writer, relation: reader, object: document:doc }
+            expectation: false
+          - name: blocked_owner_writer_can_read
+            tuple: { user: user:blocked_owner_writer, relation: can_read, object: document:doc }
+            expectation: true
+          - name: blocked_owner_writer_eligible
+            tuple: { user: user:blocked_owner_writer, relation: eligible, object: document:doc }
+            expectation: false
+          - name: blocked_owner_writer_can_edit
+            tuple: { user: user:blocked_owner_writer, relation: can_edit, object: document:doc }
+            expectation: true
+          - name: blocked_owner_writer_alias
+            tuple: { user: user:blocked_owner_writer, relation: alias, object: document:doc }
+            expectation: false
+          - name: blocked_owner_writer_forwarded
+            tuple: { user: user:blocked_owner_writer, relation: forwarded, object: document:doc }
+            expectation: true
+          - name: blocked_owner_writer_writer_override
+            tuple: { user: user:blocked_owner_writer, relation: writer_override, object: document:doc }
+            expectation: true
+          - name: active_writer_reader
+            tuple: { user: user:active_writer, relation: reader, object: document:doc }
+            expectation: true
+          - name: active_writer_can_read
+            tuple: { user: user:active_writer, relation: can_read, object: document:doc }
+            expectation: true
+          - name: active_writer_eligible
+            tuple: { user: user:active_writer, relation: eligible, object: document:doc }
+            expectation: true
+          - name: active_writer_can_edit
+            tuple: { user: user:active_writer, relation: can_edit, object: document:doc }
+            expectation: true
+          - name: active_writer_alias
+            tuple: { user: user:active_writer, relation: alias, object: document:doc }
+            expectation: true
+          - name: active_writer_forwarded
+            tuple: { user: user:active_writer, relation: forwarded, object: document:doc }
+            expectation: true
+          - name: active_writer_writer_override
+            tuple: { user: user:active_writer, relation: writer_override, object: document:doc }
+            expectation: true
+          - name: blocked_active_writer_reader
+            tuple: { user: user:blocked_active_writer, relation: reader, object: document:doc }
+            expectation: false
+          - name: blocked_active_writer_can_read
+            tuple: { user: user:blocked_active_writer, relation: can_read, object: document:doc }
+            expectation: false
+          - name: blocked_active_writer_eligible
+            tuple: { user: user:blocked_active_writer, relation: eligible, object: document:doc }
+            expectation: true
+          - name: blocked_active_writer_can_edit
+            tuple: { user: user:blocked_active_writer, relation: can_edit, object: document:doc }
+            expectation: true
+          - name: blocked_active_writer_alias
+            tuple: { user: user:blocked_active_writer, relation: alias, object: document:doc }
+            expectation: false
+          - name: blocked_active_writer_forwarded
+            tuple: { user: user:blocked_active_writer, relation: forwarded, object: document:doc }
+            expectation: false
+          - name: blocked_active_writer_writer_override
+            tuple: { user: user:blocked_active_writer, relation: writer_override, object: document:doc }
+            expectation: true
+          - name: stranger_reader
+            tuple: { user: user:stranger, relation: reader, object: document:doc }
+            expectation: false
+          - name: stranger_can_read
+            tuple: { user: user:stranger, relation: can_read, object: document:doc }
+            expectation: false
+          - name: stranger_eligible
+            tuple: { user: user:stranger, relation: eligible, object: document:doc }
+            expectation: false
+          - name: stranger_can_edit
+            tuple: { user: user:stranger, relation: can_edit, object: document:doc }
+            expectation: false
+          - name: stranger_alias
+            tuple: { user: user:stranger, relation: alias, object: document:doc }
+            expectation: false
+          - name: stranger_forwarded
+            tuple: { user: user:stranger, relation: forwarded, object: document:doc }
+            expectation: false
+          - name: stranger_writer_override
+            tuple: { user: user:stranger, relation: writer_override, object: document:doc }
+            expectation: false
+        listObjectsAssertions:
+          - request: { user: user:blocked_writer, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:blocked_writer, type: document, relation: can_read }
+            expectation: []
+          - request: { user: user:blocked_writer, type: document, relation: eligible }
+            expectation: []
+          - request: { user: user:blocked_writer, type: document, relation: can_edit }
+            expectation: []
+          - request: { user: user:blocked_writer, type: document, relation: alias }
+            expectation: []
+          - request: { user: user:blocked_writer, type: document, relation: forwarded }
+            expectation: []
+          - request: { user: user:blocked_writer, type: document, relation: writer_override }
+            expectation: [document:doc]
+          - request: { user: user:writer, type: document, relation: reader }
+            expectation: [document:doc]
+          - request: { user: user:writer, type: document, relation: can_read }
+            expectation: [document:doc]
+          - request: { user: user:writer, type: document, relation: eligible }
+            expectation: []
+          - request: { user: user:writer, type: document, relation: can_edit }
+            expectation: []
+          - request: { user: user:writer, type: document, relation: alias }
+            expectation: [document:doc]
+          - request: { user: user:writer, type: document, relation: forwarded }
+            expectation: [document:doc]
+          - request: { user: user:writer, type: document, relation: writer_override }
+            expectation: [document:doc]
+          - request: { user: user:owner, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:owner, type: document, relation: can_read }
+            expectation: [document:doc]
+          - request: { user: user:owner, type: document, relation: eligible }
+            expectation: []
+          - request: { user: user:owner, type: document, relation: can_edit }
+            expectation: [document:doc]
+          - request: { user: user:owner, type: document, relation: alias }
+            expectation: []
+          - request: { user: user:owner, type: document, relation: forwarded }
+            expectation: [document:doc]
+          - request: { user: user:owner, type: document, relation: writer_override }
+            expectation: [document:doc]
+          - request: { user: user:blocked_owner_writer, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:blocked_owner_writer, type: document, relation: can_read }
+            expectation: [document:doc]
+          - request: { user: user:blocked_owner_writer, type: document, relation: eligible }
+            expectation: []
+          - request: { user: user:blocked_owner_writer, type: document, relation: can_edit }
+            expectation: [document:doc]
+          - request: { user: user:blocked_owner_writer, type: document, relation: alias }
+            expectation: []
+          - request: { user: user:blocked_owner_writer, type: document, relation: forwarded }
+            expectation: [document:doc]
+          - request: { user: user:blocked_owner_writer, type: document, relation: writer_override }
+            expectation: [document:doc]
+          - request: { user: user:active_writer, type: document, relation: reader }
+            expectation: [document:doc]
+          - request: { user: user:active_writer, type: document, relation: can_read }
+            expectation: [document:doc]
+          - request: { user: user:active_writer, type: document, relation: eligible }
+            expectation: [document:doc]
+          - request: { user: user:active_writer, type: document, relation: can_edit }
+            expectation: [document:doc]
+          - request: { user: user:active_writer, type: document, relation: alias }
+            expectation: [document:doc]
+          - request: { user: user:active_writer, type: document, relation: forwarded }
+            expectation: [document:doc]
+          - request: { user: user:active_writer, type: document, relation: writer_override }
+            expectation: [document:doc]
+          - request: { user: user:blocked_active_writer, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:blocked_active_writer, type: document, relation: can_read }
+            expectation: []
+          - request: { user: user:blocked_active_writer, type: document, relation: eligible }
+            expectation: [document:doc]
+          - request: { user: user:blocked_active_writer, type: document, relation: can_edit }
+            expectation: [document:doc]
+          - request: { user: user:blocked_active_writer, type: document, relation: alias }
+            expectation: []
+          - request: { user: user:blocked_active_writer, type: document, relation: forwarded }
+            expectation: []
+          - request: { user: user:blocked_active_writer, type: document, relation: writer_override }
+            expectation: [document:doc]
+          - request: { user: user:stranger, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:stranger, type: document, relation: can_read }
+            expectation: []
+          - request: { user: user:stranger, type: document, relation: eligible }
+            expectation: []
+          - request: { user: user:stranger, type: document, relation: can_edit }
+            expectation: []
+          - request: { user: user:stranger, type: document, relation: alias }
+            expectation: []
+          - request: { user: user:stranger, type: document, relation: forwarded }
+            expectation: []
+          - request: { user: user:stranger, type: document, relation: writer_override }
+            expectation: []
+        listUsersAssertions:
+          - request:
+              object: document:doc
+              relation: reader
+              filters:
+                - user
+            expectation:
+              - user:active_writer
+              - user:writer
+          - request:
+              object: document:doc
+              relation: can_read
+              filters:
+                - user
+            expectation:
+              - user:active_writer
+              - user:blocked_owner_writer
+              - user:owner
+              - user:writer
+          - request:
+              object: document:doc
+              relation: eligible
+              filters:
+                - user
+            expectation:
+              - user:active_writer
+              - user:blocked_active_writer
+          - request:
+              object: document:doc
+              relation: can_edit
+              filters:
+                - user
+            expectation:
+              - user:active_writer
+              - user:blocked_active_writer
+              - user:blocked_owner_writer
+              - user:owner
+          - request:
+              object: document:doc
+              relation: alias
+              filters:
+                - user
+            expectation:
+              - user:active_writer
+              - user:writer
+          - request:
+              object: document:doc
+              relation: forwarded
+              filters:
+                - user
+            expectation:
+              - user:active_writer
+              - user:blocked_owner_writer
+              - user:owner
+              - user:writer
+          - request:
+              object: document:doc
+              relation: writer_override
+              filters:
+                - user
+            expectation:
+              - user:active_writer
+              - user:blocked_active_writer
+              - user:blocked_owner_writer
+              - user:blocked_writer
+              - user:owner
+              - user:writer
+
+# Regression: an exclusion belongs to the relation that defines it. Closure
+# exclusions were promoted to the enclosing relation, so final: can_read but
+# not d also applied reader's "but not b" and denied a valid c grant
+# (user6: b and c; user7: a, b and c). Found by FuzzAuthorizationAlgebra.
+#
+# userN holds the tuples in the bits of N: 1=a, 2=b, 4=c, 8=d. The complex
+# variant reaches b and d through computed relations. Mirrors
+# test/check_exclusion_scope_test.go, which also covers check_permission_nw.
+  - name: exclusion_scope_direct
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type document
+            relations
+              define a: [user]
+              define b: [user]
+              define c: [user]
+              define d: [user]
+              define branch_blocked: b
+              define outer_blocked: d
+              define reader: a but not b
+              define can_read: reader or c
+              define final: can_read but not d
+              define alias: final
+        tuples:
+          - user: user:user1
+            relation: a
+            object: document:doc
+          - user: user:user2
+            relation: b
+            object: document:doc
+          - user: user:user3
+            relation: a
+            object: document:doc
+          - user: user:user3
+            relation: b
+            object: document:doc
+          - user: user:user4
+            relation: c
+            object: document:doc
+          - user: user:user5
+            relation: a
+            object: document:doc
+          - user: user:user5
+            relation: c
+            object: document:doc
+          - user: user:user6
+            relation: b
+            object: document:doc
+          - user: user:user6
+            relation: c
+            object: document:doc
+          - user: user:user7
+            relation: a
+            object: document:doc
+          - user: user:user7
+            relation: b
+            object: document:doc
+          - user: user:user7
+            relation: c
+            object: document:doc
+          - user: user:user8
+            relation: d
+            object: document:doc
+          - user: user:user9
+            relation: a
+            object: document:doc
+          - user: user:user9
+            relation: d
+            object: document:doc
+          - user: user:user10
+            relation: b
+            object: document:doc
+          - user: user:user10
+            relation: d
+            object: document:doc
+          - user: user:user11
+            relation: a
+            object: document:doc
+          - user: user:user11
+            relation: b
+            object: document:doc
+          - user: user:user11
+            relation: d
+            object: document:doc
+          - user: user:user12
+            relation: c
+            object: document:doc
+          - user: user:user12
+            relation: d
+            object: document:doc
+          - user: user:user13
+            relation: a
+            object: document:doc
+          - user: user:user13
+            relation: c
+            object: document:doc
+          - user: user:user13
+            relation: d
+            object: document:doc
+          - user: user:user14
+            relation: b
+            object: document:doc
+          - user: user:user14
+            relation: c
+            object: document:doc
+          - user: user:user14
+            relation: d
+            object: document:doc
+          - user: user:user15
+            relation: a
+            object: document:doc
+          - user: user:user15
+            relation: b
+            object: document:doc
+          - user: user:user15
+            relation: c
+            object: document:doc
+          - user: user:user15
+            relation: d
+            object: document:doc
+        checkAssertions:
+          - name: user0_reader
+            tuple: { user: user:user0, relation: reader, object: document:doc }
+            expectation: false
+          - name: user0_can_read
+            tuple: { user: user:user0, relation: can_read, object: document:doc }
+            expectation: false
+          - name: user0_final
+            tuple: { user: user:user0, relation: final, object: document:doc }
+            expectation: false
+          - name: user0_alias
+            tuple: { user: user:user0, relation: alias, object: document:doc }
+            expectation: false
+          - name: user1_reader
+            tuple: { user: user:user1, relation: reader, object: document:doc }
+            expectation: true
+          - name: user1_can_read
+            tuple: { user: user:user1, relation: can_read, object: document:doc }
+            expectation: true
+          - name: user1_final
+            tuple: { user: user:user1, relation: final, object: document:doc }
+            expectation: true
+          - name: user1_alias
+            tuple: { user: user:user1, relation: alias, object: document:doc }
+            expectation: true
+          - name: user2_reader
+            tuple: { user: user:user2, relation: reader, object: document:doc }
+            expectation: false
+          - name: user2_can_read
+            tuple: { user: user:user2, relation: can_read, object: document:doc }
+            expectation: false
+          - name: user2_final
+            tuple: { user: user:user2, relation: final, object: document:doc }
+            expectation: false
+          - name: user2_alias
+            tuple: { user: user:user2, relation: alias, object: document:doc }
+            expectation: false
+          - name: user3_reader
+            tuple: { user: user:user3, relation: reader, object: document:doc }
+            expectation: false
+          - name: user3_can_read
+            tuple: { user: user:user3, relation: can_read, object: document:doc }
+            expectation: false
+          - name: user3_final
+            tuple: { user: user:user3, relation: final, object: document:doc }
+            expectation: false
+          - name: user3_alias
+            tuple: { user: user:user3, relation: alias, object: document:doc }
+            expectation: false
+          - name: user4_reader
+            tuple: { user: user:user4, relation: reader, object: document:doc }
+            expectation: false
+          - name: user4_can_read
+            tuple: { user: user:user4, relation: can_read, object: document:doc }
+            expectation: true
+          - name: user4_final
+            tuple: { user: user:user4, relation: final, object: document:doc }
+            expectation: true
+          - name: user4_alias
+            tuple: { user: user:user4, relation: alias, object: document:doc }
+            expectation: true
+          - name: user5_reader
+            tuple: { user: user:user5, relation: reader, object: document:doc }
+            expectation: true
+          - name: user5_can_read
+            tuple: { user: user:user5, relation: can_read, object: document:doc }
+            expectation: true
+          - name: user5_final
+            tuple: { user: user:user5, relation: final, object: document:doc }
+            expectation: true
+          - name: user5_alias
+            tuple: { user: user:user5, relation: alias, object: document:doc }
+            expectation: true
+          - name: user6_reader
+            tuple: { user: user:user6, relation: reader, object: document:doc }
+            expectation: false
+          - name: user6_can_read
+            tuple: { user: user:user6, relation: can_read, object: document:doc }
+            expectation: true
+          - name: user6_final
+            tuple: { user: user:user6, relation: final, object: document:doc }
+            expectation: true
+          - name: user6_alias
+            tuple: { user: user:user6, relation: alias, object: document:doc }
+            expectation: true
+          - name: user7_reader
+            tuple: { user: user:user7, relation: reader, object: document:doc }
+            expectation: false
+          - name: user7_can_read
+            tuple: { user: user:user7, relation: can_read, object: document:doc }
+            expectation: true
+          - name: user7_final
+            tuple: { user: user:user7, relation: final, object: document:doc }
+            expectation: true
+          - name: user7_alias
+            tuple: { user: user:user7, relation: alias, object: document:doc }
+            expectation: true
+          - name: user8_reader
+            tuple: { user: user:user8, relation: reader, object: document:doc }
+            expectation: false
+          - name: user8_can_read
+            tuple: { user: user:user8, relation: can_read, object: document:doc }
+            expectation: false
+          - name: user8_final
+            tuple: { user: user:user8, relation: final, object: document:doc }
+            expectation: false
+          - name: user8_alias
+            tuple: { user: user:user8, relation: alias, object: document:doc }
+            expectation: false
+          - name: user9_reader
+            tuple: { user: user:user9, relation: reader, object: document:doc }
+            expectation: true
+          - name: user9_can_read
+            tuple: { user: user:user9, relation: can_read, object: document:doc }
+            expectation: true
+          - name: user9_final
+            tuple: { user: user:user9, relation: final, object: document:doc }
+            expectation: false
+          - name: user9_alias
+            tuple: { user: user:user9, relation: alias, object: document:doc }
+            expectation: false
+          - name: user10_reader
+            tuple: { user: user:user10, relation: reader, object: document:doc }
+            expectation: false
+          - name: user10_can_read
+            tuple: { user: user:user10, relation: can_read, object: document:doc }
+            expectation: false
+          - name: user10_final
+            tuple: { user: user:user10, relation: final, object: document:doc }
+            expectation: false
+          - name: user10_alias
+            tuple: { user: user:user10, relation: alias, object: document:doc }
+            expectation: false
+          - name: user11_reader
+            tuple: { user: user:user11, relation: reader, object: document:doc }
+            expectation: false
+          - name: user11_can_read
+            tuple: { user: user:user11, relation: can_read, object: document:doc }
+            expectation: false
+          - name: user11_final
+            tuple: { user: user:user11, relation: final, object: document:doc }
+            expectation: false
+          - name: user11_alias
+            tuple: { user: user:user11, relation: alias, object: document:doc }
+            expectation: false
+          - name: user12_reader
+            tuple: { user: user:user12, relation: reader, object: document:doc }
+            expectation: false
+          - name: user12_can_read
+            tuple: { user: user:user12, relation: can_read, object: document:doc }
+            expectation: true
+          - name: user12_final
+            tuple: { user: user:user12, relation: final, object: document:doc }
+            expectation: false
+          - name: user12_alias
+            tuple: { user: user:user12, relation: alias, object: document:doc }
+            expectation: false
+          - name: user13_reader
+            tuple: { user: user:user13, relation: reader, object: document:doc }
+            expectation: true
+          - name: user13_can_read
+            tuple: { user: user:user13, relation: can_read, object: document:doc }
+            expectation: true
+          - name: user13_final
+            tuple: { user: user:user13, relation: final, object: document:doc }
+            expectation: false
+          - name: user13_alias
+            tuple: { user: user:user13, relation: alias, object: document:doc }
+            expectation: false
+          - name: user14_reader
+            tuple: { user: user:user14, relation: reader, object: document:doc }
+            expectation: false
+          - name: user14_can_read
+            tuple: { user: user:user14, relation: can_read, object: document:doc }
+            expectation: true
+          - name: user14_final
+            tuple: { user: user:user14, relation: final, object: document:doc }
+            expectation: false
+          - name: user14_alias
+            tuple: { user: user:user14, relation: alias, object: document:doc }
+            expectation: false
+          - name: user15_reader
+            tuple: { user: user:user15, relation: reader, object: document:doc }
+            expectation: false
+          - name: user15_can_read
+            tuple: { user: user:user15, relation: can_read, object: document:doc }
+            expectation: true
+          - name: user15_final
+            tuple: { user: user:user15, relation: final, object: document:doc }
+            expectation: false
+          - name: user15_alias
+            tuple: { user: user:user15, relation: alias, object: document:doc }
+            expectation: false
+        listObjectsAssertions:
+          - request: { user: user:user0, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:user0, type: document, relation: can_read }
+            expectation: []
+          - request: { user: user:user0, type: document, relation: final }
+            expectation: []
+          - request: { user: user:user0, type: document, relation: alias }
+            expectation: []
+          - request: { user: user:user1, type: document, relation: reader }
+            expectation: [document:doc]
+          - request: { user: user:user1, type: document, relation: can_read }
+            expectation: [document:doc]
+          - request: { user: user:user1, type: document, relation: final }
+            expectation: [document:doc]
+          - request: { user: user:user1, type: document, relation: alias }
+            expectation: [document:doc]
+          - request: { user: user:user2, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:user2, type: document, relation: can_read }
+            expectation: []
+          - request: { user: user:user2, type: document, relation: final }
+            expectation: []
+          - request: { user: user:user2, type: document, relation: alias }
+            expectation: []
+          - request: { user: user:user3, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:user3, type: document, relation: can_read }
+            expectation: []
+          - request: { user: user:user3, type: document, relation: final }
+            expectation: []
+          - request: { user: user:user3, type: document, relation: alias }
+            expectation: []
+          - request: { user: user:user4, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:user4, type: document, relation: can_read }
+            expectation: [document:doc]
+          - request: { user: user:user4, type: document, relation: final }
+            expectation: [document:doc]
+          - request: { user: user:user4, type: document, relation: alias }
+            expectation: [document:doc]
+          - request: { user: user:user5, type: document, relation: reader }
+            expectation: [document:doc]
+          - request: { user: user:user5, type: document, relation: can_read }
+            expectation: [document:doc]
+          - request: { user: user:user5, type: document, relation: final }
+            expectation: [document:doc]
+          - request: { user: user:user5, type: document, relation: alias }
+            expectation: [document:doc]
+          - request: { user: user:user6, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:user6, type: document, relation: can_read }
+            expectation: [document:doc]
+          - request: { user: user:user6, type: document, relation: final }
+            expectation: [document:doc]
+          - request: { user: user:user6, type: document, relation: alias }
+            expectation: [document:doc]
+          - request: { user: user:user7, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:user7, type: document, relation: can_read }
+            expectation: [document:doc]
+          - request: { user: user:user7, type: document, relation: final }
+            expectation: [document:doc]
+          - request: { user: user:user7, type: document, relation: alias }
+            expectation: [document:doc]
+          - request: { user: user:user8, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:user8, type: document, relation: can_read }
+            expectation: []
+          - request: { user: user:user8, type: document, relation: final }
+            expectation: []
+          - request: { user: user:user8, type: document, relation: alias }
+            expectation: []
+          - request: { user: user:user9, type: document, relation: reader }
+            expectation: [document:doc]
+          - request: { user: user:user9, type: document, relation: can_read }
+            expectation: [document:doc]
+          - request: { user: user:user9, type: document, relation: final }
+            expectation: []
+          - request: { user: user:user9, type: document, relation: alias }
+            expectation: []
+          - request: { user: user:user10, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:user10, type: document, relation: can_read }
+            expectation: []
+          - request: { user: user:user10, type: document, relation: final }
+            expectation: []
+          - request: { user: user:user10, type: document, relation: alias }
+            expectation: []
+          - request: { user: user:user11, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:user11, type: document, relation: can_read }
+            expectation: []
+          - request: { user: user:user11, type: document, relation: final }
+            expectation: []
+          - request: { user: user:user11, type: document, relation: alias }
+            expectation: []
+          - request: { user: user:user12, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:user12, type: document, relation: can_read }
+            expectation: [document:doc]
+          - request: { user: user:user12, type: document, relation: final }
+            expectation: []
+          - request: { user: user:user12, type: document, relation: alias }
+            expectation: []
+          - request: { user: user:user13, type: document, relation: reader }
+            expectation: [document:doc]
+          - request: { user: user:user13, type: document, relation: can_read }
+            expectation: [document:doc]
+          - request: { user: user:user13, type: document, relation: final }
+            expectation: []
+          - request: { user: user:user13, type: document, relation: alias }
+            expectation: []
+          - request: { user: user:user14, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:user14, type: document, relation: can_read }
+            expectation: [document:doc]
+          - request: { user: user:user14, type: document, relation: final }
+            expectation: []
+          - request: { user: user:user14, type: document, relation: alias }
+            expectation: []
+          - request: { user: user:user15, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:user15, type: document, relation: can_read }
+            expectation: [document:doc]
+          - request: { user: user:user15, type: document, relation: final }
+            expectation: []
+          - request: { user: user:user15, type: document, relation: alias }
+            expectation: []
+        listUsersAssertions:
+          - request:
+              object: document:doc
+              relation: reader
+              filters:
+                - user
+            expectation:
+              - user:user1
+              - user:user5
+              - user:user9
+              - user:user13
+          - request:
+              object: document:doc
+              relation: can_read
+              filters:
+                - user
+            expectation:
+              - user:user1
+              - user:user4
+              - user:user5
+              - user:user6
+              - user:user7
+              - user:user9
+              - user:user12
+              - user:user13
+              - user:user14
+              - user:user15
+          - request:
+              object: document:doc
+              relation: final
+              filters:
+                - user
+            expectation:
+              - user:user1
+              - user:user4
+              - user:user5
+              - user:user6
+              - user:user7
+          - request:
+              object: document:doc
+              relation: alias
+              filters:
+                - user
+            expectation:
+              - user:user1
+              - user:user4
+              - user:user5
+              - user:user6
+              - user:user7
+  - name: exclusion_scope_complex
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type document
+            relations
+              define a: [user]
+              define b: [user]
+              define c: [user]
+              define d: [user]
+              define branch_blocked: b
+              define outer_blocked: d
+              define reader: a but not branch_blocked
+              define can_read: reader or c
+              define final: can_read but not outer_blocked
+              define alias: final
+        tuples:
+          - user: user:user1
+            relation: a
+            object: document:doc
+          - user: user:user2
+            relation: b
+            object: document:doc
+          - user: user:user3
+            relation: a
+            object: document:doc
+          - user: user:user3
+            relation: b
+            object: document:doc
+          - user: user:user4
+            relation: c
+            object: document:doc
+          - user: user:user5
+            relation: a
+            object: document:doc
+          - user: user:user5
+            relation: c
+            object: document:doc
+          - user: user:user6
+            relation: b
+            object: document:doc
+          - user: user:user6
+            relation: c
+            object: document:doc
+          - user: user:user7
+            relation: a
+            object: document:doc
+          - user: user:user7
+            relation: b
+            object: document:doc
+          - user: user:user7
+            relation: c
+            object: document:doc
+          - user: user:user8
+            relation: d
+            object: document:doc
+          - user: user:user9
+            relation: a
+            object: document:doc
+          - user: user:user9
+            relation: d
+            object: document:doc
+          - user: user:user10
+            relation: b
+            object: document:doc
+          - user: user:user10
+            relation: d
+            object: document:doc
+          - user: user:user11
+            relation: a
+            object: document:doc
+          - user: user:user11
+            relation: b
+            object: document:doc
+          - user: user:user11
+            relation: d
+            object: document:doc
+          - user: user:user12
+            relation: c
+            object: document:doc
+          - user: user:user12
+            relation: d
+            object: document:doc
+          - user: user:user13
+            relation: a
+            object: document:doc
+          - user: user:user13
+            relation: c
+            object: document:doc
+          - user: user:user13
+            relation: d
+            object: document:doc
+          - user: user:user14
+            relation: b
+            object: document:doc
+          - user: user:user14
+            relation: c
+            object: document:doc
+          - user: user:user14
+            relation: d
+            object: document:doc
+          - user: user:user15
+            relation: a
+            object: document:doc
+          - user: user:user15
+            relation: b
+            object: document:doc
+          - user: user:user15
+            relation: c
+            object: document:doc
+          - user: user:user15
+            relation: d
+            object: document:doc
+        checkAssertions:
+          - name: user0_reader
+            tuple: { user: user:user0, relation: reader, object: document:doc }
+            expectation: false
+          - name: user0_can_read
+            tuple: { user: user:user0, relation: can_read, object: document:doc }
+            expectation: false
+          - name: user0_final
+            tuple: { user: user:user0, relation: final, object: document:doc }
+            expectation: false
+          - name: user0_alias
+            tuple: { user: user:user0, relation: alias, object: document:doc }
+            expectation: false
+          - name: user1_reader
+            tuple: { user: user:user1, relation: reader, object: document:doc }
+            expectation: true
+          - name: user1_can_read
+            tuple: { user: user:user1, relation: can_read, object: document:doc }
+            expectation: true
+          - name: user1_final
+            tuple: { user: user:user1, relation: final, object: document:doc }
+            expectation: true
+          - name: user1_alias
+            tuple: { user: user:user1, relation: alias, object: document:doc }
+            expectation: true
+          - name: user2_reader
+            tuple: { user: user:user2, relation: reader, object: document:doc }
+            expectation: false
+          - name: user2_can_read
+            tuple: { user: user:user2, relation: can_read, object: document:doc }
+            expectation: false
+          - name: user2_final
+            tuple: { user: user:user2, relation: final, object: document:doc }
+            expectation: false
+          - name: user2_alias
+            tuple: { user: user:user2, relation: alias, object: document:doc }
+            expectation: false
+          - name: user3_reader
+            tuple: { user: user:user3, relation: reader, object: document:doc }
+            expectation: false
+          - name: user3_can_read
+            tuple: { user: user:user3, relation: can_read, object: document:doc }
+            expectation: false
+          - name: user3_final
+            tuple: { user: user:user3, relation: final, object: document:doc }
+            expectation: false
+          - name: user3_alias
+            tuple: { user: user:user3, relation: alias, object: document:doc }
+            expectation: false
+          - name: user4_reader
+            tuple: { user: user:user4, relation: reader, object: document:doc }
+            expectation: false
+          - name: user4_can_read
+            tuple: { user: user:user4, relation: can_read, object: document:doc }
+            expectation: true
+          - name: user4_final
+            tuple: { user: user:user4, relation: final, object: document:doc }
+            expectation: true
+          - name: user4_alias
+            tuple: { user: user:user4, relation: alias, object: document:doc }
+            expectation: true
+          - name: user5_reader
+            tuple: { user: user:user5, relation: reader, object: document:doc }
+            expectation: true
+          - name: user5_can_read
+            tuple: { user: user:user5, relation: can_read, object: document:doc }
+            expectation: true
+          - name: user5_final
+            tuple: { user: user:user5, relation: final, object: document:doc }
+            expectation: true
+          - name: user5_alias
+            tuple: { user: user:user5, relation: alias, object: document:doc }
+            expectation: true
+          - name: user6_reader
+            tuple: { user: user:user6, relation: reader, object: document:doc }
+            expectation: false
+          - name: user6_can_read
+            tuple: { user: user:user6, relation: can_read, object: document:doc }
+            expectation: true
+          - name: user6_final
+            tuple: { user: user:user6, relation: final, object: document:doc }
+            expectation: true
+          - name: user6_alias
+            tuple: { user: user:user6, relation: alias, object: document:doc }
+            expectation: true
+          - name: user7_reader
+            tuple: { user: user:user7, relation: reader, object: document:doc }
+            expectation: false
+          - name: user7_can_read
+            tuple: { user: user:user7, relation: can_read, object: document:doc }
+            expectation: true
+          - name: user7_final
+            tuple: { user: user:user7, relation: final, object: document:doc }
+            expectation: true
+          - name: user7_alias
+            tuple: { user: user:user7, relation: alias, object: document:doc }
+            expectation: true
+          - name: user8_reader
+            tuple: { user: user:user8, relation: reader, object: document:doc }
+            expectation: false
+          - name: user8_can_read
+            tuple: { user: user:user8, relation: can_read, object: document:doc }
+            expectation: false
+          - name: user8_final
+            tuple: { user: user:user8, relation: final, object: document:doc }
+            expectation: false
+          - name: user8_alias
+            tuple: { user: user:user8, relation: alias, object: document:doc }
+            expectation: false
+          - name: user9_reader
+            tuple: { user: user:user9, relation: reader, object: document:doc }
+            expectation: true
+          - name: user9_can_read
+            tuple: { user: user:user9, relation: can_read, object: document:doc }
+            expectation: true
+          - name: user9_final
+            tuple: { user: user:user9, relation: final, object: document:doc }
+            expectation: false
+          - name: user9_alias
+            tuple: { user: user:user9, relation: alias, object: document:doc }
+            expectation: false
+          - name: user10_reader
+            tuple: { user: user:user10, relation: reader, object: document:doc }
+            expectation: false
+          - name: user10_can_read
+            tuple: { user: user:user10, relation: can_read, object: document:doc }
+            expectation: false
+          - name: user10_final
+            tuple: { user: user:user10, relation: final, object: document:doc }
+            expectation: false
+          - name: user10_alias
+            tuple: { user: user:user10, relation: alias, object: document:doc }
+            expectation: false
+          - name: user11_reader
+            tuple: { user: user:user11, relation: reader, object: document:doc }
+            expectation: false
+          - name: user11_can_read
+            tuple: { user: user:user11, relation: can_read, object: document:doc }
+            expectation: false
+          - name: user11_final
+            tuple: { user: user:user11, relation: final, object: document:doc }
+            expectation: false
+          - name: user11_alias
+            tuple: { user: user:user11, relation: alias, object: document:doc }
+            expectation: false
+          - name: user12_reader
+            tuple: { user: user:user12, relation: reader, object: document:doc }
+            expectation: false
+          - name: user12_can_read
+            tuple: { user: user:user12, relation: can_read, object: document:doc }
+            expectation: true
+          - name: user12_final
+            tuple: { user: user:user12, relation: final, object: document:doc }
+            expectation: false
+          - name: user12_alias
+            tuple: { user: user:user12, relation: alias, object: document:doc }
+            expectation: false
+          - name: user13_reader
+            tuple: { user: user:user13, relation: reader, object: document:doc }
+            expectation: true
+          - name: user13_can_read
+            tuple: { user: user:user13, relation: can_read, object: document:doc }
+            expectation: true
+          - name: user13_final
+            tuple: { user: user:user13, relation: final, object: document:doc }
+            expectation: false
+          - name: user13_alias
+            tuple: { user: user:user13, relation: alias, object: document:doc }
+            expectation: false
+          - name: user14_reader
+            tuple: { user: user:user14, relation: reader, object: document:doc }
+            expectation: false
+          - name: user14_can_read
+            tuple: { user: user:user14, relation: can_read, object: document:doc }
+            expectation: true
+          - name: user14_final
+            tuple: { user: user:user14, relation: final, object: document:doc }
+            expectation: false
+          - name: user14_alias
+            tuple: { user: user:user14, relation: alias, object: document:doc }
+            expectation: false
+          - name: user15_reader
+            tuple: { user: user:user15, relation: reader, object: document:doc }
+            expectation: false
+          - name: user15_can_read
+            tuple: { user: user:user15, relation: can_read, object: document:doc }
+            expectation: true
+          - name: user15_final
+            tuple: { user: user:user15, relation: final, object: document:doc }
+            expectation: false
+          - name: user15_alias
+            tuple: { user: user:user15, relation: alias, object: document:doc }
+            expectation: false
+        listObjectsAssertions:
+          - request: { user: user:user0, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:user0, type: document, relation: can_read }
+            expectation: []
+          - request: { user: user:user0, type: document, relation: final }
+            expectation: []
+          - request: { user: user:user0, type: document, relation: alias }
+            expectation: []
+          - request: { user: user:user1, type: document, relation: reader }
+            expectation: [document:doc]
+          - request: { user: user:user1, type: document, relation: can_read }
+            expectation: [document:doc]
+          - request: { user: user:user1, type: document, relation: final }
+            expectation: [document:doc]
+          - request: { user: user:user1, type: document, relation: alias }
+            expectation: [document:doc]
+          - request: { user: user:user2, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:user2, type: document, relation: can_read }
+            expectation: []
+          - request: { user: user:user2, type: document, relation: final }
+            expectation: []
+          - request: { user: user:user2, type: document, relation: alias }
+            expectation: []
+          - request: { user: user:user3, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:user3, type: document, relation: can_read }
+            expectation: []
+          - request: { user: user:user3, type: document, relation: final }
+            expectation: []
+          - request: { user: user:user3, type: document, relation: alias }
+            expectation: []
+          - request: { user: user:user4, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:user4, type: document, relation: can_read }
+            expectation: [document:doc]
+          - request: { user: user:user4, type: document, relation: final }
+            expectation: [document:doc]
+          - request: { user: user:user4, type: document, relation: alias }
+            expectation: [document:doc]
+          - request: { user: user:user5, type: document, relation: reader }
+            expectation: [document:doc]
+          - request: { user: user:user5, type: document, relation: can_read }
+            expectation: [document:doc]
+          - request: { user: user:user5, type: document, relation: final }
+            expectation: [document:doc]
+          - request: { user: user:user5, type: document, relation: alias }
+            expectation: [document:doc]
+          - request: { user: user:user6, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:user6, type: document, relation: can_read }
+            expectation: [document:doc]
+          - request: { user: user:user6, type: document, relation: final }
+            expectation: [document:doc]
+          - request: { user: user:user6, type: document, relation: alias }
+            expectation: [document:doc]
+          - request: { user: user:user7, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:user7, type: document, relation: can_read }
+            expectation: [document:doc]
+          - request: { user: user:user7, type: document, relation: final }
+            expectation: [document:doc]
+          - request: { user: user:user7, type: document, relation: alias }
+            expectation: [document:doc]
+          - request: { user: user:user8, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:user8, type: document, relation: can_read }
+            expectation: []
+          - request: { user: user:user8, type: document, relation: final }
+            expectation: []
+          - request: { user: user:user8, type: document, relation: alias }
+            expectation: []
+          - request: { user: user:user9, type: document, relation: reader }
+            expectation: [document:doc]
+          - request: { user: user:user9, type: document, relation: can_read }
+            expectation: [document:doc]
+          - request: { user: user:user9, type: document, relation: final }
+            expectation: []
+          - request: { user: user:user9, type: document, relation: alias }
+            expectation: []
+          - request: { user: user:user10, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:user10, type: document, relation: can_read }
+            expectation: []
+          - request: { user: user:user10, type: document, relation: final }
+            expectation: []
+          - request: { user: user:user10, type: document, relation: alias }
+            expectation: []
+          - request: { user: user:user11, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:user11, type: document, relation: can_read }
+            expectation: []
+          - request: { user: user:user11, type: document, relation: final }
+            expectation: []
+          - request: { user: user:user11, type: document, relation: alias }
+            expectation: []
+          - request: { user: user:user12, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:user12, type: document, relation: can_read }
+            expectation: [document:doc]
+          - request: { user: user:user12, type: document, relation: final }
+            expectation: []
+          - request: { user: user:user12, type: document, relation: alias }
+            expectation: []
+          - request: { user: user:user13, type: document, relation: reader }
+            expectation: [document:doc]
+          - request: { user: user:user13, type: document, relation: can_read }
+            expectation: [document:doc]
+          - request: { user: user:user13, type: document, relation: final }
+            expectation: []
+          - request: { user: user:user13, type: document, relation: alias }
+            expectation: []
+          - request: { user: user:user14, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:user14, type: document, relation: can_read }
+            expectation: [document:doc]
+          - request: { user: user:user14, type: document, relation: final }
+            expectation: []
+          - request: { user: user:user14, type: document, relation: alias }
+            expectation: []
+          - request: { user: user:user15, type: document, relation: reader }
+            expectation: []
+          - request: { user: user:user15, type: document, relation: can_read }
+            expectation: [document:doc]
+          - request: { user: user:user15, type: document, relation: final }
+            expectation: []
+          - request: { user: user:user15, type: document, relation: alias }
+            expectation: []
+        listUsersAssertions:
+          - request:
+              object: document:doc
+              relation: reader
+              filters:
+                - user
+            expectation:
+              - user:user1
+              - user:user5
+              - user:user9
+              - user:user13
+          - request:
+              object: document:doc
+              relation: can_read
+              filters:
+                - user
+            expectation:
+              - user:user1
+              - user:user4
+              - user:user5
+              - user:user6
+              - user:user7
+              - user:user9
+              - user:user12
+              - user:user13
+              - user:user14
+              - user:user15
+          - request:
+              object: document:doc
+              relation: final
+              filters:
+                - user
+            expectation:
+              - user:user1
+              - user:user4
+              - user:user5
+              - user:user6
+              - user:user7
+          - request:
+              object: document:doc
+              relation: alias
+              filters:
+                - user
+            expectation:
+              - user:user1
+              - user:user4
+              - user:user5
+              - user:user6
+              - user:user7
