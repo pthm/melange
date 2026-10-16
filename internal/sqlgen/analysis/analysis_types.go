@@ -328,7 +328,7 @@ type RelationAnalysis struct {
 	IntersectionClosureRelations []string
 
 	// ExclusionClosureRelations contains list-generatable closure relations with
-	// exclusions over implied relations. Compose their list functions to enumerate
+	// exclusions. Compose their list functions to enumerate
 	// grants without flattening across an exclusion boundary.
 	// Relations already in IntersectionClosureRelations are omitted.
 	ExclusionClosureRelations []string
@@ -1321,7 +1321,9 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 					continue
 				}
 				relAnalysis, ok := lookup[a.ObjectType][rel]
-				if !ok {
+				// An excluded closure relation is an exclusion boundary: its
+				// grants are enumerated by composing its own list function.
+				if !ok || relAnalysis.Features.HasExclusion {
 					continue
 				}
 				for _, pattern := range relAnalysis.UsersetPatterns {
@@ -1348,7 +1350,7 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 					continue
 				}
 				relAnalysis, ok := lookup[a.ObjectType][rel]
-				if !ok {
+				if !ok || relAnalysis.Features.HasExclusion { // exclusion boundary, see above
 					continue
 				}
 				for _, parent := range relAnalysis.ParentRelations {
@@ -1603,12 +1605,13 @@ func computeCanGenerateList(a *RelationAnalysis, lookup map[string]map[string]*R
 			return false, "closure relation " + rel + " is not list-generatable: " + relAnalysis.Capabilities.ListReason
 		}
 
-		// Intersections and exclusions over implied relations can grant access
-		// without tuples on the relation itself. Compose their list functions
-		// to enumerate grants without flattening across an exclusion boundary.
+		// Intersections and exclusions can grant access without tuples on the
+		// relation itself (implied relations, usersets, TTU). Compose their list
+		// functions to enumerate grants without flattening across an exclusion
+		// boundary.
 		if relAnalysis.Features.HasIntersection {
 			a.IntersectionClosureRelations = append(a.IntersectionClosureRelations, rel)
-		} else if relAnalysis.Features.HasExclusion && relAnalysis.Features.HasImplied {
+		} else if relAnalysis.Features.HasExclusion {
 			a.ExclusionClosureRelations = append(a.ExclusionClosureRelations, rel)
 		}
 

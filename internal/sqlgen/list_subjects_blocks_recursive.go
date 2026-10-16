@@ -464,6 +464,7 @@ func classifyParentRelation(plan ListPlan, parent ListParentRelationData) parent
 //
 // Conditions that force subject_pool:
 //   - Parent target relation has intersection or exclusion.
+//   - Parent target relation's closure contains an intersection or exclusion.
 //   - Parent target relation has complex userset patterns.
 //   - Parent target relation has nested TTUs that are not (a) self-referential
 //     on the target's own object type AND (b) using the same linking relation
@@ -473,6 +474,11 @@ func parentTargetNeedsSubjectPool(target *RelationAnalysis, currentParent ListPa
 		return true
 	}
 	if target.Features.HasIntersection || target.Features.HasExclusion {
+		return true
+	}
+	// The closure path looks up tuples on the target's satisfying relations,
+	// which cannot evaluate an intersection or exclusion boundary in its closure.
+	if len(composedClosureRelations(*target)) > 0 {
 		return true
 	}
 	if target.HasComplexUsersetPatterns {
