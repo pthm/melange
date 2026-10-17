@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.9.5](https://github.com/pthm/melange/compare/v0.9.4...v0.9.5) (2026-10-17)
+
+
+### Bug Fixes
+
+* compose self-ref userset closure boundaries for nested usersets ([ac68a9c](https://github.com/pthm/melange/commit/ac68a9c4654d85f68767a086d16d8f8b76fd061a))
+* enforce exclusion boundaries and isolate contextual tuple sources ([394d76d](https://github.com/pthm/melange/commit/394d76d0628aa50b5d78b8f3d46fee52b2f77bad))
+* enforce exclusion boundaries in list functions ([12ca6e7](https://github.com/pthm/melange/commit/12ca6e7ac31b19c5c09dcd982ecbec29648b5826))
+* isolate contextual tuple source discovery ([e49c155](https://github.com/pthm/melange/commit/e49c155f8d29b55171bd87e33ca5fab77ba36eed))
+* list objects for userset subjects in self-ref and recursive TTU strategies ([324521f](https://github.com/pthm/melange/commit/324521f3a44131fc37b5dbfafe13e5f6d6104e06))
+* list objects for userset subjects in self-ref and recursive TTU strategies ([07ded5d](https://github.com/pthm/melange/commit/07ded5d7e473d9bd91ea34a5c6c71667c3b91c6b))
+* preserve exclusion boundaries in relation closure ([5c4aabc](https://github.com/pthm/melange/commit/5c4aabca008ef11c93e44e37e69d2ff9532358c9))
+* report write errors on data output instead of exiting 0 ([03183c8](https://github.com/pthm/melange/commit/03183c85312d569b69ba1fb24e6f0d85315ebb71))
+* report write errors on data output instead of exiting 0 ([a8a91b3](https://github.com/pthm/melange/commit/a8a91b3e16fc49b11ee9f0ae9c8016321b917a41))
+* scope exclusions using generated OpenFGA differential coverage ([96d4feb](https://github.com/pthm/melange/commit/96d4febfe5274a952fdf0f8fdf514b3ba39767c2))
+
 ## [0.9.4](https://github.com/pthm/melange/compare/v0.9.3...v0.9.4) (2026-08-27)
 
 
