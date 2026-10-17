@@ -1,0 +1,160 @@
+# Regression: list_objects with a userset subject on a self-referential userset
+# relation. group:inner#member is a member of inner (self-candidate) and of every
+# group that nests inner#member, transitively. The self-ref strategy added the
+# self-candidate after its recursive expansion and had no userset-subject match,
+# so it returned inner but never outer or top, while check allowed both.
+#
+# top <- outer#member, outer <- inner#member. owner implies member, so
+# inner#owner reaches the same groups. member_x adds an exclusion.
+#
+# Test names are prefixed with "melange/" by the loader.
+
+tests:
+  - name: selfref_userset_subject_listobjects
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type group
+            relations
+              define owner: [user]
+              define banned: [user]
+              define member: [user, group#member] or owner
+              define member_x: [user, group#member_x] but not banned
+        tuples:
+          - user: group:inner#member
+            relation: member
+            object: group:outer
+          - user: group:outer#member
+            relation: member
+            object: group:top
+          - user: group:inner#member_x
+            relation: member_x
+            object: group:outer
+          - user: group:outer#member_x
+            relation: member_x
+            object: group:top
+          - user: user:alice
+            relation: member
+            object: group:inner
+          - user: user:alice
+            relation: member_x
+            object: group:inner
+          - user: user:alice
+            relation: banned
+            object: group:top
+          - user: user:bob
+            relation: member
+            object: group:other
+        checkAssertions:
+          - name: inner_member_in_outer
+            tuple: { user: group:inner#member, relation: member, object: group:outer }
+            expectation: true
+          - name: inner_member_in_top
+            tuple: { user: group:inner#member, relation: member, object: group:top }
+            expectation: true
+          - name: inner_member_not_in_other
+            tuple: { user: group:inner#member, relation: member, object: group:other }
+            expectation: false
+          - name: inner_owner_in_top
+            tuple: { user: group:inner#owner, relation: member, object: group:top }
+            expectation: true
+          - name: alice_member_x_top_banned
+            tuple: { user: user:alice, relation: member_x, object: group:top }
+            expectation: false
+        listObjectsAssertions:
+          - request: { user: group:inner#member, type: group, relation: member }
+            expectation: [group:inner, group:outer, group:top]
+          - request: { user: group:outer#member, type: group, relation: member }
+            expectation: [group:outer, group:top]
+          - request: { user: group:top#member, type: group, relation: member }
+            expectation: [group:top]
+          - request: { user: group:inner#owner, type: group, relation: member }
+            expectation: [group:inner, group:outer, group:top]
+          - request: { user: group:inner#member_x, type: group, relation: member_x }
+            expectation: [group:inner, group:outer, group:top]
+          - request: { user: user:alice, type: group, relation: member }
+            expectation: [group:inner, group:outer, group:top]
+          - request: { user: user:alice, type: group, relation: member_x }
+            expectation: [group:inner, group:outer]
+
+  # Regression: list_objects with a userset subject on a recursive TTU relation.
+  # group:g#member is granted viewer on root, so it views root and every
+  # descendant; folder:root#viewer views root (self-candidate) and descendants.
+  # The recursive strategy's base case only matched plain subjects and added the
+  # self-candidate after the recursive walk, so it returned nothing for g#member
+  # and only root for root#viewer, while check allowed every folder. doc.reader
+  # composes folder.viewer and inherited the gap. folder_viewer does not satisfy
+  # the TTU target, so a #folder_viewer self-candidate must not propagate.
+  - name: ttu_userset_subject_listobjects
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type group
+            relations
+              define member: [user]
+
+          type folder
+            relations
+              define parent: [folder]
+              define viewer: [user, group#member] or viewer from parent
+              define folder_viewer: [user, group#member]
+              define can_view: viewer or folder_viewer
+
+          type doc
+            relations
+              define parent: [folder]
+              define reader: viewer from parent
+        tuples:
+          - user: group:g#member
+            relation: viewer
+            object: folder:root
+          - user: folder:root
+            relation: parent
+            object: folder:child
+          - user: folder:child
+            relation: parent
+            object: folder:grandchild
+          - user: folder:child
+            relation: parent
+            object: doc:d1
+          - user: user:alice
+            relation: member
+            object: group:g
+        checkAssertions:
+          - name: g_member_viewer_grandchild
+            tuple: { user: group:g#member, relation: viewer, object: folder:grandchild }
+            expectation: true
+          - name: root_viewer_viewer_child
+            tuple: { user: folder:root#viewer, relation: viewer, object: folder:child }
+            expectation: true
+          - name: g_member_reader_d1
+            tuple: { user: group:g#member, relation: reader, object: doc:d1 }
+            expectation: true
+          - name: root_viewer_reader_d1
+            tuple: { user: folder:root#viewer, relation: reader, object: doc:d1 }
+            expectation: true
+        listObjectsAssertions:
+          - request: { user: group:g#member, type: folder, relation: viewer }
+            expectation: [folder:root, folder:child, folder:grandchild]
+          - request: { user: folder:root#viewer, type: folder, relation: viewer }
+            expectation: [folder:root, folder:child, folder:grandchild]
+          - request: { user: folder:child#viewer, type: folder, relation: viewer }
+            expectation: [folder:child, folder:grandchild]
+          - request: { user: group:g#member, type: doc, relation: reader }
+            expectation: [doc:d1]
+          - request: { user: folder:root#viewer, type: doc, relation: reader }
+            expectation: [doc:d1]
+          - request: { user: user:alice, type: folder, relation: viewer }
+            expectation: [folder:root, folder:child, folder:grandchild]
+          - request: { user: folder:root#viewer, type: folder, relation: can_view }
+            expectation: [folder:root, folder:child, folder:grandchild]
+          - request: { user: folder:root#folder_viewer, type: folder, relation: can_view }
+            expectation: [folder:root]

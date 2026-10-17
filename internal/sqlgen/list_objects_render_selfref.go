@@ -6,6 +6,28 @@ import (
 
 // RenderListObjectsSelfRefUsersetFunction renders a list_objects function for self-referential userset patterns.
 func RenderListObjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUsersetBlockSet) (string, error) {
+	plainBlocks := blocks
+	var hasUserset bool
+	plainBlocks.BaseBlocks, hasUserset = withoutUsersetSubjectBlocks(blocks.BaseBlocks)
+	var usersetQuery string
+	if hasUserset {
+		usersetQuery = renderSelfRefUsersetListObjectsQuery(plan, blocks)
+	}
+
+	fn := PlpgsqlFunction{
+		Schema:  plan.DatabaseSchema,
+		Name:    plan.FunctionName,
+		Args:    ListObjectsArgs(),
+		Returns: ListObjectsReturns(),
+		Header:  ListObjectsFunctionHeader(plan.ObjectType, plan.Relation, plan.FeaturesString()+" (self-referential userset)"),
+		Body:    listObjectsBodyBySubjectKind(renderSelfRefUsersetListObjectsQuery(plan, plainBlocks), usersetQuery),
+	}
+
+	return fn.SQL(), nil
+}
+
+// renderSelfRefUsersetListObjectsQuery renders the paginated query for blocks.
+func renderSelfRefUsersetListObjectsQuery(plan ListPlan, blocks SelfRefUsersetBlockSet) string {
 	cteBody := renderSelfRefUsersetCTEBody(blocks)
 
 	exclusionConfig := buildExclusionInput(
@@ -39,18 +61,7 @@ func RenderListObjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUserse
 		query = joinUnionBlocksSQL([]string{cteSQL, selfCandidateSQL})
 	}
 
-	fn := PlpgsqlFunction{
-		Schema:  plan.DatabaseSchema,
-		Name:    plan.FunctionName,
-		Args:    ListObjectsArgs(),
-		Returns: ListObjectsReturns(),
-		Header:  ListObjectsFunctionHeader(plan.ObjectType, plan.Relation, plan.FeaturesString()+" (self-referential userset)"),
-		Body: []Stmt{
-			ReturnQuery{Query: plan.wrapPagination(query, "object_id")},
-		},
-	}
-
-	return fn.SQL(), nil
+	return plan.wrapPagination(query, "object_id")
 }
 
 // renderSelfRefUsersetCTEBody renders the CTE body from base and recursive blocks.

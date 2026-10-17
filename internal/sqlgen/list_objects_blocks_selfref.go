@@ -31,8 +31,16 @@ func BuildListObjectsSelfRefUsersetBlocks(plan ListPlan) (SelfRefUsersetBlockSet
 
 // buildSelfRefUsersetBaseBlocks builds the base case blocks for self-referential userset CTE.
 func buildSelfRefUsersetBaseBlocks(plan ListPlan) ([]TypedQueryBlock, error) {
-	blocks := make([]TypedQueryBlock, 0, 8)
-	blocks = append(blocks, buildSelfRefUsersetDirectBlock(plan))
+	// A userset query subject (group:inner#member) is a member of objects naming
+	// it directly and of its own object; both must seed the recursion so the
+	// groups nesting those objects are expanded too.
+	usersetSubject := buildListObjectsUsersetSubjectBlock(plan)
+	usersetSubject.UsersetSubjectOnly = true
+	selfCandidate := *buildListObjectsSelfCandidateBlock(plan)
+	selfCandidate.UsersetSubjectOnly = true
+
+	blocks := make([]TypedQueryBlock, 0, 10)
+	blocks = append(blocks, buildSelfRefUsersetDirectBlock(plan), usersetSubject, selfCandidate)
 	blocks = append(blocks, buildSelfRefUsersetComplexClosureBlocks(plan)...)
 	blocks = append(blocks, buildSelfRefUsersetComposedClosureBlocks(plan)...)
 	blocks = append(blocks, buildSelfRefUsersetPatternBlocks(plan)...)

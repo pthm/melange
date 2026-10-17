@@ -3,6 +3,33 @@ package sqlgen
 // RenderListObjectsRecursiveFunction renders a recursive list_objects function from plan and blocks.
 // This handles TTU patterns with depth tracking and recursive CTEs.
 func RenderListObjectsRecursiveFunction(plan ListPlan, blocks RecursiveBlockSet) (string, error) {
+	plainBlocks := blocks
+	var hasUserset bool
+	plainBlocks.BaseBlocks, hasUserset = withoutUsersetSubjectBlocks(blocks.BaseBlocks)
+	var usersetQuery string
+	if hasUserset {
+		usersetQuery = renderRecursiveListObjectsQuery(plan, blocks)
+	}
+
+	fn := PlpgsqlFunction{
+		Schema:  plan.DatabaseSchema,
+		Name:    plan.FunctionName,
+		Args:    ListObjectsArgs(),
+		Returns: ListObjectsReturns(),
+		Header:  ListObjectsFunctionHeader(plan.ObjectType, plan.Relation, plan.FeaturesString()),
+		// Recursion is bounded inside the accessible CTE (WHERE a.depth < 25).
+		// list_objects is best-effort to that depth: chains deeper than the bound
+		// are truncated rather than raising M2002 the way check_permission does
+		// (a pathological edge case that a global pre-check could not detect
+		// per-query anyway without re-walking the whole graph on every call).
+		Body: listObjectsBodyBySubjectKind(renderRecursiveListObjectsQuery(plan, plainBlocks), usersetQuery),
+	}
+
+	return fn.SQL(), nil
+}
+
+// renderRecursiveListObjectsQuery renders the paginated query for blocks.
+func renderRecursiveListObjectsQuery(plan ListPlan, blocks RecursiveBlockSet) string {
 	recursive := blocks.RecursiveBlock != nil
 	cteBody := renderRecursiveCTEBody(blocks, recursive)
 
@@ -50,25 +77,7 @@ func RenderListObjectsRecursiveFunction(plan ListPlan, blocks RecursiveBlockSet)
 		query = joinUnionBlocksSQL([]string{query, selfSQL})
 	}
 
-	paginatedQuery := plan.wrapPagination(query, "object_id")
-
-	fn := PlpgsqlFunction{
-		Schema:  plan.DatabaseSchema,
-		Name:    plan.FunctionName,
-		Args:    ListObjectsArgs(),
-		Returns: ListObjectsReturns(),
-		Header:  ListObjectsFunctionHeader(plan.ObjectType, plan.Relation, plan.FeaturesString()),
-		// Recursion is bounded inside the accessible CTE (WHERE a.depth < 25).
-		// list_objects is best-effort to that depth: chains deeper than the bound
-		// are truncated rather than raising M2002 the way check_permission does
-		// (a pathological edge case that a global pre-check could not detect
-		// per-query anyway without re-walking the whole graph on every call).
-		Body: []Stmt{
-			ReturnQuery{Query: paginatedQuery},
-		},
-	}
-
-	return fn.SQL(), nil
+	return plan.wrapPagination(query, "object_id")
 }
 
 func renderRecursiveCTEBody(blocks RecursiveBlockSet, recursive bool) string {

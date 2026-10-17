@@ -206,7 +206,40 @@ func buildRecursiveBaseBlocks(plan ListPlan, parentRelations []ListParentRelatio
 	// cross-type "admin from org" arm has to seed the recursive parent walk.
 	blocks = append(blocks, buildCrossTypeTTUBlocks(plan, parentRelations, propagatable, hoisted, recursive)...)
 
+	if seed := buildRecursiveSelfCandidateSeedBlock(plan, propagatable); seed != nil {
+		blocks = append(blocks, *seed)
+	}
+
 	return blocks, nil
+}
+
+// buildRecursiveSelfCandidateSeedBlock seeds the recursive walk with the
+// self-candidate (folder:root for subject folder:root#viewer) so its descendants
+// are found too. Only userset relations that satisfy a self-referential TTU
+// target may propagate; other self-candidates are added outside the CTE.
+func buildRecursiveSelfCandidateSeedBlock(plan ListPlan, propagatable map[string]bool) *TypedQueryBlock {
+	var rels []string
+	for _, rel := range plan.Analysis.SatisfyingRelations {
+		if propagatable[rel] {
+			rels = append(rels, rel)
+		}
+	}
+	if len(rels) == 0 {
+		return nil
+	}
+	return &TypedQueryBlock{
+		Comments: []string{"-- Self-candidate seed: userset subject on a propagating relation"},
+		Query: SelectStmt{
+			ColumnExprs: []Expr{Alias{Expr: UsersetObjectID{Source: SubjectID}, Name: "object_id"}},
+			Where: And(
+				HasUserset{Source: SubjectID},
+				Eq{Left: SubjectType, Right: Lit(plan.ObjectType)},
+				In{Expr: UsersetRelation{Source: SubjectID}, Values: rels},
+			),
+		},
+		Propagatable:       true,
+		UsersetSubjectOnly: true,
+	}
 }
 
 // buildRecursiveDirectBlocks builds direct tuple lookup blocks for recursive CTEs.
@@ -216,9 +249,40 @@ func buildRecursiveBaseBlocks(plan ListPlan, parentRelations []ListParentRelatio
 // seeding the recursive step when a simple propagatable relation (e.g. editor
 // satisfying viewer) is in the same relation list.
 func buildRecursiveDirectBlocks(plan ListPlan, propagatable map[string]bool) []TypedQueryBlock {
-	return splitBlocksByPropagation(plan.RelationList, propagatable, func(rels []string) TypedQueryBlock {
+	blocks := splitBlocksByPropagation(plan.RelationList, propagatable, func(rels []string) TypedQueryBlock {
 		return buildRecursiveDirectBlock(plan, rels)
 	})
+	// A userset query subject (group:g#member) named directly on a tuple is a
+	// candidate too. Kept in its own block, as in the standard strategy, so the
+	// plain-subject block stays a simple indexable lookup.
+	if !plan.HasUsersetSubject {
+		return blocks
+	}
+	return append(blocks, splitBlocksByPropagation(plan.RelationList, propagatable, func(rels []string) TypedQueryBlock {
+		return buildRecursiveUsersetSubjectBlock(plan, rels)
+	})...)
+}
+
+func buildRecursiveUsersetSubjectBlock(plan ListPlan, relations []string) TypedQueryBlock {
+	q := Tuples(plan.DatabaseSchema, "t").
+		ObjectType(plan.ObjectType).
+		Relations(relations...).
+		Where(
+			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
+			usersetSubjectCandidateMatch(plan),
+		).
+		SelectCol("object_id").
+		Distinct()
+
+	for _, pred := range plan.Exclusions.BuildPredicates() {
+		q.Where(pred)
+	}
+
+	return TypedQueryBlock{
+		Comments:           []string{"-- Userset subject matching: subject IS a userset (e.g., group:fga#member)"},
+		Query:              q.Build(),
+		UsersetSubjectOnly: true,
+	}
 }
 
 // buildRecursiveDirectBlock builds a single direct tuple lookup block for the given relations.
