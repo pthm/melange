@@ -11,11 +11,12 @@ import (
 // page is what the shell needs to know about the current view.
 type page struct {
 	Env    string
-	Active string // top-nav section: model | history | health
+	Active string // top-nav section: model | tuples | history | health
 }
 
 var navItems = []struct{ ID, Label, Href string }{
 	{"model", "Model", "/"},
+	{"tuples", "Tuples", "/tuples"},
 	{"history", "History", "/history"},
 	{"health", "Health", "/health"},
 }

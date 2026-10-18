@@ -1,0 +1,191 @@
+package studio
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/pthm/melange/melange"
+)
+
+templ tuplesSidebar(types []typeCount, active string) {
+	<div class="side-section">
+		<div class="side-title">Types</div>
+		if len(types) == 0 {
+			<p class="mute side-title">No tuples.</p>
+		}
+		<ul class="side-list">
+			for _, t := range types {
+				<li>
+					<a href={ templ.URL("/browse/" + t.Type) } { current(t.Type == active)... }>
+						{ t.Type }
+						<span class="t-mono mute">{ fmt.Sprint(t.Count) }</span>
+					</a>
+				</li>
+			}
+		</ul>
+	</div>
+}
+
+templ tuplesPage(env string, types []typeCount, errMsg string) {
+	@shell(page{Env: env, Active: "tuples"}, tuplesSidebar(types, "")) {
+		@pageHead("Tuples", nil) {
+			<p class="page-meta">Browse every entity in <code>melange_tuples</code> and see what it can access and who can access it.</p>
+		}
+		if errMsg != "" {
+			@errorBox(errMsg)
+		}
+		<section class="sec">
+			@secHead("Types", len(types), true) {
+				<p class="help">Each type that appears in a tuple, as subject or object, with its number of distinct ids.</p>
+			}
+			<div class="sec-body">
+				<ul class="rows">
+					for _, t := range types {
+						<li>
+							<a class="row" href={ templ.URL("/browse/" + t.Type) }>
+								<code>{ t.Type }</code>
+								<span class="mute">{ plural(t.Count, "entity") }</span>
+							</a>
+						</li>
+					}
+				</ul>
+			</div>
+		</section>
+	}
+}
+
+type browseData struct {
+	Env        string
+	Type       string
+	Types      []typeCount
+	Ents       []entityRef
+	Labels     labels
+	Source     *labelSource // nil when the type has no label source
+	Err        string
+}
+
+templ browsePage(d browseData) {
+	@shell(page{Env: d.Env, Active: "tuples"}, tuplesSidebar(d.Types, d.Type)) {
+		@pageHead(d.Type, crumbs(d.Type, "")) {
+			<p class="page-meta">
+				if d.Source != nil {
+					Names from <code>{ d.Source.Desc }</code>, { d.Source.Via }.
+				} else {
+					No label source found for this type, so entities show by id.
+				}
+			</p>
+		}
+		<section class="sec">
+			@secHead("Entities", len(d.Ents), true) {
+				<p class="help">Every <code>{ d.Type }</code> that appears in a tuple. Search matches ids and names.</p>
+			}
+			@filterBar(templ.Attributes{
+				"name":        "q",
+				"placeholder": "Search " + d.Type + " by id or name",
+				"autofocus":   true,
+				"hx-get":      "/browse/" + d.Type + "/list",
+				"hx-trigger":  "input changed delay:250ms, search",
+				"hx-target":   "#entities",
+			})
+			<div class="sec-body" id="entities" aria-live="polite">
+				if d.Err != "" {
+					@errorBox(d.Err)
+				} else {
+					@entityList(d.Ents, d.Labels)
+				}
+			</div>
+		</section>
+	}
+}
+
+// crumbs renders Tuples › type [› current]; current empty makes type the page.
+templ crumbs(typ, cur string) {
+	<nav class="crumbs" aria-label="Breadcrumb">
+		<a href="/tuples">Tuples</a>
+		<span aria-hidden="true">›</span>
+		if cur == "" {
+			<span aria-current="page">{ typ }</span>
+		} else {
+			<a href={ templ.URL("/browse/" + typ) }>{ typ }</a>
+			<span aria-hidden="true">›</span>
+			<span aria-current="page">{ cur }</span>
+		}
+	</nav>
+}
+
+templ entityList(ents []entityRef, ls labels) {
+	if len(ents) == 0 {
+		<p class="mute">No matches.</p>
+	}
+	<ul class="rows">
+		for _, e := range ents {
+			<li>
+				<a class="row" href={ entityURL(e.Type, e.ID) }>
+					@refLabel(e.Type, e.ID, ls)
+					<span class="mute">{ plural(e.Count, "tuple") }</span>
+				</a>
+			</li>
+		}
+	</ul>
+	if len(ents) == listLimit {
+		<p class="mute">Showing the first { fmt.Sprint(listLimit) }; refine the filter.</p>
+	}
+}
+
+// directTable lists tuples from one side: showSubject picks which end is the
+// "other" entity worth showing (the page's own entity is the fixed end).
+templ directTable(ts []melange.TupleRef, ls labels, showSubject bool) {
+	if len(ts) == 0 {
+		<p class="mute">None.</p>
+	} else {
+		<div class="scroll-x">
+			<table>
+				<tr>
+					if showSubject {
+						<th>subject</th><th>relation</th>
+					} else {
+						<th>relation</th><th>object</th>
+					}
+				</tr>
+				for _, t := range ts {
+					<tr data-item>
+						if showSubject {
+							<td>
+								{{ sid, rel, isUserset := strings.Cut(t.SubjectID, "#") }}
+								@refLink(t.SubjectType, sid, ls)
+								if isUserset {
+									<code class="mute">#{ rel }</code>
+								}
+							</td>
+							<td><code>{ t.Relation }</code></td>
+						} else {
+							<td><code>{ t.Relation }</code></td>
+							<td>
+								@refLink(t.ObjectType, t.ObjectID, ls)
+							</td>
+						}
+					</tr>
+				}
+			</table>
+		</div>
+	}
+}
+
+// refLink links an entity by its label when one resolved, keeping the raw
+// type:id beside it so the tuple identity is never hidden.
+templ refLink(typ, id string, ls labels) {
+	<a class="ent" href={ entityURL(typ, id) }>
+		@refLabel(typ, id, ls)
+	</a>
+}
+
+// refLabel is refLink's content, for rows that are links themselves.
+templ refLabel(typ, id string, ls labels) {
+	<span class="ent">
+		if l := ls.of(typ, id); l != "" {
+			<span class="name">{ l }</span><span class="t-mono">{ typ }:{ id }</span>
+		} else {
+			<code>{ typ }:{ id }</code>
+		}
+	</span>
+}

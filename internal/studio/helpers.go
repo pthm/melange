@@ -3,8 +3,10 @@ package studio
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"strings"
 
 	"github.com/a-h/templ"
@@ -65,6 +67,16 @@ func relationNames(m *migrator.DeployedModel) []string {
 	return out
 }
 
+func entityURL(typ, id string) templ.SafeURL {
+	return templ.URL("/entity?" + url.Values{"type": {typ}, "id": {id}}.Encode())
+}
+
+// explainVals is the hx-vals payload for an inline "why?" Explain.
+func explainVals(subject, relation, object string) string {
+	b, _ := json.Marshal(map[string]string{"subject": subject, "relation": relation, "object": object})
+	return string(b)
+}
+
 // anchor turns a heading into a fragment id.
 func anchor(s string) string {
 	return strings.ToLower(strings.ReplaceAll(s, " ", "-"))
@@ -102,9 +114,15 @@ var assetVersion = func() string {
 // asset returns the versioned URL of an embedded asset.
 func asset(name string) string { return "/assets/" + name + "?v=" + assetVersion }
 
-func errString(err error) string {
-	if err == nil {
-		return ""
+// groupShow is how many entities an access group renders before "Show more".
+const groupShow = 100
+
+func headN[T any](s []T, n int) []T { return s[:min(n, len(s))] }
+
+// countLabel shows n, marked "n+" when a list cap may have hidden more.
+func countLabel(n int, capped bool) string {
+	if capped {
+		return fmt.Sprintf("%d+", n)
 	}
-	return err.Error()
+	return fmt.Sprint(n)
 }

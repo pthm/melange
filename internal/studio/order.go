@@ -87,3 +87,32 @@ func (o modelOrder) sortRelations(m *migrator.DeployedModel) {
 		slices.SortStableFunc(t.Relations, func(a, b schema.RelationDefinition) int { return o.compareRels(t.Name, a.Name, b.Name) })
 	}
 }
+
+// naturalCompare orders ids so numeric ones sort by value (2 before 10);
+// anything else compares as text, after numbers.
+func naturalCompare(a, b string) int {
+	an, bn := isDigits(a), isDigits(b)
+	switch {
+	case an && bn:
+		a, b = strings.TrimLeft(a, "0"), strings.TrimLeft(b, "0")
+		return cmp.Or(cmp.Compare(len(a), len(b)), strings.Compare(a, b))
+	case an != bn:
+		if an {
+			return -1
+		}
+		return 1
+	}
+	return strings.Compare(a, b)
+}
+
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}

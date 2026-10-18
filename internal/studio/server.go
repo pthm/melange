@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/a-h/templ"
 
@@ -32,6 +34,14 @@ type Server struct {
 	env        string
 	schemaPath string // optional local .fga, for the Health page's file and drift checks
 	checker    *melange.Checker
+	labels     *labeler
+
+	countsMu sync.Mutex // guards the cached Tuples sidebar counts
+	counts   []typeCount
+	countsAt time.Time
+
+	groupsMu sync.Mutex // guards groups, the entity access-group cache
+	groups   map[string]*groupCall
 }
 
 // New returns a Server over db. env is the active environment name, shown in
@@ -43,6 +53,7 @@ func New(db *sql.DB, dbSchema, env, schemaPath string) *Server {
 		env:        env,
 		schemaPath: schemaPath,
 		checker:    melange.NewChecker(db, melange.WithDatabaseSchema(dbSchema)),
+		labels:     newLabeler(db, dbSchema),
 	}
 }
 
@@ -53,8 +64,14 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("POST /explain", s.explain)
 	mux.HandleFunc("GET /expand", s.expand)
+	mux.HandleFunc("GET /tuples", s.tuplesIndex)
 	mux.HandleFunc("GET /history", s.history)
 	mux.HandleFunc("GET /health", s.health)
+	mux.HandleFunc("GET /browse/{type}", s.browse)
+	mux.HandleFunc("GET /browse/{type}/list", s.browseList)
+	mux.HandleFunc("GET /entity", s.entity)
+	mux.HandleFunc("GET /entity/group", s.entityGroup)
+	mux.HandleFunc("GET /entity/count", s.entityCount)
 	return localhostOnly(mux)
 }
 
