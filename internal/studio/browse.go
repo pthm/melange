@@ -3,16 +3,14 @@ package studio
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/lib/pq"
 )
-
-// ponytail: every list is capped at listLimit with no paging; add cursors
-// (ListObjects/ListSubjects already return one) when real datasets need them.
-const listLimit = 200
 
 type entityRef struct {
 	Type, ID string
@@ -92,9 +90,14 @@ func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
 	typ := r.PathValue("type")
 	d := browseData{Env: s.env, Type: typ}
 	var err error
-	if d.Ents, d.Labels, err = s.listEntities(r.Context(), typ, ""); err == nil {
+	if d.Ents, d.Labels, d.More, err = s.listEntities(r.Context(), typ, "", 0); err == nil {
 		model, _ := s.loadModel(r.Context())
 		d.Types, err = s.typeCounts(r.Context(), newModelOrder(model))
+	}
+	for _, t := range d.Types {
+		if t.Type == typ {
+			d.Total = t.Count
+		}
 	}
 	d.Err = errString(err)
 	d.Source, _ = s.labels.source(r.Context(), typ)
@@ -102,22 +105,23 @@ func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) browseList(w http.ResponseWriter, r *http.Request) {
-	ents, ls, err := s.listEntities(r.Context(), r.PathValue("type"), strings.TrimSpace(r.FormValue("q")))
+	typ, q, offset := r.PathValue("type"), strings.TrimSpace(r.FormValue("q")), offsetParam(r)
+	ents, ls, more, err := s.listEntities(r.Context(), typ, q, offset)
 	if err != nil {
 		render(w, r, errorBox(err.Error()))
 		return
 	}
-	render(w, r, entityList(ents, ls))
+	render(w, r, entityList(ents, ls, listPage{More: more, Next: browseNextURL(typ, q, offset+pageSize), First: offset == 0}))
 }
 
 // listEntities returns the distinct ids of typ that appear in any tuple, as
 // subject or object, optionally filtered by a case-insensitive substring of
 // the id or its label. Userset subjects (group:eng#member) count toward their
-// object (group:eng).
-func (s *Server) listEntities(ctx context.Context, typ, q string) ([]entityRef, labels, error) {
+// object (group:eng). It returns one page from offset, and whether more follow.
+func (s *Server) listEntities(ctx context.Context, typ, q string, offset int) (ents []entityRef, ls labels, more bool, err error) {
 	labelMatch, err := s.labels.searchClause(ctx, typ)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT id, count(*) FROM (
@@ -127,25 +131,34 @@ func (s *Server) listEntities(ctx context.Context, typ, q string) ([]entityRef, 
 		) e
 		WHERE id <> '*' AND ($2 = '' OR id ILIKE '%' || $2 || '%'`+labelMatch+`)
 		GROUP BY id
-		ORDER BY CASE WHEN id ~ '^[0-9]{1,18}$' THEN lpad(id, 18, '0') ELSE id END
-		LIMIT $3`, typ, q, listLimit)
+		-- Natural order, then the raw id: "1" and "01" pad to the same key,
+		-- and OFFSET paging needs a total order or ties can repeat or skip.
+		ORDER BY CASE WHEN id ~ '^[0-9]{1,18}$' THEN lpad(id, 18, '0') ELSE id END, id
+		LIMIT $3 OFFSET $4`, typ, q, pageSize+1, offset)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	defer func() { _ = rows.Close() }()
-	var out []entityRef
 	for rows.Next() {
 		e := entityRef{Type: typ}
 		if err := rows.Scan(&e.ID, &e.Count); err != nil {
-			return nil, nil, err
+			return nil, nil, false, err
 		}
-		out = append(out, e)
+		ents = append(ents, e)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
-	ls, err := s.labels.resolve(ctx, out)
-	return out, ls, err
+	if more = len(ents) > pageSize; more {
+		ents = ents[:pageSize]
+	}
+	ls, err = s.labels.resolve(ctx, ents)
+	return ents, ls, more, err
+}
+
+// browseNextURL is the request for the browse list's next page.
+func browseNextURL(typ, q string, offset int) string {
+	return "/browse/" + url.PathEscape(typ) + "/list?" + url.Values{"q": {q}, "offset": {strconv.Itoa(offset)}}.Encode()
 }
 
 func errString(err error) string {

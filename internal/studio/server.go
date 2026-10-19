@@ -78,6 +78,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /entity", s.entity)
 	mux.HandleFunc("GET /entity/group", s.entityGroup)
 	mux.HandleFunc("GET /entity/count", s.entityCount)
+	mux.HandleFunc("GET /entity/direct", s.entityDirect)
 	return localhostOnly(secureHeaders(gzipped(mux)))
 }
 

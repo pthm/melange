@@ -323,6 +323,8 @@ details.disclose[open] > summary { margin-bottom: var(--sp-2); }
 .access-rows.matrix > li { grid-template-columns: minmax(120px, max-content) minmax(0, 1fr); align-items: center; padding: var(--sp-1) 0; }
 .chip[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
 .more { margin-top: var(--sp-2); }
+.more-rows { display: block; padding: var(--sp-3) 0; list-style: none; } /* infinite-scroll sentinel */
+tr.more-rows { display: table-row; }
 .group > summary::before { content: "›"; width: 12px; color: var(--mute); transition: transform .15s; }
 .group[open] > summary::before { transform: rotate(90deg); }
 .group > .tree { margin: var(--sp-1) 0 0 7px; border-left: 1px solid var(--line); }

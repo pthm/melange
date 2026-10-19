@@ -2,8 +2,6 @@ package studio
 
 import (
 	"strings"
-
-	"github.com/pthm/melange/melange"
 )
 
 templ tuplesSidebar(types []typeCount, active string) {
@@ -58,6 +56,8 @@ type browseData struct {
 	Type       string
 	Types      []typeCount
 	Ents       []entityRef
+	More       bool // more entities than the first page
+	Total      int  // distinct ids of the type, from the sidebar counts
 	Labels     labels
 	Source     *labelSource // nil when the type has no label source
 	Err        string
@@ -75,7 +75,7 @@ templ browsePage(d browseData) {
 			</p>
 		}
 		<section class="sec">
-			@secHead("Entities", countLabel(len(d.Ents), len(d.Ents) == listLimit)) {
+			@secHead("Entities", num(d.Total)) {
 				<p class="help">Every <code>{ d.Type }</code> that appears in a tuple. Search matches ids and names.</p>
 			}
 			@filterBar(templ.Attributes{
@@ -90,7 +90,7 @@ templ browsePage(d browseData) {
 				if d.Err != "" {
 					@errorBox(d.Err)
 				} else {
-					@entityList(d.Ents, d.Labels)
+					@entityList(d.Ents, d.Labels, listPage{First: true, More: d.More, Next: browseNextURL(d.Type, "", pageSize)})
 				}
 			</div>
 		</section>
@@ -112,62 +112,80 @@ templ crumbs(typ, cur string) {
 	</nav>
 }
 
-templ entityList(ents []entityRef, ls labels) {
-	if len(ents) == 0 {
-		<p class="mute">No matches.</p>
-	}
-	<ul class="rows">
-		for _, e := range ents {
-			<li>
-				<a class="row" href={ entityURL(e.Type, e.ID) }>
-					@refLabel(e.Type, e.ID, ls)
-					<span class="mute">{ plural(e.Count, "tuple") }</span>
-				</a>
-			</li>
+// entityList is a page of a type's entities: the whole list on the first
+// page, then rows appended by infinite scroll.
+templ entityList(ents []entityRef, ls labels, p listPage) {
+	if p.First {
+		if len(ents) == 0 {
+			<p class="mute">No matches.</p>
 		}
-	</ul>
-	if len(ents) == listLimit {
-		<p class="mute">Showing the first { num(listLimit) }; refine the filter.</p>
+		<ul class="rows">
+			@entityRows(ents, ls, p)
+		</ul>
+	} else {
+		@entityRows(ents, ls, p)
 	}
 }
 
-// directTable lists tuples from one side: showSubject picks which end is the
-// "other" entity worth showing (the page's own entity is the fixed end).
-templ directTable(ts []melange.TupleRef, ls labels, showSubject bool) {
-	if len(ts) == 0 {
+templ entityRows(ents []entityRef, ls labels, p listPage) {
+	for _, e := range ents {
+		<li>
+			<a class="row" href={ entityURL(e.Type, e.ID) }>
+				@refLabel(e.Type, e.ID, ls)
+				<span class="mute">{ plural(e.Count, "tuple") }</span>
+			</a>
+		</li>
+	}
+	@moreItem(p)
+}
+
+// directTable lists one side's tuples (the page's own entity is the fixed
+// end, so only the other end and the relation show), first page only;
+// directRows appends the rest.
+templ directTable(p directPage, ls labels) {
+	if len(p.Tuples) == 0 {
 		<p class="mute">None.</p>
 	} else {
 		<div class="scroll-x">
 			<table>
-				<tr>
-					if showSubject {
-						<th>subject</th><th>relation</th>
-					} else {
-						<th>relation</th><th>object</th>
-					}
-				</tr>
-				for _, t := range ts {
-					<tr data-item>
-						if showSubject {
-							<td>
-								{{ sid, rel, isUserset := strings.Cut(t.SubjectID, "#") }}
-								@refLink(t.SubjectType, sid, ls)
-								if isUserset {
-									<code class="mute">#{ rel }</code>
-								}
-							</td>
-							<td><code>{ t.Relation }</code></td>
+				<thead>
+					<tr>
+						if p.Side == sideObject {
+							<th>subject</th><th>relation</th>
 						} else {
-							<td><code>{ t.Relation }</code></td>
-							<td>
-								@refLink(t.ObjectType, t.ObjectID, ls)
-							</td>
+							<th>relation</th><th>object</th>
 						}
 					</tr>
-				}
+				</thead>
+				<tbody>
+					@directRows(p, ls)
+				</tbody>
 			</table>
 		</div>
 	}
+}
+
+templ directRows(p directPage, ls labels) {
+	for _, t := range p.Tuples {
+		<tr>
+			if p.Side == sideObject {
+				<td>
+					{{ sid, rel, isUserset := strings.Cut(t.SubjectID, "#") }}
+					@refLink(t.SubjectType, sid, ls)
+					if isUserset {
+						<code class="mute">#{ rel }</code>
+					}
+				</td>
+				<td><code>{ t.Relation }</code></td>
+			} else {
+				<td><code>{ t.Relation }</code></td>
+				<td>
+					@refLink(t.ObjectType, t.ObjectID, ls)
+				</td>
+			}
+		</tr>
+	}
+	@moreRow(listPage{More: p.More, Next: p.Next}, 2)
 }
 
 // refLink links an entity by its label when one resolved, keeping the raw

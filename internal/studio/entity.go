@@ -1,15 +1,18 @@
 package studio
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/lib/pq"
 
 	"github.com/pthm/melange/melange"
 	"github.com/pthm/melange/pkg/schema"
@@ -30,13 +33,15 @@ type entityData struct {
 	Tab    string
 	Group  string   // selected type on the access tabs
 	Groups []string // types in the access tab's sub-navigation, model order
-	// Direct tuples are always loaded: they are cheap and the tab shows a count.
-	AsSubject    []melange.TupleRef
-	AsObject     []melange.TupleRef
-	DirectCapped bool
-	ModelErr     string
-	Labels       labels
-	Types        []typeCount
+	// Direct tuples: the first page of each side and the Direct tab's
+	// filter (?q=).
+	AsSubject, AsObject       directPage
+	SubjectTotal, ObjectTotal int // all tuples per side
+	SubjectMatch, ObjectMatch int // those passing Query
+	Query                     string
+	ModelErr                  string
+	Labels                    labels
+	Types                     []typeCount
 }
 
 func (s *Server) entity(w http.ResponseWriter, r *http.Request) {
@@ -53,12 +58,22 @@ func (s *Server) entity(w http.ResponseWriter, r *http.Request) {
 	model, modelErr := s.loadModel(ctx)
 	order := newModelOrder(model)
 
+	if d.Tab == tabDirect {
+		d.Query = strings.TrimSpace(r.FormValue("q"))
+	}
 	var err error
 	if d.Types, err = s.typeCounts(ctx, order); err == nil {
-		d.AsSubject, err = s.directTuples(ctx, order, "subject_type = $1 AND split_part(subject_id, '#', 1) = $2", ent)
+		d.SubjectTotal, d.ObjectTotal, err = s.directCounts(ctx, ent, "")
+		d.SubjectMatch, d.ObjectMatch = d.SubjectTotal, d.ObjectTotal
+	}
+	if err == nil && d.Query != "" {
+		d.SubjectMatch, d.ObjectMatch, err = s.directCounts(ctx, ent, d.Query)
 	}
 	if err == nil {
-		d.AsObject, err = s.directTuples(ctx, order, "object_type = $1 AND object_id = $2", ent)
+		d.AsSubject, err = s.directTuples(ctx, order, sideSubject, ent, d.Query, 0)
+	}
+	if err == nil {
+		d.AsObject, err = s.directTuples(ctx, order, sideObject, ent, d.Query, 0)
 	}
 	switch {
 	case err != nil:
@@ -73,25 +88,16 @@ func (s *Server) entity(w http.ResponseWriter, r *http.Request) {
 	case d.Tab == tabBy && len(relationsOf(model.Types, ent.Type)) > 0:
 		d.Groups, err = s.subjectTypes(ctx, order)
 	}
+	if err == nil {
+		refs := append(tupleRefs(append(slices.Clone(d.AsSubject.Tuples), d.AsObject.Tuples...)), d.Entity)
+		d.Labels, err = s.labels.resolve(ctx, refs)
+	}
 	if err != nil {
 		render(w, r, errorBox(err.Error()))
 		return
 	}
-	d.DirectCapped = len(d.AsSubject) == listLimit || len(d.AsObject) == listLimit
 	if d.Group == "" && len(d.Groups) > 0 {
 		d.Group = d.Groups[0]
-	}
-
-	refs := make([]entityRef, 0, 1+2*(len(d.AsSubject)+len(d.AsObject)))
-	refs = append(refs, d.Entity)
-	for _, t := range append(d.AsSubject, d.AsObject...) {
-		refs = append(refs,
-			entityRef{Type: t.SubjectType, ID: strings.SplitN(t.SubjectID, "#", 2)[0]},
-			entityRef{Type: t.ObjectType, ID: t.ObjectID})
-	}
-	if d.Labels, err = s.labels.resolve(ctx, refs); err != nil {
-		render(w, r, errorBox(err.Error()))
-		return
 	}
 	render(w, r, entityPage(d))
 }
@@ -103,24 +109,91 @@ func groupParams(r *http.Request) (self entityRef, tab, group string, ok bool) {
 	return self, tab, group, self.Type != "" && self.ID != "" && group != "" && (tab == tabCan || tab == tabBy)
 }
 
-// entityGroup serves the entity list of one type on an access tab.
+// entityGroup serves one page of one type's entities on an access tab,
+// filtered by ?q= (id, name or relation, case-insensitive). The group is
+// computed once and cached (see group), so later pages and filtering are
+// in-memory; only a filter needs every entity's label.
 func (s *Server) entityGroup(w http.ResponseWriter, r *http.Request) {
 	self, tab, group, ok := groupParams(r)
 	if !ok {
 		render(w, r, errorBox("type, id, tab and group are required"))
 		return
 	}
+	q, offset := strings.TrimSpace(r.FormValue("q")), offsetParam(r)
 	g := s.group(r.Context(), self, tab, group)
-	refs := make([]entityRef, len(g.Entities))
-	for i, e := range g.Entities {
-		refs[i] = entityRef{Type: g.Type, ID: e.ID}
+	// A filter matches names, so it needs every entity's label; without
+	// one, only the page's.
+	need := g.Entities
+	if q == "" {
+		need, _ = pageOf(g.Entities, offset)
 	}
-	ls, err := s.labels.resolve(r.Context(), refs)
+	ls, err := s.labels.resolve(r.Context(), groupRefs(g.Type, need))
 	if err != nil {
 		render(w, r, errorBox(err.Error()))
 		return
 	}
-	render(w, r, accessList(g, ls, self, tab == tabCan))
+	ents := g.Entities
+	if q != "" {
+		ents = filterGroup(g.Type, ents, ls, q)
+	}
+	rows, more := pageOf(ents, offset)
+	render(w, r, accessList(g, len(ents), rows, ls, self, tab == tabCan, listPage{
+		First: offset == 0, More: more, Next: groupPageURL(self, tab, group, q, offset+pageSize),
+	}))
+}
+
+func groupRefs(typ string, ents []entityGroup) []entityRef {
+	refs := make([]entityRef, len(ents))
+	for i, e := range ents {
+		refs[i] = entityRef{Type: typ, ID: e.ID}
+	}
+	return refs
+}
+
+// filterGroup keeps the entities whose id, label or a relation contains q.
+func filterGroup(typ string, ents []entityGroup, ls labels, q string) []entityGroup {
+	q = strings.ToLower(q)
+	has := func(s string) bool { return strings.Contains(strings.ToLower(s), q) }
+	var out []entityGroup
+	for _, e := range ents {
+		if has(e.ID) || has(ls.of(typ, e.ID)) || slices.ContainsFunc(e.Relations, has) {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// entityDirect serves a later page of one side of the Direct tuples tab.
+func (s *Server) entityDirect(w http.ResponseWriter, r *http.Request) {
+	ent := entityRef{Type: r.FormValue("type"), ID: r.FormValue("id")}
+	side := r.FormValue("side")
+	if ent.Type == "" || ent.ID == "" || (side != sideSubject && side != sideObject) {
+		render(w, r, errorBox("type, id and side are required"))
+		return
+	}
+	model, _ := s.loadModel(r.Context())
+	p, err := s.directTuples(r.Context(), newModelOrder(model), side, ent, strings.TrimSpace(r.FormValue("q")), offsetParam(r))
+	if err != nil {
+		render(w, r, errorBox(err.Error()))
+		return
+	}
+	ls, err := s.labels.resolve(r.Context(), tupleRefs(p.Tuples))
+	if err != nil {
+		render(w, r, errorBox(err.Error()))
+		return
+	}
+	render(w, r, directRows(p, ls))
+}
+
+// tupleRefs lists both ends of each tuple, for label lookup.
+func tupleRefs(ts []melange.TupleRef) []entityRef {
+	refs := make([]entityRef, 0, 2*len(ts))
+	for _, t := range ts {
+		refs = append(refs,
+			entityRef{Type: t.SubjectType, ID: strings.SplitN(t.SubjectID, "#", 2)[0]},
+			entityRef{Type: t.ObjectType, ID: t.ObjectID})
+	}
+	return refs
 }
 
 // entityCount serves the count badge for one type in the sub-navigation.
@@ -149,7 +222,12 @@ const (
 	listTimeout   = 10 * time.Second
 	listParallel  = 4
 	groupTTL      = time.Minute
-	groupCacheMax = 512 // entries; the cache is dropped wholesale past this
+	groupCacheMax = 128 // entries; the cache is dropped wholesale past this
+	// groupLimit caps each relation's list in a group. The list functions
+	// compute their whole result before paging it, so a high cap costs the
+	// database little; the group is held in memory and served pageSize rows
+	// at a time.
+	groupLimit = 5000
 )
 
 // ponytail: package-level, since a process serves one studio; per-Server if
@@ -248,7 +326,7 @@ func (s *Server) computeGroup(ctx context.Context, self entityRef, tab, other st
 		return empty
 	}
 	obj := melange.Object{Type: melange.ObjectType(self.Type), ID: self.ID}
-	page := melange.PageOptions{Limit: listLimit}
+	page := melange.PageOptions{Limit: groupLimit}
 	var rows []accessRow
 	if tab == tabCan {
 		rows = listRelations(ctx, relationsOf(model.Types, other), other, func(ctx context.Context, rel string) ([]string, error) {
@@ -342,7 +420,7 @@ func groupByType(rows []accessRow) []typeGroup {
 		if row.Err != "" {
 			g.Errs = append(g.Errs, row.Relation+": "+row.Err)
 		}
-		g.Capped = g.Capped || len(row.IDs) == listLimit
+		g.Capped = g.Capped || len(row.IDs) == groupLimit
 		for _, id := range row.IDs {
 			key := row.Type + ":" + id
 			ei, ok := entIdx[key]
@@ -396,37 +474,68 @@ func (s *Server) subjectTypes(ctx context.Context, o modelOrder) ([]string, erro
 	return out, nil
 }
 
-// directTuples returns raw tuples matching where ($1 = type, $2 = id), in
-// model order: subject type, object type, then the relation's place in the
-// object type, with ids breaking ties.
-func (s *Server) directTuples(ctx context.Context, o modelOrder, where string, e entityRef) ([]melange.TupleRef, error) {
+// Direct tuple sides: the page's entity as the subject or as the object.
+const (
+	sideSubject = "subject"
+	sideObject  = "object"
+)
+
+var sideWhere = map[string]string{
+	sideSubject: "subject_type = $1 AND split_part(subject_id, '#', 1) = $2",
+	sideObject:  "object_type = $1 AND object_id = $2",
+}
+
+// directPage is one page of one side's tuples.
+type directPage struct {
+	Side   string
+	Tuples []melange.TupleRef
+	More   bool
+	Next   string // the next page's request, when More
+}
+
+// directTuples returns a page of the tuples on one side of e, in model order
+// (types, then relations, as ranked by array_position over the model's
+// lists; unknown ones last), filtered by q across both ends and the relation.
+func (s *Server) directTuples(ctx context.Context, o modelOrder, side string, e entityRef, q string, offset int) (directPage, error) {
+	p := directPage{Side: side}
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT subject_type, subject_id, relation, object_type, object_id
-		FROM `+s.tuples()+` WHERE `+where+`
-		ORDER BY 1, 2, 3, 4, 5 LIMIT $3`, e.Type, e.ID, listLimit)
+		FROM `+s.tuples()+` WHERE `+sideWhere[side]+` AND `+directMatch+`
+		ORDER BY array_position($4::text[], subject_type), subject_type,
+		         array_position($4::text[], object_type), object_type,
+		         array_position($5::text[], object_type || '#' || relation), relation,
+		         subject_id, object_id
+		LIMIT $6 OFFSET $7`, e.Type, e.ID, q, pq.Array(o.typeList()), pq.Array(o.relList()), pageSize+1, offset)
 	if err != nil {
-		return nil, err
+		return p, err
 	}
 	defer func() { _ = rows.Close() }()
-	var out []melange.TupleRef
 	for rows.Next() {
 		var t melange.TupleRef
 		if err := rows.Scan(&t.SubjectType, &t.SubjectID, &t.Relation, &t.ObjectType, &t.ObjectID); err != nil {
-			return nil, err
+			return p, err
 		}
-		out = append(out, t)
+		p.Tuples = append(p.Tuples, t)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+	if p.More = len(p.Tuples) > pageSize; p.More {
+		p.Tuples = p.Tuples[:pageSize]
+		p.Next = "/entity/direct?" + url.Values{
+			"type": {e.Type}, "id": {e.ID}, "side": {side}, "q": {q}, "offset": {strconv.Itoa(offset + pageSize)},
+		}.Encode()
 	}
-	slices.SortStableFunc(out, func(a, b melange.TupleRef) int {
-		return cmp.Or(
-			o.compareTypes(a.SubjectType, b.SubjectType),
-			o.compareTypes(a.ObjectType, b.ObjectType),
-			o.compareRels(a.ObjectType, a.Relation, b.Relation),
-			strings.Compare(a.SubjectID, b.SubjectID),
-			strings.Compare(a.ObjectID, b.ObjectID),
-		)
-	})
-	return out, nil
+	return p, rows.Err()
+}
+
+// directMatch is the Direct tab's filter on $3: a substring of either end
+// or the relation, case-insensitive; empty matches everything.
+const directMatch = `($3 = '' OR concat_ws(' ', subject_type || ':' || subject_id, relation, object_type || ':' || object_id) ILIKE '%' || $3 || '%')`
+
+// directCounts counts the tuples on each side of e that match q.
+func (s *Server) directCounts(ctx context.Context, e entityRef, q string) (asSubject, asObject int, err error) {
+	err = s.db.QueryRowContext(ctx, `
+		SELECT count(*) FILTER (WHERE `+sideWhere[sideSubject]+`),
+		       count(*) FILTER (WHERE `+sideWhere[sideObject]+`)
+		FROM `+s.tuples()+`
+		WHERE ((`+sideWhere[sideSubject]+`) OR (`+sideWhere[sideObject]+`)) AND `+directMatch, e.Type, e.ID, q).Scan(&asSubject, &asObject)
+	return asSubject, asObject, err
 }

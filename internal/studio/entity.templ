@@ -2,6 +2,7 @@ package studio
 
 import (
 	"net/url"
+	"strconv"
 )
 
 var entityTabs = []struct{ ID, Label string }{
@@ -22,6 +23,19 @@ func groupPartURL(part string, e entityRef, tab, group string) string {
 	return "/entity/" + part + "?" + url.Values{"type": {e.Type}, "id": {e.ID}, "tab": {tab}, "group": {group}}.Encode()
 }
 
+// groupPageURL requests a page of a group list. q and offset are left out
+// when empty, since the filter input supplies its own q.
+func groupPageURL(e entityRef, tab, group, q string, offset int) string {
+	v := url.Values{"type": {e.Type}, "id": {e.ID}, "tab": {tab}, "group": {group}}
+	if q != "" {
+		v.Set("q", q)
+	}
+	if offset > 0 {
+		v.Set("offset", strconv.Itoa(offset))
+	}
+	return "/entity/group?" + v.Encode()
+}
+
 templ entityPage(d entityData) {
 	{{ self := d.Entity.Type + ":" + d.Entity.ID }}
 	{{ name := d.Labels.of(d.Entity.Type, d.Entity.ID) }}
@@ -39,7 +53,7 @@ templ entityPage(d entityData) {
 					<a href={ entityTabURL(d.Entity, t.ID, "") } { current(t.ID == d.Tab)... }>
 						{ t.Label }
 						if t.ID == tabDirect {
-							<span class="badge">{ countLabel(len(d.AsSubject)+len(d.AsObject), d.DirectCapped) }</span>
+							<span class="badge">{ num(d.SubjectTotal + d.ObjectTotal) }</span>
 						}
 					</a>
 				}
@@ -109,7 +123,13 @@ templ accessTab(d entityData, self string) {
 						}
 					</p>
 				</div>
-				@filterBar(templ.Attributes{"placeholder": "Filter " + d.Group + " by name, id or relation", "data-filter": "#group-list"})
+				@filterBar(templ.Attributes{
+					"name":        "q",
+					"placeholder": "Filter " + d.Group + " by name, id or relation",
+					"hx-get":      groupPageURL(d.Entity, d.Tab, d.Group, "", 0),
+					"hx-trigger":  "input changed delay:250ms, search",
+					"hx-target":   "#group-list",
+				})
 				<div class="sec-body" id="group-list" hx-get={ groupPartURL("group", d.Entity, d.Tab, d.Group) } hx-trigger="load" aria-live="polite">
 					<p class="mute">Loading…</p>
 				</div>
@@ -130,42 +150,49 @@ templ groupBadge(g typeGroup) {
 	}
 }
 
-// accessList is one type's entities as rows: name and id, then the relation
-// chips. The first groupShow render; the rest sit behind "Show N more".
-templ accessList(g typeGroup, ls labels, self entityRef, selfIsSubject bool) {
-	for _, e := range g.Errs {
-		@errorBox(e)
-	}
-	if len(g.Entities) == 0 {
-		<p class="mute">None.</p>
-	} else {
-		<p class="subhead">
-			{ countLabel(len(g.Entities), g.Capped) } { g.Type } entities
-			if g.Capped {
-				· lists stop at { num(listLimit) } per relation, so there may be more
-			}
-		</p>
-		<ul class="access-rows">
-			for _, ent := range headN(g.Entities, groupShow) {
-				@accessEntity(g.Type, ent, ls, self, selfIsSubject)
-			}
-		</ul>
-		if len(g.Entities) > groupShow {
-			<details class="more disclose" data-group>
-				<summary>Show { num(len(g.Entities) - groupShow) } more</summary>
-				<ul class="access-rows">
-					for _, ent := range g.Entities[groupShow:] {
-						@accessEntity(g.Type, ent, ls, self, selfIsSubject)
-					}
-				</ul>
-			</details>
+// accessList is a page of one type's entities as rows: name and id, then
+// the relation chips. The first page carries the heading line and the list;
+// later pages append rows by infinite scroll. matched is how many entities
+// pass the filter (all of them without one).
+templ accessList(g typeGroup, matched int, rows []entityGroup, ls labels, self entityRef, selfIsSubject bool, p listPage) {
+	if p.First {
+		for _, e := range g.Errs {
+			@errorBox(e)
 		}
-		<p class="mute" data-empty-filter hidden>Nothing matches the filter.</p>
+		if matched == 0 {
+			if len(g.Entities) == 0 {
+				<p class="mute">None.</p>
+			} else {
+				<p class="mute">Nothing matches the filter.</p>
+			}
+		} else {
+			<p class="subhead">
+				if matched < len(g.Entities) {
+					{ num(matched) } of
+				}
+				{ countLabel(len(g.Entities), g.Capped) } { g.Type } entities
+				if g.Capped {
+					· lists stop at { num(groupLimit) } per relation, so there may be more
+				}
+			</p>
+			<ul class="access-rows">
+				@accessRows(g.Type, rows, ls, self, selfIsSubject, p)
+			</ul>
+		}
+	} else {
+		@accessRows(g.Type, rows, ls, self, selfIsSubject, p)
 	}
 }
 
+templ accessRows(typ string, rows []entityGroup, ls labels, self entityRef, selfIsSubject bool, p listPage) {
+	for _, ent := range rows {
+		@accessEntity(typ, ent, ls, self, selfIsSubject)
+	}
+	@moreItem(p)
+}
+
 templ accessEntity(typ string, ent entityGroup, ls labels, self entityRef, selfIsSubject bool) {
-	<li data-item>
+	<li>
 		<div class="who">
 			if ent.ID == "*" {
 				<code>{ typ }:*</code> <span class="mute">every { typ }</span>
@@ -186,31 +213,40 @@ templ accessEntity(typ string, ent entityGroup, ls labels, self entityRef, selfI
 	</li>
 }
 
+// directTab lists the raw tuples on both sides of the entity. Its filter
+// re-renders the page with ?q= and swaps in just #direct-tables.
 templ directTab(d entityData, self string) {
 	<div id="direct">
-		@filterBar(templ.Attributes{"placeholder": "Filter direct tuples by entity or relation", "data-filter": "#direct"})
-		<section class="sec">
-			@secHead("As subject", countLabel(len(d.AsSubject), len(d.AsSubject) == listLimit)) {
-				<p class="help">Tuples where <code>{ self }</code> is the subject: <code>{ self } → relation → object</code>.</p>
-			}
-			<div class="sec-body">
-				@directTable(d.AsSubject, d.Labels, false)
-			</div>
-		</section>
-		<section class="sec">
-			@secHead("As object", countLabel(len(d.AsObject), len(d.AsObject) == listLimit)) {
-				<p class="help">
-					Tuples where <code>{ self }</code> is the object: <code>subject → relation → { self }</code>.
-					A <code>#relation</code> suffix means every subject with that relation.
-				</p>
-			}
-			<div class="sec-body">
-				@directTable(d.AsObject, d.Labels, true)
-			</div>
-		</section>
-		if d.DirectCapped {
-			<p class="mute">Each side shows its first { num(listLimit) } rows.</p>
-		}
-		<p class="mute" data-empty-filter hidden>No tuples match the filter.</p>
+		@filterBar(templ.Attributes{
+			"name":        "q",
+			"value":       d.Query,
+			"placeholder": "Filter direct tuples by id or relation",
+			"hx-get":      string(entityTabURL(d.Entity, tabDirect, "")),
+			"hx-trigger":  "input changed delay:250ms, search",
+			"hx-target":   "#direct-tables",
+			"hx-select":   "#direct-tables",
+			"hx-swap":     "outerHTML",
+		})
+		<div id="direct-tables" aria-live="polite">
+			<section class="sec">
+				@secHead("As subject", matchLabel(d.SubjectMatch, d.SubjectTotal)) {
+					<p class="help">Tuples where <code>{ self }</code> is the subject: <code>{ self } → relation → object</code>.</p>
+				}
+				<div class="sec-body">
+					@directTable(d.AsSubject, d.Labels)
+				</div>
+			</section>
+			<section class="sec">
+				@secHead("As object", matchLabel(d.ObjectMatch, d.ObjectTotal)) {
+					<p class="help">
+						Tuples where <code>{ self }</code> is the object: <code>subject → relation → { self }</code>.
+						A <code>#relation</code> suffix means every subject with that relation.
+					</p>
+				}
+				<div class="sec-body">
+					@directTable(d.AsObject, d.Labels)
+				</div>
+			</section>
+		</div>
 	</div>
 }

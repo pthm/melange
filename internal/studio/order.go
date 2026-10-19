@@ -80,6 +80,28 @@ func (o modelOrder) compareRels(typ, a, b string) int {
 	return cmp.Or(cmp.Compare(o.relRank(typ, a), o.relRank(typ, b)), strings.Compare(a, b))
 }
 
+// typeList and relList are the model's types, and its relations as
+// "type#relation", in rank order: SQL sorts by array_position over them.
+func (o modelOrder) typeList() []string {
+	out := make([]string, len(o.types))
+	for t, r := range o.types {
+		out[r] = t
+	}
+	return out
+}
+
+func (o modelOrder) relList() []string {
+	out := make([]string, 0, len(o.rels)*4)
+	for _, t := range o.typeList() {
+		rels := make([]string, len(o.rels[t]))
+		for rel, r := range o.rels[t] {
+			rels[r] = t + "#" + rel
+		}
+		out = append(out, rels...)
+	}
+	return out
+}
+
 // sortRelations puts each type's relations back in DSL order, in place.
 func (o modelOrder) sortRelations(m *migrator.DeployedModel) {
 	for i := range m.Types {

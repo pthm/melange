@@ -437,3 +437,43 @@ func TestShortVersion(t *testing.T) {
 		t.Errorf("versionURL(dev) = %q, want none", got)
 	}
 }
+
+func TestPageOf(t *testing.T) {
+	s := make([]int, 250)
+	for i := range s {
+		s[i] = i
+	}
+	for _, c := range []struct {
+		offset, first, n int
+		more             bool
+	}{{0, 0, 100, true}, {100, 100, 100, true}, {200, 200, 50, false}, {250, 0, 0, false}, {900, 0, 0, false}} {
+		got, more := pageOf(s, c.offset)
+		if len(got) != c.n || more != c.more || (c.n > 0 && got[0] != c.first) {
+			t.Errorf("pageOf(250, %d) = %d rows from %v, more %v; want %d from %d, more %v", c.offset, len(got), got[:min(1, len(got))], more, c.n, c.first, c.more)
+		}
+	}
+}
+
+func TestFilterGroup(t *testing.T) {
+	ents := []entityGroup{{ID: "1", Relations: []string{"owner"}}, {ID: "22", Relations: []string{"viewer"}}, {ID: "3", Relations: []string{"viewer"}}}
+	ls := labels{"doc:3": "Budget 2026"}
+	for q, want := range map[string]string{"own": "1", "22": "22", "budget": "3", "VIEW": "22 3", "2026": "3"} {
+		ids := make([]string, 0, len(ents))
+		for _, e := range filterGroup("doc", ents, ls, q) {
+			ids = append(ids, e.ID)
+		}
+		if got := strings.Join(ids, " "); got != want {
+			t.Errorf("filterGroup(%q) = %q, want %q", q, got, want)
+		}
+	}
+}
+
+func TestModelOrderLists(t *testing.T) {
+	o := newModelOrder(&migrator.DeployedModel{DSL: "model\n  schema 1.1\ntype user\ntype doc\n  relations\n    define owner: [user]\n    define viewer: [user] or owner\n"})
+	if got := strings.Join(o.typeList(), " "); got != "user doc" {
+		t.Errorf("typeList = %q", got)
+	}
+	if got := strings.Join(o.relList(), " "); got != "doc#owner doc#viewer" {
+		t.Errorf("relList = %q", got)
+	}
+}

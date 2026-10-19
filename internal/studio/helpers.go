@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
+	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -147,8 +148,43 @@ func pageTitle(p page) string {
 	return t + " · melange studio"
 }
 
-// groupShow is how many entities an access group renders before "Show more".
-const groupShow = 100
+// pageSize is how many rows a list renders per page; the last row of a page
+// loads the next one when it scrolls into view (infinite scroll).
+const pageSize = 100
+
+// matchLabel is a filtered count: "12 of 101", or just "101" unfiltered.
+func matchLabel(matched, total int) string {
+	if matched == total {
+		return num(total)
+	}
+	return num(matched) + " of " + num(total)
+}
+
+// listPage is a rendered page's place in its list: First pages include the
+// list's container, later ones only rows; More pages end with a row that
+// fetches Next when it scrolls into view.
+type listPage struct {
+	First, More bool
+	Next        string
+}
+
+// offsetParam reads a page offset from the request; anything invalid is 0.
+func offsetParam(r *http.Request) int {
+	n, err := strconv.Atoi(r.FormValue("offset"))
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// pageOf slices one page out of s at offset and reports whether more follow.
+func pageOf[T any](s []T, offset int) (out []T, more bool) {
+	if offset >= len(s) {
+		return nil, false
+	}
+	end := min(offset+pageSize, len(s))
+	return s[offset:end], end < len(s)
+}
 
 func headN[T any](s []T, n int) []T { return s[:min(n, len(s))] }
 

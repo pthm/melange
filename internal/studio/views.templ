@@ -116,6 +116,21 @@ templ topLinks() {
 	</span>
 }
 
+// moreItem ends a page of list items while more remain: scrolling it into
+// view fetches the next page, which replaces it (ending with its own).
+templ moreItem(p listPage) {
+	if p.More {
+		<li class="more-rows" hx-get={ p.Next } hx-trigger="intersect once" hx-swap="outerHTML"><span class="mute">Loading more…</span></li>
+	}
+}
+
+// moreRow is moreItem for a table body.
+templ moreRow(p listPage, cols int) {
+	if p.More {
+		<tr class="more-rows" hx-get={ p.Next } hx-trigger="intersect once" hx-swap="outerHTML"><td colspan={ cols } class="mute">Loading more…</td></tr>
+	}
+}
+
 // secHead is a section's title row plus help text passed as children.
 // count is the formatted badge (num, or countLabel for capped lists); empty
 // shows none.
