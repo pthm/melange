@@ -255,7 +255,7 @@ func historyPage(env string, recs []migrator.MigrationRecord, deployed *migrator
 				var templ_7745c5c3_Var13 string
 				templ_7745c5c3_Var13, templ_7745c5c3_Err = templ.JoinStringErrs(rec.MelangeVersion)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 54, Col: 53}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 55, Col: 37}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var13))
 				if templ_7745c5c3_Err != nil {
@@ -268,7 +268,7 @@ func historyPage(env string, recs []migrator.MigrationRecord, deployed *migrator
 				var templ_7745c5c3_Var14 string
 				templ_7745c5c3_Var14, templ_7745c5c3_Err = templ.JoinStringErrs(rec.CodegenVersion)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 55, Col: 53}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 57, Col: 37}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var14))
 				if templ_7745c5c3_Err != nil {
@@ -281,7 +281,7 @@ func historyPage(env string, recs []migrator.MigrationRecord, deployed *migrator
 				var templ_7745c5c3_Var15 string
 				templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinStringErrs(rec.SchemaChecksum)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 56, Col: 61}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 59, Col: 37}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
 				if templ_7745c5c3_Err != nil {
@@ -294,7 +294,7 @@ func historyPage(env string, recs []migrator.MigrationRecord, deployed *migrator
 				var templ_7745c5c3_Var16 string
 				templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs(num(len(rec.FunctionNames)))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 57, Col: 58}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 61, Col: 40}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 				if templ_7745c5c3_Err != nil {
@@ -312,7 +312,7 @@ func historyPage(env string, recs []migrator.MigrationRecord, deployed *migrator
 					var templ_7745c5c3_Var17 string
 					templ_7745c5c3_Var17, templ_7745c5c3_Err = templ.JoinStringErrs(rec.SchemaFormat)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 61, Col: 37}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 65, Col: 37}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var17))
 					if templ_7745c5c3_Err != nil {
@@ -398,7 +398,7 @@ func healthSidebar(cats []healthCategory) templ.Component {
 			var templ_7745c5c3_Var19 templ.SafeURL
 			templ_7745c5c3_Var19, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL("#" + anchor(c.Name)))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 86, Col: 46}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 90, Col: 46}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var19))
 			if templ_7745c5c3_Err != nil {
@@ -411,7 +411,7 @@ func healthSidebar(cats []healthCategory) templ.Component {
 			var templ_7745c5c3_Var20 string
 			templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.JoinStringErrs(c.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 87, Col: 14}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 91, Col: 14}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var20))
 			if templ_7745c5c3_Err != nil {
@@ -446,7 +446,7 @@ func healthSidebar(cats []healthCategory) templ.Component {
 			var templ_7745c5c3_Var23 string
 			templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.JoinStringErrs(num(len(c.Checks)))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 88, Col: 72}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 92, Col: 72}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var23))
 			if templ_7745c5c3_Err != nil {
@@ -523,7 +523,7 @@ func healthPage(env, schemaPath string, report *doctor.Report, errMsg string) te
 					var templ_7745c5c3_Var27 string
 					templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinStringErrs(schemaPath)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 103, Col: 27}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 107, Col: 27}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var27))
 					if templ_7745c5c3_Err != nil {
@@ -593,7 +593,7 @@ func healthPage(env, schemaPath string, report *doctor.Report, errMsg string) te
 				var templ_7745c5c3_Var28 string
 				templ_7745c5c3_Var28, templ_7745c5c3_Err = templ.ResolveAttributeValue(anchor(c.Name))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 121, Col: 44}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 125, Col: 44}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var28)
 				if templ_7745c5c3_Err != nil {
@@ -641,7 +641,7 @@ func healthPage(env, schemaPath string, report *doctor.Report, errMsg string) te
 					var templ_7745c5c3_Var31 string
 					templ_7745c5c3_Var31, templ_7745c5c3_Err = templ.JoinStringErrs(statusLabel(chk.Status))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 127, Col: 83}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 131, Col: 83}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var31))
 					if templ_7745c5c3_Err != nil {
@@ -654,7 +654,7 @@ func healthPage(env, schemaPath string, report *doctor.Report, errMsg string) te
 					var templ_7745c5c3_Var32 string
 					templ_7745c5c3_Var32, templ_7745c5c3_Err = templ.JoinStringErrs(chk.Message)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 129, Col: 23}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 133, Col: 23}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var32))
 					if templ_7745c5c3_Err != nil {
@@ -677,7 +677,7 @@ func healthPage(env, schemaPath string, report *doctor.Report, errMsg string) te
 							var templ_7745c5c3_Var33 string
 							templ_7745c5c3_Var33, templ_7745c5c3_Err = templ.JoinStringErrs(chk.Details)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 133, Col: 31}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 137, Col: 31}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var33))
 							if templ_7745c5c3_Err != nil {
@@ -696,7 +696,7 @@ func healthPage(env, schemaPath string, report *doctor.Report, errMsg string) te
 							var templ_7745c5c3_Var34 string
 							templ_7745c5c3_Var34, templ_7745c5c3_Err = templ.JoinStringErrs(chk.FixHint)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 136, Col: 56}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 140, Col: 56}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var34))
 							if templ_7745c5c3_Err != nil {

@@ -140,7 +140,7 @@ templ accessTab(d entityData, self string) {
 
 // groupBadge is a type's count in the sub-navigation.
 templ groupBadge(g typeGroup) {
-	switch {
+	switch  {
 		case len(g.Errs) > 0:
 			<span class="badge warn" title={ g.Errs[0] }>!</span>
 		case len(g.Entities) == 0:
@@ -202,7 +202,7 @@ templ accessEntity(typ string, ent entityGroup, ls labels, self entityRef, selfI
 		</div>
 		<div class="chips">
 			for _, rel := range ent.Relations {
-				{{ sub, obj := typ + ":" + ent.ID, self.Type + ":" + self.ID }}
+				{{ sub, obj := typ+":"+ent.ID, self.Type+":"+self.ID }}
 				if selfIsSubject {
 					{{ sub, obj = obj, sub }}
 				}

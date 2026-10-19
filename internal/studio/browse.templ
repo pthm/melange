@@ -1,8 +1,6 @@
 package studio
 
-import (
-	"strings"
-)
+import "strings"
 
 templ tuplesSidebar(types []typeCount, active string) {
 	<div class="side-section">
@@ -52,15 +50,15 @@ templ tuplesPage(env string, types []typeCount, errMsg string) {
 }
 
 type browseData struct {
-	Env        string
-	Type       string
-	Types      []typeCount
-	Ents       []entityRef
-	More       bool // more entities than the first page
-	Total      int  // distinct ids of the type, from the sidebar counts
-	Labels     labels
-	Source     *labelSource // nil when the type has no label source
-	Err        string
+	Env    string
+	Type   string
+	Types  []typeCount
+	Ents   []entityRef
+	More   bool // more entities than the first page
+	Total  int  // distinct ids of the type, from the sidebar counts
+	Labels labels
+	Source *labelSource // nil when the type has no label source
+	Err    string
 }
 
 templ browsePage(d browseData) {
@@ -151,9 +149,11 @@ templ directTable(p directPage, ls labels) {
 				<thead>
 					<tr>
 						if p.Side == sideObject {
-							<th>subject</th><th>relation</th>
+							<th>subject</th>
+							<th>relation</th>
 						} else {
-							<th>relation</th><th>object</th>
+							<th>relation</th>
+							<th>object</th>
 						}
 					</tr>
 				</thead>

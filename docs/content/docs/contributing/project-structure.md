@@ -263,6 +263,20 @@ When modifying SQL generation in `internal/sqlgen/`:
 2. Run `just test-openfga` to verify compatibility
 3. Run `just bench-openfga` to check performance impact
 
+### Studio Views
+
+`melange studio` renders its pages from [templ](https://templ.guide) files in
+`internal/studio/`. The generated `*_templ.go` files are committed, so ordinary
+builds and `go install` need no extra step. After editing a `.templ` file:
+
+1. Run `just studio-generate` (formats and regenerates) and commit the result
+2. `just studio-generate-check` (also part of `just check` and CI) fails on
+   unformatted templates and on stale or orphaned generated files
+
+`just studio-watch --db <dsn> [--schema <file>]` regenerates, rebuilds and restarts
+studio on every change under `internal/studio/`, with live reload at
+`http://127.0.0.1:7331`.
+
 ### Adding a Language Generator
 
 1. Create `internal/clientgen/<language>/generate.go`

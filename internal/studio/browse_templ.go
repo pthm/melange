@@ -8,9 +8,7 @@ package studio
 import "github.com/a-h/templ"
 import templruntime "github.com/a-h/templ/runtime"
 
-import (
-	"strings"
-)
+import "strings"
 
 func tuplesSidebar(types []typeCount, active string) templ.Component {
 	return templruntime.GeneratedTemplate(func(templ_7745c5c3_Input templruntime.GeneratedComponentInput) (templ_7745c5c3_Err error) {
@@ -55,7 +53,7 @@ func tuplesSidebar(types []typeCount, active string) templ.Component {
 			var templ_7745c5c3_Var2 templ.SafeURL
 			templ_7745c5c3_Var2, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL("/browse/" + t.Type))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 16, Col: 45}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 14, Col: 45}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var2))
 			if templ_7745c5c3_Err != nil {
@@ -76,7 +74,7 @@ func tuplesSidebar(types []typeCount, active string) templ.Component {
 			var templ_7745c5c3_Var3 string
 			templ_7745c5c3_Var3, templ_7745c5c3_Err = templ.JoinStringErrs(t.Type)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 17, Col: 14}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 15, Col: 14}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var3))
 			if templ_7745c5c3_Err != nil {
@@ -89,7 +87,7 @@ func tuplesSidebar(types []typeCount, active string) templ.Component {
 			var templ_7745c5c3_Var4 string
 			templ_7745c5c3_Var4, templ_7745c5c3_Err = templ.JoinStringErrs(num(t.Count))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 18, Col: 46}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 16, Col: 46}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var4))
 			if templ_7745c5c3_Err != nil {
@@ -211,7 +209,7 @@ func tuplesPage(env string, types []typeCount, errMsg string) templ.Component {
 				var templ_7745c5c3_Var9 templ.SafeURL
 				templ_7745c5c3_Var9, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL("/browse/" + t.Type))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 42, Col: 59}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 40, Col: 59}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var9))
 				if templ_7745c5c3_Err != nil {
@@ -224,7 +222,7 @@ func tuplesPage(env string, types []typeCount, errMsg string) templ.Component {
 				var templ_7745c5c3_Var10 string
 				templ_7745c5c3_Var10, templ_7745c5c3_Err = templ.JoinStringErrs(t.Type)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 43, Col: 22}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 41, Col: 22}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var10))
 				if templ_7745c5c3_Err != nil {
@@ -237,7 +235,7 @@ func tuplesPage(env string, types []typeCount, errMsg string) templ.Component {
 				var templ_7745c5c3_Var11 string
 				templ_7745c5c3_Var11, templ_7745c5c3_Err = templ.JoinStringErrs(plural(t.Count, "entity"))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 44, Col: 54}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 42, Col: 54}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var11))
 				if templ_7745c5c3_Err != nil {
@@ -331,7 +329,7 @@ func browsePage(d browseData) templ.Component {
 					var templ_7745c5c3_Var15 string
 					templ_7745c5c3_Var15, templ_7745c5c3_Err = templ.JoinStringErrs(d.Source.Desc)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 71, Col: 37}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 69, Col: 37}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var15))
 					if templ_7745c5c3_Err != nil {
@@ -344,7 +342,7 @@ func browsePage(d browseData) templ.Component {
 					var templ_7745c5c3_Var16 string
 					templ_7745c5c3_Var16, templ_7745c5c3_Err = templ.JoinStringErrs(d.Source.Via)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 71, Col: 62}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 69, Col: 62}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var16))
 					if templ_7745c5c3_Err != nil {
@@ -393,7 +391,7 @@ func browsePage(d browseData) templ.Component {
 				var templ_7745c5c3_Var18 string
 				templ_7745c5c3_Var18, templ_7745c5c3_Err = templ.JoinStringErrs(d.Type)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 79, Col: 40}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 77, Col: 40}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var18))
 				if templ_7745c5c3_Err != nil {
@@ -483,7 +481,7 @@ func crumbs(typ, cur string) templ.Component {
 			var templ_7745c5c3_Var20 string
 			templ_7745c5c3_Var20, templ_7745c5c3_Err = templ.JoinStringErrs(typ)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 106, Col: 34}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 104, Col: 34}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var20))
 			if templ_7745c5c3_Err != nil {
@@ -501,7 +499,7 @@ func crumbs(typ, cur string) templ.Component {
 			var templ_7745c5c3_Var21 templ.SafeURL
 			templ_7745c5c3_Var21, templ_7745c5c3_Err = templ.JoinURLErrs(templ.URL("/browse/" + typ))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 108, Col: 40}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 106, Col: 40}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var21))
 			if templ_7745c5c3_Err != nil {
@@ -514,7 +512,7 @@ func crumbs(typ, cur string) templ.Component {
 			var templ_7745c5c3_Var22 string
 			templ_7745c5c3_Var22, templ_7745c5c3_Err = templ.JoinStringErrs(typ)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 108, Col: 48}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 106, Col: 48}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var22))
 			if templ_7745c5c3_Err != nil {
@@ -527,7 +525,7 @@ func crumbs(typ, cur string) templ.Component {
 			var templ_7745c5c3_Var23 string
 			templ_7745c5c3_Var23, templ_7745c5c3_Err = templ.JoinStringErrs(cur)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 110, Col: 34}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 108, Col: 34}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var23))
 			if templ_7745c5c3_Err != nil {
@@ -627,7 +625,7 @@ func entityRows(ents []entityRef, ls labels, p listPage) templ.Component {
 			var templ_7745c5c3_Var26 templ.SafeURL
 			templ_7745c5c3_Var26, templ_7745c5c3_Err = templ.JoinURLErrs(entityURL(e.Type, e.ID))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 133, Col: 48}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 131, Col: 48}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var26))
 			if templ_7745c5c3_Err != nil {
@@ -648,7 +646,7 @@ func entityRows(ents []entityRef, ls labels, p listPage) templ.Component {
 			var templ_7745c5c3_Var27 string
 			templ_7745c5c3_Var27, templ_7745c5c3_Err = templ.JoinStringErrs(plural(e.Count, "tuple"))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 135, Col: 49}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `browse.templ`, Line: 133, Col: 49}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var27))
 			if templ_7745c5c3_Err != nil {

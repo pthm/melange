@@ -51,10 +51,14 @@ templ historyPage(env string, recs []migrator.MigrationRecord, deployed *migrato
 					</div>
 					<div class="sec-body stack">
 						<dl class="kv">
-							<dt>melange</dt><dd><code>{ rec.MelangeVersion }</code></dd>
-							<dt>codegen</dt><dd><code>{ rec.CodegenVersion }</code></dd>
-							<dt>schema checksum</dt><dd><code>{ rec.SchemaChecksum }</code></dd>
-							<dt>functions</dt><dd>{ num(len(rec.FunctionNames)) }</dd>
+							<dt>melange</dt>
+							<dd><code>{ rec.MelangeVersion }</code></dd>
+							<dt>codegen</dt>
+							<dd><code>{ rec.CodegenVersion }</code></dd>
+							<dt>schema checksum</dt>
+							<dd><code>{ rec.SchemaChecksum }</code></dd>
+							<dt>functions</dt>
+							<dd>{ num(len(rec.FunctionNames)) }</dd>
 							<dt>model</dt>
 							<dd>
 								if rec.SchemaFormat != "" {
