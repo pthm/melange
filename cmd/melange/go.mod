@@ -2,7 +2,7 @@
 // Install it with: go install github.com/pthm/melange@latest
 module github.com/pthm/melange/cmd/melange
 
-go 1.25.7
+go 1.27.3
 
 // This module is retired. Its only remaining code is an error-shim main that
 // points at the new install path. Every prior release (v0.1.0–v0.8.6, all 16

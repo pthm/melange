@@ -7,8 +7,10 @@ experimental = true
 
 [tools]
 # Toolchain — pinned to major.minor so patch updates flow through but minor
-# bumps are explicit. go.mod's `go` directives top out at 1.25.
-go = "1.25"
+# bumps are explicit. Only the runtime module (melange/) keeps a lower `go`
+# directive, for library users; the CLI, compiler and test modules track
+# the current release.
+go = "1.27"
 
 # Release automation
 goreleaser = "latest"
