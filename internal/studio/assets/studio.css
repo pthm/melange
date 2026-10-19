@@ -7,7 +7,7 @@
  *   body     14/20 sans  prose, nav, inputs      labels, entity names, table
  *                                                headers, primary buttons, verdicts
  *            14/20 mono  —                       section titles
- *   mono     12/18 mono  identifiers, chips,     type groups, status badges
+ *   mono     12/18 mono  identifiers, chips,     userset names, status badges
  *                        counts, DSL
  *
  * Colours: --fg (strong), --mute (muted), and the status tones --ok, --warn,
@@ -37,8 +37,8 @@
   --ok: #1a7f37; --ok-bg: #e9f6ec; --warn: #8a6a00; --warn-bg: #fbf5d9; --fail: #c0362c; --fail-bg: #fdeceb;
   color-scheme: light;
 }
-/* data-theme is set before first paint by the inline script in shell():
-   the saved choice from the top-bar toggle, else the system preference. */
+/* data-theme is set before first paint by theme.js: the saved choice from
+   the top-bar toggle, else the system preference. */
 :root[data-theme="dark"] {
   color-scheme: dark;
   --fg: #e5e5e5; --mute: #a3a3a3; --bg: #111; --panel: #171717; --strip: #1f1f1f; --line: #262626; --hover: #1f1f1f;
@@ -117,7 +117,6 @@ a { color: inherit; }
 }
 .side-list a:hover { background: var(--hover); }
 .side-list a[aria-current] { background: var(--accent-bg); color: var(--accent); }
-.side-list > li:has(> .side-list) > a { font-weight: 600; }
 .side-list .side-list a { padding-left: var(--sp-5); min-height: 28px; color: var(--mute); font-weight: 400; }
 .side-list .side-list a[aria-current] { color: var(--accent); }
 .side-list .stack-2 { display: flex; flex-direction: column; min-width: 0; }
@@ -282,12 +281,6 @@ details.disclose[open] > summary { margin-bottom: var(--sp-2); }
 .inline-gap > a { display: inline-flex; align-items: center; min-height: 28px; } /* tap target: 24px + margin */
 .inline-gap { display: inline-flex; flex-wrap: wrap; gap: var(--sp-1); align-items: center; }
 
-/* access tree: type group → entity → relation chips */
-.group + .group { margin-top: var(--sp-3); }
-.group > summary { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-1) 0; list-style: none; }
-.group > summary::-webkit-details-marker { display: none; }
-.group > summary code { font-weight: 600; }
-
 /* entity tabs (in the page-header band) */
 .page-head > .tabs { grid-column: 1 / -1; display: flex; gap: var(--sp-1); margin: var(--sp-3) 0 calc(-1 * var(--sp-4) - 1px); }
 .tabs a {
@@ -325,11 +318,6 @@ details.disclose[open] > summary { margin-bottom: var(--sp-2); }
 .more { margin-top: var(--sp-2); }
 .more-rows { display: block; padding: var(--sp-3) 0; list-style: none; } /* infinite-scroll sentinel */
 tr.more-rows { display: table-row; }
-.group > summary::before { content: "›"; width: 12px; color: var(--mute); transition: transform .15s; }
-.group[open] > summary::before { transform: rotate(90deg); }
-.group > .tree { margin: var(--sp-1) 0 0 7px; border-left: 1px solid var(--line); }
-.group > .tree > li { padding: var(--sp-2) 0 var(--sp-2) var(--sp-4); }
-.group > .tree > li::before { content: ""; position: absolute; left: 0; top: 18px; width: 10px; border-top: 1px solid var(--line); }
 
 /* ---------- syntax highlighting (highlight.go: FGA and SQL) ---------- */
 .code .f-kw { color: var(--accent); font-weight: 700; }
