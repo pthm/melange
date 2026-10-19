@@ -169,20 +169,6 @@ func convertIntersectionGroups(groups []IntersectionGroupInfo) []ExcludedInterse
 	return result
 }
 
-// buildSimpleComplexExclusionInput creates an ExclusionConfig with only simple and complex
-// exclusions (no TTU or intersection exclusions).
-func buildSimpleComplexExclusionInput(a RelationAnalysis, databaseSchema string, objectIDExpr, subjectTypeExpr, subjectIDExpr Expr) ExclusionConfig {
-	return ExclusionConfig{
-		DatabaseSchema:           databaseSchema,
-		ObjectType:               a.ObjectType,
-		ObjectIDExpr:             objectIDExpr,
-		SubjectTypeExpr:          subjectTypeExpr,
-		SubjectIDExpr:            subjectIDExpr,
-		SimpleExcludedRelations:  a.SimpleExcludedRelations,
-		ComplexExcludedRelations: a.ComplexExcludedRelations,
-	}
-}
-
 // trimTrailingSemicolon removes a trailing semicolon from a SQL string.
 func trimTrailingSemicolon(input string) string {
 	trimmed := strings.TrimSpace(input)

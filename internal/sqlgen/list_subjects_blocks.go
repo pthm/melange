@@ -20,6 +20,17 @@ func applyExclusionPredicates(q *TupleQuery, config ExclusionConfig, useCTE bool
 	}
 }
 
+// memberExclusionPredicates builds exclusion predicates for the subject a
+// userset block returns (memberID), not the userset tuple that produced it.
+// Returns nil when the CTE path applies exclusions instead.
+func memberExclusionPredicates(plan ListPlan, memberID Expr) []Expr {
+	if plan.UseCTEExclusion || !plan.HasExclusion {
+		return nil
+	}
+	return buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID,
+		Param("p_subject_type"), memberID).BuildPredicates()
+}
+
 // BuildListSubjectsBlocks builds all query blocks for a list_subjects function.
 // Returns a BlockSet with Primary and optionally Secondary blocks.
 func BuildListSubjectsBlocks(plan ListPlan) (BlockSet, error) {
@@ -305,7 +316,11 @@ func buildListSubjectsUsersetPatternBlocks(plan ListPlan) ([]TypedQueryBlock, er
 func buildListSubjectsComplexUsersetBlock(plan ListPlan, pattern listUsersetPatternInput) TypedQueryBlock {
 	funcName := listSubjectsFunctionName(pattern.SubjectType, pattern.SubjectRelation)
 
-	conditions := []Expr{
+	// For exclusions on LATERAL join blocks, we must check each returned subject
+	// individually since the exclusion applies to the result (ls.subject_id), not the
+	// userset tuple (t.subject_id). Use the exclusion config with the returned subject's
+	// columns to build correct NOT EXISTS predicates.
+	conditions := append([]Expr{
 		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 		Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
 		In{Expr: Col{Table: "t", Column: "relation"}, Values: pattern.SourceRelations},
@@ -315,22 +330,7 @@ func buildListSubjectsComplexUsersetBlock(plan ListPlan, pattern listUsersetPatt
 			Left:  UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}},
 			Right: Lit(pattern.SubjectRelation),
 		},
-	}
-
-	// For exclusions on LATERAL join blocks, we must check each returned subject
-	// individually since the exclusion applies to the result (ls.subject_id), not the
-	// userset tuple (t.subject_id). Use the exclusion config with the returned subject's
-	// columns to build correct NOT EXISTS predicates.
-	if !plan.UseCTEExclusion && plan.HasExclusion {
-		resultExclusions := buildSimpleComplexExclusionInput(
-			plan.Analysis,
-			plan.DatabaseSchema,
-			ObjectID,
-			Param("p_subject_type"),
-			Col{Table: "ls", Column: "subject_id"},
-		)
-		conditions = append(conditions, resultExclusions.BuildPredicates()...)
-	}
+	}, memberExclusionPredicates(plan, Col{Table: "ls", Column: "subject_id"})...)
 
 	stmt := SelectStmt{
 		Distinct:    true,
@@ -404,7 +404,10 @@ func buildListSubjectsSimpleUsersetBlock(plan ListPlan, pattern listUsersetPatte
 		})
 	}
 
-	applyExclusionPredicates(q, plan.Exclusions, plan.UseCTEExclusion)
+	// Exclusions apply to the returned member, not the userset tuple t.
+	for _, pred := range memberExclusionPredicates(plan, Col{Table: "m", Column: "subject_id"}) {
+		q.Where(pred)
+	}
 
 	return TypedQueryBlock{
 		Comments: []string{

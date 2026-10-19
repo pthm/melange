@@ -1,0 +1,69 @@
+# A tuple-to-userset base excluding an intersection. Check denied alice,
+# but list_subjects ignored the excluded intersection and listed her.
+# Found by TestOpenFGA_GeneratedNested.
+tests:
+  - name: ttu_exclusion_intersection_listsubjects
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type folder
+            relations
+              define a: [user]
+          type document
+            relations
+              define parent: [folder]
+              define c: [user]
+              define r1: [user]
+              define x: a from parent but not (r1 and c)
+        tuples:
+          - user: folder:f1
+            relation: parent
+            object: document:d0
+          - user: user:alice
+            relation: a
+            object: folder:f1
+          - user: user:alice
+            relation: r1
+            object: document:d0
+          - user: user:alice
+            relation: c
+            object: document:d0
+          - user: user:bob
+            relation: a
+            object: folder:f1
+          - user: user:bob
+            relation: r1
+            object: document:d0
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: x
+              object: document:d0
+            expectation: false
+          - tuple:
+              user: user:bob
+              relation: x
+              object: document:d0
+            expectation: true
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: document
+              relation: x
+            expectation: []
+          - request:
+              user: user:bob
+              type: document
+              relation: x
+            expectation:
+              - document:d0
+        listUsersAssertions:
+          - request:
+              object: document:d0
+              relation: x
+              filters:
+                - user
+            expectation:
+              - user:bob

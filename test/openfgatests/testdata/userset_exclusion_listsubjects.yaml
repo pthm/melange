@@ -1,0 +1,50 @@
+# list_subjects applied an exclusion to the userset tuple (group#member)
+# instead of the member it returned, so excluded members were listed.
+# Found by TestOpenFGA_GeneratedNested.
+tests:
+  - name: userset_exclusion_listsubjects
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type document
+            relations
+              define blocked: [user]
+              define viewer: [user, group#member]
+              define can_view: viewer but not blocked
+        tuples:
+          - user: user:alice
+            relation: member
+            object: group:g
+          - user: user:bob
+            relation: member
+            object: group:g
+          - user: group:g#member
+            relation: viewer
+            object: document:d
+          - user: user:alice
+            relation: blocked
+            object: document:d
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: can_view
+              object: document:d
+            expectation: false
+          - tuple:
+              user: user:bob
+              relation: can_view
+              object: document:d
+            expectation: true
+        listUsersAssertions:
+          - request:
+              object: document:d
+              relation: can_view
+              filters:
+                - user
+            expectation:
+              - user:bob

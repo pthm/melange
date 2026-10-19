@@ -116,7 +116,7 @@ func buildRegularQueryWithExclusions(plan ListPlan, blocks ComposedSubjectsBlock
 	}
 
 	if blocks.HasExclusions {
-		exclusions := buildSimpleComplexExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sc", Column: "subject_id"})
+		exclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sc", Column: "subject_id"})
 		if preds := exclusions.BuildPredicates(); len(preds) > 0 {
 			query.Where = And(preds...)
 		}
