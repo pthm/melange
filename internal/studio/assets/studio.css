@@ -88,6 +88,13 @@ a { color: inherit; }
 .topnav a:hover { color: var(--fg); }
 .topnav a[aria-current] { color: var(--fg); border-bottom-color: var(--accent); }
 .topbar .meta { margin-left: auto; display: flex; align-items: center; gap: var(--sp-2); }
+/* version and outbound links: muted, set off from the status badges */
+.toplinks { display: flex; align-items: center; gap: var(--sp-3); margin-left: var(--sp-2); padding-left: var(--sp-3); border-left: 1px solid var(--line); color: var(--mute); }
+.toplinks > a:not(.badge) { color: var(--mute); text-decoration: none; }
+.toplinks > a:not(.badge):hover { color: var(--fg); }
+.toplinks .icon { display: flex; }
+.toplinks a.badge { text-decoration: none; }
+.toplinks a.badge:hover { text-decoration: underline; }
 .sidebar { grid-area: side; overflow-y: auto; background: var(--panel); border-right: 1px solid var(--line); padding: var(--sp-4) var(--sp-3); }
 .content { --main-px: var(--sp-6); grid-area: main; overflow-y: auto; min-width: 0; background: var(--panel); display: flex; flex-direction: column; }
 .content > .error { padding: var(--sp-4) var(--main-px); border-bottom: 1px solid var(--line); }

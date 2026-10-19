@@ -417,3 +417,23 @@ func TestNumberFormatting(t *testing.T) {
 		}
 	}
 }
+
+func TestShortVersion(t *testing.T) {
+	for in, want := range map[string]string{
+		"0.9.6":  "v0.9.6",
+		"v0.9.6": "v0.9.6",
+		"dev":    "dev",
+		"v0.9.6-0.20261018190901-38c4ca1c55f9+dirty": "dev 38c4ca1",
+		"v0.9.7-0.20261019120000-abcdef123456":       "dev abcdef1",
+	} {
+		if got := shortVersion(in); got != want {
+			t.Errorf("shortVersion(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := versionURL("0.9.6"); got != releasesURL+"/tag/v0.9.6" {
+		t.Errorf("versionURL(0.9.6) = %q", got)
+	}
+	if got := versionURL("dev"); got != "" {
+		t.Errorf("versionURL(dev) = %q, want none", got)
+	}
+}

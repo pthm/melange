@@ -96,6 +96,19 @@ func runStudio(dsn, databaseSchema, schemaPath, addr string) error {
 	}
 	fmt.Fprintf(os.Stderr, "melange studio: http://%s (ctrl-c to stop)\n", ln.Addr())
 
+	// The root command's background update check (off with --no-update-check
+	// or in CI) also feeds the top bar's "update available" badge. The result
+	// goes back on the channel for the usual notice on exit.
+	if updateResult != nil {
+		go func() {
+			info := <-updateResult
+			if info != nil && info.UpdateAvailable {
+				studio.SetLatestRelease(info.LatestVersion)
+			}
+			updateResult <- info
+		}()
+	}
+
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
 	select {
