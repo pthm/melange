@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.9.6](https://github.com/pthm/melange/compare/v0.9.5...v0.9.6) (2026-10-19)
+
+
+### Features
+
+* **cli:** add a local read-only `melange studio` console ([27df7dc](https://github.com/pthm/melange/commit/27df7dcadc041e543c0faed41061808e8ddbc01c))
+* **cli:** add a studio check matrix for a subject and object ([c106c78](https://github.com/pthm/melange/commit/c106c78090730255c0911adb1f431705f17b1951))
+* **cli:** add a studio relation detail page ([c8433c6](https://github.com/pthm/melange/commit/c8433c66eca9e2c32dd092a0ce585c05bdea2fe9))
+* **cli:** add a tuple browser to melange studio ([54fc7f6](https://github.com/pthm/melange/commit/54fc7f6ed326d7cf441f00cd940697f89417071b))
+* **cli:** add melange studio, a local read-only web console ([fcde414](https://github.com/pthm/melange/commit/fcde414426de61062ff351ca741a9df0214ee306))
+* **cli:** add what-if contextual tuples to studio Explain ([feeaa01](https://github.com/pthm/melange/commit/feeaa018fc3b3fc8a6626b63f36c235a6c88797e))
+* **cli:** format studio counts with thousands separators ([00e306b](https://github.com/pthm/melange/commit/00e306bb451794e6386d28d96b0435a480342e0a))
+* **cli:** give the studio Model page tabs and a query mode switcher ([13b8d64](https://github.com/pthm/melange/commit/13b8d642f0e22fc1d64749b1f9b1bcb64df7fe05))
+* **cli:** harden how studio serves pages and assets ([0eab5b9](https://github.com/pthm/melange/commit/0eab5b96f0447713bb1f4de43d29c6620b622622))
+* **cli:** page studio's long lists with infinite scroll ([41b1947](https://github.com/pthm/melange/commit/41b1947857ba4fa0a5c0328c85b97ea2daf68e07))
+* **cli:** show studio query timings and an EXPLAIN ANALYZE view ([ce865bb](https://github.com/pthm/melange/commit/ce865bb5e5909bd5bd9321cfb5b8e088f50fde5a))
+* **cli:** show the running version and docs links in the studio top bar ([256982d](https://github.com/pthm/melange/commit/256982d36efc619022cd3b049b4ec7d7837d24a1))
+
+
+### Bug Fixes
+
+* **cli:** show studio's "No matches." when the model filter finds nothing ([94ccb4d](https://github.com/pthm/melange/commit/94ccb4d30e9b2e239489663dfd1875514dac8d80))
+
 ## [0.9.5](https://github.com/pthm/melange/compare/v0.9.4...v0.9.5) (2026-10-17)
 
 
