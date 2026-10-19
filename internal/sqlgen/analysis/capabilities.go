@@ -127,7 +127,9 @@ func DetermineListStrategy(a RelationAnalysis) ListStrategy {
 	// so it under-reports every object reached only through the parent chain.
 	// Route these to Recursive, whose CTE covers both the cross-type anchor base
 	// and the self-referential parent expansion.
-	if a.IndirectAnchor != nil && !hasSelfReferentialParent(a) {
+	// Composed also models only the anchor path, not intersection groups: a
+	// relation like "v from parent or (a but not c)" would lose its group.
+	if a.IndirectAnchor != nil && !hasSelfReferentialParent(a) && !a.Features.HasIntersection {
 		return ListStrategyComposed
 	}
 	if a.Features.HasIntersection {

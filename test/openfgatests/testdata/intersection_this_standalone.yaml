@@ -1,0 +1,124 @@
+# Direct tuples that appear only inside an intersection must not grant on
+# their own. They did when the relation had a parent part inside the
+# intersection (`[user] and a from parent`), or an implied or parent path
+# outside it (`([user] and a) or c`). Found by TestOpenFGA_GeneratedNested.
+tests:
+  - name: intersection_this_standalone
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type folder
+            relations
+              define a: [user]
+          type document
+            relations
+              define parent: [folder]
+              define a: [user]
+              define c: [user]
+              define and_ttu: [user] and a from parent
+              define and_or_implied: ([user] and a) or c
+              define and_or_ttu: ([user] and a) or a from parent
+        tuples:
+          - user: folder:f1
+            relation: parent
+            object: document:d1
+          - user: user:carol
+            relation: a
+            object: folder:f1
+          # alice has only the direct tuples
+          - user: user:alice
+            relation: and_ttu
+            object: document:d1
+          - user: user:alice
+            relation: and_or_implied
+            object: document:d1
+          - user: user:alice
+            relation: and_or_ttu
+            object: document:d1
+          # bob has the direct tuples and a on the document
+          - user: user:bob
+            relation: and_or_implied
+            object: document:d1
+          - user: user:bob
+            relation: and_or_ttu
+            object: document:d1
+          - user: user:bob
+            relation: a
+            object: document:d1
+          # carol has the direct tuple and a on the parent folder
+          - user: user:carol
+            relation: and_ttu
+            object: document:d1
+          - user: user:dave
+            relation: c
+            object: document:d1
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: and_ttu
+              object: document:d1
+            expectation: false
+          - tuple:
+              user: user:carol
+              relation: and_ttu
+              object: document:d1
+            expectation: true
+          - tuple:
+              user: user:alice
+              relation: and_or_implied
+              object: document:d1
+            expectation: false
+          - tuple:
+              user: user:bob
+              relation: and_or_implied
+              object: document:d1
+            expectation: true
+          - tuple:
+              user: user:dave
+              relation: and_or_implied
+              object: document:d1
+            expectation: true
+          - tuple:
+              user: user:alice
+              relation: and_or_ttu
+              object: document:d1
+            expectation: false
+          - tuple:
+              user: user:bob
+              relation: and_or_ttu
+              object: document:d1
+            expectation: true
+          - tuple:
+              user: user:carol
+              relation: and_or_ttu
+              object: document:d1
+            expectation: true
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: document
+              relation: and_ttu
+            expectation: []
+          - request:
+              user: user:alice
+              type: document
+              relation: and_or_implied
+            expectation: []
+        listUsersAssertions:
+          - request:
+              object: document:d1
+              relation: and_ttu
+              filters:
+                - user
+            expectation:
+              - user:carol
+          - request:
+              object: document:d1
+              relation: and_or_implied
+              filters:
+                - user
+            expectation:
+              - user:bob
+              - user:dave

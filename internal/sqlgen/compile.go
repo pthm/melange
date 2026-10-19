@@ -292,8 +292,11 @@ func computeHasStandaloneAccess(a RelationAnalysis) bool {
 		return a.Features.HasDirect || a.Features.HasImplied || a.Features.HasUserset || a.Features.HasRecursive
 	}
 
-	// Implied and recursive are always standalone, regardless of intersection.
-	if a.Features.HasImplied || a.Features.HasRecursive {
+	// Implied and parent paths outside the intersection are standalone. Use
+	// ParentRelations, not Features.HasRecursive: HasRecursive is also set by
+	// a parent part inside an intersection, which must not make the
+	// relation's direct tuples (`[user] and viewer from parent`) standalone.
+	if a.Features.HasImplied || len(a.ParentRelations) > 0 {
 		return true
 	}
 

@@ -98,14 +98,14 @@ func (o *oracle) evalGroup(owner string, g schema.IntersectionGroup) bool {
 func (o *oracle) evalFlat(rel string) bool {
 	d := o.flat[rel]
 	// Mirrors computeHasStandaloneAccess: direct grants stand alone unless an
-	// intersection group uses this relation's own tuples.
-	thisInGroup := false
-	for _, g := range d.IntersectionGroups {
-		for _, r := range g.Relations {
-			thisInGroup = thisInGroup || r == rel
-		}
-	}
-	allowed := len(d.SubjectTypeRefs) > 0 && !thisInGroup && o.direct(rel)
+	// intersection group uses this relation's own tuples and the relation has
+	// no implied or parent path (either of which makes all of its tuple
+	// lookups, its own included, standalone).
+	thisInGroup := slices.ContainsFunc(d.IntersectionGroups, func(g schema.IntersectionGroup) bool {
+		return slices.Contains(g.Relations, rel)
+	})
+	standalone := !thisInGroup || len(d.ImpliedBy) > 0 || len(d.ParentRelations) > 0
+	allowed := len(d.SubjectTypeRefs) > 0 && standalone && o.direct(rel)
 	for _, r := range d.ImpliedBy {
 		allowed = allowed || o.evalFlat(r)
 	}
@@ -218,6 +218,14 @@ func TestFlatteningMatchesOpenFGA(t *testing.T) {
 		"(a and b) but not c",
 		"d and ((a and b) but not c)",
 		"([user] and a) but not b",
+		"([user] and a) or c",
+		"([user] and a from parent) or c",
+		"(([user] and a) but not b) or viewer from parent",
+		"([user] but not b) or a",
+		"([user] but not (c or c)) or a",
+		"([user] but not b) or viewer from parent",
+		"[user] or (a but not b)",
+		"([user] or a) but not b",
 		"[user] but not viewer from parent",
 		"a but not (b or viewer from parent)",
 	}
@@ -250,12 +258,13 @@ func TestFlatteningRejectsUnrepresentable(t *testing.T) {
 // Random nested expressions: every accepted one must match OpenFGA exactly.
 func TestFlatteningMatchesOpenFGARandom(t *testing.T) {
 	atoms := []string{"a", "b", "c", "d", "e", "everyone", "viewer from parent"}
+	ops := []string{" or ", " and ", " but not "}
 	var gen func(r *rand.Rand, depth int) string
 	gen = func(r *rand.Rand, depth int) string {
 		if depth == 0 || r.Intn(3) == 0 {
 			return atoms[r.Intn(len(atoms))]
 		}
-		op := []string{" or ", " and ", " but not "}[r.Intn(3)]
+		op := ops[r.Intn(len(ops))]
 		return "(" + gen(r, depth-1) + op + gen(r, depth-1) + ")"
 	}
 	r := rand.New(rand.NewSource(1))
@@ -268,7 +277,12 @@ func TestFlatteningMatchesOpenFGARandom(t *testing.T) {
 		if !strings.HasPrefix(expr, "(") {
 			continue // a bare atom
 		}
-		_ = checkOracle(t, expr[1:len(expr)-1]) // rejections are allowed here
+		expr = expr[1 : len(expr)-1]
+		// A direct type restriction is only valid as the leftmost operand.
+		if r.Intn(3) == 0 {
+			expr = "[user]" + ops[r.Intn(len(ops))] + "(" + expr + ")"
+		}
+		_ = checkOracle(t, expr) // rejections are allowed here
 		if t.Failed() {
 			return
 		}

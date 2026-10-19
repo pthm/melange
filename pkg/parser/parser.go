@@ -272,8 +272,38 @@ func convertRelation(name string, rel *openfgav1.Userset, subjectTypeRefs []sche
 		Name:            name,
 		SubjectTypeRefs: subjectTypeRefs,
 	}
-	err := extractUserset(rel, &relDef)
-	return relDef, err
+	if err := extractUserset(rel, &relDef); err != nil {
+		return relDef, err
+	}
+	liftRootPaths(&relDef)
+	return relDef, nil
+}
+
+// liftRootPaths moves a relation's top-level implied and parent paths into
+// single-member intersection groups when the relation has groups. Codegen's
+// group strategies evaluate every member kind exactly, while its
+// standalone paths next to groups did not:
+//
+//   - With an implied or parent path, a relation's own tuples were treated
+//     as standalone even when its direct assignment appears only inside a
+//     group (`([user] and a) or c`), letting a direct tuple grant alone.
+//   - list_objects had no branch for a top-level parent path, or for an
+//     implied relation that is itself a parent path, next to groups
+//     (`v from parent or (a but not c)`, `r0 or (b but not r0)`).
+//
+// Afterwards a relation with groups has no implied or parent paths outside
+// them, so its direct tuples are standalone exactly when no group uses them.
+func liftRootPaths(rel *schema.RelationDefinition) {
+	if len(rel.IntersectionGroups) == 0 {
+		return
+	}
+	for _, r := range rel.ImpliedBy {
+		rel.IntersectionGroups = append(rel.IntersectionGroups, schema.IntersectionGroup{Relations: []string{r}})
+	}
+	for _, p := range rel.ParentRelations {
+		rel.IntersectionGroups = append(rel.IntersectionGroups, schema.IntersectionGroup{ParentRelations: []schema.ParentRelationCheck{p}})
+	}
+	rel.ImpliedBy, rel.ParentRelations = nil, nil
 }
 
 // extractUserset flattens a relation's userset into RelationDefinition fields.
