@@ -65,6 +65,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("POST /explain", s.explain)
 	mux.HandleFunc("GET /expand", s.expand)
+	mux.HandleFunc("POST /matrix", s.matrix)
 	mux.HandleFunc("GET /tuples", s.tuplesIndex)
 	mux.HandleFunc("GET /history", s.history)
 	mux.HandleFunc("GET /health", s.health)
@@ -207,6 +208,55 @@ func (s *Server) explainWithWhatIf(w http.ResponseWriter, r *http.Request, subje
 		return
 	}
 	render(w, r, whatIfView(base, with, tuples, unchecked))
+}
+
+// matrixCell is one relation's answer in the check matrix.
+type matrixCell struct {
+	Relation string
+	Allowed  bool
+	Err      string
+}
+
+// matrix checks every relation on the object's type for the subject. The
+// relations come from the deployed model, since check_permission answers
+// false (not an error) for a relation that doesn't exist.
+func (s *Server) matrix(w http.ResponseWriter, r *http.Request) {
+	subject, err1 := parseIdent("subject", r.FormValue("subject"))
+	object, err2 := parseIdent("object", r.FormValue("object"))
+	if err := firstErr(err1, err2); err != nil {
+		render(w, r, errorBox(err.Error()))
+		return
+	}
+	model, reason := s.loadModel(r.Context())
+	if model == nil {
+		render(w, r, errorBox(reason))
+		return
+	}
+	if !typeExists(model.Types, string(object.Type)) {
+		render(w, r, errorBox(fmt.Sprintf("%s is not a type in the deployed model", object.Type)))
+		return
+	}
+	var notes []string
+	if !typeExists(model.Types, string(subject.Type)) {
+		notes = append(notes, fmt.Sprintf("%s is not a type in the deployed model, so every check is denied.", subject.Type))
+	}
+	if r.FormValue("whatif") != "" {
+		notes = append(notes, "What-if tuples are ignored by Matrix.")
+	}
+	rels := relationsOf(model.Types, string(object.Type))
+	if len(rels) == 0 {
+		render(w, r, errorBox(fmt.Sprintf("%s has no relations in the deployed model", object.Type)))
+		return
+	}
+	cells := make([]matrixCell, len(rels))
+	errs := eachRelation(r.Context(), rels, func(ctx context.Context, i int, rel string) (err error) {
+		cells[i].Allowed, err = s.checker.Check(ctx, subject, melange.Relation(rel), object)
+		return err
+	})
+	for i, rel := range rels {
+		cells[i].Relation, cells[i].Err = rel, errString(errs[i])
+	}
+	render(w, r, matrixView(string(subject.Type)+":"+subject.ID, string(object.Type)+":"+object.ID, cells, notes))
 }
 
 // expand serves both the form (object + relation) and pointer drill-in

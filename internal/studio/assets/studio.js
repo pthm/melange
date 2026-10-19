@@ -6,6 +6,7 @@
 //   [data-theme-toggle]           flips light/dark and remembers the choice
 //   .filter-bar input              focused by pressing "/"
 //   details.whatif                 its textarea is disabled (not sent) while closed
+//   [data-explain]                 toggles its row's .why-out (aria-expanded)
 document.addEventListener("input", (e) => {
   const input = e.target.closest("[data-filter]");
   if (!input) return;
@@ -49,3 +50,19 @@ document.addEventListener("toggle", (e) => {
   if (!e.target.matches?.("details.whatif")) return;
   e.target.querySelector("textarea").disabled = !e.target.open;
 }, true);
+
+// Explain chips toggle: a second click on the open chip clears its row's
+// panel instead of explaining again. Chips in one row share one panel.
+document.addEventListener("htmx:confirm", (e) => {
+  const chip = e.detail.elt;
+  if (!chip.matches("[data-explain]")) return;
+  const row = chip.closest("li");
+  const open = chip.getAttribute("aria-expanded") === "true";
+  for (const c of row.querySelectorAll("[data-explain]")) c.setAttribute("aria-expanded", "false");
+  if (open) {
+    e.preventDefault();
+    row.querySelector(".why-out").replaceChildren();
+    return;
+  }
+  chip.setAttribute("aria-expanded", "true");
+});

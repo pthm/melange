@@ -180,7 +180,7 @@ templ accessEntity(typ string, ent entityGroup, ls labels, self entityRef, selfI
 				if selfIsSubject {
 					{{ sub, obj = obj, sub }}
 				}
-				<button class="chip" title={ "Explain why " + sub + " has " + rel + " on " + obj } hx-post="/explain" hx-vals={ explainVals(sub, rel, obj) } hx-target="next .why-out">{ rel }</button>
+				@explainChip(sub, rel, obj)
 			}
 		</div>
 		<div class="why-out"></div>

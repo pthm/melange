@@ -272,6 +272,22 @@ func (s *Server) computeGroup(ctx context.Context, self entityRef, tab, other st
 // error. Rows stay in rels order.
 func listRelations(ctx context.Context, rels []string, typ string, list func(context.Context, string) ([]string, error)) []accessRow {
 	rows := make([]accessRow, len(rels))
+	errs := eachRelation(ctx, rels, func(ctx context.Context, i int, rel string) (err error) {
+		rows[i].IDs, err = list(ctx, rel)
+		return err
+	})
+	for i, rel := range rels {
+		rows[i].Relation, rows[i].Type, rows[i].Err = rel, typ, errString(errs[i])
+	}
+	return slices.DeleteFunc(rows, func(r accessRow) bool { return r.Err == "" && len(r.IDs) == 0 })
+}
+
+// eachRelation calls fn once per relation, sharing listSlots with every
+// other list call in the server, each bounded by listTimeout, and returns
+// each call's error by index (a timeout reads "timed out after 10s" rather
+// than "context deadline exceeded").
+func eachRelation(ctx context.Context, rels []string, fn func(ctx context.Context, i int, rel string) error) []error {
+	errs := make([]error, len(rels))
 	var wg sync.WaitGroup
 	for i, rel := range rels {
 		wg.Go(func() {
@@ -279,20 +295,20 @@ func listRelations(ctx context.Context, rels []string, typ string, list func(con
 			case listSlots <- struct{}{}:
 				defer func() { <-listSlots }()
 			case <-ctx.Done():
-				rows[i] = accessRow{Relation: rel, Type: typ, Err: ctx.Err().Error()}
+				errs[i] = ctx.Err()
 				return
 			}
 			cctx, cancel := context.WithTimeout(ctx, listTimeout)
 			defer cancel()
-			ids, err := list(cctx, rel)
+			err := fn(cctx, i, rel)
 			if err != nil && errors.Is(cctx.Err(), context.DeadlineExceeded) {
 				err = fmt.Errorf("timed out after %s", listTimeout)
 			}
-			rows[i] = accessRow{Relation: rel, Type: typ, IDs: ids, Err: errString(err)}
+			errs[i] = err
 		})
 	}
 	wg.Wait()
-	return slices.DeleteFunc(rows, func(r accessRow) bool { return r.Err == "" && len(r.IDs) == 0 })
+	return errs
 }
 
 // typeGroup is one type in an entity's access tree: the entities of that type

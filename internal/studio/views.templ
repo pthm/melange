@@ -163,12 +163,14 @@ templ indexPage(d indexData) {
 					<p class="help">
 						<strong>Explain</strong> checks whether the subject has the relation on the object, and shows every path the check tried.
 						<strong>Expand</strong> shows everyone who has the relation on the object, as a tree; it ignores the subject.
+						<strong>Matrix</strong> checks every relation on the object's type for the subject, in model order; it ignores the relation and what-if tuples.
 					</p>
 				}
 				<div class="sec-body">
-					// One form, two verbs: Enter and Explain post /explain; Expand
+					// One form, three verbs: Enter and Explain post /explain; Expand
 					// GETs /expand with the same fields (hx-include, since htmx only
-					// sends a form's values for non-GET requests by default).
+					// sends a form's values for non-GET requests by default); Matrix
+					// posts /matrix.
 					// Cmd/Ctrl+Enter in the what-if textarea also runs Explain, and
 					// #query-result dims while either request runs.
 					<form class="query" hx-post="/explain" hx-target="#query-result" hx-indicator="#query-result" hx-trigger="submit, keydown[(metaKey||ctrlKey)&&key=='Enter'] from:find textarea">
@@ -178,6 +180,7 @@ templ indexPage(d indexData) {
 						<div class="actions">
 							<button class="primary" type="submit">Explain</button>
 							<button type="button" hx-get="/expand" hx-include="closest form">Expand</button>
+							<button type="button" hx-post="/matrix">Matrix</button>
 						</div>
 						<details class="disclose whatif">
 							<summary>What-if tuples</summary>
@@ -220,6 +223,51 @@ templ errorBox(msg string) {
 
 templ note(msg string) {
 	<p class="mute whatif-tuples">{ msg }</p>
+}
+
+// explainChip explains one relation into the next .why-out in its row; a
+// second click on the open chip collapses it again (studio.js).
+templ explainChip(sub, rel, obj string) {
+	<button class="chip" data-explain aria-expanded="false" title={ "Explain " + sub + " " + rel + " " + obj } hx-post="/explain" hx-vals={ explainVals(sub, rel, obj) } hx-target="next .why-out">{ rel }</button>
+}
+
+// matrixView lists one subject's answer for every relation on an object, in
+// model order; each relation explains itself inline.
+templ matrixView(sub, obj string, cells []matrixCell, notes []string) {
+	{{ allowedN, errN := matrixCounts(cells) }}
+	<p class="verdict">
+		<span class="badge accent">matrix</span>
+		What <code>{ sub }</code> can do on <code>{ obj }</code>
+		<span class="mute">
+			· { fmt.Sprint(allowedN) } of { plural(len(cells), "relation") } allowed
+			if errN > 0 {
+				· { plural(errN, "error") }
+			}
+			· click a relation to explain
+		</span>
+	</p>
+	for _, n := range notes {
+		@note(n)
+	}
+	<ul class="access-rows matrix">
+		for _, c := range cells {
+			<li>
+				<div class="who">
+					@explainChip(sub, c.Relation, obj)
+				</div>
+				<div>
+					if c.Err != "" {
+						<span class="badge warn">error</span> <span class="mute">{ c.Err }</span>
+					} else if c.Allowed {
+						<span class="badge ok">allowed</span>
+					} else {
+						<span class="badge fail">denied</span>
+					}
+				</div>
+				<div class="why-out"></div>
+			</li>
+		}
+	</ul>
 }
 
 templ traceView(t *melange.Trace) {

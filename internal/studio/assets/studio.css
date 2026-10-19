@@ -290,7 +290,11 @@ details.disclose[open] > summary { margin-bottom: var(--sp-2); }
 .access-rows > li:last-child { border-bottom: 0; }
 .access-rows .chips { margin-top: 0; }
 .access-rows .why-out { grid-column: 1 / -1; }
+.access-rows .why-out:empty { display: none; }
 @media (max-width: 760px) { .access-rows > li { grid-template-columns: minmax(0, 1fr); } }
+/* matrix: one tight line per relation, chip then verdict, at every width */
+.access-rows.matrix > li { grid-template-columns: minmax(120px, max-content) minmax(0, 1fr); align-items: center; padding: var(--sp-1) 0; }
+.chip[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
 .more { margin-top: var(--sp-2); }
 .group > summary::before { content: "›"; width: 12px; color: var(--mute); transition: transform .15s; }
 .group[open] > summary::before { transform: rotate(90deg); }

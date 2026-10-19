@@ -151,3 +151,15 @@ func isAdded(e melange.TupleRef, added []melange.ContextualTuple) bool {
 	}
 	return false
 }
+
+// matrixCounts tallies a check matrix: allowed relations and failed checks.
+func matrixCounts(cells []matrixCell) (allowed, errs int) {
+	for _, c := range cells {
+		if c.Err != "" {
+			errs++
+		} else if c.Allowed {
+			allowed++
+		}
+	}
+	return allowed, errs
+}

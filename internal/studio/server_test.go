@@ -2,6 +2,7 @@ package studio
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -226,5 +227,25 @@ func TestHighlightFGA(t *testing.T) {
 	}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("tokens:\n got  %v\n want %v", got, want)
+	}
+}
+
+func TestEachRelationKeepsOrderAndErrors(t *testing.T) {
+	rels := []string{"a", "b", "c", "d", "e", "f"}
+	got := make([]string, len(rels))
+	errs := eachRelation(context.Background(), rels, func(_ context.Context, i int, rel string) error {
+		got[i] = rel
+		if rel == "c" {
+			return errors.New("boom")
+		}
+		return nil
+	})
+	if !slices.Equal(got, rels) {
+		t.Fatalf("got %v, want %v", got, rels)
+	}
+	for i, err := range errs {
+		if (err != nil) != (rels[i] == "c") {
+			t.Fatalf("errs[%d] = %v", i, err)
+		}
 	}
 }
