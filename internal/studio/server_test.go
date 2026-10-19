@@ -3,6 +3,7 @@ package studio
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -11,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/lib/pq"
 
 	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/pkg/schema"
@@ -247,6 +250,44 @@ func TestEachRelationKeepsOrderAndErrors(t *testing.T) {
 		if (err != nil) != (rels[i] == "c") {
 			t.Fatalf("errs[%d] = %v", i, err)
 		}
+	}
+}
+
+func TestPlanTimes(t *testing.T) {
+	plan := `Result  (cost=0.00..0.26 rows=1 width=1) (actual time=205.301..205.302 rows=1 loops=1)
+  Buffers: shared hit=20696
+Planning Time: 0.298 ms
+Execution Time: 205.324 ms`
+	exec, planning := planTimes(plan)
+	if exec != 205.324 || planning != 0.298 {
+		t.Fatalf("planTimes = %v, %v; want 205.324, 0.298", exec, planning)
+	}
+	if e, p := planTimes("Result"); e != 0 || p != 0 {
+		t.Fatalf("planTimes on a plan without times = %v, %v; want 0, 0", e, p)
+	}
+}
+
+func TestFuncDeltaSubtractsEarlierCalls(t *testing.T) {
+	before := map[string]funcTime{"a": {"a", 2, 10, 10}, "idle": {"idle", 1, 5, 5}}
+	after := map[string]funcTime{
+		"a":    {"a", 3, 13, 13},
+		"b":    {"b", 1, 20, 4},
+		"idle": {"idle", 1, 5, 5},
+	}
+	got := funcDelta(before, after)
+	want := []funcTime{{"b", 1, 20, 4}, {"a", 1, 3, 3}}
+	if !slices.Equal(got, want) {
+		t.Fatalf("funcDelta = %v; want %v", got, want)
+	}
+}
+
+func TestFailedAfterWordsDepthLimitLikeTheChecker(t *testing.T) {
+	err := fmt.Errorf("wrapped: %w", &pq.Error{Code: "M2002", Message: "resolution too complex"})
+	if got, want := failedAfter(err, 412*time.Millisecond), "Failed after 412.0 ms: resolution too complex: depth limit exceeded"; got != want {
+		t.Fatalf("failedAfter = %q; want %q", got, want)
+	}
+	if got := msf(0.997); got != "1.0 ms" {
+		t.Fatalf("msf(0.997) = %q; want 1.0 ms", got)
 	}
 }
 

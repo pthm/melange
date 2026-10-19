@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/a-h/templ"
 
@@ -166,4 +167,16 @@ func matrixCounts(cells []matrixCell) (allowed, errs int) {
 
 func relationURL(typ, rel string) templ.SafeURL {
 	return templ.URL("/relation?" + url.Values{"type": {typ}, "relation": {rel}}.Encode())
+}
+
+// ms formats a wall-clock duration the way the plan reports times.
+func ms(d time.Duration) string { return msf(float64(d.Microseconds()) / 1000) }
+
+// msf formats milliseconds; sub-millisecond values keep two decimals so a
+// fast check does not read "0.0 ms".
+func msf(v float64) string {
+	if v < 0.995 { // rounds to 1.00 otherwise; give that "1.0 ms" like its neighbors
+		return fmt.Sprintf("%.2f ms", v)
+	}
+	return fmt.Sprintf("%.1f ms", v)
 }

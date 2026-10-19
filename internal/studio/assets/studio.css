@@ -228,6 +228,8 @@ th, td { text-align: left; padding: var(--sp-2) var(--sp-3); border-bottom: 1px 
 th { color: var(--mute); font-weight: 600; }
 tr:last-child td { border-bottom: 0; }
 th:first-child, td:first-child { padding-left: 0; }
+/* Numeric columns: right-aligned so decimals line up, never wrapped. */
+th.num, td.num { text-align: right; white-space: nowrap; }
 .kv { display: grid; grid-template-columns: max-content 1fr; gap: var(--sp-2) var(--sp-5); margin: 0; }
 .kv dt { color: var(--mute); }
 .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }

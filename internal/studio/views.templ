@@ -3,6 +3,7 @@ package studio
 import (
 	"fmt"
 	"net/url"
+	"time"
 
 	"github.com/pthm/melange/melange"
 	"github.com/pthm/melange/pkg/migrator"
@@ -164,13 +165,14 @@ templ indexPage(d indexData) {
 						<strong>Explain</strong> checks whether the subject has the relation on the object, and shows every path the check tried.
 						<strong>Expand</strong> shows everyone who has the relation on the object, as a tree; it ignores the subject.
 						<strong>Matrix</strong> checks every relation on the object's type for the subject, in model order; it ignores the relation and what-if tuples.
+						<strong>Analyze</strong> runs the plain check under <code>EXPLAIN ANALYZE</code> (read-only, { analyzeTimeout.String() } limit) and shows where the time went; it ignores what-if tuples. It times <code>check_permission</code>, which can be fast where Explain is slow or too complex.
 					</p>
 				}
 				<div class="sec-body">
 					// One form, three verbs: Enter and Explain post /explain; Expand
 					// GETs /expand with the same fields (hx-include, since htmx only
 					// sends a form's values for non-GET requests by default); Matrix
-					// posts /matrix.
+					// posts /matrix; Analyze posts /analyze.
 					// Cmd/Ctrl+Enter in the what-if textarea also runs Explain, and
 					// #query-result dims while either request runs.
 					<form class="query" hx-post="/explain" hx-target="#query-result" hx-indicator="#query-result" hx-trigger="submit, keydown[(metaKey||ctrlKey)&&key=='Enter'] from:find textarea">
@@ -181,6 +183,7 @@ templ indexPage(d indexData) {
 							<button class="primary" type="submit">Explain</button>
 							<button type="button" hx-get="/expand" hx-include="closest form">Expand</button>
 							<button type="button" hx-post="/matrix">Matrix</button>
+							<button type="button" hx-post="/analyze">Analyze</button>
 						</div>
 						<details class="disclose whatif">
 							<summary>What-if tuples</summary>
@@ -233,7 +236,7 @@ templ explainChip(sub, rel, obj string) {
 
 // matrixView lists one subject's answer for every relation on an object, in
 // model order; each relation explains itself inline.
-templ matrixView(sub, obj string, cells []matrixCell, notes []string) {
+templ matrixView(sub, obj string, cells []matrixCell, notes []string, took time.Duration) {
 	{{ allowedN, errN := matrixCounts(cells) }}
 	<p class="verdict">
 		<span class="badge accent">matrix</span>
@@ -243,6 +246,7 @@ templ matrixView(sub, obj string, cells []matrixCell, notes []string) {
 			if errN > 0 {
 				· { plural(errN, "error") }
 			}
+			· { ms(took) } in parallel
 			· click a relation to explain
 		</span>
 	</p>
@@ -270,7 +274,7 @@ templ matrixView(sub, obj string, cells []matrixCell, notes []string) {
 	</ul>
 }
 
-templ traceView(t *melange.Trace) {
+templ traceView(t *melange.Trace, took time.Duration) {
 	<p class="verdict">
 		if allowed(t) {
 			<span class="badge ok">allowed</span>
@@ -284,6 +288,7 @@ templ traceView(t *melange.Trace) {
 			if t.Truncated {
 				· truncated
 			}
+			· { ms(took) }
 		</span>
 	</p>
 	@traceTree(t, nil)
@@ -301,7 +306,7 @@ templ traceTree(t *melange.Trace, added []melange.ContextualTuple) {
 // whatIfView shows an Explain answer with what-if tuples against base, the
 // answer without them: one verdict row, the hypothetical tree, then the
 // base trace behind a disclosure.
-templ whatIfView(base, with *melange.Trace, tuples []melange.ContextualTuple, unchecked string) {
+templ whatIfView(base, with *melange.Trace, tuples []melange.ContextualTuple, unchecked string, baseTook, withTook time.Duration) {
 	<p class="verdict">
 		<span class="badge accent">what-if</span>
 		@verdictBadge(base)
@@ -313,6 +318,7 @@ templ whatIfView(base, with *melange.Trace, tuples []melange.ContextualTuple, un
 			if with.Truncated {
 				· truncated
 			}
+			· { ms(withTook) }
 		</span>
 	</p>
 	<div class="evidence whatif-tuples">
@@ -326,7 +332,7 @@ templ whatIfView(base, with *melange.Trace, tuples []melange.ContextualTuple, un
 	@traceTree(with, tuples)
 	<details class="disclose">
 		<summary>Without what-if</summary>
-		@traceView(base)
+		@traceView(base, baseTook)
 	</details>
 }
 
@@ -369,10 +375,10 @@ templ traceNode(n *melange.Node, added []melange.ContextualTuple) {
 
 // expandView renders an Expand tree. top marks a form query (not a pointer
 // drill-in), which gets a heading naming the userset.
-templ expandView(t *melange.UsersetTree, top bool) {
+templ expandView(t *melange.UsersetTree, top bool, took time.Duration) {
 	if t.Root != nil {
 		if top {
-			<p class="verdict"><span class="badge accent">expand</span> Who has <code>{ t.Root.Name }</code></p>
+			<p class="verdict"><span class="badge accent">expand</span> Who has <code>{ t.Root.Name }</code> <span class="mute">· { ms(took) }</span></p>
 		}
 		<ul class="tree">
 			@expandNode(t.Root, t.Root.Name)
@@ -499,4 +505,47 @@ templ codeBlock(tokens []codeToken) {
 			}
 		}
 	</pre>
+}
+
+// analyzeView shows one check under EXPLAIN ANALYZE: the times, the
+// generated functions by self time when track_functions allowed it, and the
+// raw plan (one opaque Result node for a plpgsql call).
+templ analyzeView(a *analysis) {
+	<p class="verdict">
+		<span class="badge accent">analyze</span>
+		if a.Allowed != nil {
+			if *a.Allowed {
+				<span class="badge ok">allowed</span>
+			} else {
+				<span class="badge fail">denied</span>
+			}
+		}
+		<code>check_permission</code> <code>{ a.Subject }</code> <code>{ a.Relation }</code> <code>{ a.Object }</code>
+		<span class="mute">· { msf(a.Exec) } execution · { msf(a.Planning) } planning</span>
+	</p>
+	if len(a.Funcs) > 0 {
+		<div class="scroll-x">
+			<table>
+				<tr><th>function</th><th class="num">calls</th><th class="num">total</th><th class="num">self</th></tr>
+				for _, f := range a.Funcs {
+					<tr>
+						<td>
+							if u, ok := a.Links[f.Name]; ok {
+								<a href={ u }><code>{ f.Name }</code></a>
+							} else {
+								<code>{ f.Name }</code>
+							}
+						</td>
+						<td class="num"><code>{ fmt.Sprint(f.Calls) }</code></td>
+						<td class="num"><code>{ msf(f.Total) }</code></td>
+						<td class="num"><code>{ msf(f.Self) }</code></td>
+					</tr>
+				}
+			</table>
+		</div>
+		<p class="mute">Generated functions this check called, by self time (time spent in the function itself, not its callees).</p>
+	} else if !a.Tracked {
+		<p class="mute">Per-function times need <code>track_functions</code>, which this role cannot set (superuser, or <code>GRANT SET ON PARAMETER track_functions</code>).</p>
+	}
+	<pre>{ a.Plan }</pre>
 }

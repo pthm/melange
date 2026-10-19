@@ -67,6 +67,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /expand", s.expand)
 	mux.HandleFunc("GET /relation", s.relation)
 	mux.HandleFunc("POST /matrix", s.matrix)
+	mux.HandleFunc("POST /analyze", s.analyze)
 	mux.HandleFunc("GET /tuples", s.tuplesIndex)
 	mux.HandleFunc("GET /history", s.history)
 	mux.HandleFunc("GET /health", s.health)
@@ -174,12 +175,14 @@ func (s *Server) explain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.TrimSpace(r.FormValue("whatif")) == "" {
+		start := time.Now()
 		trace, err := s.checker.Explain(r.Context(), subject, melange.Relation(relation), object)
+		took := time.Since(start)
 		if err != nil {
-			render(w, r, errorBox(err.Error()))
+			render(w, r, errorBox(failedAfter(err, took)))
 			return
 		}
-		render(w, r, traceView(trace))
+		render(w, r, traceView(trace, took))
 		return
 	}
 	s.explainWithWhatIf(w, r, subject, melange.Relation(relation), object)
@@ -198,17 +201,21 @@ func (s *Server) explainWithWhatIf(w http.ResponseWriter, r *http.Request, subje
 		render(w, r, errorBox("What-if tuples:\n"+err.Error()))
 		return
 	}
+	start := time.Now()
 	base, err := s.checker.Explain(r.Context(), subject, relation, object)
+	baseTook := time.Since(start)
 	if err != nil {
-		render(w, r, errorBox("Without what-if: "+err.Error()))
+		render(w, r, errorBox("Without what-if: "+failedAfter(err, baseTook)))
 		return
 	}
+	start = time.Now()
 	with, err := s.explainWhatIf(r.Context(), tuples, subject, relation, object)
+	withTook := time.Since(start)
 	if err != nil {
-		render(w, r, errorBox("With what-if: "+err.Error()))
+		render(w, r, errorBox("With what-if: "+failedAfter(err, withTook)))
 		return
 	}
-	render(w, r, whatIfView(base, with, tuples, unchecked))
+	render(w, r, whatIfView(base, with, tuples, unchecked, baseTook, withTook))
 }
 
 // matrixCell is one relation's answer in the check matrix.
@@ -250,14 +257,16 @@ func (s *Server) matrix(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cells := make([]matrixCell, len(rels))
+	start := time.Now()
 	errs := eachRelation(r.Context(), rels, func(ctx context.Context, i int, rel string) (err error) {
 		cells[i].Allowed, err = s.checker.Check(ctx, subject, melange.Relation(rel), object)
 		return err
 	})
+	took := time.Since(start)
 	for i, rel := range rels {
 		cells[i].Relation, cells[i].Err = rel, errString(errs[i])
 	}
-	render(w, r, matrixView(string(subject.Type)+":"+subject.ID, string(object.Type)+":"+object.ID, cells, notes))
+	render(w, r, matrixView(string(subject.Type)+":"+subject.ID, string(object.Type)+":"+object.ID, cells, notes, took))
 }
 
 // expand serves both the form (object + relation) and pointer drill-in
@@ -276,15 +285,17 @@ func (s *Server) expand(w http.ResponseWriter, r *http.Request) {
 		render(w, r, errorBox(err.Error()))
 		return
 	}
+	start := time.Now()
 	tree, err := s.checker.Expand(r.Context(), object, melange.Relation(relation))
+	took := time.Since(start)
 	if err != nil {
-		render(w, r, errorBox(err.Error()))
+		render(w, r, errorBox(failedAfter(err, took)))
 		return
 	}
 	if strings.TrimSpace(r.FormValue("whatif")) != "" {
 		render(w, r, note("What-if tuples are not applied to Expand."))
 	}
-	render(w, r, expandView(tree, r.FormValue("userset") == ""))
+	render(w, r, expandView(tree, r.FormValue("userset") == "", took))
 }
 
 func render(w http.ResponseWriter, r *http.Request, c templ.Component) {
