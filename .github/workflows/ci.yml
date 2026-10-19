@@ -26,15 +26,20 @@ jobs:
           experimental: true
           cache: true
 
-      - name: Cache Go modules and build
-        uses: actions/cache@v5
+      # Per-job caches keyed by commit: main saves a fresh one each run (an
+      # exact-key hit never saves, which froze a shared cache), and PRs restore
+      # the newest from main.
+      - name: Restore Go cache
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+            ~/.cache/golangci-lint
+          key: go-${{ runner.os }}-lint-${{ hashFiles('**/go.sum') }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-go-
+            go-${{ runner.os }}-lint-${{ hashFiles('**/go.sum') }}-
+            go-${{ runner.os }}-lint-
 
       - name: Setup Go workspace
         run: go work init . ./cmd/melange ./docs ./melange ./test
@@ -60,6 +65,16 @@ jobs:
           cd ../cmd/melange && golangci-lint run ./...
           cd ../../test && golangci-lint run ./...
 
+      - name: Save Go cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+            ~/.cache/golangci-lint
+          key: go-${{ runner.os }}-lint-${{ hashFiles('**/go.sum') }}-${{ github.sha }}
+
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
@@ -72,15 +87,19 @@ jobs:
           experimental: true
           cache: true
 
-      - name: Cache Go modules and build
-        uses: actions/cache@v5
+      # Per-job caches keyed by commit: main saves a fresh one each run (an
+      # exact-key hit never saves, which froze a shared cache), and PRs restore
+      # the newest from main.
+      - name: Restore Go cache
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          key: go-${{ runner.os }}-unit-${{ hashFiles('**/go.sum') }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-go-
+            go-${{ runner.os }}-unit-${{ hashFiles('**/go.sum') }}-
+            go-${{ runner.os }}-unit-
 
       - name: Setup Go workspace
         run: go work init . ./cmd/melange ./docs ./melange ./test
@@ -113,6 +132,15 @@ jobs:
           flags: unit
           fail_ci_if_error: false
 
+      - name: Save Go cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-unit-${{ hashFiles('**/go.sum') }}-${{ github.sha }}
+
   integration-tests:
     name: Integration Tests (Go + TypeScript)
     runs-on: ubuntu-latest
@@ -142,15 +170,19 @@ jobs:
           experimental: true
           cache: true
 
-      - name: Cache Go modules and build
-        uses: actions/cache@v5
+      # Per-job caches keyed by commit: main saves a fresh one each run (an
+      # exact-key hit never saves, which froze a shared cache), and PRs restore
+      # the newest from main.
+      - name: Restore Go cache
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          key: go-${{ runner.os }}-integration-${{ hashFiles('**/go.sum') }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-go-
+            go-${{ runner.os }}-integration-${{ hashFiles('**/go.sum') }}-
+            go-${{ runner.os }}-integration-
 
       - name: Setup Go workspace
         run: go work init . ./cmd/melange ./docs ./melange ./test
@@ -164,7 +196,9 @@ jobs:
 
       - name: Run Go integration tests
         working-directory: test
-        run: go test -timeout 5m -race -p 1 -parallel 1 -coverprofile=coverage-integration.out -covermode=atomic -coverpkg=github.com/pthm/melange/... ./...
+        # openfgatests runs in the OpenFGA workflow (same -race and coverage,
+        # uploaded under the same flag); running it here too doubled this job.
+        run: go test -timeout 5m -race -p 1 -parallel 1 -coverprofile=coverage-integration.out -covermode=atomic -coverpkg=github.com/pthm/melange/... $(go list ./... | grep -v /openfgatests)
 
       - name: Run TypeScript integration tests
         working-directory: clients/typescript
@@ -177,3 +211,12 @@ jobs:
           files: ./test/coverage-integration.out
           flags: integration
           fail_ci_if_error: false
+
+      - name: Save Go cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-integration-${{ hashFiles('**/go.sum') }}-${{ github.sha }}
