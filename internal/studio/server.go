@@ -1,0 +1,217 @@
+// Package studio serves melange studio: a local, read-only web console over a
+// melange-managed database. It is a presentation layer over calls the CLI
+// already makes (GetDeployedModel, Checker.Explain, Checker.Expand); see
+// specs/proposals/STUDIO.md.
+package studio
+
+//go:generate go tool templ generate
+
+import (
+	"context"
+	"database/sql"
+	"embed"
+	"fmt"
+	"net"
+	"net/http"
+	"net/url"
+	"strings"
+
+	"github.com/a-h/templ"
+
+	"github.com/pthm/melange/melange"
+	"github.com/pthm/melange/pkg/migrator"
+)
+
+//go:embed assets
+var assets embed.FS
+
+// Server holds the one database connection the console talks to.
+type Server struct {
+	db         *sql.DB
+	dbSchema   string
+	env        string
+	schemaPath string // optional local .fga, for the Health page's file and drift checks
+	checker    *melange.Checker
+}
+
+// New returns a Server over db. env is the active environment name, shown in
+// the page header; empty means the base config. schemaPath may be empty.
+func New(db *sql.DB, dbSchema, env, schemaPath string) *Server {
+	return &Server{
+		db:         db,
+		dbSchema:   dbSchema,
+		env:        env,
+		schemaPath: schemaPath,
+		checker:    melange.NewChecker(db, melange.WithDatabaseSchema(dbSchema)),
+	}
+}
+
+// Handler returns the console's routes, wrapped in a Host check.
+func (s *Server) Handler() http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("GET /assets/", http.FileServerFS(assets))
+	mux.HandleFunc("GET /{$}", s.index)
+	mux.HandleFunc("POST /explain", s.explain)
+	mux.HandleFunc("GET /expand", s.expand)
+	mux.HandleFunc("GET /history", s.history)
+	mux.HandleFunc("GET /health", s.health)
+	return localhostOnly(mux)
+}
+
+// localhostOnly rejects requests whose Host is not a loopback name. The bind
+// address is already loopback; this closes the DNS-rebinding hole where a
+// hostile page resolves its own domain to 127.0.0.1 and reads responses.
+func localhostOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.Host)
+		if err != nil {
+			host = r.Host
+		}
+		if host != "localhost" && !isLoopbackIP(host) {
+			http.Error(w, "forbidden host", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func isLoopbackIP(host string) bool {
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
+}
+
+// ReadOnlyDSN returns dsn with default_transaction_read_only=on set as a
+// connection runtime parameter, so every statement the console runs is in a
+// read-only transaction. Accepts URL and key=value forms.
+func ReadOnlyDSN(dsn string) (string, error) {
+	if !strings.HasPrefix(dsn, "postgres://") && !strings.HasPrefix(dsn, "postgresql://") {
+		return dsn + " default_transaction_read_only=on", nil
+	}
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "", fmt.Errorf("parsing database URL: %w", err)
+	}
+	q := u.Query()
+	q.Set("default_transaction_read_only", "on")
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
+// VerifyReadOnly fails unless the connection really is read-only, so a driver
+// that ignored the runtime parameter cannot silently leave writes enabled.
+func VerifyReadOnly(ctx context.Context, db *sql.DB) error {
+	var v string
+	if err := db.QueryRowContext(ctx, "SHOW default_transaction_read_only").Scan(&v); err != nil {
+		return fmt.Errorf("checking read-only mode: %w", err)
+	}
+	if v != "on" {
+		return fmt.Errorf("connection is not read-only (default_transaction_read_only=%s)", v)
+	}
+	return nil
+}
+
+type indexData struct {
+	Env      string
+	Model    *migrator.DeployedModel
+	ModelErr string
+	// Type and Relation preselect the query forms (from ?type=&relation=).
+	Type     string
+	Relation string
+}
+
+func (s *Server) index(w http.ResponseWriter, r *http.Request) {
+	data := indexData{
+		Env:      s.env,
+		Type:     r.URL.Query().Get("type"),
+		Relation: r.URL.Query().Get("relation"),
+	}
+	data.Model, data.ModelErr = s.loadModel(r.Context())
+	render(w, r, indexPage(data))
+}
+
+// loadModel returns the deployed model, or a message saying why there is none.
+func (s *Server) loadModel(ctx context.Context) (model *migrator.DeployedModel, reason string) {
+	m := migrator.NewMigrator(s.db, "")
+	m.SetDatabaseSchema(s.dbSchema)
+	model, err := m.GetDeployedModel(ctx)
+	switch {
+	case err != nil:
+		return nil, err.Error()
+	case model == nil:
+		return nil, "No model recorded. The database was never migrated, or was migrated before melange recorded deployed models; re-run `melange migrate` to record it. Explain and Expand still work."
+	default:
+		newModelOrder(model).sortRelations(model)
+		return model, ""
+	}
+}
+
+func (s *Server) explain(w http.ResponseWriter, r *http.Request) {
+	subject, err1 := parseIdent("subject", r.FormValue("subject"))
+	object, err2 := parseIdent("object", r.FormValue("object"))
+	relation := strings.TrimSpace(r.FormValue("relation"))
+	if err := firstErr(err1, err2, required(relation, "relation")); err != nil {
+		render(w, r, errorBox(err.Error()))
+		return
+	}
+	trace, err := s.checker.Explain(r.Context(), subject, melange.Relation(relation), object)
+	if err != nil {
+		render(w, r, errorBox(err.Error()))
+		return
+	}
+	render(w, r, traceView(trace))
+}
+
+// expand serves both the form (object + relation) and pointer drill-in
+// (userset = "type:id#relation", as Leaf.Computed carries it).
+func (s *Server) expand(w http.ResponseWriter, r *http.Request) {
+	rawObject, relation := r.FormValue("object"), strings.TrimSpace(r.FormValue("relation"))
+	if us := r.FormValue("userset"); us != "" {
+		var ok bool
+		if rawObject, relation, ok = strings.Cut(us, "#"); !ok {
+			render(w, r, errorBox(fmt.Sprintf("expected <type>:<id>#<relation>, got %q", us)))
+			return
+		}
+	}
+	object, err := parseIdent("object", rawObject)
+	if err := firstErr(err, required(relation, "relation")); err != nil {
+		render(w, r, errorBox(err.Error()))
+		return
+	}
+	tree, err := s.checker.Expand(r.Context(), object, melange.Relation(relation))
+	if err != nil {
+		render(w, r, errorBox(err.Error()))
+		return
+	}
+	render(w, r, expandView(tree, r.FormValue("userset") == ""))
+}
+
+func render(w http.ResponseWriter, r *http.Request, c templ.Component) {
+	if err := c.Render(r.Context(), w); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// parseIdent parses "type:id"; field names the input in the error.
+func parseIdent(field, raw string) (melange.Object, error) {
+	typ, id, ok := strings.Cut(strings.TrimSpace(raw), ":")
+	if !ok || typ == "" || id == "" {
+		return melange.Object{}, fmt.Errorf("%s: expected <type>:<id>, got %q", field, raw)
+	}
+	return melange.Object{Type: melange.ObjectType(typ), ID: id}, nil
+}
+
+func required(v, name string) error {
+	if v == "" {
+		return fmt.Errorf("%s is required", name)
+	}
+	return nil
+}
+
+func firstErr(errs ...error) error {
+	for _, err := range errs {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}

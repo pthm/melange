@@ -1,0 +1,378 @@
+package studio
+
+import (
+	"fmt"
+	"net/url"
+
+	"github.com/pthm/melange/melange"
+	"github.com/pthm/melange/pkg/migrator"
+)
+
+// page is what the shell needs to know about the current view.
+type page struct {
+	Env    string
+	Active string // top-nav section: model | history | health
+}
+
+var navItems = []struct{ ID, Label, Href string }{
+	{"model", "Model", "/"},
+	{"history", "History", "/history"},
+	{"health", "Health", "/health"},
+}
+
+// shell is the admin layout: fixed top bar, section sidebar, and a main pane
+// that scrolls independently. The body never scrolls. Styles live in
+// assets/studio.css.
+templ shell(p page, sidebar templ.Component) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<title>melange studio</title>
+			<link rel="icon" type="image/png" href={ asset("favicon.png") }/>
+			<script>
+				try { document.documentElement.dataset.theme = localStorage.getItem("studio-theme") ?? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"); } catch { document.documentElement.dataset.theme = "light"; }
+			</script>
+			<link rel="stylesheet" href={ asset("studio.css") }/>
+			<script src={ asset("htmx.min.js") }></script>
+			<script src={ asset("studio.js") } defer></script>
+		</head>
+		<body>
+			<div class="app">
+				<header class="topbar">
+					<a class="brand t-heading" href="/">
+						<img class="on-light" src={ asset("logo-dark.png") } alt="melange" width="99" height="20"/>
+						<img class="on-dark" src={ asset("logo-light.png") } alt="melange" width="99" height="20"/>
+						<span class="mute">studio</span>
+					</a>
+					<nav class="topnav" aria-label="Sections">
+						for _, n := range navItems {
+							<a href={ templ.URL(n.Href) } { current(n.ID == p.Active)... }>{ n.Label }</a>
+						}
+					</nav>
+					<div class="meta">
+						if p.Env != "" {
+							<span class="badge accent" title="Active environment">{ p.Env }</span>
+						}
+						<span class="badge" title="Every connection is read-only">read-only</span>
+						<button type="button" class="theme-toggle" data-theme-toggle aria-label="Toggle dark mode" title="Toggle dark mode"></button>
+					</div>
+				</header>
+				<aside class="sidebar" aria-label="Section navigation">
+					@sidebar
+				</aside>
+				<main class="content">
+					{ children... }
+				</main>
+			</div>
+		</body>
+	</html>
+}
+
+// pageHead is the title block; crumbs (may be nil) sit above the title,
+// children (meta, stats) below it.
+templ pageHead(title string, crumbs templ.Component) {
+	<header class="page-head">
+		if crumbs != nil {
+			@crumbs
+		}
+		<h1>{ title }</h1>
+		{ children... }
+	</header>
+}
+
+// secHead is a section's title row (title, optional count) plus help text
+// passed as children.
+templ secHead(title string, count int, showCount bool) {
+	<div class="sec-head">
+		<div class="title-row">
+			<h2>{ title }</h2>
+			if showCount {
+				<span class="badge">{ fmt.Sprint(count) }</span>
+			}
+		</div>
+		{ children... }
+	</div>
+}
+
+// filterBar is the one search/filter control: a full-width strip that sits
+// between a section's heading and the list it narrows (or atop the sidebar).
+// attrs carries placeholder plus either data-filter (client-side, studio.js)
+// or hx-* (server search); the placeholder doubles as the accessible label.
+templ filterBar(attrs templ.Attributes) {
+	<div class="filter-bar">
+		<input type="search" autocomplete="off" spellcheck="false" aria-label={ attrs["placeholder"].(string) } { attrs... }/>
+		<kbd aria-hidden="true" title="Press / to filter">/</kbd>
+	</div>
+}
+
+// modelSidebarOpenAll is the largest model whose sidebar starts fully open;
+// bigger ones open only the selected type, and the filter finds the rest.
+const modelSidebarOpenAll = 12
+
+templ modelSidebar(d indexData) {
+	if d.Model != nil {
+		@filterBar(templ.Attributes{"placeholder": "Filter types and relations", "data-filter": "#model-nav"})
+	}
+	<div class="side-section">
+		<div class="side-title">Types</div>
+		if d.Model == nil {
+			<p class="mute side-title">No model recorded.</p>
+		} else {
+			<ul class="side-list" id="model-nav">
+				for _, t := range d.Model.Types {
+					<li>
+						<details class="side-group" data-group open?={ len(d.Model.Types) <= modelSidebarOpenAll || t.Name == d.Type }>
+							<summary>
+								{ t.Name }
+								<span class="t-mono mute">{ fmt.Sprint(len(t.Relations)) }</span>
+							</summary>
+							if len(t.Relations) > 0 {
+								<ul class="side-list">
+									for _, rel := range t.Relations {
+										<li data-item data-text={ t.Name + "#" + rel.Name }><a href={ templ.URL("/?" + url.Values{"type": {t.Name}, "relation": {rel.Name}}.Encode()) } { current(t.Name == d.Type && rel.Name == d.Relation)... }>{ rel.Name }</a></li>
+									}
+								</ul>
+							}
+						</details>
+					</li>
+				}
+			</ul>
+			<p class="mute side-title" data-empty-filter hidden>No matches.</p>
+		}
+	</div>
+}
+
+templ indexPage(d indexData) {
+	@shell(page{Env: d.Env, Active: "model"}, modelSidebar(d)) {
+		@pageHead("Model", nil) {
+			if d.Model == nil {
+				<p class="page-meta">{ d.ModelErr }</p>
+			} else {
+				<p class="page-meta">
+					Migrated { d.Model.MigratedAt.UTC().Format("2 Jan 2006, 15:04 MST") } by melange <code>{ d.Model.MelangeVersion }</code>
+					· checksum <code>{ short(d.Model.SchemaChecksum) }</code>
+				</p>
+			}
+		}
+		<div>
+			<section class="sec">
+				@secHead("Query", 0, false) {
+					<p class="help">
+						<strong>Explain</strong> checks whether the subject has the relation on the object, and shows every path the check tried.
+						<strong>Expand</strong> shows everyone who has the relation on the object, as a tree; it ignores the subject.
+					</p>
+				}
+				<div class="sec-body">
+					// One form, two verbs: Enter and Explain post /explain; Expand
+					// GETs /expand with the same fields (hx-include, since htmx only
+					// sends a form's values for non-GET requests by default).
+					<form class="query" hx-post="/explain" hx-target="#query-result">
+						<label class="field">Subject<input name="subject" placeholder="user:alice" list="dl-types" autocomplete="off"/></label>
+						<label class="field">Relation<input name="relation" placeholder="viewer" value={ d.Relation } list="dl-rels" autocomplete="off"/></label>
+						<label class="field">Object<input name="object" placeholder="document:1" value={ prefill(d.Type) } list="dl-types" autocomplete="off"/></label>
+						<div class="actions">
+							<button class="primary" type="submit">Explain</button>
+							<button type="button" hx-get="/expand" hx-include="closest form">Expand</button>
+						</div>
+					</form>
+					if d.Model != nil {
+						@modelDatalists(d.Model)
+					}
+				</div>
+			</section>
+			<section class="sec">
+				<div id="query-result" class="sec-body" aria-live="polite">
+					<p class="mute">Results appear here. Pick a relation in the sidebar to fill in its type and name.</p>
+				</div>
+			</section>
+			if d.Model != nil {
+				<section class="sec">
+					@secHead("Deployed schema", 0, false) {
+						<p class="help">The DSL recorded by the last migration ({ d.Model.Format } file). This is what the database runs.</p>
+					}
+					<div class="sec-body">
+						@fgaSource(d.Model.DSL)
+					</div>
+				</section>
+			}
+		</div>
+	}
+}
+
+templ errorBox(msg string) {
+	<p class="error">{ msg }</p>
+}
+
+templ traceView(t *melange.Trace) {
+	<p class="verdict">
+		if t.Result != nil && *t.Result {
+			<span class="badge ok">allowed</span>
+			<code>{ t.Subject }</code> has <code>{ t.Relation }</code> on <code>{ t.Object }</code>
+		} else {
+			<span class="badge fail">denied</span>
+			<code>{ t.Subject }</code> does not have <code>{ t.Relation }</code> on <code>{ t.Object }</code>
+		}
+		<span class="mute">
+			· { plural(t.NodeCount, "node") }
+			if t.Truncated {
+				· truncated
+			}
+		</span>
+	</p>
+	if t.Root != nil {
+		<ul class="tree">
+			@traceNode(t.Root)
+		</ul>
+	}
+}
+
+templ traceNode(n *melange.Node) {
+	<li class={ resultClass(n.Result) }>
+		<span class="kind">{ string(n.Type) }</span>
+		{ n.Label }
+		for _, u := range n.Users {
+			<code>{ u.Type }:{ u.ID }</code>
+		}
+		if len(n.Evidence) > 0 {
+			<div class="evidence">
+				for _, e := range n.Evidence {
+					<div>tuple <code>{ e.SubjectType }:{ e.SubjectID } { e.Relation } { e.ObjectType }:{ e.ObjectID }</code></div>
+				}
+			</div>
+		}
+		if len(n.Children) > 0 {
+			<ul>
+				for _, c := range n.Children {
+					@traceNode(c)
+				}
+			</ul>
+		}
+	</li>
+}
+
+// expandView renders an Expand tree. top marks a form query (not a pointer
+// drill-in), which gets a heading naming the userset.
+templ expandView(t *melange.UsersetTree, top bool) {
+	if t.Root != nil {
+		if top {
+			<p class="verdict"><span class="badge accent">expand</span> Who has <code>{ t.Root.Name }</code></p>
+		}
+		<ul class="tree">
+			@expandNode(t.Root, t.Root.Name)
+		</ul>
+	}
+}
+
+// expandNode prints a node's userset name only where it adds something (see
+// showNodeName). The root's name is the query, already in the heading or the
+// pointer that was drilled.
+templ expandNode(n *melange.UsersetTreeNode, parent string) {
+	<li>
+		if showNodeName(n, parent) {
+			<code class="strong">{ n.Name }</code>
+		}
+		switch {
+			case n.Leaf != nil:
+				@expandLeaf(n.Leaf)
+			case n.Union != nil:
+				<span class="kind">any of</span>
+				@expandNodes(n.Union.Nodes, n.Name)
+			case n.Intersection != nil:
+				<span class="kind">all of</span>
+				@expandNodes(n.Intersection.Nodes, n.Name)
+			case n.Difference != nil:
+				<span class="kind">but not</span>
+				<ul>
+					<li><span class="mute">base</span><ul>
+						@expandNode(n.Difference.Base, n.Name)
+					</ul></li>
+					<li><span class="mute">minus</span><ul>
+						@expandNode(n.Difference.Subtract, n.Name)
+					</ul></li>
+				</ul>
+		}
+	</li>
+}
+
+templ expandNodes(nodes []*melange.UsersetTreeNode, parent string) {
+	<ul>
+		for _, c := range nodes {
+			@expandNode(c, parent)
+		}
+	</ul>
+}
+
+templ expandLeaf(l *melange.Leaf) {
+	if l.Users != nil {
+		<span class="kind">direct</span>
+		<span class="inline-gap">
+			for _, u := range l.Users.Users {
+				<code>{ u }</code>
+			}
+			if len(l.Users.Users) == 0 {
+				<span class="mute">none</span>
+			}
+			if l.Users.UsersTruncated {
+				<span class="mute">(truncated)</span>
+			}
+		</span>
+	}
+	if l.Computed != nil {
+		<span class="kind">same as</span>
+		@pointer(l.Computed.Userset)
+	}
+	if l.TupleToUserset != nil {
+		<span class="kind">from</span>
+		<code>{ l.TupleToUserset.Tupleset }</code>
+		<ul>
+			for _, c := range l.TupleToUserset.Computed {
+				<li>
+					@pointer(c.Userset)
+				</li>
+			}
+		</ul>
+	}
+}
+
+// modelDatalists feeds the query fields' autocomplete: "type:" prefixes for
+// subject and object, and every relation name in the model.
+templ modelDatalists(m *migrator.DeployedModel) {
+	<datalist id="dl-types">
+		for _, t := range m.Types {
+			<option value={ t.Name + ":" }></option>
+		}
+	</datalist>
+	<datalist id="dl-rels">
+		for _, r := range relationNames(m) {
+			<option value={ r }></option>
+		}
+	</datalist>
+}
+
+// pointer renders an unresolved userset with an inline drill-in: htmx fetches
+// the next Expand level into the sibling div, so a tree is chased one click at
+// a time instead of all at once.
+templ pointer(userset string) {
+	<code>{ userset }</code>
+	<button class="chip" hx-get={ "/expand?" + url.Values{"userset": {userset}}.Encode() } hx-target="next .sub">expand</button>
+	<div class="sub"></div>
+}
+
+templ stat(n int, label, tone string) {
+	<div class={ "stat", tone }><span class="t-heading">{ fmt.Sprint(n) }</span>{ label }</div>
+}
+
+// fgaSource renders OpenFGA DSL with syntax colouring (see highlightFGA).
+templ fgaSource(dsl string) {
+	<pre class="fga">
+		for _, t := range highlightFGA(dsl) {
+			if t.Class == "" {
+				{ t.Text }
+			} else if t.Text != "" {
+				<span class={ "f-" + t.Class }>{ t.Text }</span>
+			}
+		}
+	</pre>
+}
