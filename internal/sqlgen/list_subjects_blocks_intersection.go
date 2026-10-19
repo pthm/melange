@@ -264,7 +264,29 @@ func buildListSubjectsIntersectionUsersetCandidates(plan ListPlan) []TypedQueryB
 	blocks = append(blocks, buildListSubjectsIntersectionUsersetFilterBaseBlock(plan))
 	blocks = append(blocks, buildListSubjectsIntersectionUsersetFilterPartBlocks(plan)...)
 	blocks = append(blocks, buildListSubjectsIntersectionUsersetFilterTTUBlocks(plan)...)
+	blocks = append(blocks, buildListSubjectsIntersectionSelfCandidateBlock(plan))
 	return blocks
+}
+
+// buildListSubjectsIntersectionSelfCandidateBlock offers object_id#filter_relation
+// as a candidate. The unfiltered self block covers SatisfyingRelations; a
+// relation reached only through an intersection group (e.g. the editor in
+// `writer or (editor but not owner)`) needs the check_permission filter the
+// candidates get.
+func buildListSubjectsIntersectionSelfCandidateBlock(plan ListPlan) TypedQueryBlock {
+	return TypedQueryBlock{
+		Comments: []string{"-- Userset filter: self-candidate, checked like the others"},
+		Query: SelectStmt{
+			ColumnExprs: []Expr{Alias{
+				Expr: Concat{Parts: []Expr{ObjectID, Lit("#"), Param("v_filter_relation")}},
+				Name: "subject_id",
+			}},
+			Where: And(
+				Eq{Left: Param("v_filter_type"), Right: Lit(plan.ObjectType)},
+				NotIn{Expr: Param("v_filter_relation"), Values: plan.Analysis.SatisfyingRelations},
+			),
+		},
+	}
 }
 
 func buildListSubjectsIntersectionUsersetFilterBaseBlock(plan ListPlan) TypedQueryBlock {

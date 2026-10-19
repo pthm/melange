@@ -1,0 +1,243 @@
+# A "but not" inside an "and" must keep every part of the difference.
+# The parser used to keep only the outermost subtract, and only when it
+# was a plain relation, and dropped the whole operand when the base was
+# not a plain relation. Each dropped piece widened access. Excluding a
+# tuple-to-userset inside an "and" is rejected instead (see
+# pkg/parser/normalize_test.go).
+tests:
+  - name: intersection_difference_parts
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type folder
+            relations
+              define viewer: [user]
+          type document
+            relations
+              define parent: [folder]
+              define a: [user]
+              define b: [user]
+              define c: [user]
+              define d: [user]
+              define e: [user]
+              define nested_diff: ((a but not b) but not c) and d
+              define union_subtract: (a but not (b or c)) and d
+              define and_subtract: (a but not (b and c)) and d
+              define ttu_base: (viewer from parent but not b) and d
+              define this_base: ([user] but not b) and d
+              define union_base: ((a or e) but not b) and d
+              define nested_and_union: d and (a and (b or c))
+        tuples:
+          - user: folder:1
+            relation: parent
+            object: document:1
+          - user: user:alice
+            relation: a
+            object: document:1
+          - user: user:alice
+            relation: b
+            object: document:1
+          - user: user:alice
+            relation: d
+            object: document:1
+          - user: user:bob
+            relation: a
+            object: document:1
+          - user: user:bob
+            relation: c
+            object: document:1
+          - user: user:bob
+            relation: d
+            object: document:1
+          - user: user:carol
+            relation: d
+            object: document:1
+          - user: user:dave
+            relation: a
+            object: document:1
+          - user: user:dave
+            relation: b
+            object: document:1
+          - user: user:dave
+            relation: c
+            object: document:1
+          - user: user:dave
+            relation: d
+            object: document:1
+          - user: user:erin
+            relation: viewer
+            object: folder:1
+          - user: user:erin
+            relation: a
+            object: document:1
+          - user: user:erin
+            relation: d
+            object: document:1
+          - user: user:frank
+            relation: e
+            object: document:1
+          - user: user:frank
+            relation: d
+            object: document:1
+          - user: user:gina
+            relation: this_base
+            object: document:1
+          - user: user:gina
+            relation: d
+            object: document:1
+        checkAssertions:
+          # ((a but not b) but not c) and d
+          - tuple:
+              user: user:alice
+              relation: nested_diff
+              object: document:1
+            expectation: false
+          - tuple:
+              user: user:bob
+              relation: nested_diff
+              object: document:1
+            expectation: false
+          - tuple:
+              user: user:erin
+              relation: nested_diff
+              object: document:1
+            expectation: true
+          # (a but not (b or c)) and d
+          - tuple:
+              user: user:alice
+              relation: union_subtract
+              object: document:1
+            expectation: false
+          - tuple:
+              user: user:bob
+              relation: union_subtract
+              object: document:1
+            expectation: false
+          - tuple:
+              user: user:erin
+              relation: union_subtract
+              object: document:1
+            expectation: true
+          # (a but not (b and c)) and d
+          - tuple:
+              user: user:dave
+              relation: and_subtract
+              object: document:1
+            expectation: false
+          - tuple:
+              user: user:alice
+              relation: and_subtract
+              object: document:1
+            expectation: true
+          # (viewer from parent but not b) and d
+          - tuple:
+              user: user:carol
+              relation: ttu_base
+              object: document:1
+            expectation: false
+          - tuple:
+              user: user:erin
+              relation: ttu_base
+              object: document:1
+            expectation: true
+          # ([user] but not b) and d
+          - tuple:
+              user: user:carol
+              relation: this_base
+              object: document:1
+            expectation: false
+          - tuple:
+              user: user:gina
+              relation: this_base
+              object: document:1
+            expectation: true
+          # ((a or e) but not b) and d
+          - tuple:
+              user: user:carol
+              relation: union_base
+              object: document:1
+            expectation: false
+          - tuple:
+              user: user:frank
+              relation: union_base
+              object: document:1
+            expectation: true
+          - tuple:
+              user: user:alice
+              relation: union_base
+              object: document:1
+            expectation: false
+          # d and (a and (b or c))
+          - tuple:
+              user: user:bob
+              relation: nested_and_union
+              object: document:1
+            expectation: true
+          - tuple:
+              user: user:alice
+              relation: nested_and_union
+              object: document:1
+            expectation: true
+          - tuple:
+              user: user:carol
+              relation: nested_and_union
+              object: document:1
+            expectation: false
+  # A self-referencing userset (document:1#r) holds r on document:1, also
+  # when r is reached through an intersection part.
+  - name: intersection_difference_parts_selfref
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type document
+            relations
+              define writer: [user]
+              define editor: [user]
+              define owner: [user]
+              define viewer: writer or (editor but not owner)
+              define implied_editor: [user] or writer
+              define both: writer and implied_editor
+        tuples:
+          - user: user:anne
+            relation: writer
+            object: document:2
+        checkAssertions:
+          - tuple:
+              user: document:1#editor
+              relation: viewer
+              object: document:1
+            expectation: true
+          - tuple:
+              user: document:1#owner
+              relation: viewer
+              object: document:1
+            expectation: false
+          - tuple:
+              user: document:1#writer
+              relation: both
+              object: document:1
+            expectation: true
+          - tuple:
+              user: document:1#editor
+              relation: both
+              object: document:1
+            expectation: false
+        listUsersAssertions:
+          - request:
+              filters:
+                - document#editor
+              object: document:1
+              relation: viewer
+            expectation:
+              - document:1#editor
+          - request:
+              filters:
+                - document#writer
+              object: document:1
+              relation: both
+            expectation:
+              - document:1#writer

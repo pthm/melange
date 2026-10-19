@@ -300,7 +300,10 @@ func (c *Client) WriteAuthorizationModel(ctx context.Context, req *openfgav1.Wri
 	}
 
 	// Convert the protobuf model to schema TypeDefinitions
-	types := convertProtoModel(req)
+	types, err := convertProtoModel(req)
+	if err != nil {
+		return nil, err
+	}
 
 	modelID := fmt.Sprintf("model_%d", c.modelCounter.Add(1))
 	s.models[modelID] = &model{
@@ -741,7 +744,7 @@ func (c *Client) refreshTuples(ctx context.Context, db *sql.DB, s *store) error 
 
 // convertProtoModel converts a WriteAuthorizationModelRequest to schema TypeDefinitions.
 // Uses parser.ConvertProtoModel to ensure test parsing matches production parsing.
-func convertProtoModel(req *openfgav1.WriteAuthorizationModelRequest) []schema.TypeDefinition {
+func convertProtoModel(req *openfgav1.WriteAuthorizationModelRequest) ([]schema.TypeDefinition, error) {
 	model := &openfgav1.AuthorizationModel{
 		SchemaVersion:   req.GetSchemaVersion(),
 		TypeDefinitions: req.GetTypeDefinitions(),

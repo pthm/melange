@@ -181,11 +181,34 @@ and would be silently dropped: document#viewer allows [user with ip_allowed].
 Remove the condition (and tighten the relation another way) to use the schema
 with Melange.
 
+### Excluding a Parent Relation Inside a Compound Expression
+
+Melange rewrites each relation into a union of intersections before
+compiling it. A `but not` whose subtract is a tuple-to-userset (`x from
+parent`) can be compiled at the top of a relation, but not when it ends up
+inside an intersection:
+
+```fga
+# Supported
+define can_view: viewer but not blocked from parent
+
+# NOT SUPPORTED
+define can_view: (viewer but not blocked from parent) and active
+```
+
+Melange rejects these schemas rather than compiling them approximately. Move
+the sub-expression into its own named relation:
+
+```fga
+define viewer_not_blocked: viewer but not blocked from parent
+define can_view: viewer_not_blocked and active
+```
+
 ## Moving from OpenFGA to Melange
 
 If you run OpenFGA today, most of your model carries over unchanged.
 
-1. **Reuse your `.fga` files.** Schema 1.1 models and modular models (`fga.mod`) compile as-is. Check that no relation uses a [condition](#conditions-schema-12), which Melange rejects.
+1. **Reuse your `.fga` files.** Schema 1.1 models and modular models (`fga.mod`) compile as-is. Check that no relation uses a [condition](#conditions-schema-12) or [excludes a parent relation inside a compound expression](#excluding-a-parent-relation-inside-a-compound-expression), both of which Melange rejects.
 
 2. **Replace tuple writes with a view.** Instead of writing tuples to a store, define a `melange_tuples` view over the tables that already hold the relationships (memberships, ownership, parent links). See [Creating Your Tuples View](../../getting-started/tuples-view/). If some relationships only exist in OpenFGA, export them with `fga tuple read` into a table and include it in the view.
 
