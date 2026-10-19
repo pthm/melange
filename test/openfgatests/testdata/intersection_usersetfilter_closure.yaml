@@ -1,0 +1,44 @@
+# ListUsers with a userset filter on a relation that has intersection groups
+# and implied relations outside them missed usersets granted through those
+# implied relations. Found by TestOpenFGA_GeneratedNested.
+tests:
+  - name: intersection_usersetfilter_closure
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type folder
+            relations
+              define a: [user]
+          type document
+            relations
+              define parent: [folder]
+              define a: [user]
+              define c: [user, group#member]
+              define r0: (c or a from parent) but not (a and c)
+              define x: (r0 and a) or r0
+        tuples:
+          - user: group:g0#member
+            relation: c
+            object: document:d0
+          - user: user:alice
+            relation: a
+            object: document:d0
+        checkAssertions:
+          - tuple:
+              user: group:g0#member
+              relation: x
+              object: document:d0
+            expectation: true
+        listUsersAssertions:
+          - request:
+              object: document:d0
+              relation: x
+              filters:
+                - group#member
+            expectation:
+              - group:g0#member

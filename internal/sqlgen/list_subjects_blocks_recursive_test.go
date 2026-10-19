@@ -161,7 +161,7 @@ func TestClassifyParentRelation(t *testing.T) {
 		},
 		{
 			name: "self-referential same-linking parent stays on closure",
-			plan: ListPlan{AnalysisLookup: map[string]*RelationAnalysis{
+			plan: ListPlan{ObjectType: "folder", AnalysisLookup: map[string]*RelationAnalysis{
 				"folder.viewer": {
 					ObjectType: "folder",
 					ParentRelations: []ParentRelationInfo{{
@@ -174,8 +174,24 @@ func TestClassifyParentRelation(t *testing.T) {
 			want: parentStrategyClosure,
 		},
 		{
+			// parent_closure only recurses on the listed type, so listing a
+			// document whose folder recurses must not take the closure path.
+			name: "parent recursing on another type forces subject_pool",
+			plan: ListPlan{ObjectType: "document", AnalysisLookup: map[string]*RelationAnalysis{
+				"folder.viewer": {
+					ObjectType: "folder",
+					ParentRelations: []ParentRelationInfo{{
+						Relation:            "viewer",
+						LinkingRelation:     "parent",
+						AllowedLinkingTypes: []string{"folder"},
+					}},
+				},
+			}},
+			want: parentStrategySubjectPool,
+		},
+		{
 			name: "cross-type nested TTU forces subject_pool",
-			plan: ListPlan{AnalysisLookup: map[string]*RelationAnalysis{
+			plan: ListPlan{ObjectType: "folder", AnalysisLookup: map[string]*RelationAnalysis{
 				"folder.viewer": {
 					ObjectType: "folder",
 					ParentRelations: []ParentRelationInfo{{
@@ -189,7 +205,7 @@ func TestClassifyParentRelation(t *testing.T) {
 		},
 		{
 			name: "self-referential but different linking relation forces subject_pool",
-			plan: ListPlan{AnalysisLookup: map[string]*RelationAnalysis{
+			plan: ListPlan{ObjectType: "folder", AnalysisLookup: map[string]*RelationAnalysis{
 				"folder.viewer": {
 					ObjectType: "folder",
 					ParentRelations: []ParentRelationInfo{{
@@ -203,7 +219,7 @@ func TestClassifyParentRelation(t *testing.T) {
 		},
 		{
 			name: "empty AllowedLinkingTypes on nested TTU forces subject_pool",
-			plan: ListPlan{AnalysisLookup: map[string]*RelationAnalysis{
+			plan: ListPlan{ObjectType: "folder", AnalysisLookup: map[string]*RelationAnalysis{
 				"folder.viewer": {
 					ObjectType: "folder",
 					ParentRelations: []ParentRelationInfo{{
@@ -216,7 +232,7 @@ func TestClassifyParentRelation(t *testing.T) {
 		},
 		{
 			name: "ClosureParentRelations also checked",
-			plan: ListPlan{AnalysisLookup: map[string]*RelationAnalysis{
+			plan: ListPlan{ObjectType: "folder", AnalysisLookup: map[string]*RelationAnalysis{
 				"folder.viewer": {
 					ObjectType: "folder",
 					ClosureParentRelations: []ParentRelationInfo{{

@@ -264,8 +264,35 @@ func buildListSubjectsIntersectionUsersetCandidates(plan ListPlan) []TypedQueryB
 	blocks = append(blocks, buildListSubjectsIntersectionUsersetFilterBaseBlock(plan))
 	blocks = append(blocks, buildListSubjectsIntersectionUsersetFilterPartBlocks(plan)...)
 	blocks = append(blocks, buildListSubjectsIntersectionUsersetFilterTTUBlocks(plan)...)
-	blocks = append(blocks, buildListSubjectsIntersectionSelfCandidateBlock(plan))
+	blocks = append(blocks,
+		buildListSubjectsIntersectionUsersetPoolBlock(),
+		buildListSubjectsIntersectionSelfCandidateBlock(plan),
+	)
 	return blocks
+}
+
+// buildListSubjectsIntersectionUsersetPoolBlock is the userset-filter
+// counterpart of the subject pool: every userset of the filter type named in
+// any tuple, as filter_type:id#filter_relation. A group part can grant a
+// userset through paths the per-part blocks do not follow (a complex part's
+// own exclusions or parent lookups); the check_permission filter on the
+// candidates keeps the result exact.
+func buildListSubjectsIntersectionUsersetPoolBlock() TypedQueryBlock {
+	return TypedQueryBlock{
+		Comments: []string{"-- Userset pool: every userset of the filter type, checked like the others"},
+		Query: SelectStmt{
+			Distinct: true,
+			ColumnExprs: []Expr{Alias{
+				Expr: NormalizedUsersetSubject(Col{Table: "t", Column: "subject_id"}, Param("v_filter_relation")),
+				Name: "subject_id",
+			}},
+			FromExpr: TableAs("", "melange_tuples", "t"),
+			Where: And(
+				Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Param("v_filter_type")},
+				HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
+			),
+		},
+	}
 }
 
 // buildListSubjectsIntersectionSelfCandidateBlock offers object_id#filter_relation

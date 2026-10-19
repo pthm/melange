@@ -449,7 +449,7 @@ func classifyParentRelation(plan ListPlan, parent ListParentRelationData) parent
 
 	for _, parentType := range parent.AllowedLinkingTypesSlice {
 		key := parentType + "." + parent.Relation
-		if parentTargetNeedsSubjectPool(plan.AnalysisLookup[key], parent) {
+		if parentTargetNeedsSubjectPool(plan.AnalysisLookup[key], parent, plan.ObjectType) {
 			return parentStrategySubjectPool
 		}
 	}
@@ -466,11 +466,19 @@ func classifyParentRelation(plan ListPlan, parent ListParentRelationData) parent
 //   - Parent target relation has intersection or exclusion.
 //   - Parent target relation's closure contains an intersection or exclusion.
 //   - Parent target relation has complex userset patterns.
+//   - Parent target relation is on another type and has nested TTUs.
 //   - Parent target relation has nested TTUs that are not (a) self-referential
 //     on the target's own object type AND (b) using the same linking relation
 //     as the current parent_closure walk.
-func parentTargetNeedsSubjectPool(target *RelationAnalysis, currentParent ListParentRelationData) bool {
+func parentTargetNeedsSubjectPool(target *RelationAnalysis, currentParent ListParentRelationData, objectType string) bool {
 	if target == nil {
+		return true
+	}
+	// parent_closure only recurses out of nodes of the listed object's own
+	// type (see buildParentClosureCTESQL), so a target that recurses on a
+	// different type (document -> folder, folder.v: v from parent) would stop
+	// after one hop and miss grants on further ancestors.
+	if target.ObjectType != objectType && len(target.ParentRelations)+len(target.ClosureParentRelations) > 0 {
 		return true
 	}
 	if target.Features.HasIntersection || target.Features.HasExclusion {
