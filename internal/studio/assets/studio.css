@@ -15,12 +15,13 @@
  *
  * Brand follows the docs site (docs/assets/css/custom.css): burnt orange
  * accent, Space Grotesk body, Space Mono headings and code, square corners.
- * Fonts are embedded (assets/fonts, SIL OFL) so studio works offline.
+ * Fonts and htmx are vendored from npm (assets/npm, scripts/studio-assets.sh)
+ * and embedded, so studio works offline.
  */
 
-@font-face { font-family: "Space Grotesk"; font-weight: 300 700; font-display: swap; src: url(fonts/space-grotesk.woff2) format("woff2"); }
-@font-face { font-family: "Space Mono"; font-weight: 400; font-display: swap; src: url(fonts/space-mono-400.woff2) format("woff2"); }
-@font-face { font-family: "Space Mono"; font-weight: 700; font-display: swap; src: url(fonts/space-mono-700.woff2) format("woff2"); }
+@font-face { font-family: "Space Grotesk"; font-weight: 300 700; font-display: swap; src: url(npm/fontsource-variable-space-grotesk/space-grotesk-latin-wght-normal.woff2) format("woff2"); }
+@font-face { font-family: "Space Mono"; font-weight: 400; font-display: swap; src: url(npm/fontsource-space-mono/space-mono-latin-400-normal.woff2) format("woff2"); }
+@font-face { font-family: "Space Mono"; font-weight: 700; font-display: swap; src: url(npm/fontsource-space-mono/space-mono-latin-700-normal.woff2) format("woff2"); }
 
 :root {
   --font-sans: "Space Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;

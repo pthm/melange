@@ -614,6 +614,19 @@ build-signed: build
 build-notarized: _check-1password build
     mise exec -- ./scripts/sign-macos.sh bin/melange --notarize
 
+# Vendor studio's browser dependencies (htmx, fonts) from npm, then regenerate notices
+[group('Release')]
+[doc('Fetch the pinned studio browser dependencies from npm and regenerate THIRD_PARTY_NOTICES')]
+studio-assets:
+    ./scripts/studio-assets.sh
+    go generate ./internal/licenses
+
+# Check the pinned studio browser dependencies against the npm registry
+[group('Release')]
+[doc('Report studio browser dependencies with newer npm releases')]
+studio-assets-outdated:
+    ./scripts/studio-assets.sh outdated
+
 # Generate root THIRD_PARTY_NOTICES from go-licenses output
 [group('Release')]
 [doc('Generate THIRD_PARTY_NOTICES from go-licenses data')]

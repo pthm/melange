@@ -39,7 +39,7 @@ templ shell(p page, sidebar templ.Component) {
 				try { document.documentElement.dataset.theme = localStorage.getItem("studio-theme") ?? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"); } catch { document.documentElement.dataset.theme = "light"; }
 			</script>
 			<link rel="stylesheet" href={ asset("studio.css") }/>
-			<script src={ asset("htmx.min.js") }></script>
+			<script src={ asset("npm/htmx.org/htmx.min.js") }></script>
 			<script src={ asset("studio.js") } defer></script>
 		</head>
 		<body>

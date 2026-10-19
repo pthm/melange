@@ -29,6 +29,21 @@ export DATABASE_URL="postgresql://user:pass@host:port/dbname"
 ./scripts/integration-test-runner.sh
 ```
 
+### `studio-assets.sh`
+
+Vendors the browser dependencies `melange studio` embeds (htmx, the Space
+Grotesk and Space Mono fonts) from their npm distributions into
+`internal/studio/assets/npm/<package>/`. Each package keeps its own
+`LICENSE` and `package.json`, which `internal/licenses/gen_notice.go` reads
+into `THIRD_PARTY_NOTICES`. Versions are pinned in the script.
+
+**Usage:**
+```bash
+just studio-assets-outdated   # compare the pins with the npm registry
+# bump a version in scripts/studio-assets.sh, then:
+just studio-assets            # fetch (npm pack verifies integrity) and regenerate notices
+```
+
 ### `start-test-db.sh`
 
 Starts a standalone PostgreSQL container for manual testing.

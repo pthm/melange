@@ -6,11 +6,25 @@ and notices may appear in other parts of the product in accordance with the appl
 Melange may not use all the open source software packages referred to below and may only use portions of a given
 package.
 
-Date generated: 2026-01-10
+Date generated: 2026-10-18
 
 Dependencies:
 
+- github.com/a-h/templ - MIT
 - github.com/antlr4-go/antlr/v4 - BSD-3-Clause
+- github.com/atotto/clipboard - BSD-3-Clause
+- github.com/aymanbagabas/go-osc52/v2 - MIT
+- github.com/catppuccin/go - MIT
+- github.com/charmbracelet/bubbles - MIT
+- github.com/charmbracelet/bubbletea - MIT
+- github.com/charmbracelet/colorprofile - MIT
+- github.com/charmbracelet/huh - MIT
+- github.com/charmbracelet/lipgloss - MIT
+- github.com/charmbracelet/x/ansi - MIT
+- github.com/charmbracelet/x/cellbuf - MIT
+- github.com/charmbracelet/x/exp/strings - MIT
+- github.com/charmbracelet/x/term - MIT
+- github.com/dustin/go-humanize - MIT
 - github.com/envoyproxy/protoc-gen-validate - Apache-2.0
 - github.com/fsnotify/fsnotify - BSD-3-Clause
 - github.com/go-viper/mapstructure/v2 - MIT
@@ -18,20 +32,30 @@ Dependencies:
 - github.com/hashicorp/errwrap - MPL-2.0
 - github.com/hashicorp/go-multierror - MPL-2.0
 - github.com/lib/pq - MIT
+- github.com/lucasb-eyer/go-colorful - MIT
+- github.com/mattn/go-isatty - MIT
+- github.com/mattn/go-runewidth - MIT
+- github.com/mitchellh/hashstructure/v2 - MIT
+- github.com/muesli/ansi - MIT
+- github.com/muesli/cancelreader - MIT
+- github.com/muesli/termenv - MIT
 - github.com/openfga/api/proto - Apache-2.0
-- github.com/openfga/language/lib/go - Apache-2.0
+- github.com/openfga/language/pkg/go - Apache-2.0
 - github.com/pelletier/go-toml/v2 - MIT
+- github.com/rivo/uniseg - MIT
 - github.com/sagikazarmark/locafero - MIT
-- github.com/sourcegraph/conc - MIT
 - github.com/spf13/afero - Apache-2.0
 - github.com/spf13/cast - MIT
 - github.com/spf13/cobra - Apache-2.0
 - github.com/spf13/pflag - BSD-3-Clause
 - github.com/spf13/viper - MIT
 - github.com/subosito/gotenv - MIT
+- github.com/xo/terminfo - MIT
 - go.yaml.in/yaml/v2 - Apache-2.0
+- go.yaml.in/yaml/v3 - Apache-2.0
 - golang.org/x/exp - BSD-3-Clause
 - golang.org/x/net - BSD-3-Clause
+- golang.org/x/sync - BSD-3-Clause
 - golang.org/x/sys - BSD-3-Clause
 - golang.org/x/text - BSD-3-Clause
 - google.golang.org/genproto/googleapis/api - Apache-2.0
@@ -39,7 +63,44 @@ Dependencies:
 - google.golang.org/grpc - Apache-2.0
 - google.golang.org/protobuf - BSD-3-Clause
 - gopkg.in/yaml.v3 - Apache-2.0
+- npm:@fontsource-variable/space-grotesk - OFL-1.1
+- npm:@fontsource/space-mono - OFL-1.1
+- npm:htmx.org - 0BSD
 - sigs.k8s.io/yaml - Apache-2.0
+
+================================================================================
+PACKAGE: github.com/a-h/templ
+LICENSE: MIT
+VERSION: v0.3.1020
+COPYRIGHT: Copyright (c) 2021 Adrian Hesketh
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: github.com/a-h/templ/LICENSE
+--------------------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2021 Adrian Hesketh
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
 
 ================================================================================
 PACKAGE: github.com/antlr4-go/antlr/v4
@@ -83,9 +144,457 @@ NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ================================================================================
+PACKAGE: github.com/atotto/clipboard
+LICENSE: BSD-3-Clause
+VERSION: v0.1.4
+COPYRIGHT: Copyright (c) 2013 Ato Araki. All rights reserved.
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: github.com/atotto/clipboard/LICENSE
+--------------------------------------------------------------------------------
+
+Copyright (c) 2013 Ato Araki. All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+   * Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+   * Redistributions in binary form must reproduce the above
+copyright notice, this list of conditions and the following disclaimer
+in the documentation and/or other materials provided with the
+distribution.
+   * Neither the name of @atotto. nor the names of its
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+================================================================================
+PACKAGE: github.com/aymanbagabas/go-osc52/v2
+LICENSE: MIT
+VERSION: v2.0.1
+COPYRIGHT: Copyright (c) 2022 Ayman Bagabas
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: github.com/aymanbagabas/go-osc52/v2/LICENSE
+--------------------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2022 Ayman Bagabas
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+PACKAGE: github.com/catppuccin/go
+LICENSE: MIT
+VERSION: v0.3.0
+COPYRIGHT: Copyright (c) 2021 Catppuccin
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: github.com/catppuccin/go/LICENSE
+--------------------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2021 Catppuccin
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+PACKAGE: github.com/charmbracelet/bubbles
+LICENSE: MIT
+VERSION: v0.21.1-0.20250623103423-23b8fd6302d7
+COPYRIGHT: Copyright (c) 2020-2023 Charmbracelet, Inc
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: github.com/charmbracelet/bubbles/LICENSE
+--------------------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2020-2023 Charmbracelet, Inc
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+PACKAGE: github.com/charmbracelet/bubbletea
+LICENSE: MIT
+VERSION: v1.3.6
+COPYRIGHT: Copyright (c) 2020-2023 Charmbracelet, Inc
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: github.com/charmbracelet/bubbletea/LICENSE
+--------------------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2020-2023 Charmbracelet, Inc
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+PACKAGE: github.com/charmbracelet/colorprofile
+LICENSE: MIT
+VERSION: v0.2.3-0.20250311203215-f60798e515dc
+COPYRIGHT: Copyright (c) 2020-2024 Charmbracelet, Inc
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: github.com/charmbracelet/colorprofile/LICENSE
+--------------------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2020-2024 Charmbracelet, Inc
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+PACKAGE: github.com/charmbracelet/huh
+LICENSE: MIT
+VERSION: v1.0.0
+COPYRIGHT: Copyright (c) 2023 Charm
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: github.com/charmbracelet/huh/LICENSE
+--------------------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2023 Charm
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+PACKAGE: github.com/charmbracelet/lipgloss
+LICENSE: MIT
+VERSION: v1.1.0
+COPYRIGHT: Copyright (c) 2021-2023 Charmbracelet, Inc
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: github.com/charmbracelet/lipgloss/LICENSE
+--------------------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2021-2023 Charmbracelet, Inc
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+PACKAGE: github.com/charmbracelet/x/ansi
+LICENSE: MIT
+VERSION: v0.9.3
+COPYRIGHT: Copyright (c) 2023 Charmbracelet, Inc.
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: github.com/charmbracelet/x/ansi/LICENSE
+--------------------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2023 Charmbracelet, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+PACKAGE: github.com/charmbracelet/x/cellbuf
+LICENSE: MIT
+VERSION: v0.0.13
+COPYRIGHT: Copyright (c) 2023 Charmbracelet, Inc.
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: github.com/charmbracelet/x/cellbuf/LICENSE
+--------------------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2023 Charmbracelet, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+PACKAGE: github.com/charmbracelet/x/exp/strings
+LICENSE: MIT
+VERSION: v0.0.0-20240722160745-212f7b056ed0
+COPYRIGHT: Copyright (c) 2023 Charmbracelet, Inc.
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: github.com/charmbracelet/x/exp/strings/LICENSE
+--------------------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2023 Charmbracelet, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+PACKAGE: github.com/charmbracelet/x/term
+LICENSE: MIT
+VERSION: v0.2.1
+COPYRIGHT: Copyright (c) 2023 Charmbracelet, Inc.
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: github.com/charmbracelet/x/term/LICENSE
+--------------------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2023 Charmbracelet, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+PACKAGE: github.com/dustin/go-humanize
+LICENSE: MIT
+VERSION: v1.0.1
+COPYRIGHT: Copyright (c) 2005-2008  Dustin Sallings <dustin@spy.net>
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: github.com/dustin/go-humanize/LICENSE
+--------------------------------------------------------------------------------
+
+Copyright (c) 2005-2008  Dustin Sallings <dustin@spy.net>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+<http://www.opensource.org/licenses/mit-license.php>
+
+================================================================================
 PACKAGE: github.com/envoyproxy/protoc-gen-validate
 LICENSE: Apache-2.0
-VERSION: v1.2.1
+VERSION: v1.3.3
 PATH: github.com/envoyproxy/protoc-gen-validate/validate
 COPYRIGHT: unknown
 FILES: LICENSE
@@ -339,7 +848,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ================================================================================
 PACKAGE: github.com/go-viper/mapstructure/v2
 LICENSE: MIT
-VERSION: v2.4.0
+VERSION: v2.5.0
 COPYRIGHT: Copyright (c) 2013 Mitchell Hashimoto
 FILES: LICENSE
 ================================================================================
@@ -373,7 +882,7 @@ THE SOFTWARE.
 ================================================================================
 PACKAGE: github.com/grpc-ecosystem/grpc-gateway/v2
 LICENSE: BSD-3-Clause
-VERSION: v2.27.3
+VERSION: v2.29.0
 COPYRIGHT: Copyright (c) 2015, Gengo, Inc.
 FILES: LICENSE
 ================================================================================
@@ -1145,17 +1654,50 @@ Exhibit B - “Incompatible With Secondary Licenses” Notice
 ================================================================================
 PACKAGE: github.com/lib/pq
 LICENSE: MIT
-VERSION: v1.10.9
-COPYRIGHT: Copyright (c) 2011-2013, 'pq' Contributors
-FILES: LICENSE.md
+VERSION: v1.12.3
+COPYRIGHT: Copyright (c) 2011-2013, 'pq' Contributors. Portions Copyright (c) 2011 Blake Mizerany
+FILES: LICENSE
 ================================================================================
 
 --------------------------------------------------------------------------------
-FILE: github.com/lib/pq/LICENSE.md
+FILE: github.com/lib/pq/LICENSE
 --------------------------------------------------------------------------------
 
-Copyright (c) 2011-2013, 'pq' Contributors
-Portions Copyright (C) 2011 Blake Mizerany
+MIT License
+
+Copyright (c) 2011-2013, 'pq' Contributors. Portions Copyright (c) 2011 Blake Mizerany
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+PACKAGE: github.com/lucasb-eyer/go-colorful
+LICENSE: MIT
+VERSION: v1.2.0
+COPYRIGHT: Copyright (c) 2013 Lucas Beyer
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: github.com/lucasb-eyer/go-colorful/LICENSE
+--------------------------------------------------------------------------------
+
+Copyright (c) 2013 Lucas Beyer
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 
@@ -1164,9 +1706,201 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ================================================================================
+PACKAGE: github.com/mattn/go-isatty
+LICENSE: MIT
+VERSION: v0.0.21
+COPYRIGHT: unknown
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: github.com/mattn/go-isatty/LICENSE
+--------------------------------------------------------------------------------
+
+Copyright (c) Yasuhiro MATSUMOTO <mattn.jp@gmail.com>
+
+MIT License (Expat)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+================================================================================
+PACKAGE: github.com/mattn/go-runewidth
+LICENSE: MIT
+VERSION: v0.0.16
+COPYRIGHT: Copyright (c) 2016 Yasuhiro Matsumoto
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: github.com/mattn/go-runewidth/LICENSE
+--------------------------------------------------------------------------------
+
+The MIT License (MIT)
+
+Copyright (c) 2016 Yasuhiro Matsumoto
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+PACKAGE: github.com/mitchellh/hashstructure/v2
+LICENSE: MIT
+VERSION: v2.0.2
+COPYRIGHT: Copyright (c) 2016 Mitchell Hashimoto
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: github.com/mitchellh/hashstructure/v2/LICENSE
+--------------------------------------------------------------------------------
+
+The MIT License (MIT)
+
+Copyright (c) 2016 Mitchell Hashimoto
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+================================================================================
+PACKAGE: github.com/muesli/ansi
+LICENSE: MIT
+VERSION: v0.0.0-20230316100256-276c6243b2f6
+COPYRIGHT: Copyright (c) 2021 Christian Muehlhaeuser
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: github.com/muesli/ansi/LICENSE
+--------------------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2021 Christian Muehlhaeuser
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+PACKAGE: github.com/muesli/cancelreader
+LICENSE: MIT
+VERSION: v0.2.2
+COPYRIGHT: Copyright (c) 2022 Erik Geiser and Christian Muehlhaeuser
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: github.com/muesli/cancelreader/LICENSE
+--------------------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2022 Erik Geiser and Christian Muehlhaeuser
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
+PACKAGE: github.com/muesli/termenv
+LICENSE: MIT
+VERSION: v0.16.0
+COPYRIGHT: Copyright (c) 2019 Christian Muehlhaeuser
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: github.com/muesli/termenv/LICENSE
+--------------------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2019 Christian Muehlhaeuser
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
 PACKAGE: github.com/openfga/api/proto
 LICENSE: Apache-2.0
-VERSION: v0.0.0-20251105142303-feed3db3d69d
+VERSION: v0.0.0-20260723150800-6981fff8d33b
 PATH: github.com/openfga/api/proto/openfga/v1
 COPYRIGHT: unknown
 FILES: LICENSE
@@ -1355,15 +2089,15 @@ FILE: github.com/openfga/api/proto/openfga/v1/LICENSE
    END OF TERMS AND CONDITIONS
 
 ================================================================================
-PACKAGE: github.com/openfga/language/lib/go
+PACKAGE: github.com/openfga/language/pkg/go
 LICENSE: Apache-2.0
-VERSION: v0.2.0-beta.2.0.20251027165255-0f8f255e5f6c
+VERSION: v0.2.1
 COPYRIGHT: unknown
 FILES: LICENSE
 ================================================================================
 
 --------------------------------------------------------------------------------
-FILE: github.com/openfga/language/lib/go/LICENSE
+FILE: github.com/openfga/language/pkg/go/LICENSE
 --------------------------------------------------------------------------------
 
 
@@ -1605,9 +2339,43 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ================================================================================
+PACKAGE: github.com/rivo/uniseg
+LICENSE: MIT
+VERSION: v0.4.7
+COPYRIGHT: Copyright (c) 2019 Oliver Kuederle
+FILES: LICENSE.txt
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: github.com/rivo/uniseg/LICENSE.txt
+--------------------------------------------------------------------------------
+
+MIT License
+
+Copyright (c) 2019 Oliver Kuederle
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
 PACKAGE: github.com/sagikazarmark/locafero
 LICENSE: MIT
-VERSION: v0.9.0
+VERSION: v0.12.0
 COPYRIGHT: Copyright (c) 2023 Márk Sági-Kazár <mark.sagikazar@gmail.com>
 FILES: LICENSE
 ================================================================================
@@ -1635,40 +2403,6 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
-
-================================================================================
-PACKAGE: github.com/sourcegraph/conc
-LICENSE: MIT
-VERSION: v0.3.0
-COPYRIGHT: Copyright (c) 2023 Sourcegraph
-FILES: LICENSE
-================================================================================
-
---------------------------------------------------------------------------------
-FILE: github.com/sourcegraph/conc/LICENSE
---------------------------------------------------------------------------------
-
-MIT License
-
-Copyright (c) 2023 Sourcegraph
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
 
 ================================================================================
 PACKAGE: github.com/spf13/afero
@@ -2122,7 +2856,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ================================================================================
 PACKAGE: github.com/spf13/viper
 LICENSE: MIT
-VERSION: v1.20.1
+VERSION: v1.21.0
 COPYRIGHT: Copyright (c) 2014 Steve Francia
 FILES: LICENSE
 ================================================================================
@@ -2188,9 +2922,43 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ================================================================================
+PACKAGE: github.com/xo/terminfo
+LICENSE: MIT
+VERSION: v0.0.0-20220910002029-abceb7e1c41e
+COPYRIGHT: Copyright (c) 2016 Anmol Sethi
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: github.com/xo/terminfo/LICENSE
+--------------------------------------------------------------------------------
+
+The MIT License (MIT)
+
+Copyright (c) 2016 Anmol Sethi
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+================================================================================
 PACKAGE: go.yaml.in/yaml/v2
 LICENSE: Apache-2.0
-VERSION: v2.4.2
+VERSION: v2.4.4
 COPYRIGHT: Copyright 2011-2016 Canonical Ltd.
 FILES: LICENSE, NOTICE
 ================================================================================
@@ -2420,9 +3188,90 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 ================================================================================
+PACKAGE: go.yaml.in/yaml/v3
+LICENSE: Apache-2.0
+VERSION: v3.0.4
+COPYRIGHT: copyright staring in 2011 when the project was ported over:
+FILES: LICENSE, NOTICE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: go.yaml.in/yaml/v3/LICENSE
+--------------------------------------------------------------------------------
+
+
+This project is covered by two different licenses: MIT and Apache.
+
+#### MIT License ####
+
+The following files were ported to Go from C files of libyaml, and thus
+are still covered by their original MIT license, with the additional
+copyright staring in 2011 when the project was ported over:
+
+    apic.go emitterc.go parserc.go readerc.go scannerc.go
+    writerc.go yamlh.go yamlprivateh.go
+
+Copyright (c) 2006-2010 Kirill Simonov
+Copyright (c) 2006-2011 Kirill Simonov
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+### Apache License ###
+
+All the remaining project files are covered by the Apache license:
+
+Copyright (c) 2011-2019 Canonical Ltd
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+--------------------------------------------------------------------------------
+FILE: go.yaml.in/yaml/v3/NOTICE
+--------------------------------------------------------------------------------
+
+Copyright 2011-2016 Canonical Ltd.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+================================================================================
 PACKAGE: golang.org/x/exp
 LICENSE: BSD-3-Clause
-VERSION: v0.0.0-20250620022241-b7579e27df2b
+VERSION: v0.0.0-20260410095643-746e56fc9e2f
 PATH: golang.org/x/exp/slices
 COPYRIGHT: Copyright 2009 The Go Authors.
 FILES: LICENSE
@@ -2463,7 +3312,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ================================================================================
 PACKAGE: golang.org/x/net
 LICENSE: BSD-3-Clause
-VERSION: v0.48.0
+VERSION: v0.55.0
 COPYRIGHT: Copyright 2009 The Go Authors.
 FILES: LICENSE
 ================================================================================
@@ -2501,9 +3350,50 @@ THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ================================================================================
+PACKAGE: golang.org/x/sync
+LICENSE: BSD-3-Clause
+VERSION: v0.20.0
+PATH: golang.org/x/sync/errgroup
+COPYRIGHT: Copyright 2009 The Go Authors.
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: golang.org/x/sync/errgroup/LICENSE
+--------------------------------------------------------------------------------
+
+Copyright 2009 The Go Authors.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+   * Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+   * Redistributions in binary form must reproduce the above
+copyright notice, this list of conditions and the following disclaimer
+in the documentation and/or other materials provided with the
+distribution.
+   * Neither the name of Google LLC nor the names of its
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+================================================================================
 PACKAGE: golang.org/x/sys
 LICENSE: BSD-3-Clause
-VERSION: v0.39.0
+VERSION: v0.45.0
 PATH: golang.org/x/sys/unix
 COPYRIGHT: Copyright 2009 The Go Authors.
 FILES: LICENSE
@@ -2544,7 +3434,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ================================================================================
 PACKAGE: golang.org/x/text
 LICENSE: BSD-3-Clause
-VERSION: v0.32.0
+VERSION: v0.37.0
 COPYRIGHT: Copyright 2009 The Go Authors.
 FILES: LICENSE
 ================================================================================
@@ -2584,7 +3474,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ================================================================================
 PACKAGE: google.golang.org/genproto/googleapis/api
 LICENSE: Apache-2.0
-VERSION: v0.0.0-20251022142026-3a174f9686a8
+VERSION: v0.0.0-20260615183401-62b3387ff324
 COPYRIGHT: unknown
 FILES: LICENSE
 ================================================================================
@@ -2799,7 +3689,7 @@ FILE: google.golang.org/genproto/googleapis/api/LICENSE
 ================================================================================
 PACKAGE: google.golang.org/genproto/googleapis/rpc
 LICENSE: Apache-2.0
-VERSION: v0.0.0-20251022142026-3a174f9686a8
+VERSION: v0.0.0-20260615183401-62b3387ff324
 PATH: google.golang.org/genproto/googleapis/rpc/status
 COPYRIGHT: unknown
 FILES: LICENSE
@@ -3015,7 +3905,7 @@ FILE: google.golang.org/genproto/googleapis/rpc/status/LICENSE
 ================================================================================
 PACKAGE: google.golang.org/grpc
 LICENSE: Apache-2.0
-VERSION: v1.77.0
+VERSION: v1.82.1
 COPYRIGHT: Copyright 2014 gRPC authors.
 FILES: LICENSE, NOTICE.txt
 ================================================================================
@@ -3248,7 +4138,7 @@ limitations under the License.
 ================================================================================
 PACKAGE: google.golang.org/protobuf
 LICENSE: BSD-3-Clause
-VERSION: v1.36.10
+VERSION: v1.36.11
 COPYRIGHT: Copyright (c) 2018 The Go Authors. All rights reserved.
 FILES: LICENSE
 ================================================================================
@@ -3365,6 +4255,244 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
+
+================================================================================
+PACKAGE: npm:@fontsource-variable/space-grotesk
+LICENSE: OFL-1.1
+VERSION: 5.3.0
+COPYRIGHT: Copyright 2020 The Space Grotesk Project Authors (https://github.com/floriankarsten/space-grotesk)
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: fontsource-variable-space-grotesk/LICENSE
+--------------------------------------------------------------------------------
+
+Copyright 2020 The Space Grotesk Project Authors (https://github.com/floriankarsten/space-grotesk)
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is copied below, and is also available with a FAQ at:
+http://scripts.sil.org/OFL
+
+
+-----------------------------------------------------------
+SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
+-----------------------------------------------------------
+
+PREAMBLE
+The goals of the Open Font License (OFL) are to stimulate worldwide
+development of collaborative font projects, to support the font creation
+efforts of academic and linguistic communities, and to provide a free and
+open framework in which fonts may be shared and improved in partnership
+with others.
+
+The OFL allows the licensed fonts to be used, studied, modified and
+redistributed freely as long as they are not sold by themselves. The
+fonts, including any derivative works, can be bundled, embedded,
+redistributed and/or sold with any software provided that any reserved
+names are not used by derivative works. The fonts and derivatives,
+however, cannot be released under any other type of license. The
+requirement for fonts to remain under this license does not apply
+to any document created using the fonts or their derivatives.
+
+DEFINITIONS
+"Font Software" refers to the set of files released by the Copyright
+Holder(s) under this license and clearly marked as such. This may
+include source files, build scripts and documentation.
+
+"Reserved Font Name" refers to any names specified as such after the
+copyright statement(s).
+
+"Original Version" refers to the collection of Font Software components as
+distributed by the Copyright Holder(s).
+
+"Modified Version" refers to any derivative made by adding to, deleting,
+or substituting -- in part or in whole -- any of the components of the
+Original Version, by changing formats or by porting the Font Software to a
+new environment.
+
+"Author" refers to any designer, engineer, programmer, technical
+writer or other person who contributed to the Font Software.
+
+PERMISSION & CONDITIONS
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of the Font Software, to use, study, copy, merge, embed, modify,
+redistribute, and sell modified and unmodified copies of the Font
+Software, subject to the following conditions:
+
+1) Neither the Font Software nor any of its individual components,
+in Original or Modified Versions, may be sold by itself.
+
+2) Original or Modified Versions of the Font Software may be bundled,
+redistributed and/or sold with any software, provided that each copy
+contains the above copyright notice and this license. These can be
+included either as stand-alone text files, human-readable headers or
+in the appropriate machine-readable metadata fields within text or
+binary files as long as those fields can be easily viewed by the user.
+
+3) No Modified Version of the Font Software may use the Reserved Font
+Name(s) unless explicit written permission is granted by the corresponding
+Copyright Holder. This restriction only applies to the primary font name as
+presented to the users.
+
+4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
+Software shall not be used to promote, endorse or advertise any
+Modified Version, except to acknowledge the contribution(s) of the
+Copyright Holder(s) and the Author(s) or with their explicit written
+permission.
+
+5) The Font Software, modified or unmodified, in part or in whole,
+must be distributed entirely under this license, and must not be
+distributed under any other license. The requirement for fonts to
+remain under this license does not apply to any document created
+using the Font Software.
+
+TERMINATION
+This license becomes null and void if any of the above conditions are
+not met.
+
+DISCLAIMER
+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
+OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
+DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
+OTHER DEALINGS IN THE FONT SOFTWARE.
+
+================================================================================
+PACKAGE: npm:@fontsource/space-mono
+LICENSE: OFL-1.1
+VERSION: 5.3.0
+COPYRIGHT: Copyright 2016 The Space Mono Project Authors (https://github.com/googlefonts/spacemono) SpaceMono-Italic.ttf: Copyright 2016 The Space Mono Project Authors (https://github.com/googlefonts/spacemono) SpaceMono-Bold.ttf: Copyright 2016 The Space Mono Project Authors (https://github.com/googlefonts/spacemono) SpaceMono-BoldItalic.ttf: Copyright 2016 The Space Mono Project Authors (https://github.com/googlefonts/spacemono)
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: fontsource-space-mono/LICENSE
+--------------------------------------------------------------------------------
+
+Copyright 2016 The Space Mono Project Authors (https://github.com/googlefonts/spacemono) SpaceMono-Italic.ttf: Copyright 2016 The Space Mono Project Authors (https://github.com/googlefonts/spacemono) SpaceMono-Bold.ttf: Copyright 2016 The Space Mono Project Authors (https://github.com/googlefonts/spacemono) SpaceMono-BoldItalic.ttf: Copyright 2016 The Space Mono Project Authors (https://github.com/googlefonts/spacemono)
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is copied below, and is also available with a FAQ at:
+http://scripts.sil.org/OFL
+
+
+-----------------------------------------------------------
+SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
+-----------------------------------------------------------
+
+PREAMBLE
+The goals of the Open Font License (OFL) are to stimulate worldwide
+development of collaborative font projects, to support the font creation
+efforts of academic and linguistic communities, and to provide a free and
+open framework in which fonts may be shared and improved in partnership
+with others.
+
+The OFL allows the licensed fonts to be used, studied, modified and
+redistributed freely as long as they are not sold by themselves. The
+fonts, including any derivative works, can be bundled, embedded,
+redistributed and/or sold with any software provided that any reserved
+names are not used by derivative works. The fonts and derivatives,
+however, cannot be released under any other type of license. The
+requirement for fonts to remain under this license does not apply
+to any document created using the fonts or their derivatives.
+
+DEFINITIONS
+"Font Software" refers to the set of files released by the Copyright
+Holder(s) under this license and clearly marked as such. This may
+include source files, build scripts and documentation.
+
+"Reserved Font Name" refers to any names specified as such after the
+copyright statement(s).
+
+"Original Version" refers to the collection of Font Software components as
+distributed by the Copyright Holder(s).
+
+"Modified Version" refers to any derivative made by adding to, deleting,
+or substituting -- in part or in whole -- any of the components of the
+Original Version, by changing formats or by porting the Font Software to a
+new environment.
+
+"Author" refers to any designer, engineer, programmer, technical
+writer or other person who contributed to the Font Software.
+
+PERMISSION & CONDITIONS
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of the Font Software, to use, study, copy, merge, embed, modify,
+redistribute, and sell modified and unmodified copies of the Font
+Software, subject to the following conditions:
+
+1) Neither the Font Software nor any of its individual components,
+in Original or Modified Versions, may be sold by itself.
+
+2) Original or Modified Versions of the Font Software may be bundled,
+redistributed and/or sold with any software, provided that each copy
+contains the above copyright notice and this license. These can be
+included either as stand-alone text files, human-readable headers or
+in the appropriate machine-readable metadata fields within text or
+binary files as long as those fields can be easily viewed by the user.
+
+3) No Modified Version of the Font Software may use the Reserved Font
+Name(s) unless explicit written permission is granted by the corresponding
+Copyright Holder. This restriction only applies to the primary font name as
+presented to the users.
+
+4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
+Software shall not be used to promote, endorse or advertise any
+Modified Version, except to acknowledge the contribution(s) of the
+Copyright Holder(s) and the Author(s) or with their explicit written
+permission.
+
+5) The Font Software, modified or unmodified, in part or in whole,
+must be distributed entirely under this license, and must not be
+distributed under any other license. The requirement for fonts to
+remain under this license does not apply to any document created
+using the Font Software.
+
+TERMINATION
+This license becomes null and void if any of the above conditions are
+not met.
+
+DISCLAIMER
+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
+OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
+DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
+OTHER DEALINGS IN THE FONT SOFTWARE.
+
+================================================================================
+PACKAGE: npm:htmx.org
+LICENSE: 0BSD
+VERSION: 2.0.11
+COPYRIGHT: unknown
+FILES: LICENSE
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: htmx.org/LICENSE
+--------------------------------------------------------------------------------
+
+Zero-Clause BSD
+=============
+
+Permission to use, copy, modify, and/or distribute this software for
+any purpose with or without fee is hereby granted.
+
+THE SOFTWARE IS PROVIDED “AS IS” AND THE AUTHOR DISCLAIMS ALL
+WARRANTIES WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES
+OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE
+FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY
+DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN
+AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT
+OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
 ================================================================================
 PACKAGE: sigs.k8s.io/yaml
