@@ -3,6 +3,8 @@ package studio
 import (
 	"fmt"
 	"net/url"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/pthm/melange/melange"
@@ -157,67 +159,111 @@ templ indexPage(d indexData) {
 					· checksum <code>{ short(d.Model.SchemaChecksum) }</code>
 				</p>
 			}
+			<nav class="tabs" aria-label="Model views">
+				<a href="/" { current(d.Tab == modelTabQuery)... }>Query</a>
+				<a href={ templ.URL("/?tab=" + modelTabSchema) } { current(d.Tab == modelTabSchema)... }>Deployed schema</a>
+			</nav>
 		}
-		<div>
-			<section class="sec">
-				@secHead("Query", 0, false) {
-					<p class="help">
-						<strong>Explain</strong> checks whether the subject has the relation on the object, and shows every path the check tried.
-						<strong>Expand</strong> shows everyone who has the relation on the object, as a tree; it ignores the subject.
-						<strong>Matrix</strong> checks every relation on the object's type for the subject, in model order; it ignores the relation and what-if tuples.
-						<strong>Analyze</strong> runs the plain check under <code>EXPLAIN ANALYZE</code> (read-only, { analyzeTimeout.String() } limit) and shows where the time went; it ignores what-if tuples. It times <code>check_permission</code>, which can be fast where Explain is slow or too complex.
-					</p>
-				}
-				<div class="sec-body">
-					// One form, three verbs: Enter and Explain post /explain; Expand
-					// GETs /expand with the same fields (hx-include, since htmx only
-					// sends a form's values for non-GET requests by default); Matrix
-					// posts /matrix; Analyze posts /analyze.
-					// Cmd/Ctrl+Enter in the what-if textarea also runs Explain, and
-					// #query-result dims while either request runs.
-					<form class="query" hx-post="/explain" hx-target="#query-result" hx-indicator="#query-result" hx-trigger="submit, keydown[(metaKey||ctrlKey)&&key=='Enter'] from:find textarea">
-						<label class="field">Subject<input name="subject" placeholder="user:alice" list="dl-types" autocomplete="off"/></label>
-						<label class="field">Relation<input name="relation" placeholder="viewer" value={ d.Relation } list="dl-rels" autocomplete="off"/></label>
-						<label class="field">Object<input name="object" placeholder="document:1" value={ prefill(d.Type) } list="dl-types" autocomplete="off"/></label>
-						<div class="actions">
-							<button class="primary" type="submit">Explain</button>
-							<button type="button" hx-get="/expand" hx-include="closest form">Expand</button>
-							<button type="button" hx-post="/matrix">Matrix</button>
-							<button type="button" hx-post="/analyze">Analyze</button>
-						</div>
-						<details class="disclose whatif">
-							<summary>What-if tuples</summary>
-							<p class="help">
-								One tuple per line, <code>subject relation object</code>. Explain adds them for this query only and shows the answer with and without them, so you can see whether a grant would fix or break a check.
-								They are added in a transaction that is always rolled back; nothing is written. Expand ignores them.
-								They apply only while this panel is open; <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Enter</kbd> runs Explain.
-							</p>
-							// Disabled while closed (studio.js), so htmx does not send it.
-							<textarea name="whatif" rows="3" placeholder="user:bob viewer document:1" spellcheck="false" autocomplete="off" disabled></textarea>
-						</details>
-					</form>
-					if d.Model != nil {
-						@modelDatalists(d.Model)
-					}
-				</div>
-			</section>
-			<section class="sec">
-				<div id="query-result" class="sec-body" aria-live="polite">
-					<p class="mute">Results appear here. Pick a relation in the sidebar to see its definition, dependencies, and generated SQL; its Query button fills in this form.</p>
-				</div>
-			</section>
-			if d.Model != nil {
-				<section class="sec">
-					@secHead("Deployed schema", 0, false) {
-						<p class="help">The DSL recorded by the last migration ({ d.Model.Format } file). This is what the database runs.</p>
-					}
-					<div class="sec-body">
-						@fgaSource(d.Model.DSL)
-					</div>
-				</section>
-			}
-		</div>
+		if d.Tab == modelTabSchema {
+			@schemaTab(d)
+		} else {
+			@queryTab(d)
+		}
 	}
+}
+
+// schemaTab is the Model page's deployed DSL, highlighted.
+templ schemaTab(d indexData) {
+	if d.Model == nil {
+		<section class="sec"><div class="sec-body mute">No deployed schema to show.</div></section>
+	} else {
+		<section class="sec">
+			@secHead("Deployed schema", 0, false) {
+				<p class="help">The DSL recorded by the last migration ({ d.Model.Format } file). This is what the database runs.</p>
+			}
+			<div class="sec-body">
+				@fgaSource(d.Model.DSL)
+			</div>
+		</section>
+	}
+}
+
+// queryMode is one verb of the Query form. Uses lists the fields it reads
+// (data-for in the markup), so CSS shows only those while it is selected.
+type queryMode struct {
+	ID, Label, Help, Uses string
+}
+
+var queryModes = []queryMode{
+	{queryExplain, "Explain", "Does the subject have the relation on the object? Shows every path the check tried.", "subject relation whatif"},
+	{queryExpand, "Expand", "Who has the relation on the object, as a tree of how they get it.", "relation"},
+	{queryMatrix, "Matrix", "Every relation on the object's type, allowed or denied for the subject.", "subject"},
+	{queryAnalyze, "Analyze", "Where the time goes: runs the check under EXPLAIN ANALYZE (read-only, " + analyzeTimeout.String() + " limit).", "subject relation"},
+}
+
+// modesUsing returns the ids of the modes whose Uses include field, for a
+// data-for attribute.
+func modesUsing(field string) string {
+	var ids []string
+	for _, m := range queryModes {
+		if slices.Contains(strings.Fields(m.Uses), field) {
+			ids = append(ids, m.ID)
+		}
+	}
+	return strings.Join(ids, " ")
+}
+
+// queryTab is the Model page's query console. One form: the mode radios in
+// the heading strip pick the verb, POST /query dispatches on it, and only the
+// fields that verb reads are shown (assets/studio.css, .query [data-for]).
+// Enter submits; Cmd/Ctrl+Enter in the what-if textarea does too.
+templ queryTab(d indexData) {
+	<div>
+		<form class="sec query" hx-post="/query" hx-target="#query-result" hx-indicator="#query-result" hx-trigger="submit, keydown[(metaKey||ctrlKey)&&key=='Enter'] from:find textarea">
+			<div class="sec-head">
+				<div class="modes" role="radiogroup" aria-label="Query mode">
+					for i, m := range queryModes {
+						<label>
+							<input type="radio" name="mode" value={ m.ID } checked?={ i == 0 }/>
+							{ m.Label }
+						</label>
+					}
+				</div>
+				for _, m := range queryModes {
+					<p class="help" data-for={ m.ID }>{ m.Help }</p>
+				}
+			</div>
+			<div class="sec-body">
+				<div class="query-row">
+					<label class="field" data-for={ modesUsing("subject") }>Subject<input name="subject" placeholder="user:alice" list="dl-types" autocomplete="off"/></label>
+					<label class="field" data-for={ modesUsing("relation") }>Relation<input name="relation" placeholder="viewer" value={ d.Relation } list="dl-rels" autocomplete="off"/></label>
+					<label class="field">Object<input name="object" placeholder="document:1" value={ prefill(d.Type) } list="dl-types" autocomplete="off"/></label>
+					<button class="primary" type="submit">
+						for _, m := range queryModes {
+							<span data-for={ m.ID }>{ m.Label }</span>
+						}
+					</button>
+				</div>
+				<details class="disclose whatif" data-for={ modesUsing("whatif") }>
+					<summary>What-if tuples</summary>
+					<p class="help">
+						One <code>subject relation object</code> per line. Explain answers with and without them, in a transaction that is always rolled back.
+						Applied only while open; <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Enter</kbd> runs.
+					</p>
+					// Disabled while closed (studio.js), so htmx does not send it.
+					<textarea name="whatif" rows="3" placeholder="user:bob viewer document:1" spellcheck="false" autocomplete="off" disabled></textarea>
+				</details>
+			</div>
+			if d.Model != nil {
+				@modelDatalists(d.Model)
+			}
+		</form>
+		<section class="sec">
+			<div id="query-result" class="sec-body" aria-live="polite">
+				<p class="mute">Results appear here. A relation's page in the sidebar has its definition, dependencies and generated SQL.</p>
+			</div>
+		</section>
+	</div>
 }
 
 templ errorBox(msg string) {
@@ -394,7 +440,7 @@ templ expandNode(n *melange.UsersetTreeNode, parent string) {
 		if showNodeName(n, parent) {
 			<code class="strong">{ n.Name }</code>
 		}
-		switch {
+		switch  {
 			case n.Leaf != nil:
 				@expandLeaf(n.Leaf)
 			case n.Union != nil:
@@ -406,12 +452,18 @@ templ expandNode(n *melange.UsersetTreeNode, parent string) {
 			case n.Difference != nil:
 				<span class="kind">but not</span>
 				<ul>
-					<li><span class="mute">base</span><ul>
-						@expandNode(n.Difference.Base, n.Name)
-					</ul></li>
-					<li><span class="mute">minus</span><ul>
-						@expandNode(n.Difference.Subtract, n.Name)
-					</ul></li>
+					<li>
+						<span class="mute">base</span>
+						<ul>
+							@expandNode(n.Difference.Base, n.Name)
+						</ul>
+					</li>
+					<li>
+						<span class="mute">minus</span>
+						<ul>
+							@expandNode(n.Difference.Subtract, n.Name)
+						</ul>
+					</li>
 				</ul>
 		}
 	</li>

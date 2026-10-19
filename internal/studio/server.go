@@ -63,11 +63,10 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.Handle("GET /assets/", http.FileServerFS(assets))
 	mux.HandleFunc("GET /{$}", s.index)
+	mux.HandleFunc("POST /query", s.query)
 	mux.HandleFunc("POST /explain", s.explain)
 	mux.HandleFunc("GET /expand", s.expand)
 	mux.HandleFunc("GET /relation", s.relation)
-	mux.HandleFunc("POST /matrix", s.matrix)
-	mux.HandleFunc("POST /analyze", s.analyze)
 	mux.HandleFunc("GET /tuples", s.tuplesIndex)
 	mux.HandleFunc("GET /history", s.history)
 	mux.HandleFunc("GET /health", s.health)
@@ -138,13 +137,31 @@ type indexData struct {
 	// Type and Relation preselect the query forms (from ?type=&relation=).
 	Type     string
 	Relation string
+	Tab      string // modelTabQuery (default) or modelTabSchema, from ?tab=
 }
+
+const (
+	modelTabQuery  = "query"
+	modelTabSchema = "schema"
+)
+
+// Query form modes (the "mode" radio), in display order in queryModes.
+const (
+	queryExplain = "explain"
+	queryExpand  = "expand"
+	queryMatrix  = "matrix"
+	queryAnalyze = "analyze"
+)
 
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	data := indexData{
 		Env:      s.env,
 		Type:     r.URL.Query().Get("type"),
 		Relation: r.URL.Query().Get("relation"),
+		Tab:      modelTabQuery,
+	}
+	if r.URL.Query().Get("tab") == modelTabSchema {
+		data.Tab = modelTabSchema
 	}
 	data.Model, data.ModelErr = s.loadModel(r.Context())
 	render(w, r, indexPage(data))
@@ -163,6 +180,30 @@ func (s *Server) loadModel(ctx context.Context) (model *migrator.DeployedModel, 
 	default:
 		newModelOrder(model).sortRelations(model)
 		return model, ""
+	}
+}
+
+// query runs the Query form's selected mode. Only Explain uses what-if
+// tuples, so the other modes never receive them.
+func (s *Server) query(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		render(w, r, errorBox(err.Error()))
+		return
+	}
+	mode := r.Form.Get("mode")
+	if mode != queryExplain {
+		r.Form.Del("whatif")
+		r.PostForm.Del("whatif")
+	}
+	switch mode {
+	case queryExpand:
+		s.expand(w, r)
+	case queryMatrix:
+		s.matrix(w, r)
+	case queryAnalyze:
+		s.analyze(w, r)
+	default:
+		s.explain(w, r)
 	}
 }
 
@@ -248,9 +289,6 @@ func (s *Server) matrix(w http.ResponseWriter, r *http.Request) {
 	if !typeExists(model.Types, string(subject.Type)) {
 		notes = append(notes, fmt.Sprintf("%s is not a type in the deployed model, so every check is denied.", subject.Type))
 	}
-	if r.FormValue("whatif") != "" {
-		notes = append(notes, "What-if tuples are ignored by Matrix.")
-	}
 	rels := relationsOf(model.Types, string(object.Type))
 	if len(rels) == 0 {
 		render(w, r, errorBox(fmt.Sprintf("%s has no relations in the deployed model", object.Type)))
@@ -291,9 +329,6 @@ func (s *Server) expand(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		render(w, r, errorBox(failedAfter(err, took)))
 		return
-	}
-	if strings.TrimSpace(r.FormValue("whatif")) != "" {
-		render(w, r, note("What-if tuples are not applied to Expand."))
 	}
 	render(w, r, expandView(tree, r.FormValue("userset") == "", took))
 }

@@ -88,9 +88,6 @@ func (s *Server) analyze(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 		render(w, r, errorBox(failedAfter(err, took)))
 	default:
-		if strings.TrimSpace(r.FormValue("whatif")) != "" {
-			render(w, r, note("What-if tuples are not applied to Analyze."))
-		}
 		if model != nil {
 			a.Links = checkFuncLinks(model.Types)
 		}
