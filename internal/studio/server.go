@@ -7,10 +7,13 @@ package studio
 //go:generate go tool templ generate
 
 import (
+	"cmp"
+	"compress/gzip"
 	"context"
 	"database/sql"
 	"embed"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -61,7 +64,7 @@ func New(db *sql.DB, dbSchema, env, schemaPath string) *Server {
 // Handler returns the console's routes, wrapped in a Host check.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("GET /assets/", http.FileServerFS(assets))
+	mux.Handle("GET /assets/{version}/", serveAssets())
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("POST /query", s.query)
 	mux.HandleFunc("POST /explain", s.explain)
@@ -75,7 +78,122 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /entity", s.entity)
 	mux.HandleFunc("GET /entity/group", s.entityGroup)
 	mux.HandleFunc("GET /entity/count", s.entityCount)
-	return localhostOnly(mux)
+	return localhostOnly(secureHeaders(gzipped(mux)))
+}
+
+// serveAssets serves the embedded assets under /assets/<version>/. A URL with
+// the current assetVersion never changes content, so it is cached as
+// immutable; an old version (a page from before an upgrade) revalidates.
+func serveAssets() http.Handler {
+	sub, err := fs.Sub(assets, "assets")
+	if err != nil {
+		panic(err) // the embed always has an assets directory
+	}
+	files := http.FileServerFS(sub)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		version := r.PathValue("version")
+		if version == assetVersion {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+		http.StripPrefix("/assets/"+version, files).ServeHTTP(w, r)
+	})
+}
+
+// contentSecurityPolicy allows only studio's own scripts, styles, fonts and
+// images (plus data: images, for the CSS search icon). htmx runs with
+// allowEval and includeIndicatorStyles off (views.templ shell), so neither
+// unsafe-eval nor unsafe-inline is needed.
+const contentSecurityPolicy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; " +
+	"font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+
+// secureHeaders sets the browser hardening headers on every response. Pages
+// show live authorization data, so they are never stored in a cache;
+// serveAssets sets its own Cache-Control.
+func secureHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("Content-Security-Policy", contentSecurityPolicy)
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("Referrer-Policy", "no-referrer")
+		h.Set("Cross-Origin-Opener-Policy", "same-origin")
+		h.Set("Cross-Origin-Resource-Policy", "same-origin")
+		if !strings.HasPrefix(r.URL.Path, "/assets/") {
+			h.Set("Cache-Control", "no-store")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// gzipped compresses responses for clients that accept gzip. Fonts and PNGs
+// are already compressed and pass through untouched.
+func gzipped(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Vary", "Accept-Encoding")
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") ||
+			strings.HasSuffix(r.URL.Path, ".woff2") || strings.HasSuffix(r.URL.Path, ".png") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		r.Header.Del("Range") // byte ranges of the uncompressed file would be wrong
+		gw := &gzipWriter{ResponseWriter: w}
+		defer gw.close()
+		next.ServeHTTP(gw, r)
+	})
+}
+
+// gzipWriter compresses the body written through it. It holds the status
+// until the first body write, so a handler that sends a status before its
+// body (a 404 page) still gets its Content-Type detected from the
+// uncompressed bytes; net/http would otherwise sniff the gzip stream, or
+// never see a body at all. A response with no body passes through as-is,
+// and Content-Length, which describes the uncompressed size, is dropped.
+type gzipWriter struct {
+	http.ResponseWriter
+	gz      *gzip.Writer
+	code    int // status held until the body starts; 0 means 200
+	started bool
+}
+
+func (g *gzipWriter) WriteHeader(code int) {
+	if !g.started && g.code == 0 {
+		g.code = code
+	}
+}
+
+func (g *gzipWriter) Write(b []byte) (int, error) {
+	if !g.started {
+		g.start(b)
+	}
+	if g.gz == nil {
+		return g.ResponseWriter.Write(b)
+	}
+	return g.gz.Write(b)
+}
+
+// start sends the held status, compressing only when there is a body.
+func (g *gzipWriter) start(b []byte) {
+	g.started = true
+	code := cmp.Or(g.code, http.StatusOK)
+	if len(b) > 0 && code != http.StatusNoContent && code != http.StatusNotModified {
+		if g.Header().Get("Content-Type") == "" {
+			g.Header().Set("Content-Type", http.DetectContentType(b))
+		}
+		g.Header().Del("Content-Length")
+		g.Header().Set("Content-Encoding", "gzip")
+		g.gz = gzip.NewWriter(g.ResponseWriter)
+	}
+	g.ResponseWriter.WriteHeader(code)
+}
+
+func (g *gzipWriter) close() {
+	switch {
+	case !g.started && g.code != 0:
+		g.ResponseWriter.WriteHeader(g.code)
+	case g.gz != nil:
+		_ = g.gz.Close()
+	}
 }
 
 // localhostOnly rejects requests whose Host is not a loopback name. The bind

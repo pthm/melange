@@ -112,8 +112,23 @@ var assetVersion = func() string {
 	return hex.EncodeToString(h.Sum(nil))[:12]
 }()
 
-// asset returns the versioned URL of an embedded asset.
-func asset(name string) string { return "/assets/" + name + "?v=" + assetVersion }
+// asset returns the versioned URL of an embedded asset. The version is a
+// path segment, not a query, so URLs relative to a stylesheet (its fonts)
+// carry it too and every asset can be cached as immutable.
+func asset(name string) string { return "/assets/" + assetVersion + "/" + name }
+
+// pageTitle is the document title: the page's own title, else its section.
+func pageTitle(p page) string {
+	t := p.Title
+	if t == "" {
+		for _, n := range navItems {
+			if n.ID == p.Active {
+				t = n.Label
+			}
+		}
+	}
+	return t + " · melange studio"
+}
 
 // groupShow is how many entities an access group renders before "Show more".
 const groupShow = 100

@@ -70,3 +70,10 @@ document.addEventListener("htmx:confirm", (e) => {
 
 // Keep the current sidebar link in view; on a large model it can sit far down.
 document.querySelector(".sidebar [aria-current]")?.scrollIntoView({ block: "center" });
+
+// Cmd/Ctrl+Enter in a form's textarea submits the form (the what-if box).
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || !e.target.matches?.("textarea")) return;
+  e.preventDefault();
+  e.target.form?.requestSubmit();
+});

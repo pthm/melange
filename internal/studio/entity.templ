@@ -30,7 +30,7 @@ templ entityPage(d entityData) {
 	if name != "" {
 		{{ title = name }}
 	}
-	@shell(page{Env: d.Env, Active: "tuples"}, tuplesSidebar(d.Types, d.Entity.Type)) {
+	@shell(page{Env: d.Env, Active: "tuples", Title: title}, tuplesSidebar(d.Types, d.Entity.Type)) {
 		@pageHead(title, crumbs(d.Entity.Type, title)) {
 			if name != "" {
 				<code class="page-id">{ self }</code>

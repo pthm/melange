@@ -365,7 +365,7 @@ func relationPage(d relationData) templ.Component {
 			}
 			return nil
 		})
-		templ_7745c5c3_Err = shell(page{Env: d.Env, Active: "model"}, modelSidebar(indexData{Model: d.Model, Type: d.Type, Relation: d.Relation})).Render(templ.WithChildren(ctx, templ_7745c5c3_Var2), templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = shell(page{Env: d.Env, Active: "model", Title: d.Type + "#" + d.Relation}, modelSidebar(indexData{Model: d.Model, Type: d.Type, Relation: d.Relation})).Render(templ.WithChildren(ctx, templ_7745c5c3_Var2), templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

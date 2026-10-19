@@ -9,7 +9,7 @@ import (
 )
 
 templ relationPage(d relationData) {
-	@shell(page{Env: d.Env, Active: "model"}, modelSidebar(indexData{Model: d.Model, Type: d.Type, Relation: d.Relation})) {
+	@shell(page{Env: d.Env, Active: "model", Title: d.Type + "#" + d.Relation}, modelSidebar(indexData{Model: d.Model, Type: d.Type, Relation: d.Relation})) {
 		@pageHead(cmp.Or(d.Relation, "Relation"), modelCrumbs(d.Type)) {
 			// The old sidebar behaviour: prefill the Model page query form.
 			if d.Known {

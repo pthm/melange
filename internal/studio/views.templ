@@ -15,6 +15,7 @@ import (
 type page struct {
 	Env    string
 	Active string // top-nav section: model | tuples | history | health
+	Title  string // document title; empty uses the section's name
 }
 
 var navItems = []struct{ ID, Label, Href string }{
@@ -33,13 +34,21 @@ templ shell(p page, sidebar templ.Component) {
 		<head>
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
-			<title>melange studio</title>
+			<meta name="description" content="melange studio: a local, read-only console for a melange authorization database."/>
+			<meta name="color-scheme" content="light dark"/>
+			// No eval (CSP has no unsafe-eval) and no injected <style> (no
+			// unsafe-inline); studio.css styles the request indicator itself.
+			<meta name="htmx-config" content='{"allowEval":false,"includeIndicatorStyles":false}'/>
+			<title>{ pageTitle(p) }</title>
 			<link rel="icon" type="image/png" href={ asset("favicon.png") }/>
-			<script>
-				try { document.documentElement.dataset.theme = localStorage.getItem("studio-theme") ?? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"); } catch { document.documentElement.dataset.theme = "light"; }
-			</script>
+			// Sets data-theme before first paint, so it loads blocking; external
+			// rather than inline so the CSP needs no script hash.
+			<script src={ asset("theme.js") }></script>
+			<link rel="preload" href={ asset("npm/fontsource-variable-space-grotesk/space-grotesk-latin-wght-normal.woff2") } as="font" type="font/woff2" crossorigin/>
+			<link rel="preload" href={ asset("npm/fontsource-space-mono/space-mono-latin-400-normal.woff2") } as="font" type="font/woff2" crossorigin/>
+			<link rel="preload" href={ asset("npm/fontsource-space-mono/space-mono-latin-700-normal.woff2") } as="font" type="font/woff2" crossorigin/>
 			<link rel="stylesheet" href={ asset("studio.css") }/>
-			<script src={ asset("npm/htmx.org/htmx.min.js") }></script>
+			<script src={ asset("npm/htmx.org/htmx.min.js") } defer></script>
 			<script src={ asset("studio.js") } defer></script>
 		</head>
 		<body>
@@ -216,10 +225,10 @@ func modesUsing(field string) string {
 // queryTab is the Model page's query console. One form: the mode radios in
 // the heading strip pick the verb, POST /query dispatches on it, and only the
 // fields that verb reads are shown (assets/studio.css, .query [data-for]).
-// Enter submits; Cmd/Ctrl+Enter in the what-if textarea does too.
+// Enter submits; Cmd/Ctrl+Enter in the what-if textarea does too (studio.js).
 templ queryTab(d indexData) {
 	<div>
-		<form class="sec query" hx-post="/query" hx-target="#query-result" hx-indicator="#query-result" hx-trigger="submit, keydown[(metaKey||ctrlKey)&&key=='Enter'] from:find textarea">
+		<form class="sec query" hx-post="/query" hx-target="#query-result" hx-indicator="#query-result">
 			<div class="sec-head">
 				<div class="modes" role="radiogroup" aria-label="Query mode">
 					for i, m := range queryModes {

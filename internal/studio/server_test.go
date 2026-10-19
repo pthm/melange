@@ -1,9 +1,13 @@
 package studio
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -312,5 +316,82 @@ func TestHighlightSQL(t *testing.T) {
 	}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Errorf("tokens:\n got  %v\n want %v", got, want)
+	}
+}
+
+func TestServeAssets(t *testing.T) {
+	h := (&Server{}).Handler() // routing only; no handler here touches the database
+	get := func(path string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, path, http.NoBody)
+		r.Host = "127.0.0.1:7070"
+		r.Header.Set("Accept-Encoding", "gzip")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+
+	// Current version: immutable, gzipped, typed from the file, hardened.
+	w := get(asset("studio.css"))
+	if w.Code != http.StatusOK {
+		t.Fatalf("studio.css: status %d", w.Code)
+	}
+	for k, want := range map[string]string{
+		"Cache-Control":           "public, max-age=31536000, immutable",
+		"Content-Encoding":        "gzip",
+		"Content-Type":            "text/css; charset=utf-8",
+		"Content-Security-Policy": contentSecurityPolicy,
+		"X-Content-Type-Options":  "nosniff",
+	} {
+		if got := w.Header().Get(k); got != want {
+			t.Errorf("studio.css %s = %q, want %q", k, got, want)
+		}
+	}
+	zr, err := gzip.NewReader(w.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(zr)
+	want, _ := fs.ReadFile(assets, "assets/studio.css")
+	if !bytes.Equal(body, want) {
+		t.Error("studio.css: decompressed body differs from the embedded file")
+	}
+
+	// Already-compressed fonts pass through; an old version revalidates.
+	w = get(asset("npm/fontsource-space-mono/space-mono-latin-400-normal.woff2"))
+	if w.Code != http.StatusOK || w.Header().Get("Content-Encoding") != "" {
+		t.Errorf("woff2: status %d, Content-Encoding %q", w.Code, w.Header().Get("Content-Encoding"))
+	}
+	if got := get("/assets/0ld/studio.css").Header().Get("Cache-Control"); got != "no-cache" {
+		t.Errorf("old version Cache-Control = %q, want no-cache", got)
+	}
+	if got := get("/no-such-page").Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("page Cache-Control = %q, want no-store", got)
+	}
+}
+
+func TestGzipKeepsContentTypeAfterEarlyStatus(t *testing.T) {
+	h := gzipped(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/missing": // a status first, then a rendered page, like relation's 404
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte("<!DOCTYPE html><p>not found</p>"))
+		case "/empty":
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	get := func(path string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, path, http.NoBody)
+		r.Header.Set("Accept-Encoding", "gzip")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	w := get("/missing")
+	if w.Code != http.StatusNotFound || w.Header().Get("Content-Encoding") != "gzip" ||
+		w.Header().Get("Content-Type") != "text/html; charset=utf-8" {
+		t.Errorf("/missing: %d, encoding %q, type %q", w.Code, w.Header().Get("Content-Encoding"), w.Header().Get("Content-Type"))
+	}
+	if w = get("/empty"); w.Code != http.StatusNoContent || w.Body.Len() != 0 || w.Header().Get("Content-Encoding") != "" {
+		t.Errorf("/empty: %d, %d body bytes, encoding %q", w.Code, w.Body.Len(), w.Header().Get("Content-Encoding"))
 	}
 }

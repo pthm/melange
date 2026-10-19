@@ -184,7 +184,11 @@ a { color: inherit; }
 .filter-bar:focus-within::before { background: var(--accent); }
 .filter-bar kbd { position: absolute; right: var(--fx); padding: 0 5px; border: 1px solid var(--line); color: var(--mute); pointer-events: none; }
 .filter-bar:focus-within kbd, .filter-bar:has(input:not(:placeholder-shown)) kbd { display: none; }
-.sidebar > .filter-bar { --fx: var(--sp-5); position: sticky; top: calc(-1 * var(--sp-4)); z-index: 1; margin: calc(-1 * var(--sp-4)) calc(-1 * var(--sp-3)) var(--sp-3); }
+/* A sidebar with a filter is a column: the filter stays on top and only the
+   list below it scrolls, so nothing ever sits underneath the filter. */
+.sidebar:has(> .filter-bar) { display: flex; flex-direction: column; overflow: hidden; padding: 0; }
+.sidebar > .filter-bar { --fx: var(--sp-5); flex: none; }
+.sidebar:has(> .filter-bar) > .side-section { flex: 1; min-height: 0; overflow-y: auto; padding: var(--sp-3) var(--sp-3) var(--sp-4); }
 .subhead { color: var(--mute); margin: var(--sp-4) 0 var(--sp-2); display: flex; gap: var(--sp-2); flex-wrap: wrap; }
 .subhead:first-child { margin-top: 0; }
 
@@ -268,6 +272,7 @@ details.disclose[open] > summary { margin-bottom: var(--sp-2); }
 .verdict { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); margin-bottom: var(--sp-3); }
 .evidence { color: var(--mute); margin-top: 2px; }
 .why-out:not(:empty) { margin: var(--sp-2) 0 var(--sp-1); padding: var(--sp-3); background: var(--bg); border-radius: var(--r); }
+.inline-gap > a { display: inline-flex; align-items: center; min-height: 28px; } /* tap target: 24px + margin */
 .inline-gap { display: inline-flex; flex-wrap: wrap; gap: var(--sp-1); align-items: center; }
 
 /* access tree: type group → entity → relation chips */

@@ -65,7 +65,7 @@ type browseData struct {
 }
 
 templ browsePage(d browseData) {
-	@shell(page{Env: d.Env, Active: "tuples"}, tuplesSidebar(d.Types, d.Type)) {
+	@shell(page{Env: d.Env, Active: "tuples", Title: d.Type}, tuplesSidebar(d.Types, d.Type)) {
 		@pageHead(d.Type, crumbs(d.Type, "")) {
 			<p class="page-meta">
 				if d.Source != nil {
