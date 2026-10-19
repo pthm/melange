@@ -249,3 +249,27 @@ func TestEachRelationKeepsOrderAndErrors(t *testing.T) {
 		}
 	}
 }
+
+func TestHighlightSQL(t *testing.T) {
+	src := "CREATE FUNCTION check_doc(p text) RETURNS integer AS $function$\n" +
+		"-- direct\nSELECT 1 FROM \"melange\".melange_tuples WHERE relation = 'it''s' AND check_x (p) = 1;\n$function$"
+	var got []string
+	var text strings.Builder
+	for _, tok := range highlightSQL(src) {
+		text.WriteString(tok.Text)
+		if tok.Class != "" && tok.Text != "" {
+			got = append(got, tok.Class+":"+tok.Text)
+		}
+	}
+	if text.String() != src {
+		t.Fatalf("tokens do not reassemble the source:\n%s", text.String())
+	}
+	want := []string{
+		"kw:CREATE", "kw:FUNCTION", "name:check_doc", "kw:text", "kw:RETURNS", "kw:integer", "kw:AS", "punct:$function$",
+		"comment:-- direct", "kw:SELECT", "num:1", "kw:FROM", `name:"melange"`, "kw:WHERE", "ref:'it''s'", "kw:AND",
+		"name:check_x", "num:1", "punct:$function$",
+	}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Errorf("tokens:\n got  %v\n want %v", got, want)
+	}
+}

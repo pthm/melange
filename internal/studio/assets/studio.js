@@ -7,6 +7,7 @@
 //   .filter-bar input              focused by pressing "/"
 //   details.whatif                 its textarea is disabled (not sent) while closed
 //   [data-explain]                 toggles its row's .why-out (aria-expanded)
+//   .sidebar [aria-current]        scrolled into view on load (large models)
 document.addEventListener("input", (e) => {
   const input = e.target.closest("[data-filter]");
   if (!input) return;
@@ -66,3 +67,6 @@ document.addEventListener("htmx:confirm", (e) => {
   }
   chip.setAttribute("aria-expanded", "true");
 });
+
+// Keep the current sidebar link in view; on a large model it can sit far down.
+document.querySelector(".sidebar [aria-current]")?.scrollIntoView({ block: "center" });

@@ -163,3 +163,7 @@ func matrixCounts(cells []matrixCell) (allowed, errs int) {
 	}
 	return allowed, errs
 }
+
+func relationURL(typ, rel string) templ.SafeURL {
+	return templ.URL("/relation?" + url.Values{"type": {typ}, "relation": {rel}}.Encode())
+}

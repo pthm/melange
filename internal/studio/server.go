@@ -65,6 +65,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("POST /explain", s.explain)
 	mux.HandleFunc("GET /expand", s.expand)
+	mux.HandleFunc("GET /relation", s.relation)
 	mux.HandleFunc("POST /matrix", s.matrix)
 	mux.HandleFunc("GET /tuples", s.tuplesIndex)
 	mux.HandleFunc("GET /history", s.history)

@@ -1,0 +1,191 @@
+package studio
+
+import (
+	"cmp"
+	"fmt"
+	"strings"
+
+	"github.com/pthm/melange/pkg/compiler"
+)
+
+templ relationPage(d relationData) {
+	@shell(page{Env: d.Env, Active: "model"}, modelSidebar(indexData{Model: d.Model, Type: d.Type, Relation: d.Relation})) {
+		@pageHead(cmp.Or(d.Relation, "Relation"), modelCrumbs(d.Type)) {
+			// The old sidebar behaviour: prefill the Model page query form.
+			if d.Known {
+				<form class="head-actions" action="/" method="get">
+					<input type="hidden" name="type" value={ d.Type }/>
+					<input type="hidden" name="relation" value={ d.Relation }/>
+					<button type="submit" title="Fill in the Model page query form with this relation">Query</button>
+				</form>
+			}
+			if d.Model != nil {
+				<p class="page-meta">
+					Deployed model, migrated { d.Model.MigratedAt.UTC().Format("2 Jan 2006, 15:04 MST") } by melange <code>{ d.Model.MelangeVersion }</code>
+				</p>
+			}
+		}
+		<div>
+			if d.Err != "" {
+				<section class="sec">
+					<div class="sec-body">
+						@errorBox(d.Err)
+					</div>
+				</section>
+			}
+			if d.Define != "" {
+				<section class="sec">
+					@secHead("Definition", 0, false) {
+						<p class="help">From the deployed schema.</p>
+					}
+					<div class="sec-body">
+						@fgaSource(d.Define)
+					</div>
+				</section>
+			}
+			if d.Analysis != nil {
+				@relationAnalysis(d.Type, d.Analysis)
+			}
+			if d.Model != nil && d.Err == "" {
+				@relationEdges("Depends on", dependsOnHelp(d.DependsOn), d.DependsOn, "Nothing: only direct tuples grant it.")
+				@relationEdges("Used by", "Relations that read this one.", d.UsedBy, "No other relation reads it.")
+			}
+			if d.Known {
+				<section class="sec">
+					@secHead("Generated SQL", len(d.Funcs), true) {
+						<p class="help">
+							The specialized functions installed in the database for this relation, read back from PostgreSQL; this is what runs.
+							The dispatchers route <code>check_permission</code> and the list functions here.
+						</p>
+					}
+					<div class="sec-body stack">
+						if d.FuncErr != "" {
+							@errorBox(d.FuncErr)
+						} else if len(d.Funcs) == 0 {
+							<p class="mute">
+								No specialized functions are installed for this relation; the dispatchers fall back to the generic implementation.
+								if d.Analysis != nil && d.Analysis.Capabilities.CheckReason != "" {
+									Check: { d.Analysis.Capabilities.CheckReason }.
+								}
+								if d.Analysis != nil && d.Analysis.Capabilities.ListReason != "" {
+									List: { d.Analysis.Capabilities.ListReason }.
+								}
+							</p>
+						}
+						for _, f := range d.Funcs {
+							<details class="disclose">
+								<summary>
+									<code>{ f.Name }</code>
+									<span class="mute">· { f.Label } · { plural(strings.Count(f.Def, "\n"), "line") }</span>
+								</summary>
+								@sqlSource(f.Def)
+							</details>
+						}
+					</div>
+				</section>
+			}
+		</div>
+	}
+}
+
+// modelCrumbs renders Model › type above a relation's title.
+templ modelCrumbs(typ string) {
+	<nav class="crumbs" aria-label="Breadcrumb">
+		<a href="/">Model</a>
+		if typ != "" {
+			<span aria-hidden="true">›</span>
+			<span>{ typ }</span>
+		}
+	</nav>
+}
+
+templ relationAnalysis(typ string, a *compiler.RelationAnalysis) {
+	<section class="sec">
+		@secHead("Features", 0, false) {
+			<p class="help">As the code generator sees the relation after resolving implied relations, so a relation can inherit flags (such as wildcard) from the ones that imply it.</p>
+		}
+		<div class="sec-body">
+			<dl class="kv">
+				<dt>features</dt>
+				<dd class="inline-gap">
+					for _, f := range features(a) {
+						<span class="badge accent">{ f }</span>
+					}
+					if len(features(a)) == 0 {
+						<span class="mute">none</span>
+					}
+				</dd>
+				<dt>check</dt>
+				<dd>
+					if a.Capabilities.CheckAllowed {
+						<span class="badge ok">specialized</span>
+					} else {
+						<span class="badge warn">generic</span> <span class="mute">{ a.Capabilities.CheckReason }</span>
+					}
+				</dd>
+				<dt>list</dt>
+				<dd>
+					if a.Capabilities.ListAllowed {
+						<span class="badge ok">specialized</span> <span class="mute">strategy</span> <code>{ a.ListStrategy.String() }</code>
+					} else {
+						<span class="badge warn">generic</span> <span class="mute">{ a.Capabilities.ListReason }</span>
+					}
+				</dd>
+				<dt>satisfied by</dt>
+				<dd class="inline-gap">
+					for _, s := range a.SatisfyingRelations {
+						<a href={ relationURL(typ, s) }><code>{ s }</code></a>
+					}
+				</dd>
+				if a.MaxUsersetDepth > 0 {
+					<dt>userset depth</dt>
+					<dd>
+						{ fmt.Sprint(a.MaxUsersetDepth) }
+						if a.ExceedsDepthLimit {
+							<span class="badge fail">exceeds limit</span>
+						}
+					</dd>
+				}
+			</dl>
+		</div>
+	</section>
+}
+
+templ relationEdges(title, help string, edges []relEdge, empty string) {
+	<section class="sec">
+		@secHead(title, len(edges), true) {
+			<p class="help">{ help }</p>
+		}
+		<div class="sec-body">
+			if len(edges) == 0 {
+				<p class="mute">{ empty }</p>
+			} else {
+				@edgeRows(headN(edges, edgeShow))
+				// A hub relation can have hundreds of edges; keep Generated SQL in reach.
+				if len(edges) > edgeShow {
+					<details class="more disclose">
+						<summary>Show { fmt.Sprint(len(edges) - edgeShow) } more</summary>
+						@edgeRows(edges[edgeShow:])
+					</details>
+				}
+			}
+		</div>
+	</section>
+}
+
+templ edgeRows(edges []relEdge) {
+	<ul class="rows">
+		for _, e := range edges {
+			<li>
+				<a class="row" href={ relationURL(e.Type, e.Relation) }>
+					<code>{ e.Type }#{ e.Relation }</code>
+					<span>
+						for _, k := range e.Kinds {
+							<span class="kind">{ k }</span>
+						}
+					</span>
+				</a>
+			</li>
+		}
+	</ul>
+}

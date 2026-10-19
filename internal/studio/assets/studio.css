@@ -302,13 +302,13 @@ details.disclose[open] > summary { margin-bottom: var(--sp-2); }
 .group > .tree > li { padding: var(--sp-2) 0 var(--sp-2) var(--sp-4); }
 .group > .tree > li::before { content: ""; position: absolute; left: 0; top: 18px; width: 10px; border-top: 1px solid var(--line); }
 
-/* ---------- FGA syntax (highlight.go) ---------- */
-.fga .f-kw { color: var(--accent); font-weight: 700; }
-.fga .f-name { color: var(--fg); font-weight: 700; }
-.fga .f-op { color: var(--accent); }
-.fga .f-ref, .fga .f-num { color: var(--ok); }
-.fga .f-punct, .fga .f-comment { color: var(--mute); }
-.fga .f-comment { font-style: italic; }
+/* ---------- syntax highlighting (highlight.go: FGA and SQL) ---------- */
+.code .f-kw { color: var(--accent); font-weight: 700; }
+.code .f-name { color: var(--fg); font-weight: 700; }
+.code .f-op { color: var(--accent); }
+.code .f-ref, .code .f-num { color: var(--ok); }
+.code .f-punct, .code .f-comment { color: var(--mute); }
+.code .f-comment { font-style: italic; }
 
 /* what-if tuples: a disclosure spanning the whole query row */
 .query .whatif { grid-column: 1 / -1; }
@@ -317,3 +317,5 @@ details.disclose[open] > summary { margin-bottom: var(--sp-2); }
 .whatif textarea::placeholder { color: var(--mute); }
 .whatif-tuples { margin-bottom: var(--sp-3); }
 #query-result.htmx-request { opacity: .5; }
+/* relation page: the Query action sits in the header's right column */
+.page-head > .head-actions { grid-column: 3; grid-row: 1 / span 3; align-self: center; }

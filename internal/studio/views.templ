@@ -132,7 +132,7 @@ templ modelSidebar(d indexData) {
 							if len(t.Relations) > 0 {
 								<ul class="side-list">
 									for _, rel := range t.Relations {
-										<li data-item data-text={ t.Name + "#" + rel.Name }><a href={ templ.URL("/?" + url.Values{"type": {t.Name}, "relation": {rel.Name}}.Encode()) } { current(t.Name == d.Type && rel.Name == d.Relation)... }>{ rel.Name }</a></li>
+										<li data-item data-text={ t.Name + "#" + rel.Name }><a href={ relationURL(t.Name, rel.Name) } { current(t.Name == d.Type && rel.Name == d.Relation)... }>{ rel.Name }</a></li>
 									}
 								</ul>
 							}
@@ -200,7 +200,7 @@ templ indexPage(d indexData) {
 			</section>
 			<section class="sec">
 				<div id="query-result" class="sec-body" aria-live="polite">
-					<p class="mute">Results appear here. Pick a relation in the sidebar to fill in its type and name.</p>
+					<p class="mute">Results appear here. Pick a relation in the sidebar to see its definition, dependencies, and generated SQL; its Query button fills in this form.</p>
 				</div>
 			</section>
 			if d.Model != nil {
@@ -481,8 +481,17 @@ templ stat(n int, label, tone string) {
 
 // fgaSource renders OpenFGA DSL with syntax colouring (see highlightFGA).
 templ fgaSource(dsl string) {
-	<pre class="fga">
-		for _, t := range highlightFGA(dsl) {
+	@codeBlock(highlightFGA(dsl))
+}
+
+// sqlSource renders SQL with syntax colouring (see highlightSQL).
+templ sqlSource(src string) {
+	@codeBlock(highlightSQL(src))
+}
+
+templ codeBlock(tokens []codeToken) {
+	<pre class="code">
+		for _, t := range tokens {
 			if t.Class == "" {
 				{ t.Text }
 			} else if t.Text != "" {
