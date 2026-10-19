@@ -160,25 +160,30 @@ code, pre, kbd {
   padding-bottom: 1.5rem;
 }
 
-/* Studio screenshots (shortcodes/studio-screenshot.html): both themes are
-   rendered; show the one matching the site theme. */
+/* Studio screenshots (shortcodes/studio-screenshot.html, studio-stack.html):
+   both themes are rendered; show the one matching the site theme. */
 .studio-shot {
   margin: 1.5rem 0;
 }
 
 .studio-shot img {
+  margin: 0;
   width: 100%;
   height: auto;
   border: 1px solid rgba(0, 0, 0, 0.1);
 }
 
-.studio-shot .studio-shot-dark,
-.dark .studio-shot .studio-shot-light {
+.studio-shot-dark,
+.dark .studio-shot-light {
   display: none;
 }
 
-.dark .studio-shot .studio-shot-dark {
+.dark .studio-shot-dark {
   display: block;
+}
+
+.dark .studio-shot img,
+.dark .studio-stack-layer img {
   border-color: rgba(255, 255, 255, 0.1);
 }
 
@@ -212,3 +217,42 @@ code, pre, kbd {
 .homepage-studio-grid .studio-shot {
   margin: 0;
 }
+
+/* Stacked studio preview (shortcodes/studio-stack.html). Layers are 78% of
+   the width, each offset 7% right and 11% down (of a layer) from the one
+   behind; the container's aspect ratio fits n layers:
+   1 / (0.78 * 0.625 * (1 + 0.11 * (n - 1))). */
+.studio-stack {
+  position: relative;
+  margin: 2rem 0 2.5rem;
+}
+
+.studio-stack-3 { aspect-ratio: 1.68; }
+.studio-stack-4 { aspect-ratio: 1.54; }
+.studio-stack-5 { aspect-ratio: 1.42; }
+
+.studio-stack-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 78%;
+  margin: 0;
+  line-height: 0; /* no inline gap under the image */
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18);
+}
+
+.dark .studio-stack-layer {
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+}
+
+.studio-stack-layer img {
+  margin: 0; /* Hextra gives content images a top margin */
+  width: 100%;
+  height: auto;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+}
+
+.studio-stack-layer:nth-child(2) { transform: translate(7%, 11%); }
+.studio-stack-layer:nth-child(3) { transform: translate(14%, 22%); }
+.studio-stack-layer:nth-child(4) { transform: translate(21%, 33%); }
+.studio-stack-layer:nth-child(5) { transform: translate(28%, 44%); }

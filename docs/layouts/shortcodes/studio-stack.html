@@ -1,0 +1,22 @@
+{{- /*
+  A stacked preview of several studio screenshots: each layer is offset down
+  and to the right of the one behind it, and the last name sits in front.
+  Like studio-screenshot, both theme captures are emitted and CSS shows the
+  one matching the site theme.
+
+  Usage (3 to 5 names, back to front):
+    {{< studio-stack names="health,relation,query-explain,entity" alt="Studio pages" >}}
+
+  Images live at static/images/studio/<name>-light.webp and -dark.webp.
+*/ -}}
+{{- $names := split (.Get "names") "," -}}
+<div class="studio-stack studio-stack-{{ len $names }}" role="group" aria-label="{{ .Get "alt" }}">
+  {{- range $names }}
+  {{- $name := trim . " " }}
+  {{- $alt := printf "melange studio: %s" (replace $name "-" " ") }}
+  <figure class="studio-stack-layer">
+    <img class="studio-shot-light" src="{{ printf "images/studio/%s-light.webp" $name | relURL }}" alt="{{ $alt }}" width="1280" height="800" loading="lazy" decoding="async">
+    <img class="studio-shot-dark" src="{{ printf "images/studio/%s-dark.webp" $name | relURL }}" alt="{{ $alt }}" width="1280" height="800" loading="lazy" decoding="async">
+  </figure>
+  {{- end }}
+</div>
