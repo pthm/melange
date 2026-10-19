@@ -54,7 +54,7 @@ templ historyPage(env string, recs []migrator.MigrationRecord, deployed *migrato
 							<dt>melange</dt><dd><code>{ rec.MelangeVersion }</code></dd>
 							<dt>codegen</dt><dd><code>{ rec.CodegenVersion }</code></dd>
 							<dt>schema checksum</dt><dd><code>{ rec.SchemaChecksum }</code></dd>
-							<dt>functions</dt><dd>{ fmt.Sprint(len(rec.FunctionNames)) }</dd>
+							<dt>functions</dt><dd>{ num(len(rec.FunctionNames)) }</dd>
 							<dt>model</dt>
 							<dd>
 								if rec.SchemaFormat != "" {
@@ -85,7 +85,7 @@ templ healthSidebar(cats []healthCategory) {
 				<li>
 					<a href={ templ.URL("#" + anchor(c.Name)) }>
 						{ c.Name }
-						<span class={ "badge", statusClass(c.Worst) }>{ fmt.Sprint(len(c.Checks)) }</span>
+						<span class={ "badge", statusClass(c.Worst) }>{ num(len(c.Checks)) }</span>
 					</a>
 				</li>
 			}
@@ -119,7 +119,7 @@ templ healthPage(env, schemaPath string, report *doctor.Report, errMsg string) {
 		<div class="stack">
 			for _, c := range cats {
 				<section class="sec" id={ anchor(c.Name) }>
-					@secHead(c.Name, len(c.Checks), true)
+					@secHead(c.Name, num(len(c.Checks)))
 					<div class="sec-body">
 						<ul class="rows">
 							for _, chk := range c.Checks {

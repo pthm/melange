@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -83,11 +84,27 @@ func anchor(s string) string {
 	return strings.ToLower(strings.ReplaceAll(s, " ", "-"))
 }
 
+// plural renders a count and its noun: "1 entity", "1,204 entities".
 func plural(n int, noun string) string {
 	if n == 1 {
 		return "1 " + noun
 	}
-	return fmt.Sprintf("%d %ss", n, noun)
+	if stem, ok := strings.CutSuffix(noun, "y"); ok && !strings.ContainsAny(stem[len(stem)-1:], "aeiou") {
+		return num(n) + " " + stem + "ies"
+	}
+	return num(n) + " " + noun + "s"
+}
+
+// num formats a count with thousands separators: 1234567 -> "1,234,567".
+func num(n int) string {
+	if n < 0 {
+		return "-" + num(-n)
+	}
+	s := strconv.Itoa(n)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
 }
 
 // current marks the active navigation link for both styling and assistive tech.
@@ -138,9 +155,9 @@ func headN[T any](s []T, n int) []T { return s[:min(n, len(s))] }
 // countLabel shows n, marked "n+" when a list cap may have hidden more.
 func countLabel(n int, capped bool) string {
 	if capped {
-		return fmt.Sprintf("%d+", n)
+		return num(n) + "+"
 	}
-	return fmt.Sprint(n)
+	return num(n)
 }
 
 func allowed(t *melange.Trace) bool { return t.Result != nil && *t.Result }
@@ -193,5 +210,7 @@ func msf(v float64) string {
 	if v < 0.995 { // rounds to 1.00 otherwise; give that "1.0 ms" like its neighbors
 		return fmt.Sprintf("%.2f ms", v)
 	}
-	return fmt.Sprintf("%.1f ms", v)
+	whole, frac, _ := strings.Cut(fmt.Sprintf("%.1f", v), ".")
+	n, _ := strconv.Atoi(whole)
+	return num(n) + "." + frac + " ms"
 }

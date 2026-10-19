@@ -1,7 +1,6 @@
 package studio
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/pthm/melange/melange"
@@ -18,7 +17,7 @@ templ tuplesSidebar(types []typeCount, active string) {
 				<li>
 					<a href={ templ.URL("/browse/" + t.Type) } { current(t.Type == active)... }>
 						{ t.Type }
-						<span class="t-mono mute">{ fmt.Sprint(t.Count) }</span>
+						<span class="t-mono mute">{ num(t.Count) }</span>
 					</a>
 				</li>
 			}
@@ -35,7 +34,7 @@ templ tuplesPage(env string, types []typeCount, errMsg string) {
 			@errorBox(errMsg)
 		}
 		<section class="sec">
-			@secHead("Types", len(types), true) {
+			@secHead("Types", num(len(types))) {
 				<p class="help">Each type that appears in a tuple, as subject or object, with its number of distinct ids.</p>
 			}
 			<div class="sec-body">
@@ -76,7 +75,7 @@ templ browsePage(d browseData) {
 			</p>
 		}
 		<section class="sec">
-			@secHead("Entities", len(d.Ents), true) {
+			@secHead("Entities", countLabel(len(d.Ents), len(d.Ents) == listLimit)) {
 				<p class="help">Every <code>{ d.Type }</code> that appears in a tuple. Search matches ids and names.</p>
 			}
 			@filterBar(templ.Attributes{
@@ -128,7 +127,7 @@ templ entityList(ents []entityRef, ls labels) {
 		}
 	</ul>
 	if len(ents) == listLimit {
-		<p class="mute">Showing the first { fmt.Sprint(listLimit) }; refine the filter.</p>
+		<p class="mute">Showing the first { num(listLimit) }; refine the filter.</p>
 	}
 }
 

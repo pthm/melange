@@ -1,7 +1,6 @@
 package studio
 
 import (
-	"fmt"
 	"net/url"
 	"slices"
 	"strings"
@@ -95,14 +94,15 @@ templ pageHead(title string, crumbs templ.Component) {
 	</header>
 }
 
-// secHead is a section's title row (title, optional count) plus help text
-// passed as children.
-templ secHead(title string, count int, showCount bool) {
+// secHead is a section's title row plus help text passed as children.
+// count is the formatted badge (num, or countLabel for capped lists); empty
+// shows none.
+templ secHead(title, count string) {
 	<div class="sec-head">
 		<div class="title-row">
 			<h2>{ title }</h2>
-			if showCount {
-				<span class="badge">{ fmt.Sprint(count) }</span>
+			if count != "" {
+				<span class="badge">{ count }</span>
 			}
 		</div>
 		{ children... }
@@ -139,7 +139,7 @@ templ modelSidebar(d indexData) {
 						<details class="side-group" data-group open?={ len(d.Model.Types) <= modelSidebarOpenAll || t.Name == d.Type }>
 							<summary>
 								{ t.Name }
-								<span class="t-mono mute">{ fmt.Sprint(len(t.Relations)) }</span>
+								<span class="t-mono mute">{ num(len(t.Relations)) }</span>
 							</summary>
 							if len(t.Relations) > 0 {
 								<ul class="side-list">
@@ -187,7 +187,7 @@ templ schemaTab(d indexData) {
 		<section class="sec"><div class="sec-body mute">No deployed schema to show.</div></section>
 	} else {
 		<section class="sec">
-			@secHead("Deployed schema", 0, false) {
+			@secHead("Deployed schema", "") {
 				<p class="help">The DSL recorded by the last migration ({ d.Model.Format } file). This is what the database runs.</p>
 			}
 			<div class="sec-body">
@@ -297,7 +297,7 @@ templ matrixView(sub, obj string, cells []matrixCell, notes []string, took time.
 		<span class="badge accent">matrix</span>
 		What <code>{ sub }</code> can do on <code>{ obj }</code>
 		<span class="mute">
-			· { fmt.Sprint(allowedN) } of { plural(len(cells), "relation") } allowed
+			· { num(allowedN) } of { plural(len(cells), "relation") } allowed
 			if errN > 0 {
 				· { plural(errN, "error") }
 			}
@@ -543,7 +543,7 @@ templ pointer(userset string) {
 }
 
 templ stat(n int, label, tone string) {
-	<div class={ "stat", tone }><span class="t-heading">{ fmt.Sprint(n) }</span>{ label }</div>
+	<div class={ "stat", tone }><span class="t-heading">{ num(n) }</span>{ label }</div>
 }
 
 // fgaSource renders OpenFGA DSL with syntax colouring (see highlightFGA).
@@ -597,7 +597,7 @@ templ analyzeView(a *analysis) {
 								<code>{ f.Name }</code>
 							}
 						</td>
-						<td class="num"><code>{ fmt.Sprint(f.Calls) }</code></td>
+						<td class="num"><code>{ num(int(f.Calls)) }</code></td>
 						<td class="num"><code>{ msf(f.Total) }</code></td>
 						<td class="num"><code>{ msf(f.Self) }</code></td>
 					</tr>

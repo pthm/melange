@@ -1,7 +1,6 @@
 package studio
 
 import (
-	"fmt"
 	"net/url"
 )
 
@@ -143,7 +142,7 @@ templ accessList(g typeGroup, ls labels, self entityRef, selfIsSubject bool) {
 		<p class="subhead">
 			{ countLabel(len(g.Entities), g.Capped) } { g.Type } entities
 			if g.Capped {
-				· lists stop at { fmt.Sprint(listLimit) } per relation, so there may be more
+				· lists stop at { num(listLimit) } per relation, so there may be more
 			}
 		</p>
 		<ul class="access-rows">
@@ -153,7 +152,7 @@ templ accessList(g typeGroup, ls labels, self entityRef, selfIsSubject bool) {
 		</ul>
 		if len(g.Entities) > groupShow {
 			<details class="more disclose" data-group>
-				<summary>Show { fmt.Sprint(len(g.Entities) - groupShow) } more</summary>
+				<summary>Show { num(len(g.Entities) - groupShow) } more</summary>
 				<ul class="access-rows">
 					for _, ent := range g.Entities[groupShow:] {
 						@accessEntity(g.Type, ent, ls, self, selfIsSubject)
@@ -191,7 +190,7 @@ templ directTab(d entityData, self string) {
 	<div id="direct">
 		@filterBar(templ.Attributes{"placeholder": "Filter direct tuples by entity or relation", "data-filter": "#direct"})
 		<section class="sec">
-			@secHead("As subject", len(d.AsSubject), true) {
+			@secHead("As subject", countLabel(len(d.AsSubject), len(d.AsSubject) == listLimit)) {
 				<p class="help">Tuples where <code>{ self }</code> is the subject: <code>{ self } → relation → object</code>.</p>
 			}
 			<div class="sec-body">
@@ -199,7 +198,7 @@ templ directTab(d entityData, self string) {
 			</div>
 		</section>
 		<section class="sec">
-			@secHead("As object", len(d.AsObject), true) {
+			@secHead("As object", countLabel(len(d.AsObject), len(d.AsObject) == listLimit)) {
 				<p class="help">
 					Tuples where <code>{ self }</code> is the object: <code>subject → relation → { self }</code>.
 					A <code>#relation</code> suffix means every subject with that relation.
@@ -210,7 +209,7 @@ templ directTab(d entityData, self string) {
 			</div>
 		</section>
 		if d.DirectCapped {
-			<p class="mute">Each side shows its first { fmt.Sprint(listLimit) } rows.</p>
+			<p class="mute">Each side shows its first { num(listLimit) } rows.</p>
 		}
 		<p class="mute" data-empty-filter hidden>No tuples match the filter.</p>
 	</div>

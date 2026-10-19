@@ -180,7 +180,7 @@ func relationPage(d relationData) templ.Component {
 					}
 					return nil
 				})
-				templ_7745c5c3_Err = secHead("Definition", 0, false).Render(templ.WithChildren(ctx, templ_7745c5c3_Var8), templ_7745c5c3_Buffer)
+				templ_7745c5c3_Err = secHead("Definition", "").Render(templ.WithChildren(ctx, templ_7745c5c3_Var8), templ_7745c5c3_Buffer)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -240,7 +240,7 @@ func relationPage(d relationData) templ.Component {
 					}
 					return nil
 				})
-				templ_7745c5c3_Err = secHead("Generated SQL", len(d.Funcs), true).Render(templ.WithChildren(ctx, templ_7745c5c3_Var9), templ_7745c5c3_Buffer)
+				templ_7745c5c3_Err = secHead("Generated SQL", num(len(d.Funcs))).Render(templ.WithChildren(ctx, templ_7745c5c3_Var9), templ_7745c5c3_Buffer)
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -469,7 +469,7 @@ func relationAnalysis(typ string, a *compiler.RelationAnalysis) templ.Component 
 			}
 			return nil
 		})
-		templ_7745c5c3_Err = secHead("Features", 0, false).Render(templ.WithChildren(ctx, templ_7745c5c3_Var18), templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = secHead("Features", "").Render(templ.WithChildren(ctx, templ_7745c5c3_Var18), templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -704,7 +704,7 @@ func relationEdges(title, help string, edges []relEdge, empty string) templ.Comp
 			}
 			return nil
 		})
-		templ_7745c5c3_Err = secHead(title, len(edges), true).Render(templ.WithChildren(ctx, templ_7745c5c3_Var27), templ_7745c5c3_Buffer)
+		templ_7745c5c3_Err = secHead(title, num(len(edges))).Render(templ.WithChildren(ctx, templ_7745c5c3_Var27), templ_7745c5c3_Buffer)
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -745,9 +745,9 @@ func relationEdges(title, help string, edges []relEdge, empty string) templ.Comp
 					return templ_7745c5c3_Err
 				}
 				var templ_7745c5c3_Var30 string
-				templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.JoinStringErrs(fmt.Sprint(len(edges) - edgeShow))
+				templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.JoinStringErrs(num(len(edges) - edgeShow))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `relation.templ`, Line: 167, Col: 55}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `relation.templ`, Line: 167, Col: 48}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var30))
 				if templ_7745c5c3_Err != nil {

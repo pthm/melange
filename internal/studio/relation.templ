@@ -35,7 +35,7 @@ templ relationPage(d relationData) {
 			}
 			if d.Define != "" {
 				<section class="sec">
-					@secHead("Definition", 0, false) {
+					@secHead("Definition", "") {
 						<p class="help">From the deployed schema.</p>
 					}
 					<div class="sec-body">
@@ -52,7 +52,7 @@ templ relationPage(d relationData) {
 			}
 			if d.Known {
 				<section class="sec">
-					@secHead("Generated SQL", len(d.Funcs), true) {
+					@secHead("Generated SQL", num(len(d.Funcs))) {
 						<p class="help">
 							The specialized functions installed in the database for this relation, read back from PostgreSQL; this is what runs.
 							The dispatchers route <code>check_permission</code> and the list functions here.
@@ -101,7 +101,7 @@ templ modelCrumbs(typ string) {
 
 templ relationAnalysis(typ string, a *compiler.RelationAnalysis) {
 	<section class="sec">
-		@secHead("Features", 0, false) {
+		@secHead("Features", "") {
 			<p class="help">As the code generator sees the relation after resolving implied relations, so a relation can inherit flags (such as wildcard) from the ones that imply it.</p>
 		}
 		<div class="sec-body">
@@ -153,7 +153,7 @@ templ relationAnalysis(typ string, a *compiler.RelationAnalysis) {
 
 templ relationEdges(title, help string, edges []relEdge, empty string) {
 	<section class="sec">
-		@secHead(title, len(edges), true) {
+		@secHead(title, num(len(edges))) {
 			<p class="help">{ help }</p>
 		}
 		<div class="sec-body">
@@ -164,7 +164,7 @@ templ relationEdges(title, help string, edges []relEdge, empty string) {
 				// A hub relation can have hundreds of edges; keep Generated SQL in reach.
 				if len(edges) > edgeShow {
 					<details class="more disclose">
-						<summary>Show { fmt.Sprint(len(edges) - edgeShow) } more</summary>
+						<summary>Show { num(len(edges) - edgeShow) } more</summary>
 						@edgeRows(edges[edgeShow:])
 					</details>
 				}

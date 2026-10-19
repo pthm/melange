@@ -395,3 +395,25 @@ func TestGzipKeepsContentTypeAfterEarlyStatus(t *testing.T) {
 		t.Errorf("/empty: %d, %d body bytes, encoding %q", w.Code, w.Body.Len(), w.Header().Get("Content-Encoding"))
 	}
 }
+
+func TestNumberFormatting(t *testing.T) {
+	for _, c := range []struct{ got, want string }{
+		{num(0), "0"},
+		{num(999), "999"},
+		{num(1000), "1,000"},
+		{num(198304), "198,304"},
+		{num(-1234567), "-1,234,567"},
+		{plural(1, "entity"), "1 entity"},
+		{plural(20000, "entity"), "20,000 entities"},
+		{plural(2, "key"), "2 keys"},
+		{plural(1500, "relation"), "1,500 relations"},
+		{countLabel(200, true), "200+"},
+		{msf(6200.34), "6,200.3 ms"},
+		{msf(12.44), "12.4 ms"},
+		{msf(0.42), "0.42 ms"},
+	} {
+		if c.got != c.want {
+			t.Errorf("got %q, want %q", c.got, c.want)
+		}
+	}
+}
