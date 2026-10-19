@@ -1,0 +1,4 @@
+{{- /* The newest post in the blog section as a release card. */ -}}
+{{- with index (where site.RegularPages "Section" "blog").ByDate.Reverse 0 -}}
+{{ partial "release-card.html" (dict "page" . "home" true) }}
+{{- end -}}

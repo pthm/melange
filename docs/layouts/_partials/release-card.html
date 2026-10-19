@@ -1,0 +1,28 @@
+{{- /*
+  A card previewing one release post: date, title, badges and summary.
+  Used for the latest release on the updates list and the landing page.
+
+    {{ partial "release-card.html" (dict "page" $p "home" true) }}
+
+  "home" adds a link to the full updates list.
+*/ -}}
+{{- $p := .page -}}
+<section class="release-card" aria-label="Latest release">
+  <p class="release-card-eyebrow">
+    <span class="release-card-new">Latest release</span>
+    <time datetime="{{ $p.Date.Format "2006-01-02" }}">{{ partial "utils/format-date" $p.Date }}</time>
+  </p>
+  <h2 class="release-card-title"><a href="{{ $p.RelPermalink }}">{{ $p.Title }}</a></h2>
+  <div class="release-card-tags">
+    {{ partial "release-badges.html" $p }}
+    {{ partial "release-areas.html" $p }}
+  </div>
+  <div class="release-card-summary">{{ $p.Summary }}</div>
+  {{ partial "release-highlights.html" $p }}
+  <p class="release-card-links">
+    <a class="release-card-read" href="{{ $p.RelPermalink }}">Read the release notes →</a>
+    {{- if .home }}
+    <a href="{{ "blog/" | relURL }}">All updates</a>
+    {{- end }}
+  </p>
+</section>

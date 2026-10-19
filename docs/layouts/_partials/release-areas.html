@@ -1,0 +1,23 @@
+{{- /*
+  What a release changed, from its front matter:
+
+    areas: [feature, fix, perf, sql, go, ts, cli, docs]
+
+  Areas render in the order below, whatever order the front matter uses.
+*/ -}}
+{{- $areas := slice
+  (slice "feature" "Features")
+  (slice "fix" "Fixes")
+  (slice "perf" "Performance")
+  (slice "sql" "Generated SQL")
+  (slice "go" "Go runtime")
+  (slice "ts" "TypeScript")
+  (slice "cli" "CLI")
+  (slice "docs" "Docs")
+-}}
+{{- with .Params.areas -}}
+{{- $set := . -}}
+<span class="release-areas">
+  {{- range $areas }}{{ if in $set (index . 0) }}<span class="release-area release-area-{{ index . 0 }}">{{ index . 1 }}</span>{{ end }}{{ end -}}
+</span>
+{{- end -}}

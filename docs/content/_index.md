@@ -66,6 +66,12 @@ layout: hextra-home
   >}}
 {{< /hextra/feature-grid >}}
 
+<div class="homepage-release hx:mt-16">
+
+{{< latest-release >}}
+
+</div>
+
 <div class="homepage-section-gap"></div>
 
 <div class="homepage-columns">

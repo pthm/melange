@@ -1,0 +1,7 @@
+{{- with .Params.highlights -}}
+<ul class="release-highlights">
+  {{- range . }}
+  <li>{{ . | markdownify }}</li>
+  {{- end }}
+</ul>
+{{- end -}}

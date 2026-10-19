@@ -1,0 +1,16 @@
+{{- /*
+  What upgrading to a release needs, from its front matter:
+
+    badges: [migrate, breaking, security, prerelease]
+*/ -}}
+{{- $labels := dict
+  "migrate" "Run migrate"
+  "breaking" "Breaking"
+  "security" "Security fix"
+  "prerelease" "Pre-release"
+-}}
+{{- with .Params.badges -}}
+<span class="release-badges">
+  {{- range . }}<span class="release-badge release-badge-{{ . }}">{{ index $labels . | default . }}</span>{{ end -}}
+</span>
+{{- end -}}
