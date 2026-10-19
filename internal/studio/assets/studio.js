@@ -2,7 +2,9 @@
 //   <input data-filter="#root">   filters [data-item] elements inside #root by
 //                                 their data-text attribute, else their text
 //   [data-group]                  hidden when none of its [data-item]s match
-//   [data-empty-filter]           shown when a non-empty filter matches nothing
+//   [data-empty-filter="#root"]   shown when a non-empty filter matches nothing
+//                                 in #root (it may sit outside it: a <p> cannot
+//                                 go inside a <ul>)
 //   [data-theme-toggle]           flips light/dark and remembers the choice
 //   .filter-bar input              focused by pressing "/"
 //   details.whatif                 its textarea is disabled (not sent) while closed
@@ -21,7 +23,7 @@ document.addEventListener("input", (e) => {
     g.hidden = !any;
     if (q && any && "open" in g) g.open = true;
   }
-  const empty = root.querySelector("[data-empty-filter]");
+  const empty = document.querySelector(`[data-empty-filter="${input.dataset.filter}"]`);
   if (empty) empty.hidden = q === "" || root.querySelector("[data-item]:not([hidden])") !== null;
 });
 
