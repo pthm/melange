@@ -33,7 +33,10 @@ database: the deployed model, Explain traces, and Expand trees.
 
 It needs only a connection: the model is read from the database, so no
 schema file or repo checkout is required. Every connection is opened
-read-only, and the server binds a loopback address only.`,
+read-only, and the server binds a loopback address only. The one exception
+is an Explain with what-if tuples: it opens a read-write transaction to
+create a temporary view, switches it to read-only, and always rolls it
+back, so nothing is committed.`,
 	Example: `  # Point the console at staging
   melange studio --env staging
 

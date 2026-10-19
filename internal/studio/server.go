@@ -22,6 +22,7 @@ import (
 
 	"github.com/pthm/melange/melange"
 	"github.com/pthm/melange/pkg/migrator"
+	"github.com/pthm/melange/pkg/schema"
 )
 
 //go:embed assets
@@ -170,12 +171,42 @@ func (s *Server) explain(w http.ResponseWriter, r *http.Request) {
 		render(w, r, errorBox(err.Error()))
 		return
 	}
-	trace, err := s.checker.Explain(r.Context(), subject, melange.Relation(relation), object)
-	if err != nil {
-		render(w, r, errorBox(err.Error()))
+	if strings.TrimSpace(r.FormValue("whatif")) == "" {
+		trace, err := s.checker.Explain(r.Context(), subject, melange.Relation(relation), object)
+		if err != nil {
+			render(w, r, errorBox(err.Error()))
+			return
+		}
+		render(w, r, traceView(trace))
 		return
 	}
-	render(w, r, traceView(trace))
+	s.explainWithWhatIf(w, r, subject, melange.Relation(relation), object)
+}
+
+// explainWithWhatIf runs the query without and with the form's what-if
+// tuples. The tuples are parsed first, so a typo costs no Explain.
+func (s *Server) explainWithWhatIf(w http.ResponseWriter, r *http.Request, subject melange.Object, relation melange.Relation, object melange.Object) {
+	model, unchecked := s.loadModel(r.Context())
+	var types []schema.TypeDefinition
+	if model != nil {
+		types = model.Types
+	}
+	tuples, err := parseWhatIf(r.FormValue("whatif"), types)
+	if err != nil {
+		render(w, r, errorBox("What-if tuples:\n"+err.Error()))
+		return
+	}
+	base, err := s.checker.Explain(r.Context(), subject, relation, object)
+	if err != nil {
+		render(w, r, errorBox("Without what-if: "+err.Error()))
+		return
+	}
+	with, err := s.explainWhatIf(r.Context(), tuples, subject, relation, object)
+	if err != nil {
+		render(w, r, errorBox("With what-if: "+err.Error()))
+		return
+	}
+	render(w, r, whatIfView(base, with, tuples, unchecked))
 }
 
 // expand serves both the form (object + relation) and pointer drill-in
@@ -198,6 +229,9 @@ func (s *Server) expand(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		render(w, r, errorBox(err.Error()))
 		return
+	}
+	if strings.TrimSpace(r.FormValue("whatif")) != "" {
+		render(w, r, note("What-if tuples are not applied to Expand."))
 	}
 	render(w, r, expandView(tree, r.FormValue("userset") == ""))
 }

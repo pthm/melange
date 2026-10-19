@@ -126,3 +126,28 @@ func countLabel(n int, capped bool) string {
 	}
 	return fmt.Sprint(n)
 }
+
+func allowed(t *melange.Trace) bool { return t.Result != nil && *t.Result }
+
+// whatIfChange names what the what-if tuples did to the answer.
+func whatIfChange(base, with *melange.Trace) string {
+	switch b, w := allowed(base), allowed(with); {
+	case b == w:
+		return "no change"
+	case w:
+		return "the what-if tuples grant it"
+	default:
+		return "the what-if tuples revoke it"
+	}
+}
+
+// isAdded reports whether evidence e is one of the what-if tuples.
+func isAdded(e melange.TupleRef, added []melange.ContextualTuple) bool {
+	for _, t := range added {
+		if e.SubjectType == string(t.Subject.Type) && e.SubjectID == t.Subject.ID && e.Relation == string(t.Relation) &&
+			e.ObjectType == string(t.Object.Type) && e.ObjectID == t.Object.ID {
+			return true
+		}
+	}
+	return false
+}

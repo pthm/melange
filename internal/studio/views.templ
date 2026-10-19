@@ -56,7 +56,7 @@ templ shell(p page, sidebar templ.Component) {
 						if p.Env != "" {
 							<span class="badge accent" title="Active environment">{ p.Env }</span>
 						}
-						<span class="badge" title="Every connection is read-only">read-only</span>
+						<span class="badge" title="Every connection is read-only. What-if Explain uses a temporary view in a transaction that is always rolled back.">read-only</span>
 						<button type="button" class="theme-toggle" data-theme-toggle aria-label="Toggle dark mode" title="Toggle dark mode"></button>
 					</div>
 				</header>
@@ -169,7 +169,9 @@ templ indexPage(d indexData) {
 					// One form, two verbs: Enter and Explain post /explain; Expand
 					// GETs /expand with the same fields (hx-include, since htmx only
 					// sends a form's values for non-GET requests by default).
-					<form class="query" hx-post="/explain" hx-target="#query-result">
+					// Cmd/Ctrl+Enter in the what-if textarea also runs Explain, and
+					// #query-result dims while either request runs.
+					<form class="query" hx-post="/explain" hx-target="#query-result" hx-indicator="#query-result" hx-trigger="submit, keydown[(metaKey||ctrlKey)&&key=='Enter'] from:find textarea">
 						<label class="field">Subject<input name="subject" placeholder="user:alice" list="dl-types" autocomplete="off"/></label>
 						<label class="field">Relation<input name="relation" placeholder="viewer" value={ d.Relation } list="dl-rels" autocomplete="off"/></label>
 						<label class="field">Object<input name="object" placeholder="document:1" value={ prefill(d.Type) } list="dl-types" autocomplete="off"/></label>
@@ -177,6 +179,16 @@ templ indexPage(d indexData) {
 							<button class="primary" type="submit">Explain</button>
 							<button type="button" hx-get="/expand" hx-include="closest form">Expand</button>
 						</div>
+						<details class="disclose whatif">
+							<summary>What-if tuples</summary>
+							<p class="help">
+								One tuple per line, <code>subject relation object</code>. Explain adds them for this query only and shows the answer with and without them, so you can see whether a grant would fix or break a check.
+								They are added in a transaction that is always rolled back; nothing is written. Expand ignores them.
+								They apply only while this panel is open; <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Enter</kbd> runs Explain.
+							</p>
+							// Disabled while closed (studio.js), so htmx does not send it.
+							<textarea name="whatif" rows="3" placeholder="user:bob viewer document:1" spellcheck="false" autocomplete="off" disabled></textarea>
+						</details>
 					</form>
 					if d.Model != nil {
 						@modelDatalists(d.Model)
@@ -206,9 +218,13 @@ templ errorBox(msg string) {
 	<p class="error">{ msg }</p>
 }
 
+templ note(msg string) {
+	<p class="mute whatif-tuples">{ msg }</p>
+}
+
 templ traceView(t *melange.Trace) {
 	<p class="verdict">
-		if t.Result != nil && *t.Result {
+		if allowed(t) {
 			<span class="badge ok">allowed</span>
 			<code>{ t.Subject }</code> has <code>{ t.Relation }</code> on <code>{ t.Object }</code>
 		} else {
@@ -222,14 +238,59 @@ templ traceView(t *melange.Trace) {
 			}
 		</span>
 	</p>
+	@traceTree(t, nil)
+}
+
+// traceTree renders a trace's tree, tagging evidence that is one of added.
+templ traceTree(t *melange.Trace, added []melange.ContextualTuple) {
 	if t.Root != nil {
 		<ul class="tree">
-			@traceNode(t.Root)
+			@traceNode(t.Root, added)
 		</ul>
 	}
 }
 
-templ traceNode(n *melange.Node) {
+// whatIfView shows an Explain answer with what-if tuples against base, the
+// answer without them: one verdict row, the hypothetical tree, then the
+// base trace behind a disclosure.
+templ whatIfView(base, with *melange.Trace, tuples []melange.ContextualTuple, unchecked string) {
+	<p class="verdict">
+		<span class="badge accent">what-if</span>
+		@verdictBadge(base)
+		<span class="mute">→</span>
+		@verdictBadge(with)
+		<span>{ whatIfChange(base, with) }</span>
+		<span class="mute">
+			{ plural(with.NodeCount, "node") }
+			if with.Truncated {
+				· truncated
+			}
+		</span>
+	</p>
+	<div class="evidence whatif-tuples">
+		for _, t := range tuples {
+			<div>added <code>{ t.Subject.String() } { string(t.Relation) } { t.Object.String() }</code></div>
+		}
+		if unchecked != "" {
+			<div>These tuples were not checked against the model, so one it does not allow is silently ignored. { unchecked }</div>
+		}
+	</div>
+	@traceTree(with, tuples)
+	<details class="disclose">
+		<summary>Without what-if</summary>
+		@traceView(base)
+	</details>
+}
+
+templ verdictBadge(t *melange.Trace) {
+	if allowed(t) {
+		<span class="badge ok">allowed</span>
+	} else {
+		<span class="badge fail">denied</span>
+	}
+}
+
+templ traceNode(n *melange.Node, added []melange.ContextualTuple) {
 	<li class={ resultClass(n.Result) }>
 		<span class="kind">{ string(n.Type) }</span>
 		{ n.Label }
@@ -239,14 +300,19 @@ templ traceNode(n *melange.Node) {
 		if len(n.Evidence) > 0 {
 			<div class="evidence">
 				for _, e := range n.Evidence {
-					<div>tuple <code>{ e.SubjectType }:{ e.SubjectID } { e.Relation } { e.ObjectType }:{ e.ObjectID }</code></div>
+					<div>
+						tuple <code>{ e.SubjectType }:{ e.SubjectID } { e.Relation } { e.ObjectType }:{ e.ObjectID }</code>
+						if isAdded(e, added) {
+							<span class="badge accent">what-if</span>
+						}
+					</div>
 				}
 			</div>
 		}
 		if len(n.Children) > 0 {
 			<ul>
 				for _, c := range n.Children {
-					@traceNode(c)
+					@traceNode(c, added)
 				}
 			</ul>
 		}

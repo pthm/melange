@@ -5,6 +5,7 @@
 //   [data-empty-filter]           shown when a non-empty filter matches nothing
 //   [data-theme-toggle]           flips light/dark and remembers the choice
 //   .filter-bar input              focused by pressing "/"
+//   details.whatif                 its textarea is disabled (not sent) while closed
 document.addEventListener("input", (e) => {
   const input = e.target.closest("[data-filter]");
   if (!input) return;
@@ -42,3 +43,9 @@ document.addEventListener("keydown", (e) => {
   e.preventDefault();
   input.focus();
 });
+
+// What-if tuples apply only while their panel is open. toggle does not bubble.
+document.addEventListener("toggle", (e) => {
+  if (!e.target.matches?.("details.whatif")) return;
+  e.target.querySelector("textarea").disabled = !e.target.open;
+}, true);

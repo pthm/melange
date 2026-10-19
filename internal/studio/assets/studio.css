@@ -51,7 +51,7 @@
 html, body { height: 100%; }
 body { margin: 0; font: 400 14px/20px var(--font-sans); color: var(--fg); background: var(--bg); -webkit-font-smoothing: antialiased; }
 h1, .t-heading { font: 700 16px/24px var(--font-mono); margin: 0; }
-code, pre, kbd, .t-mono, .chip, .badge, .kind { font: 400 12px/18px var(--font-mono); }
+code, pre, kbd, textarea, .t-mono, .chip, .badge, .kind { font: 400 12px/18px var(--font-mono); }
 h2, h3 { font: 700 14px/20px var(--font-mono); margin: 0; }
 th, summary, em, button, input { font: inherit; }
 strong, b, .strong { font-weight: 600; }
@@ -305,3 +305,11 @@ details.disclose[open] > summary { margin-bottom: var(--sp-2); }
 .fga .f-ref, .fga .f-num { color: var(--ok); }
 .fga .f-punct, .fga .f-comment { color: var(--mute); }
 .fga .f-comment { font-style: italic; }
+
+/* what-if tuples: a disclosure spanning the whole query row */
+.query .whatif { grid-column: 1 / -1; }
+.whatif > summary { width: fit-content; }
+.whatif textarea { display: block; width: 100%; margin-top: var(--sp-2); padding: var(--sp-2) var(--sp-3); border: 1px solid var(--line); border-radius: var(--r); background: var(--panel); color: var(--fg); resize: vertical; }
+.whatif textarea::placeholder { color: var(--mute); }
+.whatif-tuples { margin-bottom: var(--sp-3); }
+#query-result.htmx-request { opacity: .5; }
