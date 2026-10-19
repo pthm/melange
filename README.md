@@ -15,96 +15,67 @@
 
 **An OpenFGA-to-PostgreSQL authorization compiler.**
 
-Melange compiles [OpenFGA](https://openfga.dev) authorization schemas into specialized PL/pgSQL functions that run directly in your PostgreSQL database. Like [Protocol Buffers](https://protobuf.dev/) compiles `.proto` files into serialization code, Melange compiles `.fga` files into optimized SQL functions for [Zanzibar](https://research.google/pubs/pub48190/)-style relationship-based access control.
+Melange compiles [OpenFGA](https://openfga.dev) authorization schemas into specialized PL/pgSQL functions that run inside your PostgreSQL database. Like [Protocol Buffers](https://protobuf.dev/) compiles `.proto` files into serialization code, Melange compiles `.fga` files into SQL functions for [Zanzibar](https://research.google/pubs/pub48190/)-style relationship-based access control.
 
-The generated functions query a `melange_tuples` view you define over your existing domain tables—no separate tuple storage or synchronization required.
+The generated functions read a `melange_tuples` view you define over your existing domain tables. There is no separate tuple store and nothing to sync.
+
+> [!NOTE]
+> **📚 Documentation:** guides, API reference and examples at **[melange.sh](https://melange.sh)**.
 
 ## Why Melange?
 
-Traditional authorization systems require syncing your application data to a separate service. Melange takes a different approach: **it's a compiler, not a runtime service**.
+Most authorization systems run as a separate service that you keep in sync with your application data. Melange is a compiler instead.
 
-### How it works
+**At migration time**, `melange migrate` parses your OpenFGA schema, analyzes each relation's patterns (direct, union, exclusion, tuple-to-userset and so on), resolves role hierarchies, and installs a specialized SQL function per relation.
 
-**Compile time** — When you run `melange migrate`, the compiler:
+**At runtime**, a permission check is a single SQL function call, `check_permission()`, which runs those functions against your `melange_tuples` view.
 
-- Parses your OpenFGA schema
-- Analyzes relation patterns (direct, union, exclusion, etc.)
-- Computes transitive closures for role hierarchies
-- Generates specialized SQL functions for each relation
-- Installs the functions into PostgreSQL
+That gives you:
 
-**Runtime** — Permission checks are simple SQL function calls:
-
-- `check_permission()` executes the generated functions
-- Functions query a `melange_tuples` view you define over your domain tables
-- PostgreSQL's query planner optimizes the specialized functions
-
-This compilation model gives you:
-
-- **Always in sync** — Permissions query your tables directly, no replication lag
-- **Transaction-aware** — Permission checks see uncommitted changes in the same transaction
-- **Language-agnostic** — Use from any language that can call SQL (Go, TypeScript, Python, Ruby, etc.)
-- **Optional runtime libraries** — Convenience clients for Go and TypeScript, or use raw SQL
-- **Single query** — Role hierarchies resolved at compile time, no recursive lookups at runtime
+- **Always in sync.** Checks read your tables directly, with no replication lag.
+- **Transaction-aware.** Checks see uncommitted changes in the same transaction, so they work in triggers and RLS policies.
+- **Any language.** Anything that can run SQL can check permissions. Go and TypeScript clients are optional conveniences.
+- **No recursive lookups.** Role hierarchies are resolved at compile time and inlined into the generated SQL.
+- **OpenFGA compatible.** Schema 1.1 conformance, validated against the official OpenFGA test suite.
 
 Inspired by [OpenFGA](https://openfga.dev) and built on ideas from [pgFGA](https://github.com/rover-app/pgfga).
 
----
-
-> [!NOTE]
-> **📚 Full Documentation**
-> Visit **[melange.sh](https://melange.sh)** for comprehensive guides, API reference, and examples.
-
----
-
 ## Installation
 
-### CLI
-
-**Homebrew (macOS and Linux):**
+**Homebrew** (macOS and Linux):
 
 ```bash
 brew install pthm/tap/melange
 ```
 
-**Go install:**
+**Go:**
 
 ```bash
 go install github.com/pthm/melange@latest
 ```
 
-**Pre-built binaries:**
-Download from [GitHub Releases](https://github.com/pthm/melange/releases) (macOS binaries are code-signed)
-
-**Updating:**
+**Container image:**
 
 ```bash
-# Homebrew
-brew upgrade melange
-
-# Go install
-go install github.com/pthm/melange@latest
+docker pull ghcr.io/pthm/melange:latest
 ```
 
-Melange automatically checks for updates and notifies you when a new version is available. Use `--no-update-check` to disable.
+**Binaries:** download from [GitHub Releases](https://github.com/pthm/melange/releases). macOS binaries are code-signed.
 
-### Optional: Go Runtime Library
+The CLI tells you when a newer release is available. Pass `--no-update-check` to turn that off.
 
-If you want to use the Go convenience library instead of raw SQL:
+**Runtime libraries** (optional):
 
 ```bash
-go get github.com/pthm/melange/melange
+go get github.com/pthm/melange/melange   # Go, standard library only
+npm install @pthm/melange                # TypeScript
 ```
-
-The runtime module has zero external dependencies (Go stdlib only).
 
 ## Quick Start
 
-### 1. Define Your Schema
+### 1. Define your schema
 
-Create a schema file (`schema.fga`) using the OpenFGA DSL:
-
-```
+```fga
 model
   schema 1.1
 
@@ -117,19 +88,11 @@ type repository
     define can_read: reader
 ```
 
-### 2. Compile Schema into SQL Functions
+`melange init` creates a config file and a starter schema for you.
 
-Run the migration to generate specialized PL/pgSQL functions:
+### 2. Map your tables to tuples
 
-```bash
-melange migrate --db postgres://localhost/mydb --schemas-dir ./schemas/
-```
-
-This generates optimized SQL functions like `check_permission()`, `list_objects()`, and specialized check functions for each relation.
-
-### 3. Define Your Tuples View
-
-Create a `melange_tuples` view that exposes your authorization data:
+Create a `melange_tuples` view over the tables that already hold your authorization data:
 
 ```sql
 CREATE VIEW melange_tuples AS
@@ -145,219 +108,156 @@ SELECT 'user', user_id::text, 'reader', 'repository', repo_id::text
 FROM repository_readers;
 ```
 
-### 4. Check Permissions
+### 3. Compile the schema into SQL functions
 
-**With Go runtime (optional):**
-
-```go
-import "github.com/pthm/melange/melange"
-
-checker := melange.NewChecker(db)
-decision, err := checker.Check(ctx,
-    melange.Object{Type: "user", ID: "alice"},
-    "can_read",
-    melange.Object{Type: "repository", ID: "my-repo"},
-)
-if !decision.Allowed {
-    return ErrForbidden
-}
+```bash
+melange migrate --db postgres://localhost/mydb --schema schema.fga
 ```
 
-**Or use raw SQL from any language:**
+This installs `check_permission()`, `list_accessible_objects()`, `list_accessible_subjects()`, and a specialized check function for each relation.
+
+### 4. Check permissions
+
+**SQL**, from any language:
 
 ```sql
-SELECT check_permission(
-  'user', 'alice',
-  'can_read',
-  'repository', 'my-repo'
-);
--- Returns: true/false
+SELECT check_permission('user', 'alice', 'can_read', 'repository', 'my-repo');
+-- 1 (allowed) or 0 (denied)
 ```
 
-### 5. (Optional) Generate Type-Safe Client Code
+**Go:**
 
-For better type safety, generate constants and constructors:
+```go
+checker := melange.NewChecker(db)
+
+allowed, err := checker.Check(ctx,
+    melange.Object{Type: "user", ID: "alice"},
+    melange.Relation("can_read"),
+    melange.Object{Type: "repository", ID: "my-repo"},
+)
+```
+
+**TypeScript:**
+
+```typescript
+const checker = new Checker(pool);
+
+const decision = await checker.check(
+  { type: "user", id: "alice" },
+  "can_read",
+  { type: "repository", id: "my-repo" },
+);
+if (decision.allowed) { /* ... */ }
+```
+
+### 5. Generate type-safe clients (optional)
 
 ```bash
 melange generate client --runtime go --schema schema.fga --output ./authz/
+melange generate client --runtime typescript --schema schema.fga --output ./src/authz/
 ```
 
 ```go
-import "yourapp/authz"
-
-checker := melange.NewChecker(db)
-decision, err := checker.Check(ctx,
-    authz.User("alice"),
-    authz.RelCanRead,
-    authz.Repository("my-repo"),
-)
+allowed, err := checker.Check(ctx, authz.User("alice"), authz.RelCanRead, authz.Repository("my-repo"))
 ```
 
-## CLI Reference
+## Inspect It With Studio
 
-```
-melange - PostgreSQL Fine-Grained Authorization
-
-Commands:
-  generate client  Generate type-safe client code from schema
-  migrate          Apply schema to database
-  validate         Validate schema syntax
-  status           Show current schema status
-  doctor           Run health checks on authorization infrastructure
-```
-
-### Generate Client Code
+`melange studio` opens a local, read-only web console on any melange database. See what a user can access and who can access an object, explain a decision step by step, try a grant before you write it, and read the SQL melange generated for each relation. It reads the model from the database, so it needs only a connection.
 
 ```bash
-# Generate Go code
-melange generate client --runtime go --schema schema.fga --output ./authz/
-
-# With custom package name
-melange generate client --runtime go --schema schema.fga --output ./authz/ --package myauthz
-
-# With int64 IDs instead of strings
-melange generate client --runtime go --schema schema.fga --output ./authz/ --id-type int64
-
-# Only generate permission relations (can_*)
-melange generate client --runtime go --schema schema.fga --output ./authz/ --filter can_
+melange studio --env staging
 ```
 
-Supported runtimes: `go` (TypeScript coming soon)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/static/images/studio/entity-dark.webp">
+  <img src="docs/static/images/studio/entity-light.webp" alt="Studio's tuple browser showing the repositories a user can access, with relation chips and an inline Explain">
+</picture>
 
-### Apply Schema to Database
+<table>
+  <tr>
+    <td width="33%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/static/images/studio/query-explain-dark.webp">
+        <img src="docs/static/images/studio/query-explain-light.webp" alt="An Explain trace showing why a user can read an issue">
+      </picture>
+      <p align="center"><b>Explain</b> any check, path by path</p>
+    </td>
+    <td width="33%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/static/images/studio/relation-dark.webp">
+        <img src="docs/static/images/studio/relation-light.webp" alt="A relation page with its definition, analysis and dependencies">
+      </picture>
+      <p align="center"><b>Relations</b> with their analysis and generated SQL</p>
+    </td>
+    <td width="33%">
+      <picture>
+        <source media="(prefers-color-scheme: dark)" srcset="docs/static/images/studio/query-matrix-dark.webp">
+        <img src="docs/static/images/studio/query-matrix-light.webp" alt="A matrix of every repository relation, allowed or denied for one user">
+      </picture>
+      <p align="center"><b>Matrix</b> of every relation for a subject</p>
+    </td>
+  </tr>
+</table>
+
+Studio binds a loopback address, opens read-only connections, and loads nothing from other hosts. It is experimental. See the [Studio guide](https://melange.sh/docs/guides/studio/) for environments, privileges and every page.
+
+## CLI
+
+```
+Schema
+  migrate     Apply schema to database
+  validate    Validate schema syntax
+  status      Show schema, tuples, and deployed-model status
+  diff        Show what changed between the deployed model and your local schema
+  history     Show the migration history recorded in the database
+  schema      Inspect the model deployed in a database
+  explain     Show why a permission check returns true or false
+  expand      Show who has a permission on an object
+  doctor      Run health checks
+  studio      Open a local, read-only web console for a database (experimental)
+
+Client
+  generate    Generate code from schema
+
+Utility
+  init        Initialize a new Melange project
+  config      Configuration utilities
+  env         Environment profile utilities
+  version     Print version information
+  license     Print license and third-party notices
+```
+
+A few common commands:
 
 ```bash
-# Apply schema
-melange migrate --db postgres://localhost/mydb --schemas-dir ./schemas/
-
-# Dry run (show SQL without applying)
-melange migrate --db postgres://localhost/mydb --schemas-dir ./schemas/ --dry-run
-
-# Force re-apply even if unchanged
-melange migrate --db postgres://localhost/mydb --schemas-dir ./schemas/ --force
+melange migrate --dry-run                      # print the SQL without applying it
+melange diff                                   # compare your schema with the deployed one
+melange explain user:alice can_read repository:42
+melange expand repository:42 can_read
+melange doctor --verbose
 ```
 
-### Validate Schema
-
-```bash
-melange validate --schema schema.fga
-```
-
-### Check Status
-
-```bash
-melange status --db postgres://localhost/mydb
-```
-
-### Health Check
-
-```bash
-melange doctor --db postgres://localhost/mydb --verbose
-```
-
----
-
-## Using from Any Language
-
-Melange generates standard PostgreSQL functions, so you can use it from **any language** that can execute SQL:
-
-```python
-# Python
-cursor.execute(
-    "SELECT check_permission(%s, %s, %s, %s, %s)",
-    ('user', 'alice', 'can_read', 'repository', 'my-repo')
-)
-```
-
-```ruby
-# Ruby
-DB.fetch(
-  "SELECT check_permission(?, ?, ?, ?, ?)",
-  'user', 'alice', 'can_read', 'repository', 'my-repo'
-).first
-```
-
-```typescript
-// TypeScript (with pg or any SQL client)
-const result = await db.query("SELECT check_permission($1, $2, $3, $4, $5)", [
-  "user",
-  "alice",
-  "can_read",
-  "repository",
-  "my-repo",
-]);
-```
-
-### Optional Runtime Libraries
-
-For convenience, Melange provides type-safe runtime clients:
-
-| Language   | Runtime Package                   | CLI Flag               | Status      |
-| ---------- | --------------------------------- | ---------------------- | ----------- |
-| Go         | `github.com/pthm/melange/melange` | `--runtime go`         | Implemented |
-| TypeScript | `@pthm/melange`                   | `--runtime typescript` | Planned     |
-
-These libraries provide a nicer API but are completely optional. See [`clients/`](clients/) for language-specific implementations.
-
----
+Commands read `melange.yaml` and support named environments (`--env staging`). See the [CLI reference](https://melange.sh/docs/reference/cli/).
 
 ## Contributing
 
-Contributions are welcome! Melange is still evolving and feedback, bug reports, and improvements are greatly appreciated.
+Contributions are welcome. Melange is still evolving, and feedback, bug reports and improvements are appreciated.
 
-### Chat
+- **Chat:** questions, ideas and help getting started in the [Matrix room](https://matrix.to/#/#melange:matrix.org).
+- **Issues:** [bug reports and feature requests](https://github.com/pthm/melange/issues). For bugs, include steps to reproduce, expected and actual behavior, and any errors.
+- **Security:** report vulnerabilities through [private vulnerability reporting](https://github.com/pthm/melange/security/advisories/new).
+- **Pull requests:** fork, branch, run `just test`, and open a PR with a clear description. Include tests for new behavior. For larger changes, open an issue or ask on Matrix first so we can agree on the approach.
 
-If you have questions, want to discuss ideas, or need help getting started, join the Matrix room:
-
-[![Matrix](https://img.shields.io/matrix/melange:matrix.org?label=Matrix%20Chat&logo=matrix)](https://matrix.to/#/#melange:matrix.org)
-
-Matrix is the best place for:
-
-- general discussion about the project
-- design ideas or architecture questions
-- quick help getting set up
-
-### Issues
-
-For **bug reports, feature requests, or design discussions**, please open an issue:
-
-https://github.com/pthm/melange/issues
-
-When reporting a bug, please include:
-
-- steps to reproduce
-- expected vs actual behavior
-- relevant logs or error messages
-- environment details if applicable
-
-### Pull Requests
-
-Code contributions are very welcome.
-
-1. **Fork the repository** and clone locally
-2. **Create a branch** for your changes
-3. **Run tests** with `just test`
-4. **Submit a pull request** with a clear description
-
-Please ensure your code:
-
-- Passes all existing tests
-- Includes tests for new functionality
-- Follows the existing code style
-
-For larger changes or new features, it's often helpful to **open an issue or start a discussion on Matrix first** so we can align on the approach.
-
----
+The [contributing guide](https://melange.sh/docs/contributing/) covers the architecture, testing and benchmarks.
 
 ## Resources
 
-- **[Documentation](https://melange.sh)** — Guides, API reference, and examples
-- **[OpenFGA](https://openfga.dev)** — The authorization model Melange implements
-- **[Zanzibar Paper](https://research.google/pubs/pub48190/)** — Google's original authorization system
-- **[pgFGA](https://github.com/rover-app/pgfga)** — PostgreSQL FGA implementation that inspired this project
-
----
+- **[Documentation](https://melange.sh):** guides, API reference and examples
+- **[OpenFGA](https://openfga.dev):** the authorization model Melange implements
+- **[Zanzibar paper](https://research.google/pubs/pub48190/):** Google's original authorization system
+- **[pgFGA](https://github.com/rover-app/pgfga):** the PostgreSQL FGA implementation that inspired this project
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) for details.
+MIT License. See [LICENSE](LICENSE) for details.
