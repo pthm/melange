@@ -256,6 +256,45 @@ SELECT check_permission(
 
 <div class="homepage-section-gap"></div>
 
+<!-- Studio showcase: full width -->
+<div class="homepage-studio">
+
+{{< hextra/hero-section >}}
+  Inspect Everything in Studio
+{{< /hextra/hero-section >}}
+
+<div class="hx:mt-6"></div>
+
+<div class="content">
+
+`melange studio` opens a local, read-only console on any melange database. See what each user can access and who can access each object, explain any decision step by step, try a grant before you write it, and read the SQL melange generated for every relation. It needs only a database connection.
+
+```bash
+melange studio --env staging
+```
+
+</div>
+
+{{< studio-screenshot name="entity" alt="Studio's tuple browser showing the repositories user carol can access, with relation chips and an inline Explain" >}}
+
+<div class="homepage-studio-grid">
+
+{{< studio-screenshot name="query-explain" alt="An Explain trace showing why a user can read an issue" caption="**Explain** any check, path by path" >}}
+
+{{< studio-screenshot name="relation" alt="A relation page with its definition, analysis and dependencies" caption="**Relations** with their analysis and generated SQL" >}}
+
+{{< studio-screenshot name="health" alt="The Health page with melange doctor checks" caption="**Health** checks from `melange doctor`" >}}
+
+</div>
+
+<div class="hx:mt-6">
+{{< hextra/hero-button text="Explore Studio" link="docs/guides/studio" >}}
+</div>
+
+</div>
+
+<div class="homepage-section-gap"></div>
+
 <div class="homepage-cta">
 
 {{< hextra/hero-section >}}
@@ -278,6 +317,9 @@ melange migrate
 
 # Generate type-safe client code
 melange generate client
+
+# Inspect the database in a local web console
+melange studio
 ```
 
 </div>

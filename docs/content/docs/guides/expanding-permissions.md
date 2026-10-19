@@ -236,6 +236,7 @@ Opt-in via `ExpandCache` — see [Caching](./caching/#expandcache).
 ## See Also
 
 - [Explaining Decisions](../explaining-decisions/): the companion `Explain` API for "why (or why not)?"
+- [Studio](../studio/): browse Expand trees one pointer at a time in a local web console
 - [Listing Subjects](../listing-subjects/): request-path listing without the tree structure
 - [Caching](../caching/): opt-in caching for Expand trees via `ExpandCache`
 - [Go API reference](../reference/go-api/#expand): `Checker.Expand` / `ExpandRecursive` signatures

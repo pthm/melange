@@ -150,6 +150,14 @@ melange explain <subject> <relation> <object> --db postgres://localhost/mydb
 
 Output is a tree of every branch the engine tried with `✓`/`✗` markers per node. `--format=json` returns the raw `Trace` JSONB; `--max-nodes N` caps the trace size. See [Explaining Decisions](../explaining-decisions/).
 
+### Inspect a database in studio
+
+```bash
+melange studio --db postgres://localhost/mydb
+```
+
+Opens a local, read-only web console with Explain, Expand, a check matrix of every relation on an object for one subject, `EXPLAIN ANALYZE` timings, the tuples behind each entity, and the doctor checks. See [Studio](../studio/).
+
 ### Preview Generated SQL
 
 ```bash

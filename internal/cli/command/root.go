@@ -163,6 +163,7 @@ func init() {
 	doctorCmd.GroupID = groupSchema
 	explainCmd.GroupID = groupSchema
 	expandCmd.GroupID = groupSchema
+	studioCmd.GroupID = groupSchema
 	rootCmd.AddCommand(validateCmd)
 	rootCmd.AddCommand(migrateCmd)
 	rootCmd.AddCommand(statusCmd)
@@ -172,6 +173,7 @@ func init() {
 	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(explainCmd)
 	rootCmd.AddCommand(expandCmd)
+	rootCmd.AddCommand(studioCmd)
 
 	// Client commands
 	generateCmd.GroupID = groupClient

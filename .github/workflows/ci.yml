@@ -42,6 +42,12 @@ jobs:
       - name: Install tools
         run: go install tool
 
+      - name: Check studio templates are generated
+        run: |
+          go tool templ fmt -fail internal/studio
+          for f in internal/studio/*_templ.go; do [ -f "${f%_templ.go}.templ" ] || { echo "orphaned $f"; exit 1; }; done
+          go tool templ generate -check -path internal/studio
+
       - name: Generate test authz package
         run: go run . generate client --runtime go --schema test/testutil/testdata/schema.fga --output test/authz/ --package authz --id-type int64
 

@@ -614,6 +614,44 @@ build-signed: build
 build-notarized: _check-1password build
     mise exec -- ./scripts/sign-macos.sh bin/melange --notarize
 
+# Format studio's .templ views and regenerate their Go (generated files are committed)
+[group('Generate')]
+studio-generate:
+    go tool templ fmt internal/studio
+    go tool templ generate -path internal/studio
+
+# Fail if studio's .templ views are unformatted or their committed *_templ.go are stale or orphaned
+[group('Generate')]
+studio-generate-check:
+    go tool templ fmt -fail internal/studio
+    # before generate: -check silently deletes an orphaned *_templ.go
+    for f in internal/studio/*_templ.go; do [ -f "${f%_templ.go}.templ" ] || { echo "orphaned $f"; exit 1; }; done
+    go tool templ generate -check -path internal/studio
+
+# Run studio with live reload (usage: just studio-watch --db postgres://... [--schema file.fga])
+# Regenerates templ, rebuilds and restarts studio on change; browse the reload proxy at :7331
+# -path stays internal/studio (templ embeds file names relative to it); the command
+# runs there too, so go -C returns to the repo root for relative ARGS.
+[group('Generate')]
+[doc('Run studio with live reload on http://127.0.0.1:7331 (args go to melange studio)')]
+studio-watch *ARGS:
+    go tool templ generate -watch -path internal/studio -open-browser=false \
+        -cmd "go -C ../.. run . studio --addr 127.0.0.1:7070 --no-update-check {{ARGS}}" \
+        -proxy http://127.0.0.1:7070
+
+# Vendor studio's browser dependencies (htmx, fonts) from npm, then regenerate notices
+[group('Release')]
+[doc('Fetch the pinned studio browser dependencies from npm and regenerate THIRD_PARTY_NOTICES')]
+studio-assets:
+    ./scripts/studio-assets.sh
+    go generate ./internal/licenses
+
+# Check the pinned studio browser dependencies against the npm registry
+[group('Release')]
+[doc('Report studio browser dependencies with newer npm releases')]
+studio-assets-outdated:
+    ./scripts/studio-assets.sh outdated
+
 # Generate root THIRD_PARTY_NOTICES from go-licenses output
 [group('Release')]
 [doc('Generate THIRD_PARTY_NOTICES from go-licenses data')]
@@ -690,9 +728,9 @@ clean:
 docs-dev:
     cd docs && hugo mod tidy && hugo server
 
-# Run all checks (fmt, lint, test)
+# Run all checks (fmt, lint, templ generation, test)
 [group('Test')]
-check: fmt lint test
+check: fmt lint studio-generate-check test
 
 # =============================================================================
 # OpenFGA Test Suite

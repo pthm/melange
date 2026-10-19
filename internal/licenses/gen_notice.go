@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -53,75 +54,72 @@ func main() {
 		exit(err)
 	}
 
-	var moduleNames []string
-	for name := range moduleFiles {
-		moduleNames = append(moduleNames, name)
-	}
-	sort.Strings(moduleNames)
-
-	var toc []string
-	for _, module := range moduleNames {
-		files := moduleFiles[module]
+	var notices []notice
+	for module, files := range moduleFiles {
 		if len(files) == 0 {
 			continue
 		}
-		moduleRoot, _ := resolveModuleVersion(module, moduleVersions)
-		licenseName := detectLicenseName(files)
-		toc = append(toc, fmt.Sprintf("- %s - %s", moduleRoot, licenseName))
+		root, version := resolveModuleVersion(module, moduleVersions)
+		notices = append(notices, notice{
+			Name: root, Path: module, Version: version,
+			License: detectLicenseName(files), Files: files, Dir: thirdPartyDir,
+		})
 	}
+
+	// Browser dependencies melange studio embeds, vendored from npm by
+	// scripts/studio-assets.sh with their LICENSE and package.json.
+	studioNPM := filepath.Clean(filepath.Join(cwd, "..", "studio", "assets", "npm"))
+	npmNotices, err := loadNPMVendor(studioNPM)
+	if err != nil {
+		exit(err)
+	}
+	notices = append(notices, npmNotices...)
+	sort.Slice(notices, func(i, j int) bool { return notices[i].Name < notices[j].Name })
 
 	var thirdPartyBuilder strings.Builder
 	thirdPartyBuilder.WriteString(fmt.Sprintf(thirdPartyHeader, time.Now().Format("2006-01-02")))
 	thirdPartyBuilder.WriteString("Dependencies:\n")
 	thirdPartyBuilder.WriteString("\n")
-	for _, entry := range toc {
-		thirdPartyBuilder.WriteString(entry)
-		thirdPartyBuilder.WriteString("\n")
+	for _, n := range notices {
+		thirdPartyBuilder.WriteString(fmt.Sprintf("- %s - %s\n", n.Name, n.License))
 	}
 	thirdPartyBuilder.WriteString("\n")
 
-	for _, module := range moduleNames {
-		files := moduleFiles[module]
-		if len(files) == 0 {
-			continue
-		}
-
-		moduleRoot, version := resolveModuleVersion(module, moduleVersions)
-
+	for _, n := range notices {
+		files := n.Files
 		sort.Strings(files)
 		copyrightLine := extractCopyrightLine(files)
 		if copyrightLine == "" {
 			copyrightLine = "unknown"
 		}
-		licenseName := detectLicenseName(files)
 
 		thirdPartyBuilder.WriteString(noticeSeparator)
 		thirdPartyBuilder.WriteString("\n")
 		thirdPartyBuilder.WriteString("PACKAGE: ")
-		thirdPartyBuilder.WriteString(moduleRoot)
+		thirdPartyBuilder.WriteString(n.Name)
 		thirdPartyBuilder.WriteString("\n")
 		thirdPartyBuilder.WriteString("LICENSE: ")
-		thirdPartyBuilder.WriteString(licenseName)
+		thirdPartyBuilder.WriteString(n.License)
 		thirdPartyBuilder.WriteString("\n")
 		thirdPartyBuilder.WriteString("VERSION: ")
-		thirdPartyBuilder.WriteString(version)
+		thirdPartyBuilder.WriteString(n.Version)
 		thirdPartyBuilder.WriteString("\n")
-		if moduleRoot != module {
+		if n.Path != "" && n.Path != n.Name {
 			thirdPartyBuilder.WriteString("PATH: ")
-			thirdPartyBuilder.WriteString(module)
+			thirdPartyBuilder.WriteString(n.Path)
 			thirdPartyBuilder.WriteString("\n")
 		}
 		thirdPartyBuilder.WriteString("COPYRIGHT: ")
 		thirdPartyBuilder.WriteString(copyrightLine)
 		thirdPartyBuilder.WriteString("\n")
 		thirdPartyBuilder.WriteString("FILES: ")
-		thirdPartyBuilder.WriteString(listFileNames(thirdPartyDir, files))
+		thirdPartyBuilder.WriteString(listFileNames(n.Dir, files))
 		thirdPartyBuilder.WriteString("\n")
 		thirdPartyBuilder.WriteString(noticeSeparator)
 		thirdPartyBuilder.WriteString("\n\n")
 
 		for _, path := range files {
-			rel, err := filepath.Rel(thirdPartyDir, path)
+			rel, err := filepath.Rel(n.Dir, path)
 			if err != nil {
 				exit(err)
 			}
@@ -147,6 +145,58 @@ func main() {
 	if err := os.WriteFile(thirdPartyEmbedPath, []byte(thirdPartyBuilder.String()), 0o644); err != nil {
 		exit(err)
 	}
+}
+
+// notice is one package's entry in THIRD_PARTY_NOTICES. Dir is the root
+// its Files are listed relative to.
+type notice struct {
+	Name, Path, Version, License, Dir string
+	Files                             []string
+}
+
+// loadNPMVendor reads the npm packages vendored under dir (one directory
+// each, holding the package's own package.json and LICENSE). The license
+// comes from package.json's SPDX field: text detection cannot tell 0BSD
+// from ISC.
+func loadNPMVendor(dir string) ([]notice, error) {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []notice
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		pkgDir := filepath.Join(dir, e.Name())
+		data, err := os.ReadFile(filepath.Join(pkgDir, "package.json"))
+		if err != nil {
+			return nil, err
+		}
+		var pkg struct{ Name, Version, License string }
+		if err := json.Unmarshal(data, &pkg); err != nil {
+			return nil, fmt.Errorf("%s: %w", pkgDir, err)
+		}
+		files, err := listModuleFiles(pkgDir)
+		if err != nil {
+			return nil, err
+		}
+		var notices []string
+		for _, paths := range files {
+			notices = append(notices, paths...)
+		}
+		if len(notices) == 0 {
+			return nil, fmt.Errorf("%s: no LICENSE file", pkgDir)
+		}
+		out = append(out, notice{
+			Name: "npm:" + pkg.Name, Version: pkg.Version, License: pkg.License,
+			Files: notices, Dir: dir,
+		})
+	}
+	return out, nil
 }
 
 func listModuleFiles(root string) (map[string][]string, error) {

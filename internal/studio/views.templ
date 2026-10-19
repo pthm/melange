@@ -1,0 +1,649 @@
+package studio
+
+import (
+	"net/url"
+	"slices"
+	"strings"
+	"time"
+
+	"github.com/pthm/melange/melange"
+	"github.com/pthm/melange/pkg/migrator"
+)
+
+// page is what the shell needs to know about the current view.
+type page struct {
+	Env    string
+	Active string // top-nav section: model | tuples | history | health
+	Title  string // document title; empty uses the section's name
+}
+
+var navItems = []struct{ ID, Label, Href string }{
+	{"model", "Model", "/"},
+	{"tuples", "Tuples", "/tuples"},
+	{"history", "History", "/history"},
+	{"health", "Health", "/health"},
+}
+
+// shell is the admin layout: fixed top bar, section sidebar, and a main pane
+// that scrolls independently. The body never scrolls. Styles live in
+// assets/studio.css.
+templ shell(p page, sidebar templ.Component) {
+	<!DOCTYPE html>
+	<html lang="en">
+		<head>
+			<meta charset="utf-8"/>
+			<meta name="viewport" content="width=device-width, initial-scale=1"/>
+			<meta name="description" content="melange studio: a local, read-only console for a melange authorization database."/>
+			<meta name="color-scheme" content="light dark"/>
+			// No eval (CSP has no unsafe-eval) and no injected <style> (no
+			// unsafe-inline); studio.css styles the request indicator itself.
+			<meta name="htmx-config" content='{"allowEval":false,"includeIndicatorStyles":false}'/>
+			<title>{ pageTitle(p) }</title>
+			<link rel="icon" type="image/png" href={ asset("favicon.png") }/>
+			// Sets data-theme before first paint, so it loads blocking; external
+			// rather than inline so the CSP needs no script hash.
+			<script src={ asset("theme.js") }></script>
+			<link rel="preload" href={ asset("npm/fontsource-variable-space-grotesk/space-grotesk-latin-wght-normal.woff2") } as="font" type="font/woff2" crossorigin/>
+			<link rel="preload" href={ asset("npm/fontsource-space-mono/space-mono-latin-400-normal.woff2") } as="font" type="font/woff2" crossorigin/>
+			<link rel="preload" href={ asset("npm/fontsource-space-mono/space-mono-latin-700-normal.woff2") } as="font" type="font/woff2" crossorigin/>
+			<link rel="stylesheet" href={ asset("studio.css") }/>
+			<script src={ asset("npm/htmx.org/htmx.min.js") } defer></script>
+			<script src={ asset("studio.js") } defer></script>
+		</head>
+		<body>
+			<div class="app">
+				<header class="topbar">
+					<a class="brand t-heading" href="/">
+						<img class="on-light" src={ asset("logo-dark.png") } alt="melange" width="99" height="20"/>
+						<img class="on-dark" src={ asset("logo-light.png") } alt="melange" width="99" height="20"/>
+						<span class="mute">studio</span>
+					</a>
+					<nav class="topnav" aria-label="Sections">
+						for _, n := range navItems {
+							<a href={ templ.URL(n.Href) } { current(n.ID == p.Active)... }>{ n.Label }</a>
+						}
+					</nav>
+					<div class="meta">
+						if p.Env != "" {
+							<span class="badge accent" title="Active environment">{ p.Env }</span>
+						}
+						<span class="badge" title="Every connection is read-only. What-if Explain uses a temporary view in a transaction that is always rolled back.">read-only</span>
+						@topLinks()
+						<button type="button" class="theme-toggle" data-theme-toggle aria-label="Toggle dark mode" title="Toggle dark mode"></button>
+					</div>
+				</header>
+				<aside class="sidebar" aria-label="Section navigation">
+					@sidebar
+				</aside>
+				<main class="content">
+					{ children... }
+				</main>
+			</div>
+		</body>
+	</html>
+}
+
+// pageHead is the title block; crumbs (may be nil) sit above the title,
+// children (meta, stats) below it.
+templ pageHead(title string, crumbs templ.Component) {
+	<header class="page-head">
+		if crumbs != nil {
+			@crumbs
+		}
+		<h1>{ title }</h1>
+		{ children... }
+	</header>
+}
+
+// topLinks is the top bar's version and outbound links, set off from the
+// status badges by a rule: an update badge when a newer release is known,
+// the running version, the docs and the repository.
+templ topLinks() {
+	{{ v := runningVersion() }}
+	<span class="toplinks">
+		if u := availableUpdate(); u != "" {
+			<a class="badge accent" href={ templ.SafeURL(releasesURL + "/latest") } target="_blank" rel="noopener noreferrer" title={ "melange v" + u + " is available (running " + v + "). " + upgradeHint }>v{ u } available</a>
+		}
+		if url := versionURL(v); url != "" {
+			<a class="t-mono" href={ templ.SafeURL(url) } target="_blank" rel="noopener noreferrer" title={ "melange " + v + ": release notes" }>{ shortVersion(v) }</a>
+		} else {
+			<span class="t-mono" title={ "melange " + v }>{ shortVersion(v) }</span>
+		}
+		<a href={ templ.SafeURL(docsURL) } target="_blank" rel="noopener noreferrer" title="melange documentation (melange.sh)">Docs</a>
+		<a class="icon" href={ templ.SafeURL(repoURL) } target="_blank" rel="noopener noreferrer" aria-label="melange on GitHub" title="melange on GitHub">
+			<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.06-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
+		</a>
+	</span>
+}
+
+// moreItem ends a page of list items while more remain: scrolling it into
+// view fetches the next page, which replaces it (ending with its own).
+templ moreItem(p listPage) {
+	if p.More {
+		<li class="more-rows" hx-get={ p.Next } hx-trigger="intersect once" hx-swap="outerHTML"><span class="mute">Loading more…</span></li>
+	}
+}
+
+// moreRow is moreItem for a table body.
+templ moreRow(p listPage, cols int) {
+	if p.More {
+		<tr class="more-rows" hx-get={ p.Next } hx-trigger="intersect once" hx-swap="outerHTML"><td colspan={ cols } class="mute">Loading more…</td></tr>
+	}
+}
+
+// secHead is a section's title row plus help text passed as children.
+// count is the formatted badge (num, or countLabel for capped lists); empty
+// shows none.
+templ secHead(title, count string) {
+	<div class="sec-head">
+		<div class="title-row">
+			<h2>{ title }</h2>
+			if count != "" {
+				<span class="badge">{ count }</span>
+			}
+		</div>
+		{ children... }
+	</div>
+}
+
+// filterBar is the one search/filter control: a full-width strip that sits
+// between a section's heading and the list it narrows (or atop the sidebar).
+// attrs carries placeholder plus either data-filter (client-side, studio.js)
+// or hx-* (server search); the placeholder doubles as the accessible label.
+templ filterBar(attrs templ.Attributes) {
+	<div class="filter-bar">
+		<input type="search" autocomplete="off" spellcheck="false" aria-label={ attrs["placeholder"].(string) } { attrs... }/>
+		<kbd aria-hidden="true" title="Press / to filter">/</kbd>
+	</div>
+}
+
+// modelSidebarOpenAll is the largest model whose sidebar starts fully open;
+// bigger ones open only the selected type, and the filter finds the rest.
+const modelSidebarOpenAll = 12
+
+templ modelSidebar(d indexData) {
+	if d.Model != nil {
+		@filterBar(templ.Attributes{"placeholder": "Filter types and relations", "data-filter": "#model-nav"})
+	}
+	<div class="side-section">
+		<div class="side-title">Types</div>
+		if d.Model == nil {
+			<p class="mute side-title">No model recorded.</p>
+		} else {
+			<ul class="side-list" id="model-nav">
+				for _, t := range d.Model.Types {
+					<li>
+						<details class="side-group" data-group open?={ len(d.Model.Types) <= modelSidebarOpenAll || t.Name == d.Type }>
+							<summary>
+								{ t.Name }
+								<span class="t-mono mute">{ num(len(t.Relations)) }</span>
+							</summary>
+							if len(t.Relations) > 0 {
+								<ul class="side-list">
+									for _, rel := range t.Relations {
+										<li data-item data-text={ t.Name + "#" + rel.Name }><a href={ relationURL(t.Name, rel.Name) } { current(t.Name == d.Type && rel.Name == d.Relation)... }>{ rel.Name }</a></li>
+									}
+								</ul>
+							}
+						</details>
+					</li>
+				}
+			</ul>
+			<p class="mute side-title" data-empty-filter="#model-nav" hidden>No matches.</p>
+		}
+	</div>
+}
+
+templ indexPage(d indexData) {
+	@shell(page{Env: d.Env, Active: "model"}, modelSidebar(d)) {
+		@pageHead("Model", nil) {
+			if d.Model == nil {
+				<p class="page-meta">{ d.ModelErr }</p>
+			} else {
+				<p class="page-meta">
+					Migrated { d.Model.MigratedAt.UTC().Format("2 Jan 2006, 15:04 MST") } by melange <code>{ d.Model.MelangeVersion }</code>
+					· checksum <code>{ short(d.Model.SchemaChecksum) }</code>
+				</p>
+			}
+			<nav class="tabs" aria-label="Model views">
+				<a href="/" { current(d.Tab == modelTabQuery)... }>Query</a>
+				<a href={ templ.URL("/?tab=" + modelTabSchema) } { current(d.Tab == modelTabSchema)... }>Deployed schema</a>
+			</nav>
+		}
+		if d.Tab == modelTabSchema {
+			@schemaTab(d)
+		} else {
+			@queryTab(d)
+		}
+	}
+}
+
+// schemaTab is the Model page's deployed DSL, highlighted.
+templ schemaTab(d indexData) {
+	if d.Model == nil {
+		<section class="sec"><div class="sec-body mute">No deployed schema to show.</div></section>
+	} else {
+		<section class="sec">
+			@secHead("Deployed schema", "") {
+				<p class="help">The DSL recorded by the last migration ({ d.Model.Format } file). This is what the database runs.</p>
+			}
+			<div class="sec-body">
+				@fgaSource(d.Model.DSL)
+			</div>
+		</section>
+	}
+}
+
+// queryMode is one verb of the Query form. Uses lists the fields it reads
+// (data-for in the markup), so CSS shows only those while it is selected.
+type queryMode struct {
+	ID, Label, Help, Uses string
+}
+
+var queryModes = []queryMode{
+	{queryExplain, "Explain", "Does the subject have the relation on the object? Shows every path the check tried.", "subject relation whatif"},
+	{queryExpand, "Expand", "Who has the relation on the object, as a tree of how they get it.", "relation"},
+	{queryMatrix, "Matrix", "Every relation on the object's type, allowed or denied for the subject.", "subject"},
+	{queryAnalyze, "Analyze", "Where the time goes: runs the check under EXPLAIN ANALYZE (read-only, " + analyzeTimeout.String() + " limit).", "subject relation"},
+}
+
+// modesUsing returns the ids of the modes whose Uses include field, for a
+// data-for attribute.
+func modesUsing(field string) string {
+	var ids []string
+	for _, m := range queryModes {
+		if slices.Contains(strings.Fields(m.Uses), field) {
+			ids = append(ids, m.ID)
+		}
+	}
+	return strings.Join(ids, " ")
+}
+
+// queryTab is the Model page's query console. One form: the mode radios in
+// the heading strip pick the verb, POST /query dispatches on it, and only the
+// fields that verb reads are shown (assets/studio.css, .query [data-for]).
+// Enter submits; Cmd/Ctrl+Enter in the what-if textarea does too (studio.js).
+templ queryTab(d indexData) {
+	<div>
+		<form class="sec query" hx-post="/query" hx-target="#query-result" hx-indicator="#query-result">
+			<div class="sec-head">
+				<div class="modes" role="radiogroup" aria-label="Query mode">
+					for i, m := range queryModes {
+						<label>
+							<input type="radio" name="mode" value={ m.ID } checked?={ i == 0 }/>
+							{ m.Label }
+						</label>
+					}
+				</div>
+				for _, m := range queryModes {
+					<p class="help" data-for={ m.ID }>{ m.Help }</p>
+				}
+			</div>
+			<div class="sec-body">
+				<div class="query-row">
+					<label class="field" data-for={ modesUsing("subject") }>Subject<input name="subject" placeholder="user:alice" list="dl-types" autocomplete="off"/></label>
+					<label class="field" data-for={ modesUsing("relation") }>Relation<input name="relation" placeholder="viewer" value={ d.Relation } list="dl-rels" autocomplete="off"/></label>
+					<label class="field">Object<input name="object" placeholder="document:1" value={ prefill(d.Type) } list="dl-types" autocomplete="off"/></label>
+					<button class="primary" type="submit">
+						for _, m := range queryModes {
+							<span data-for={ m.ID }>{ m.Label }</span>
+						}
+					</button>
+				</div>
+				<details class="disclose whatif" data-for={ modesUsing("whatif") }>
+					<summary>What-if tuples</summary>
+					<p class="help">
+						One <code>subject relation object</code> per line. Explain answers with and without them, in a transaction that is always rolled back.
+						Applied only while open; <kbd>Cmd</kbd>/<kbd>Ctrl</kbd>+<kbd>Enter</kbd> runs.
+					</p>
+					// Disabled while closed (studio.js), so htmx does not send it.
+					<textarea name="whatif" rows="3" placeholder="user:bob viewer document:1" spellcheck="false" autocomplete="off" disabled></textarea>
+				</details>
+			</div>
+			if d.Model != nil {
+				@modelDatalists(d.Model)
+			}
+		</form>
+		<section class="sec">
+			<div id="query-result" class="sec-body" aria-live="polite">
+				<p class="mute">Results appear here. A relation's page in the sidebar has its definition, dependencies and generated SQL.</p>
+			</div>
+		</section>
+	</div>
+}
+
+templ errorBox(msg string) {
+	<p class="error">{ msg }</p>
+}
+
+templ note(msg string) {
+	<p class="mute whatif-tuples">{ msg }</p>
+}
+
+// explainChip explains one relation into the next .why-out in its row; a
+// second click on the open chip collapses it again (studio.js).
+templ explainChip(sub, rel, obj string) {
+	<button class="chip" data-explain aria-expanded="false" title={ "Explain " + sub + " " + rel + " " + obj } hx-post="/explain" hx-vals={ explainVals(sub, rel, obj) } hx-target="next .why-out">{ rel }</button>
+}
+
+// matrixView lists one subject's answer for every relation on an object, in
+// model order; each relation explains itself inline.
+templ matrixView(sub, obj string, cells []matrixCell, notes []string, took time.Duration) {
+	{{ allowedN, errN := matrixCounts(cells) }}
+	<p class="verdict">
+		<span class="badge accent">matrix</span>
+		What <code>{ sub }</code> can do on <code>{ obj }</code>
+		<span class="mute">
+			· { num(allowedN) } of { plural(len(cells), "relation") } allowed
+			if errN > 0 {
+				· { plural(errN, "error") }
+			}
+			· { ms(took) } in parallel
+			· click a relation to explain
+		</span>
+	</p>
+	for _, n := range notes {
+		@note(n)
+	}
+	<ul class="access-rows matrix">
+		for _, c := range cells {
+			<li>
+				<div class="who">
+					@explainChip(sub, c.Relation, obj)
+				</div>
+				<div>
+					if c.Err != "" {
+						<span class="badge warn">error</span> <span class="mute">{ c.Err }</span>
+					} else if c.Allowed {
+						<span class="badge ok">allowed</span>
+					} else {
+						<span class="badge fail">denied</span>
+					}
+				</div>
+				<div class="why-out"></div>
+			</li>
+		}
+	</ul>
+}
+
+templ traceView(t *melange.Trace, took time.Duration) {
+	<p class="verdict">
+		if allowed(t) {
+			<span class="badge ok">allowed</span>
+			<code>{ t.Subject }</code> has <code>{ t.Relation }</code> on <code>{ t.Object }</code>
+		} else {
+			<span class="badge fail">denied</span>
+			<code>{ t.Subject }</code> does not have <code>{ t.Relation }</code> on <code>{ t.Object }</code>
+		}
+		<span class="mute">
+			· { plural(t.NodeCount, "node") }
+			if t.Truncated {
+				· truncated
+			}
+			· { ms(took) }
+		</span>
+	</p>
+	@traceTree(t, nil)
+}
+
+// traceTree renders a trace's tree, tagging evidence that is one of added.
+templ traceTree(t *melange.Trace, added []melange.ContextualTuple) {
+	if t.Root != nil {
+		<ul class="tree">
+			@traceNode(t.Root, added)
+		</ul>
+	}
+}
+
+// whatIfView shows an Explain answer with what-if tuples against base, the
+// answer without them: one verdict row, the hypothetical tree, then the
+// base trace behind a disclosure.
+templ whatIfView(base, with *melange.Trace, tuples []melange.ContextualTuple, unchecked string, baseTook, withTook time.Duration) {
+	<p class="verdict">
+		<span class="badge accent">what-if</span>
+		@verdictBadge(base)
+		<span class="mute">→</span>
+		@verdictBadge(with)
+		<span>{ whatIfChange(base, with) }</span>
+		<span class="mute">
+			{ plural(with.NodeCount, "node") }
+			if with.Truncated {
+				· truncated
+			}
+			· { ms(withTook) }
+		</span>
+	</p>
+	<div class="evidence whatif-tuples">
+		for _, t := range tuples {
+			<div>added <code>{ t.Subject.String() } { string(t.Relation) } { t.Object.String() }</code></div>
+		}
+		if unchecked != "" {
+			<div>These tuples were not checked against the model, so one it does not allow is silently ignored. { unchecked }</div>
+		}
+	</div>
+	@traceTree(with, tuples)
+	<details class="disclose">
+		<summary>Without what-if</summary>
+		@traceView(base, baseTook)
+	</details>
+}
+
+templ verdictBadge(t *melange.Trace) {
+	if allowed(t) {
+		<span class="badge ok">allowed</span>
+	} else {
+		<span class="badge fail">denied</span>
+	}
+}
+
+templ traceNode(n *melange.Node, added []melange.ContextualTuple) {
+	<li class={ resultClass(n.Result) }>
+		<span class="kind">{ string(n.Type) }</span>
+		{ n.Label }
+		for _, u := range n.Users {
+			<code>{ u.Type }:{ u.ID }</code>
+		}
+		if len(n.Evidence) > 0 {
+			<div class="evidence">
+				for _, e := range n.Evidence {
+					<div>
+						tuple <code>{ e.SubjectType }:{ e.SubjectID } { e.Relation } { e.ObjectType }:{ e.ObjectID }</code>
+						if isAdded(e, added) {
+							<span class="badge accent">what-if</span>
+						}
+					</div>
+				}
+			</div>
+		}
+		if len(n.Children) > 0 {
+			<ul>
+				for _, c := range n.Children {
+					@traceNode(c, added)
+				}
+			</ul>
+		}
+	</li>
+}
+
+// expandView renders an Expand tree. top marks a form query (not a pointer
+// drill-in), which gets a heading naming the userset.
+templ expandView(t *melange.UsersetTree, top bool, took time.Duration) {
+	if t.Root != nil {
+		if top {
+			<p class="verdict"><span class="badge accent">expand</span> Who has <code>{ t.Root.Name }</code> <span class="mute">· { ms(took) }</span></p>
+		}
+		<ul class="tree">
+			@expandNode(t.Root, t.Root.Name)
+		</ul>
+	}
+}
+
+// expandNode prints a node's userset name only where it adds something (see
+// showNodeName). The root's name is the query, already in the heading or the
+// pointer that was drilled.
+templ expandNode(n *melange.UsersetTreeNode, parent string) {
+	<li>
+		if showNodeName(n, parent) {
+			<code class="strong">{ n.Name }</code>
+		}
+		switch  {
+			case n.Leaf != nil:
+				@expandLeaf(n.Leaf)
+			case n.Union != nil:
+				<span class="kind">any of</span>
+				@expandNodes(n.Union.Nodes, n.Name)
+			case n.Intersection != nil:
+				<span class="kind">all of</span>
+				@expandNodes(n.Intersection.Nodes, n.Name)
+			case n.Difference != nil:
+				<span class="kind">but not</span>
+				<ul>
+					<li>
+						<span class="mute">base</span>
+						<ul>
+							@expandNode(n.Difference.Base, n.Name)
+						</ul>
+					</li>
+					<li>
+						<span class="mute">minus</span>
+						<ul>
+							@expandNode(n.Difference.Subtract, n.Name)
+						</ul>
+					</li>
+				</ul>
+		}
+	</li>
+}
+
+templ expandNodes(nodes []*melange.UsersetTreeNode, parent string) {
+	<ul>
+		for _, c := range nodes {
+			@expandNode(c, parent)
+		}
+	</ul>
+}
+
+templ expandLeaf(l *melange.Leaf) {
+	if l.Users != nil {
+		<span class="kind">direct</span>
+		<span class="inline-gap">
+			for _, u := range l.Users.Users {
+				<code>{ u }</code>
+			}
+			if len(l.Users.Users) == 0 {
+				<span class="mute">none</span>
+			}
+			if l.Users.UsersTruncated {
+				<span class="mute">(truncated)</span>
+			}
+		</span>
+	}
+	if l.Computed != nil {
+		<span class="kind">same as</span>
+		@pointer(l.Computed.Userset)
+	}
+	if l.TupleToUserset != nil {
+		<span class="kind">from</span>
+		<code>{ l.TupleToUserset.Tupleset }</code>
+		<ul>
+			for _, c := range l.TupleToUserset.Computed {
+				<li>
+					@pointer(c.Userset)
+				</li>
+			}
+		</ul>
+	}
+}
+
+// modelDatalists feeds the query fields' autocomplete: "type:" prefixes for
+// subject and object, and every relation name in the model.
+templ modelDatalists(m *migrator.DeployedModel) {
+	<datalist id="dl-types">
+		for _, t := range m.Types {
+			<option value={ t.Name + ":" }></option>
+		}
+	</datalist>
+	<datalist id="dl-rels">
+		for _, r := range relationNames(m) {
+			<option value={ r }></option>
+		}
+	</datalist>
+}
+
+// pointer renders an unresolved userset with an inline drill-in: htmx fetches
+// the next Expand level into the sibling div, so a tree is chased one click at
+// a time instead of all at once.
+templ pointer(userset string) {
+	<code>{ userset }</code>
+	<button class="chip" hx-get={ "/expand?" + url.Values{"userset": {userset}}.Encode() } hx-target="next .sub">expand</button>
+	<div class="sub"></div>
+}
+
+templ stat(n int, label, tone string) {
+	<div class={ "stat", tone }><span class="t-heading">{ num(n) }</span>{ label }</div>
+}
+
+// fgaSource renders OpenFGA DSL with syntax colouring (see highlightFGA).
+templ fgaSource(dsl string) {
+	@codeBlock(highlightFGA(dsl))
+}
+
+// sqlSource renders SQL with syntax colouring (see highlightSQL).
+templ sqlSource(src string) {
+	@codeBlock(highlightSQL(src))
+}
+
+templ codeBlock(tokens []codeToken) {
+	<pre class="code">
+		for _, t := range tokens {
+			if t.Class == "" {
+				{ t.Text }
+			} else if t.Text != "" {
+				<span class={ "f-" + t.Class }>{ t.Text }</span>
+			}
+		}
+	</pre>
+}
+
+// analyzeView shows one check under EXPLAIN ANALYZE: the times, the
+// generated functions by self time when track_functions allowed it, and the
+// raw plan (one opaque Result node for a plpgsql call).
+templ analyzeView(a *analysis) {
+	<p class="verdict">
+		<span class="badge accent">analyze</span>
+		if a.Allowed != nil {
+			if *a.Allowed {
+				<span class="badge ok">allowed</span>
+			} else {
+				<span class="badge fail">denied</span>
+			}
+		}
+		<code>check_permission</code> <code>{ a.Subject }</code> <code>{ a.Relation }</code> <code>{ a.Object }</code>
+		<span class="mute">· { msf(a.Exec) } execution · { msf(a.Planning) } planning</span>
+	</p>
+	if len(a.Funcs) > 0 {
+		<div class="scroll-x">
+			<table>
+				<tr><th>function</th><th class="num">calls</th><th class="num">total</th><th class="num">self</th></tr>
+				for _, f := range a.Funcs {
+					<tr>
+						<td>
+							if u, ok := a.Links[f.Name]; ok {
+								<a href={ u }><code>{ f.Name }</code></a>
+							} else {
+								<code>{ f.Name }</code>
+							}
+						</td>
+						<td class="num"><code>{ num(int(f.Calls)) }</code></td>
+						<td class="num"><code>{ msf(f.Total) }</code></td>
+						<td class="num"><code>{ msf(f.Self) }</code></td>
+					</tr>
+				}
+			</table>
+		</div>
+		<p class="mute">Generated functions this check called, by self time (time spent in the function itself, not its callees).</p>
+	} else if !a.Tracked {
+		<p class="mute">Per-function times need <code>track_functions</code>, which this role cannot set (superuser, or <code>GRANT SET ON PARAMETER track_functions</code>).</p>
+	}
+	<pre>{ a.Plan }</pre>
+}

@@ -28,6 +28,8 @@ ignore:
   - "bin/**"
   - "scripts/**"
   - "**/*_test.go"
+  # templ output; its source (*.templ) is what is reviewed and tested
+  - "**/*_templ.go"
 
 flags:
   unit:

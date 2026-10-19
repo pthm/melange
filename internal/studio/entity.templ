@@ -1,0 +1,252 @@
+package studio
+
+import (
+	"net/url"
+	"strconv"
+)
+
+var entityTabs = []struct{ ID, Label string }{
+	{tabCan, "Can access"},
+	{tabBy, "Accessed by"},
+	{tabDirect, "Direct tuples"},
+}
+
+func entityTabURL(e entityRef, tab, group string) templ.SafeURL {
+	v := url.Values{"type": {e.Type}, "id": {e.ID}, "tab": {tab}}
+	if group != "" {
+		v.Set("group", group)
+	}
+	return templ.URL("/entity?" + v.Encode())
+}
+
+func groupPartURL(part string, e entityRef, tab, group string) string {
+	return "/entity/" + part + "?" + url.Values{"type": {e.Type}, "id": {e.ID}, "tab": {tab}, "group": {group}}.Encode()
+}
+
+// groupPageURL requests a page of a group list. q and offset are left out
+// when empty, since the filter input supplies its own q.
+func groupPageURL(e entityRef, tab, group, q string, offset int) string {
+	v := url.Values{"type": {e.Type}, "id": {e.ID}, "tab": {tab}, "group": {group}}
+	if q != "" {
+		v.Set("q", q)
+	}
+	if offset > 0 {
+		v.Set("offset", strconv.Itoa(offset))
+	}
+	return "/entity/group?" + v.Encode()
+}
+
+templ entityPage(d entityData) {
+	{{ self := d.Entity.Type + ":" + d.Entity.ID }}
+	{{ name := d.Labels.of(d.Entity.Type, d.Entity.ID) }}
+	{{ title := self }}
+	if name != "" {
+		{{ title = name }}
+	}
+	@shell(page{Env: d.Env, Active: "tuples", Title: title}, tuplesSidebar(d.Types, d.Entity.Type)) {
+		@pageHead(title, crumbs(d.Entity.Type, title)) {
+			if name != "" {
+				<code class="page-id">{ self }</code>
+			}
+			<nav class="tabs" aria-label="Entity views">
+				for _, t := range entityTabs {
+					<a href={ entityTabURL(d.Entity, t.ID, "") } { current(t.ID == d.Tab)... }>
+						{ t.Label }
+						if t.ID == tabDirect {
+							<span class="badge">{ num(d.SubjectTotal + d.ObjectTotal) }</span>
+						}
+					</a>
+				}
+			</nav>
+		}
+		if d.ModelErr != "" {
+			<p class="badge warn">{ d.ModelErr } Only direct tuples are available.</p>
+		}
+		switch d.Tab {
+			case tabDirect:
+				@directTab(d, self)
+			default:
+				@accessTab(d, self)
+		}
+	}
+}
+
+// accessTab is the split view of an access tab: types on the left, the
+// selected type's entities on the right.
+templ accessTab(d entityData, self string) {
+	{{ subject := d.Tab == tabCan }}
+	if len(d.Groups) == 0 {
+		<section class="sec">
+			<div class="sec-body mute">
+				if subject {
+					No type in the model has relations, so <code>{ self }</code> can't access anything.
+				} else {
+					<code>{ d.Entity.Type }</code> has no relations, so nothing can access <code>{ self }</code>.
+				}
+			</div>
+		</section>
+	} else {
+		<div class="split">
+			<nav class="sec subnav" aria-label="Types">
+				<div class="sec-head">
+					<h2>
+						if subject {
+							Object types
+						} else {
+							Subject types
+						}
+					</h2>
+				</div>
+				<div class="sec-body">
+					<ul class="side-list">
+						for _, t := range d.Groups {
+							<li>
+								<a href={ entityTabURL(d.Entity, d.Tab, t) } { current(t == d.Group)... }>
+									{ t }
+									<span class="badge" hx-get={ groupPartURL("count", d.Entity, d.Tab, t) } hx-trigger="intersect once" hx-swap="outerHTML">…</span>
+								</a>
+							</li>
+						}
+					</ul>
+				</div>
+			</nav>
+			<section class="sec">
+				<div class="sec-head">
+					<div class="title-row"><h2>{ d.Group }</h2></div>
+					<p class="help">
+						if subject {
+							Each <code>{ d.Group }</code> that <code>{ self }</code> has a relation on, with every relation it holds.
+							Includes access derived through rewrites and parents. Click a relation to see why it holds.
+						} else {
+							Each <code>{ d.Group }</code> with a relation on <code>{ self }</code>, with every relation it holds.
+							Parent links appear here too, because the parent is the subject of that tuple.
+						}
+					</p>
+				</div>
+				@filterBar(templ.Attributes{
+					"name":        "q",
+					"placeholder": "Filter " + d.Group + " by name, id or relation",
+					"hx-get":      groupPageURL(d.Entity, d.Tab, d.Group, "", 0),
+					"hx-trigger":  "input changed delay:250ms, search",
+					"hx-target":   "#group-list",
+				})
+				<div class="sec-body" id="group-list" hx-get={ groupPartURL("group", d.Entity, d.Tab, d.Group) } hx-trigger="load" aria-live="polite">
+					<p class="mute">Loading…</p>
+				</div>
+			</section>
+		</div>
+	}
+}
+
+// groupBadge is a type's count in the sub-navigation.
+templ groupBadge(g typeGroup) {
+	switch  {
+		case len(g.Errs) > 0:
+			<span class="badge warn" title={ g.Errs[0] }>!</span>
+		case len(g.Entities) == 0:
+			<span class="badge zero">0</span>
+		default:
+			<span class="badge">{ countLabel(len(g.Entities), g.Capped) }</span>
+	}
+}
+
+// accessList is a page of one type's entities as rows: name and id, then
+// the relation chips. The first page carries the heading line and the list;
+// later pages append rows by infinite scroll. matched is how many entities
+// pass the filter (all of them without one).
+templ accessList(g typeGroup, matched int, rows []entityGroup, ls labels, self entityRef, selfIsSubject bool, p listPage) {
+	if p.First {
+		for _, e := range g.Errs {
+			@errorBox(e)
+		}
+		if matched == 0 {
+			if len(g.Entities) == 0 {
+				<p class="mute">None.</p>
+			} else {
+				<p class="mute">Nothing matches the filter.</p>
+			}
+		} else {
+			<p class="subhead">
+				if matched < len(g.Entities) {
+					{ num(matched) } of
+				}
+				{ countLabel(len(g.Entities), g.Capped) } { g.Type } entities
+				if g.Capped {
+					· lists stop at { num(groupLimit) } per relation, so there may be more
+				}
+			</p>
+			<ul class="access-rows">
+				@accessRows(g.Type, rows, ls, self, selfIsSubject, p)
+			</ul>
+		}
+	} else {
+		@accessRows(g.Type, rows, ls, self, selfIsSubject, p)
+	}
+}
+
+templ accessRows(typ string, rows []entityGroup, ls labels, self entityRef, selfIsSubject bool, p listPage) {
+	for _, ent := range rows {
+		@accessEntity(typ, ent, ls, self, selfIsSubject)
+	}
+	@moreItem(p)
+}
+
+templ accessEntity(typ string, ent entityGroup, ls labels, self entityRef, selfIsSubject bool) {
+	<li>
+		<div class="who">
+			if ent.ID == "*" {
+				<code>{ typ }:*</code> <span class="mute">every { typ }</span>
+			} else {
+				@refLink(typ, ent.ID, ls)
+			}
+		</div>
+		<div class="chips">
+			for _, rel := range ent.Relations {
+				{{ sub, obj := typ+":"+ent.ID, self.Type+":"+self.ID }}
+				if selfIsSubject {
+					{{ sub, obj = obj, sub }}
+				}
+				@explainChip(sub, rel, obj)
+			}
+		</div>
+		<div class="why-out"></div>
+	</li>
+}
+
+// directTab lists the raw tuples on both sides of the entity. Its filter
+// re-renders the page with ?q= and swaps in just #direct-tables.
+templ directTab(d entityData, self string) {
+	<div id="direct">
+		@filterBar(templ.Attributes{
+			"name":        "q",
+			"value":       d.Query,
+			"placeholder": "Filter direct tuples by id or relation",
+			"hx-get":      string(entityTabURL(d.Entity, tabDirect, "")),
+			"hx-trigger":  "input changed delay:250ms, search",
+			"hx-target":   "#direct-tables",
+			"hx-select":   "#direct-tables",
+			"hx-swap":     "outerHTML",
+		})
+		<div id="direct-tables" aria-live="polite">
+			<section class="sec">
+				@secHead("As subject", matchLabel(d.SubjectMatch, d.SubjectTotal)) {
+					<p class="help">Tuples where <code>{ self }</code> is the subject: <code>{ self } → relation → object</code>.</p>
+				}
+				<div class="sec-body">
+					@directTable(d.AsSubject, d.Labels)
+				</div>
+			</section>
+			<section class="sec">
+				@secHead("As object", matchLabel(d.ObjectMatch, d.ObjectTotal)) {
+					<p class="help">
+						Tuples where <code>{ self }</code> is the object: <code>subject → relation → { self }</code>.
+						A <code>#relation</code> suffix means every subject with that relation.
+					</p>
+				}
+				<div class="sec-body">
+					@directTable(d.AsObject, d.Labels)
+				</div>
+			</section>
+		</div>
+	</div>
+}

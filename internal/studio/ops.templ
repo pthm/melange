@@ -1,0 +1,153 @@
+package studio
+
+import (
+	"fmt"
+
+	"github.com/pthm/melange/internal/doctor"
+	"github.com/pthm/melange/pkg/migrator"
+)
+
+templ historySidebar(recs []migrator.MigrationRecord) {
+	<div class="side-section">
+		<div class="side-title">Migrations</div>
+		<ul class="side-list">
+			for _, rec := range recs {
+				<li>
+					<a href={ templ.URL(fmt.Sprintf("#m%d", rec.ID)) }>
+						<span class="stack-2">
+							{ rec.MigratedAt.UTC().Format("2 Jan 2006, 15:04") }
+							<span class="t-mono">{ rec.MelangeVersion }</span>
+						</span>
+						<span class="t-mono mute">#{ fmt.Sprint(rec.ID) }</span>
+					</a>
+				</li>
+			}
+		</ul>
+	</div>
+}
+
+templ historyPage(env string, recs []migrator.MigrationRecord, deployed *migrator.DeployedModel, errMsg string) {
+	@shell(page{Env: env, Active: "history"}, historySidebar(recs)) {
+		@pageHead("History", nil) {
+			<p class="page-meta">The last { fmt.Sprint(historyLimit) } rows of <code>melange_migrations</code>, newest first.</p>
+		}
+		if errMsg != "" {
+			@errorBox(errMsg)
+		}
+		if len(recs) == 0 && errMsg == "" {
+			<p class="mute">No migrations recorded.</p>
+		}
+		<div class="stack">
+			for i, rec := range recs {
+				<section class="sec" id={ fmt.Sprintf("m%d", rec.ID) }>
+					<div class="sec-head">
+						<div class="title-row">
+							<h2>Migration #{ fmt.Sprint(rec.ID) }</h2>
+							if i == 0 {
+								<span class="badge ok">deployed</span>
+							}
+							<span class="mute end">{ rec.MigratedAt.UTC().Format("2 Jan 2006, 15:04:05 MST") }</span>
+						</div>
+					</div>
+					<div class="sec-body stack">
+						<dl class="kv">
+							<dt>melange</dt>
+							<dd><code>{ rec.MelangeVersion }</code></dd>
+							<dt>codegen</dt>
+							<dd><code>{ rec.CodegenVersion }</code></dd>
+							<dt>schema checksum</dt>
+							<dd><code>{ rec.SchemaChecksum }</code></dd>
+							<dt>functions</dt>
+							<dd>{ num(len(rec.FunctionNames)) }</dd>
+							<dt>model</dt>
+							<dd>
+								if rec.SchemaFormat != "" {
+									recorded ({ rec.SchemaFormat } file)
+								} else {
+									<span class="mute">not recorded (migrated before melange stored deployed models)</span>
+								}
+							</dd>
+						</dl>
+						if i == 0 && deployed != nil && deployed.SchemaChecksum == rec.SchemaChecksum {
+							<details class="disclose">
+								<summary>Show schema</summary>
+								@fgaSource(deployed.DSL)
+							</details>
+						}
+					</div>
+				</section>
+			}
+		</div>
+	}
+}
+
+templ healthSidebar(cats []healthCategory) {
+	<div class="side-section">
+		<div class="side-title">Checks</div>
+		<ul class="side-list">
+			for _, c := range cats {
+				<li>
+					<a href={ templ.URL("#" + anchor(c.Name)) }>
+						{ c.Name }
+						<span class={ "badge", statusClass(c.Worst) }>{ num(len(c.Checks)) }</span>
+					</a>
+				</li>
+			}
+		</ul>
+	</div>
+}
+
+templ healthPage(env, schemaPath string, report *doctor.Report, errMsg string) {
+	{{ cats := groupChecks(report) }}
+	@shell(page{Env: env, Active: "health"}, healthSidebar(cats)) {
+		@pageHead("Health", nil) {
+			<p class="page-meta">
+				The checks <code>melange doctor</code> runs, against this database
+				if schemaPath != "" {
+					and <code>{ schemaPath }</code>.
+				} else {
+					. No local schema file is configured, so file and drift checks report it missing.
+				}
+			</p>
+			if report != nil {
+				<div class="stats">
+					@stat(report.Passed, "passed", "ok")
+					@stat(report.Warnings, "warnings", "warn")
+					@stat(report.Errors, "errors", "fail")
+				</div>
+			}
+		}
+		if errMsg != "" {
+			@errorBox(errMsg)
+		}
+		<div class="stack">
+			for _, c := range cats {
+				<section class="sec" id={ anchor(c.Name) }>
+					@secHead(c.Name, num(len(c.Checks)))
+					<div class="sec-body">
+						<ul class="rows">
+							for _, chk := range c.Checks {
+								<li class="check">
+									<span class={ "badge", statusClass(chk.Status) }>{ statusLabel(chk.Status) }</span>
+									<div>
+										{ chk.Message }
+										if chk.Details != "" || chk.FixHint != "" {
+											<div class="detail">
+												if chk.Details != "" {
+													<pre>{ chk.Details }</pre>
+												}
+												if chk.FixHint != "" {
+													<span class="mute">Fix: <code>{ chk.FixHint }</code></span>
+												}
+											</div>
+										}
+									</div>
+								</li>
+							}
+						</ul>
+					</div>
+				</section>
+			}
+		</div>
+	}
+}
