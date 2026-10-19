@@ -19,5 +19,6 @@ Task-oriented guides for using Melange's client libraries, SQL functions, and op
 {{< card link="testing-authorization" title="Testing Authorization" subtitle="Write integration tests for your permission setup" icon="beaker" >}}
 {{< card link="scaling" title="Scaling" subtitle="Expression indexes, materialized views, and dedicated tables" icon="trending-up" >}}
 {{< card link="migrations" title="Running Migrations" subtitle="Built-in vs versioned strategies, CI/CD integration, schema evolution" icon="arrow-circle-up" >}}
+{{< card link="studio" title="Studio" subtitle="A local, read-only web console for a melange database" icon="desktop-computer" >}}
 {{< card link="troubleshooting" title="Troubleshooting" subtitle="Diagnose common issues with melange doctor" icon="search" >}}
 {{< /cards >}}

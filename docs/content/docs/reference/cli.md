@@ -65,7 +65,7 @@ The cache respects the `XDG_CACHE_HOME` environment variable if set.
 
 Commands are organized into logical groups:
 
-**Schema Commands:** `validate`, `migrate`, `status`, `schema pull`, `diff`, `history`, `doctor`, `explain`, `expand`
+**Schema Commands:** `validate`, `migrate`, `status`, `schema pull`, `diff`, `history`, `doctor`, `explain`, `expand`, `studio`
 **Client Commands:** `generate client`, `generate migration`
 **Utility Commands:** `init`, `config show`, `env list`, `version`, `license`
 
@@ -693,6 +693,26 @@ user:*
 ```
 
 `--flatten` chases every `Leaf.Computed` and `Leaf.TupleToUserset` pointer with follow-up Expand calls. Cost is N round-trips per N distinct pointers; suitable for admin flows, not the request path. `--format=json` returns the raw `UsersetTree` JSONB for tooling.
+
+### studio
+
+Serve a local, read-only web console for a database (experimental). The model is read from the database, so no schema file is required. See the [Studio guide](../../guides/studio/) for the pages, required privileges, and limits.
+
+```bash
+melange studio --env staging
+melange studio --db postgres://localhost/mydb --addr 127.0.0.1:7070
+```
+
+**Flags:**
+
+| Flag          | Default                 | Description                                                                          |
+| ------------- | ----------------------- | ------------------------------------------------------------------------------------ |
+| `--db`        | (from config)           | PostgreSQL connection string                                                         |
+| `--db-schema` | (config, else `public`) | PostgreSQL schema for melange objects                                                |
+| `--schema`    | (config, else `schemas/schema.fga`) | Local schema file for the Health page's file and drift checks          |
+| `--addr`      | `127.0.0.1:0`           | Loopback address to listen on. Port `0` picks a free port. Non-loopback addresses are refused |
+
+Studio prints its URL on stderr and runs until Ctrl-C. Every connection is opened with `default_transaction_read_only=on`; the one exception is Explain with what-if tuples, which creates a temporary view in a transaction that is always rolled back. The global `--no-update-check` flag also hides the top bar's update badge.
 
 ### Colour output
 

@@ -211,6 +211,7 @@ A sentinel response means the requested pair has no generated function. Check wh
 - [Checking Permissions](../checking-permissions/): the request-path `Check` API
 - [Caching](../caching/): opt-in caching for Explain traces via `ExplainCache`
 - [Troubleshooting](../troubleshooting/): when checks return the wrong answer
+- [Studio](../studio/): run Explain, with what-if tuples, from a local web console
 - [Go API reference](../reference/go-api/#explain): `Checker.Explain` signature
 - [SQL API reference](../reference/sql-api/#explain_permission): `explain_permission` SQL function
 - [CLI reference](../reference/cli/#explain): `melange explain` command
