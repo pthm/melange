@@ -73,8 +73,14 @@ func ensureSingleton() (string, error) {
 		ctx := context.Background()
 
 		// Start PostgreSQL with increased max_connections for parallel tests
+		// MELANGE_TEST_PG_IMAGE runs the suite against another server version,
+		// e.g. postgres:19rc1-alpine.
+		image := os.Getenv("MELANGE_TEST_PG_IMAGE")
+		if image == "" {
+			image = "postgres:18-alpine"
+		}
 		container, err := postgres.Run(ctx,
-			"postgres:18-alpine",
+			image,
 			postgres.WithDatabase("postgres"),
 			postgres.WithUsername("test"),
 			postgres.WithPassword("test"),
