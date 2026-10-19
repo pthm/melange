@@ -60,6 +60,8 @@ The one exception is Explain with what-if tuples (see [What-If Tuples](#what-if-
 
 The Model page has two tabs: **Query** and **Deployed schema**. The deployed schema tab shows the DSL recorded by the last `melange migrate`. The sidebar lists every type and relation, with a filter; each relation links to its relation page.
 
+{{< studio-screenshot name="schema" alt="The Model page's Deployed schema tab, showing the highlighted DSL with the type and relation sidebar" >}}
+
 The Query form has four modes:
 
 | Mode        | Inputs                      | Result                                                                                   |
@@ -71,7 +73,11 @@ The Query form has four modes:
 
 Subjects and objects use `type:id` (`user:alice`, `document:1`). Each result shows how long the call took.
 
+{{< studio-screenshot name="query-explain" alt="An Explain result for user:5 can_read issue:6, allowed through the repository and organization membership" >}}
+
 Matrix checks run in parallel, at most four list or check calls at a time across the whole server, each limited to 10 seconds.
+
+{{< studio-screenshot name="query-matrix" alt="A Matrix result listing every repository relation as allowed or denied for user:2 on repository:2" >}}
 
 #### What-If Tuples
 
@@ -102,17 +108,23 @@ Without it, Analyze still shows the plan and total timings, with a note that per
 
 Each relation has a page showing its `define` line, the relations it reads (**Depends on**) and the relations that read it (**Used by**), the code generator's feature analysis, and the SQL source of its deployed functions (check, list objects, list subjects, explain, expand), read from `pg_proc`.
 
+{{< studio-screenshot name="relation" alt="The relation page for repository#can_read, with its definition, feature analysis and dependencies" >}}
+
 ### Tuples
 
 The Tuples page lists every type that appears in `melange_tuples`, with the number of distinct ids. The counts take a full pass over the view and are cached for 30 seconds.
 
 Selecting a type lists its entities, 100 at a time; scrolling to the end of the list loads the next page. Search matches a substring of the id or the entity's label.
 
+{{< studio-screenshot name="browse" alt="The Tuples browser listing repositories by name, with their ids and tuple counts" >}}
+
 Selecting an entity opens three tabs:
 
 - **Can access**: what the entity can reach as a subject, one object type at a time, through `ListObjects`.
 - **Accessed by**: who can reach the entity as an object, one subject type at a time, through `ListSubjects`.
 - **Direct tuples**: the raw tuples with the entity as subject or as object, with exact counts and a filter.
+
+{{< studio-screenshot name="entity" alt="The Can access tab for user carol, listing her repositories with relation chips and an inline Explain" >}}
 
 #### Access List Limits
 
@@ -140,6 +152,8 @@ The History page shows the last 50 rows of `melange_migrations`, newest first: w
 ### Health
 
 The Health page runs the same checks as [`melange doctor`](../../reference/cli/#doctor), grouped by category. The checks that compare a local schema file with the database use `--schema`, else `schema` in config, else `schemas/schema.fga`. If no file exists at that path, the Schema File check fails.
+
+{{< studio-screenshot name="health" alt="The Health page showing melange doctor checks grouped by category with pass and warning counts" >}}
 
 ## Database Privileges
 

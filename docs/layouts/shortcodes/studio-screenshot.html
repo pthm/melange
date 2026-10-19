@@ -1,0 +1,21 @@
+{{- /*
+  A melange studio screenshot in both themes: the light and dark captures
+  are both emitted and CSS (assets/css/custom.css, .studio-shot) shows the
+  one matching the site's current theme, so they follow the theme toggle.
+
+  Usage:
+    {{< studio-screenshot name="query-explain" alt="Explain trace in studio" >}}
+    {{< studio-screenshot name="entity" alt="..." caption="Optional caption" >}}
+
+  Images live at static/images/studio/<name>-light.webp and -dark.webp
+  (1280x800 captures of a running studio).
+*/ -}}
+{{- $name := .Get "name" -}}
+{{- $alt := .Get "alt" -}}
+<figure class="studio-shot">
+  <img class="studio-shot-light" src="{{ printf "images/studio/%s-light.webp" $name | relURL }}" alt="{{ $alt }}" width="1280" height="800" loading="lazy" decoding="async">
+  <img class="studio-shot-dark" src="{{ printf "images/studio/%s-dark.webp" $name | relURL }}" alt="{{ $alt }}" width="1280" height="800" loading="lazy" decoding="async">
+  {{- with .Get "caption" }}
+  <figcaption>{{ . | markdownify }}</figcaption>
+  {{- end }}
+</figure>
