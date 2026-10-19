@@ -23,26 +23,32 @@ jobs:
           experimental: true
           cache: true
 
-      - name: Cache Go modules and build
-        uses: actions/cache@v5
+      # Per-job caches keyed by commit: main saves a fresh one each run (an
+      # exact-key hit never saves, which froze a shared cache), and PRs restore
+      # the newest from main.
+      - name: Restore Go cache
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          key: go-${{ runner.os }}-openfga-${{ hashFiles('**/go.sum') }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-go-
+            go-${{ runner.os }}-openfga-${{ hashFiles('**/go.sum') }}-
+            go-${{ runner.os }}-openfga-
 
       - name: Setup Go workspace
         run: go work init . ./cmd/melange ./docs ./melange ./test
 
+      # TestOpenFGA_All runs every YAML case; the per-category tests are
+      # subsets of it, kept for `just test-openfga-feature`, so CI skips them.
       - name: Run OpenFGA feature tests
         working-directory: test
         run: |
           go test -count=1 -timeout 5m -race -v \
             -coverprofile=coverage-openfga.out -covermode=atomic \
             -coverpkg=github.com/pthm/melange/... \
-            -run "TestOpenFGA_" ./openfgatests/...
+            -run "TestOpenFGA_(All|GeneratedAlgebra)$" ./openfgatests/...
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v6
@@ -51,3 +57,12 @@ jobs:
           files: ./test/coverage-openfga.out
           flags: integration
           fail_ci_if_error: false
+
+      - name: Save Go cache
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-${{ runner.os }}-openfga-${{ hashFiles('**/go.sum') }}-${{ github.sha }}
