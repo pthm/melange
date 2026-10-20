@@ -1,5 +1,40 @@
 # Changelog
 
+## [0.10.0](https://github.com/pthm/melange/compare/v0.9.6...v0.10.0) (2026-10-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* **parser:** parser.ConvertProtoModel now returns ([]schema.TypeDefinition, error). It rejects unsupported models, including conditions, which it previously dropped silently.
+
+### Features
+
+* **cli:** add --format json to validate and doctor ([4eeb295](https://github.com/pthm/melange/commit/4eeb295569a1342ce85e33df71a690ef969fbd9f))
+* **cli:** add coding-agent instructions to melange init ([c99167b](https://github.com/pthm/melange/commit/c99167bedf475e51d7a392cc94c1e46d46805ffe))
+* make Melange easier to use with coding agents ([990430c](https://github.com/pthm/melange/commit/990430cbedb3d9836c372c83c32ec4e43e14f708))
+
+
+### Bug Fixes
+
+* keep direct tuples and top-level paths inside intersection groups ([69d0af1](https://github.com/pthm/melange/commit/69d0af1d8bed01384ee735a09f1425d23711d975))
+* **parser:** compile nested exclusions and intersections exactly ([1c79028](https://github.com/pthm/melange/commit/1c7902821700f0e522ae2d613cc2be9ccf8c68ed))
+* **parser:** reject references to undefined types and relations ([1ce6fb4](https://github.com/pthm/melange/commit/1ce6fb4407fcad6aa089f5ae95558084931b454a))
+* **sqlgen:** apply every exclusion kind in composed and userset lists ([e313536](https://github.com/pthm/melange/commit/e313536cce29bb0ef26f7bdd2e9a16b4e83fd827))
+* **sqlgen:** apply exclusions to usersets from implied relations ([5048d32](https://github.com/pthm/melange/commit/5048d32f80bbf3c0c2d8dd76c2ac3c64ef91cd4a))
+* **sqlgen:** complete userset-filter and recursive list_subjects ([c40eb5f](https://github.com/pthm/melange/commit/c40eb5feec0794361320955ac539ed91c51c98dc))
+* **sqlgen:** list every parent lookup of a pure parent-lookup relation ([c908651](https://github.com/pthm/melange/commit/c908651052e69600c1518a7bcbfd4618c4a14b26))
+* **sqlgen:** list narrowed wildcard grants in direct list_subjects ([479d638](https://github.com/pthm/melange/commit/479d63847bf0547274580470e3cb4e36c5e88e6f))
+* **sqlgen:** list users a narrowed wildcard grant still covers ([7d41ef9](https://github.com/pthm/melange/commit/7d41ef90468046457873d6cfd6aacb343457ca37))
+
+
+### Performance
+
+* **sqlgen:** anchor intersection list_subjects candidates ([ebc2f2e](https://github.com/pthm/melange/commit/ebc2f2e0f9a16752107abaf32be580c6d1a3a5cb))
+* **sqlgen:** compose covering closure relations once in list functions ([8543b8e](https://github.com/pthm/melange/commit/8543b8ec4c5df36b577ffe341a110bacc65aa256))
+* **sqlgen:** cut list_subjects and list_objects cost on composed relations ([19b9f72](https://github.com/pthm/melange/commit/19b9f7278f8e47b5519eb02ffe2732ea05f4fc8b))
+* **sqlgen:** skip redundant implied and exclusion checks ([e3a4370](https://github.com/pthm/melange/commit/e3a437016295cfc74e620438cfa9f18ee5f07f8b))
+* **sqlgen:** walk parent closure for cross-type parents and lookups ([6865e33](https://github.com/pthm/melange/commit/6865e3395108724d4559230e8be477233b9b2d55))
+
 ## [0.9.6](https://github.com/pthm/melange/compare/v0.9.5...v0.9.6) (2026-10-19)
 
 
