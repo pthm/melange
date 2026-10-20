@@ -333,3 +333,47 @@ type document
 		}
 	})
 }
+
+// melange init agent fills the instructions in from the project's config, and
+// starts with a blank line so `>> AGENTS.md` never joins the heading onto the
+// file's last line.
+func TestCLI_InitAgent(t *testing.T) {
+	const config = `schema: auth/model.fga
+generate:
+  client:
+    runtime: go
+    output: pkg/authz
+  migration:
+    output: db/migrations
+`
+	out, err := runCLI(t, config, "init", "agent")
+	if err != nil {
+		t.Fatalf("init agent: %v", err)
+	}
+	if !strings.HasPrefix(out, "\n"+agentsHeading+"\n") {
+		t.Errorf("output should start with a blank line and the heading:\n%s", out)
+	}
+	for _, want := range []string{
+		"Model: `auth/model.fga`. Config: `melange.yaml`.",
+		"`pkg/authz` is generated; don't edit it.",
+		"2. `melange generate client`",
+		"3. `melange generate migration` writes the SQL to `db/migrations`",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestCLI_InitAgent_NoConfig(t *testing.T) {
+	out, err := runCLI(t, "", "init", "agent")
+	if err != nil {
+		t.Fatalf("init agent: %v", err)
+	}
+	if strings.Contains(out, "Config:") || strings.Contains(out, "generate client") {
+		t.Errorf("without a config, there is no config path or client step:\n%s", out)
+	}
+	if !strings.Contains(out, "2. `melange migrate`") {
+		t.Errorf("built-in migrations are the default:\n%s", out)
+	}
+}

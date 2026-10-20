@@ -68,7 +68,7 @@ Commands are organized into logical groups:
 
 **Schema Commands:** `validate`, `migrate`, `status`, `schema pull`, `diff`, `history`, `doctor`, `explain`, `expand`, `studio`
 **Client Commands:** `generate client`, `generate migration`
-**Utility Commands:** `init`, `config show`, `env list`, `version`, `license`
+**Utility Commands:** `init`, `init agent`, `config show`, `env list`, `version`, `license`
 
 ---
 
@@ -939,7 +939,7 @@ melange generate migration \
 
 ### init
 
-Initialize a new Melange project with an interactive wizard. Detects your project type (Go or TypeScript) and scaffolds a config file, starter schema, and runtime dependency.
+Initialize a new Melange project with an interactive wizard. Detects your project type (Go or TypeScript) and scaffolds a config file, starter schema, and runtime dependency. It also asks whether to add a Melange section for coding agents to `AGENTS.md` (or `CLAUDE.md` if that is the only one present, or a new `AGENTS.md`); for an existing project, use [`melange init agent`](#init-agent).
 
 ```bash
 melange init
@@ -962,6 +962,7 @@ melange init
 | `--migration-output` | `migrations/` | Output directory for versioned migration files |
 | `--migration-format` | `split` | Versioned migration format: `split` (`.up.sql`/`.down.sql`) or `single` |
 | `--migration-name` | `melange` | Versioned migration name suffix used in filenames |
+| `--agents` | `false` | Add a Melange section to `AGENTS.md` / `CLAUDE.md` without asking. The wizard asks; `-y` skips it unless this is set |
 
 **Project detection:**
 
@@ -1019,6 +1020,16 @@ melange init -y --schema melange/auth.fga --db postgres://prod:5432/app --no-ins
 # Minimal schema with no client generation
 melange init -y --template minimal
 ```
+
+### init agent
+
+Print a Markdown section for coding agents describing the project's Melange setup and workflow, filled in from the config file: schema and config paths, generated client location, and whether to run `melange migrate` or `melange generate migration`. Append it to the instructions file your agent reads:
+
+```bash
+melange init agent >> AGENTS.md
+```
+
+The output starts with a blank line so it can be appended to any file. It is the same section the `melange init` wizard offers to add. See [Using Coding Agents](../../guides/coding-agents/) for sample output.
 
 ### config show
 

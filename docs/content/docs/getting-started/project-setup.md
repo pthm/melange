@@ -29,6 +29,7 @@ The wizard collects these settings in order:
 | Database URL | `postgres://localhost:5432/mydb` | PostgreSQL connection string |
 | Migration strategy | Built-in | How schema changes are applied |
 | Generate client code? | Yes (if project detected) | Whether to set up type-safe code generation |
+| Add Melange instructions for coding agents? | Yes (skipped with `-y` unless `--agents`) | Appends a Melange section to `AGENTS.md` (or `CLAUDE.md`). See [Coding Agent Instructions](#coding-agent-instructions). |
 
 If you choose **versioned** migration strategy, you'll also be asked:
 
@@ -218,6 +219,7 @@ melange init -y --no-install
 | `--migration-output` | Versioned migration output directory | `migrations/` |
 | `--migration-format` | Versioned migration format: `split`, `single` | `split` |
 | `--migration-name` | Versioned migration name suffix | `melange` |
+| `--agents` | Add a Melange section to `AGENTS.md` / `CLAUDE.md` without asking (otherwise skipped with `-y`) | |
 
 ## Client Code Generation
 
@@ -246,6 +248,26 @@ allowed, err := checker.Check(ctx,
 ```
 
 The `--filter` option (configurable in `generate.client.filter`) lets you limit which relations are generated. For example, `--filter can_` generates only relations starting with `can_`.
+
+## Coding Agent Instructions
+
+`melange init` can add a short Markdown section (about 300 tokens) that tells coding agents (Claude Code, Codex, Cursor, and others) how this project uses Melange: where the schema and config live, that relationship data comes from the `melange_tuples` view rather than tuple writes, the commands to run after changing the model, and how to debug an unexpected permission result.
+
+The wizard asks before adding it. With `-y`, it is skipped unless you also pass `--agents`. The section goes into the instructions file your agent already reads:
+
+1. `AGENTS.md`, if it exists
+2. otherwise `CLAUDE.md`, if it exists
+3. otherwise a new `AGENTS.md`
+
+Only one file is written, because a `CLAUDE.md` often just imports `AGENTS.md`. Nothing is written if either file already has the section.
+
+For an existing project, or after changing your schema path, client output, or migration strategy, generate the section from your config and append it yourself:
+
+```bash
+melange init agent >> AGENTS.md
+```
+
+See [Using Coding Agents](../../guides/coding-agents/) for sample output and the docs formats agents can read.
 
 ## Next Steps
 

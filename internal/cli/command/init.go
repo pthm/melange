@@ -29,6 +29,7 @@ var (
 	initMigrationOutput   string
 	initMigrationFormat   string
 	initMigrationName     string
+	initAgents            bool
 )
 
 var initCmd = &cobra.Command{
@@ -38,7 +39,8 @@ var initCmd = &cobra.Command{
 
 Creates a melange/ directory with config.yaml and an OpenFGA schema file.
 Detects your project type (Go/TypeScript) and offers to set up client code
-generation with the appropriate runtime dependency.
+generation with the appropriate runtime dependency, and asks whether to
+add Melange instructions for coding agents to AGENTS.md (or CLAUDE.md).
 
 Use --yes to accept all defaults without prompting.`,
 	Example: `  # Interactive wizard (detects project type automatically)
@@ -51,7 +53,10 @@ Use --yes to accept all defaults without prompting.`,
   melange init -y --schema melange/auth.fga --db postgres://prod:5432/app
 
   # Skip dependency installation
-  melange init -y --no-install`,
+  melange init -y --no-install
+
+  # Also add Melange instructions for coding agents (the wizard asks)
+  melange init -y --agents`,
 	RunE: runInit,
 }
 
@@ -70,6 +75,7 @@ func init() {
 	f.StringVar(&initMigrationOutput, "migration-output", "", "versioned migration output directory (default: migrations/)")
 	f.StringVar(&initMigrationFormat, "migration-format", "", "versioned migration format: split, single")
 	f.StringVar(&initMigrationName, "migration-name", "", "versioned migration name suffix (default: melange)")
+	f.BoolVar(&initAgents, "agents", false, "add Melange instructions for coding agents to AGENTS.md / CLAUDE.md without asking")
 }
 
 // initAnswers is the resolved configuration that flows through the entire init
@@ -88,6 +94,7 @@ type initAnswers struct {
 	MigrationOutput   string
 	MigrationFormat   string
 	MigrationName     string
+	AgentInstructions bool // add a Melange section to AGENTS.md / CLAUDE.md
 }
 
 // detectedProject captures what kind of project exists in the current directory.
@@ -208,6 +215,9 @@ func runInit(_ *cobra.Command, _ []string) error {
 	if initMigrationName != "" {
 		answers.MigrationName = initMigrationName
 	}
+	if initAgents {
+		answers.AgentInstructions = true
+	}
 
 	if !initYes {
 		if err := runWizard(&answers, proj); err != nil {
@@ -254,6 +264,18 @@ func runInit(_ *cobra.Command, _ []string) error {
 			return fmt.Errorf("writing schema: %w", err)
 		}
 		created = append(created, answers.SchemaPath)
+	}
+
+	// Add instructions for coding agents
+	if answers.AgentInstructions {
+		path := agentsFile()
+		wrote, err := writeAgentInstructions(path, agentInstructions(&answers, configPath))
+		if err != nil {
+			return fmt.Errorf("writing agent instructions: %w", err)
+		}
+		if wrote {
+			created = append(created, path+" (Melange section for coding agents)")
+		}
 	}
 
 	// Print summary
@@ -332,7 +354,8 @@ const melangeBanner = `       ▜
 
 // runWizard presents the interactive setup experience, mutating a in place.
 // The wizard runs in two stages: a required first form covering schema path,
-// starter model, database URL, and whether to generate client code; then an
+// starter model, database URL, whether to generate client code, and (unless
+// --agents) whether to add coding-agent instructions; then an
 // optional second form (shown only when GenerateCode is true) that collects
 // runtime-specific client generation settings. The detected project is used
 // only for the banner display; defaults have already been applied by the caller.
@@ -354,36 +377,43 @@ func runWizard(a *initAnswers, proj detectedProject) error {
 	fmt.Println(lipgloss.NewStyle().PaddingLeft(1).PaddingTop(1).Render(content))
 	fmt.Println()
 
-	err := huh.NewForm(
-		huh.NewGroup(
-			huh.NewInput().
-				Title("Schema path").
-				Value(&a.SchemaPath),
-			huh.NewSelect[string]().
-				Title("Starter model").
-				Options(
-					huh.NewOption("Organization RBAC", "org-rbac"),
-					huh.NewOption("Document sharing", "doc-sharing"),
-					huh.NewOption("Minimal", "minimal"),
-					huh.NewOption("None", "none"),
-				).
-				Value(&a.Template),
-			huh.NewInput().
-				Title("Database URL").
-				Value(&a.DatabaseURL),
-			huh.NewSelect[string]().
-				Title("Migration strategy").
-				Description("How should schema changes be applied to the database?").
-				Options(
-					huh.NewOption("Built-in (melange migrate)", "builtin"),
-					huh.NewOption("Versioned SQL files (golang-migrate, Atlas, Flyway, etc.)", "versioned"),
-				).
-				Value(&a.MigrationStrategy),
-			huh.NewConfirm().
-				Title("Generate client code?").
-				Value(&a.GenerateCode),
-		),
-	).WithTheme(melangeTheme()).Run()
+	fields := []huh.Field{
+		huh.NewInput().
+			Title("Schema path").
+			Value(&a.SchemaPath),
+		huh.NewSelect[string]().
+			Title("Starter model").
+			Options(
+				huh.NewOption("Organization RBAC", "org-rbac"),
+				huh.NewOption("Document sharing", "doc-sharing"),
+				huh.NewOption("Minimal", "minimal"),
+				huh.NewOption("None", "none"),
+			).
+			Value(&a.Template),
+		huh.NewInput().
+			Title("Database URL").
+			Value(&a.DatabaseURL),
+		huh.NewSelect[string]().
+			Title("Migration strategy").
+			Description("How should schema changes be applied to the database?").
+			Options(
+				huh.NewOption("Built-in (melange migrate)", "builtin"),
+				huh.NewOption("Versioned SQL files (golang-migrate, Atlas, Flyway, etc.)", "versioned"),
+			).
+			Value(&a.MigrationStrategy),
+		huh.NewConfirm().
+			Title("Generate client code?").
+			Value(&a.GenerateCode),
+	}
+	// Editing the user's agent instructions is opt-in: ask, unless --agents
+	// already answered. Non-interactive runs (-y) skip this unless --agents.
+	if !initAgents {
+		a.AgentInstructions = true // pre-selected answer; the user still confirms
+		fields = append(fields, huh.NewConfirm().
+			Title(fmt.Sprintf("Add Melange instructions for coding agents to %s?", agentsFile())).
+			Value(&a.AgentInstructions))
+	}
+	err := huh.NewForm(huh.NewGroup(fields...)).WithTheme(melangeTheme()).Run()
 	if err != nil {
 		return err
 	}
