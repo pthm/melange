@@ -182,7 +182,37 @@ func buildListSubjectsRegularBlocks(plan ListPlan) ([]TypedQueryBlock, error) {
 		blocks = append(blocks, usersetBlocks...)
 	}
 
+	if plan.AllowWildcard && plan.HasExclusion {
+		blocks = append(blocks, buildListSubjectsNarrowedWildcardBlock(plan))
+	}
+
 	return blocks, nil
+}
+
+// buildListSubjectsNarrowedWildcardBlock lists the users a wildcard grant
+// still covers once an exclusion narrows it (`b but not r1` with `b:
+// [user:*]`). The '*' row is excluded, so it cannot stand for them, and the
+// other blocks only name subjects with their own grant tuples. Offer every
+// concrete subject named on the object, kept by the full check, but only
+// when '*' itself is denied: otherwise '*' already represents them.
+func buildListSubjectsNarrowedWildcardBlock(plan ListPlan) TypedQueryBlock {
+	subject := Col{Table: "t", Column: "subject_id"}
+	q := Tuples(plan.DatabaseSchema, "t").
+		ObjectType(plan.ObjectType).
+		Where(
+			Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
+			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Param("p_subject_type")},
+			NoUserset{Source: subject},
+			Ne{Left: subject, Right: Lit("*")},
+			wildcardDenied(plan.DatabaseSchema, plan.Relation, plan.ObjectType),
+			WildcardPermissionCheckCall(plan.DatabaseSchema, plan.Relation, plan.ObjectType, subject, ObjectID),
+		).
+		SelectCol("subject_id").
+		Distinct()
+	return TypedQueryBlock{
+		Comments: []string{"-- Users a narrowed wildcard grant still covers"},
+		Query:    q.Build(),
+	}
 }
 
 // buildListSubjectsDirectBlock builds the direct tuple lookup block for list_subjects.
