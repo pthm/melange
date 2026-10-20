@@ -264,3 +264,15 @@ func TestCheckAdvisories(t *testing.T) {
 		})
 	}
 }
+
+// Print colors only on a terminal: a buffer gets the plain layout.
+func TestReportPrint_PlainWhenNotTerminal(t *testing.T) {
+	r := &Report{}
+	r.AddCheck(CheckResult{Category: "Schema", Status: StatusPass, Message: "ok"})
+	r.AddCheck(CheckResult{Category: "Schema", Status: StatusWarn, Message: "drift", Details: "col\tval", FixHint: "migrate"})
+	var b strings.Builder
+	r.Print(&b, true)
+	// The tab in Details must survive: lipgloss expands tabs unless told not to.
+	want := "\nSchema\n  ✓ ok\n  ⚠ drift\n      col\tval\n      Fix: migrate\n\nSummary: 1 passed, 1 warnings, 0 errors\n"
+	assert.Equal(t, want, b.String())
+}

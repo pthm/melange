@@ -278,7 +278,7 @@ func TestColor_OffByDefault_OnWhenEnabled(t *testing.T) {
 	if !strings.Contains(colored, markerAllowChip+" "+markerAllow+" "+ansiReset) {
 		t.Errorf("expected chip-styled ✓ marker; got:\n%q", colored)
 	}
-	if !strings.Contains(colored, ansiGrey+branchLast+ansiReset) {
+	if !strings.Contains(colored, colorDim+branchLast+ansiReset) {
 		t.Errorf("expected grey-wrapped tree connector; got:\n%q", colored)
 	}
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/pthm/melange/internal/cli"
 	"github.com/pthm/melange/internal/cli/render"
+	"github.com/pthm/melange/internal/cli/style"
 	"github.com/pthm/melange/melange"
 )
 
@@ -82,8 +83,9 @@ func init() {
 	f.StringVar(&explainColor, "color", "auto", "color output: auto|always|never (auto = stdout-is-TTY and NO_COLOR unset)")
 }
 
-// shouldColorize resolves the --color mode to a boolean. auto detects a TTY
-// on stdout and honors the NO_COLOR convention (https://no-color.org).
+// shouldColorize resolves the --color mode to a boolean. auto uses the same
+// detection as the rest of the CLI's styled output (style.Enabled): a terminal
+// on stdout, honoring NO_COLOR (https://no-color.org).
 func shouldColorize(mode string) bool {
 	switch strings.ToLower(mode) {
 	case "always":
@@ -91,14 +93,7 @@ func shouldColorize(mode string) bool {
 	case "never":
 		return false
 	case "auto", "":
-		if os.Getenv("NO_COLOR") != "" {
-			return false
-		}
-		fi, err := os.Stdout.Stat()
-		if err != nil {
-			return false
-		}
-		return (fi.Mode() & os.ModeCharDevice) != 0
+		return style.Enabled(os.Stdout)
 	default:
 		return false
 	}

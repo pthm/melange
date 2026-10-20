@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
 
+	"github.com/pthm/melange/internal/cli/style"
 	"github.com/pthm/melange/pkg/clientgen"
 )
 
@@ -307,14 +308,6 @@ func runInit(_ *cobra.Command, _ []string) error {
 	return nil
 }
 
-// Theme colors used across the init wizard and forms.
-var (
-	colorBurntOrange = lipgloss.AdaptiveColor{Light: "#C45A20", Dark: "#E8813A"}
-	colorSand        = lipgloss.AdaptiveColor{Light: "#A68A64", Dark: "#D4B896"}
-	colorWarmGray    = lipgloss.AdaptiveColor{Light: "#6B5E50", Dark: "#9C8E80"}
-	colorCream       = lipgloss.AdaptiveColor{Light: "#8C7A66", Dark: "#F5E6D0"}
-)
-
 // melangeTheme returns the consistent huh form theme used across all interactive
 // prompts in the init command. The warm palette (burnt orange as the accent,
 // sand/cream for secondary text) is applied to both focused and blurred states
@@ -323,26 +316,26 @@ func melangeTheme() *huh.Theme {
 	t := huh.ThemeBase()
 
 	// Focused field styles
-	t.Focused.Title = t.Focused.Title.Foreground(colorBurntOrange)
-	t.Focused.NoteTitle = t.Focused.NoteTitle.Foreground(colorBurntOrange)
-	t.Focused.SelectSelector = t.Focused.SelectSelector.Foreground(colorBurntOrange)
-	t.Focused.MultiSelectSelector = t.Focused.MultiSelectSelector.Foreground(colorBurntOrange)
-	t.Focused.SelectedOption = t.Focused.SelectedOption.Foreground(colorBurntOrange)
-	t.Focused.SelectedPrefix = t.Focused.SelectedPrefix.Foreground(colorBurntOrange)
-	t.Focused.FocusedButton = t.Focused.FocusedButton.Background(colorBurntOrange)
-	t.Focused.TextInput.Cursor = t.Focused.TextInput.Cursor.Foreground(colorBurntOrange)
-	t.Focused.TextInput.Prompt = t.Focused.TextInput.Prompt.Foreground(colorSand)
-	t.Focused.Description = t.Focused.Description.Foreground(colorWarmGray)
-	t.Focused.Option = t.Focused.Option.Foreground(colorCream)
-	t.Focused.Next = t.Focused.Next.Foreground(colorSand)
-	t.Focused.Card = t.Focused.Card.BorderForeground(colorSand)
+	t.Focused.Title = t.Focused.Title.Foreground(style.BurntOrange)
+	t.Focused.NoteTitle = t.Focused.NoteTitle.Foreground(style.BurntOrange)
+	t.Focused.SelectSelector = t.Focused.SelectSelector.Foreground(style.BurntOrange)
+	t.Focused.MultiSelectSelector = t.Focused.MultiSelectSelector.Foreground(style.BurntOrange)
+	t.Focused.SelectedOption = t.Focused.SelectedOption.Foreground(style.BurntOrange)
+	t.Focused.SelectedPrefix = t.Focused.SelectedPrefix.Foreground(style.BurntOrange)
+	t.Focused.FocusedButton = t.Focused.FocusedButton.Background(style.BurntOrange)
+	t.Focused.TextInput.Cursor = t.Focused.TextInput.Cursor.Foreground(style.BurntOrange)
+	t.Focused.TextInput.Prompt = t.Focused.TextInput.Prompt.Foreground(style.Sand)
+	t.Focused.Description = t.Focused.Description.Foreground(style.WarmGray)
+	t.Focused.Option = t.Focused.Option.Foreground(style.Cream)
+	t.Focused.Next = t.Focused.Next.Foreground(style.Sand)
+	t.Focused.Card = t.Focused.Card.BorderForeground(style.Sand)
 
 	// Blurred field styles
-	t.Blurred.Title = t.Blurred.Title.Foreground(colorWarmGray)
-	t.Blurred.TextInput.Prompt = t.Blurred.TextInput.Prompt.Foreground(colorWarmGray)
-	t.Blurred.TextInput.Text = t.Blurred.TextInput.Text.Foreground(colorSand)
-	t.Blurred.SelectSelector = t.Blurred.SelectSelector.Foreground(colorWarmGray)
-	t.Blurred.SelectedOption = t.Blurred.SelectedOption.Foreground(colorSand)
+	t.Blurred.Title = t.Blurred.Title.Foreground(style.WarmGray)
+	t.Blurred.TextInput.Prompt = t.Blurred.TextInput.Prompt.Foreground(style.WarmGray)
+	t.Blurred.TextInput.Text = t.Blurred.TextInput.Text.Foreground(style.Sand)
+	t.Blurred.SelectSelector = t.Blurred.SelectSelector.Foreground(style.WarmGray)
+	t.Blurred.SelectedOption = t.Blurred.SelectedOption.Foreground(style.Sand)
 
 	return t
 }
@@ -361,12 +354,12 @@ const melangeBanner = `       ▜
 // only for the banner display; defaults have already been applied by the caller.
 func runWizard(a *initAnswers, proj detectedProject) error {
 	bannerStyle := lipgloss.NewStyle().
-		Foreground(colorBurntOrange).
+		Foreground(style.BurntOrange).
 		Bold(true)
 	detectedStyle := lipgloss.NewStyle().
-		Foreground(colorSand)
+		Foreground(style.Sand)
 	runtimeStyle := lipgloss.NewStyle().
-		Foreground(colorBurntOrange).
+		Foreground(style.BurntOrange).
 		Bold(true)
 
 	content := bannerStyle.Render(melangeBanner)

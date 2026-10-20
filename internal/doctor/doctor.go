@@ -22,6 +22,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/pthm/melange/internal/cli/style"
 	"github.com/pthm/melange/internal/sqlgen"
 	"github.com/pthm/melange/internal/sqlgen/sqldsl"
 	"github.com/pthm/melange/internal/update"
@@ -114,8 +117,13 @@ func (r *Report) AddCheck(check CheckResult) {
 	}
 }
 
-// Print writes the report to the given writer.
+// Print writes the report to the given writer, colored when w is a terminal
+// and NO_COLOR is unset.
 func (r *Report) Print(w io.Writer, verbose bool) {
+	st := style.NewStatusStyles(w)
+	heading, dim := st.Bold, st.Muted
+	statusStyle := map[Status]lipgloss.Style{StatusPass: st.Good, StatusWarn: st.Warn, StatusFail: st.Bad}
+
 	// Group checks by category
 	categories := make(map[string][]CheckResult)
 	var categoryOrder []string
@@ -128,24 +136,31 @@ func (r *Report) Print(w io.Writer, verbose bool) {
 
 	// Print each category
 	for _, cat := range categoryOrder {
-		_, _ = fmt.Fprintf(w, "\n%s\n", cat)
+		_, _ = fmt.Fprintf(w, "\n%s\n", heading.Render(cat))
 		for _, check := range categories[cat] {
-			_, _ = fmt.Fprintf(w, "  %s %s\n", check.Status.Symbol(), check.Message)
+			_, _ = fmt.Fprintf(w, "  %s %s\n", statusStyle[check.Status].Render(check.Status.Symbol()), check.Message)
 			if verbose && check.Details != "" {
 				// Indent details
 				for _, line := range strings.Split(check.Details, "\n") {
-					_, _ = fmt.Fprintf(w, "      %s\n", line)
+					_, _ = fmt.Fprintf(w, "      %s\n", dim.Render(line))
 				}
 			}
 			if check.Status != StatusPass && check.FixHint != "" {
-				_, _ = fmt.Fprintf(w, "      Fix: %s\n", check.FixHint)
+				_, _ = fmt.Fprintf(w, "      %s %s\n", statusStyle[check.Status].Render("Fix:"), check.FixHint)
 			}
 		}
 	}
 
-	// Print summary
-	_, _ = fmt.Fprintf(w, "\nSummary: %d passed, %d warnings, %d errors\n",
-		r.Passed, r.Warnings, r.Errors)
+	// Print summary, coloring only the counts that need attention.
+	count := func(n int, label string, st Status) string {
+		text := fmt.Sprintf("%d %s", n, label)
+		if n == 0 {
+			return text
+		}
+		return statusStyle[st].Render(text)
+	}
+	_, _ = fmt.Fprintf(w, "\n%s %s, %s, %s\n", heading.Render("Summary:"),
+		count(r.Passed, "passed", StatusPass), count(r.Warnings, "warnings", StatusWarn), count(r.Errors, "errors", StatusFail))
 }
 
 // HasErrors returns true if any check failed.

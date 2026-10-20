@@ -6,10 +6,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/pthm/melange/internal/cli"
+	"github.com/pthm/melange/internal/cli/style"
 	"github.com/pthm/melange/internal/update"
 )
 
@@ -282,16 +282,12 @@ func awaitUpdateInfo(timeout time.Duration) *update.Info {
 }
 
 // Notice styles render on stderr, so color follows stderr's terminal and
-// NO_COLOR rather than stdout's: redirected output stays plain text. The colors
-// are fixed mid-tones rather than adaptive: adaptive colors make lipgloss query
-// the terminal background, and a reply arriving after the CLI exits is echoed
-// onto the user's prompt.
+// NO_COLOR rather than stdout's: redirected output stays plain text.
 var (
-	noticeRenderer = lipgloss.NewRenderer(os.Stderr)
-	noticeDanger   = noticeRenderer.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF5370")) // explain's deny color
-	noticeAccent   = noticeRenderer.NewStyle().Bold(true).Foreground(lipgloss.Color(colorBurntOrange.Dark))
-	noticeBold     = noticeRenderer.NewStyle().Bold(true)
-	noticeDim      = noticeRenderer.NewStyle().Foreground(lipgloss.Color(colorWarmGray.Dark))
+	noticeDanger = style.New(style.Stderr).Bold(true).Foreground(style.Fail)
+	noticeAccent = style.New(style.Stderr).Bold(true).Foreground(style.Accent)
+	noticeBold   = style.New(style.Stderr).Bold(true)
+	noticeDim    = style.New(style.Stderr).Foreground(style.Muted)
 )
 
 // showAdvisoryNotice warns that the running CLI is covered by security

@@ -50,7 +50,7 @@ func writeExpandNode(w io.Writer, n *melange.UsersetTreeNode, prefix string, isL
 		return
 	}
 	branch, childPrefix := connectors(prefix, isLast)
-	_, _ = fmt.Fprintf(w, "%s%s\n", paint(o, colorDim, prefix+branch), formatExpandHeader(o, n))
+	_, _ = fmt.Fprintf(w, "%s%s\n", paint(o, dimStyle, prefix+branch), formatExpandHeader(o, n))
 
 	switch {
 	case n.Leaf != nil:
@@ -119,14 +119,14 @@ func writeLeaf(w io.Writer, l *melange.Leaf, prefix string, o opts) {
 		if len(users) == 0 {
 			branch, _ := connectors(prefix, true)
 			_, _ = fmt.Fprintf(w, "%s%s\n",
-				paint(o, colorDim, prefix+branch),
+				paint(o, dimStyle, prefix+branch),
 				paintKeyword(o, "(no users)"))
 		}
 		for i, u := range users {
 			last := i == len(users)-1
 			branch, _ := connectors(prefix, last)
 			_, _ = fmt.Fprintf(w, "%s%s\n",
-				paint(o, colorDim, prefix+branch),
+				paint(o, dimStyle, prefix+branch),
 				paintUsersetIdent(o, u))
 		}
 		// Truncation on an empty result is degenerate but possible if the
@@ -134,13 +134,13 @@ func writeLeaf(w io.Writer, l *melange.Leaf, prefix string, o opts) {
 		// was elided.
 		if l.Users.UsersTruncated {
 			_, _ = fmt.Fprintf(w, "%s%s\n",
-				paint(o, colorDim, prefix),
-				paint(o, colorDeny, "(users_truncated — raise --max-leaf to see more)"))
+				paint(o, dimStyle, prefix),
+				paint(o, denyStyle, "(users_truncated — raise --max-leaf to see more)"))
 		}
 	case l.Computed != nil:
 		branch, _ := connectors(prefix, true)
 		_, _ = fmt.Fprintf(w, "%s%s %s %s  %s\n",
-			paint(o, colorDim, prefix+branch),
+			paint(o, dimStyle, prefix+branch),
 			paintKeyword(o, "computed"),
 			paintKeyword(o, "→"),
 			paintUsersetIdent(o, l.Computed.Userset),
@@ -148,7 +148,7 @@ func writeLeaf(w io.Writer, l *melange.Leaf, prefix string, o opts) {
 	case l.TupleToUserset != nil:
 		branch, _ := connectors(prefix, true)
 		_, _ = fmt.Fprintf(w, "%s%s %s %s\n",
-			paint(o, colorDim, prefix+branch),
+			paint(o, dimStyle, prefix+branch),
 			paintKeyword(o, "tupleset"),
 			paintKeyword(o, "→"),
 			paintUsersetIdent(o, l.TupleToUserset.Tupleset))
@@ -156,7 +156,7 @@ func writeLeaf(w io.Writer, l *melange.Leaf, prefix string, o opts) {
 			last := i == len(l.TupleToUserset.Computed)-1
 			sub, _ := connectors(prefix+indentLast, last)
 			_, _ = fmt.Fprintf(w, "%s%s %s %s\n",
-				paint(o, colorDim, prefix+indentLast+sub),
+				paint(o, dimStyle, prefix+indentLast+sub),
 				paintKeyword(o, "computed"),
 				paintKeyword(o, "→"),
 				paintUsersetIdent(o, c.Userset))

@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/pthm/melange/internal/cli"
+	"github.com/pthm/melange/internal/cli/style"
 	"github.com/pthm/melange/internal/update"
 	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/pkg/parser"
@@ -388,12 +389,36 @@ func shortChecksum(sum string) string {
 	return sum[:12] + "…"
 }
 
+// presence colors a present|missing value.
+func presence(st style.StatusStyles, v string) string {
+	if v == "present" {
+		return st.Good.Render(v)
+	}
+	return st.Warn.Render(v)
+}
+
+// syncStyled colors a sync-state description by how much attention it needs.
+func syncStyled(st style.StatusStyles, state string) string {
+	desc := syncDescription(state)
+	switch state {
+	case syncInSync:
+		return st.Good.Render(desc)
+	case syncDrift:
+		return st.Warn.Render(desc)
+	case syncDatabaseAhead:
+		return st.Bad.Render(desc)
+	default:
+		return st.Muted.Render(desc)
+	}
+}
+
 func printStatusText(w io.Writer, r statusReport, s *migrator.Status, schemaPath string) {
-	_, _ = fmt.Fprintf(w, "Schema file:  %s\n", r.SchemaFile)
-	_, _ = fmt.Fprintf(w, "Tuples view:  %s\n", r.TuplesView)
+	st := style.NewStatusStyles(w)
+	_, _ = fmt.Fprintf(w, "Schema file:  %s\n", presence(st, r.SchemaFile))
+	_, _ = fmt.Fprintf(w, "Tuples view:  %s\n", presence(st, r.TuplesView))
 
 	if r.Deployed == nil {
-		_, _ = fmt.Fprintln(w, "Deployed:     no migration recorded")
+		_, _ = fmt.Fprintf(w, "Deployed:     %s\n", st.Muted.Render("no migration recorded"))
 	} else {
 		d := r.Deployed
 		_, _ = fmt.Fprintf(w, "Deployed:     checksum %s", shortChecksum(d.Checksum))
@@ -401,32 +426,34 @@ func printStatusText(w io.Writer, r statusReport, s *migrator.Status, schemaPath
 			_, _ = fmt.Fprintf(w, " · melange %s", d.MelangeVersion)
 		}
 		if d.MigratedAt != "" {
-			_, _ = fmt.Fprintf(w, " · %s", d.MigratedAt)
+			_, _ = fmt.Fprintf(w, " · %s", st.Muted.Render(d.MigratedAt))
 		}
 		_, _ = fmt.Fprintln(w)
-		_, _ = fmt.Fprintf(w, "Sync:         %s\n", syncDescription(r.Sync))
-		printDriftDetail(w, r.Drift)
+		_, _ = fmt.Fprintf(w, "Sync:         %s\n", syncStyled(st, r.Sync))
+		printDriftDetail(w, r.Drift, st)
 		if !d.ModelRecorded {
-			_, _ = fmt.Fprintln(w, "              model DSL not recorded — re-migrate to enable `melange schema pull`")
+			_, _ = fmt.Fprintln(w, st.Muted.Render("              model DSL not recorded — re-migrate to enable `melange schema pull`"))
 		}
 		if len(d.Advisories) > 0 {
-			_, _ = fmt.Fprintf(w, "Security:     deployed functions are covered by %d advisor%s; upgrade to a fixed release and run `melange migrate`\n",
-				len(d.Advisories), pluralY(len(d.Advisories)))
+			n := len(d.Advisories)
+			msg := fmt.Sprintf("deployed functions are covered by %d advisor%s; upgrade to a fixed release and run `melange migrate`", n, pluralY(n))
+			_, _ = fmt.Fprintf(w, "%s     %s\n", st.Bad.Render("Security:"), st.Bad.Render(msg))
 			for _, a := range d.Advisories {
-				_, _ = fmt.Fprintf(w, "              %s (%s, %s) %s\n", a.ID, a.Severity, a.FixedIn(), a.Summary)
+				_, _ = fmt.Fprintf(w, "              %s %s %s\n", st.Bold.Render(a.ID),
+					st.Muted.Render(fmt.Sprintf("(%s, %s)", a.Severity, a.FixedIn())), a.Summary)
 			}
 		}
 	}
 
 	for _, note := range r.Notes {
-		_, _ = fmt.Fprintf(w, "Note:         %s\n", note)
+		_, _ = fmt.Fprintf(w, "%s         %s\n", st.Warn.Render("Note:"), note)
 	}
 
 	// Actionable hints, matching the pre-enrichment behavior.
 	if !s.SchemaExists {
-		_, _ = fmt.Fprintf(w, "\nNo schema found at %s\n", schemaPath)
+		_, _ = fmt.Fprintf(w, "\n%s\n", st.Warn.Render("No schema found at "+schemaPath))
 	} else if !s.TuplesExists {
-		_, _ = fmt.Fprintln(w, "\nTuples view not found.")
+		_, _ = fmt.Fprintln(w, "\n"+st.Warn.Render("Tuples view not found."))
 		_, _ = fmt.Fprintln(w, "Create melange_tuples before running checks.")
 	}
 }
@@ -438,7 +465,7 @@ const maxDriftLines = 5
 
 // printDriftDetail prints the change summary under the Sync line. Nil (no
 // detail available) prints nothing — the Sync line already says drift.
-func printDriftDetail(w io.Writer, d *driftReport) {
+func printDriftDetail(w io.Writer, d *driftReport, st style.StatusStyles) {
 	if d == nil {
 		return
 	}
@@ -448,9 +475,9 @@ func printDriftDetail(w io.Writer, d *driftReport) {
 			_, _ = fmt.Fprintf(w, "              … and %d more (`melange diff` for the full list)\n", len(d.Changes)-maxDriftLines)
 			break
 		}
-		marker := "+"
+		marker := st.Good.Render("+")
 		if c.Class == schema.ClassBreaking {
-			marker = "-"
+			marker = st.Bad.Render("-")
 		}
 		_, _ = fmt.Fprintf(w, "              %s %s\n", marker, c.Summary)
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/pthm/melange/internal/cli"
+	"github.com/pthm/melange/internal/cli/style"
 	"github.com/pthm/melange/internal/update"
 	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/pkg/schema"
@@ -98,7 +99,7 @@ func TestPrintDriftDetail_CapsTheChangeList(t *testing.T) {
 	}
 
 	var b strings.Builder
-	printDriftDetail(&b, &driftReport{Additive: 9, Changes: changes})
+	printDriftDetail(&b, &driftReport{Additive: 9, Changes: changes}, style.NewStatusStyles(&b))
 	out := b.String()
 
 	if lines := strings.Count(out, " added\n"); lines != maxDriftLines {
