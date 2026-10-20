@@ -108,6 +108,15 @@ func BenchmarkKitchenSinkCheck(b *testing.B) {
 			b.Run("Wildcard", func(b *testing.B) {
 				benchCheck(b, d.db, "user", "*", "can_view", "document", d.doc)
 			})
+			// MemberCanView: an org member rather than the owner, so more of
+			// can_view's arms run before one grants or all deny.
+			b.Run("MemberCanView", func(b *testing.B) {
+				benchCheck(b, d.db, "user", d.member, "can_view", "document", d.doc)
+			})
+			// CanEdit: an intersection (editor and active).
+			b.Run("CanEdit", func(b *testing.B) {
+				benchCheck(b, d.db, "user", d.subject, "can_edit", "document", d.doc)
+			})
 		})
 	}
 }
@@ -265,11 +274,24 @@ func BenchmarkKitchenSinkListSubjects(b *testing.B) {
 	for _, scale := range testutil.KitchenSinkScales {
 		b.Run(scale.Name, func(b *testing.B) {
 			d := setupKitchenSinkBench(b, scale)
-			for _, rel := range []string{"viewer", "can_view"} {
-				b.Run(rel, func(b *testing.B) {
+			// gated and can_edit are intersections; the folder relations recurse
+			// through parent folders and projects.
+			for _, c := range []struct{ name, objType, rel string }{
+				{"viewer", "document", "viewer"},
+				{"can_view", "document", "can_view"},
+				{"gated", "document", "gated"},
+				{"can_edit", "document", "can_edit"},
+				{"FolderViewer", "folder", "viewer"},
+				{"FolderEditor", "folder", "editor"},
+			} {
+				object := d.doc
+				if c.objType == "folder" {
+					object = d.folder
+				}
+				b.Run(c.name, func(b *testing.B) {
 					b.ResetTimer()
 					for i := 0; i < b.N; i++ {
-						drainList(b, d.db, `SELECT subject_id FROM list_accessible_subjects('document',$1,$2,'user')`, d.doc, rel)
+						drainList(b, d.db, `SELECT subject_id FROM list_accessible_subjects($1,$2,$3,'user')`, c.objType, object, c.rel)
 					}
 				})
 			}
