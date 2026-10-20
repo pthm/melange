@@ -38,6 +38,7 @@ func setupKitchenSinkBench(b *testing.B, scale testutil.KitchenSinkScale) *kitch
 
 	db := testutil.SetupKitchenSinkDB(b)
 	testutil.LoadKitchenSinkTuples(b, db, tuples)
+	testutil.EnableServerStats(db)
 
 	one := func(q string, args ...any) string {
 		var s string
@@ -124,13 +125,12 @@ func BenchmarkKitchenSinkCheck(b *testing.B) {
 // benchCheck runs check_permission in a tight loop.
 func benchCheck(b *testing.B, db *sql.DB, st, sid, rel, ot, oid string) {
 	b.Helper()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	testutil.BenchLoop(b, db, func() {
 		var r int
 		if err := db.QueryRow(`SELECT check_permission($1,$2,$3,$4,$5)`, st, sid, rel, ot, oid).Scan(&r); err != nil {
 			b.Fatal(err)
 		}
-	}
+	})
 }
 
 // BenchmarkKitchenSinkListObjects measures list_accessible_objects on the heaviest
@@ -153,27 +153,24 @@ func BenchmarkKitchenSinkListObjects(b *testing.B) {
 					subj = d.member
 				}
 				b.Run(c.name, func(b *testing.B) {
-					b.ResetTimer()
-					for i := 0; i < b.N; i++ {
+					testutil.BenchLoop(b, d.db, func() {
 						drainList(b, d.db, `SELECT object_id FROM list_accessible_objects('user',$1,$2,$3)`, subj, c.rel, c.objType)
-					}
+					})
 				})
 			}
 			// UsersetSubject: query subject is a userset (group:gX#member) — the
 			// F4 sargable-join path in list_*_obj that no plain-subject case hits.
 			b.Run("UsersetSubject_OrgMember", func(b *testing.B) {
-				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
+				testutil.BenchLoop(b, d.db, func() {
 					drainList(b, d.db, `SELECT object_id FROM list_accessible_objects('group',$1,$2,$3)`,
 						d.usersetSubj, d.usersetRel, d.usersetObjType)
-				}
+				})
 			})
 			// ServiceAccount subject.
 			b.Run("ServiceAccount_GroupMember", func(b *testing.B) {
-				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
+				testutil.BenchLoop(b, d.db, func() {
 					drainList(b, d.db, `SELECT object_id FROM list_accessible_objects('service_account',$1,'member','group')`, d.svcAccount)
-				}
+				})
 			})
 		})
 	}
@@ -187,13 +184,12 @@ func BenchmarkKitchenSinkExpand(b *testing.B) {
 		b.Run(scale.Name, func(b *testing.B) {
 			d := setupKitchenSinkBench(b, scale)
 			// document.can_view: the heavy union+exclusion+wildcard+TTU relation.
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			testutil.BenchLoop(b, d.db, func() {
 				var j []byte
 				if err := d.db.QueryRow(`SELECT expand_permission('document',$1,'can_view')`, d.doc).Scan(&j); err != nil {
 					b.Fatal(err)
 				}
-			}
+			})
 		})
 	}
 }
@@ -205,14 +201,13 @@ func BenchmarkKitchenSinkExplain(b *testing.B) {
 	for _, scale := range testutil.KitchenSinkScales {
 		b.Run(scale.Name, func(b *testing.B) {
 			d := setupKitchenSinkBench(b, scale)
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			testutil.BenchLoop(b, d.db, func() {
 				var j []byte
 				if err := d.db.QueryRow(`SELECT explain_permission('user',$1,'can_view','document',$2)`,
 					d.subject, d.doc).Scan(&j); err != nil {
 					b.Fatal(err)
 				}
-			}
+			})
 		})
 	}
 }
@@ -233,8 +228,7 @@ func BenchmarkKitchenSinkBulk(b *testing.B) {
 			rels := arrayLit("can_view", "viewer", "member")
 			ots := arrayLit("document", "folder", "organization")
 			oids := arrayLit(d.doc, d.folder, org)
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			testutil.BenchLoop(b, d.db, func() {
 				rows, err := d.db.Query(`SELECT idx, allowed FROM check_permission_bulk($1,$2,$3,$4,$5)`,
 					sts, sids, rels, ots, oids)
 				if err != nil {
@@ -247,7 +241,7 @@ func BenchmarkKitchenSinkBulk(b *testing.B) {
 					}
 				}
 				_ = rows.Close()
-			}
+			})
 		})
 	}
 }
@@ -289,10 +283,9 @@ func BenchmarkKitchenSinkListSubjects(b *testing.B) {
 					object = d.folder
 				}
 				b.Run(c.name, func(b *testing.B) {
-					b.ResetTimer()
-					for i := 0; i < b.N; i++ {
+					testutil.BenchLoop(b, d.db, func() {
 						drainList(b, d.db, `SELECT subject_id FROM list_accessible_subjects($1,$2,$3,'user')`, c.objType, object, c.rel)
-					}
+					})
 				})
 			}
 		})
@@ -314,4 +307,18 @@ func drainList(b *testing.B, db *sql.DB, q string, args ...any) {
 	if err := rows.Err(); err != nil {
 		b.Fatal(err)
 	}
+}
+
+// BenchmarkRoundTrip measures SELECT 1 through the same driver and pool as the
+// other benchmarks: the network and driver cost of one statement, with almost
+// no server work. It is the floor for any operation's net-ns/op.
+func BenchmarkRoundTrip(b *testing.B) {
+	db := testutil.EmptyDB(b)
+	testutil.EnableServerStats(db)
+	testutil.BenchLoop(b, db, func() {
+		var r int
+		if err := db.QueryRow(`SELECT 1`).Scan(&r); err != nil {
+			b.Fatal(err)
+		}
+	})
 }

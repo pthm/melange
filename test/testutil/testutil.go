@@ -68,8 +68,20 @@ var (
 
 // ensureSingleton lazily initializes the singleton PostgreSQL container.
 // Safe for concurrent access via sync.Once.
+//
+// When MELANGE_TEST_SERVER_URL is set, that server is used as the admin
+// connection instead, so DSNWithDatabaseSchema and EmptyDB create and drop
+// per-test databases there. This lets benchmarks run against a managed
+// database. It is deliberately separate from DATABASE_URL, which CI sets to
+// send DB and DBWithDatabaseSchema to a shared database while these helpers
+// keep the isolated container.
 func ensureSingleton() (string, error) {
 	singletonOnce.Do(func() {
+		if url := os.Getenv("MELANGE_TEST_SERVER_URL"); url != "" {
+			singletonDSN = url
+			return
+		}
+
 		ctx := context.Background()
 
 		// Start PostgreSQL with increased max_connections for parallel tests
@@ -183,7 +195,11 @@ func ensureTemplate(adminDSN, databaseSchema string) (string, error) {
 		return state.template, state.err
 	}
 
-	name := "melange_template"
+	// Unique per process: test packages run in parallel, and against a shared
+	// MELANGE_TEST_SERVER_URL server a fixed name would collide.
+	// ponytail: templates are never dropped; they go away with the container,
+	// or accumulate on a long-lived MELANGE_TEST_SERVER_URL server.
+	name := uniqueDBName("melange_template")
 	if databaseSchema != "" {
 		name += "_" + databaseSchema
 	}

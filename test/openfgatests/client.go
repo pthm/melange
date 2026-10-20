@@ -917,6 +917,15 @@ func (c *Client) storeDB() (*sql.DB, error) {
 	return db, nil
 }
 
+// StoreDB returns the database behind a store, or nil when the client uses the
+// OpenFGA oracle backend or the store does not exist.
+func (c *Client) StoreDB(id string) *sql.DB {
+	if s, ok := c.storeByID(id); ok {
+		return s.db
+	}
+	return nil
+}
+
 func (c *Client) storeByID(id string) (*store, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()

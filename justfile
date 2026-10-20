@@ -578,6 +578,12 @@ bench-quick:
 bench-save FILE="benchmark_results.txt":
     cd {{TEST}} && {{GO_TEST_BENCH_MEM}} -timeout 30m | tee {{FILE}}
 
+# Benchmark against Cloud SQL from a VM in the same zone (setup | run | report | teardown | all)
+# PROJECT=my-gcp-project just bench-cloud all
+[group('Test')]
+bench-cloud *ARGS:
+    scripts/cloud-bench.sh {{ARGS}}
+
 # Kitchen-sink schema benchmarks (check / list_objects / list_subjects across the feature matrix)
 # Use SCALE to limit: just bench-kitchensink SCALE=1K   (scales >100K need MELANGE_BENCH_LARGE_SCALE=1)
 [group('Test')]

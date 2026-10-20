@@ -150,6 +150,40 @@ func BenchmarkCacheHit(b *testing.B) {
 
 Expected results: a cold check costs a database round-trip (~130 µs in the database), a warm hit ~80 ns. See [Caching](../../reference/performance/#caching) for the measured numbers.
 
+## Cloud Benchmarks
+
+Local runs talk to a container on the same machine, so they measure database cost with almost no network. `scripts/cloud-bench.sh` measures what an application sees: it creates a Cloud SQL for PostgreSQL instance and a Compute Engine VM in the same zone, connects them over private IP, runs every benchmark suite (including the 1M scale) `COUNT` times, and summarises the results with `benchstat`.
+
+```bash
+# Setup, run, report, and teardown in one go (tears down even on failure)
+PROJECT=my-gcp-project just bench-cloud all
+
+# Or step by step
+PROJECT=my-gcp-project just bench-cloud setup
+PROJECT=my-gcp-project just bench-cloud run       # safe to re-run if the connection drops
+just bench-cloud report                           # writes .cloud-bench/latest/report.md
+PROJECT=my-gcp-project just bench-cloud teardown
+```
+
+The report records the instance tier, VM type, zone, and server version, then splits each kitchen-sink result into where the time went:
+
+- **In database**: server time for the statements the operation sent, from `pg_stat_statements`.
+- **Network and client**: the rest of the same measured time: round trips, transferring results, and driver and client work.
+
+A `SELECT 1` through the same driver (`BenchmarkRoundTrip`) is reported alongside, as the floor for one statement's network and client time.
+
+The kitchen-sink benchmarks report the split as `db-ns/op`, `net-ns/op`, and `stmts/op` whenever the server preloads `pg_stat_statements`, as Cloud SQL does. To get it locally, start Postgres with `-c shared_preload_libraries=pg_stat_statements` and point `MELANGE_TEST_SERVER_URL` at it. `go run ./cmd/benchreport results.txt` (from `test/`) prints the table for any saved run.
+
+Defaults are a 4 vCPU, 16 GB Cloud SQL Enterprise instance (`DB_TIER`), an `n2-standard-4` VM (`VM_TYPE`), `europe-west2-a` (`ZONE`), PostgreSQL 17 (`PG_VERSION`), and 6 runs (`COUNT`). The script header lists every setting.
+
+A full run takes several hours, mostly loading and querying the 1M dataset. The 10M to 100M scale benchmarks are left out by default; they need hundreds of gigabytes and days to run. Narrow or widen the selection with `BENCH_TEST` and `BENCH_OPENFGA`, which are passed to `-bench`.
+
+The script works because the test helpers use `MELANGE_TEST_SERVER_URL`, when set, as the server on which to create and drop per-test databases. You can point a local run at any PostgreSQL server the same way:
+
+```bash
+MELANGE_TEST_SERVER_URL="postgres://user:pass@host:5432/postgres" just bench-kitchensink 1K
+```
+
 ## Profiling
 
 ### CPU Profile
