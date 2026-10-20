@@ -1,7 +1,12 @@
 ---
 title: Benchmarking
+description: How to run Melange's OpenFGA and scale benchmarks locally and compare results.
 weight: 2
 ---
+
+{{< callout type="info" >}}
+Looking for results? See the [Performance Reference](../../reference/performance/) for measured check and list latencies at 1K to 1M tuples. This page covers running the benchmarks yourself.
+{{< /callout >}}
 
 Melange includes comprehensive benchmarks for both the OpenFGA compatibility tests and scale testing with different tuple volumes.
 
@@ -143,10 +148,7 @@ func BenchmarkCacheHit(b *testing.B) {
 }
 ```
 
-Expected results:
-
-- Cold cache: 422 µs
-- Warm cache: 83 ns (~5,000x faster)
+Expected results: a cold check costs a database round-trip (~130 µs in the database), a warm hit ~80 ns. See [Caching](../../reference/performance/#caching) for the measured numbers.
 
 ## Profiling
 

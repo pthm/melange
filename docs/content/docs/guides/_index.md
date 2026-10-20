@@ -1,5 +1,6 @@
 ---
 title: Guides
+description: "Task-oriented guides for checking and listing permissions, migrations, caching, testing, and troubleshooting Melange."
 weight: 3
 sidebar:
   open: true

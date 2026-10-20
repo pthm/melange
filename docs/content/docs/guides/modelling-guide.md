@@ -1,5 +1,6 @@
 ---
 title: Modelling Guide
+description: "Build an OpenFGA authorization model for Melange from scratch, with the schema, tuples view, and checks together."
 weight: 10
 ---
 

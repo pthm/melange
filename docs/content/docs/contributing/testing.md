@@ -1,5 +1,6 @@
 ---
 title: Testing
+description: "Running the OpenFGA compatibility test suite against Melange, inspecting test cases, and debugging failures."
 weight: 1
 ---
 

@@ -1,5 +1,6 @@
 ---
 title: Project Setup
+description: "The melange init wizard in detail: starter templates, migration strategies, database settings, and client code generation."
 weight: 3
 prev: /docs/getting-started/quick-start
 next: /docs/getting-started/tuples-view

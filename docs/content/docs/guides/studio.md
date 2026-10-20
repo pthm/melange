@@ -1,5 +1,6 @@
 ---
 title: Studio
+description: "melange studio: a local, read-only web console for exploring the deployed model, explaining checks, and browsing tuples."
 weight: 11
 ---
 

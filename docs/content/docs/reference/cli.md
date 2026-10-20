@@ -1,5 +1,6 @@
 ---
 title: CLI Reference
+description: "Every Melange CLI command and flag: init, validate, migrate, status, doctor, generate client, studio, and more."
 weight: 1
 ---
 

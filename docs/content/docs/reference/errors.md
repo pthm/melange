@@ -1,5 +1,6 @@
 ---
 title: Errors
+description: "Error types, sentinel values, and helper functions in Melange's Go runtime package."
 weight: 6
 ---
 

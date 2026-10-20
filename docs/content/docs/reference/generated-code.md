@@ -1,5 +1,6 @@
 ---
 title: Generated Code
+description: "What melange generate client produces for Go and TypeScript: type-safe constants and constructors from your schema."
 weight: 7
 ---
 

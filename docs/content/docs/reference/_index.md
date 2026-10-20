@@ -1,5 +1,6 @@
 ---
 title: Reference
+description: "Reference for the Melange CLI, configuration, Go, TypeScript, and SQL APIs, performance, and OpenFGA compatibility."
 weight: 4
 ---
 

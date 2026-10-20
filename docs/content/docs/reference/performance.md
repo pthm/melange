@@ -1,5 +1,6 @@
 ---
 title: Performance
+description: "Measured Melange latency for checks and list queries from 1K to 1M tuples, plus caching and tuning advice."
 weight: 4
 ---
 

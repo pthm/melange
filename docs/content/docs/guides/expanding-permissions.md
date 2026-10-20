@@ -1,5 +1,6 @@
 ---
 title: Expanding Permissions
+description: "Use Expand to get the OpenFGA userset tree for an object and relation, for audit UIs and access reviews."
 weight: 5
 ---
 

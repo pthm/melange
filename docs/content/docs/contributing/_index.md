@@ -1,5 +1,6 @@
 ---
 title: Contributing
+description: "How to contribute to Melange: the compiler pipeline, local setup, and where to start."
 weight: 20
 ---
 

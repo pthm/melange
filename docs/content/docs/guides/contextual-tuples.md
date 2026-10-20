@@ -1,5 +1,6 @@
 ---
 title: Contextual Tuples
+description: "Pass temporary tuples at check time to evaluate permissions against data that is not stored in the database."
 weight: 6
 ---
 

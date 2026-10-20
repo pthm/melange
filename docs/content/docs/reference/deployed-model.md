@@ -1,5 +1,6 @@
 ---
 title: Deployed Model
+description: "How Melange records each applied authorization model in melange_migrations so the database describes itself."
 weight: 3
 ---
 

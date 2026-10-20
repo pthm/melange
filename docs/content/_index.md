@@ -24,7 +24,7 @@ layout: hextra-home
 </div>
 
 <div class="hx:mb-6 hx:flex hx:gap-4">
-{{< hextra/hero-button text="Get Started" link="docs" >}}
+{{< hextra/hero-button text="Get Started" link="docs/getting-started/installation" >}}
 {{< hextra/hero-button text="GitHub" link="https://github.com/pthm/melange" style="background: #000;" >}}
 </div>
 
@@ -45,7 +45,8 @@ layout: hextra-home
   >}}
   {{< hextra/feature-card
     title="Optimized for Speed"
-    subtitle="300-600 μs permission checks with O(1) constant-time scaling. Same speed whether you have 1K or 1M tuples."
+    subtitle="~130 μs permission checks in the database with O(1) constant-time scaling. Same speed whether you have 1K or 1M tuples."
+    link="docs/reference/performance"
     icon="lightning-bolt"
     style="background: radial-gradient(ellipse at 50% 80%,rgba(194,97,254,0.15),hsla(0,0%,100%,0));"
   >}}
@@ -93,7 +94,7 @@ Melange is an **authorization compiler**. Like Protocol Buffers or GraphQL Code 
 
 ```mermaid
 flowchart LR
-    schema["schema.fga"] --> melange["melange compile"]
+    schema["schema.fga"] --> melange["melange migrate"]
     melange --> funcs["PostgreSQL Functions"]
     funcs --> check["check_permission()"]
     funcs --> list["list_accessible_objects()"]
@@ -194,6 +195,78 @@ SELECT
     id::text AS object_id
 FROM repositories;
 ```
+
+</div>
+</div>
+
+<div class="homepage-section-gap"></div>
+
+<!-- Compile and Migrate: 2-column -->
+<div class="homepage-columns">
+<div>
+
+{{< hextra/hero-section >}}
+  Compile to SQL Functions
+{{< /hextra/hero-section >}}
+
+<div class="hx:mt-6"></div>
+
+<div class="content">
+
+`melange migrate` compiles your schema into a PostgreSQL function per relation and installs them, along with `check_permission` and the list functions that dispatch to them.
+
+Role hierarchies are flattened at compile time. `can_read` inherits from `admin`, which inherits from `owner`, so the generated function matches all three in a single lookup instead of walking the graph at query time. Run it in CI or a deploy step, or use `melange generate migration` to emit SQL files for your existing migration tool.
+
+</div>
+</div>
+<div class="content">
+
+{{< tabs >}}
+
+{{< tab name="CLI" >}}
+```bash
+# Compile and install the functions
+melange migrate
+
+# Or emit up/down SQL for your migration tool
+melange generate migration --output db/migrations
+```
+{{< /tab >}}
+
+{{< tab name="Generated SQL" >}}
+```sql
+-- Excerpt of the generated function for repository.can_read
+CREATE OR REPLACE FUNCTION check_repository_can_read(
+    p_subject_type TEXT, p_subject_id TEXT, p_object_id TEXT, ...
+) RETURNS INTEGER AS $$
+BEGIN
+    -- Direct grant, or implied via admin/owner
+    IF EXISTS (
+        SELECT 1 FROM melange_tuples
+        WHERE object_type = 'repository'
+          AND object_id = p_object_id
+          AND relation IN ('can_read', 'admin', 'owner')
+          AND subject_type = p_subject_type
+          AND subject_id = p_subject_id
+    ) THEN RETURN 1; END IF;
+
+    -- Inherited via org -> member
+    IF EXISTS (
+        SELECT 1 FROM melange_tuples AS link
+        WHERE link.object_type = 'repository'
+          AND link.object_id = p_object_id
+          AND link.relation = 'org'
+          AND check_permission_internal(p_subject_type, p_subject_id,
+                'member', link.subject_type, link.subject_id, ...) = 1
+    ) THEN RETURN 1; END IF;
+
+    RETURN 0;
+END;
+$$ LANGUAGE plpgsql STABLE;
+```
+{{< /tab >}}
+
+{{< /tabs >}}
 
 </div>
 </div>

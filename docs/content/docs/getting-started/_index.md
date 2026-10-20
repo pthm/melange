@@ -1,5 +1,6 @@
 ---
 title: Getting Started
+description: "Install the Melange CLI, set up a project, and run your first permission check in PostgreSQL."
 weight: 1
 sidebar:
   open: true

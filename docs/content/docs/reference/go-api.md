@@ -1,5 +1,6 @@
 ---
 title: Go API
+description: "Reference for Melange's Go runtime package: Checker, Object, cache, list, expand, and explain APIs. Stdlib only."
 weight: 3
 ---
 

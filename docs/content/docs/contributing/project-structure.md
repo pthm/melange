@@ -1,5 +1,6 @@
 ---
 title: Project Structure
+description: "Layout of the Melange repository: Go modules, packages, and what each component does."
 weight: 3
 ---
 

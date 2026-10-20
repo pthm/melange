@@ -1,5 +1,6 @@
 ---
 title: SQL API
+description: "Melange's generated SQL functions, such as check_permission and list_accessible_objects, callable from any PostgreSQL client."
 weight: 3
 ---
 

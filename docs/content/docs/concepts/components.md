@@ -1,5 +1,6 @@
 ---
 title: Key Components
+description: "The four parts of a Melange setup: the CLI, the schema file, the melange_tuples view, and the optional runtime libraries."
 weight: 1
 ---
 
@@ -115,7 +116,7 @@ allowed, err := checker.Check(ctx, user, "can_read", repo)
 
 The runtime library adds:
 
-- **Caching**. In-memory cache with configurable TTL (~83ns cached vs ~422μs uncached).
+- **Caching**. In-memory cache with configurable TTL (~80 ns cached vs ~350-450 µs uncached).
 - **Bulk checks**. Check up to 10,000 permissions in a single SQL call.
 - **Contextual tuples**. Inject temporary tuples at check time for request-scoped authorization data.
 - **Decision overrides**. Bypass the database for testing or admin tools.

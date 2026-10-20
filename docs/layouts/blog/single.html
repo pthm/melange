@@ -19,6 +19,22 @@
           {{ partial "release-areas.html" . }}
         </div>
         {{- end }}
+        {{- /* melange: suggest the current release to readers of older posts */}}
+        {{- $this := . }}
+        {{- with index (where site.RegularPages "Section" "blog").ByDate.Reverse 0 }}
+        {{- if ne . $this }}
+        <aside class="newer-release">
+          <p>
+            You're reading about {{ $this.File.ContentBaseName }}{{ if in $this.Params.badges "prerelease" }}, an early preview{{ end }}.
+            The latest release is <strong>{{ .File.ContentBaseName }}</strong>.
+          </p>
+          <p class="newer-release-links">
+            <a href="{{ .RelPermalink }}">See what's new in {{ .File.ContentBaseName }} &rarr;</a>
+            <a href="{{ "docs/getting-started/installation/" | relURL }}">Install the latest &rarr;</a>
+          </p>
+        </aside>
+        {{- end }}
+        {{- end }}
         <div class="hx:mt-4 hx:mb-16 hx:text-gray-500 hx:dark:text-gray-400 hx:text-sm hx:flex hx:items-center hx:flex-wrap hx:gap-y-2">
           {{- with $date := .Date }}<span class="hx:mr-1">{{ partial "utils/format-date" $date }}</span>{{ end -}}
           {{- $lazyLoading := site.Params.enableImageLazyLoading | default true -}}

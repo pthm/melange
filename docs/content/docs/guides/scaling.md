@@ -1,9 +1,10 @@
 ---
 title: Scaling
+description: "Run Melange at scale: indexing the tables behind the tuples view, materialized views, and keeping list queries fast."
 weight: 8
 ---
 
-Melange's check operations are O(1) regardless of dataset size. Benchmarks show consistent 300-600μs check latency from 1K to 1M+ tuples. The regular view approach works at scale when source tables are properly indexed.
+Melange's check operations are O(1) regardless of dataset size. Benchmarks show a flat ~130 µs in-database check latency (~350-450 µs end to end) from 1K to 1M tuples; see [Performance](../../reference/performance/). The regular view approach works at scale when source tables are properly indexed.
 
 The areas that benefit from optimization are:
 
@@ -64,7 +65,7 @@ See [Tuples View](../../concepts/tuples-view/) for the full index pattern guide.
 
 ## Application-Level Caching
 
-Caching is the highest-impact optimization for repeated checks. Cached lookups return in ~83ns vs ~422μs uncached.
+Caching is the highest-impact optimization for repeated checks. Cached lookups return in ~80 ns vs ~350-450 µs uncached.
 
 ```go
 cache := melange.NewCache(melange.WithTTL(time.Minute))

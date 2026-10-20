@@ -1,5 +1,6 @@
 ---
 title: Quick Start
+description: "The shortest path from an empty project to a working permission check in PostgreSQL with Melange."
 weight: 2
 prev: /docs/getting-started/installation
 next: /docs/getting-started/project-setup
@@ -10,8 +11,10 @@ This is the shortest path to a working permission check. It uses the default set
 ## 1. Initialize Your Project
 
 ```bash
-melange init -y
+melange init -y --db postgres://localhost:5432/mydb
 ```
+
+The `--db` URL is saved to `melange/config.yaml` and used by every later command. Without it, `init -y` writes the default `postgres://localhost:5432/mydb`. You can also set `MELANGE_DATABASE_URL` or pass `--db` to `melange migrate`.
 
 This creates a `melange/` directory with a config file and starter schema:
 
@@ -53,7 +56,21 @@ See [Project Setup](../project-setup) for details on starter templates, migratio
 
 ## 2. Create the melange_tuples View
 
-Melange reads authorization data from a SQL view called `melange_tuples`. This view maps your existing tables into tuples. Create it in your database:
+Melange reads authorization data from a SQL view called `melange_tuples`. This view maps your existing tables into tuples.
+
+The view below expects `organization_members`, `repositories`, and `repository_owners` tables. If you are trying Melange on an empty database, create them with some sample rows first:
+
+```sql
+CREATE TABLE organization_members (user_id text, organization_id text, role text);
+CREATE TABLE repositories (id text, organization_id text);
+CREATE TABLE repository_owners (user_id text, repository_id text);
+
+INSERT INTO organization_members VALUES ('alice', 'acme', 'member');
+INSERT INTO repositories VALUES ('42', 'acme');
+INSERT INTO repository_owners VALUES ('bob', '42');
+```
+
+Then create the view:
 
 ```sql
 CREATE OR REPLACE VIEW melange_tuples AS
@@ -125,6 +142,8 @@ Or from application code:
 import (
     "context"
     "database/sql"
+
+    _ "github.com/lib/pq" // any database/sql Postgres driver works
     "github.com/pthm/melange/melange"
 )
 

@@ -1,5 +1,6 @@
 ---
 title: Testing Authorization
+description: "Test your Melange schema and tuples view together against a real PostgreSQL database."
 weight: 7
 ---
 

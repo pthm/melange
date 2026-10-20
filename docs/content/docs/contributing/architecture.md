@@ -1,5 +1,6 @@
 ---
 title: Architecture
+description: "Each stage of the Melange compiler pipeline, from parsing the OpenFGA DSL to installing generated SQL functions."
 weight: 4
 ---
 

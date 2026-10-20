@@ -1,9 +1,10 @@
 ---
 title: Caching
+description: "Use Melange's in-memory permission cache to serve repeated checks in nanoseconds, and when to avoid it."
 weight: 5
 ---
 
-Melange's built-in cache reduces database load by storing permission check results in memory. Cached checks return in ~83ns compared to ~422μs for uncached checks.
+Melange's built-in cache reduces database load by storing permission check results in memory. Cached checks return in ~80 ns compared to ~350-450 µs end to end for uncached checks (see [Performance](../../reference/performance/#caching)).
 
 ## Built-in Cache
 
@@ -230,7 +231,7 @@ The built-in cache supports only TTL-based expiry. For event-driven invalidation
 
 - **Transactional checks that must see uncommitted changes**. Use `*sql.Tx` without a cache.
 - **Contextual tuple checks**. These bypass the cache automatically.
-- **Very low check volume**. At ~422μs per uncached check, caching adds complexity without meaningful benefit if you're doing fewer than ~100 checks/second.
+- **Very low check volume**. At a few hundred µs per uncached check, caching adds complexity without meaningful benefit if you're doing fewer than ~100 checks/second.
 
 ## Next Steps
 

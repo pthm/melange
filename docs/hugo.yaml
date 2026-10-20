@@ -50,6 +50,8 @@ menu:
 
 params:
   description: Zero-copy authorization for PostgreSQL - OpenFGA-compatible permission checking that queries your existing domain tables directly.
+  # Default og:image / twitter:image for pages without their own `images`.
+  images: [images/og.png]
 
   navbar:
     displayTitle: false

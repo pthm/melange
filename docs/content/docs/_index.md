@@ -1,5 +1,6 @@
 ---
 title: Documentation
+description: Melange compiles OpenFGA authorization models into PostgreSQL functions, so permission checks run inside your existing database.
 cascade:
   type: docs
 ---

@@ -1,5 +1,6 @@
 ---
 title: Listing Subjects
+description: "List every subject with access to an object with Melange's ListSubjects, including pagination and performance tips."
 weight: 3
 ---
 

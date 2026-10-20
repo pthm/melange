@@ -554,3 +554,30 @@ code, pre, kbd {
     padding: 1.25rem;
   }
 }
+
+/* "Newer release" note on older blog posts (layouts/blog/single.html) */
+.newer-release {
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  border-left: 3px solid hsl(var(--primary-hue) var(--primary-saturation) var(--primary-lightness));
+  border-radius: 0.375rem;
+  background: hsl(var(--primary-hue) var(--primary-saturation) var(--primary-lightness) / 0.06);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.newer-release-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1.25rem;
+  margin-top: 0.375rem;
+}
+
+.newer-release-links a {
+  font-weight: 600;
+  color: hsl(var(--primary-hue) var(--primary-saturation) var(--primary-lightness));
+}
+
+.newer-release-links a:hover {
+  text-decoration: underline;
+}

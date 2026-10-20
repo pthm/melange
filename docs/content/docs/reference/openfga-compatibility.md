@@ -1,5 +1,6 @@
 ---
 title: OpenFGA Compatibility
+description: Which OpenFGA features Melange supports, how it is tested against the OpenFGA suite, and how to move between the two.
 weight: 5
 ---
 
@@ -179,6 +180,20 @@ and would be silently dropped: document#viewer allows [user with ip_allowed].
 
 Remove the condition (and tighten the relation another way) to use the schema
 with Melange.
+
+## Moving from OpenFGA to Melange
+
+If you run OpenFGA today, most of your model carries over unchanged.
+
+1. **Reuse your `.fga` files.** Schema 1.1 models and modular models (`fga.mod`) compile as-is. Check that no relation uses a [condition](#conditions-schema-12), which Melange rejects.
+
+2. **Replace tuple writes with a view.** Instead of writing tuples to a store, define a `melange_tuples` view over the tables that already hold the relationships (memberships, ownership, parent links). See [Creating Your Tuples View](../../getting-started/tuples-view/). If some relationships only exist in OpenFGA, export them with `fga tuple read` into a table and include it in the view.
+
+3. **Swap the client.** Replace OpenFGA SDK calls with the [Go Checker](../../guides/checking-permissions/), the [TypeScript client](../typescript-api/), or plain SQL (`check_permission`). Contextual tuples, `ListObjects`, and `ListUsers` equivalents are supported.
+
+What you gain: checks run in your database transaction, see uncommitted writes, and need no separate service or tuple sync. What you give up: conditions, and the option to scale authorization separately from PostgreSQL.
+
+To try it, start with [Installation](../../getting-started/installation/) and the [Quick Start](../../getting-started/quick-start/).
 
 ## Migration Path to OpenFGA
 

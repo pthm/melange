@@ -1,5 +1,6 @@
 ---
 title: Checking Permissions
+description: "Check whether a subject has a relation on an object with Melange from Go, TypeScript, or SQL, including bulk checks."
 weight: 1
 ---
 

@@ -1,5 +1,6 @@
 ---
 title: Your First Migration
+description: "Validate your schema, apply your first Melange migration, and check the result with melange doctor."
 weight: 5
 prev: /docs/getting-started/tuples-view
 next: /docs/concepts

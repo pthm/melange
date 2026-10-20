@@ -1,5 +1,6 @@
 ---
 title: Running Migrations
+description: "Two ways to install Melange's generated SQL: melange migrate directly, or SQL files for your existing migration tool."
 weight: 10
 ---
 

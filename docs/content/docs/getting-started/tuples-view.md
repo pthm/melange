@@ -1,5 +1,6 @@
 ---
 title: Creating Your Tuples View
+description: "Create the melange_tuples view that maps your existing domain tables into authorization tuples, with no tuple sync."
 weight: 4
 prev: /docs/getting-started/project-setup
 next: /docs/getting-started/first-migration

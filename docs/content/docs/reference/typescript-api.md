@@ -1,5 +1,6 @@
 ---
 title: TypeScript API
+description: "Reference for the @pthm/melange TypeScript runtime client, mirroring the Go API with TypeScript idioms."
 weight: 4
 ---
 

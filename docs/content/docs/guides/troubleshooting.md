@@ -1,5 +1,6 @@
 ---
 title: Troubleshooting
+description: "Diagnose and fix common Melange problems with melange doctor, error messages, and query plans."
 weight: 9
 ---
 

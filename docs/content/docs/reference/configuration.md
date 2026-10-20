@@ -1,5 +1,6 @@
 ---
 title: Configuration
+description: "Configure Melange with melange.yaml, MELANGE_ environment variables, or command-line flags, and how they take precedence."
 weight: 2
 ---
 

@@ -1,5 +1,6 @@
 ---
 title: Installation
+description: "Install the Melange CLI with Homebrew, go install, or a prebuilt binary for Linux, macOS, or Windows."
 weight: 1
 prev: /docs/getting-started
 next: /docs/getting-started/quick-start
@@ -26,13 +27,13 @@ brew install pthm/tap/melange
 go install github.com/pthm/melange@latest
 ```
 
-Requires Go 1.21 or later.
+Requires Go 1.25 or later. The CLI lives in the root module, so install `github.com/pthm/melange`, not `.../cmd/melange` (that path was retired in v0.9.0).
 {{< /tab >}}
 
 {{< tab name="Binary" >}}
 Download pre-built binaries from the [GitHub releases page](https://github.com/pthm/melange/releases).
 
-Binaries are available for Linux (amd64, arm64) and macOS (amd64, arm64).
+Binaries are available for Linux, macOS, and Windows (amd64 and arm64). Windows builds ship as a `.zip`.
 {{< /tab >}}
 
 {{< /tabs >}}

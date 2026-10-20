@@ -1,5 +1,6 @@
 ---
 title: Concepts
+description: "How Melange compiles OpenFGA schemas into SQL, how relationships are modelled, and how your tables act as the source of truth."
 weight: 2
 sidebar:
   open: true

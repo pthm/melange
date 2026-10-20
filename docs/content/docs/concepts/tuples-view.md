@@ -1,5 +1,6 @@
 ---
 title: Tuples View
+description: "The melange_tuples view schema, query patterns for mapping domain tables to tuples, and indexing for performance."
 weight: 4
 ---
 

@@ -1,5 +1,6 @@
 ---
 title: Authorization Modelling
+description: "OpenFGA DSL syntax as supported by Melange: types, relations, unions, intersections, exclusions, wildcards, and parent lookups."
 weight: 3
 ---
 

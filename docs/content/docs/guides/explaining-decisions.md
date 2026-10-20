@@ -1,5 +1,6 @@
 ---
 title: Explaining Decisions
+description: "Use Explain to trace why a Melange permission check was allowed or denied, branch by branch."
 weight: 4
 ---
 
