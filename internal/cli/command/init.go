@@ -6,9 +6,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 
-	"github.com/charmbracelet/huh"
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/huh/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
 
@@ -308,36 +309,49 @@ func runInit(_ *cobra.Command, _ []string) error {
 	return nil
 }
 
+// darkBackground reports whether the terminal background is dark, querying it
+// once per run. Only interactive prompts call it, so the reply arrives while
+// melange is still reading input rather than echoing onto the shell prompt.
+var darkBackground = sync.OnceValue(func() bool {
+	return lipgloss.HasDarkBackground(os.Stdin, os.Stdout)
+})
+
 // melangeTheme returns the consistent huh form theme used across all interactive
 // prompts in the init command. The warm palette (burnt orange as the accent,
 // sand/cream for secondary text) is applied to both focused and blurred states
 // so all forms feel cohesive regardless of where focus sits.
-func melangeTheme() *huh.Theme {
-	t := huh.ThemeBase()
+func melangeTheme() huh.Theme {
+	// huh v2 passes the background it was told about, but its forms never ask
+	// bubbletea for it, so the argument is always false (light). Use our own
+	// detection instead.
+	isDark := darkBackground()
+	t := huh.ThemeBase(isDark)
+	b := style.BrandFor(isDark)
 
 	// Focused field styles
-	t.Focused.Title = t.Focused.Title.Foreground(style.BurntOrange)
-	t.Focused.NoteTitle = t.Focused.NoteTitle.Foreground(style.BurntOrange)
-	t.Focused.SelectSelector = t.Focused.SelectSelector.Foreground(style.BurntOrange)
-	t.Focused.MultiSelectSelector = t.Focused.MultiSelectSelector.Foreground(style.BurntOrange)
-	t.Focused.SelectedOption = t.Focused.SelectedOption.Foreground(style.BurntOrange)
-	t.Focused.SelectedPrefix = t.Focused.SelectedPrefix.Foreground(style.BurntOrange)
-	t.Focused.FocusedButton = t.Focused.FocusedButton.Background(style.BurntOrange)
-	t.Focused.TextInput.Cursor = t.Focused.TextInput.Cursor.Foreground(style.BurntOrange)
-	t.Focused.TextInput.Prompt = t.Focused.TextInput.Prompt.Foreground(style.Sand)
-	t.Focused.Description = t.Focused.Description.Foreground(style.WarmGray)
-	t.Focused.Option = t.Focused.Option.Foreground(style.Cream)
-	t.Focused.Next = t.Focused.Next.Foreground(style.Sand)
-	t.Focused.Card = t.Focused.Card.BorderForeground(style.Sand)
+	t.Focused.Title = t.Focused.Title.Foreground(b.BurntOrange)
+	t.Focused.NoteTitle = t.Focused.NoteTitle.Foreground(b.BurntOrange)
+	t.Focused.SelectSelector = t.Focused.SelectSelector.Foreground(b.BurntOrange)
+	t.Focused.MultiSelectSelector = t.Focused.MultiSelectSelector.Foreground(b.BurntOrange)
+	t.Focused.SelectedOption = t.Focused.SelectedOption.Foreground(b.BurntOrange)
+	t.Focused.SelectedPrefix = t.Focused.SelectedPrefix.Foreground(b.BurntOrange)
+	t.Focused.FocusedButton = t.Focused.FocusedButton.Background(b.BurntOrange)
+	t.Focused.TextInput.Cursor = t.Focused.TextInput.Cursor.Foreground(b.BurntOrange)
+	t.Focused.TextInput.Prompt = t.Focused.TextInput.Prompt.Foreground(b.Sand)
+	t.Focused.Description = t.Focused.Description.Foreground(b.WarmGray)
+	t.Focused.Option = t.Focused.Option.Foreground(b.Cream)
+	t.Focused.Next = t.Focused.Next.Foreground(b.Sand)
+	t.Focused.Card = t.Focused.Card.BorderForeground(b.Sand)
 
 	// Blurred field styles
-	t.Blurred.Title = t.Blurred.Title.Foreground(style.WarmGray)
-	t.Blurred.TextInput.Prompt = t.Blurred.TextInput.Prompt.Foreground(style.WarmGray)
-	t.Blurred.TextInput.Text = t.Blurred.TextInput.Text.Foreground(style.Sand)
-	t.Blurred.SelectSelector = t.Blurred.SelectSelector.Foreground(style.WarmGray)
-	t.Blurred.SelectedOption = t.Blurred.SelectedOption.Foreground(style.Sand)
+	t.Blurred.Title = t.Blurred.Title.Foreground(b.WarmGray)
+	t.Blurred.TextInput.Prompt = t.Blurred.TextInput.Prompt.Foreground(b.WarmGray)
+	t.Blurred.TextInput.Text = t.Blurred.TextInput.Text.Foreground(b.Sand)
+	t.Blurred.SelectSelector = t.Blurred.SelectSelector.Foreground(b.WarmGray)
+	t.Blurred.SelectedOption = t.Blurred.SelectedOption.Foreground(b.Sand)
 
-	return t
+	// Built once: huh calls the theme on every render.
+	return huh.ThemeFunc(func(bool) *huh.Styles { return t })
 }
 
 const melangeBanner = `       ▜
@@ -353,13 +367,14 @@ const melangeBanner = `       ▜
 // runtime-specific client generation settings. The detected project is used
 // only for the banner display; defaults have already been applied by the caller.
 func runWizard(a *initAnswers, proj detectedProject) error {
+	b := style.BrandFor(darkBackground())
 	bannerStyle := lipgloss.NewStyle().
-		Foreground(style.BurntOrange).
+		Foreground(b.BurntOrange).
 		Bold(true)
 	detectedStyle := lipgloss.NewStyle().
-		Foreground(style.Sand)
+		Foreground(b.Sand)
 	runtimeStyle := lipgloss.NewStyle().
-		Foreground(style.BurntOrange).
+		Foreground(b.BurntOrange).
 		Bold(true)
 
 	content := bannerStyle.Render(melangeBanner)
@@ -367,7 +382,7 @@ func runWizard(a *initAnswers, proj detectedProject) error {
 		content += "\n" + detectedStyle.Render("Detected ") + runtimeStyle.Render(proj.runtime) + detectedStyle.Render(" project")
 	}
 
-	fmt.Println(lipgloss.NewStyle().PaddingLeft(1).PaddingTop(1).Render(content))
+	_, _ = lipgloss.Println(lipgloss.NewStyle().PaddingLeft(1).PaddingTop(1).Render(content))
 	fmt.Println()
 
 	fields := []huh.Field{

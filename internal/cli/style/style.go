@@ -3,6 +3,9 @@
 // update and advisory notices, the init wizard) takes its colors from here so
 // they read as one tool.
 //
+// Styles render full 24-bit color; output is downsampled where it is written
+// (see Writer), which is how lipgloss v2 handles terminals and NO_COLOR.
+//
 // Two families:
 //
 //   - The OpenFGA palette, mapped from the openfga-dark theme of the OpenFGA
@@ -15,11 +18,12 @@
 package style
 
 import (
+	"image/color"
 	"io"
 	"os"
 
-	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/colorprofile"
 )
 
 // OpenFGA palette.
@@ -39,67 +43,71 @@ var (
 	OnStatus = lipgloss.Color("15")      // bright white text on a Pass/Fail badge
 )
 
-// Brand palette. The adaptive forms feed the init wizard's huh theme, where
-// bubbletea has already detected the terminal background. Plain output uses
-// the fixed Accent and Muted instead: adaptive colors make lipgloss query the
-// terminal background, and a reply arriving after the CLI exits is echoed onto
-// the user's prompt.
+// Fixed brand colors for plain output. They do not adapt to the terminal
+// background: that needs a background query, and a reply arriving after the
+// CLI exits is echoed onto the user's prompt.
 var (
-	BurntOrange = lipgloss.AdaptiveColor{Light: "#C45A20", Dark: "#E8813A"}
-	Sand        = lipgloss.AdaptiveColor{Light: "#A68A64", Dark: "#D4B896"}
-	WarmGray    = lipgloss.AdaptiveColor{Light: "#6B5E50", Dark: "#9C8E80"}
-	Cream       = lipgloss.AdaptiveColor{Light: "#8C7A66", Dark: "#F5E6D0"}
-
-	Accent = lipgloss.Color(BurntOrange.Dark)
-	Muted  = lipgloss.Color(WarmGray.Dark)
+	Accent = lipgloss.Color("#E8813A") // burnt orange
+	Muted  = lipgloss.Color("#9C8E80") // warm gray
 )
 
-// For returns a renderer for w that colors only when w is a terminal and
-// NO_COLOR is unset. Use it for output that has no --color flag.
-func For(w io.Writer) *lipgloss.Renderer {
-	return lipgloss.NewRenderer(w)
+// Brand is the brand palette for one terminal background.
+type Brand struct {
+	BurntOrange, Sand, WarmGray, Cream color.Color
 }
 
-// Enabled reports whether output to w should be colored by default: the same
-// terminal and NO_COLOR detection For uses, so every command agrees.
-func Enabled(w io.Writer) bool {
-	return For(w).ColorProfile() != termenv.Ascii
-}
-
-// New returns a style on re that leaves tabs alone. lipgloss otherwise expands
-// them to spaces on every Render, even when not coloring, which would rewrite
-// user text such as paths and error details.
-func New(re *lipgloss.Renderer) lipgloss.Style {
-	return re.NewStyle().TabWidth(lipgloss.NoTabConversion)
-}
-
-// StatusStyles are the shared styles for status-bearing output (doctor,
-// status), so a pass, warning or failure looks the same everywhere.
-type StatusStyles struct {
-	Good, Warn, Bad, Muted, Bold lipgloss.Style
-}
-
-// NewStatusStyles returns StatusStyles that color only when w is a terminal
-// and NO_COLOR is unset.
-func NewStatusStyles(w io.Writer) StatusStyles {
-	re := For(w)
-	return StatusStyles{
-		Good:  New(re).Foreground(Pass),
-		Warn:  New(re).Foreground(Warn),
-		Bad:   New(re).Foreground(Fail).Bold(true),
-		Muted: New(re).Foreground(Muted),
-		Bold:  New(re).Bold(true),
+// BrandFor returns the brand palette for a dark or light background. Use it
+// only where the background has already been queried, such as the interactive
+// init wizard.
+func BrandFor(isDark bool) Brand {
+	ld := lipgloss.LightDark(isDark)
+	return Brand{
+		BurntOrange: ld(lipgloss.Color("#C45A20"), Accent),
+		Sand:        ld(lipgloss.Color("#A68A64"), lipgloss.Color("#D4B896")),
+		WarmGray:    ld(lipgloss.Color("#6B5E50"), Muted),
+		Cream:       ld(lipgloss.Color("#8C7A66"), lipgloss.Color("#F5E6D0")),
 	}
 }
 
-// TrueColor returns a renderer that always colors, in 24-bit color, wherever
-// the output goes. Use it behind an explicit --color decision, applying styles
-// only when color is on.
-func TrueColor() *lipgloss.Renderer {
-	r := lipgloss.NewRenderer(io.Discard)
-	r.SetColorProfile(termenv.TrueColor)
-	return r
+// Writer wraps w so styled text written to it is downsampled to what w
+// supports, and stripped entirely unless w is a terminal with color and
+// NO_COLOR is unset. colorprofile keeps bold and other non-color attributes
+// under NO_COLOR; they are stripped too, so plain means plain. Wrapping an
+// already-wrapped writer returns it unchanged: a second wrap would see a
+// non-terminal and strip everything. Use it for output with no --color flag.
+func Writer(w io.Writer) io.Writer {
+	if cw, ok := w.(*colorprofile.Writer); ok {
+		return cw
+	}
+	cw := colorprofile.NewWriter(w, os.Environ())
+	if cw.Profile < colorprofile.ANSI {
+		cw.Profile = colorprofile.NoTTY
+	}
+	return cw
 }
 
-// Stderr is the renderer for notices written to stderr.
-var Stderr = For(os.Stderr)
+// Enabled reports whether output to w should be colored by default: the same
+// detection Writer uses, so every command agrees.
+func Enabled(w io.Writer) bool {
+	return colorprofile.Detect(w, os.Environ()) >= colorprofile.ANSI
+}
+
+// New returns a style that leaves tabs alone. lipgloss otherwise expands them
+// to spaces on every Render, which would rewrite user text such as paths and
+// error details.
+func New() lipgloss.Style {
+	return lipgloss.NewStyle().TabWidth(lipgloss.NoTabConversion)
+}
+
+// StatusStyles are the shared styles for status-bearing output (doctor,
+// status), so a pass, warning or failure looks the same everywhere. Write
+// them through Writer so they are stripped when not on a terminal.
+var StatusStyles = struct {
+	Good, Warn, Bad, Muted, Bold lipgloss.Style
+}{
+	Good:  New().Foreground(Pass),
+	Warn:  New().Foreground(Warn),
+	Bad:   New().Foreground(Fail).Bold(true),
+	Muted: New().Foreground(Muted),
+	Bold:  New().Bold(true),
+}

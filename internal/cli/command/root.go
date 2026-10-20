@@ -281,30 +281,31 @@ func awaitUpdateInfo(timeout time.Duration) *update.Info {
 	}
 }
 
-// Notice styles render on stderr, so color follows stderr's terminal and
-// NO_COLOR rather than stdout's: redirected output stays plain text.
+// Notices are written through noticeOut, which strips color unless stderr is a
+// terminal and NO_COLOR is unset: redirected output stays plain text.
 var (
-	noticeDanger = style.New(style.Stderr).Bold(true).Foreground(style.Fail)
-	noticeAccent = style.New(style.Stderr).Bold(true).Foreground(style.Accent)
-	noticeBold   = style.New(style.Stderr).Bold(true)
-	noticeDim    = style.New(style.Stderr).Foreground(style.Muted)
+	noticeOut    = style.Writer(os.Stderr)
+	noticeDanger = style.New().Bold(true).Foreground(style.Fail)
+	noticeAccent = style.New().Bold(true).Foreground(style.Accent)
+	noticeBold   = style.New().Bold(true)
+	noticeDim    = style.New().Foreground(style.Muted)
 )
 
 // showAdvisoryNotice warns that the running CLI is covered by security
 // advisories. Most fixes are in generated SQL, so upgrading alone is not
 // enough: the database must be migrated again.
 func showAdvisoryNotice(current string, affected []update.Advisory) {
-	fmt.Fprintln(os.Stderr)
-	fmt.Fprintln(os.Stderr, noticeDanger.Render(fmt.Sprintf("! melange %s is affected by %d security advisor%s:",
+	_, _ = fmt.Fprintln(noticeOut)
+	_, _ = fmt.Fprintln(noticeOut, noticeDanger.Render(fmt.Sprintf("! melange %s is affected by %d security advisor%s:",
 		current, len(affected), pluralY(len(affected)))))
 	for _, a := range affected {
-		fmt.Fprintf(os.Stderr, "  %s %s %s\n    %s\n",
+		_, _ = fmt.Fprintf(noticeOut, "  %s %s %s\n    %s\n",
 			noticeBold.Render(a.ID),
 			noticeDim.Render(fmt.Sprintf("(%s, %s)", a.Severity, a.FixedIn())),
 			a.Summary,
 			noticeDim.Render(a.URL))
 	}
-	fmt.Fprintln(os.Stderr, "  Upgrade to a fixed release, then run "+noticeBold.Render("melange migrate")+" to regenerate the database functions.")
+	_, _ = fmt.Fprintln(noticeOut, "  Upgrade to a fixed release, then run "+noticeBold.Render("melange migrate")+" to regenerate the database functions.")
 }
 
 func pluralY(n int) string {
@@ -318,9 +319,9 @@ func pluralY(n int) string {
 // a newer release is confirmed available, so the caller should always check
 // info.UpdateAvailable before invoking this.
 func showUpdateNotice(info *update.Info) {
-	fmt.Fprintln(os.Stderr)
-	fmt.Fprintf(os.Stderr, "%s %s\n",
+	_, _ = fmt.Fprintln(noticeOut)
+	_, _ = fmt.Fprintf(noticeOut, "%s %s\n",
 		noticeAccent.Render("* A new version of melange is available: v"+info.LatestVersion),
 		noticeDim.Render("(current: "+info.CurrentVersion+")"))
-	fmt.Fprintln(os.Stderr, noticeDim.Render("  brew upgrade melange  or  go install github.com/pthm/melange@latest"))
+	_, _ = fmt.Fprintln(noticeOut, noticeDim.Render("  brew upgrade melange  or  go install github.com/pthm/melange@latest"))
 }

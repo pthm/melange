@@ -22,7 +22,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 
 	"github.com/pthm/melange/internal/cli/style"
 	"github.com/pthm/melange/internal/sqlgen"
@@ -120,7 +120,8 @@ func (r *Report) AddCheck(check CheckResult) {
 // Print writes the report to the given writer, colored when w is a terminal
 // and NO_COLOR is unset.
 func (r *Report) Print(w io.Writer, verbose bool) {
-	st := style.NewStatusStyles(w)
+	w = style.Writer(w)
+	st := style.StatusStyles
 	heading, dim := st.Bold, st.Muted
 	statusStyle := map[Status]lipgloss.Style{StatusPass: st.Good, StatusWarn: st.Warn, StatusFail: st.Bad}
 

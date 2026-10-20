@@ -11,7 +11,7 @@ import (
 // palette byte-for-byte rather than echoing the styles back. A change here
 // means the CLI drifted from the openfga-dark theme.
 const (
-	ansiReset      = "\x1b[0m"
+	ansiReset      = "\x1b[m"                  // SGR reset; lipgloss v2 omits the redundant 0
 	colorType      = "\x1b[38;2;121;237;131m"  // #79ED83
 	colorRelation  = "\x1b[38;2;32;241;245m"   // #20F1F5
 	colorTypeRestr = "\x1b[38;2;206;236;147m"  // #CEEC93

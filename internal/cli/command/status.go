@@ -390,7 +390,8 @@ func shortChecksum(sum string) string {
 }
 
 // presence colors a present|missing value.
-func presence(st style.StatusStyles, v string) string {
+func presence(v string) string {
+	st := style.StatusStyles
 	if v == "present" {
 		return st.Good.Render(v)
 	}
@@ -398,7 +399,8 @@ func presence(st style.StatusStyles, v string) string {
 }
 
 // syncStyled colors a sync-state description by how much attention it needs.
-func syncStyled(st style.StatusStyles, state string) string {
+func syncStyled(state string) string {
+	st := style.StatusStyles
 	desc := syncDescription(state)
 	switch state {
 	case syncInSync:
@@ -413,9 +415,10 @@ func syncStyled(st style.StatusStyles, state string) string {
 }
 
 func printStatusText(w io.Writer, r statusReport, s *migrator.Status, schemaPath string) {
-	st := style.NewStatusStyles(w)
-	_, _ = fmt.Fprintf(w, "Schema file:  %s\n", presence(st, r.SchemaFile))
-	_, _ = fmt.Fprintf(w, "Tuples view:  %s\n", presence(st, r.TuplesView))
+	w = style.Writer(w)
+	st := style.StatusStyles
+	_, _ = fmt.Fprintf(w, "Schema file:  %s\n", presence(r.SchemaFile))
+	_, _ = fmt.Fprintf(w, "Tuples view:  %s\n", presence(r.TuplesView))
 
 	if r.Deployed == nil {
 		_, _ = fmt.Fprintf(w, "Deployed:     %s\n", st.Muted.Render("no migration recorded"))
@@ -429,8 +432,8 @@ func printStatusText(w io.Writer, r statusReport, s *migrator.Status, schemaPath
 			_, _ = fmt.Fprintf(w, " · %s", st.Muted.Render(d.MigratedAt))
 		}
 		_, _ = fmt.Fprintln(w)
-		_, _ = fmt.Fprintf(w, "Sync:         %s\n", syncStyled(st, r.Sync))
-		printDriftDetail(w, r.Drift, st)
+		_, _ = fmt.Fprintf(w, "Sync:         %s\n", syncStyled(r.Sync))
+		printDriftDetail(w, r.Drift)
 		if !d.ModelRecorded {
 			_, _ = fmt.Fprintln(w, st.Muted.Render("              model DSL not recorded — re-migrate to enable `melange schema pull`"))
 		}
@@ -465,10 +468,12 @@ const maxDriftLines = 5
 
 // printDriftDetail prints the change summary under the Sync line. Nil (no
 // detail available) prints nothing — the Sync line already says drift.
-func printDriftDetail(w io.Writer, d *driftReport, st style.StatusStyles) {
+func printDriftDetail(w io.Writer, d *driftReport) {
 	if d == nil {
 		return
 	}
+	w = style.Writer(w)
+	st := style.StatusStyles
 	_, _ = fmt.Fprintf(w, "              %d breaking, %d additive\n", d.Breaking, d.Additive)
 	for i, c := range d.Changes {
 		if i == maxDriftLines {

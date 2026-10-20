@@ -6,10 +6,11 @@ import (
 	"github.com/pthm/melange/internal/cli/style"
 )
 
-// Styles for the OpenFGA palette (see package style). Rendering is always
-// 24-bit so the on-terminal output matches the editor palette on modern
-// terminals; whether to color at all is the caller's WithColor decision, and
-// consumers on legacy terminals opt out with `--color=never`.
+// Styles for the OpenFGA palette (see package style). Output is written
+// straight through in 24-bit color, not downsampled, so the on-terminal output
+// matches the editor palette on modern terminals; whether to color at all is
+// the caller's WithColor decision, and consumers on legacy terminals opt out
+// with `--color=never`.
 //
 // Scope mapping:
 //   - Type name (`user`, `document`)          → typeStyle
@@ -19,13 +20,12 @@ import (
 //   - Tree connectors + dim prose             → dimStyle
 //   - Deny / invalid / truncation warnings    → denyStyle
 var (
-	palette        = style.TrueColor()
-	typeStyle      = style.New(palette).Foreground(style.TypeName)
-	relationStyle  = style.New(palette).Foreground(style.RelationName)
-	typeRestrStyle = style.New(palette).Foreground(style.TypeRestriction)
-	keywordStyle   = style.New(palette).Foreground(style.Keyword)
-	dimStyle       = style.New(palette).Foreground(style.Comment)
-	denyStyle      = style.New(palette).Foreground(style.Fail)
+	typeStyle      = style.New().Foreground(style.TypeName)
+	relationStyle  = style.New().Foreground(style.RelationName)
+	typeRestrStyle = style.New().Foreground(style.TypeRestriction)
+	keywordStyle   = style.New().Foreground(style.Keyword)
+	dimStyle       = style.New().Foreground(style.Comment)
+	denyStyle      = style.New().Foreground(style.Fail)
 
 	// Per-node failure markers: bold pink foreground, not a chip, so the
 	// tree stays calm and only the header verdict gets the badge.
@@ -35,8 +35,8 @@ var (
 	// result in headers so the decision jumps off the terminal. Plain mode
 	// keeps the single-character marker so pipe/capture consumers see the
 	// same shape they always did.
-	allowChipStyle = style.New(palette).Bold(true).Foreground(style.OnStatus).Background(style.Pass)
-	denyChipStyle  = style.New(palette).Bold(true).Foreground(style.OnStatus).Background(style.Fail)
+	allowChipStyle = style.New().Bold(true).Foreground(style.OnStatus).Background(style.Pass)
+	denyChipStyle  = style.New().Bold(true).Foreground(style.OnStatus).Background(style.Fail)
 )
 
 // paintAllowChip renders the ✓ marker as a bold white glyph on a
