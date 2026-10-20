@@ -27,7 +27,7 @@ brew install pthm/tap/melange
 go install github.com/pthm/melange@latest
 ```
 
-Requires Go 1.25 or later. The CLI lives in the root module, so install `github.com/pthm/melange`, not `.../cmd/melange` (that path was retired in v0.9.0).
+Requires Go 1.27 or later. The CLI lives in the root module, so install `github.com/pthm/melange`, not `.../cmd/melange` (that path was retired in v0.9.0).
 {{< /tab >}}
 
 {{< tab name="Binary" >}}
