@@ -960,26 +960,18 @@ func buildSubjectsRecursiveUsersetFilterTypedBlocks(plan ListPlan, parentRelatio
 		)
 	}
 
-	filterUsersetExpr := Concat{Parts: []Expr{Param("v_filter_type"), Lit("#"), Param("v_filter_relation")}}
-	for _, rel := range composedClosureRelations(plan.Analysis) {
-		funcName := listSubjectsFunctionName(plan.ObjectType, rel)
-		stmt := SelectStmt{
-			Distinct:    true,
-			ColumnExprs: []Expr{Col{Table: "ics", Column: "subject_id"}},
-			FromExpr: FunctionCallExpr{
-				Schema: plan.DatabaseSchema,
-				Name:   funcName,
-				Args:   []Expr{ObjectID, filterUsersetExpr},
-				Alias:  "ics",
-			},
-		}
-		blocks = append(blocks, TypedQueryBlock{
-			Comments: []string{fmt.Sprintf("-- Composed closure: %s", rel)},
-			Query:    stmt,
-		})
+	// Usersets granted through an implied relation must still pass this
+	// relation's exclusions, as on the regular and non-recursive paths.
+	composed, err := buildListSubjectsComposedClosureBlocks(
+		plan,
+		"v_filter_type || '#' || v_filter_relation",
+		"v_filter_type",
+		plan.HasExclusion,
+	)
+	if err != nil {
+		return nil, err
 	}
-
-	return blocks, nil
+	return append(blocks, composed...), nil
 }
 
 // buildListSubjectsRecursiveUsersetFilterDirectBlock builds the direct userset tuples block.
