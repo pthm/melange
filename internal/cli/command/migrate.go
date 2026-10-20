@@ -143,6 +143,10 @@ func runMigrate(dsn, schemaPath string, dryRun, force bool, databaseSchema strin
 		if errors.As(err, &driftErr) {
 			return cli.GeneralError("migration aborted", driftErr)
 		}
+		var aheadErr *migrator.DatabaseAheadError
+		if errors.As(err, &aheadErr) {
+			return &cli.ExitError{Code: cli.ExitDatabaseAhead, Message: "migration refused", Err: aheadErr}
+		}
 		// Classify error
 		errStr := err.Error()
 		if strings.Contains(errStr, "parsing schema") {
