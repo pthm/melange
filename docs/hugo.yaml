@@ -11,9 +11,16 @@ enableRobotsTXT: true
 enableGitInfo: true
 
 # Machine-readable outputs: /llms.txt indexes the docs for LLM agents,
-# and every page gets a raw-markdown twin at <page>.md.
+# /llms-full.txt is every docs page in one file, and every page gets a
+# markdown twin at <page>.md (layouts/_partials/llms/markdown-body.html).
+outputFormats:
+  llmsfull:
+    baseName: llms-full
+    mediaType: text/plain
+    isPlainText: true
+
 outputs:
-  home: [HTML, RSS, llms]
+  home: [HTML, RSS, llms, llmsfull]
   page: [HTML, markdown]
   section: [HTML, RSS, markdown]
 

@@ -1,0 +1,25 @@
+{{- /* /llms-full.txt: every user-facing docs page as markdown, in
+  navigation order. Contributor docs are left out; llms.txt links them. */ -}}
+# {{ site.Title }} documentation
+
+> {{ site.Params.description }}
+{{ with site.GetPage "/docs" }}
+{{- template "llms-full-page" . }}
+{{- end }}
+
+{{- define "llms-full-page" }}
+{{ "\n---\n" }}
+# {{ .Title }}
+
+Source: {{ .Permalink }}
+{{ with .Description }}
+> {{ . }}
+{{ end }}
+{{ partial "llms/markdown-body.html" . }}
+{{- range .RegularPages }}
+{{- template "llms-full-page" . }}
+{{- end }}
+{{- range where .Sections "Path" "ne" "/docs/contributing" }}
+{{- template "llms-full-page" . }}
+{{- end }}
+{{- end }}

@@ -15,7 +15,7 @@ Melange applies this pattern to authorization:
 
 ```mermaid
 flowchart LR
-    schema["schema.fga<br/>(OpenFGA DSL)"] --> melange["melange<br/>compile"]
+    schema["schema.fga<br/>(OpenFGA DSL)"] --> melange["melange<br/>migrate"]
     melange --> funcs["PostgreSQL Functions<br/>(check_permission, etc)"]
 ```
 
@@ -76,6 +76,7 @@ Using Melange's client libraries, middleware patterns, and operational workflows
   {{< card link="guides/listing-subjects" title="Listing Subjects" subtitle="Find all subjects with access to an object" icon="users" >}}
   {{< card link="guides/caching" title="Caching" subtitle="In-memory, request-scoped, and custom cache strategies" icon="lightning-bolt" >}}
   {{< card link="guides/troubleshooting" title="Troubleshooting" subtitle="Diagnose common issues with melange doctor" icon="search" >}}
+  {{< card link="guides/coding-agents" title="Using Coding Agents" subtitle="Docs for agents and project instructions for your schema" icon="sparkles" >}}
 {{< /cards >}}
 
 ## Reference
