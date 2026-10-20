@@ -212,7 +212,9 @@ func buildUsersetWildcardTailQuery(a RelationAnalysis, databaseSchema string) SQ
 //     transitively through a TTU. Verifying '*' unconditionally is correct for
 //     non-exclusion relations too (the check passes), so no gate is needed.
 //   - concrete subjects use the no-wildcard check, because wildcard-only access
-//     is already represented by the '*' row.
+//     is already represented by the '*' row. With an exclusion, when '*' is
+//     denied, the '*' row is dropped and no longer represents them, so they
+//     also pass through the full check.
 //
 // The NOT(has_wildcard) short-circuit keeps every base row when there is no '*'.
 // That is safe only when the relation has no exclusion: for an exclusion-bearing
@@ -223,20 +225,31 @@ func buildUsersetWildcardTailQuery(a RelationAnalysis, databaseSchema string) SQ
 // '*' by check_permission_internal.
 func wildcardSubjectsTailWhere(schema, relation, objectType string, hasExclusion bool) Expr {
 	subject := Col{Table: "br", Column: "subject_id"}
+	var concrete Expr = NoWildcardPermissionCheckCall(schema, relation, objectType, subject, ObjectID)
+	if hasExclusion {
+		concrete = Or(concrete, And(
+			wildcardDenied(schema, relation, objectType),
+			WildcardPermissionCheckCall(schema, relation, objectType, subject, ObjectID),
+		))
+	}
 	branches := []Expr{
 		And(
 			Eq{Left: subject, Right: Lit("*")},
 			WildcardPermissionCheckCall(schema, relation, objectType, subject, ObjectID),
 		),
-		And(
-			Ne{Left: subject, Right: Lit("*")},
-			NoWildcardPermissionCheckCall(schema, relation, objectType, subject, ObjectID),
-		),
+		And(Ne{Left: subject, Right: Lit("*")}, concrete),
 	}
 	if !hasExclusion {
 		branches = append([]Expr{NotExpr{Expr: Col{Table: "hw", Column: "has_wildcard"}}}, branches...)
 	}
 	return Or(branches...)
+}
+
+// wildcardDenied is true when the full check denies '*' on the object. The
+// subquery is uncorrelated, so PostgreSQL evaluates it once.
+func wildcardDenied(schema, relation, objectType string) Expr {
+	check := WildcardPermissionCheckCall(schema, relation, objectType, Lit("*"), ObjectID)
+	return NotExpr{Expr: Paren{Expr: Raw("SELECT " + check.SQL())}}
 }
 
 // buildDispatcherBody builds the common routing logic for list dispatcher functions.
