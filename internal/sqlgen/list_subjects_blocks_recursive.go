@@ -54,9 +54,14 @@ func BuildListSubjectsRecursiveBlocks(plan ListPlan) (SubjectsRecursiveBlockSet,
 		return SubjectsRecursiveBlockSet{}, err
 	}
 
+	_, covered := recursiveClosureCoverage(plan, parentRelations)
+	regularParents := slices.DeleteFunc(slices.Clone(parentRelations), func(p ListParentRelationData) bool {
+		return p.IsClosurePattern && covered[p.SourceRelation]
+	})
+
 	return SubjectsRecursiveBlockSet{
 		RegularBlocks:          regularBlocks,
-		RegularTTUBlocks:       buildListSubjectsRecursiveTTUBlocks(plan, parentRelations),
+		RegularTTUBlocks:       buildListSubjectsRecursiveTTUBlocks(plan, regularParents),
 		UsersetFilterBlocks:    usersetBlocks,
 		UsersetFilterSelfBlock: buildListSubjectsUsersetFilterSelfBlock(plan),
 		ParentRelations:        parentRelations,
@@ -67,7 +72,12 @@ func BuildListSubjectsRecursiveBlocks(plan ListPlan) (SubjectsRecursiveBlockSet,
 func buildListSubjectsRecursiveRegularBlocks(plan ListPlan) ([]TypedQueryBlock, error) {
 	blocks := []TypedQueryBlock{buildListSubjectsRecursiveDirectBlock(plan)}
 
-	blocks = append(blocks, buildListSubjectsRecursiveComplexClosureBlocks(plan)...)
+	compose, covered := recursiveClosureCoverage(plan, buildListParentRelations(plan.Analysis))
+	blocks = append(blocks, buildListSubjectsRecursiveClosureComposeBlocks(plan, compose)...)
+
+	uncovered := plan
+	uncovered.ComplexClosure = slices.DeleteFunc(slices.Clone(plan.ComplexClosure), func(r string) bool { return covered[r] })
+	blocks = append(blocks, buildListSubjectsRecursiveComplexClosureBlocks(uncovered)...)
 
 	composedBlocks, err := buildListSubjectsComposedClosureBlocks(plan, "p_subject_type", "p_subject_type", plan.HasExclusion)
 	if err != nil {
@@ -75,13 +85,67 @@ func buildListSubjectsRecursiveRegularBlocks(plan ListPlan) ([]TypedQueryBlock, 
 	}
 	blocks = append(blocks, composedBlocks...)
 
-	usersetBlocks, err := buildListSubjectsRecursiveUsersetPatternBlocks(plan)
+	usersetBlocks, err := buildListSubjectsRecursiveUsersetPatternBlocks(plan, func(p listUsersetPatternInput) bool {
+		return p.IsClosurePattern && covered[p.SourceRelation]
+	})
 	if err != nil {
 		return nil, err
 	}
 	blocks = append(blocks, usersetBlocks...)
 
 	return blocks, nil
+}
+
+// recursiveClosureCoverage picks the closure relations whose subjects the
+// regular path lists by composing their own list_subjects function (exact,
+// so it replaces every per-arm block derived from them), and the closure
+// relations those compositions cover. Candidates are the complex closure
+// relations and closure-pattern parent sources that can be composed; one is
+// dropped when another composed relation S has it in its satisfying closure
+// and S excludes nothing (so S's subjects include it), as in ImpliedCallees.
+// covered holds each composed relation and, for exclusion-free ones, its
+// satisfying closure; it never contains the listed relation itself.
+func recursiveClosureCoverage(plan ListPlan, parents []ListParentRelationData) (compose []string, covered map[string]bool) {
+	if plan.AnalysisLookup == nil {
+		return nil, nil
+	}
+	candidates := slices.Clone(plan.ComplexClosure)
+	for _, p := range parents {
+		if p.IsClosurePattern {
+			candidates = append(candidates, p.SourceRelation)
+		}
+	}
+	return closureCoverage(plan, candidates, func(r string) bool {
+		return composableListSubjectsTarget(plan, plan.ObjectType, r)
+	})
+}
+
+// buildListSubjectsRecursiveClosureComposeBlocks lists each composed closure
+// relation through its own list_subjects function. This relation's
+// exclusions are applied here unless the wildcard tail re-checks every row.
+func buildListSubjectsRecursiveClosureComposeBlocks(plan ListPlan, compose []string) []TypedQueryBlock {
+	blocks := make([]TypedQueryBlock, 0, len(compose))
+	for _, rel := range compose {
+		stmt := SelectStmt{
+			Distinct:    true,
+			ColumnExprs: []Expr{Col{Table: "sub", Column: "subject_id"}},
+			FromExpr: FunctionCallExpr{
+				Schema: plan.DatabaseSchema, Name: listSubjectsFunctionName(plan.ObjectType, rel),
+				Args: []Expr{ObjectID, SubjectType}, Alias: "sub",
+			},
+		}
+		if !regularBranchTailValidated(plan) {
+			exclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sub", Column: "subject_id"})
+			if preds := exclusions.BuildPredicates(); len(preds) > 0 {
+				stmt.Where = And(preds...)
+			}
+		}
+		blocks = append(blocks, TypedQueryBlock{
+			Comments: []string{fmt.Sprintf("-- Closure relation %s: compose its list_subjects", rel)},
+			Query:    stmt,
+		})
+	}
+	return blocks
 }
 
 // buildListSubjectsRecursiveDirectBlock builds the direct tuple lookup block for recursive list_subjects.
@@ -152,7 +216,7 @@ func buildListSubjectsRecursiveComplexClosureBlocks(plan ListPlan) []TypedQueryB
 }
 
 // buildListSubjectsRecursiveUsersetPatternBlocks builds blocks for userset patterns in recursive list_subjects.
-func buildListSubjectsRecursiveUsersetPatternBlocks(plan ListPlan) ([]TypedQueryBlock, error) {
+func buildListSubjectsRecursiveUsersetPatternBlocks(plan ListPlan, skip func(listUsersetPatternInput) bool) ([]TypedQueryBlock, error) {
 	patterns := buildListUsersetPatternInputs(plan.Analysis)
 	if len(patterns) == 0 {
 		return nil, nil
@@ -160,6 +224,9 @@ func buildListSubjectsRecursiveUsersetPatternBlocks(plan ListPlan) ([]TypedQuery
 
 	blocks := make([]TypedQueryBlock, 0, len(patterns))
 	for _, pattern := range patterns {
+		if skip(pattern) {
+			continue
+		}
 		if pattern.IsComplex {
 			blocks = append(blocks, buildListSubjectsRecursiveComplexUsersetBlock(plan, pattern))
 		} else {

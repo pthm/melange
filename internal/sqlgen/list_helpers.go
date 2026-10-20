@@ -355,3 +355,46 @@ func collectListDispatcherCases(analyses []RelationAnalysis, nameFunc func(strin
 	}
 	return cases
 }
+
+// closureCoverage chooses which of a relation's closure relations its list
+// function obtains by composing their own (exact) list function, and which
+// closure relations those compositions cover, so per-arm blocks derived from
+// a covered relation can be skipped. From the composable candidates it drops
+// a relation R when another candidate S has R in its satisfying closure and S
+// excludes nothing, so S's results include R's (as for ImpliedCallees; when
+// two imply each other the lexically greater is dropped). covered holds each
+// composed relation and, for exclusion-free ones, its satisfying closure. It
+// never contains the listed relation itself.
+func closureCoverage(plan ListPlan, candidates []string, composable func(string) bool) (compose []string, covered map[string]bool) {
+	if plan.AnalysisLookup == nil {
+		return nil, nil
+	}
+	var usable []string
+	for _, r := range candidates {
+		if r != "" && r != plan.Relation && !slices.Contains(usable, r) && composable(r) {
+			usable = append(usable, r)
+		}
+	}
+	analysis := func(r string) *RelationAnalysis { return plan.AnalysisLookup[plan.ObjectType+"."+r] }
+	covers := func(s, r string) bool {
+		sa := analysis(s)
+		return sa != nil && !sa.Features.HasExclusion && slices.Contains(sa.SatisfyingRelations, r)
+	}
+	covered = make(map[string]bool)
+	for _, r := range usable {
+		if slices.ContainsFunc(usable, func(s string) bool {
+			return s != r && covers(s, r) && (!covers(r, s) || s < r)
+		}) {
+			continue
+		}
+		compose = append(compose, r)
+		covered[r] = true
+		if ra := analysis(r); ra != nil && !ra.Features.HasExclusion {
+			for _, x := range ra.SatisfyingRelations {
+				covered[x] = true
+			}
+		}
+	}
+	delete(covered, plan.Relation)
+	return compose, covered
+}
