@@ -4,7 +4,7 @@ description: Which OpenFGA features Melange supports, how it is tested against t
 weight: 9
 ---
 
-Melange provides **full OpenFGA Schema 1.1 compatibility**, running entirely in PostgreSQL. Melange is tested against the official OpenFGA test suite and passes all Schema 1.1 tests.
+Melange supports **every OpenFGA Schema 1.1 feature except conditions**, running entirely in PostgreSQL. It is tested against the official OpenFGA test suite. Schemas that use conditions are rejected at compile time.
 
 ## Test Suite Compliance
 
@@ -16,7 +16,7 @@ Melange is validated against the **official OpenFGA compatibility test suite**. 
 - Wildcards and contextual tuples
 - Complex nested permission patterns
 
-All Schema 1.1 tests pass, ensuring reliable compatibility with OpenFGA schemas.
+All tests for supported features pass.
 
 ## Feature Support
 
@@ -33,10 +33,10 @@ All Schema 1.1 tests pass, ensuring reliable compatibility with OpenFGA schemas.
 | **Contextual tuples**                    | ✅      | **Full**     | Temporary tuples passed with check request  |
 | **Grouping `()`**                        | ✅      | **Full**     | Complex nested expressions                  |
 | **Schema 1.0**                           | ⚠️      | **Untested** | Parser potentially works, but untested      |
-| **Schema 1.1**                           | ✅      | **Full**     | Fully supported and tested                  |
+| **Schema 1.1**                           | ✅      | **Full**     | All features except conditions              |
 | **Conditions**                           | ❌      | **None**     | CEL expressions not supported               |
 | **Modular models**                       | ✅      | **Full**     | `fga.mod` manifests, `module`, `extend type`|
-| **Schema 1.2**                           | ⚠️      | **Partial**  | Modules supported; conditions not supported |
+| **Schema 1.2**                           | ✅      | **Full**     | Modules supported                           |
 
 ## Supported Features
 
@@ -156,7 +156,7 @@ At compile time, all modules are merged into a unified schema. The generated SQL
 
 ## Unsupported Features
 
-### Conditions (Schema 1.2)
+### Conditions
 
 CEL expressions for conditional authorization are not supported:
 
@@ -226,7 +226,7 @@ Melange is designed to be a stepping stone. If you outgrow its capabilities, you
 
 ### When to Consider Migrating
 
-- You need **conditions** (Schema 1.2) for context-aware authorization with CEL expressions
+- You need **conditions** for context-aware authorization with CEL expressions
 - You need a **dedicated authorization service** for horizontal scaling
 - Your **tuple volume** exceeds what PostgreSQL can handle efficiently
 

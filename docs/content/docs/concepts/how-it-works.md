@@ -31,13 +31,11 @@ flowchart LR
 
     subgraph Output["PostgreSQL Database"]
         funcs["Specialized check functions"]
-        closure["Precomputed closure tables"]
         dispatch["Dispatcher function"]
     end
 
     schema --> melange
     melange --> funcs
-    melange --> closure
     melange --> dispatch
 ```
 
@@ -105,7 +103,7 @@ The compiler recognizes authorization patterns and generates code specific to ea
 | Pattern | Schema Syntax | Generated Code |
 |---------|--------------|----------------|
 | Direct assignment | `[user]` | Simple `EXISTS` check |
-| Role hierarchy | `viewer: owner` | Precomputed closure lookup |
+| Role hierarchy | `viewer: owner` | Closure inlined as `IN (...)` |
 | Union | `[user] or owner` | OR'd `EXISTS` clauses |
 | Tuple-to-userset | `viewer from parent` | Recursive lookup via parent |
 | Exclusion | `but not blocked` | Access check with exclusion |
@@ -275,4 +273,4 @@ Melange's compiler architecture has four key properties:
 3. **View-based tuples**: Direct queries against your existing tables
 4. **Native SQL execution**: Uses PostgreSQL's query optimizer
 
-This produces permission checks in ~130 µs in the database, with full OpenFGA Schema 1.1 compatibility, without requiring a separate authorization service.
+This produces permission checks in ~130 µs in the database, with OpenFGA Schema 1.1 compatibility (excluding conditions), without requiring a separate authorization service.

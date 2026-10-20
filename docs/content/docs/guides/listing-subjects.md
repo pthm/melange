@@ -427,14 +427,7 @@ async function auditRepositoryAccess(repoId: string): Promise<AccessAuditEntry[]
 
 ## Performance Characteristics
 
-ListSubjects uses a recursive CTE similar to ListObjects:
-
-| Tuple Count | Latency |
-|-------------|---------|
-| 1K tuples   | ~708us  |
-| 10K tuples  | ~6.3ms  |
-| 100K tuples | ~42ms   |
-| 1M tuples   | ~864ms  |
+Cost scales with the number of subjects that have access, not the total tuple count. Listing every viewer of a deeply-inherited document takes ~7.7 ms at 1K tuples and ~68 ms at 1M; see [Performance](../../reference/performance/#listsubjects) for the full table.
 
 ListSubjects is typically faster than ListObjects because it starts from a specific object rather than searching across all objects.
 

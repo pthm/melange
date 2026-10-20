@@ -24,9 +24,11 @@ layout: hextra-home
 </div>
 
 <div class="hx:mb-6 hx:flex hx:gap-4">
-{{< hextra/hero-button text="Get Started" link="docs/getting-started/installation" >}}
+{{< hextra/hero-button text="Get Started" link="docs/getting-started/quick-start" >}}
 {{< hextra/hero-button text="GitHub" link="https://github.com/pthm/melange" style="background: #000;" >}}
 </div>
+
+<p class="homepage-facts">MIT licensed · PostgreSQL 14+ · Go and TypeScript clients · SQL from any language</p>
 
 </div>
 
@@ -39,7 +41,7 @@ layout: hextra-home
   >}}
   {{< hextra/feature-card
     title="OpenFGA Compatible"
-    subtitle="Full Schema 1.1 conformance. Use familiar DSL syntax with complete feature support, validated against the official OpenFGA test suite."
+    subtitle="Every Schema 1.1 feature except conditions. Use the same DSL and .fga files, validated against the official OpenFGA test suite."
     icon="badge-check"
     style="background: radial-gradient(ellipse at 50% 80%,rgba(0,180,140,0.15),hsla(0,0%,100%,0));"
   >}}
@@ -86,7 +88,7 @@ layout: hextra-home
 
 <div class="content">
 
-Melange is an **authorization compiler**. Like Protocol Buffers or GraphQL Code Generator, you define a schema and Melange generates optimized code tailored to your exact model. Instead of a generic runtime that interprets your model at query time, Melange generates **purpose-built SQL functions** for each relation in your schema. Role hierarchies are resolved at compile time and inlined into SQL, so runtime checks avoid recursive graph traversal entirely.
+Melange is an **authorization compiler**. Like Protocol Buffers or GraphQL Code Generator, you define a schema and Melange generates optimized code tailored to your exact model. Instead of a generic runtime that interprets your model at query time, Melange generates **purpose-built SQL functions** for each relation in your schema. Role hierarchies are resolved at compile time and inlined into SQL, so runtime checks only recurse where your data does, such as nested parent folders.
 
 </div>
 </div>
@@ -370,6 +372,39 @@ melange studio --env staging
 {{< hextra/hero-button text="Explore Studio" link="docs/guides/studio" >}}
 </div>
 
+</div>
+
+<div class="homepage-section-gap"></div>
+
+<!-- Fit: 2-column -->
+<div class="homepage-columns">
+<div>
+
+{{< hextra/hero-section >}}
+  Is Melange a Fit?
+{{< /hextra/hero-section >}}
+
+<div class="hx:mt-6"></div>
+
+<div class="content">
+
+**Good fit:** an application backed by PostgreSQL that needs roles, sharing, teams, or folder-style hierarchies, and would rather not run and sync a separate authorization service.
+
+**Look elsewhere:** authorization shared across many services and databases, or attribute-based rules that need [conditions](docs/reference/openfga-compatibility/#conditions).
+
+</div>
+</div>
+<div class="content">
+
+### Outgrow it? Move to OpenFGA
+
+Your `.fga` files work unchanged in OpenFGA. Export your `melange_tuples` view as tuples and point your application at an OpenFGA server. See the [migration path](docs/reference/openfga-compatibility/#migration-path-to-openfga).
+
+### Coming from OpenFGA?
+
+Keep your model, replace the tuple store with a view over your tables. See [Moving from OpenFGA](docs/reference/openfga-compatibility/#moving-from-openfga-to-melange).
+
+</div>
 </div>
 
 <div class="homepage-section-gap"></div>

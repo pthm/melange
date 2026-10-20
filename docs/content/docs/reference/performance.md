@@ -10,7 +10,7 @@ Melange compiles permission checks into specialized SQL functions. This page doc
 
 - `check`, `expand`, `explain`, and bulk check run in constant time regardless of dataset size.
 - `list_accessible_objects` cost scales with the number of matching objects and path depth, not total tuple count.
-- `list_accessible_subjects` cost scales with the number of subjects that have access. For broad relations over a large user base this reaches seconds.
+- `list_accessible_subjects` cost scales with the number of subjects that have access. For broad relations over a large user base this reaches the low hundreds of milliseconds.
 
 ## Methodology
 
@@ -96,10 +96,12 @@ The service-account query returns few objects and stays ~170 µs from 4K to 840K
 
 | Query                                 | 1K    | 10K    | 100K  | 1M     | Scaling     |
 | ------------------------------------- | ----- | ------ | ----- | ------ | ----------- |
-| `viewer` (recursive, all paths)       | 41 ms | 206 ms | 1.4 s | 16.8 s | O(subjects) |
-| `can_view` (`viewer but not blocked`) | 60 ms | 268 ms | 1.6 s | 17.8 s | O(subjects) |
+| `viewer` (recursive, all paths)       | 7.7 ms | 15 ms | 29 ms | 68 ms  | O(subjects) |
+| `can_view` (`viewer but not blocked`) | 13 ms  | 26 ms | 56 ms | 139 ms | O(subjects) |
 
-At 1M tuples and 25,000 users, listing every subject of a deeply-inherited relation takes seconds. Resolving "who can see this" over a recursive, wildcard-bearing relation must expand the whole reachable subject graph. Use broad `ListSubjects` for batch and offline work, not interactive request paths. For "does this user have access", use `check`.
+These rows are from v0.10.0 (single run), which walks the parent closure instead of checking each subject. Earlier versions took 16.8 s and 17.8 s at 1M.
+
+At 1M tuples and 25,000 users, listing every subject of a deeply-inherited relation takes tens to hundreds of milliseconds. Resolving "who can see this" over a recursive, wildcard-bearing relation must expand the whole reachable subject graph. Prefer `check` for "does this user have access", and keep broad `ListSubjects` off hot request paths.
 
 Pagination does not reduce this cost. The database walks the full permission graph to produce an ordered page regardless of `LIMIT`. Page size affects payload size, not query time.
 
