@@ -64,7 +64,7 @@ func deployedTypesFromRecord(rec *migrator.MigrationRecord) ([]schema.TypeDefini
 	if types, err := schema.UnmarshalModel(rec.ModelJSON); err == nil && len(types) > 0 {
 		return types, nil
 	}
-	types, err := parser.ParseSchemaString(rec.SchemaDSL)
+	types, err := parser.ParseRecordedSchemaString(rec.SchemaDSL)
 	if err != nil {
 		return nil, fmt.Errorf("parsing recorded schema DSL: %w", err)
 	}

@@ -150,7 +150,7 @@ func deployedModelTypes(dsn, databaseSchema string) ([]schema.TypeDefinition, er
 		return nil, err
 	}
 	if len(model.Types) == 0 && model.DSL != "" {
-		types, perr := parser.ParseSchemaString(model.DSL)
+		types, perr := parser.ParseRecordedSchemaString(model.DSL)
 		if perr != nil {
 			return nil, cli.SchemaParseError("parsing deployed schema", perr)
 		}

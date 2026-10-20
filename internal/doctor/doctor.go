@@ -293,9 +293,9 @@ func (d *Doctor) checkSchemaFile(report *Report) {
 			Category: "Schema File",
 			Name:     "valid",
 			Status:   StatusFail,
-			Message:  "Schema has syntax errors",
+			Message:  "Schema is invalid",
 			Details:  err.Error(),
-			FixHint:  "Run 'fga model validate' to see detailed errors",
+			FixHint:  "Run 'melange validate' to see each error",
 		})
 		return
 	}
@@ -487,7 +487,7 @@ func (d *Doctor) checkDeployedModel(report *Report) {
 	// bundle; on a parse failure deployedTypes stays empty and the drift advisory
 	// below is skipped rather than run against an empty model.
 	if len(deployedTypes) == 0 && rec.SchemaDSL != "" {
-		if parsed, perr := parser.ParseSchemaString(rec.SchemaDSL); perr == nil {
+		if parsed, perr := parser.ParseRecordedSchemaString(rec.SchemaDSL); perr == nil {
 			deployedTypes = parsed
 		}
 	}
