@@ -2,6 +2,7 @@ package command
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -194,6 +195,8 @@ func TestCLI_ValidationErrorsBeforeConnecting(t *testing.T) {
 		{"diff db with git ref", []string{"diff", "--db", "postgres://localhost/app", "--git-ref", "main"}, "cannot be combined"},
 		{"history format", []string{"history", "--format", "yaml"}, "invalid --format"},
 		{"history limit", []string{"history", "--limit", "0"}, "--limit"},
+		{"validate format", []string{"validate", "--format", "yaml"}, "invalid --format"},
+		{"doctor format", []string{"doctor", "--format", "yaml"}, "invalid --format"},
 	}
 
 	for _, tc := range cases {
@@ -283,4 +286,50 @@ func TestCLI_StatusFormatValidatedBeforeConnecting(t *testing.T) {
 	if !strings.Contains(err.Error(), "invalid --format") {
 		t.Errorf("format should be validated before connecting, got: %v", err)
 	}
+}
+
+// validate --format json reports the outcome on stdout for both valid and
+// invalid schemas, and still exits non-zero for an invalid one.
+func TestCLI_ValidateJSON(t *testing.T) {
+	const config = "schema: melange/schema.fga\n"
+	const valid = `model
+  schema 1.1
+type user
+type document
+  relations
+    define owner: [user]
+    define viewer: [user] or owner
+`
+
+	t.Run("valid", func(t *testing.T) {
+		out, err := runCLIWithFiles(t, config, map[string]string{"melange/schema.fga": valid}, "validate", "--format", "json")
+		if err != nil {
+			t.Fatalf("validate: %v", err)
+		}
+		var got validateReport
+		if err := json.Unmarshal([]byte(out), &got); err != nil {
+			t.Fatalf("output is not JSON: %v\n%s", err, out)
+		}
+		if !got.Valid || got.Error != "" || len(got.Types) != 2 {
+			t.Fatalf("unexpected report: %+v", got)
+		}
+		if doc := got.Types[1]; doc.Name != "document" || strings.Join(doc.Relations, ",") != "owner,viewer" {
+			t.Errorf("document type = %+v", doc)
+		}
+	})
+
+	t.Run("invalid", func(t *testing.T) {
+		invalid := strings.Replace(valid, "or owner", "or ownr", 1)
+		out, err := runCLIWithFiles(t, config, map[string]string{"melange/schema.fga": invalid}, "validate", "--format", "json")
+		if err == nil {
+			t.Fatal("expected a non-zero exit for an invalid schema")
+		}
+		var got validateReport
+		if err := json.Unmarshal([]byte(out), &got); err != nil {
+			t.Fatalf("output is not JSON: %v\n%s", err, out)
+		}
+		if got.Valid || !strings.Contains(got.Error, `"ownr"`) {
+			t.Errorf("unexpected report: %+v", got)
+		}
+	})
 }

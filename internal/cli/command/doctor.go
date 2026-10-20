@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -19,6 +20,7 @@ var (
 	doctorSchema          string
 	doctorVerbose         bool
 	doctorSkipPerformance bool
+	doctorFormat          string
 )
 
 var doctorCmd = &cobra.Command{
@@ -32,8 +34,15 @@ var doctorCmd = &cobra.Command{
   melange doctor --db postgres://localhost/mydb --db-schema myschema
 
   # Run with verbose output
-  melange doctor --db postgres://localhost/mydb --verbose`,
+  melange doctor --db postgres://localhost/mydb --verbose
+
+  # Machine-readable report, for scripts and coding agents
+  melange doctor --format json`,
 	RunE: func(cmd *cobra.Command, args []string) error {
+		if doctorFormat != "text" && doctorFormat != "json" {
+			return cli.GeneralError(fmt.Sprintf("invalid --format %q (want text or json)", doctorFormat), nil)
+		}
+
 		databaseSchema := resolveString(doctorDBSchema, cfg.Database.Schema, "public")
 		schemaPath := resolveString(doctorSchema, cfg.Schema)
 		verboseFlag := resolveBool(doctorVerbose, cfg.Doctor.Verbose)
@@ -44,7 +53,7 @@ var doctorCmd = &cobra.Command{
 			return err
 		}
 
-		return runDoctor(dsn, databaseSchema, schemaPath, verboseFlag, skipPerf)
+		return runDoctor(dsn, databaseSchema, schemaPath, verboseFlag, skipPerf, doctorFormat)
 	},
 }
 
@@ -55,9 +64,10 @@ func init() {
 	f.StringVar(&doctorSchema, "schema", "", "path to schema.fga or fga.mod file")
 	f.BoolVar(&doctorVerbose, "verbose", false, "show detailed output")
 	f.BoolVar(&doctorSkipPerformance, "skip-performance", false, "skip performance checks")
+	f.StringVar(&doctorFormat, "format", "text", "output format: text (default) or json")
 }
 
-func runDoctor(dsn, databaseSchema, schemaPath string, verboseFlag, skipPerformance bool) error {
+func runDoctor(dsn, databaseSchema, schemaPath string, verboseFlag, skipPerformance bool, format string) error {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return cli.DBConnectError("connecting to database", err)
@@ -66,7 +76,7 @@ func runDoctor(dsn, databaseSchema, schemaPath string, verboseFlag, skipPerforma
 
 	ctx := context.Background()
 
-	if !quiet {
+	if !quiet && format == "text" {
 		fmt.Println("melange doctor - Health Check")
 	}
 
@@ -77,7 +87,15 @@ func runDoctor(dsn, databaseSchema, schemaPath string, verboseFlag, skipPerforma
 		return cli.GeneralError("running doctor", err)
 	}
 
-	report.Print(os.Stdout, verboseFlag)
+	if format == "json" {
+		out, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			return cli.GeneralError("encoding report", err)
+		}
+		fmt.Println(string(out))
+	} else {
+		report.Print(os.Stdout, verboseFlag)
+	}
 
 	if report.HasErrors() {
 		return cli.GeneralError("health checks failed", nil)

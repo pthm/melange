@@ -36,12 +36,14 @@ PostgreSQL functions. Docs for agents: https://melange.sh/llms.txt
 
 After changing the model:
 
-1. `melange validate` to check the schema.
+1. `melange validate --format json` to check the schema. It reports syntax errors,
+   undefined types and relations, and cycles, and exits non-zero on failure.
 2. `melange migrate` to compile and apply it to the dev database.
    (If the project uses versioned migrations, run `melange generate migration` instead
    and apply the generated SQL with our migration tool.)
 3. `melange generate client` to regenerate the typed client.
-4. `melange doctor` to check the view, functions, and indexes.
+4. `melange doctor --format json` to check the view, functions, and indexes. Each
+   failing check has a `fix` field.
 
 When a permission check returns an unexpected answer, run
 `melange explain <type>:<id> <relation> <type>:<id>` before changing the model. It

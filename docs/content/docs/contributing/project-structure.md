@@ -169,7 +169,7 @@ install path and exits non-zero, so `go install …/cmd/melange@latest` fails lo
 instead of installing a stale binary.
 
 Commands:
-- `validate` - Check schema syntax
+- `validate` - Check a schema without a database
 - `generate client` - Generate type-safe client code
 - `migrate` - Apply schema to database
 - `status` - Check migration status

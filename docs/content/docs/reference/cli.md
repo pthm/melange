@@ -76,7 +76,7 @@ Commands are organized into logical groups:
 
 ### validate
 
-Check `.fga` schema syntax without database access.
+Check a schema without database access: syntax, references to undefined types and relations, unsupported features (conditions), and relation cycles. These are the same checks `migrate` and `generate` run before compiling.
 
 ```bash
 melange validate --schema schemas/schema.fga
@@ -91,13 +91,30 @@ Schema is valid. Found 3 types:
   - repository (5 relations)
 ```
 
-This command parses the schema using the OpenFGA parser and reports any syntax errors. It does not require database access.
+An invalid schema exits with code 3 and names each problem:
+
+```
+Error: parsing schema: melange: invalid schema: undefined references: document#viewer references "editr", which is not a relation on "document"
+```
+
+With `--format json`, the result is printed to stdout for both outcomes, and an invalid schema still exits non-zero:
+
+```json
+{
+  "valid": false,
+  "schema": "melange/schema.fga",
+  "error": "parsing schema: melange: invalid schema: undefined references: ..."
+}
+```
+
+A valid result lists each type with its relation names under `types`.
 
 **Flags:**
 
-| Flag       | Default              | Description             |
-| ---------- | -------------------- | ----------------------- |
-| `--schema` | `schemas/schema.fga` | Path to schema.fga file |
+| Flag       | Default              | Description                         |
+| ---------- | -------------------- | ----------------------------------- |
+| `--schema` | `schemas/schema.fga` | Path to schema.fga or fga.mod file  |
+| `--format` | `text`               | Output format: `text` or `json`     |
 
 The schema path can also be set via configuration file or environment variable. See [Configuration](#configuration).
 
@@ -491,6 +508,9 @@ melange doctor \
 | `--schema`           | `schemas/schema.fga` | Path to schema.fga file                      |
 | `--verbose`          | `false`              | Show detailed output with additional context |
 | `--skip-performance` | `false`              | Skip performance checks (view analysis)      |
+| `--format`           | `text`               | Output format: `text` or `json`              |
+
+With `--format json`, the report is a list of `checks` (each with `category`, `name`, `status` of `pass`, `warn`, or `fail`, `message`, and optional `details` and `fix`) plus `passed`, `warnings`, and `errors` counts. The command exits non-zero when any check fails.
 
 **Output:**
 
@@ -533,7 +553,7 @@ The doctor command performs the following checks:
 **Schema File:**
 
 - Verifies the schema file exists
-- Parses and validates schema syntax
+- Parses the schema and checks for undefined types and relations
 - Detects cyclic dependencies in implied-by relationships
 
 **Migration State:**
@@ -599,7 +619,7 @@ This shows:
 | Issue                    | Fix                                                   |
 | ------------------------ | ----------------------------------------------------- |
 | Schema file not found    | Create `schemas/schema.fga`                           |
-| Schema has syntax errors | Run `fga model validate` for detailed errors          |
+| Schema is invalid        | Run `melange validate` for the specific errors        |
 | Schema out of sync       | Run `melange migrate`                                 |
 | Missing functions        | Run `melange migrate`                                 |
 | Orphan functions         | Run `melange migrate` (cleanup is automatic)          |
@@ -1132,7 +1152,7 @@ melange generate client
 **Without configuration file:**
 
 ```bash
-# 1. Validate schema syntax
+# 1. Validate the schema
 melange validate --schema schemas/schema.fga
 
 # 2. Apply to local database

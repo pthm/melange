@@ -196,20 +196,19 @@ type project
 
 ## Validation
 
-Validate your schema syntax:
+Validate your schema:
 
 ```bash
 melange validate --schema schemas/schema.fga
 ```
 
-For full validation including semantic checks, use the OpenFGA CLI:
+This checks syntax, references to undefined types and relations, unsupported features, and relation cycles, without a database. Add `--format json` for machine-readable output.
+
+To run OpenFGA model tests (`.fga.yaml` files with tuples and assertions), use the OpenFGA CLI:
 
 ```bash
-# Install OpenFGA CLI
 go install github.com/openfga/cli/cmd/fga@latest
-
-# Validate schema
-fga model validate --file schemas/schema.fga
+fga model test --tests schemas/schema.fga.yaml
 ```
 
 ## Best Practices

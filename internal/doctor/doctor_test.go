@@ -1,6 +1,7 @@
 package doctor
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -203,4 +204,22 @@ func TestTruncatedJoin(t *testing.T) {
 	assert.Equal(t, "a\nb\nc\nd\ne", truncatedJoin(items, 5), "exact count returns all")
 	assert.Equal(t, "a\nb\nc\nd\ne", truncatedJoin(items, 10), "over count returns all")
 	assert.Equal(t, "a\nb\n... and 3 more", truncatedJoin(items, 2), "truncates with summary")
+}
+
+// melange doctor --format json is a contract for scripts and agents: statuses
+// are strings and empty details or fixes are omitted.
+func TestReportJSON(t *testing.T) {
+	var r Report
+	r.AddCheck(CheckResult{Category: "Schema", Name: "schema_file", Status: StatusPass, Message: "Schema file valid"})
+	r.AddCheck(CheckResult{Category: "Tuples", Name: "tuples_view", Status: StatusFail, Message: "melange_tuples missing", FixHint: "create the view"})
+
+	out, err := json.Marshal(&r)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{
+		"checks": [
+			{"category": "Schema", "name": "schema_file", "status": "pass", "message": "Schema file valid"},
+			{"category": "Tuples", "name": "tuples_view", "status": "fail", "message": "melange_tuples missing", "fix": "create the view"}
+		],
+		"passed": 1, "warnings": 0, "errors": 1
+	}`, string(out))
 }

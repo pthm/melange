@@ -55,35 +55,49 @@ func (s Status) Symbol() string {
 	}
 }
 
+// MarshalText renders the status as "pass", "warn", or "fail" in JSON output.
+func (s Status) MarshalText() ([]byte, error) {
+	switch s {
+	case StatusPass:
+		return []byte("pass"), nil
+	case StatusWarn:
+		return []byte("warn"), nil
+	case StatusFail:
+		return []byte("fail"), nil
+	default:
+		return nil, fmt.Errorf("unknown status %d", s)
+	}
+}
+
 // CheckResult represents the outcome of a single health check.
 type CheckResult struct {
 	// Category groups related checks (e.g., "schema", "functions", "tuples").
-	Category string
+	Category string `json:"category"`
 
 	// Name is a short identifier for the check.
-	Name string
+	Name string `json:"name"`
 
 	// Status is the check outcome.
-	Status Status
+	Status Status `json:"status"`
 
 	// Message is a human-readable description of the result.
-	Message string
+	Message string `json:"message"`
 
 	// Details provides additional information for verbose output.
-	Details string
+	Details string `json:"details,omitempty"`
 
 	// FixHint suggests how to resolve issues.
-	FixHint string
+	FixHint string `json:"fix,omitempty"`
 }
 
 // Report contains all health check results.
 type Report struct {
-	Checks []CheckResult
+	Checks []CheckResult `json:"checks"`
 
 	// Summary counts.
-	Passed   int
-	Warnings int
-	Errors   int
+	Passed   int `json:"passed"`
+	Warnings int `json:"warnings"`
+	Errors   int `json:"errors"`
 }
 
 // AddCheck adds a check result and updates summary counts.

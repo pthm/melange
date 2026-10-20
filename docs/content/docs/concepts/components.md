@@ -22,7 +22,7 @@ The `melange` CLI is the compiler. It reads your `.fga` schema, analyzes each re
 The CLI also handles validation, health checks, and code generation:
 
 ```bash
-melange validate              # Check schema syntax
+melange validate              # Check the schema
 melange migrate               # Compile schema and install SQL functions
 melange doctor                # Verify everything is wired up correctly
 melange generate client       # Generate type-safe client code
