@@ -23,6 +23,10 @@ overrides:
   # traversal disclosing arbitrary .map files (GHSA-6g55-p6wh-862q and its
   # incomplete-fix follow-up).
   postcss: ">=8.5.23"
+  # Dev-only source-map-js advisory pulled in transitively via postcss.
+  # source-map-js >=1.2.2 fixes the event-loop DoS through indexed source-map
+  # section offsets (GHSA-68fv-2mgg-jv7q).
+  source-map-js: ">=1.2.2"
 
 # pnpm v11+ blocks transitive dependencies with build scripts by default.
 # esbuild is a trusted vitest/vite dependency; pre-approve so CI installs
