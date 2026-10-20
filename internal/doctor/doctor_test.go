@@ -2,10 +2,14 @@ package doctor
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pthm/melange/internal/update"
+	"github.com/pthm/melange/pkg/migrator"
 )
 
 // TestGetAnalyses_CachesAndHandlesNilParsedTypes covers both the nil-input
@@ -222,4 +226,41 @@ func TestReportJSON(t *testing.T) {
 		],
 		"passed": 1, "warnings": 0, "errors": 1
 	}`, string(out))
+}
+
+func TestCheckAdvisories(t *testing.T) {
+	advisories := []update.Advisory{{ID: "GHSA-test", Severity: "high", Summary: "bypass", Range: "< 0.9.5"}}
+	tests := []struct {
+		name       string
+		version    string
+		advisories []update.Advisory
+		want       []Status // empty: check skipped
+	}{
+		{"affected deployment warns", "v0.9.3", advisories, []Status{StatusWarn}},
+		{"fixed deployment passes", "v0.9.5", advisories, []Status{StatusPass}},
+		{"unknown version is skipped", "", advisories, nil},
+		{"development version is skipped", "dev", advisories, nil},
+		{"advisories unavailable is skipped", "v0.9.3", nil, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := &Doctor{
+				opts:          Options{Advisories: tt.advisories},
+				lastMigration: &migrator.MigrationRecord{MelangeVersion: tt.version},
+			}
+			report := &Report{}
+			d.checkAdvisories(report)
+			if len(report.Checks) != len(tt.want) {
+				t.Fatalf("got %d checks, want %d: %+v", len(report.Checks), len(tt.want), report.Checks)
+			}
+			for i, c := range report.Checks {
+				if c.Status != tt.want[i] {
+					t.Errorf("status = %v, want %v", c.Status, tt.want[i])
+				}
+				if c.Status == StatusWarn && !strings.Contains(c.Message, "GHSA-test") {
+					t.Errorf("warning must name the advisory: %q", c.Message)
+				}
+			}
+		})
+	}
 }

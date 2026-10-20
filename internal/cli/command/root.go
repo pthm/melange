@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/pthm/melange/internal/cli"
@@ -239,24 +240,82 @@ func isCI() bool {
 }
 
 // ShowUpdateNoticeIfAvailable displays a version upgrade prompt if the background
-// update check (started in PersistentPreRunE) found a newer release. It must be
+// update check (started in PersistentPreRunE) found a newer release, preceded by
+// any published security advisory that covers the running version. It must be
 // called after the command completes because PersistentPostRun is skipped when
 // commands return errors.
 func ShowUpdateNoticeIfAvailable() {
-	if updateResult == nil {
-		return
-	}
-
 	// Wait briefly for results (1s should be fast enough for cached results,
 	// and reasonable even for network fetch)
+	info := awaitUpdateInfo(1 * time.Second)
+	if info == nil {
+		return
+	}
+	if affected := update.Affecting(info.Advisories, info.CurrentVersion); len(affected) > 0 {
+		showAdvisoryNotice(info.CurrentVersion, affected)
+	}
+	if info.UpdateAvailable {
+		showUpdateNotice(info)
+	}
+}
+
+// advisoryWait bounds how long doctor and status wait for the background
+// update check before skipping the advisory check. It started before the
+// command connected to the database, so a cached result is already there.
+const advisoryWait = 3 * time.Second
+
+// awaitUpdateInfo returns the background update check result, waiting up to
+// timeout. The result is put back on the channel so later callers (the exit
+// notice) still see it. It returns nil when the check is disabled, failed, or
+// has not finished in time.
+func awaitUpdateInfo(timeout time.Duration) *update.Info {
+	if updateResult == nil {
+		return nil
+	}
 	select {
 	case info := <-updateResult:
-		if info != nil && info.UpdateAvailable {
-			showUpdateNotice(info)
-		}
-	case <-time.After(1 * time.Second):
-		// Check not finished in time, skip notice
+		updateResult <- info
+		return info
+	case <-time.After(timeout):
+		return nil
 	}
+}
+
+// Notice styles render on stderr, so color follows stderr's terminal and
+// NO_COLOR rather than stdout's: redirected output stays plain text. The colors
+// are fixed mid-tones rather than adaptive: adaptive colors make lipgloss query
+// the terminal background, and a reply arriving after the CLI exits is echoed
+// onto the user's prompt.
+var (
+	noticeRenderer = lipgloss.NewRenderer(os.Stderr)
+	noticeDanger   = noticeRenderer.NewStyle().Bold(true).Foreground(lipgloss.Color("#FF5370")) // explain's deny color
+	noticeAccent   = noticeRenderer.NewStyle().Bold(true).Foreground(lipgloss.Color(colorBurntOrange.Dark))
+	noticeBold     = noticeRenderer.NewStyle().Bold(true)
+	noticeDim      = noticeRenderer.NewStyle().Foreground(lipgloss.Color(colorWarmGray.Dark))
+)
+
+// showAdvisoryNotice warns that the running CLI is covered by security
+// advisories. Most fixes are in generated SQL, so upgrading alone is not
+// enough: the database must be migrated again.
+func showAdvisoryNotice(current string, affected []update.Advisory) {
+	fmt.Fprintln(os.Stderr)
+	fmt.Fprintln(os.Stderr, noticeDanger.Render(fmt.Sprintf("! melange %s is affected by %d security advisor%s:",
+		current, len(affected), pluralY(len(affected)))))
+	for _, a := range affected {
+		fmt.Fprintf(os.Stderr, "  %s %s %s\n    %s\n",
+			noticeBold.Render(a.ID),
+			noticeDim.Render(fmt.Sprintf("(%s, %s)", a.Severity, a.FixedIn())),
+			a.Summary,
+			noticeDim.Render(a.URL))
+	}
+	fmt.Fprintln(os.Stderr, "  Upgrade to a fixed release, then run "+noticeBold.Render("melange migrate")+" to regenerate the database functions.")
+}
+
+func pluralY(n int) string {
+	if n == 1 {
+		return "y"
+	}
+	return "ies"
 }
 
 // showUpdateNotice prints an upgrade prompt to stderr. It is called only when
@@ -264,7 +323,8 @@ func ShowUpdateNoticeIfAvailable() {
 // info.UpdateAvailable before invoking this.
 func showUpdateNotice(info *update.Info) {
 	fmt.Fprintln(os.Stderr)
-	fmt.Fprintf(os.Stderr, "* A new version of melange is available: v%s (current: %s)\n",
-		info.LatestVersion, info.CurrentVersion)
-	fmt.Fprintln(os.Stderr, "  brew upgrade melange  or  go install github.com/pthm/melange@latest")
+	fmt.Fprintf(os.Stderr, "%s %s\n",
+		noticeAccent.Render("* A new version of melange is available: v"+info.LatestVersion),
+		noticeDim.Render("(current: "+info.CurrentVersion+")"))
+	fmt.Fprintln(os.Stderr, noticeDim.Render("  brew upgrade melange  or  go install github.com/pthm/melange@latest"))
 }
