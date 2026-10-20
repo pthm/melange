@@ -1,6 +1,7 @@
 package analysis
 
 import (
+	"slices"
 	"sort"
 	"strings"
 
@@ -320,6 +321,13 @@ type RelationAnalysis struct {
 	// These are relations with exclusions that are themselves generatable.
 	// Computed by ComputeCanGenerate.
 	ComplexClosureRelations []string
+
+	// ImpliedCallees is ComplexClosureRelations without the relations another
+	// callee already evaluates: R is dropped when some other callee S has R in
+	// its satisfying closure and S has no exclusion of its own, so every R
+	// grant is an S grant. Check functions call only these. Nil when not
+	// computed; use ComplexClosureRelations then.
+	ImpliedCallees []string
 
 	// IntersectionClosureRelations contains relations in the closure that have intersection
 	// patterns and are list-generatable. These need to be handled by composing with their
@@ -1499,7 +1507,39 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		}
 	}
 
+	for i := range sorted {
+		sorted[i].ImpliedCallees = impliedCallees(&sorted[i], lookup)
+	}
+
 	return sorted
+}
+
+// impliedCallees drops from a's complex closure each relation R that another
+// callee S already evaluates. Closure is an unconditional union, so when R is
+// in S's satisfying relations and S excludes nothing, R's grants are a subset
+// of S's and calling both evaluates R twice. When two callees imply each
+// other, the lexically greater one is dropped and the other kept.
+func impliedCallees(a *RelationAnalysis, lookup map[string]map[string]*RelationAnalysis) []string {
+	if len(a.ComplexClosureRelations) < 2 {
+		return a.ComplexClosureRelations
+	}
+	covers := func(s, r string) bool {
+		sa, ok := lookup[a.ObjectType][s]
+		return ok && !sa.Features.HasExclusion && slices.Contains(sa.SatisfyingRelations, r)
+	}
+	var kept []string
+	for _, r := range a.ComplexClosureRelations {
+		covered := slices.ContainsFunc(a.ComplexClosureRelations, func(s string) bool {
+			if s == r || !covers(s, r) {
+				return false
+			}
+			return !covers(r, s) || s < r // mutual: keep the lexically smaller
+		})
+		if !covered {
+			kept = append(kept, r)
+		}
+	}
+	return kept
 }
 
 // computeCanGenerateList determines if a relation can use specialized list functions.

@@ -413,9 +413,11 @@ func andExprs(exprs []Expr) Expr {
 }
 
 func buildIntersectionInnerStmts(plan CheckPlan, parts []IntersectionPartCheck, visitedExpr Expr) []Stmt {
+	// Parts whose exclusion Check already decided inline need no second
+	// look; complex exclusions are re-checked through the dispatcher.
 	hasExclusions := false
 	for _, part := range parts {
-		if part.ExcludedRelation != "" {
+		if part.ExcludedRelation != "" && !part.ExcludedInline {
 			hasExclusions = true
 			break
 		}
@@ -428,7 +430,7 @@ func buildIntersectionInnerStmts(plan CheckPlan, parts []IntersectionPartCheck, 
 	innermost := []Stmt{Assign{Name: "v_has_access", Value: Bool(true)}}
 	for i := len(parts) - 1; i >= 0; i-- {
 		part := parts[i]
-		if part.ExcludedRelation == "" {
+		if part.ExcludedRelation == "" || part.ExcludedInline {
 			continue
 		}
 		checkCall := InternalCheckCall(
