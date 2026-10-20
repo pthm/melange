@@ -1,0 +1,35 @@
+{{- /*
+  /llms.txt (https://llmstxt.org): an index of the docs for LLM agents.
+  Overrides Hextra's version to list docs before release notes, use each
+  page's description, and link to the raw-markdown twins.
+*/ -}}
+# {{ site.Title }}
+
+> {{ site.Params.description }}
+
+Melange is an OpenFGA-to-PostgreSQL compiler. You write an OpenFGA (.fga) authorization model and a `melange_tuples` SQL view over your existing tables; `melange migrate` compiles the model into PostgreSQL functions such as `check_permission`, called from SQL or the Go and TypeScript clients.
+
+Every link below is a markdown page. The whole documentation as one file: {{ "llms-full.txt" | absURL }}
+{{ with site.GetPage "/docs" }}
+{{- template "llms-tree" (dict "page" . "level" 2) }}
+{{- end }}
+
+## Optional
+{{ with site.GetPage "/docs/contributing" }}
+- [{{ .Title }}]({{ (.OutputFormats.Get "markdown").Permalink }}): working on Melange itself, not needed to use it
+{{- end }}
+{{- range first 3 (where site.RegularPages "Section" "blog").ByDate.Reverse }}
+- [{{ .Title }}]({{ (.OutputFormats.Get "markdown").Permalink }}): {{ .Summary | plainify | htmlUnescape | truncate 160 | strings.TrimSpace }} ({{ .Date.Format "2006-01-02" }})
+{{- end }}
+- [All release notes]({{ "blog/" | absURL }})
+
+{{- define "llms-tree" }}
+{{- $level := .level }}
+{{- range where .page.Sections "Path" "ne" "/docs/contributing" }}
+{{ printf "\n%s %s\n" (strings.Repeat $level "#") .Title }}
+{{- range .RegularPages }}
+- [{{ .Title }}]({{ (.OutputFormats.Get "markdown").Permalink }}): {{ .Description | default (.Summary | plainify | htmlUnescape | truncate 160) }}
+{{- end }}
+{{- template "llms-tree" (dict "page" . "level" (add $level 1)) }}
+{{- end }}
+{{- end }}

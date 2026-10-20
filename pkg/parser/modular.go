@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	openfgav1 "github.com/openfga/api/proto/openfga/v1"
 	"github.com/openfga/language/pkg/go/transformer"
 
 	"github.com/pthm/melange/pkg/schema"
@@ -61,6 +62,29 @@ func readManifest(manifestPath string) (*manifestData, error) {
 //
 // Module names are sorted for deterministic processing order.
 func ParseModularSchemaFromStrings(modules map[string]string, schemaVersion string) ([]schema.TypeDefinition, error) {
+	model, err := transformModules(modules, schemaVersion)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkReferences(model); err != nil {
+		return nil, err
+	}
+	return convertModel(model)
+}
+
+// ParseRecordedModularSchemaFromStrings is ParseModularSchemaFromStrings for
+// a schema melange has already accepted, such as a previous revision read
+// from git. Like ParseRecordedSchemaString, it skips the undefined-reference
+// check.
+func ParseRecordedModularSchemaFromStrings(modules map[string]string, schemaVersion string) ([]schema.TypeDefinition, error) {
+	model, err := transformModules(modules, schemaVersion)
+	if err != nil {
+		return nil, err
+	}
+	return convertModel(model)
+}
+
+func transformModules(modules map[string]string, schemaVersion string) (*openfgav1.AuthorizationModel, error) {
 	names := make([]string, 0, len(modules))
 	for name := range modules {
 		names = append(names, name)
@@ -79,12 +103,10 @@ func ParseModularSchemaFromStrings(modules map[string]string, schemaVersion stri
 	if err != nil {
 		return nil, fmt.Errorf("compiling modules: %w", err)
 	}
-
 	if err := checkUnsupported(model); err != nil {
 		return nil, err
 	}
-
-	return convertModel(model)
+	return model, nil
 }
 
 // ParseManifestEntries parses an fga.mod manifest string and returns the

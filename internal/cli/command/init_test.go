@@ -3,6 +3,7 @@ package command
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -50,6 +51,7 @@ func resetInitFlags(t *testing.T) {
 		initMigrationOutput = ""
 		initMigrationFormat = ""
 		initMigrationName = ""
+		initAgents = false
 	})
 }
 
@@ -664,4 +666,94 @@ func TestRunInit_VersionedMigration_ConfigDiscoverable(t *testing.T) {
 	assert.Equal(t, "migrations/", cfg.Generate.Migration.Output)
 	assert.Equal(t, "split", cfg.Generate.Migration.Format)
 	assert.Equal(t, "melange", cfg.Generate.Migration.Name)
+}
+
+// --- Coding-agent instructions ---
+
+func TestRunInit_AgentInstructions_CreatesAgentsMD(t *testing.T) {
+	dir := setupInitTest(t)
+	initAgents = true
+
+	require.NoError(t, runInit(nil, nil))
+
+	data, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	require.NoError(t, err)
+	s := string(data)
+	assert.True(t, strings.HasPrefix(s, agentsHeading))
+	assert.Contains(t, s, "Model: `melange/schema.fga`")
+	assert.Contains(t, s, "Config: `melange/config.yaml`")
+	assert.Contains(t, s, "2. `melange migrate`")
+	assert.Contains(t, s, "Only run it against a local dev database.", "migrate must not be aimed at a shared database")
+	assert.Contains(t, s, "say so instead of improvising one")
+	assert.NotContains(t, s, "generate client", "no client step without code generation")
+}
+
+func TestRunInit_AgentInstructions_VersionedGoProject(t *testing.T) {
+	dir := setupInitTest(t)
+	initAgents = true
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/test"), 0o644))
+	initMigrationStrategy = "versioned"
+
+	require.NoError(t, runInit(nil, nil))
+
+	data, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	require.NoError(t, err)
+	s := string(data)
+	assert.Contains(t, s, "`internal/authz` is generated; don't edit it.")
+	assert.Contains(t, s, "3. `melange generate migration` writes the SQL to `migrations/`")
+	assert.Contains(t, s, "2. `melange generate client`")
+	assert.NotContains(t, s, "`melange migrate`")
+}
+
+func TestRunInit_AgentInstructions_AppendsToClaudeMD(t *testing.T) {
+	dir := setupInitTest(t)
+	initAgents = true
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("# Project\n\nUse tabs."), 0o644))
+
+	require.NoError(t, runInit(nil, nil))
+
+	data, err := os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(string(data), "# Project\n\nUse tabs.\n\n"+agentsHeading), "existing content kept, section appended after a blank line")
+	assert.NoFileExists(t, filepath.Join(dir, "AGENTS.md"), "only one instructions file is written")
+}
+
+func TestRunInit_AgentInstructions_PrefersAgentsMDAndIsIdempotent(t *testing.T) {
+	dir := setupInitTest(t)
+	initAgents = true
+	existing := "# Agents\n\n" + agentsHeading + "\n\nhand-edited\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte(existing), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte("@AGENTS.md\n"), 0o644))
+
+	require.NoError(t, runInit(nil, nil))
+
+	data, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	require.NoError(t, err)
+	assert.Equal(t, existing, string(data), "an existing section is left alone")
+	data, err = os.ReadFile(filepath.Join(dir, "CLAUDE.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "@AGENTS.md\n", string(data))
+}
+
+// Agent instructions are opt-in: the wizard asks, and a non-interactive run
+// leaves AGENTS.md / CLAUDE.md alone unless --agents is passed.
+func TestRunInit_YesSkipsAgentInstructionsWithoutFlag(t *testing.T) {
+	dir := setupInitTest(t)
+
+	require.NoError(t, runInit(nil, nil))
+
+	assert.NoFileExists(t, filepath.Join(dir, "AGENTS.md"))
+}
+
+func TestRunInit_AgentInstructions_SkipsWhenClaudeMDHasSection(t *testing.T) {
+	dir := setupInitTest(t)
+	initAgents = true
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "AGENTS.md"), []byte("# Agents\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "CLAUDE.md"), []byte(agentsHeading+"\n\npasted from the docs\n"), 0o644))
+
+	require.NoError(t, runInit(nil, nil))
+
+	data, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	require.NoError(t, err)
+	assert.Equal(t, "# Agents\n", string(data), "the section already exists in CLAUDE.md")
 }

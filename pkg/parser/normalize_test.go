@@ -219,7 +219,9 @@ func TestFlatteningMatchesOpenFGA(t *testing.T) {
 		"d and ((a and b) but not c)",
 		"([user] and a) but not b",
 		"([user] and a) or c",
-		"([user] and a from parent) or c",
+		// folder defines viewer only; `a from parent` would be a dangling
+		// reference, which the parser rejects.
+		"([user] and viewer from parent) or c",
 		"(([user] and a) but not b) or viewer from parent",
 		"([user] but not b) or a",
 		"([user] but not (c or c)) or a",

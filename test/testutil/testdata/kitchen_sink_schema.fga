@@ -115,7 +115,7 @@ type document
     # --- INTERSECTION shapes (each via `and`) ---
     define can_edit: editor and active            # computed AND computed
     define gated: viewer and active               # helper: intersection base
-    define can_manage: editor and admin from folder   # intersection with TTU part
+    define can_manage: editor and editor from folder  # intersection with TTU part
     define audience: [group#member] and active    # intersection with userset part
 
     # --- EXCLUSION shapes (each via `but not`) ---

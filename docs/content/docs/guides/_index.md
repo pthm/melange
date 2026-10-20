@@ -22,4 +22,5 @@ Task-oriented guides for using Melange's client libraries, SQL functions, and op
 {{< card link="migrations" title="Running Migrations" subtitle="Built-in vs versioned strategies, CI/CD integration, schema evolution" icon="arrow-circle-up" >}}
 {{< card link="studio" title="Studio" subtitle="A local, read-only web console for a melange database" icon="desktop-computer" >}}
 {{< card link="troubleshooting" title="Troubleshooting" subtitle="Diagnose common issues with melange doctor" icon="search" >}}
+{{< card link="coding-agents" title="Using Coding Agents" subtitle="Docs for agents and project instructions for your schema" icon="sparkles" >}}
 {{< /cards >}}

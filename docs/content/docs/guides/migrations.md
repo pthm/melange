@@ -380,7 +380,7 @@ git commit -m "Add editor relation to document type"
 ### CI pipeline
 
 ```bash
-# Validate schema syntax
+# Validate the schema
 melange validate --schema schemas/schema.fga
 
 # Verify no un-committed migration drift
@@ -498,7 +498,7 @@ These changes can be applied without coordination:
 ### Recommended Workflow
 
 1. Make the schema change in your `.fga` file.
-2. Run `melange validate` to catch syntax errors.
+2. Run `melange validate` to catch syntax errors and undefined relations.
 3. Generate a migration with `--git-ref main` to see only the delta.
 4. Review the generated SQL.
 5. Update application code and tuples view if needed.

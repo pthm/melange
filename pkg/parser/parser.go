@@ -103,6 +103,9 @@ func ParseModularSchema(manifestPath string) ([]schema.TypeDefinition, error) {
 	if err := checkUnsupported(model); err != nil {
 		return nil, err
 	}
+	if err := checkReferences(model); err != nil {
+		return nil, err
+	}
 
 	return convertModel(model)
 }
@@ -111,16 +114,41 @@ func ParseModularSchema(manifestPath string) ([]schema.TypeDefinition, error) {
 // This is the core parser used by both file-based and string-based parsing.
 // Wraps the OpenFGA transformer to convert protobuf models to our format.
 func ParseSchemaString(content string) ([]schema.TypeDefinition, error) {
+	model, err := transformDSL(content)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkReferences(model); err != nil {
+		return nil, err
+	}
+	return convertModel(model)
+}
+
+// ParseRecordedSchemaString parses a schema melange has already accepted: the
+// DSL recorded for a deployed model, or a previous revision used as the
+// baseline for a diff or migration. It skips the undefined-reference check,
+// which older versions did not apply, so the baseline of a change that fixes
+// a dangling reference still parses. Use ParseSchemaString for a schema that
+// is about to be compiled.
+func ParseRecordedSchemaString(content string) ([]schema.TypeDefinition, error) {
+	model, err := transformDSL(content)
+	if err != nil {
+		return nil, err
+	}
+	return convertModel(model)
+}
+
+// transformDSL compiles DSL to the OpenFGA model and rejects unsupported
+// features, the checks every parse entrypoint shares.
+func transformDSL(content string) (*openfgav1.AuthorizationModel, error) {
 	model, err := transformer.TransformDSLToProto(content)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", melange.ErrInvalidSchema, err)
 	}
-
 	if err := checkUnsupported(model); err != nil {
 		return nil, err
 	}
-
-	return convertModel(model)
+	return model, nil
 }
 
 // compatibilityDocsURL documents which OpenFGA features melange supports.
@@ -159,6 +187,99 @@ func checkUnsupported(model *openfgav1.AuthorizationModel) error {
 
 	return fmt.Errorf("%w: conditions are not supported and would be silently dropped: %s. Remove them or see %s",
 		melange.ErrInvalidSchema, strings.Join(found, "; "), compatibilityDocsURL)
+}
+
+// checkReferences rejects references to types and relations the model does
+// not define. The DSL transformer accepts them, and convertModel compiles each
+// one to a branch that never matches, so a typo like `viewer: [user] or editr`
+// would silently deny instead of failing. Mirrors OpenFGA's model validation:
+// a tuple-to-userset's computed relation must exist on at least one of the
+// types its tupleset relation can point to.
+func checkReferences(model *openfgav1.AuthorizationModel) error {
+	defined := make(map[string]map[string]bool)
+	for _, td := range model.GetTypeDefinitions() {
+		defined[td.GetType()] = make(map[string]bool)
+		for name := range td.GetRelations() {
+			defined[td.GetType()][name] = true
+		}
+	}
+
+	var found []string
+	for _, td := range model.GetTypeDefinitions() {
+		objType := td.GetType()
+		meta := td.GetMetadata().GetRelations()
+		for _, relName := range slices.Sorted(maps.Keys(td.GetRelations())) {
+			at := objType + "#" + relName
+
+			for _, ref := range meta[relName].GetDirectlyRelatedUserTypes() {
+				rels, ok := defined[ref.GetType()]
+				switch {
+				case !ok:
+					found = append(found, fmt.Sprintf("%s allows [%s] but type %q is not defined",
+						at, subjectRefString(ref), ref.GetType()))
+				case ref.GetRelation() != "" && !rels[ref.GetRelation()]:
+					found = append(found, fmt.Sprintf("%s allows [%s] but %q has no relation %q",
+						at, subjectRefString(ref), ref.GetType(), ref.GetRelation()))
+				}
+			}
+
+			walkUserset(td.GetRelations()[relName], func(u *openfgav1.Userset) {
+				if cu := u.GetComputedUserset(); cu != nil && !defined[objType][cu.GetRelation()] {
+					found = append(found, fmt.Sprintf("%s references %q, which is not a relation on %q",
+						at, cu.GetRelation(), objType))
+				}
+				ttu := u.GetTupleToUserset()
+				if ttu == nil {
+					return
+				}
+				tupleset, computed := ttu.GetTupleset().GetRelation(), ttu.GetComputedUserset().GetRelation()
+				if !defined[objType][tupleset] {
+					found = append(found, fmt.Sprintf("%s uses `%s from %s`, but %q is not a relation on %q",
+						at, computed, tupleset, tupleset, objType))
+					return
+				}
+				var targets []string
+				for _, ref := range meta[tupleset].GetDirectlyRelatedUserTypes() {
+					if defined[ref.GetType()][computed] {
+						return
+					}
+					if !slices.Contains(targets, ref.GetType()) {
+						targets = append(targets, ref.GetType())
+					}
+				}
+				if len(targets) == 0 {
+					found = append(found, fmt.Sprintf("%s uses `%s from %s`, but %s#%s has no direct type restrictions to follow",
+						at, computed, tupleset, objType, tupleset))
+					return
+				}
+				found = append(found, fmt.Sprintf("%s uses `%s from %s`, but none of the types %s#%s can point to (%s) has a relation %q",
+					at, computed, tupleset, objType, tupleset, strings.Join(targets, ", "), computed))
+			})
+		}
+	}
+
+	if len(found) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%w: undefined references: %s", melange.ErrInvalidSchema, strings.Join(found, "; "))
+}
+
+// walkUserset calls fn on u and every userset nested inside it.
+func walkUserset(u *openfgav1.Userset, fn func(*openfgav1.Userset)) {
+	if u == nil {
+		return
+	}
+	fn(u)
+	for _, child := range u.GetUnion().GetChild() {
+		walkUserset(child, fn)
+	}
+	for _, child := range u.GetIntersection().GetChild() {
+		walkUserset(child, fn)
+	}
+	if d := u.GetDifference(); d != nil {
+		walkUserset(d.GetBase(), fn)
+		walkUserset(d.GetSubtract(), fn)
+	}
 }
 
 // subjectRefString renders a type restriction the way it appears in the DSL:

@@ -207,7 +207,7 @@ Studio binds a loopback address, opens read-only connections, and loads nothing 
 ```
 Schema
   migrate     Apply schema to database
-  validate    Validate schema syntax
+  validate    Validate a schema
   status      Show schema, tuples, and deployed-model status
   diff        Show what changed between the deployed model and your local schema
   history     Show the migration history recorded in the database

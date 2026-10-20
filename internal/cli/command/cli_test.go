@@ -2,6 +2,7 @@ package command
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -194,6 +195,8 @@ func TestCLI_ValidationErrorsBeforeConnecting(t *testing.T) {
 		{"diff db with git ref", []string{"diff", "--db", "postgres://localhost/app", "--git-ref", "main"}, "cannot be combined"},
 		{"history format", []string{"history", "--format", "yaml"}, "invalid --format"},
 		{"history limit", []string{"history", "--limit", "0"}, "--limit"},
+		{"validate format", []string{"validate", "--format", "yaml"}, "invalid --format"},
+		{"doctor format", []string{"doctor", "--format", "yaml"}, "invalid --format"},
 	}
 
 	for _, tc := range cases {
@@ -282,5 +285,95 @@ func TestCLI_StatusFormatValidatedBeforeConnecting(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid --format") {
 		t.Errorf("format should be validated before connecting, got: %v", err)
+	}
+}
+
+// validate --format json reports the outcome on stdout for both valid and
+// invalid schemas, and still exits non-zero for an invalid one.
+func TestCLI_ValidateJSON(t *testing.T) {
+	const config = "schema: melange/schema.fga\n"
+	const valid = `model
+  schema 1.1
+type user
+type document
+  relations
+    define owner: [user]
+    define viewer: [user] or owner
+`
+
+	t.Run("valid", func(t *testing.T) {
+		out, err := runCLIWithFiles(t, config, map[string]string{"melange/schema.fga": valid}, "validate", "--format", "json")
+		if err != nil {
+			t.Fatalf("validate: %v", err)
+		}
+		var got validateReport
+		if err := json.Unmarshal([]byte(out), &got); err != nil {
+			t.Fatalf("output is not JSON: %v\n%s", err, out)
+		}
+		if !got.Valid || got.Error != "" || len(got.Types) != 2 {
+			t.Fatalf("unexpected report: %+v", got)
+		}
+		if doc := got.Types[1]; doc.Name != "document" || strings.Join(doc.Relations, ",") != "owner,viewer" {
+			t.Errorf("document type = %+v", doc)
+		}
+	})
+
+	t.Run("invalid", func(t *testing.T) {
+		invalid := strings.Replace(valid, "or owner", "or ownr", 1)
+		out, err := runCLIWithFiles(t, config, map[string]string{"melange/schema.fga": invalid}, "validate", "--format", "json")
+		if err == nil {
+			t.Fatal("expected a non-zero exit for an invalid schema")
+		}
+		var got validateReport
+		if err := json.Unmarshal([]byte(out), &got); err != nil {
+			t.Fatalf("output is not JSON: %v\n%s", err, out)
+		}
+		if got.Valid || !strings.Contains(got.Error, `"ownr"`) {
+			t.Errorf("unexpected report: %+v", got)
+		}
+	})
+}
+
+// melange init agent fills the instructions in from the project's config, and
+// starts with a blank line so `>> AGENTS.md` never joins the heading onto the
+// file's last line.
+func TestCLI_InitAgent(t *testing.T) {
+	const config = `schema: auth/model.fga
+generate:
+  client:
+    runtime: go
+    output: pkg/authz
+  migration:
+    output: db/migrations
+`
+	out, err := runCLI(t, config, "init", "agent")
+	if err != nil {
+		t.Fatalf("init agent: %v", err)
+	}
+	if !strings.HasPrefix(out, "\n"+agentsHeading+"\n") {
+		t.Errorf("output should start with a blank line and the heading:\n%s", out)
+	}
+	for _, want := range []string{
+		"Model: `auth/model.fga`. Config: `melange.yaml`.",
+		"`pkg/authz` is generated; don't edit it.",
+		"2. `melange generate client`",
+		"3. `melange generate migration` writes the SQL to `db/migrations`",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestCLI_InitAgent_NoConfig(t *testing.T) {
+	out, err := runCLI(t, "", "init", "agent")
+	if err != nil {
+		t.Fatalf("init agent: %v", err)
+	}
+	if strings.Contains(out, "Config:") || strings.Contains(out, "generate client") {
+		t.Errorf("without a config, there is no config path or client step:\n%s", out)
+	}
+	if !strings.Contains(out, "2. `melange migrate`") {
+		t.Errorf("built-in migrations are the default:\n%s", out)
 	}
 }

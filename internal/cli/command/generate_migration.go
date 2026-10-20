@@ -408,7 +408,7 @@ func parsePreviousSchema(pathOrRef, schemaPath string, isGitRef bool) ([]schema.
 		content = string(raw)
 	}
 
-	types, err := parser.ParseSchemaString(content)
+	types, err := parser.ParseRecordedSchemaString(content)
 	if err != nil {
 		return nil, cli.SchemaParseError("parsing previous schema", err)
 	}
@@ -446,7 +446,7 @@ func parseModularSchemaFromGit(gitRef, manifestPath string) ([]schema.TypeDefini
 		modules[p] = content
 	}
 
-	types, err := parser.ParseModularSchemaFromStrings(modules, schemaVersion)
+	types, err := parser.ParseRecordedModularSchemaFromStrings(modules, schemaVersion)
 	if err != nil {
 		return nil, cli.SchemaParseError("parsing modular schema from git ref", err)
 	}
