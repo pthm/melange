@@ -2,6 +2,7 @@ package sqlgen
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/pthm/melange/internal/sqlgen/sqldsl"
 )
@@ -537,6 +538,9 @@ func nestedParentForcesSubjectPool(pr ParentRelationInfo, targetObjectType, curr
 // is false (its WHERE only filters '*' when ExcludeWildcard is true), so no
 // dedicated wildcard block is needed today.
 func buildListSubjectsRecursiveTTUBlock(plan ListPlan, parent ListParentRelationData) []TypedQueryBlock {
+	if blocks := buildSelfClosureTTUBlocks(plan, parent); blocks != nil {
+		return blocks
+	}
 	if classifyParentRelation(plan, parent) == parentStrategySubjectPool {
 		if blocks := buildSubjectFirstTTUSubjectBlocks(plan, parent); blocks != nil {
 			return blocks
@@ -1197,4 +1201,168 @@ func buildListSubjectsRecursiveUsersetFilterTTUNestedBlock(plan ListPlan, parent
 		Comments: []string{"-- TTU nested: multi-hop chain resolution"},
 		Query:    stmt,
 	}
+}
+
+// buildSelfClosureTTUBlocks lists a self-referential recursive relation such as
+// `viewer: [user, group#member] or viewer from parent or member from org` with
+// `parent: [folder, project]` over parent_closure, where the plain closure path
+// would fall back to the subject pool (one check per subject in the table) for
+// two reasons it can now handle exactly:
+//
+//   - the walk also reaches parents of another type (project): those nodes are
+//     leaves (parent_closure recurses only out of nodes of the listed type), and
+//     their subjects are that type's own list function;
+//   - the relation has other parent lookups (member from org): each ancestor's
+//     links are joined into the target's list function.
+//
+// Own-type ancestors contribute the relation's direct and simple-userset
+// grants, read with its own satisfying relations and restricted to own-type
+// nodes. Returns nil (use the other strategies) unless the relation has no
+// exclusion, intersection, complex usersets or inherited parent lookups and
+// every composed target is composable, mirroring the closure path's
+// assumption that these arms fully describe the relation's grants.
+func buildSelfClosureTTUBlocks(plan ListPlan, parent ListParentRelationData) []TypedQueryBlock {
+	a := plan.Analysis
+	if plan.AnalysisLookup == nil || parent.Relation != plan.Relation ||
+		!slices.Contains(parent.AllowedLinkingTypesSlice, plan.ObjectType) {
+		return nil
+	}
+	if sourceRelationNeedsVerification(plan, parent) || a.Features.HasIntersection || a.Features.HasExclusion ||
+		len(composedClosureRelations(a)) > 0 || len(a.ClosureParentRelations) > 0 {
+		return nil
+	}
+	patterns := buildListUsersetPatternInputs(a)
+	for _, pattern := range patterns {
+		if pattern.IsComplex && !composableListSubjectsTarget(plan, pattern.SubjectType, pattern.SubjectRelation) {
+			return nil
+		}
+	}
+	var leaves []string
+	for _, t := range parent.AllowedLinkingTypesSlice {
+		if t == plan.ObjectType {
+			continue
+		}
+		if !composableListSubjectsTarget(plan, t, parent.Relation) {
+			return nil
+		}
+		leaves = append(leaves, t)
+	}
+	var cross []ParentRelationInfo
+	for _, pr := range a.ParentRelations {
+		if pr.Relation == parent.Relation && pr.LinkingRelation == parent.LinkingRelation {
+			continue // the walk itself
+		}
+		if len(pr.AllowedLinkingTypes) == 0 {
+			return nil
+		}
+		for _, lt := range pr.AllowedLinkingTypes {
+			if !composableListSubjectsTarget(plan, lt, pr.Relation) {
+				return nil
+			}
+		}
+		cross = append(cross, pr)
+	}
+	if len(leaves) == 0 && len(cross) == 0 {
+		return nil // pure self-recursion: the plain closure path handles it
+	}
+
+	ownType := Eq{Left: Col{Table: "p", Column: "subject_type"}, Right: Lit(plan.ObjectType)}
+	noWildcard := func(col Col) []Expr {
+		if plan.ExcludeWildcard() {
+			return []Expr{Ne{Left: col, Right: Lit("*")}}
+		}
+		return nil
+	}
+	closureJoin := func(alias string, extra ...Expr) JoinClause {
+		on := append([]Expr{
+			Eq{Left: Col{Table: alias, Column: "object_type"}, Right: Col{Table: "p", Column: "subject_type"}},
+			Eq{Left: Col{Table: alias, Column: "object_id"}, Right: Col{Table: "p", Column: "subject_id"}},
+		}, extra...)
+		return JoinClause{Type: "INNER", Table: "melange_tuples", Alias: alias, On: And(on...)}
+	}
+	lateral := func(objType, rel string, objectID Expr) JoinClause {
+		return JoinClause{Type: "CROSS JOIN LATERAL", TableExpr: FunctionCallExpr{
+			Schema: plan.DatabaseSchema, Name: listSubjectsFunctionName(objType, rel),
+			Args: []Expr{objectID, SubjectType}, Alias: "s",
+		}}
+	}
+
+	direct := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "t", Column: "subject_id"}},
+		FromExpr:    TableAs("", "parent_closure", "p"),
+		Joins:       []JoinClause{closureJoin("t")},
+		Where: And(append([]Expr{
+			ownType,
+			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
+			In{Expr: Col{Table: "t", Column: "relation"}, Values: a.SatisfyingRelations},
+			NoUserset{Source: Col{Table: "t", Column: "subject_id"}},
+		}, noWildcard(Col{Table: "t", Column: "subject_id"})...)...),
+	}
+	blocks := []TypedQueryBlock{{
+		Comments: []string{fmt.Sprintf("-- TTU: direct grants on %s ancestors via %s (parent closure)", plan.ObjectType, parent.LinkingRelation)},
+		Query:    direct,
+	}}
+	for _, pattern := range patterns {
+		if !pattern.IsComplex {
+			block := buildListSubjectsRecursiveTTUBlockParentClosureUsersetPattern(plan, parent, pattern)
+			block.Query.Where = And(block.Query.Where, ownType)
+			blocks = append(blocks, block)
+			continue
+		}
+		// A complex userset (group#member where member recurses) on an
+		// ancestor: list the userset relation's subjects on the granted object.
+		blocks = append(blocks, TypedQueryBlock{
+			Comments: []string{fmt.Sprintf("-- TTU: %s#%s grants on %s ancestors (compose list_subjects)", pattern.SubjectType, pattern.SubjectRelation, plan.ObjectType)},
+			Query: SelectStmt{
+				Distinct:    true,
+				ColumnExprs: []Expr{Col{Table: "s", Column: "subject_id"}},
+				FromExpr:    TableAs("", "parent_closure", "p"),
+				Joins: []JoinClause{
+					closureJoin("g",
+						In{Expr: Col{Table: "g", Column: "relation"}, Values: pattern.SourceRelations},
+						Eq{Left: Col{Table: "g", Column: "subject_type"}, Right: Lit(pattern.SubjectType)},
+						HasUserset{Source: Col{Table: "g", Column: "subject_id"}},
+						Eq{Left: UsersetRelation{Source: Col{Table: "g", Column: "subject_id"}}, Right: Lit(pattern.SubjectRelation)},
+					),
+					lateral(pattern.SubjectType, pattern.SubjectRelation, UsersetObjectID{Source: Col{Table: "g", Column: "subject_id"}}),
+				},
+				Where: And(append([]Expr{ownType}, noWildcard(Col{Table: "s", Column: "subject_id"})...)...),
+			},
+		})
+	}
+	for _, t := range leaves {
+		blocks = append(blocks, TypedQueryBlock{
+			Comments: []string{fmt.Sprintf("-- TTU: %s ancestors are leaves, listed by %s", t, listSubjectsFunctionName(t, parent.Relation))},
+			Query: SelectStmt{
+				Distinct:    true,
+				ColumnExprs: []Expr{Col{Table: "s", Column: "subject_id"}},
+				FromExpr:    TableAs("", "parent_closure", "p"),
+				Joins:       []JoinClause{lateral(t, parent.Relation, Col{Table: "p", Column: "subject_id"})},
+				Where: And(append([]Expr{Eq{Left: Col{Table: "p", Column: "subject_type"}, Right: Lit(t)}},
+					noWildcard(Col{Table: "s", Column: "subject_id"})...)...),
+			},
+		})
+	}
+	for _, pr := range cross {
+		for _, lt := range pr.AllowedLinkingTypes {
+			blocks = append(blocks, TypedQueryBlock{
+				Comments: []string{fmt.Sprintf("-- TTU: %s from %s on each %s ancestor", pr.Relation, pr.LinkingRelation, plan.ObjectType)},
+				Query: SelectStmt{
+					Distinct:    true,
+					ColumnExprs: []Expr{Col{Table: "s", Column: "subject_id"}},
+					FromExpr:    TableAs("", "parent_closure", "p"),
+					Joins: []JoinClause{
+						closureJoin("link",
+							Eq{Left: Col{Table: "link", Column: "relation"}, Right: Lit(pr.LinkingRelation)},
+							Eq{Left: Col{Table: "link", Column: "subject_type"}, Right: Lit(lt)},
+						),
+						lateral(lt, pr.Relation, Col{Table: "link", Column: "subject_id"}),
+					},
+					Where: And(append([]Expr{ownType}, noWildcard(Col{Table: "s", Column: "subject_id"})...)...),
+				},
+			})
+		}
+	}
+	return blocks
 }
