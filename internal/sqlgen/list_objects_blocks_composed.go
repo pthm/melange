@@ -65,7 +65,7 @@ func BuildListObjectsComposedBlocks(plan ListPlan) (ComposedObjectsBlockSet, err
 
 	// Build main composed query blocks
 	firstStep := anchor.Path[0]
-	exclusions := buildSimpleComplexExclusionInput(plan.Analysis, plan.DatabaseSchema, Col{Table: "t", Column: "object_id"}, SubjectType, SubjectID)
+	exclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, Col{Table: "t", Column: "object_id"}, SubjectType, SubjectID)
 
 	switch firstStep.Type {
 	case "ttu":

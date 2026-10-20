@@ -10,7 +10,7 @@ import (
 func formatTextOutput(testName string, results []*ExplainResult) string {
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("Test: %s\n", testName))
+	fmt.Fprintf(&sb, "Test: %s\n", testName)
 	sb.WriteString(strings.Repeat("-", len(testName)+6) + "\n\n")
 
 	if len(results) == 0 {
@@ -22,21 +22,21 @@ func formatTextOutput(testName string, results []*ExplainResult) string {
 	for _, r := range results {
 		if r.Stage != currentStage {
 			currentStage = r.Stage
-			sb.WriteString(fmt.Sprintf("\n##### Stage %d #####\n\n", r.Stage))
+			fmt.Fprintf(&sb, "\n##### Stage %d #####\n\n", r.Stage)
 		}
-		sb.WriteString(fmt.Sprintf("=== Assertion %d (%s) ===\n",
-			r.AssertionIndex, r.AssertionType))
-		sb.WriteString(fmt.Sprintf("Query: %s(%s)\n", r.Query, strings.Join(r.Parameters, ", ")))
-		sb.WriteString(fmt.Sprintf("Expected: %s\n\n", r.Expected))
+		fmt.Fprintf(&sb, "=== Assertion %d (%s) ===\n",
+			r.AssertionIndex, r.AssertionType)
+		fmt.Fprintf(&sb, "Query: %s(%s)\n", r.Query, strings.Join(r.Parameters, ", "))
+		fmt.Fprintf(&sb, "Expected: %s\n\n", r.Expected)
 
 		sb.WriteString("Metrics:\n")
-		sb.WriteString(fmt.Sprintf("  Execution Time: %.3f ms\n", r.Metrics.ExecutionTimeMS))
-		sb.WriteString(fmt.Sprintf("  Planning Time:  %.3f ms\n", r.Metrics.PlanningTimeMS))
-		sb.WriteString(fmt.Sprintf("  Buffer Hits:    %d\n", r.Metrics.BufferHits))
+		fmt.Fprintf(&sb, "  Execution Time: %.3f ms\n", r.Metrics.ExecutionTimeMS)
+		fmt.Fprintf(&sb, "  Planning Time:  %.3f ms\n", r.Metrics.PlanningTimeMS)
+		fmt.Fprintf(&sb, "  Buffer Hits:    %d\n", r.Metrics.BufferHits)
 		if r.Metrics.BufferReads > 0 {
-			sb.WriteString(fmt.Sprintf("  Buffer Reads:   %d\n", r.Metrics.BufferReads))
+			fmt.Fprintf(&sb, "  Buffer Reads:   %d\n", r.Metrics.BufferReads)
 		}
-		sb.WriteString(fmt.Sprintf("  Rows:           %d\n", r.Metrics.Rows))
+		fmt.Fprintf(&sb, "  Rows:           %d\n", r.Metrics.Rows)
 		sb.WriteString("\n")
 
 		sb.WriteString("Query Plan:\n")

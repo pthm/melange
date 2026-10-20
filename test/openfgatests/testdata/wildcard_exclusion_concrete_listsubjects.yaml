@@ -1,0 +1,50 @@
+# A wildcard grant narrowed by an exclusion. user:* cannot be returned
+# (not everyone has access), but the users the exclusion leaves out still
+# have access; ListUsers returned none of them. Found by
+# TestOpenFGA_GeneratedNested.
+tests:
+  - name: wildcard_exclusion_concrete_listsubjects
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type folder
+            relations
+              define b: [user, user:*]
+          type document
+            relations
+              define parent: [folder]
+              define a: [user]
+              define c: [user]
+              define r2: c or b from parent
+              define x: r2 but not (r2 but not a)
+        tuples:
+          - user: folder:f
+            relation: parent
+            object: document:d
+          - user: user:*
+            relation: b
+            object: folder:f
+          - user: user:bob
+            relation: a
+            object: document:d
+        checkAssertions:
+          - tuple:
+              user: user:bob
+              relation: x
+              object: document:d
+            expectation: true
+          - tuple:
+              user: user:carol
+              relation: x
+              object: document:d
+            expectation: false
+        listUsersAssertions:
+          - request:
+              object: document:d
+              relation: x
+              filters:
+                - user
+            expectation:
+              - user:bob

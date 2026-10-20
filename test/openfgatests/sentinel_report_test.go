@@ -154,12 +154,12 @@ func analyseStageSchema(dsl string) ([]sqlgen.RelationAnalysis, bool) {
 	if model == nil {
 		return nil, false
 	}
-	types := convertProtoModel(&openfgav1.WriteAuthorizationModelRequest{
+	types, err := convertProtoModel(&openfgav1.WriteAuthorizationModelRequest{
 		SchemaVersion:   typesystem.SchemaVersion1_1,
 		TypeDefinitions: model.GetTypeDefinitions(),
 		Conditions:      model.GetConditions(),
 	})
-	if len(types) == 0 {
+	if err != nil || len(types) == 0 {
 		return nil, false
 	}
 	closure := schema.ComputeRelationClosure(types)

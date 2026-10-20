@@ -1,6 +1,9 @@
 package sqlgen
 
-import "sort"
+import (
+	"slices"
+	"sort"
+)
 
 // CheckBlocks contains all the DSL blocks needed to generate a check function.
 type CheckBlocks struct {
@@ -42,11 +45,15 @@ type IntersectionGroupCheck struct {
 type IntersectionPartCheck struct {
 	Relation         string
 	ExcludedRelation string
-	IsThis           bool // [user]-direct grant probe at the wrapping relation
-	IsParent         bool
-	ParentRelation   string
-	LinkingRelation  string
-	Check            Expr
+	// ExcludedInline is true when Check already decides the exclusion
+	// exactly with an inline tuple probe (a simple excluded relation), so no
+	// separate exclusion call is needed after the group matches.
+	ExcludedInline  bool
+	IsThis          bool // [user]-direct grant probe at the wrapping relation
+	IsParent        bool
+	ParentRelation  string
+	LinkingRelation string
+	Check           Expr
 }
 
 // BuildCheckBlocks builds all DSL blocks for a check function.
@@ -502,8 +509,11 @@ func parentRelationScore(p ParentRelationInfo, complexity map[string]map[string]
 }
 
 func buildImpliedFunctionCalls(plan CheckPlan) []ImpliedFunctionCheck {
-	relations := make([]string, len(plan.Analysis.ComplexClosureRelations))
-	copy(relations, plan.Analysis.ComplexClosureRelations)
+	callees := plan.Analysis.ImpliedCallees
+	if callees == nil {
+		callees = plan.Analysis.ComplexClosureRelations
+	}
+	relations := slices.Clone(callees)
 	sameType := plan.ComplexityByRelation[plan.ObjectType]
 	sort.SliceStable(relations, func(i, j int) bool {
 		return sameType[relations[i]] < sameType[relations[j]]
@@ -604,6 +614,20 @@ func buildSimpleRelationCheck(plan CheckPlan, relation string) Expr {
 	return Exists{Query: q}
 }
 
+// buildSimplePartCheck is buildSimpleRelationCheck for an intersection part,
+// plus the self-referential userset: object:id#relation holds relation on
+// object:id. A simple relation's only satisfying relation is itself. The
+// tuple lookup alone misses this, which check_permission's Case 1 covers
+// for function-call parts.
+func buildSimplePartCheck(plan CheckPlan, relation string) Expr {
+	selfRef := And(
+		Eq{Left: SubjectType, Right: Lit(plan.ObjectType)},
+		Eq{Left: UsersetObjectID{Source: SubjectID}, Right: ObjectID},
+		Eq{Left: UsersetRelation{Source: SubjectID}, Right: Lit(relation)},
+	)
+	return Or(selfRef, buildSimpleRelationCheck(plan, relation))
+}
+
 func buildIntersectionPartCheck(plan CheckPlan, part IntersectionPart, visitedWithKey Expr) IntersectionPartCheck {
 	pc := IntersectionPartCheck{
 		Relation:         part.Relation,
@@ -623,7 +647,7 @@ func buildIntersectionPartCheck(plan CheckPlan, part IntersectionPart, visitedWi
 
 	case part.IsSimple:
 		// Optimization: inline simple relations as EXISTS instead of function calls
-		pc.Check = buildSimpleRelationCheck(plan, part.Relation)
+		pc.Check = buildSimplePartCheck(plan, part.Relation)
 
 	default:
 		pc.Check = CheckPermission{
@@ -637,10 +661,11 @@ func buildIntersectionPartCheck(plan CheckPlan, part IntersectionPart, visitedWi
 	}
 
 	if part.ExcludedRelation != "" {
+		pc.ExcludedInline = part.IsExcludedSimple
 		var exclusionCheck Expr
 		if part.IsExcludedSimple {
 			// Optimization: inline simple exclusions as NOT EXISTS
-			exclusionCheck = Not(buildSimpleRelationCheck(plan, part.ExcludedRelation))
+			exclusionCheck = Not(buildSimplePartCheck(plan, part.ExcludedRelation))
 		} else {
 			exclusionCheck = CheckPermission{
 				Schema:      plan.DatabaseSchema,

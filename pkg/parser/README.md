@@ -31,7 +31,7 @@ func ParseSchemaString(content string) ([]schema.TypeDefinition, error)
 ```go
 // ConvertProtoModel converts an OpenFGA protobuf AuthorizationModel
 // to schema TypeDefinitions. Useful for OpenFGA API integration.
-func ConvertProtoModel(model *openfgav1.AuthorizationModel) []schema.TypeDefinition
+func ConvertProtoModel(model *openfgav1.AuthorizationModel) ([]schema.TypeDefinition, error)
 ```
 
 ## Usage Examples

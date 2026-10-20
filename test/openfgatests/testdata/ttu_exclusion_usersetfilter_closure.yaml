@@ -1,0 +1,54 @@
+# The recursive list_subjects strategy's userset-filter path listed usersets
+# granted through an implied relation without applying this relation's
+# exclusion. Found by TestOpenFGA_GeneratedNested.
+tests:
+  - name: ttu_exclusion_usersetfilter_closure
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type folder
+            relations
+              define parent: [folder]
+              define v: [user] or v from parent
+          type document
+            relations
+              define parent: [folder]
+              define b: [user]
+              define c: [user, group#member]
+              define r0: c but not b
+              define x: (v from parent or r0) but not c
+              define w: v from parent or r0
+        tuples:
+          - user: group:g#member
+            relation: c
+            object: document:d
+        checkAssertions:
+          - tuple:
+              user: group:g#member
+              relation: x
+              object: document:d
+            expectation: false
+          - tuple:
+              user: group:g#member
+              relation: w
+              object: document:d
+            expectation: true
+        listUsersAssertions:
+          - request:
+              object: document:d
+              relation: x
+              filters:
+                - group#member
+            expectation: []
+          - request:
+              object: document:d
+              relation: w
+              filters:
+                - group#member
+            expectation:
+              - group:g#member

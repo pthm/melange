@@ -84,7 +84,7 @@ func ParseModularSchemaFromStrings(modules map[string]string, schemaVersion stri
 		return nil, err
 	}
 
-	return convertModel(model), nil
+	return convertModel(model)
 }
 
 // ParseManifestEntries parses an fga.mod manifest string and returns the

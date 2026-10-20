@@ -169,20 +169,6 @@ func convertIntersectionGroups(groups []IntersectionGroupInfo) []ExcludedInterse
 	return result
 }
 
-// buildSimpleComplexExclusionInput creates an ExclusionConfig with only simple and complex
-// exclusions (no TTU or intersection exclusions).
-func buildSimpleComplexExclusionInput(a RelationAnalysis, databaseSchema string, objectIDExpr, subjectTypeExpr, subjectIDExpr Expr) ExclusionConfig {
-	return ExclusionConfig{
-		DatabaseSchema:           databaseSchema,
-		ObjectType:               a.ObjectType,
-		ObjectIDExpr:             objectIDExpr,
-		SubjectTypeExpr:          subjectTypeExpr,
-		SubjectIDExpr:            subjectIDExpr,
-		SimpleExcludedRelations:  a.SimpleExcludedRelations,
-		ComplexExcludedRelations: a.ComplexExcludedRelations,
-	}
-}
-
 // trimTrailingSemicolon removes a trailing semicolon from a SQL string.
 func trimTrailingSemicolon(input string) string {
 	trimmed := strings.TrimSpace(input)
@@ -226,7 +212,9 @@ func buildUsersetWildcardTailQuery(a RelationAnalysis, databaseSchema string) SQ
 //     transitively through a TTU. Verifying '*' unconditionally is correct for
 //     non-exclusion relations too (the check passes), so no gate is needed.
 //   - concrete subjects use the no-wildcard check, because wildcard-only access
-//     is already represented by the '*' row.
+//     is already represented by the '*' row. With an exclusion, when '*' is
+//     denied, the '*' row is dropped and no longer represents them, so they
+//     also pass through the full check.
 //
 // The NOT(has_wildcard) short-circuit keeps every base row when there is no '*'.
 // That is safe only when the relation has no exclusion: for an exclusion-bearing
@@ -237,20 +225,31 @@ func buildUsersetWildcardTailQuery(a RelationAnalysis, databaseSchema string) SQ
 // '*' by check_permission_internal.
 func wildcardSubjectsTailWhere(schema, relation, objectType string, hasExclusion bool) Expr {
 	subject := Col{Table: "br", Column: "subject_id"}
+	var concrete Expr = NoWildcardPermissionCheckCall(schema, relation, objectType, subject, ObjectID)
+	if hasExclusion {
+		concrete = Or(concrete, And(
+			wildcardDenied(schema, relation, objectType),
+			WildcardPermissionCheckCall(schema, relation, objectType, subject, ObjectID),
+		))
+	}
 	branches := []Expr{
 		And(
 			Eq{Left: subject, Right: Lit("*")},
 			WildcardPermissionCheckCall(schema, relation, objectType, subject, ObjectID),
 		),
-		And(
-			Ne{Left: subject, Right: Lit("*")},
-			NoWildcardPermissionCheckCall(schema, relation, objectType, subject, ObjectID),
-		),
+		And(Ne{Left: subject, Right: Lit("*")}, concrete),
 	}
 	if !hasExclusion {
 		branches = append([]Expr{NotExpr{Expr: Col{Table: "hw", Column: "has_wildcard"}}}, branches...)
 	}
 	return Or(branches...)
+}
+
+// wildcardDenied is true when the full check denies '*' on the object. The
+// subquery is uncorrelated, so PostgreSQL evaluates it once.
+func wildcardDenied(schema, relation, objectType string) Expr {
+	check := WildcardPermissionCheckCall(schema, relation, objectType, Lit("*"), ObjectID)
+	return NotExpr{Expr: Paren{Expr: Raw("SELECT " + check.SQL())}}
 }
 
 // buildDispatcherBody builds the common routing logic for list dispatcher functions.
@@ -355,4 +354,47 @@ func collectListDispatcherCases(analyses []RelationAnalysis, nameFunc func(strin
 		})
 	}
 	return cases
+}
+
+// closureCoverage chooses which of a relation's closure relations its list
+// function obtains by composing their own (exact) list function, and which
+// closure relations those compositions cover, so per-arm blocks derived from
+// a covered relation can be skipped. From the composable candidates it drops
+// a relation R when another candidate S has R in its satisfying closure and S
+// excludes nothing, so S's results include R's (as for ImpliedCallees; when
+// two imply each other the lexically greater is dropped). covered holds each
+// composed relation and, for exclusion-free ones, its satisfying closure. It
+// never contains the listed relation itself.
+func closureCoverage(plan ListPlan, candidates []string, composable func(string) bool) (compose []string, covered map[string]bool) {
+	if plan.AnalysisLookup == nil {
+		return nil, nil
+	}
+	var usable []string
+	for _, r := range candidates {
+		if r != "" && r != plan.Relation && !slices.Contains(usable, r) && composable(r) {
+			usable = append(usable, r)
+		}
+	}
+	analysis := func(r string) *RelationAnalysis { return plan.AnalysisLookup[plan.ObjectType+"."+r] }
+	covers := func(s, r string) bool {
+		sa := analysis(s)
+		return sa != nil && !sa.Features.HasExclusion && slices.Contains(sa.SatisfyingRelations, r)
+	}
+	covered = make(map[string]bool)
+	for _, r := range usable {
+		if slices.ContainsFunc(usable, func(s string) bool {
+			return s != r && covers(s, r) && (!covers(r, s) || s < r)
+		}) {
+			continue
+		}
+		compose = append(compose, r)
+		covered[r] = true
+		if ra := analysis(r); ra != nil && !ra.Features.HasExclusion {
+			for _, x := range ra.SatisfyingRelations {
+				covered[x] = true
+			}
+		}
+	}
+	delete(covered, plan.Relation)
+	return compose, covered
 }

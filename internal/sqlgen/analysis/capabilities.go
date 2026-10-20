@@ -108,7 +108,8 @@ func hasSelfReferentialParent(a RelationAnalysis) bool {
 //  1. DepthExceeded - relation exceeds userset depth limit
 //  2. SelfRefUserset - has self-referential userset patterns
 //  3. Composed - has indirect anchor (pure TTU reaching direct grants), but only
-//     when there is no self-referential recursive parent — see below.
+//     with no self-referential parent, no intersection groups and at most one
+//     parent lookup; see below.
 //  4. Intersection - has intersection patterns (AND groups)
 //  5. Recursive - has TTU patterns or closure TTU patterns
 //  6. Userset - has userset patterns or closure userset patterns
@@ -127,7 +128,11 @@ func DetermineListStrategy(a RelationAnalysis) ListStrategy {
 	// so it under-reports every object reached only through the parent chain.
 	// Route these to Recursive, whose CTE covers both the cross-type anchor base
 	// and the self-referential parent expansion.
-	if a.IndirectAnchor != nil && !hasSelfReferentialParent(a) {
+	// Composed also models only the anchor path: not intersection groups
+	// ("v from parent or (a but not c)" would lose its group), and not a
+	// second parent lookup ("v from parent or b from parent" would lose b).
+	if a.IndirectAnchor != nil && !hasSelfReferentialParent(a) && !a.Features.HasIntersection &&
+		len(a.ParentRelations) <= 1 {
 		return ListStrategyComposed
 	}
 	if a.Features.HasIntersection {

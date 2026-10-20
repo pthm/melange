@@ -1,6 +1,9 @@
 package sqlgen
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // SubjectsIntersectionBlockSet contains blocks for an intersection list_subjects function.
 // Unlike recursive which uses check_permission_internal within queries, intersection
@@ -80,7 +83,94 @@ func buildListSubjectsIntersectionRegularCandidates(plan ListPlan) []TypedQueryB
 	blocks = append(blocks, buildListSubjectsIntersectionPartBlocks(plan, excludeWildcard)...)
 	blocks = append(blocks, buildListSubjectsIntersectionUsersetPatternBlocks(plan, excludeWildcard)...)
 	blocks = append(blocks, buildListSubjectsIntersectionTTUBlocks(plan, excludeWildcard)...)
-	blocks = append(blocks, buildListSubjectsIntersectionPoolBlock(plan, excludeWildcard))
+	return append(blocks, buildListSubjectsIntersectionPoolBlocks(plan, excludeWildcard)...)
+}
+
+// intersectionAnchors picks, for each intersection group, one part whose own
+// list_subjects function enumerates its subjects: every subject a group
+// grants holds every part of that group, so the anchors' subjects are a
+// superset of the group-granted subjects, and the candidates' check filter
+// keeps the result exact. It prefers parts that cannot grant through a
+// wildcard, then simple relations. ok is false when some group has no
+// listable part (only direct-assignment or parent parts), or when the
+// relation has implied or parent paths outside its groups, which the
+// candidate blocks would then have to enumerate as well.
+func intersectionAnchors(plan ListPlan) (rels []string, wildcard, ok bool) {
+	a := plan.Analysis
+	if len(a.IntersectionGroups) == 0 || a.Features.HasImplied || len(a.ParentRelations) > 0 {
+		return nil, false, false
+	}
+	for _, group := range a.IntersectionGroups {
+		best, bestScore := "", 0
+		for _, part := range group.Parts {
+			if part.IsThis || part.ParentRelation != nil || part.Relation == "" ||
+				!composableListSubjectsTarget(plan, plan.ObjectType, part.Relation) {
+				continue
+			}
+			score := 0
+			if plan.AnalysisLookup[plan.ObjectType+"."+part.Relation].Features.HasWildcard {
+				score += 2
+			}
+			if !part.IsSimple {
+				score++
+			}
+			if best == "" || score < bestScore {
+				best, bestScore = part.Relation, score
+			}
+		}
+		if best == "" {
+			return nil, false, false
+		}
+		if !slices.Contains(rels, best) {
+			rels = append(rels, best)
+		}
+	}
+	for _, rel := range rels {
+		wildcard = wildcard || plan.AnalysisLookup[plan.ObjectType+"."+rel].Features.HasWildcard
+	}
+	return rels, wildcard, true
+}
+
+// buildListSubjectsIntersectionPoolBlocks returns the candidates that cover
+// the intersection groups: the anchors' list functions when every group has
+// one, else the subject pool. An anchor that can grant through a wildcard
+// may return '*' (every subject holds it); the pool is then still offered,
+// gated on that anchor actually returning '*' for this object.
+func buildListSubjectsIntersectionPoolBlocks(plan ListPlan, excludeWildcard bool) []TypedQueryBlock {
+	rels, wildcard, ok := intersectionAnchors(plan)
+	if !ok {
+		return []TypedQueryBlock{buildListSubjectsIntersectionPoolBlock(plan, excludeWildcard)}
+	}
+	blocks := make([]TypedQueryBlock, 0, len(rels)+1)
+	var wildcardGates []Expr
+	for _, rel := range rels {
+		fn := listSubjectsFunctionName(plan.ObjectType, rel)
+		stmt := SelectStmt{
+			ColumnExprs: []Expr{Col{Table: "a", Column: "subject_id"}},
+			FromExpr: FunctionCallExpr{
+				Schema: plan.DatabaseSchema, Name: fn, Args: []Expr{ObjectID, SubjectType}, Alias: "a",
+			},
+		}
+		if excludeWildcard {
+			stmt.Where = Ne{Left: Col{Table: "a", Column: "subject_id"}, Right: Lit("*")}
+		}
+		blocks = append(blocks, TypedQueryBlock{
+			Comments: []string{"-- Intersection anchor: subjects of " + rel},
+			Query:    stmt,
+		})
+		if plan.AnalysisLookup[plan.ObjectType+"."+rel].Features.HasWildcard {
+			wildcardGates = append(wildcardGates, InFunctionSelect{
+				Expr: Lit("*"), Schema: plan.DatabaseSchema, FuncName: fn,
+				Args: []Expr{ObjectID, SubjectType}, Alias: "w", SelectCol: "subject_id",
+			})
+		}
+	}
+	if wildcard {
+		pool := buildListSubjectsIntersectionPoolBlock(plan, excludeWildcard)
+		pool.Comments = []string{"-- Subject pool, only when an anchor grants every subject ('*')"}
+		pool.Query.Where = And(pool.Query.Where, Or(wildcardGates...))
+		blocks = append(blocks, pool)
+	}
 	return blocks
 }
 
@@ -264,7 +354,84 @@ func buildListSubjectsIntersectionUsersetCandidates(plan ListPlan) []TypedQueryB
 	blocks = append(blocks, buildListSubjectsIntersectionUsersetFilterBaseBlock(plan))
 	blocks = append(blocks, buildListSubjectsIntersectionUsersetFilterPartBlocks(plan)...)
 	blocks = append(blocks, buildListSubjectsIntersectionUsersetFilterTTUBlocks(plan)...)
-	return blocks
+	return append(blocks,
+		buildListSubjectsIntersectionUsersetAnchorOrPool(plan),
+		buildListSubjectsIntersectionSelfCandidateBlock(plan),
+	)
+}
+
+// buildListSubjectsIntersectionUsersetAnchorOrPool is the userset-filter
+// form of buildListSubjectsIntersectionPoolBlocks: the anchors' list
+// functions under the filter (a userset is never granted by a wildcard), or
+// the userset pool when some group has no anchor.
+func buildListSubjectsIntersectionUsersetAnchorOrPool(plan ListPlan) TypedQueryBlock {
+	rels, _, ok := intersectionAnchors(plan)
+	if !ok {
+		return buildListSubjectsIntersectionUsersetPoolBlock()
+	}
+	filter := Concat{Parts: []Expr{Param("v_filter_type"), Lit("#"), Param("v_filter_relation")}}
+	queries := make([]SelectStmt, 0, len(rels))
+	for _, rel := range rels {
+		queries = append(queries, SelectStmt{
+			ColumnExprs: []Expr{Col{Table: "a", Column: "subject_id"}},
+			FromExpr: FunctionCallExpr{
+				Schema: plan.DatabaseSchema, Name: listSubjectsFunctionName(plan.ObjectType, rel),
+				Args: []Expr{ObjectID, filter}, Alias: "a",
+			},
+		})
+	}
+	return TypedQueryBlock{
+		Comments: []string{"-- Intersection anchors under the userset filter"},
+		Query: SelectStmt{
+			ColumnExprs: []Expr{Col{Table: "an", Column: "subject_id"}},
+			FromExpr:    UnionSubquery{Queries: queries, Alias: "an"},
+		},
+	}
+}
+
+// buildListSubjectsIntersectionUsersetPoolBlock is the userset-filter
+// counterpart of the subject pool: every userset of the filter type named in
+// any tuple, as filter_type:id#filter_relation. A group part can grant a
+// userset through paths the per-part blocks do not follow (a complex part's
+// own exclusions or parent lookups); the check_permission filter on the
+// candidates keeps the result exact.
+func buildListSubjectsIntersectionUsersetPoolBlock() TypedQueryBlock {
+	return TypedQueryBlock{
+		Comments: []string{"-- Userset pool: every userset of the filter type, checked like the others"},
+		Query: SelectStmt{
+			Distinct: true,
+			ColumnExprs: []Expr{Alias{
+				Expr: NormalizedUsersetSubject(Col{Table: "t", Column: "subject_id"}, Param("v_filter_relation")),
+				Name: "subject_id",
+			}},
+			FromExpr: TableAs("", "melange_tuples", "t"),
+			Where: And(
+				Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Param("v_filter_type")},
+				HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
+			),
+		},
+	}
+}
+
+// buildListSubjectsIntersectionSelfCandidateBlock offers object_id#filter_relation
+// as a candidate. The unfiltered self block covers SatisfyingRelations; a
+// relation reached only through an intersection group (e.g. the editor in
+// `writer or (editor but not owner)`) needs the check_permission filter the
+// candidates get.
+func buildListSubjectsIntersectionSelfCandidateBlock(plan ListPlan) TypedQueryBlock {
+	return TypedQueryBlock{
+		Comments: []string{"-- Userset filter: self-candidate, checked like the others"},
+		Query: SelectStmt{
+			ColumnExprs: []Expr{Alias{
+				Expr: Concat{Parts: []Expr{ObjectID, Lit("#"), Param("v_filter_relation")}},
+				Name: "subject_id",
+			}},
+			Where: And(
+				Eq{Left: Param("v_filter_type"), Right: Lit(plan.ObjectType)},
+				NotIn{Expr: Param("v_filter_relation"), Values: plan.Analysis.SatisfyingRelations},
+			),
+		},
+	}
 }
 
 func buildListSubjectsIntersectionUsersetFilterBaseBlock(plan ListPlan) TypedQueryBlock {

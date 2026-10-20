@@ -2,6 +2,7 @@ package sqlgen
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -101,6 +102,14 @@ func BuildListObjectsRecursiveBlocks(plan ListPlan) (RecursiveBlockSet, error) {
 	selfRefSQL := buildSelfReferentialLinkingRelations(parentRelations)
 	selfRefLinkingRelations := dequoteLinkingRelations(selfRefSQL)
 
+	// Without a self-referential walk no block seeds propagation, so closure
+	// relations can be listed whole and the arms they cover dropped.
+	var compose []string
+	if len(selfRefLinkingRelations) == 0 {
+		plan, compose = coverListObjectsClosure(plan, parentRelations)
+		parentRelations = buildListParentRelations(plan.Analysis)
+	}
+
 	// Compute which relations should propagate through the recursive step.
 	// Only relations that satisfy a self-referential TTU target should propagate.
 	propagatableRelations := computePropagatableRelations(plan, parentRelations)
@@ -126,6 +135,11 @@ func BuildListObjectsRecursiveBlocks(plan ListPlan) (RecursiveBlockSet, error) {
 	baseBlocks, err := buildRecursiveBaseBlocks(plan, parentRelations, propagatableRelations, hoisted, recursive)
 	if err != nil {
 		return RecursiveBlockSet{}, err
+	}
+	for _, rel := range compose {
+		block := buildRecursiveComposedClosureBlock(plan, rel)
+		block.Comments = []string{fmt.Sprintf("-- Closure relation %s: compose its list_objects", rel)}
+		baseBlocks = append(baseBlocks, block)
 	}
 
 	result := RecursiveBlockSet{
@@ -760,4 +774,38 @@ func dequoteLinkingRelations(sqlList string) []string {
 		}
 	}
 	return result
+}
+
+// coverListObjectsClosure is closureCoverage for a non-recursive list_objects
+// plan. It returns the plan with every closure-derived arm of a covered
+// relation removed (complex and composed closure relations, closure userset
+// patterns, closure parent lookups) and the relations to compose instead.
+// can_view (`viewer but not blocked`) then lists viewer once rather than
+// re-deriving editor and viewer arm by arm and validating each through the
+// full list function.
+func coverListObjectsClosure(plan ListPlan, parents []ListParentRelationData) (covered ListPlan, compose []string) {
+	a := plan.Analysis
+	candidates := slices.Concat(plan.ComplexClosure, composedClosureRelations(a))
+	for _, p := range parents {
+		if p.IsClosurePattern {
+			candidates = append(candidates, p.SourceRelation)
+		}
+	}
+	for _, p := range a.ClosureUsersetPatterns {
+		candidates = append(candidates, p.SourceRelation)
+	}
+	compose, isComposedOrCovered := closureCoverage(plan, candidates, func(r string) bool {
+		return composableListTarget(plan, plan.ObjectType, r)
+	})
+	if len(compose) == 0 {
+		return plan, nil
+	}
+	isCovered := func(r string) bool { return isComposedOrCovered[r] }
+	a.ClosureUsersetPatterns = slices.DeleteFunc(slices.Clone(a.ClosureUsersetPatterns), func(p UsersetPattern) bool { return isCovered(p.SourceRelation) })
+	a.ClosureParentRelations = slices.DeleteFunc(slices.Clone(a.ClosureParentRelations), func(p ParentRelationInfo) bool { return isCovered(p.SourceRelation) })
+	a.IntersectionClosureRelations = slices.DeleteFunc(slices.Clone(a.IntersectionClosureRelations), isCovered)
+	a.ExclusionClosureRelations = slices.DeleteFunc(slices.Clone(a.ExclusionClosureRelations), isCovered)
+	plan.Analysis = a
+	plan.ComplexClosure = slices.DeleteFunc(slices.Clone(plan.ComplexClosure), isCovered)
+	return plan, compose
 }

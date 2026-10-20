@@ -1,0 +1,43 @@
+# The direct list_subjects strategy's version of
+# wildcard_exclusion_concrete_listsubjects: a wildcard grant narrowed by an
+# exclusion must still list the users it covers. Found by
+# TestOpenFGA_GeneratedNested.
+tests:
+  - name: wildcard_exclusion_direct_listsubjects
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type document
+            relations
+              define b: [user, user:*]
+              define c: [user]
+              define r1: b but not c
+              define x: b but not r1
+        tuples:
+          - user: user:*
+            relation: b
+            object: document:d
+          - user: user:alice
+            relation: c
+            object: document:d
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: x
+              object: document:d
+            expectation: true
+          - tuple:
+              user: user:bob
+              relation: x
+              object: document:d
+            expectation: false
+        listUsersAssertions:
+          - request:
+              object: document:d
+              relation: x
+              filters:
+                - user
+            expectation:
+              - user:alice

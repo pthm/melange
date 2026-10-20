@@ -16,10 +16,12 @@ import (
 // relationReferences, then record it here either way.
 var relationReferencesReviewedFields = map[string]bool{
 	// Carries references — walked by relationReferences:
-	"SatisfyingRelations":          true,
-	"DirectImpliedBy":              true,
-	"SimpleClosureRelations":       true,
-	"ComplexClosureRelations":      true,
+	"SatisfyingRelations":     true,
+	"DirectImpliedBy":         true,
+	"SimpleClosureRelations":  true,
+	"ComplexClosureRelations": true,
+	// A subset of ComplexClosureRelations, so its edges are already walked.
+	"ImpliedCallees":               true,
 	"IntersectionClosureRelations": true,
 	"ExclusionClosureRelations":    true,
 	"ExcludedRelations":            true,

@@ -1,0 +1,65 @@
+# A relation built from two parent lookups. The composed list strategy
+# follows a single anchor path, so the second lookup was dropped from
+# ListObjects and ListUsers. Found by TestOpenFGA_GeneratedNested.
+tests:
+  - name: ttu_union_two_parents_list
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type folder
+            relations
+              define parent: [folder]
+              define b: [user, user:*]
+              define v: [user] or v from parent
+          type document
+            relations
+              define parent: [folder]
+              define x: v from parent or b from parent
+        tuples:
+          - user: folder:f1
+            relation: parent
+            object: document:d1
+          - user: folder:f2
+            relation: parent
+            object: document:d2
+          - user: user:alice
+            relation: v
+            object: folder:f1
+          - user: user:bob
+            relation: b
+            object: folder:f1
+          - user: user:*
+            relation: b
+            object: folder:f2
+        checkAssertions:
+          - tuple:
+              user: user:bob
+              relation: x
+              object: document:d1
+            expectation: true
+        listObjectsAssertions:
+          - request:
+              user: user:bob
+              type: document
+              relation: x
+            expectation:
+              - document:d1
+              - document:d2
+        listUsersAssertions:
+          - request:
+              object: document:d1
+              relation: x
+              filters:
+                - user
+            expectation:
+              - user:alice
+              - user:bob
+          - request:
+              object: document:d2
+              relation: x
+              filters:
+                - user
+            expectation:
+              - user:*

@@ -1,6 +1,7 @@
 package analysis
 
 import (
+	"slices"
 	"sort"
 	"strings"
 
@@ -321,6 +322,13 @@ type RelationAnalysis struct {
 	// Computed by ComputeCanGenerate.
 	ComplexClosureRelations []string
 
+	// ImpliedCallees is ComplexClosureRelations without the relations another
+	// callee already evaluates: R is dropped when some other callee S has R in
+	// its satisfying closure and S has no exclusion of its own, so every R
+	// grant is an S grant. Check functions call only these. Nil when not
+	// computed; use ComplexClosureRelations then.
+	ImpliedCallees []string
+
 	// IntersectionClosureRelations contains relations in the closure that have intersection
 	// patterns and are list-generatable. These need to be handled by composing with their
 	// list function rather than tuple lookup (since intersection relations have no tuples).
@@ -591,21 +599,10 @@ func collectExcludedIntersectionGroups(r RelationDefinition) []IntersectionGroup
 	var groups []IntersectionGroupInfo
 	for _, ig := range r.ExcludedIntersectionGroups {
 		group := IntersectionGroupInfo{}
+		seen := map[string]bool{}
 		// Add relation checks
 		for _, rel := range ig.Relations {
-			part := IntersectionPart{
-				Relation: rel,
-			}
-			// Check for nested exclusions within the intersection part
-			// For "but not (editor but not owner)", ig.Exclusions["editor"] = ["owner"]
-			// NOTE: Currently only the first exclusion per relation is supported.
-			// Multiple exclusions on the same relation (e.g., "editor but not a but not b")
-			// are not common in FGA schemas and would require IntersectionPart.ExcludedRelations
-			// to be a slice. For now, we take the first exclusion.
-			if excls, ok := ig.Exclusions[rel]; ok && len(excls) > 0 {
-				part.ExcludedRelation = excls[0]
-			}
-			group.Parts = append(group.Parts, part)
+			group.Parts = appendExcludedParts(group.Parts, IntersectionPart{Relation: rel}, ig.Exclusions, seen)
 		}
 		// Add parent relation checks (rare but possible)
 		for _, pr := range ig.ParentRelations {
@@ -625,12 +622,32 @@ func collectExcludedIntersectionGroups(r RelationDefinition) []IntersectionGroup
 	return groups
 }
 
+// appendExcludedParts appends part once per exclusion keyed on its relation,
+// since a part carries a single ExcludedRelation and
+// (x but not a) and (x but not b) = x but not (a or b). Exclusions are keyed
+// by relation name, so only the first occurrence of a relation carries them.
+func appendExcludedParts(parts []IntersectionPart, part IntersectionPart, exclusions map[string][]string, seen map[string]bool) []IntersectionPart {
+	excls := exclusions[part.Relation]
+	repeated := seen[part.Relation]
+	seen[part.Relation] = true
+	if repeated || len(excls) == 0 {
+		return append(parts, part)
+	}
+	for _, ex := range excls {
+		p := part
+		p.ExcludedRelation = ex
+		parts = append(parts, p)
+	}
+	return parts
+}
+
 // collectIntersectionGroups converts IntersectionGroup to IntersectionGroupInfo.
 func collectIntersectionGroups(r RelationDefinition) []IntersectionGroupInfo {
 	var groups []IntersectionGroupInfo
 
 	for _, ig := range r.IntersectionGroups {
 		group := IntersectionGroupInfo{}
+		seen := map[string]bool{}
 
 		// Add relation checks
 		for _, rel := range ig.Relations {
@@ -645,11 +662,7 @@ func collectIntersectionGroups(r RelationDefinition) []IntersectionGroupInfo {
 				// wildcards inherited from closure relations.
 				part.HasWildcard = hasWildcardRefs(r)
 			}
-			// Check for nested exclusions (see note in collectExcludedIntersectionGroups)
-			if excls, ok := ig.Exclusions[rel]; ok && len(excls) > 0 {
-				part.ExcludedRelation = excls[0]
-			}
-			group.Parts = append(group.Parts, part)
+			group.Parts = appendExcludedParts(group.Parts, part, ig.Exclusions, seen)
 		}
 
 		// Add parent relation checks
@@ -1494,7 +1507,39 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		}
 	}
 
+	for i := range sorted {
+		sorted[i].ImpliedCallees = impliedCallees(&sorted[i], lookup)
+	}
+
 	return sorted
+}
+
+// impliedCallees drops from a's complex closure each relation R that another
+// callee S already evaluates. Closure is an unconditional union, so when R is
+// in S's satisfying relations and S excludes nothing, R's grants are a subset
+// of S's and calling both evaluates R twice. When two callees imply each
+// other, the lexically greater one is dropped and the other kept.
+func impliedCallees(a *RelationAnalysis, lookup map[string]map[string]*RelationAnalysis) []string {
+	if len(a.ComplexClosureRelations) < 2 {
+		return a.ComplexClosureRelations
+	}
+	covers := func(s, r string) bool {
+		sa, ok := lookup[a.ObjectType][s]
+		return ok && !sa.Features.HasExclusion && slices.Contains(sa.SatisfyingRelations, r)
+	}
+	var kept []string
+	for _, r := range a.ComplexClosureRelations {
+		covered := slices.ContainsFunc(a.ComplexClosureRelations, func(s string) bool {
+			if s == r || !covers(s, r) {
+				return false
+			}
+			return !covers(r, s) || s < r // mutual: keep the lexically smaller
+		})
+		if !covered {
+			kept = append(kept, r)
+		}
+	}
+	return kept
 }
 
 // computeCanGenerateList determines if a relation can use specialized list functions.

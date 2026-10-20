@@ -67,6 +67,20 @@ condition non_expired_grant(current_time: timestamp, grant_time: timestamp) {
 }`,
 			want: `condition "non_expired_grant" is declared`,
 		},
+		{
+			// OpenFGA dynamic conditions: the expression lives on each tuple,
+			// so the model has no condition block to declare it.
+			name: "dynamic $expression",
+			schema: `model
+  schema 1.1
+
+type user
+
+type document
+  relations
+    define viewer: [user with $expression]`,
+			want: "document#viewer allows [user with $expression]",
+		},
 	}
 
 	for _, tt := range tests {

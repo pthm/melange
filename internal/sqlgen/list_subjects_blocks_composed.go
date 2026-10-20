@@ -13,7 +13,7 @@ func BuildListSubjectsComposedBlocks(plan ListPlan) (ComposedSubjectsBlockSet, e
 	}
 
 	candidateBlocks := buildComposedSubjectsCandidateBlocks(plan, anchor)
-	exclusions := buildSimpleComplexExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sc", Column: "subject_id"})
+	exclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sc", Column: "subject_id"})
 
 	return ComposedSubjectsBlockSet{
 		SelfBlock:           buildComposedSubjectsSelfBlock(plan),

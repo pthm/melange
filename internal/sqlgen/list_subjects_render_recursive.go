@@ -243,9 +243,13 @@ func buildSubjectPoolCTESQL(plan ListPlan) string {
 // pagination CTE by the caller.
 func buildSubjectsWildcardTailQuery(plan ListPlan) SQLer {
 	if plan.AllowWildcard {
+		var from TableExpr = TableAs("", "base_results", "br")
+		if plan.HasExclusion {
+			from = wildcardExclusionCandidates(plan)
+		}
 		return SelectStmt{
 			ColumnExprs: []Expr{Col{Table: "br", Column: "subject_id"}},
-			FromExpr:    TableAs("", "base_results", "br"),
+			FromExpr:    from,
 			Joins: []JoinClause{
 				{Type: "CROSS", Table: "has_wildcard", Alias: "hw"},
 			},
@@ -255,5 +259,35 @@ func buildSubjectsWildcardTailQuery(plan ListPlan) SQLer {
 	return SelectStmt{
 		ColumnExprs: []Expr{Col{Table: "br", Column: "subject_id"}},
 		FromExpr:    TableAs("", "base_results", "br"),
+	}
+}
+
+// wildcardExclusionCandidates extends base_results for a relation whose
+// wildcard grant an exclusion can narrow. Then the '*' row is dropped (not
+// everyone has access), but every subject the exclusion leaves out still
+// has access, and the base set names none of those reached only through the
+// wildcard. Offer the concrete subjects named in any tuple on this object;
+// the tail's checks keep exactly those with access (see
+// wildcardSubjectsTailWhere).
+func wildcardExclusionCandidates(plan ListPlan) TableExpr {
+	return UnionSubquery{
+		Alias: "br",
+		Queries: []SelectStmt{
+			{
+				ColumnExprs: []Expr{Col{Table: "b", Column: "subject_id"}},
+				FromExpr:    TableAs("", "base_results", "b"),
+			},
+			{
+				ColumnExprs: []Expr{Col{Table: "t", Column: "subject_id"}},
+				FromExpr:    TableAs("", "melange_tuples", "t"),
+				Where: And(
+					Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+					Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
+					Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
+					Ne{Left: Col{Table: "t", Column: "subject_id"}, Right: Lit("*")},
+					NoUserset{Source: Col{Table: "t", Column: "subject_id"}},
+				),
+			},
+		},
 	}
 }

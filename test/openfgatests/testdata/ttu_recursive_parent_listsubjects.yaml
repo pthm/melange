@@ -1,0 +1,51 @@
+# Drive-style inheritance: a document relation that unions a direct grant
+# with a parent relation that recurses on the folder type. list_subjects
+# walked only the first folder and missed grants on further ancestors.
+# Found by TestOpenFGA_GeneratedNested.
+tests:
+  - name: ttu_recursive_parent_listsubjects
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type folder
+            relations
+              define parent: [folder]
+              define viewer: [user] or viewer from parent
+          type document
+            relations
+              define parent: [folder]
+              define viewer: [user] or viewer from parent
+        tuples:
+          - user: folder:root
+            relation: parent
+            object: folder:sub
+          - user: folder:sub
+            relation: parent
+            object: document:doc
+          - user: user:alice
+            relation: viewer
+            object: folder:root
+          - user: user:bob
+            relation: viewer
+            object: folder:sub
+          - user: user:carol
+            relation: viewer
+            object: document:doc
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: viewer
+              object: document:doc
+            expectation: true
+        listUsersAssertions:
+          - request:
+              object: document:doc
+              relation: viewer
+              filters:
+                - user
+            expectation:
+              - user:alice
+              - user:bob
+              - user:carol

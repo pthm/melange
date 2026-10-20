@@ -1,0 +1,97 @@
+# A top-level parent path next to an intersection group. The list functions
+# lost one or the other (ListUsers the group, ListObjects the parent path).
+# Found by TestOpenFGA_GeneratedNested.
+tests:
+  - name: ttu_union_intersection_list
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type folder
+            relations
+              define parent: [folder]
+              define v: [user] or v from parent
+          type document
+            relations
+              define parent: [folder]
+              define a: [user]
+              define b: [user]
+              define c: [user]
+              define x: v from parent or (a but not c)
+              define w: v from parent or (a and b)
+        tuples:
+          - user: folder:f1
+            relation: parent
+            object: document:d0
+          - user: user:bob
+            relation: v
+            object: folder:f1
+          - user: user:alice
+            relation: a
+            object: document:d0
+          - user: user:alice
+            relation: b
+            object: document:d0
+          - user: user:carol
+            relation: a
+            object: document:d0
+          - user: user:carol
+            relation: c
+            object: document:d0
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: x
+              object: document:d0
+            expectation: true
+          - tuple:
+              user: user:bob
+              relation: x
+              object: document:d0
+            expectation: true
+          - tuple:
+              user: user:carol
+              relation: x
+              object: document:d0
+            expectation: false
+          - tuple:
+              user: user:alice
+              relation: w
+              object: document:d0
+            expectation: true
+          - tuple:
+              user: user:bob
+              relation: w
+              object: document:d0
+            expectation: true
+        listObjectsAssertions:
+          - request:
+              user: user:bob
+              type: document
+              relation: x
+            expectation:
+              - document:d0
+          - request:
+              user: user:bob
+              type: document
+              relation: w
+            expectation:
+              - document:d0
+        listUsersAssertions:
+          - request:
+              object: document:d0
+              relation: x
+              filters:
+                - user
+            expectation:
+              - user:alice
+              - user:bob
+          - request:
+              object: document:d0
+              relation: w
+              filters:
+                - user
+            expectation:
+              - user:alice
+              - user:bob
