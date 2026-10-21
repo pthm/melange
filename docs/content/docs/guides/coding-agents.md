@@ -44,7 +44,7 @@ Permissions are an OpenFGA model that Melange compiles into PostgreSQL functions
 - Model: `melange/schema.fga`. Config: `melange/config.yaml`.
 - Relationships come from the `melange_tuples` view over our tables, defined in our own migrations (Melange doesn't create it). Never insert tuples; change the underlying rows, or the view definition.
 - `internal/authz` is generated; don't edit it.
-- No OpenFGA conditions. Use `check_permission` (or the client's check) for access decisions; listing objects or subjects can be slow and suits batch or admin use.
+- No OpenFGA conditions; express them as `WHERE` clauses in the tuples view or as contextual tuples (see [Replacing Conditions](../conditions/)). Use `check_permission` (or the client's check) for access decisions; listing objects or subjects can be slow and suits batch or admin use.
 
 After editing the model:
 
@@ -68,7 +68,7 @@ The section is deliberately short (about 300 tokens), because agents load it int
 - **Forgetting to migrate.** Editing `schema.fga` changes nothing until `melange migrate` (or the generated migration) runs. `melange status` reports whether the database is behind the schema.
 - **Migrating the wrong database.** `melange migrate` applies to whatever database the config names. Keep a local development database there, and point other environments at their own [environment profiles](../../reference/configuration/#environments).
 - **Improvising a database.** Agents without database access can spend many turns trying to start Postgres. `validate`, `generate migration`, and `generate client` work offline; `migrate`, `explain`, and `doctor` need the database.
-- **Unsupported features.** OpenFGA conditions fail validation. See [OpenFGA Compatibility](../../reference/openfga-compatibility/).
+- **Unsupported features.** OpenFGA conditions fail validation. See [Replacing Conditions](../conditions/) for SQL equivalents.
 
 ## Next Steps
 
