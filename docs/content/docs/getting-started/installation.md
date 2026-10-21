@@ -1,14 +1,12 @@
 ---
 title: Installation
-description: "Install the Melange CLI on macOS, Linux, or Windows with Homebrew, Scoop, a Linux package, go install, or the container image."
+description: "Install the Melange CLI on macOS, Linux, or Windows with Homebrew, Scoop, a Linux package, go install, or the container image, and add the Go or TypeScript client library."
 weight: 1
 prev: /docs/getting-started
 next: /docs/getting-started/quick-start
 ---
 
-The `melange` CLI validates schemas, migrates them into PostgreSQL, and generates client code. It is a single binary with no runtime dependencies. You only need PostgreSQL 14 or later when you run `melange migrate`.
-
-This page installs the CLI. The Go and TypeScript runtime libraries are added to your application by [`melange init`](../project-setup) or with `go get github.com/pthm/melange/melange` / `npm install @pthm/melange`.
+The `melange` CLI validates schemas, migrates them into PostgreSQL, and generates client code. It is a single binary with no runtime dependencies. You only need PostgreSQL 14 or later when you run `melange migrate`. To call Melange from your application, also add a [client library](#client-libraries).
 
 Find your platform below and pick one install method. Each release is published for amd64 and arm64 on [GitHub Releases](https://github.com/pthm/melange/releases). Once installed, check it works:
 
@@ -122,6 +120,26 @@ docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work \
 - **`--user`**: the image runs as root, so without it, files written into the mount on Linux are owned by root. Docker Desktop on macOS and Windows doesn't need it.
 - **Database on the host**: `localhost` inside the container is the container itself. Use `--network host` on Linux or `host.docker.internal` on Docker Desktop.
 - **Tags**: `vX.Y.Z` for an exact release, `vX.Y` to follow its patch releases, and `latest`. Pin `vX.Y.Z` in CI so migrations are reproducible.
+
+## Client libraries
+
+Your application calls the generated permission functions through a client library. [`melange init`](../project-setup#client-code-generation) adds it for you when it sets up code generation; to add it yourself:
+
+### Go
+
+```bash
+go get github.com/pthm/melange/melange
+```
+
+Requires Go 1.24 or later. The library uses only the standard library.
+
+### TypeScript
+
+```bash
+npm install @pthm/melange pg
+```
+
+Requires Node.js 18 or later. [`pg`](https://www.npmjs.com/package/pg) (version 8) is a peer dependency. Use your package manager's equivalent (`pnpm add`, `yarn add`, `bun add`) if you don't use npm.
 
 ## Updating
 

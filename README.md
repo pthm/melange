@@ -42,40 +42,40 @@ Inspired by [OpenFGA](https://openfga.dev) and built on ideas from [pgFGA](https
 
 ## Installation
 
-**Homebrew** (macOS and Linux):
+**macOS and Linux** (Homebrew):
 
 ```bash
 brew install pthm/tap/melange
 ```
 
-**Scoop** (Windows):
+**Windows** (Scoop):
 
 ```powershell
 scoop bucket add pthm https://github.com/pthm/scoop-bucket
 scoop install pthm/melange
 ```
 
-**Go:**
+**Go** (1.27 or later):
 
 ```bash
 go install github.com/pthm/melange@latest
 ```
 
-**Container image:**
+**Docker:**
 
 ```bash
 docker pull ghcr.io/pthm/melange:latest
 ```
 
-**Binaries and Linux packages:** `.tar.gz`, `.zip`, `.deb`, and `.rpm` for Linux, macOS, and Windows on [GitHub Releases](https://github.com/pthm/melange/releases). macOS binaries are code-signed. See the [installation guide](https://melange.sh/docs/getting-started/installation/) for package, Docker, and checksum instructions.
+**Debian / RPM packages and archives:** `.deb` and `.rpm` packages for Linux, and `.tar.gz` / `.zip` archives for Linux, macOS, and Windows, all for amd64 and arm64, on [GitHub Releases](https://github.com/pthm/melange/releases). macOS binaries are code-signed and notarized.
 
-The CLI tells you when a newer release is available. Pass `--no-update-check` to turn that off.
+The [installation guide](https://melange.sh/docs/getting-started/installation/) has step-by-step instructions for each platform, running in Docker, updating, and verifying downloads. The CLI tells you when a newer release is available; pass `--no-update-check` to turn that off.
 
-**Runtime libraries** (optional):
+**Client libraries** (optional):
 
 ```bash
-go get github.com/pthm/melange/melange   # Go, standard library only
-npm install @pthm/melange                # TypeScript
+go get github.com/pthm/melange/melange   # Go 1.24+, standard library only
+npm install @pthm/melange pg             # TypeScript, Node.js 18+, pg is a peer dependency
 ```
 
 ## Quick Start
