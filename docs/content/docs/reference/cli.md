@@ -45,10 +45,10 @@ $ melange migrate
 Migration completed successfully
 
 * A new version of melange is available: v1.2.3 (current: v1.2.0)
-  brew upgrade melange
+  brew upgrade pthm/tap/melange
 ```
 
-The second line is the upgrade command for how melange was installed: `brew upgrade melange` for Homebrew, `scoop update melange` for Scoop, `go install github.com/pthm/melange@latest` for a binary in `$GOBIN` or `$GOPATH/bin`, and otherwise a link to [Updating](../../getting-started/installation/#updating).
+The second line is the upgrade command for how melange was installed: `brew upgrade pthm/tap/melange` for Homebrew, `scoop update melange` for Scoop, `go install github.com/pthm/melange@latest` for a binary in `$GOBIN` or `$GOPATH/bin`, and otherwise a link to [Updating](../../getting-started/installation/#updating).
 
 **To disable update checks:**
 

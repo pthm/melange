@@ -262,7 +262,7 @@ func upgradeHintFor(exe, gobin, gopath, home string) string {
 		}
 	}
 	if strings.Contains(exe, "/Caskroom/") || strings.Contains(exe, "/Cellar/") {
-		return "brew upgrade melange"
+		return "brew upgrade pthm/tap/melange"
 	}
 
 	bins := []string{gobin}

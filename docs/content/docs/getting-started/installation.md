@@ -129,7 +129,7 @@ When a newer release is out, the CLI prints a notice with the update command for
 
 | Installed with | Update with |
 |---|---|
-| Homebrew | `brew upgrade melange` |
+| Homebrew | `brew upgrade pthm/tap/melange` |
 | Scoop | `scoop update melange` |
 | `.deb` / `.rpm` | Repeat the install commands. They replace the existing package. |
 | Archive | Download the new archive and replace the binary. |

@@ -93,7 +93,7 @@ func containsPath(path, segment string) bool {
 func TestUpgradeHintFor(t *testing.T) {
 	const (
 		scoop = "scoop update melange"
-		brew  = "brew upgrade melange"
+		brew  = "brew upgrade pthm/tap/melange"
 		goget = "go install github.com/pthm/melange@latest"
 	)
 	tests := []struct {

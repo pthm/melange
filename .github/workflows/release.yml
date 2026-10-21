@@ -426,13 +426,16 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           brew tap pthm/tap
+          tap="$(brew --repo pthm/tap)"
           for i in $(seq 1 5); do
             if [ "$i" -gt 1 ]; then
               echo "  tap has ${cask_version}, waiting for ${VERSION#v}... (${i}/5)"
               sleep 30
-              git -C "$(brew --repo pthm/tap)" pull --quiet
+              git -C "$tap" pull --quiet
             fi
-            cask_version=$(brew info --cask --json=v2 pthm/tap/melange | jq -r '.casks[0].version')
+            # Read the cask file rather than `brew info`: Homebrew refuses to
+            # load casks from an untrusted tap until something installs one.
+            cask_version=$(sed -n 's/^ *version "\(.*\)"$/\1/p' "$tap/Casks/melange.rb")
             [ "$cask_version" = "${VERSION#v}" ] && break
           done
           if [ "$cask_version" != "${VERSION#v}" ]; then
