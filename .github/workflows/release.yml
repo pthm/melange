@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Override version (e.g. v0.9.0). Leave blank for normal release-please flow."
+        description: "Override version, vX.Y.Z only (e.g. v0.9.0). Leave blank for normal release-please flow."
         required: false
         default: ""
       dry_run:
@@ -89,8 +89,10 @@ jobs:
               version="v$version"
             fi
           fi
-          if ! printf '%s' "$version" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$'; then
-            echo "❌ VERSION must look like v1.2.3 or v1.2.3-rc.1, got: $version"
+          if ! printf '%s' "$version" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            # Stable releases only: scripts/verify-release.sh rejects anything
+            # else, and failing here stops us before any tag is pushed.
+            echo "❌ VERSION must be vX.Y.Z (prereleases are not supported), got: $version"
             exit 1
           fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
