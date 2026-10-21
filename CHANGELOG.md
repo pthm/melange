@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.10.1](https://github.com/pthm/melange/compare/v0.10.0...v0.10.1) (2026-10-21)
+
+
+### Features
+
+* **cli:** warn when the CLI or deployed functions match an advisory ([60450b1](https://github.com/pthm/melange/commit/60450b1a2ebc0e37ca3197592bd52a8924fad7f4))
+* **migrator:** serialize migrations and refuse codegen downgrades ([f877a2b](https://github.com/pthm/melange/commit/f877a2b33aa389ad43cce9f5a40e321aae60e1b3))
+* publish a Scoop manifest and document every install channel ([9490259](https://github.com/pthm/melange/commit/9490259e48a0601b489cb5f4181b566cfa14ba07))
+* Windows distribution and install-channel hardening ([c4b08b0](https://github.com/pthm/melange/commit/c4b08b057f275856ad825ba60d07c56199ffe103))
+
+
+### Bug Fixes
+
+* **init:** write forward-slash paths into agent instructions ([5c45cb3](https://github.com/pthm/melange/commit/5c45cb34f8d254db06961bb885821531770f3147))
+* qualify Homebrew commands with the pthm/tap path ([f5e8a72](https://github.com/pthm/melange/commit/f5e8a72269e7e5146a7484c054a5393b0bf01919))
+* **release:** don't fail when the Scoop token is unset ([15a48f1](https://github.com/pthm/melange/commit/15a48f1159964ef0702173bc08c040df659fba10))
+* show the upgrade command for how melange was installed ([d8f95f8](https://github.com/pthm/melange/commit/d8f95f840fb32efa534326db76d0be5063a4f72d))
+* **test:** build the explain CLI from the root module ([89f6426](https://github.com/pthm/melange/commit/89f6426f894dc5469a534060f4d7c885549f59b4))
+* use os.UserCacheDir for the update-check cache ([372429a](https://github.com/pthm/melange/commit/372429ae201103ea78e613ea1f159068e9f95e6e))
+
 ## [0.10.0](https://github.com/pthm/melange/compare/v0.9.6...v0.10.0) (2026-10-20)
 
 
