@@ -121,7 +121,7 @@ docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work \
 
 - **`--user`**: the image runs as root, so without it, files written into the mount on Linux are owned by root. Docker Desktop on macOS and Windows doesn't need it.
 - **Database on the host**: `localhost` inside the container is the container itself. Use `--network host` on Linux or `host.docker.internal` on Docker Desktop.
-- **Pin a tag** (`vX.Y.Z`) rather than `latest` in CI, so migrations are reproducible.
+- **Tags**: `vX.Y.Z` for an exact release, `vX.Y` to follow its patch releases, and `latest`. Pin `vX.Y.Z` in CI so migrations are reproducible.
 
 ## Updating
 

@@ -121,8 +121,12 @@ dockers_v2:
     dockerfile: Dockerfile.goreleaser
     images:
       - "ghcr.io/pthm/melange"
+    # Floating tags follow patch releases (vX.Y) and, from 1.0, minor ones
+    # (vX). No v0: under 0.x a minor release can break compatibility.
     tags:
       - "v{{ .Version }}"
+      - "v{{ .Major }}.{{ .Minor }}"
+      - '{{ if gt .Major 0 }}v{{ .Major }}{{ end }}'
       - '{{ if not .Prerelease }}latest{{ end }}'
     platforms:
       - linux/amd64
