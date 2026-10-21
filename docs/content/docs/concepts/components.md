@@ -116,7 +116,7 @@ allowed, err := checker.Check(ctx, user, "can_read", repo)
 
 The runtime library adds:
 
-- **Caching**. In-memory cache with configurable TTL (~80 ns cached vs ~350-450 µs uncached).
+- **Caching**. In-memory cache with configurable TTL (about 120 ns cached, against about 0.4 to 0.7 ms uncached).
 - **Bulk checks**. Check up to 10,000 permissions in a single SQL call.
 - **Contextual tuples**. Inject temporary tuples at check time for request-scoped authorization data.
 - **Decision overrides**. Bypass the database for testing or admin tools.

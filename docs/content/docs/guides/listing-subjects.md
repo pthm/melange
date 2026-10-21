@@ -427,9 +427,14 @@ async function auditRepositoryAccess(repoId: string): Promise<AccessAuditEntry[]
 
 ## Performance Characteristics
 
-Cost scales with the number of subjects that have access, not the total tuple count. Listing every viewer of a deeply-inherited document takes ~7.7 ms at 1K tuples and ~68 ms at 1M; see [Performance](../../reference/performance/#listsubjects) for the full table.
+Cost grows with the part of the permission graph Postgres walks to find the subjects, which can be more than the number of subjects returned. Measured on managed Postgres from a VM in the same zone:
 
-ListSubjects is typically faster than ListObjects because it starts from a specific object rather than searching across all objects.
+- Direct members of an organization (20 to 200): under 1.1 ms.
+- Readers inherited from a parent (20 to 200 accessible subjects): first-page calls took about 1 to 6.1 ms, depending on scale and limit.
+- Viewers of a document through nested groups and folders (16 to 169): 11 to 106 ms as the dataset grows from 4K to 840K tuples.
+- The measured exclusion over that document relation took 20 to 220 ms, even though the selected document's wildcard block removed every subject.
+
+A page limit bounds the payload but may leave expensive enumeration in place; verify its effect in your query plan. Keep broad ListSubjects off hot request paths. See [Performance](../../reference/performance/#listsubjects) for the full table.
 
 ## Decision Override Behavior
 

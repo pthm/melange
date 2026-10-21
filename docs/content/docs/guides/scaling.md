@@ -4,12 +4,12 @@ description: "Run Melange at scale: indexing the tables behind the tuples view, 
 weight: 10
 ---
 
-Melange's check operations are O(1) regardless of dataset size. Benchmarks show a flat ~130 µs in-database check latency (~350-450 µs end to end) from 1K to 1M tuples; see [Performance](../../reference/performance/). The regular view approach works at scale when source tables are properly indexed.
+Melange's check latency stayed roughly flat in the measured scale fixtures. On managed Postgres, measured from a VM in the same zone, checks spent about 0.1 ms in the database and took about 0.4 to 0.7 ms end to end across sizes from a few thousand to two million tuples; see [Performance](../../reference/performance/). The regular view approach works at scale when source tables are properly indexed.
 
 The areas that benefit from optimization are:
 
 - **Missing indexes** cause sequential scans on source tables, degrading all operations.
-- **List operations with large result sets** scale with result count (O(results)), not total tuple count.
+- **List operations** grow with the part of the permission graph they walk, which can be much larger than the result.
 - **Repeated checks** benefit from caching.
 
 ## Measure First
@@ -65,7 +65,7 @@ See [Tuples View](../../concepts/tuples-view/) for the full index pattern guide.
 
 ## Application-Level Caching
 
-Caching is the highest-impact optimization for repeated checks. Cached lookups return in ~80 ns vs ~350-450 µs uncached.
+Caching is the highest-impact optimization for repeated checks. Cached lookups return in about 120 ns, against about 0.4 to 0.7 ms uncached in the measured same-zone setup.
 
 ```go
 cache := melange.NewCache(melange.WithTTL(time.Minute))
@@ -76,17 +76,13 @@ Request-scoped caching (fresh cache per request) avoids stale results while stil
 
 ## List Operations at Scale
 
-List operations (ListObjects, ListSubjects) scale with result set size, not total tuple count. Small result sets are fast at any scale:
+List operations (ListObjects, ListSubjects) cost what it takes to walk the permission graph to their answer:
 
-| Results | Typical Latency |
-|---------|----------------|
-| ~5 | 300-500 μs |
-| ~100 | 4-5 ms |
-| ~1K | 10-15 ms |
-| ~10K | 34-37 ms |
-| ~100K | 134-153 ms |
+- The measured short-path lists with few results took about 0.5 to 1 ms across the tested scales.
+- Use relation-specific measurements rather than a universal per-object budget: first-page PR listing took 2.8 ms at the smallest hierarchy scale and 262 to 269 ms at the largest.
+- Intersections and exclusions follow the size of their base relation, and recursive relations and nested-group usersets follow the size of the reachable graph. Either can take hundreds of milliseconds on a million-tuple dataset while returning a handful of results.
 
-Page size has minimal effect on query time because the database walks the full permission graph regardless of `LIMIT`. Use small pages (10-100) for API responses.
+At large kitchen-sink sizes nearly all of the expensive list time is spent in Postgres. The measured first-page PR query took 262 to 269 ms for limits of 10 through 500; smaller limits bounded the payload without materially reducing the work. Later-page costs were not measured by that benchmark. Inspect your plan before assuming the same behavior for every relation. See [Performance](../../reference/performance/#list-operations) for measurements by query shape.
 
 For paths where you only need a boolean answer, use `Check` or `BulkCheck` instead of `ListObjects`.
 

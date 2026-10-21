@@ -47,7 +47,7 @@ layout: hextra-home
   >}}
   {{< hextra/feature-card
     title="Optimized for Speed"
-    subtitle="~130 μs permission checks in the database with O(1) constant-time scaling. Same speed whether you have 1K or 1M tuples."
+    subtitle="Measured checks took 0.4–0.7 ms end to end on same-zone managed Postgres, across fixtures from thousands to two million tuples."
     link="docs/reference/performance"
     icon="lightning-bolt"
     style="background: radial-gradient(ellipse at 50% 80%,rgba(194,97,254,0.15),hsla(0,0%,100%,0));"

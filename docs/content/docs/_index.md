@@ -61,7 +61,7 @@ Architecture and design.
 
 {{< cards >}}
   {{< card link="concepts/components" title="Key Components" subtitle="CLI, schema, tuples view, and runtime libraries" icon="template" >}}
-  {{< card link="concepts/how-it-works" title="How It Works" subtitle="Specialized SQL generation, precomputed closures, and constant-time permission checks" icon="cog" >}}
+  {{< card link="concepts/how-it-works" title="How It Works" subtitle="Specialized SQL generation, precomputed closures, and permission checks that stay flat as data grows" icon="cog" >}}
   {{< card link="concepts/modelling" title="Authorization Modelling" subtitle="Write OpenFGA schemas to define your permission model" icon="document-text" >}}
   {{< card link="concepts/tuples-view" title="Tuples View" subtitle="Map your domain tables to authorization tuples" icon="database" >}}
 {{< /cards >}}

@@ -387,21 +387,20 @@ const result: RepoWithPermissions[] = repos.map(repo => ({
 
 ## Performance Characteristics
 
-ListObjects uses a recursive CTE that walks the permission graph in a single query. Performance depends primarily on the **number of accessible objects (results)**, not total tuple count:
+ListObjects walks the permission graph in a single query. Its cost grows with the number of objects Postgres has to consider, which is not always the number it returns. Measured on managed Postgres from a VM in the same zone:
 
-| Result Count | Typical Latency |
-|--------------|-----------------|
-| <10 objects  | 300-500 μs      |
-| 10-100       | 1-10 ms         |
-| 100-1K       | 10-50 ms        |
-| 1K-10K       | 30-200 ms       |
-| 10K+         | 200-1000 ms     |
+| Measured query | Observed latency |
+| --- | --- |
+| A few results over short paths | About 0.5 to 1 ms across the measured scales |
+| Objects inherited through a parent, or a broad union | PR first page: 2.8 ms with 100 accessible PRs; 262 to 269 ms with 20,000 accessible PRs. These are accessible universes, not page payloads. |
+| Intersections and exclusions | Follow the size of the base relation, even when few objects pass |
+| Recursive relations and userset subjects through nested groups | Follow the size of the reachable graph: 10 results took 188 ms over 2,000 nested groups |
 
-Performance scales with result set size. For large datasets:
+See [Performance](../../reference/performance/#listobjects) for the full tables. For large result sets:
 
-1. **Use pagination** - Use `p_limit` to control result size and avoid loading unbounded data
-2. **Pre-filter candidates** - If you know the user only cares about certain objects, filter at the application layer first
-3. **Cache results** - Cache ListObjects results for repeated queries
+1. **Prefer a bulk check** when you already have the candidates, such as a page of objects loaded from your own tables.
+2. **Paginate to bound payload size.** In the largest measured PR fixture, first-page limits from 10 to 500 took 262 to 269 ms. A limit may not reduce expensive enumeration; inspect your query plan. This benchmark does not establish later-page latency.
+3. **Cache results** for repeated queries.
 
 ## Decision Override Behavior
 
