@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/pthm/melange/internal/version"
 	"github.com/pthm/melange/pkg/migrator"
+	"github.com/pthm/melange/pkg/parser"
 	"github.com/pthm/melange/test/testutil"
 )
 
@@ -154,50 +156,11 @@ func TestMigrate_RechecksGuardsUnderLock(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(ctx,
 		`SELECT schema_checksum FROM melange_migrations ORDER BY id DESC LIMIT 1`).Scan(&deployed))
 
-	// runBehindLock holds the migration lock while migrate starts and queues
-	// behind it, commits a record from a newer melange, then returns migrate's
-	// result once it gets the lock.
+	// A record from a newer melange lands while migrate waits on the lock.
+	newerRecord := copyLastRecord(map[string]string{"schema_checksum": "'newer-checksum'", "codegen_version": "'v0.11.0'"})
 	runBehindLock := func(opts migrator.MigrateOptions) error {
-		tx, err := db.BeginTx(ctx, nil)
-		require.NoError(t, err)
-		defer func() { _ = tx.Rollback() }()
-		_, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('melange'), hashtext(current_schema()))`)
-		require.NoError(t, err)
-
-		done := make(chan error, 1)
-		go func() {
-			_, err := migrator.MigrateWithOptions(ctx, db, changedPath, opts)
-			done <- err
-		}()
-		// Wait until migrate is blocked on melange's lock in this database.
-		// Polled on the test goroutine so an early return fails cleanly.
-		deadline := time.Now().Add(10 * time.Second)
-		for {
-			select {
-			case err := <-done:
-				t.Fatalf("migrate returned before queuing behind the lock: %v", err)
-			default:
-			}
-			var waiting bool
-			require.NoError(t, db.QueryRowContext(ctx, `SELECT EXISTS (
-				SELECT 1 FROM pg_locks
-				WHERE locktype = 'advisory' AND NOT granted AND objsubid = 2
-				AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
-				AND classid = hashtext('melange')::bigint::oid)`).Scan(&waiting))
-			if waiting {
-				break
-			}
-			require.True(t, time.Now().Before(deadline), "migrate never queued behind the lock")
-			time.Sleep(10 * time.Millisecond)
-		}
-
-		_, err = tx.ExecContext(ctx, `INSERT INTO melange_migrations
-			(melange_version, schema_checksum, codegen_version, function_names, function_checksums, schema_dsl, schema_format, model_json)
-			SELECT melange_version, 'newer-checksum', 'v0.11.0', function_names, function_checksums, schema_dsl, schema_format, model_json
-			FROM melange_migrations ORDER BY id DESC LIMIT 1`)
-		require.NoError(t, err)
-		require.NoError(t, tx.Commit())
-		return <-done
+		_, err := migrateBehindLock(t, db, changedPath, opts, newerRecord)
+		return err
 	}
 
 	var drift *migrator.DeployedModelChangedError
@@ -214,6 +177,151 @@ func TestMigrate_RechecksGuardsUnderLock(t *testing.T) {
 	require.NoError(t, db.QueryRowContext(ctx,
 		`SELECT count(*) FROM pg_proc WHERE proname LIKE '%auditor%'`).Scan(&auditorFns))
 	require.Zero(t, auditorFns, "a migration refused under the lock must not apply functions")
+}
+
+// migrateBehindLock holds the migration lock while migrate starts and queues
+// behind it, runs inject in the lock-holding transaction and commits it, then
+// returns migrate's result once it gets the lock.
+func migrateBehindLock(t *testing.T, db *sql.DB, schemaPath string, opts migrator.MigrateOptions, inject string) (bool, error) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('melange'), hashtext(current_schema()))`)
+	require.NoError(t, err)
+
+	type result struct {
+		skipped bool
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		skipped, err := migrator.MigrateWithOptions(ctx, db, schemaPath, opts)
+		done <- result{skipped, err}
+	}()
+	// Wait until migrate is blocked on melange's lock in this database.
+	// Polled on the test goroutine so an early return fails cleanly.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		select {
+		case r := <-done:
+			t.Fatalf("migrate returned before queuing behind the lock: skipped=%v err=%v", r.skipped, r.err)
+		default:
+		}
+		var waiting bool
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT EXISTS (
+			SELECT 1 FROM pg_locks
+			WHERE locktype = 'advisory' AND NOT granted AND objsubid = 2
+			AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
+			AND classid = hashtext('melange')::bigint::oid)`).Scan(&waiting))
+		if waiting {
+			break
+		}
+		require.True(t, time.Now().Before(deadline), "migrate never queued behind the lock")
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	_, err = tx.ExecContext(ctx, inject)
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit())
+	r := <-done
+	return r.skipped, r.err
+}
+
+// copyLastRecord returns an INSERT that copies the latest migration record,
+// replacing the named columns with SQL expressions, as if another migration
+// committed it.
+func copyLastRecord(overrides map[string]string) string {
+	cols := []string{
+		"melange_version", "schema_checksum", "codegen_version", "function_names",
+		"function_checksums", "schema_dsl", "schema_format", "model_json",
+	}
+	exprs := make([]string, len(cols))
+	for i, c := range cols {
+		exprs[i] = c
+		if e, ok := overrides[c]; ok {
+			exprs[i] = e
+		}
+	}
+	return "INSERT INTO melange_migrations (" + strings.Join(cols, ", ") + ") SELECT " +
+		strings.Join(exprs, ", ") + " FROM melange_migrations ORDER BY id DESC LIMIT 1"
+}
+
+// When only the melange version changes, the generated SQL is identical and
+// migrate records the new version without re-applying functions. That path
+// re-checks under the lock too: what another migration committed meanwhile
+// decides whether it refuses, skips, or falls back to a full apply.
+func TestMigrate_RecordOnlyRechecksUnderLock(t *testing.T) {
+	stampVersion(t, "v0.10.0")
+	db := newTuplesDB(t)
+	ctx := context.Background()
+	schemaPath := writeSchema(t, concurrencySchema)
+	_, err := migrator.MigrateWithOptions(ctx, db, schemaPath, migrator.MigrateOptions{Version: "v0.10.0"})
+	require.NoError(t, err)
+	var deployed string
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT schema_checksum FROM melange_migrations ORDER BY id DESC LIMIT 1`).Scan(&deployed))
+
+	stampVersion(t, "v0.10.1")
+	current := "'" + migrator.CodegenVersion() + "'"
+	opts := migrator.MigrateOptions{Version: "v0.10.1"}
+	records := func() int {
+		var n int
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM melange_migrations`).Scan(&n))
+		return n
+	}
+	// Each case starts from the v0.10.0 record alone.
+	reset := func() {
+		_, err := db.ExecContext(ctx, `DELETE FROM melange_migrations WHERE id > (SELECT min(id) FROM melange_migrations)`)
+		require.NoError(t, err)
+	}
+
+	t.Run("newer codegen refuses", func(t *testing.T) {
+		defer reset()
+		_, err := migrateBehindLock(t, db, schemaPath, opts,
+			copyLastRecord(map[string]string{"codegen_version": "'v0.11.0'"}))
+		var ahead *migrator.DatabaseAheadError
+		require.ErrorAs(t, err, &ahead)
+		require.Equal(t, 2, records(), "a refused migration must not record anything")
+	})
+
+	t.Run("drifted checksum aborts", func(t *testing.T) {
+		defer reset()
+		guarded := opts
+		guarded.IfDeployedChecksum = &deployed
+		_, err := migrateBehindLock(t, db, schemaPath, guarded,
+			copyLastRecord(map[string]string{"schema_checksum": "'newer-checksum'"}))
+		var drift *migrator.DeployedModelChangedError
+		require.ErrorAs(t, err, &drift)
+		require.Equal(t, 2, records(), "an aborted migration must not record anything")
+	})
+
+	t.Run("already recorded skips", func(t *testing.T) {
+		defer reset()
+		skipped, err := migrateBehindLock(t, db, schemaPath, opts,
+			copyLastRecord(map[string]string{"codegen_version": current, "melange_version": current}))
+		require.NoError(t, err)
+		require.True(t, skipped)
+		require.Equal(t, 2, records(), "a state already recorded must not be recorded twice")
+	})
+
+	t.Run("changed functions apply in full", func(t *testing.T) {
+		defer reset()
+		skipped, err := migrateBehindLock(t, db, schemaPath, opts, copyLastRecord(map[string]string{
+			"function_checksums": `(SELECT jsonb_object_agg(key, 'changed') FROM jsonb_each_text(function_checksums))`,
+		}))
+		require.NoError(t, err)
+		require.False(t, skipped)
+		require.Equal(t, 3, records())
+		var codegen string
+		var changed bool
+		require.NoError(t, db.QueryRowContext(ctx, `SELECT codegen_version,
+			EXISTS (SELECT 1 FROM jsonb_each_text(function_checksums) WHERE value = 'changed')
+			FROM melange_migrations ORDER BY id DESC LIMIT 1`).Scan(&codegen, &changed))
+		require.Equal(t, migrator.CodegenVersion(), codegen)
+		require.False(t, changed, "the full apply must record the real function checksums")
+	})
 }
 
 // Callers may migrate inside their own transaction; concurrent ones serialize
@@ -255,4 +363,41 @@ func TestMigrate_ConcurrentCallerTransactions(t *testing.T) {
 	var records int
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT count(*) FROM melange_migrations`).Scan(&records))
 	require.Equal(t, 2, records, "only the first caller should record the change")
+}
+
+// MigrateWithTypes records nothing, but it still must not replace functions a
+// newer melange generated, including inside a transaction the caller owns.
+func TestMigrateWithTypes_CallerTransactionRefusesOlderCodegen(t *testing.T) {
+	db := newTuplesDB(t)
+	ctx := context.Background()
+	stampVersion(t, "v0.11.0")
+	_, err := migrator.MigrateWithOptions(ctx, db, writeSchema(t, concurrencySchema), migrator.MigrateOptions{Version: version.Version})
+	require.NoError(t, err)
+	types, err := parser.ParseSchemaString(concurrencySchema + "    define auditor: [user]\n")
+	require.NoError(t, err)
+
+	migrateInTx := func() error {
+		tx, err := db.BeginTx(ctx, nil)
+		require.NoError(t, err)
+		defer func() { _ = tx.Rollback() }()
+		if err := migrator.NewMigrator(tx, "").MigrateWithTypes(ctx, types); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+	auditorFns := func() int {
+		var n int
+		require.NoError(t, db.QueryRowContext(ctx,
+			`SELECT count(*) FROM pg_proc WHERE proname LIKE '%auditor%'`).Scan(&n))
+		return n
+	}
+
+	stampVersion(t, "v0.10.0")
+	var ahead *migrator.DatabaseAheadError
+	require.ErrorAs(t, migrateInTx(), &ahead)
+	require.Zero(t, auditorFns(), "a refused migration must not apply functions")
+
+	stampVersion(t, "v0.11.0")
+	require.NoError(t, migrateInTx())
+	require.NotZero(t, auditorFns())
 }
