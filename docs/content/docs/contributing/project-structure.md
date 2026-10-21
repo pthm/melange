@@ -20,8 +20,6 @@ melange/
 │   └── typescript/        # TypeScript client
 ├── pkg/                   # Public packages (extension surface)
 ├── internal/              # Sealed implementation (CLI, sqlgen, clientgen, …)
-├── cmd/melange/
-│   └── go.mod             # Retired error-shim module (deprecated install path)
 └── test/
     └── go.mod             # Integration-test module (never released)
 ```
@@ -31,7 +29,6 @@ melange/
 | Root (`github.com/pthm/melange`) | CLI + schema parsing, code generation | OpenFGA parser, pq driver |
 | Runtime (`github.com/pthm/melange/melange`) | Checker, cache, types, errors | stdlib only |
 | Test (`github.com/pthm/melange/test`) | Integration tests + OpenFGA oracle | testcontainers, pgx, openfga-server (never released) |
-| `cmd/melange` | Retired error-shim pointing at the root install path | stdlib only |
 
 Install the CLI from the root module:
 
@@ -164,9 +161,11 @@ internal/cli/
 └── render/                # explain/expand rendering
 ```
 
-`cmd/melange/` is a retired error-shim module — its `main.go` prints the new
+The old `github.com/pthm/melange/cmd/melange` module is retired. Its final
+published version (`cmd/melange/v0.8.7`) is an error-shim that prints the new
 install path and exits non-zero, so `go install …/cmd/melange@latest` fails loudly
-instead of installing a stale binary.
+instead of installing a stale binary. The source is gone from the tree, but the
+tag and the module proxy keep serving it; never delete `cmd/melange/v*` tags.
 
 Commands:
 - `validate` - Check a schema without a database

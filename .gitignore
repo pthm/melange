@@ -53,7 +53,6 @@ specs/
 dist/
 **/dist/
 **/node_modules/
-cmd/melange/melange
 
 # Playwright MCP session output
 .playwright-mcp/

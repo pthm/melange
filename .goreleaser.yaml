@@ -6,7 +6,7 @@ version: 2
 project_name: melange
 
 # The repo has three tag prefixes — `vX.Y.Z` (root), `melange/vX.Y.Z` (runtime),
-# and `cmd/melange/vX.Y.Z` (CLI). Only the root tag should drive goreleaser's
+# and `cmd/melange/vX.Y.Z` (the retired CLI shim). Only the root tag should drive goreleaser's
 # .Version; the others contain slashes and would break docker tag rendering.
 git:
   ignore_tags:

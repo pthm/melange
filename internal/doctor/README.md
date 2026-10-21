@@ -15,7 +15,7 @@ Validates that the authorization system is properly configured by checking:
 ## Architecture Role
 
 ```
-cmd/melange doctor
+melange doctor
        │
        └── internal/doctor
                │

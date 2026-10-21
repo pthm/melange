@@ -3,7 +3,7 @@
 
 ROOT := "."
 TEST := "test"
-GO_MODULES := ". cmd/melange melange test"
+GO_MODULES := ". melange test"
 
 GO_TEST := "go test"
 GO_TEST_JSON := "go test -json -count=1"

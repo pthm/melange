@@ -13,7 +13,7 @@ This package provides infrastructure shared across CLI commands:
 ## Architecture Role
 
 ```
-cmd/melange/main.go
+main.go
        │
        ├── internal/cli (config, errors)
        │

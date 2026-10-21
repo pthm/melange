@@ -14,7 +14,7 @@ Used by the CLI to display license information and comply with open source licen
 ## Architecture Role
 
 ```
-cmd/melange
+main.go
        │
        └── internal/licenses
                │

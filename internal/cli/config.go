@@ -462,7 +462,7 @@ func setDefaults(v *viper.Viper) {
 // melange.yaml, melange.yml, melange/config.yaml, melange/config.yml,
 // melange/melange.yaml, and melange/melange.yml. The walk stops at a .git
 // boundary or after maxWalkDepth levels. This search order must stay in sync
-// with findExistingConfig in cmd/melange/init.go so that configs written by
+// with findExistingConfig in internal/cli/command/init.go so that configs written by
 // init are always discovered by other commands.
 func findConfigFile(explicitPath string) (string, error) {
 	if explicitPath != "" {
