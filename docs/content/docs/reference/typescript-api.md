@@ -1,7 +1,7 @@
 ---
 title: TypeScript API
 description: "Reference for the @pthm/melange TypeScript runtime client, mirroring the Go API with TypeScript idioms."
-weight: 4
+weight: 5
 ---
 
 Reference for the `@pthm/melange` TypeScript runtime client. Mirrors the [Go API](../go-api/) with TypeScript idioms. Ships with the type-safe generated client from `melange generate client --runtime typescript`.

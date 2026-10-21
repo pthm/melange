@@ -75,8 +75,8 @@ Using Melange's client libraries, middleware patterns, and operational workflows
   {{< card link="guides/listing-objects" title="Listing Objects" subtitle="Find all objects a subject can access" icon="collection" >}}
   {{< card link="guides/listing-subjects" title="Listing Subjects" subtitle="Find all subjects with access to an object" icon="users" >}}
   {{< card link="guides/caching" title="Caching" subtitle="In-memory, request-scoped, and custom cache strategies" icon="lightning-bolt" >}}
-  {{< card link="guides/troubleshooting" title="Troubleshooting" subtitle="Diagnose common issues with melange doctor" icon="search" >}}
   {{< card link="guides/coding-agents" title="Using Coding Agents" subtitle="Docs for agents and project instructions for your schema" icon="sparkles" >}}
+  {{< card link="guides/troubleshooting" title="Troubleshooting" subtitle="Diagnose common issues with melange doctor" icon="search" >}}
 {{< /cards >}}
 
 ## Reference
@@ -84,14 +84,14 @@ Using Melange's client libraries, middleware patterns, and operational workflows
 Technical reference documentation.
 
 {{< cards >}}
-  {{< card link="reference/cli" title="CLI Reference" subtitle="Commands for migrations, code generation, and validation" icon="terminal" >}}
   {{< card link="reference/configuration" title="Configuration" subtitle="Config files, environment variables, and precedence" icon="cog" >}}
-  {{< card link="reference/go-api" title="Go API" subtitle="Runtime types, Checker, bulk checks, caching, and decision overrides" icon="code" >}}
+  {{< card link="reference/cli" title="CLI Reference" subtitle="Commands for migrations, code generation, and validation" icon="terminal" >}}
   {{< card link="reference/sql-api" title="SQL API" subtitle="Generated SQL functions for permission checks" icon="database" >}}
-  {{< card link="reference/errors" title="Errors" subtitle="Sentinel errors, validation codes, and error helpers" icon="exclamation-circle" >}}
+  {{< card link="reference/go-api" title="Go API" subtitle="Runtime types, Checker, bulk checks, caching, and decision overrides" icon="code" >}}
   {{< card link="reference/generated-code" title="Generated Code" subtitle="What melange generate client produces" icon="document-text" >}}
-  {{< card link="reference/performance" title="Performance" subtitle="Benchmark results, optimization strategies, and scaling guidance" icon="lightning-bolt" >}}
+  {{< card link="reference/errors" title="Errors" subtitle="Sentinel errors, validation codes, and error helpers" icon="exclamation-circle" >}}
   {{< card link="reference/openfga-compatibility" title="OpenFGA Compatibility" subtitle="Feature support table and migration guidance" icon="badge-check" >}}
+  {{< card link="reference/performance" title="Performance" subtitle="Benchmark results, optimization strategies, and scaling guidance" icon="lightning-bolt" >}}
 {{< /cards >}}
 
 ## Contributing

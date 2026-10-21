@@ -1,7 +1,7 @@
 ---
 title: Expanding Permissions
 description: "Use Expand to get the OpenFGA userset tree for an object and relation, for audit UIs and access reviews."
-weight: 5
+weight: 7
 ---
 
 `Expand` returns the OpenFGA-shaped `UsersetTree` for a `(object, relation)` pair — the structured "who has access?" answer. Use it to surface an audit UI, generate an access-review export, or debug why a specific subject ended up in the result of `ListSubjects`.

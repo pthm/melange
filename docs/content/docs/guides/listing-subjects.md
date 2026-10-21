@@ -1,7 +1,7 @@
 ---
 title: Listing Subjects
 description: "List every subject with access to an object with Melange's ListSubjects, including pagination and performance tips."
-weight: 3
+weight: 5
 ---
 
 `ListSubjects` returns all subjects of a given type that have a specific relation on an object.

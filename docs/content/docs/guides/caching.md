@@ -1,7 +1,7 @@
 ---
 title: Caching
 description: "Use Melange's in-memory permission cache to serve repeated checks in nanoseconds, and when to avoid it."
-weight: 5
+weight: 9
 ---
 
 Melange's built-in cache reduces database load by storing permission check results in memory. Cached checks return in ~80 ns compared to ~350-450 µs end to end for uncached checks (see [Performance](../../reference/performance/#caching)).

@@ -1,7 +1,7 @@
 ---
 title: Testing Authorization
 description: "Test your Melange schema and tuples view together against a real PostgreSQL database."
-weight: 7
+weight: 11
 ---
 
 Test your tuples view and schema together against a real PostgreSQL database. Mocking the permission layer risks divergence between test and production behavior.

@@ -44,11 +44,11 @@ just bench-openfga
 ## Quick Links
 
 {{< cards >}}
+  {{< card link="project-structure" title="Project Structure" subtitle="Codebase layout, modules, and key files" >}}
   {{< card link="architecture" title="Architecture" subtitle="Compilation pipeline, SQL generation, and key design decisions" >}}
   {{< card link="adding-features" title="Adding Features" subtitle="Step-by-step guide for new OpenFGA feature support" >}}
   {{< card link="testing" title="Testing" subtitle="Run the OpenFGA compatibility test suite" >}}
   {{< card link="benchmarking" title="Benchmarking" subtitle="Performance testing and profiling" >}}
-  {{< card link="project-structure" title="Project Structure" subtitle="Codebase layout, modules, and key files" >}}
 {{< /cards >}}
 
 ## Development Workflow

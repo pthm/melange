@@ -1,7 +1,7 @@
 ---
 title: Scaling
 description: "Run Melange at scale: indexing the tables behind the tuples view, materialized views, and keeping list queries fast."
-weight: 8
+weight: 10
 ---
 
 Melange's check operations are O(1) regardless of dataset size. Benchmarks show a flat ~130 µs in-database check latency (~350-450 µs end to end) from 1K to 1M tuples; see [Performance](../../reference/performance/). The regular view approach works at scale when source tables are properly indexed.

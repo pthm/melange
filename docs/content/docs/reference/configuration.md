@@ -1,7 +1,7 @@
 ---
 title: Configuration
 description: "Configure Melange with melange.yaml, MELANGE_ environment variables, or command-line flags, and how they take precedence."
-weight: 2
+weight: 1
 ---
 
 Melange supports configuration via YAML files, environment variables, and command-line flags with the following precedence (highest to lowest):

@@ -1,7 +1,7 @@
 ---
 title: Go API
 description: "Reference for Melange's Go runtime package: Checker, Object, cache, list, expand, and explain APIs. Stdlib only."
-weight: 3
+weight: 4
 ---
 
 Complete reference for the `github.com/pthm/melange/melange` Go runtime package. This package has zero external dependencies (stdlib only).

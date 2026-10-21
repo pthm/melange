@@ -1,7 +1,7 @@
 ---
 title: Project Structure
 description: "Layout of the Melange repository: Go modules, packages, and what each component does."
-weight: 3
+weight: 1
 ---
 
 This guide explains Melange's codebase layout and the purpose of each component.

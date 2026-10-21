@@ -1,7 +1,7 @@
 ---
 title: Contextual Tuples
 description: "Pass temporary tuples at check time to evaluate permissions against data that is not stored in the database."
-weight: 6
+weight: 8
 ---
 
 Contextual tuples are temporary tuples injected at check time. They are not persisted to the database and only affect the single check or list call they are passed to.

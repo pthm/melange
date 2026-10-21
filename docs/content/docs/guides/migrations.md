@@ -1,7 +1,7 @@
 ---
 title: Running Migrations
 description: "Two ways to install Melange's generated SQL: melange migrate directly, or SQL files for your existing migration tool."
-weight: 10
+weight: 2
 ---
 
 Melange compiles your `.fga` schema into SQL functions that must be installed in PostgreSQL before permission checks can run. This page explains the two ways to get those functions into your database and helps you choose between them.

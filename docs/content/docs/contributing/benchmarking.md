@@ -1,7 +1,7 @@
 ---
 title: Benchmarking
 description: How to run Melange's OpenFGA and scale benchmarks locally and compare results.
-weight: 2
+weight: 5
 ---
 
 {{< callout type="info" >}}

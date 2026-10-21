@@ -1,7 +1,7 @@
 ---
 title: Errors
 description: "Error types, sentinel values, and helper functions in Melange's Go runtime package."
-weight: 6
+weight: 8
 ---
 
 All error types, sentinel values, and helper functions in the `github.com/pthm/melange/melange` package.

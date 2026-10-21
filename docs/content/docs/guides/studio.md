@@ -1,7 +1,7 @@
 ---
 title: Studio
 description: "melange studio: a local, read-only web console for exploring the deployed model, explaining checks, and browsing tuples."
-weight: 11
+weight: 12
 ---
 
 `melange studio` serves a local web console for inspecting a melange-managed database: the deployed model, Explain and Expand results, a check matrix, `EXPLAIN ANALYZE` timings, the tuples behind each entity, migration history, and `melange doctor` health checks.

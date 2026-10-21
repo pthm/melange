@@ -1,7 +1,7 @@
 ---
 title: CLI Reference
 description: "Every Melange CLI command and flag: init, validate, migrate, status, doctor, generate client, studio, and more."
-weight: 1
+weight: 2
 ---
 
 The Melange CLI provides commands for validating schemas, generating client code, and applying migrations to your database. Built on Cobra/Viper, it supports [configuration files](../configuration/), environment variables, and command-line flags with consistent precedence.

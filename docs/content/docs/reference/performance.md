@@ -1,7 +1,7 @@
 ---
 title: Performance
 description: "Measured Melange latency for checks and list queries from 1K to 1M tuples, plus caching and tuning advice."
-weight: 4
+weight: 10
 ---
 
 Melange compiles permission checks into specialized SQL functions. This page documents measured latency and scaling behavior.

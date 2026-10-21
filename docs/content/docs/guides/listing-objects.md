@@ -1,7 +1,7 @@
 ---
 title: Listing Objects
 description: "List every object a subject can access with Melange's ListObjects, including pagination and performance tips."
-weight: 2
+weight: 4
 ---
 
 `ListObjects` returns all objects of a given type that a subject has a specific relation on.
