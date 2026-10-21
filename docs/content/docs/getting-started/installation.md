@@ -69,9 +69,11 @@ docker pull ghcr.io/pthm/melange:latest
 The image contains only the `melange` binary, so mount your project and set the working directory:
 
 ```bash
-docker run --rm -v "$PWD:/work" -w /work ghcr.io/pthm/melange:latest \
-  migrate --db "$DATABASE_URL" --schema schemas/schema.fga
+docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work \
+  ghcr.io/pthm/melange:latest migrate --db "$DATABASE_URL" --schema schemas/schema.fga
 ```
+
+The image runs as root by default, so `--user` keeps files written into a bind mount on Linux owned by you rather than root. Docker Desktop on macOS and Windows already maps ownership, so it needs no flag.
 
 If PostgreSQL runs on the host, `localhost` inside the container is the container itself. Use `--network host` on Linux or `host.docker.internal` on Docker Desktop.
 
