@@ -138,6 +138,18 @@ $expected = (Select-String -Path checksums.txt -Pattern $file).Line.Split(" ")[0
 
 Homebrew and Scoop verify these hashes automatically.
 
+Releases after v0.10.0 also carry [build provenance attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations) proving they were built by this repository's release workflow. Check an archive, package, or `checksums.txt` with the [GitHub CLI](https://cli.github.com/):
+
+```bash
+gh attestation verify melange_<version>_linux_amd64.tar.gz --repo pthm/melange
+```
+
+and the Docker image with:
+
+```bash
+gh attestation verify oci://ghcr.io/pthm/melange:v<version> --repo pthm/melange
+```
+
 ## Updating
 
 Melange checks for updates in the background and prints a notice when a newer version is available. The check is non-blocking, cached for 24 hours, and disabled in CI environments (when the `CI` environment variable is set).

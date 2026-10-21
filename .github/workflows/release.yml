@@ -22,6 +22,9 @@ permissions:
   # ID token at publish time and exchanges it with npm for an ephemeral
   # publishing credential. No static NPM_TOKEN needed.
   id-token: write
+  # Build provenance attestations for the release artifacts and image; they
+  # also use the ID token above to get a Sigstore signing certificate.
+  attestations: write
 
 jobs:
   release-please:
@@ -256,6 +259,40 @@ jobs:
           else
             goreleaser release --clean --release-notes "$RELEASE_NOTES_PATH"
           fi
+
+      # Signed SLSA provenance for everything goreleaser uploaded, checkable
+      # with `gh attestation verify`. Snapshot builds aren't published, so
+      # there's nothing to attest on a dry run. The release is already out by
+      # now, so a Sigstore or registry hiccup here only warns rather than
+      # skipping npm, the release-please relabel and the install checks.
+      - name: Attest release artifacts
+        if: env.DRY_RUN != 'true'
+        continue-on-error: true
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.deb
+            dist/*.rpm
+            dist/checksums.txt
+
+      - name: Resolve image digest
+        if: env.DRY_RUN != 'true'
+        continue-on-error: true
+        id: image
+        run: |
+          digest=$(docker buildx imagetools inspect "ghcr.io/pthm/melange:${VERSION}" --format '{{.Manifest.Digest}}')
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Attest container image
+        if: env.DRY_RUN != 'true'
+        continue-on-error: true
+        uses: actions/attest-build-provenance@v4
+        with:
+          subject-name: ghcr.io/pthm/melange
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
 
       # Publishes via OIDC trusted publisher (configured on npmjs.com against
       # this repo + workflow file). No static NPM_TOKEN involved — pnpm fetches
