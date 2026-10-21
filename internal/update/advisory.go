@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -71,8 +72,14 @@ func fetchAdvisories(ctx context.Context) ([]Advisory, error) {
 		return nil, fmt.Errorf("GitHub API returned status %d", resp.StatusCode)
 	}
 
+	return parseAdvisories(resp.Body)
+}
+
+// parseAdvisories decodes GitHub's advisory list and keeps the vulnerable
+// ranges reported for modulePath.
+func parseAdvisories(r io.Reader) ([]Advisory, error) {
 	var raw []githubAdvisory
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+	if err := json.NewDecoder(r).Decode(&raw); err != nil {
 		return nil, err
 	}
 
