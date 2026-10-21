@@ -18,6 +18,16 @@ const (
 	githubAPIURL = "https://api.github.com/repos/pthm/melange/releases/latest"
 	cacheTTL     = 24 * time.Hour
 	cacheFile    = "update-check.json"
+
+	// advisoryGrace is how long a finished release check waits for the
+	// advisory request. The exit notice waits only 1s in total, so a stalled
+	// advisory request must not hold back the update notice.
+	advisoryGrace = 500 * time.Millisecond
+
+	// advisoryRetryTTL is how soon a cache saved without advisories is
+	// refreshed. Shorter than cacheTTL so advisories are not hidden for a day,
+	// long enough that a rate-limited client does not retry on every run.
+	advisoryRetryTTL = time.Hour
 )
 
 // Info contains update check results
@@ -26,6 +36,9 @@ type Info struct {
 	CurrentVersion  string    `json:"current_version"`
 	CheckedAt       time.Time `json:"checked_at"`
 	UpdateAvailable bool      `json:"update_available"`
+	// Advisories are the published advisories for the melange module, nil
+	// when they could not be fetched. Use Affecting to match a version.
+	Advisories []Advisory `json:"advisories"`
 }
 
 // githubRelease represents the GitHub API response
@@ -37,17 +50,28 @@ type githubRelease struct {
 // CheckWithCache checks for updates using cache when available
 func CheckWithCache(ctx context.Context) (*Info, error) {
 	// Try to load from cache first
-	info, err := loadCache()
-	if err == nil && time.Since(info.CheckedAt) < cacheTTL {
-		// Cache is valid, update current version for comparison
-		info.CurrentVersion = version.Version
-		info.UpdateAvailable = compareVersions(info.CurrentVersion, info.LatestVersion) < 0
-		return info, nil
+	cached, err := loadCache()
+	if err == nil {
+		// A cache without advisories predates them or failed to fetch them;
+		// retry sooner than the full TTL, but not on every run.
+		ttl := cacheTTL
+		if cached.Advisories == nil {
+			ttl = advisoryRetryTTL
+		}
+		cached.CurrentVersion = version.Version
+		cached.UpdateAvailable = compareVersions(cached.CurrentVersion, cached.LatestVersion) < 0
+		if time.Since(cached.CheckedAt) < ttl {
+			return cached, nil
+		}
 	}
 
 	// Cache miss or expired, fetch from GitHub
-	info, err = check(ctx)
+	info, err := check(ctx)
 	if err != nil {
+		// An early advisory retry that fails still has a usable release check.
+		if cached != nil && time.Since(cached.CheckedAt) < cacheTTL {
+			return cached, nil
+		}
 		return nil, err
 	}
 
@@ -59,6 +83,14 @@ func CheckWithCache(ctx context.Context) (*Info, error) {
 
 // check fetches the latest release from GitHub
 func check(ctx context.Context) (*Info, error) {
+	// Fetched alongside the release so a slow advisory request adds little
+	// latency to the update notice; see advisoryGrace.
+	advisoriesCh := make(chan []Advisory, 1)
+	go func() {
+		a, _ := fetchAdvisories(ctx)
+		advisoriesCh <- a
+	}()
+
 	req, err := http.NewRequestWithContext(ctx, "GET", githubAPIURL, http.NoBody)
 	if err != nil {
 		return nil, err
@@ -84,6 +116,14 @@ func check(ctx context.Context) (*Info, error) {
 		return nil, err
 	}
 
+	var advisories []Advisory
+	select {
+	case advisories = <-advisoriesCh:
+	case <-time.After(advisoryGrace):
+		// Leave Advisories nil: the result is still delivered, and the nil
+		// marks the cache for a refresh on the next run.
+	}
+
 	latestVersion := strings.TrimPrefix(release.TagName, "v")
 	currentVersion := version.Version
 
@@ -92,6 +132,7 @@ func check(ctx context.Context) (*Info, error) {
 		CurrentVersion:  currentVersion,
 		CheckedAt:       time.Now(),
 		UpdateAvailable: compareVersions(currentVersion, latestVersion) < 0,
+		Advisories:      advisories,
 	}, nil
 }
 

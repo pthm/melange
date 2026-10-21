@@ -40,63 +40,262 @@ code, pre, kbd {
   display: none !important;
 }
 
-/* Homepage hero */
+/* Homepage hero: text, and on wide screens a schema-to-check example */
 .homepage-hero {
   width: 100%;
-  padding-top: 4rem;
-  padding-bottom: 4rem;
+  padding-top: 3rem;
+  padding-bottom: 3.5rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 3rem;
+  align-items: center;
+}
+
+@media (min-width: 1024px) {
+  .homepage-hero {
+    padding-top: 3.5rem;
+    padding-bottom: 4.5rem;
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    gap: 4rem;
+  }
+}
+
+.homepage-hero-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.homepage-hero-demo {
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: #fff;
+  padding: 0.25rem 1.25rem 1.25rem;
+  box-shadow: 0 18px 40px -24px rgba(0, 0, 0, 0.35);
+}
+
+.dark .homepage-hero-demo {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: #111;
+  box-shadow: none;
+}
+
+.homepage-hero-demo .hextra-code-block {
+  margin-top: 0;
+}
+
+.homepage-hero-demo pre {
+  margin: 0 !important;
+  font-size: 0.8125rem;
+}
+
+.homepage-demo-label {
+  margin: 1rem 0 0.5rem;
+  font-family: 'Space Mono', monospace;
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.6;
 }
 
 /* Homepage section spacing */
 .homepage-section-gap {
-  margin-top: 8rem;
+  margin-top: 5rem;
+}
+
+@media (min-width: 768px) {
+  .homepage-section-gap {
+    margin-top: 7rem;
+  }
+}
+
+/* "Step n" eyebrow above each walkthrough heading */
+.homepage-step {
+  margin-bottom: 0.75rem;
+  font-family: 'Space Mono', monospace;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: hsl(var(--primary-hue) var(--primary-saturation) var(--primary-lightness));
 }
 
 /* Homepage two-column section spacing */
 .homepage-columns {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 3rem;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2rem;
   width: 100%;
   align-items: start;
 }
 
 @media (min-width: 768px) {
   .homepage-columns {
-    grid-template-columns: 1fr 1fr;
-    gap: 6rem;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 5rem;
   }
 }
 
-/* Homepage CTA section */
+/* Homepage get started panel: text and buttons beside the install commands */
 .homepage-cta {
   width: 100%;
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2.5rem;
   align-items: center;
-  text-align: center;
-  padding: 4rem 2rem;
-  background: rgba(0, 0, 0, 0.03);
+  padding: 2.5rem 1.5rem;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  background: hsl(var(--primary-hue) var(--primary-saturation) var(--primary-lightness) / 0.04);
 }
 
 .dark .homepage-cta {
-  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.08);
+  background: hsl(var(--primary-hue) var(--primary-saturation) var(--primary-lightness) / 0.06);
 }
 
-.homepage-cta .content {
-  max-width: 48rem;
-  text-align: left;
+@media (min-width: 1024px) {
+  .homepage-cta {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 4rem;
+    padding: 3.5rem;
+  }
 }
 
-.homepage-cta-buttons {
-  display: flex;
+.homepage-cta-lead {
+  margin: 1.25rem 0 2rem;
+  max-width: 32rem;
+  font-size: 1.125rem;
+  line-height: 1.7;
+  opacity: 0.8;
+}
+
+/* Is Melange a fit: two verdict cards, then two linked migration cards */
+.homepage-fit {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 1rem;
   margin-top: 2rem;
 }
 
-/* Feature card heading weight */
+@media (min-width: 768px) {
+  .homepage-fit {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.homepage-fit-card {
+  display: block;
+  padding: 1.5rem;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: rgba(0, 0, 0, 0.015);
+  line-height: 1.7;
+}
+
+.dark .homepage-fit-card {
+  border-color: rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.homepage-fit-card p {
+  margin: 0;
+  opacity: 0.85;
+}
+
+.homepage-fit-card p.homepage-fit-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  font-family: 'Space Mono', monospace;
+  font-size: 1.0625rem;
+  font-weight: 700;
+  opacity: 1;
+}
+
+.homepage-fit-card a {
+  color: hsl(var(--primary-hue) var(--primary-saturation) var(--primary-lightness));
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.homepage-fit-yes,
+.dark .homepage-fit-yes {
+  border-top: 3px solid #16a34a;
+}
+
+.homepage-fit-yes .homepage-fit-label svg {
+  color: #16a34a;
+}
+
+.homepage-fit-no,
+.dark .homepage-fit-no {
+  border-top: 3px solid #a8a29e;
+}
+
+.homepage-fit-no .homepage-fit-label svg {
+  color: #a8a29e;
+}
+
+.homepage-fit-link {
+  color: inherit;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.homepage-fit-link .homepage-fit-label svg {
+  color: hsl(var(--primary-hue) var(--primary-saturation) var(--primary-lightness));
+  transition: transform 0.15s ease;
+}
+
+.homepage-fit-link:hover {
+  border-color: hsl(var(--primary-hue) var(--primary-saturation) var(--primary-lightness) / 0.6);
+  background: hsl(var(--primary-hue) var(--primary-saturation) var(--primary-lightness) / 0.04);
+}
+
+.homepage-fit-link:hover .homepage-fit-label svg {
+  transform: translateX(3px);
+}
+
+.homepage-fit-card code,
+.homepage-studio-footer code {
+  font-size: 0.875em;
+  padding: 0.1em 0.35em;
+  background: rgba(0, 0, 0, 0.05);
+}
+
+.dark .homepage-fit-card code,
+.dark .homepage-studio-footer code {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* Feature cards: one style for all six, icon in the brand colour, and a
+   visible hover since every card links to its docs */
+.hextra-feature-card {
+  background: rgba(0, 0, 0, 0.015);
+  transition: border-color 0.15s ease, background-color 0.15s ease, transform 0.15s ease;
+}
+
+.dark .hextra-feature-card {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.hextra-feature-card:hover {
+  border-color: hsl(var(--primary-hue) var(--primary-saturation) var(--primary-lightness) / 0.6) !important;
+  background: hsl(var(--primary-hue) var(--primary-saturation) var(--primary-lightness) / 0.04);
+  transform: translateY(-2px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hextra-feature-card:hover {
+    transform: none;
+  }
+}
+
 .hextra-feature-card h3 {
   font-weight: 600;
+  font-size: 1.25rem;
+}
+
+.hextra-feature-card h3 svg {
+  color: hsl(var(--primary-hue) var(--primary-saturation) var(--primary-lightness));
 }
 
 /* Mermaid diagram styling */
@@ -202,20 +401,183 @@ code, pre, kbd {
   max-width: 48rem;
 }
 
-.homepage-studio-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 1.5rem;
+.homepage-studio-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1rem 1.5rem;
+  margin-top: 2rem;
 }
 
-@media (min-width: 768px) {
-  .homepage-studio-grid {
-    grid-template-columns: repeat(3, 1fr);
+.homepage-studio-footer p {
+  margin: 0;
+}
+
+/* Studio showcase (shortcodes/studio-showcase.html): view list beside a
+   window frame. The checked radio picks the tab style and the panel shown;
+   there is one selector per view, up to five. */
+.studio-showcase {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1.25rem;
+  margin-top: 2.5rem;
+}
+
+@media (min-width: 1024px) {
+  .studio-showcase {
+    grid-template-columns: 17rem minmax(0, 1fr);
+    gap: 2rem;
+    align-items: start;
   }
 }
 
-.homepage-studio-grid .studio-shot {
+.studio-showcase-input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.studio-showcase-tabs {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+@media (min-width: 1024px) {
+  .studio-showcase-tabs {
+    flex-direction: column;
+    overflow: visible;
+  }
+}
+
+.studio-showcase-tab {
+  flex: none;
+  display: block;
+  padding: 0.625rem 0.875rem;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-left-width: 3px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.dark .studio-showcase-tab {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.studio-showcase-tab:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.dark .studio-showcase-tab:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.studio-showcase-tab-title {
+  display: block;
+  font-family: 'Space Mono', monospace;
+  font-weight: 700;
+}
+
+.studio-showcase-tab-desc {
+  display: none;
+  margin-top: 0.25rem;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  opacity: 0.75;
+}
+
+@media (min-width: 1024px) {
+  .studio-showcase-tab {
+    padding: 0.875rem 1rem;
+  }
+
+  .studio-showcase-tab-desc {
+    display: block;
+  }
+}
+
+.studio-showcase-window {
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: #fff;
+  box-shadow: 0 24px 48px -28px rgba(0, 0, 0, 0.45);
+}
+
+.dark .studio-showcase-window {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: #111;
+  box-shadow: 0 24px 48px -28px rgba(0, 0, 0, 0.9);
+}
+
+.studio-showcase-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.625rem 0.875rem;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.dark .studio-showcase-bar {
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.studio-showcase-bar > span:not(.studio-showcase-url) {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 9999px !important;
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.dark .studio-showcase-bar > span:not(.studio-showcase-url) {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.studio-showcase-url {
+  margin-left: 0.75rem;
+  font-family: 'Space Mono', monospace;
+  font-size: 0.75rem;
+  opacity: 0.55;
+}
+
+.studio-showcase-panel {
+  display: none;
   margin: 0;
+  line-height: 0;
+}
+
+.studio-showcase-panel img {
+  margin: 0;
+  width: 100%;
+  height: auto;
+}
+
+#studio-view-1:checked ~ .studio-showcase-window .studio-showcase-panel-1,
+#studio-view-2:checked ~ .studio-showcase-window .studio-showcase-panel-2,
+#studio-view-3:checked ~ .studio-showcase-window .studio-showcase-panel-3,
+#studio-view-4:checked ~ .studio-showcase-window .studio-showcase-panel-4,
+#studio-view-5:checked ~ .studio-showcase-window .studio-showcase-panel-5 {
+  display: block;
+}
+
+#studio-view-1:checked ~ .studio-showcase-tabs [for="studio-view-1"],
+#studio-view-2:checked ~ .studio-showcase-tabs [for="studio-view-2"],
+#studio-view-3:checked ~ .studio-showcase-tabs [for="studio-view-3"],
+#studio-view-4:checked ~ .studio-showcase-tabs [for="studio-view-4"],
+#studio-view-5:checked ~ .studio-showcase-tabs [for="studio-view-5"] {
+  border-color: hsl(var(--primary-hue) var(--primary-saturation) var(--primary-lightness) / 0.35);
+  border-left-color: hsl(var(--primary-hue) var(--primary-saturation) var(--primary-lightness));
+  background: hsl(var(--primary-hue) var(--primary-saturation) var(--primary-lightness) / 0.06);
+}
+
+#studio-view-1:focus-visible ~ .studio-showcase-tabs [for="studio-view-1"],
+#studio-view-2:focus-visible ~ .studio-showcase-tabs [for="studio-view-2"],
+#studio-view-3:focus-visible ~ .studio-showcase-tabs [for="studio-view-3"],
+#studio-view-4:focus-visible ~ .studio-showcase-tabs [for="studio-view-4"],
+#studio-view-5:focus-visible ~ .studio-showcase-tabs [for="studio-view-5"] {
+  outline: 2px solid hsl(var(--primary-hue) var(--primary-saturation) var(--primary-lightness));
+  outline-offset: 2px;
 }
 
 /* Stacked studio preview (shortcodes/studio-stack.html). Layers are 78% of
@@ -458,6 +820,17 @@ code, pre, kbd {
 
 .homepage-release .release-card {
   margin: 0;
+  padding: 1.5rem 1.75rem;
+}
+
+/* On the landing page the highlights say enough; the summary paragraph is
+   on the release post. Keep it when a release has no highlights. */
+.homepage-release .release-card:has(.release-highlights) .release-card-summary {
+  display: none;
+}
+
+.homepage-release .release-card-title {
+  font-size: 1.5rem;
 }
 
 /* Updates list (layouts/blog/list.html) */
@@ -580,4 +953,44 @@ code, pre, kbd {
 
 .newer-release-links a:hover {
   text-decoration: underline;
+}
+
+/* Facts under the hero buttons: a wrapping row with square markers */
+.homepage-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1.25rem;
+  margin-top: 1.75rem;
+  padding: 0;
+  list-style: none;
+  font-size: 0.875rem;
+  opacity: 0.75;
+}
+
+.homepage-facts li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.homepage-facts li::before {
+  content: "";
+  width: 0.375rem;
+  height: 0.375rem;
+  background: hsl(var(--primary-hue) var(--primary-saturation) var(--primary-lightness));
+}
+
+/* Secondary hero buttons (GitHub, View on GitHub) are set black inline: give
+   them a hover state, and an outline in dark mode where black disappears. */
+a[style*="background: #000"]:hover {
+  background: #262626 !important;
+}
+
+.dark a[style*="background: #000"] {
+  background: transparent !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
+.dark a[style*="background: #000"]:hover {
+  background: rgba(255, 255, 255, 0.08) !important;
 }

@@ -80,7 +80,11 @@ func runDoctor(dsn, databaseSchema, schemaPath string, verboseFlag, skipPerforma
 		fmt.Println("melange doctor - Health Check")
 	}
 
-	d := doctor.New(db, schemaPath, doctor.Options{SkipPerformance: skipPerformance})
+	opts := doctor.Options{SkipPerformance: skipPerformance}
+	if info := awaitUpdateInfo(advisoryWait); info != nil {
+		opts.Advisories = info.Advisories
+	}
+	d := doctor.New(db, schemaPath, opts)
 	d.SetDatabaseSchema(databaseSchema)
 	report, err := d.Run(ctx)
 	if err != nil {

@@ -1,0 +1,47 @@
+{{- /*
+  Syntax highlighting for ```fga blocks. Chroma has no OpenFGA lexer, so this
+  tokenises each line with regexes into Chroma's own classes, which the
+  theme's chroma CSS already colours in light and dark mode:
+
+    k   keywords (model, schema, type, relations, define, ...)
+    nc  type names after `type`
+    nf  relation names after `define`
+    kt  type restrictions inside [...]
+    ow  or, and, but not, from
+    mf  the schema version
+    c1  # comments
+
+  The wrapper mirrors Hextra's render-codeblock.html, so the copy button and
+  `filename` attribute keep working.
+  ponytail: regexes, not a parser; fine for the DSL's line-oriented syntax.
+*/ -}}
+{{- $filename := .Attributes.filename | default "" -}}
+{{- $lines := slice -}}
+{{- range split (strings.TrimSuffix "\n" .Inner) "\n" -}}
+  {{- $line := . | htmlEscape -}}
+  {{- $comment := "" -}}
+  {{- with findRESubmatch `^(.*?)((?:^|\s)#\s.*)$` $line 1 -}}
+    {{- $line = index (index . 0) 1 -}}
+    {{- $comment = index (index . 0) 2 -}}
+  {{- end -}}
+  {{- $line = replaceRE `^(\s*)type(\s+)([\w/.-]+)` `${1}<span class="k">type</span>${2}<span class="nc">${3}</span>` $line -}}
+  {{- $line = replaceRE `^(\s*)define(\s+)(\w+)` `${1}<span class="k">define</span>${2}<span class="nf">${3}</span>` $line -}}
+  {{- $line = replaceRE `^(\s*)schema(\s+)([\d.]+)` `${1}<span class="k">schema</span>${2}<span class="mf">${3}</span>` $line -}}
+  {{- $line = replaceRE `^(\s*)(model|relations|module|extend|condition)\b` `${1}<span class="k">${2}</span>` $line -}}
+  {{- $line = replaceRE `\[([^\]]*)\]` `<span class="p">[</span><span class="kt">${1}</span><span class="p">]</span>` $line -}}
+  {{- $line = replaceRE `\b(but not|or|and|from|with)\b` `<span class="ow">${1}</span>` $line -}}
+  {{- with $comment -}}
+    {{- $line = printf `%s<span class="c1">%s</span>` $line . -}}
+  {{- end -}}
+  {{- $lines = $lines | append (printf `<span class="line"><span class="cl">%s
+</span></span>` $line) -}}
+{{- end -}}
+<div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code">
+  {{- with $filename -}}
+    <div class="hextra-code-filename not-prose" dir="auto">{{ . }}</div>
+  {{- end -}}
+  <div><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-fga" data-lang="fga">{{ delimit $lines "" | safeHTML }}</code></pre></div></div>
+  {{- if or (eq site.Params.highlight.copy.enable nil) (site.Params.highlight.copy.enable) -}}
+    {{- partialCached "components/codeblock-copy-button" (dict "filename" $filename) $filename -}}
+  {{- end -}}
+</div>

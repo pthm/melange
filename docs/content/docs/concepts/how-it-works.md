@@ -31,13 +31,11 @@ flowchart LR
 
     subgraph Output["PostgreSQL Database"]
         funcs["Specialized check functions"]
-        closure["Precomputed closure tables"]
         dispatch["Dispatcher function"]
     end
 
     schema --> melange
     melange --> funcs
-    melange --> closure
     melange --> dispatch
 ```
 
@@ -105,7 +103,7 @@ The compiler recognizes authorization patterns and generates code specific to ea
 | Pattern | Schema Syntax | Generated Code |
 |---------|--------------|----------------|
 | Direct assignment | `[user]` | Simple `EXISTS` check |
-| Role hierarchy | `viewer: owner` | Precomputed closure lookup |
+| Role hierarchy | `viewer: owner` | Closure inlined as `IN (...)` |
 | Union | `[user] or owner` | OR'd `EXISTS` clauses |
 | Tuple-to-userset | `viewer from parent` | Recursive lookup via parent |
 | Exclusion | `but not blocked` | Access check with exclusion |
@@ -260,7 +258,7 @@ Melange provides **full OpenFGA Schema 1.1 compatibility** (excluding conditions
 
 ## Performance
 
-Compiled SQL functions deliver permission checks in ~130 µs in the database (~350-450 µs end to end), with **O(1) scaling** as tuple count grows. Specialization, precomputed closures, and in-database execution eliminate the runtime overhead of graph traversal.
+A permission check is one SQL call. On a managed PostgreSQL instance, measured from an application VM in the same zone, a check spends about 0.1 ms in the database and takes about 0.4 to 0.7 ms end to end, most of it the network round trip. Check latency stayed roughly flat across the measured fixtures, from thousands to two million tuples. This is a measured workload result, not a constant-time guarantee: recursive relations can still require traversal, and graph depth, fan-out, and indexes matter. List operations cost more: they grow with the part of the permission graph they walk.
 
 {{< cards cols="1" >}}
 {{< card link="../../reference/performance" title="Performance Guide" subtitle="Detailed benchmarks, optimization strategies, and caching configuration" icon="chart-bar" >}}
@@ -275,4 +273,4 @@ Melange's compiler architecture has four key properties:
 3. **View-based tuples**: Direct queries against your existing tables
 4. **Native SQL execution**: Uses PostgreSQL's query optimizer
 
-This produces permission checks in ~130 µs in the database, with full OpenFGA Schema 1.1 compatibility, without requiring a separate authorization service.
+The measured kitchen-sink checks spend about 0.06 to 0.13 ms in the database, with OpenFGA Schema 1.1 compatibility (excluding conditions), without requiring a separate authorization service.

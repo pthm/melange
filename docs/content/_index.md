@@ -4,64 +4,97 @@ layout: hextra-home
 ---
 
 <div class="homepage-hero">
+<div class="homepage-hero-text">
 
-{{< hextra/hero-badge >}}
+{{< hextra/hero-badge link="https://github.com/pthm/melange" >}}
   <div class="hx:w-2 hx:h-2 hx:rounded-full hx:bg-primary-400"></div>
-  <span>Free, open source</span>
+  <span>Free and open source on GitHub</span>
   {{< icon name="arrow-circle-right" attributes="height=14" >}}
 {{< /hextra/hero-badge >}}
 
 <div class="hx:mt-6 hx:mb-6">
 {{< hextra/hero-headline >}}
-  Zanzibar-Style Authorization&nbsp;<br class="hx:sm:block hx:hidden" />for PostgreSQL
+  Zanzibar-Style Authorization for PostgreSQL
 {{< /hextra/hero-headline >}}
 </div>
 
-<div class="hx:mb-12">
+<div class="hx:mb-10">
 {{< hextra/hero-subtitle >}}
-  Implement fine-grained, relationship-based access control without external services.&nbsp;<br class="hx:sm:block hx:hidden" />Melange compiles OpenFGA schemas into SQL functions that run inside your existing database.
+  Fine-grained, relationship-based access control without an external service. Melange compiles OpenFGA schemas into SQL functions that run inside your existing database.
 {{< /hextra/hero-subtitle >}}
 </div>
 
-<div class="hx:mb-6 hx:flex hx:gap-4">
-{{< hextra/hero-button text="Get Started" link="docs/getting-started/installation" >}}
+<div class="homepage-hero-buttons">
+{{< hextra/hero-button text="Get Started" link="docs/getting-started/quick-start" >}}
 {{< hextra/hero-button text="GitHub" link="https://github.com/pthm/melange" style="background: #000;" >}}
 </div>
 
+<ul class="homepage-facts">
+  <li>MIT licensed</li>
+  <li>PostgreSQL 14+</li>
+  <li>Go and TypeScript clients</li>
+  <li>SQL from any language</li>
+</ul>
+
+</div>
+<div class="homepage-hero-demo">
+
+<p class="homepage-demo-label">schema.fga</p>
+
+```fga
+type repository
+  relations
+    define org: [organization]
+    define admin: [user]
+    define can_read: member from org or admin
+```
+
+<p class="homepage-demo-label">Your application</p>
+
+```sql
+SELECT check_permission(
+  'user', 'alice', 'can_read', 'repository', '123'
+);
+-- 1: alice is a member of the repository's org
+```
+
+</div>
 </div>
 
 {{< hextra/feature-grid >}}
   {{< hextra/feature-card
     title="Pure PostgreSQL"
+    link="docs/concepts/how-it-works"
     subtitle="Zero external dependencies. No sidecars, no services. Everything runs as SQL functions inside your database."
     icon="database"
-    style="background: radial-gradient(ellipse at 50% 80%,rgba(51,103,145,0.2),hsla(0,0%,100%,0));"
   >}}
   {{< hextra/feature-card
     title="OpenFGA Compatible"
-    subtitle="Full Schema 1.1 conformance. Use familiar DSL syntax with complete feature support, validated against the official OpenFGA test suite."
+    link="docs/reference/openfga-compatibility"
+    subtitle="Every Schema 1.1 feature except conditions. Use the same DSL and .fga files, validated against the official OpenFGA test suite."
     icon="badge-check"
-    style="background: radial-gradient(ellipse at 50% 80%,rgba(0,180,140,0.15),hsla(0,0%,100%,0));"
   >}}
   {{< hextra/feature-card
     title="Optimized for Speed"
-    subtitle="~130 μs permission checks in the database with O(1) constant-time scaling. Same speed whether you have 1K or 1M tuples."
+    subtitle="Measured checks took 0.4–0.7 ms end to end on same-zone managed Postgres, across fixtures from thousands to two million tuples."
     link="docs/reference/performance"
     icon="lightning-bolt"
-    style="background: radial-gradient(ellipse at 50% 80%,rgba(194,97,254,0.15),hsla(0,0%,100%,0));"
   >}}
   {{< hextra/feature-card
     title="No Tuple Sync"
+    link="docs/concepts/tuples-view"
     subtitle="Permissions derived from views over your domain tables. Always in sync, transaction-aware, zero data duplication."
     icon="refresh"
   >}}
   {{< hextra/feature-card
     title="Transaction Aware"
+    link="docs/guides/checking-permissions#transaction-support"
     subtitle="Permission checks see uncommitted changes within the same transaction. No eventual consistency, no stale authorization data."
     icon="clock"
   >}}
   {{< hextra/feature-card
     title="Language Agnostic"
+    link="docs/reference/sql-api"
     subtitle="Go and TypeScript client libraries included, or call SQL functions directly from any language. Works in triggers, RLS policies, or application code."
     icon="puzzle"
   >}}
@@ -86,7 +119,7 @@ layout: hextra-home
 
 <div class="content">
 
-Melange is an **authorization compiler**. Like Protocol Buffers or GraphQL Code Generator, you define a schema and Melange generates optimized code tailored to your exact model. Instead of a generic runtime that interprets your model at query time, Melange generates **purpose-built SQL functions** for each relation in your schema. Role hierarchies are resolved at compile time and inlined into SQL, so runtime checks avoid recursive graph traversal entirely.
+Melange is an **authorization compiler**. Like Protocol Buffers or GraphQL Code Generator, you define a schema and Melange generates optimized code tailored to your exact model. Instead of a generic runtime that interprets your model at query time, Melange generates **purpose-built SQL functions** for each relation in your schema. Role hierarchies are resolved at compile time and inlined into SQL, so runtime checks only recurse where your data does, such as nested parent folders.
 
 </div>
 </div>
@@ -109,6 +142,8 @@ flowchart LR
 <!-- Define Your Schema: 2-column -->
 <div class="homepage-columns">
 <div>
+
+<p class="homepage-step">Step 1</p>
 
 {{< hextra/hero-section >}}
   Define Your Schema
@@ -157,6 +192,8 @@ type repository
 <div class="homepage-columns">
 <div>
 
+<p class="homepage-step">Step 2</p>
+
 {{< hextra/hero-section >}}
   Query Your Existing Tables
 {{< /hextra/hero-section >}}
@@ -204,6 +241,8 @@ FROM repositories;
 <!-- Compile and Migrate: 2-column -->
 <div class="homepage-columns">
 <div>
+
+<p class="homepage-step">Step 3</p>
 
 {{< hextra/hero-section >}}
   Compile to SQL Functions
@@ -277,6 +316,8 @@ $$ LANGUAGE plpgsql STABLE;
 <div class="homepage-columns">
 <div>
 
+<p class="homepage-step">Step 4</p>
+
 {{< hextra/hero-section >}}
   Check Permissions From Any Language
 {{< /hextra/hero-section >}}
@@ -335,8 +376,10 @@ SELECT check_permission(
 
 <div class="homepage-section-gap"></div>
 
-<!-- Studio showcase: full width -->
+<!-- Studio showcase -->
 <div class="homepage-studio">
+
+<p class="homepage-step">Studio</p>
 
 {{< hextra/hero-section >}}
   Inspect Everything in Studio
@@ -346,43 +389,75 @@ SELECT check_permission(
 
 <div class="content">
 
-`melange studio` opens a local, read-only console on any melange database. See what each user can access and who can access each object, explain any decision step by step, try a grant before you write it, and read the SQL melange generated for every relation. It needs only a database connection.
-
-```bash
-melange studio --env staging
-```
+`melange studio` opens a local, read-only console on any melange database. See who can access what, explain any decision step by step, try a grant before you write it, and read the SQL generated for every relation. It needs only a database connection.
 
 </div>
 
-{{< studio-screenshot name="entity" alt="Studio's tuple browser showing the repositories user carol can access, with relation chips and an inline Explain" >}}
+{{< studio-showcase >}}
 
-<div class="homepage-studio-grid">
+<div class="homepage-studio-footer">
 
-{{< studio-screenshot name="query-explain" alt="An Explain trace showing why a user can read an issue" caption="**Explain** any check, path by path" >}}
-
-{{< studio-screenshot name="relation" alt="A relation page with its definition, analysis and dependencies" caption="**Relations** with their analysis and generated SQL" >}}
-
-{{< studio-screenshot name="health" alt="The Health page with melange doctor checks" caption="**Health** checks from `melange doctor`" >}}
-
-</div>
-
-<div class="hx:mt-6">
 {{< hextra/hero-button text="Explore Studio" link="docs/guides/studio" >}}
+
+`melange studio --env staging`
+
 </div>
 
 </div>
 
 <div class="homepage-section-gap"></div>
 
+<!-- Fit -->
+<div class="homepage-fit-section">
+
+{{< hextra/hero-section >}}
+  Is Melange a Fit?
+{{< /hextra/hero-section >}}
+
+<div class="homepage-fit">
+<div class="homepage-fit-card homepage-fit-yes">
+<p class="homepage-fit-label">{{< icon name="check-circle" attributes="height=20" >}} Good fit</p>
+<p>An application backed by PostgreSQL that needs roles, sharing, teams, or folder-style hierarchies, and would rather not run and sync a separate authorization service.</p>
+</div>
+<div class="homepage-fit-card homepage-fit-no">
+<p class="homepage-fit-label">{{< icon name="x-circle" attributes="height=20" >}} Look elsewhere</p>
+<p>Authorization shared across many services and databases, or attribute-based rules that need <a href="docs/reference/openfga-compatibility/#conditions">conditions</a>.</p>
+</div>
+<a class="homepage-fit-card homepage-fit-link" href="docs/reference/openfga-compatibility/#migration-path-to-openfga">
+<p class="homepage-fit-label">Outgrow it? Move to OpenFGA {{< icon name="arrow-right" attributes="height=16" >}}</p>
+<p>Your <code>.fga</code> files work unchanged in OpenFGA. Export your <code>melange_tuples</code> view as tuples and point your application at an OpenFGA server.</p>
+</a>
+<a class="homepage-fit-card homepage-fit-link" href="docs/reference/openfga-compatibility/#moving-from-openfga-to-melange">
+<p class="homepage-fit-label">Coming from OpenFGA? {{< icon name="arrow-right" attributes="height=16" >}}</p>
+<p>Keep your model, and replace the tuple store with a view over your tables.</p>
+</a>
+</div>
+
+</div>
+
+<div class="homepage-section-gap"></div>
+
+<!-- Get started -->
 <div class="homepage-cta">
+<div class="homepage-cta-text">
+
+<p class="homepage-step">Get started</p>
 
 {{< hextra/hero-section >}}
   Get Started in Minutes
 {{< /hextra/hero-section >}}
 
-<div class="hx:mt-6"></div>
+<p class="homepage-cta-lead">Install the CLI, point it at your database, and check your first permission. The quick start takes you from an empty schema to a working check.</p>
 
-<div class="content">
+<div class="homepage-hero-buttons">
+{{< hextra/hero-button text="Quick Start" link="docs/getting-started/quick-start" >}}
+{{< hextra/hero-button text="View on GitHub" link="https://github.com/pthm/melange" style="background: #000;" >}}
+</div>
+
+</div>
+<div class="homepage-hero-demo">
+
+<p class="homepage-demo-label">Terminal</p>
 
 ```bash
 # Install
@@ -402,10 +477,4 @@ melange studio
 ```
 
 </div>
-
-<div class="homepage-cta-buttons">
-{{< hextra/hero-button text="Read the Docs" link="docs" >}}
-{{< hextra/hero-button text="View on GitHub" link="https://github.com/pthm/melange" style="background: #000;" >}}
-</div>
-
 </div>

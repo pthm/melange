@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/pthm/melange/internal/cli"
+	"github.com/pthm/melange/internal/update"
 	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/pkg/schema"
 )
@@ -360,5 +361,25 @@ func TestPrintLines(t *testing.T) {
 	}
 	if err := printLines(failWriter{}, []string{"user:alice"}); !errors.Is(err, io.ErrClosedPipe) {
 		t.Fatalf("got %v, want io.ErrClosedPipe", err)
+	}
+}
+
+func TestPrintStatusText_Advisories(t *testing.T) {
+	out := renderStatus(t, statusReport{
+		SchemaFile: "present",
+		TuplesView: "present",
+		Sync:       syncInSync,
+		Deployed: &deployedReport{
+			MelangeVersion: "v0.9.3",
+			Checksum:       "abc123",
+			ModelRecorded:  true,
+			Advisories:     []update.Advisory{{ID: "GHSA-test", Severity: "high", Summary: "bypass", Patched: "0.9.5"}},
+		},
+	}, &migrator.Status{SchemaExists: true, TuplesExists: true})
+
+	for _, want := range []string{"Security:", "melange migrate", "GHSA-test (high, fixed in 0.9.5) bypass"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
 	}
 }

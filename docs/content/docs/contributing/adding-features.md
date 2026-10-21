@@ -1,7 +1,7 @@
 ---
 title: Adding Features
 description: "Step-by-step guide to adding support for a new OpenFGA feature to the Melange compiler."
-weight: 5
+weight: 3
 ---
 
 Step-by-step guide for adding support for a new OpenFGA feature in Melange.

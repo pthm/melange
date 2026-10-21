@@ -34,8 +34,9 @@ func TestExplainExamples(t *testing.T) {
 
 	run := func(t *testing.T, label string, args ...string) {
 		t.Helper()
-		// The CLI ships from the root module now (cmd/melange is a retired shim).
-		full := append([]string{"run", "github.com/pthm/melange", "explain"}, args...)
+		// The CLI lives in the root module; -C builds it there so it resolves
+		// against the root go.mod/go.sum instead of test/go.sum.
+		full := append([]string{"run", "-C", "..", ".", "explain"}, args...)
 		full = append(full, "--db", dsn, "--color", "always")
 		out, err := exec.CommandContext(ctx, "go", full...).CombinedOutput()
 		t.Logf("\n=== %s ===\n$ melange explain %v\n%s", label, args, out)

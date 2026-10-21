@@ -34,7 +34,7 @@ markup:
 defaultContentLanguage: en
 languages:
   en:
-    languageName: English
+    label: English
     weight: 1
 
 menu:
@@ -74,6 +74,17 @@ params:
     width: wide
     tabs:
       sync: true
+    # "Copy page" menu on docs pages: copy or view the page's Markdown twin,
+    # or hand it to an assistant. Placeholders are URL-encoded by Hextra.
+    contextMenu:
+      enable: true
+      links:
+        - name: Open in Claude
+          icon: simple:claude
+          url: "https://claude.ai/new?q=Read%20{markdown_url}%20so%20I%20can%20ask%20questions%20about%20it."
+        - name: Open in ChatGPT
+          icon: lucide:message-circle
+          url: "https://chatgpt.com/?q=Read%20{markdown_url}%20so%20I%20can%20ask%20questions%20about%20it."
 
   footer:
     displayCopyright: false

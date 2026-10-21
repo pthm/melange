@@ -57,3 +57,6 @@ cmd/melange/melange
 
 # Playwright MCP session output
 .playwright-mcp/
+
+# Cloud benchmark state and results (scripts/cloud-bench.sh)
+.cloud-bench/

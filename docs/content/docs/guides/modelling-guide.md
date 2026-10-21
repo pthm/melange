@@ -1,7 +1,7 @@
 ---
 title: Modelling Guide
 description: "Build an OpenFGA authorization model for Melange from scratch, with the schema, tuples view, and checks together."
-weight: 10
+weight: 1
 ---
 
 Melange uses the [OpenFGA DSL](https://openfga.dev/docs/configuration-language) to define authorization models. This guide walks through building a model from scratch, with full examples showing the schema, tuples view, and permission checks together.

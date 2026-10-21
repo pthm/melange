@@ -16,6 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/structpb"
 	"sigs.k8s.io/yaml"
+
+	"github.com/pthm/melange/test/testutil"
 )
 
 //go:embed testdata/*.yaml
@@ -292,6 +294,8 @@ func BenchTest(b *testing.B, tc TestCase) {
 		b.Fatalf("create store: %v", err)
 	}
 	storeID := resp.GetId()
+	db := client.StoreDB(storeID)
+	testutil.EnableServerStats(db)
 
 	// Prepared operations ready for benchmarking
 	type checkOp struct {
@@ -375,8 +379,7 @@ func BenchTest(b *testing.B, tc TestCase) {
 						}
 					}
 
-					b.ResetTimer()
-					for j := 0; j < b.N; j++ {
+					testutil.BenchLoop(b, db, func() {
 						_, err := client.Check(ctx, &openfgav1.CheckRequest{
 							StoreId:              storeID,
 							AuthorizationModelId: op.modelID,
@@ -389,7 +392,7 @@ func BenchTest(b *testing.B, tc TestCase) {
 						if err != nil {
 							b.Fatalf("check failed: %v", err)
 						}
-					}
+					})
 				})
 			}
 		})
@@ -404,13 +407,12 @@ func BenchTest(b *testing.B, tc TestCase) {
 		bulkAssertions := bulkEligibleAssertions(allCheckAssertions)
 		if len(bulkAssertions) > 0 {
 			b.Run("BulkCheck", func(b *testing.B) {
-				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
+				testutil.BenchLoop(b, db, func() {
 					_, err := client.CheckBulk(ctx, storeID, bulkAssertions)
 					if err != nil {
 						b.Fatalf("bulk check failed: %v", err)
 					}
-				}
+				})
 			})
 		}
 	}
@@ -420,8 +422,7 @@ func BenchTest(b *testing.B, tc TestCase) {
 		b.Run("ListObjects", func(b *testing.B) {
 			for i, op := range listObjOps {
 				b.Run(fmt.Sprintf("%d", i), func(b *testing.B) {
-					b.ResetTimer()
-					for j := 0; j < b.N; j++ {
+					testutil.BenchLoop(b, db, func() {
 						_, err := client.ListObjects(ctx, &openfgav1.ListObjectsRequest{
 							StoreId:              storeID,
 							AuthorizationModelId: op.modelID,
@@ -435,7 +436,7 @@ func BenchTest(b *testing.B, tc TestCase) {
 						if err != nil {
 							b.Fatalf("list objects failed: %v", err)
 						}
-					}
+					})
 				})
 			}
 		})
@@ -460,8 +461,7 @@ func BenchTest(b *testing.B, tc TestCase) {
 						filters = append(filters, parseUserTypeFilter(f))
 					}
 
-					b.ResetTimer()
-					for j := 0; j < b.N; j++ {
+					testutil.BenchLoop(b, db, func() {
 						_, err := client.ListUsers(ctx, &openfgav1.ListUsersRequest{
 							StoreId:              storeID,
 							AuthorizationModelId: op.modelID,
@@ -476,7 +476,7 @@ func BenchTest(b *testing.B, tc TestCase) {
 						if err != nil {
 							b.Fatalf("list users failed: %v", err)
 						}
-					}
+					})
 				})
 			}
 		})

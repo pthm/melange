@@ -1,7 +1,7 @@
 ---
 title: Generated Code
 description: "What melange generate client produces for Go and TypeScript: type-safe constants and constructors from your schema."
-weight: 7
+weight: 6
 ---
 
 `melange generate client` reads your `.fga` schema and produces type-safe constants and constructors. This page documents the output for each runtime.

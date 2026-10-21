@@ -1,7 +1,7 @@
 ---
 title: Testing
 description: "Running the OpenFGA compatibility test suite against Melange, inspecting test cases, and debugging failures."
-weight: 1
+weight: 4
 ---
 
 Melange validates compatibility with OpenFGA using their official test suite. This guide covers running tests, inspecting test cases, and debugging failures.

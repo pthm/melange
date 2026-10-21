@@ -1,10 +1,13 @@
 package command
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
 	"github.com/pthm/melange/internal/cli"
+	"github.com/pthm/melange/internal/cli/style"
+	"github.com/pthm/melange/internal/update"
 )
 
 func envConfig() *cli.Config {
@@ -146,5 +149,52 @@ func TestBoolCount(t *testing.T) {
 	}
 	if got := boolCount(false, false); got != 0 {
 		t.Errorf("boolCount = %d, want 0", got)
+	}
+}
+
+// captureNotices redirects noticeOut to a plain-text buffer for the test.
+func captureNotices(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := noticeOut
+	noticeOut = style.Writer(&buf)
+	t.Cleanup(func() { noticeOut = prev })
+	return &buf
+}
+
+func TestShowAdvisoryNotice(t *testing.T) {
+	buf := captureNotices(t)
+	showAdvisoryNotice("0.9.4", []update.Advisory{
+		{ID: "GHSA-1", Summary: "Check bypass", Severity: "high", URL: "https://u/1", Patched: "0.9.5"},
+		{ID: "GHSA-2", Summary: "List leak", Severity: "low", URL: "https://u/2"},
+	})
+	want := `
+! melange 0.9.4 is affected by 2 security advisories:
+  GHSA-1 (high, fixed in 0.9.5) Check bypass
+    https://u/1
+  GHSA-2 (low, no fixed release yet) List leak
+    https://u/2
+  Upgrade to a fixed release, then run melange migrate to regenerate the database functions.
+`
+	if got := buf.String(); got != want {
+		t.Errorf("advisory notice:\n%s\nwant:\n%s", got, want)
+	}
+
+	buf.Reset()
+	showAdvisoryNotice("0.9.4", []update.Advisory{{ID: "GHSA-1"}})
+	if got := buf.String(); !strings.Contains(got, "affected by 1 security advisory:") {
+		t.Errorf("single advisory notice = %q, want singular", got)
+	}
+}
+
+func TestShowUpdateNotice(t *testing.T) {
+	buf := captureNotices(t)
+	showUpdateNotice(&update.Info{LatestVersion: "0.11.0", CurrentVersion: "0.10.0"})
+	want := `
+* A new version of melange is available: v0.11.0 (current: 0.10.0)
+  brew upgrade melange  or  go install github.com/pthm/melange@latest
+`
+	if got := buf.String(); got != want {
+		t.Errorf("update notice:\n%s\nwant:\n%s", got, want)
 	}
 }

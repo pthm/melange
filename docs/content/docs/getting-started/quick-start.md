@@ -8,6 +8,8 @@ next: /docs/getting-started/project-setup
 
 This is the shortest path to a working permission check. It uses the default settings; see [Project Setup](../project-setup) for customization.
 
+You need the `melange` CLI (`brew install pthm/tap/melange` or `go install github.com/pthm/melange@latest`; see [Installation](../installation)) and a PostgreSQL 14+ database.
+
 ## 1. Initialize Your Project
 
 ```bash
@@ -185,7 +187,8 @@ SELECT check_permission('user', 'alice', 'can_read', 'repository', '42');
 -- Filter query results
 SELECT r.*
 FROM repositories r
-WHERE check_permission('user', 'alice', 'can_read', 'repository', r.id::text) = 1;
+JOIN list_accessible_objects('user', 'alice', 'can_read', 'repository', NULL, NULL) a
+    ON r.id::text = a.object_id;
 ```
 {{< /tab >}}
 

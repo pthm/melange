@@ -1,0 +1,45 @@
+{{- /*
+  Landing page showcase of melange studio: a list of views on the left (a row
+  of tabs on small screens) and the selected view's screenshot in a window
+  frame on the right. Selection is radio inputs and CSS (assets/css/custom.css,
+  .studio-showcase), so it works without JavaScript and from the keyboard.
+
+  Usage:
+    {{< studio-showcase >}}
+
+  ponytail: the views are listed here, and the CSS has one selector per view
+  for up to 5; add selectors there if you add a sixth.
+*/ -}}
+{{- $views := slice
+  (dict "name" "entity" "title" "Tuples" "desc" "What each user can access, and who can access each object." "alt" "Studio's tuple browser showing the repositories user carol can access, with relation chips and an inline Explain")
+  (dict "name" "query-explain" "title" "Explain" "desc" "Why a check was allowed or denied, path by path." "alt" "An Explain trace showing why a user can read an issue")
+  (dict "name" "query-matrix" "title" "Matrix" "desc" "Every relation on an object, allowed or denied, in one view." "alt" "A Matrix result listing every repository relation as allowed or denied for a user on a repository")
+  (dict "name" "relation" "title" "Relations" "desc" "Each relation's definition, analysis, and generated SQL." "alt" "A relation page with its definition, analysis and dependencies")
+  (dict "name" "health" "title" "Health" "desc" "The checks from melange doctor, against the live database." "alt" "The Health page with melange doctor checks")
+-}}
+<div class="studio-showcase not-prose">
+  {{- range $i, $v := $views }}
+  <input class="studio-showcase-input" type="radio" name="studio-showcase" id="studio-view-{{ add $i 1 }}"{{ if eq $i 0 }} checked{{ end }}>
+  {{- end }}
+  <div class="studio-showcase-tabs" role="group" aria-label="Studio views">
+    {{- range $i, $v := $views }}
+    <label class="studio-showcase-tab" for="studio-view-{{ add $i 1 }}">
+      <span class="studio-showcase-tab-title">{{ $v.title }}</span>
+      <span class="studio-showcase-tab-desc">{{ $v.desc }}</span>
+    </label>
+    {{- end }}
+  </div>
+  <div class="studio-showcase-window">
+    <div class="studio-showcase-bar" aria-hidden="true">
+      <span></span><span></span><span></span>
+      <span class="studio-showcase-url">localhost · melange studio</span>
+    </div>
+    {{- range $i, $v := $views }}
+    <figure class="studio-showcase-panel studio-showcase-panel-{{ add $i 1 }}">
+      {{- $loading := cond (eq $i 0) "eager" "lazy" }}
+      <img class="studio-shot-light" src="{{ printf "images/studio/%s-light.webp" $v.name | relURL }}" alt="{{ $v.alt }}" width="1280" height="800" loading="{{ $loading }}" decoding="async">
+      <img class="studio-shot-dark" src="{{ printf "images/studio/%s-dark.webp" $v.name | relURL }}" alt="{{ $v.alt }}" width="1280" height="800" loading="{{ $loading }}" decoding="async">
+    </figure>
+    {{- end }}
+  </div>
+</div>

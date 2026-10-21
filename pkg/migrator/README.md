@@ -83,11 +83,19 @@ type MigrationRecord struct {
 ```go
 import "github.com/pthm/melange/pkg/migrator"
 
-// Run on application startup
+// Run on application startup. Concurrent replicas are serialized by an
+// advisory lock, so every replica can migrate.
 func main() {
     db, _ := sql.Open("postgres", connString)
 
-    if err := migrator.Migrate(ctx, db, "schemas/schema.fga"); err != nil {
+    err := migrator.Migrate(ctx, db, "schemas/schema.fga")
+    var ahead *migrator.DatabaseAheadError
+    switch {
+    case errors.As(err, &ahead):
+        // A replica running a newer melange already upgraded the database
+        // (e.g. mid rolling deploy). Its functions keep the same SQL API.
+        log.Printf("Skipping migration: %v", err)
+    case err != nil:
         log.Fatalf("Migration failed: %v", err)
     }
 

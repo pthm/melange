@@ -137,18 +137,7 @@ func runMigrate(dsn, schemaPath string, dryRun, force bool, databaseSchema strin
 
 	skipped, err := migrator.MigrateWithOptions(ctx, db, schemaPath, opts)
 	if err != nil {
-		// Drift guard failed — the database is not at the expected checksum.
-		// Preserve the typed error in the chain (like the sibling mappings below).
-		var driftErr *migrator.DeployedModelChangedError
-		if errors.As(err, &driftErr) {
-			return cli.GeneralError("migration aborted", driftErr)
-		}
-		// Classify error
-		errStr := err.Error()
-		if strings.Contains(errStr, "parsing schema") {
-			return cli.SchemaParseError("schema error", err)
-		}
-		return cli.GeneralError("migration failed", err)
+		return migrateExitError(err)
 	}
 
 	if dryRun {
@@ -176,4 +165,22 @@ func runMigrate(dsn, schemaPath string, dryRun, force bool, databaseSchema strin
 	}
 
 	return nil
+}
+
+// migrateExitError maps a migration error to the CLI's exit code, keeping the
+// typed migrator errors in the chain for errors.As.
+func migrateExitError(err error) error {
+	// Drift guard failed: the database is not at the expected checksum.
+	var driftErr *migrator.DeployedModelChangedError
+	if errors.As(err, &driftErr) {
+		return cli.GeneralError("migration aborted", driftErr)
+	}
+	var aheadErr *migrator.DatabaseAheadError
+	if errors.As(err, &aheadErr) {
+		return &cli.ExitError{Code: cli.ExitDatabaseAhead, Message: "migration refused", Err: aheadErr}
+	}
+	if strings.Contains(err.Error(), "parsing schema") {
+		return cli.SchemaParseError("schema error", err)
+	}
+	return cli.GeneralError("migration failed", err)
 }

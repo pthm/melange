@@ -1,7 +1,7 @@
 ---
 title: Using Coding Agents
 description: Point coding agents like Claude Code, Codex, or Cursor at Melange's docs, and give them project instructions for working on your schema.
-weight: 12
+weight: 13
 ---
 
 Coding agents work best with Melange when they can read the docs as markdown and know the project's workflow before they start editing. This page covers both.

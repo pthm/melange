@@ -14,6 +14,11 @@ const (
 	ExitConfig      = 2
 	ExitSchemaParse = 3
 	ExitDBConnect   = 4
+
+	// ExitDatabaseAhead means migrate refused because a newer melange already
+	// migrated the database. Startup scripts can treat it as success: the
+	// newer functions keep the same SQL API.
+	ExitDatabaseAhead = 5
 )
 
 // ExitError wraps an error with an exit code.

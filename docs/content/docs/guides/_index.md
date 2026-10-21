@@ -10,17 +10,17 @@ Task-oriented guides for using Melange's client libraries, SQL functions, and op
 
 {{< cards >}}
 {{< card link="modelling-guide" title="Modelling Guide" subtitle="Build an authorization model from scratch with end-to-end examples" icon="document-text" >}}
+{{< card link="migrations" title="Running Migrations" subtitle="Built-in vs versioned strategies, CI/CD integration, schema evolution" icon="arrow-circle-up" >}}
 {{< card link="checking-permissions" title="Checking Permissions" subtitle="Validate access using the Checker API" icon="shield-check" >}}
 {{< card link="listing-objects" title="Listing Objects" subtitle="Find all objects a subject can access" icon="collection" >}}
 {{< card link="listing-subjects" title="Listing Subjects" subtitle="Find all subjects with access to an object" icon="users" >}}
 {{< card link="explaining-decisions" title="Explaining Decisions" subtitle="Resolution traces for `why did this check return what it returned?`" icon="search" >}}
 {{< card link="expanding-permissions" title="Expanding Permissions" subtitle="OpenFGA-shaped UsersetTree for `who has access?`" icon="template" >}}
-{{< card link="caching" title="Caching" subtitle="In-memory, request-scoped, and custom cache strategies" icon="lightning-bolt" >}}
 {{< card link="contextual-tuples" title="Contextual Tuples" subtitle="Inject temporary tuples at check time for request context" icon="variable" >}}
-{{< card link="testing-authorization" title="Testing Authorization" subtitle="Write integration tests for your permission setup" icon="beaker" >}}
+{{< card link="caching" title="Caching" subtitle="In-memory, request-scoped, and custom cache strategies" icon="lightning-bolt" >}}
 {{< card link="scaling" title="Scaling" subtitle="Expression indexes, materialized views, and dedicated tables" icon="trending-up" >}}
-{{< card link="migrations" title="Running Migrations" subtitle="Built-in vs versioned strategies, CI/CD integration, schema evolution" icon="arrow-circle-up" >}}
+{{< card link="testing-authorization" title="Testing Authorization" subtitle="Write integration tests for your permission setup" icon="beaker" >}}
 {{< card link="studio" title="Studio" subtitle="A local, read-only web console for a melange database" icon="desktop-computer" >}}
-{{< card link="troubleshooting" title="Troubleshooting" subtitle="Diagnose common issues with melange doctor" icon="search" >}}
 {{< card link="coding-agents" title="Using Coding Agents" subtitle="Docs for agents and project instructions for your schema" icon="sparkles" >}}
+{{< card link="troubleshooting" title="Troubleshooting" subtitle="Diagnose common issues with melange doctor" icon="search" >}}
 {{< /cards >}}

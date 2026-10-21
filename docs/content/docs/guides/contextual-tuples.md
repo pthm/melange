@@ -1,7 +1,7 @@
 ---
 title: Contextual Tuples
 description: "Pass temporary tuples at check time to evaluate permissions against data that is not stored in the database."
-weight: 6
+weight: 8
 ---
 
 Contextual tuples are temporary tuples injected at check time. They are not persisted to the database and only affect the single check or list call they are passed to.
@@ -93,11 +93,7 @@ Checks with contextual tuples bypass the cache entirely. Each call goes directly
 
 ## Performance
 
-Contextual tuple checks have additional overhead compared to regular checks:
-
-- ~3-5ms setup per operation (creating temporary table, inserting tuples, creating temporary view).
-- Regular check latency on top of setup.
-- Cleanup after each operation.
+Each call with contextual tuples creates a temporary view that adds the tuples to `melange_tuples`, runs the query, and drops the view. On Cloud SQL, measured from a VM in the same zone, a check took about 7 ms with one contextual tuple and 10 ms with 100, against 0.4 ms without. List queries with contextual tuples took 7 to 11 ms. See [Performance](../../reference/performance/#contextual-tuples).
 
 For high-throughput paths, consider whether the authorization data can be modelled in your domain tables instead.
 

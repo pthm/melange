@@ -554,3 +554,32 @@ func TestMigrateFromString_InvalidSchema(t *testing.T) {
 type failWriter struct{}
 
 func (failWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+func TestDowngradeGuardError(t *testing.T) {
+	tests := []struct {
+		deployed, current string
+		refused           bool
+	}{
+		{"v0.11.0", "v0.10.0", true},
+		{"0.11.0", "v0.10.0", true},                                // release binaries are stamped without "v"
+		{"v0.10.0", "0.11.0", false},                               // upgrade
+		{"v0.10.0", "v0.10.0", false},                              // same version
+		{"v0.11.0", "v0.11.0-rc.1", true},                          // release candidate is older than its release
+		{"v0.10.1-0.20261001120000-abcdef123456", "v0.10.0", true}, // pseudo-version of a later commit
+		{"v0.10.0", "v0.10.0-3-gabc1234", false},                   // git describe: newer, but semver would say older
+		{"v0.10.0-3-gabc1234-dirty", "v0.9.0", false},              // git describe on either side is not compared
+		{"v0.11.0", "dev", false},
+		{"dev", "v0.10.0", false},
+		{"abc1234", "v0.10.0", false}, // bare commit hash from --always
+	}
+	for _, tt := range tests {
+		prev := version.Version
+		version.Version = tt.current
+		err := downgradeGuardError(&MigrationRecord{CodegenVersion: tt.deployed})
+		version.Version = prev
+		var ahead *DatabaseAheadError
+		if got := errors.As(err, &ahead); got != tt.refused {
+			t.Errorf("deployed %q, current %q: refused = %v, want %v", tt.deployed, tt.current, got, tt.refused)
+		}
+	}
+}

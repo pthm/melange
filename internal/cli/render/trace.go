@@ -12,6 +12,8 @@ import (
 	"io"
 	"strings"
 
+	"charm.land/lipgloss/v2"
+
 	"github.com/pthm/melange/melange"
 )
 
@@ -30,8 +32,8 @@ const (
 	markerDeny  = "✗"
 )
 
-// Color constants live in palette.go so trace.go and expand.go
-// share the OpenFGA-mapped palette + structured painters.
+// Styles live in palette.go so trace.go and expand.go share the
+// OpenFGA-mapped palette + structured painters.
 
 // Option configures a single Trace rendering. The zero value is colorless
 // output suitable for piped writers and captured strings.
@@ -41,18 +43,18 @@ type opts struct {
 	color bool
 }
 
-// WithColor enables ANSI color escapes in the rendered output. Callers
+// WithColor enables 24-bit color in the rendered output. Callers
 // (e.g. the CLI command) typically detect TTY + NO_COLOR and pass the
 // resolved bool.
 func WithColor(enabled bool) Option {
 	return func(o *opts) { o.color = enabled }
 }
 
-func paint(o opts, code, s string) string {
+func paint(o opts, st lipgloss.Style, s string) string {
 	if !o.color {
 		return s
 	}
-	return code + s + ansiReset
+	return st.Render(s)
 }
 
 // Trace writes a human-readable rendering of t to w. A nil trace prints
@@ -135,9 +137,9 @@ func writeNode(w io.Writer, n *melange.Node, prefix string, isLast bool, o opts)
 	// background block.
 	mark := ""
 	if n.Result != nil && !*n.Result {
-		mark = paint(o, "\x1b[1m"+colorDeny, markerDeny) + " "
+		mark = paint(o, denyMarkStyle, markerDeny) + " "
 	}
-	_, _ = fmt.Fprintf(w, "%s%s%s\n", paint(o, colorDim, prefix+branch), mark, formatNode(o, n))
+	_, _ = fmt.Fprintf(w, "%s%s%s\n", paint(o, dimStyle, prefix+branch), mark, formatNode(o, n))
 
 	// Track which sub-items are last so connectors line up.
 	subEvidence := n.Evidence
@@ -153,7 +155,7 @@ func writeNode(w io.Writer, n *melange.Node, prefix string, isLast bool, o opts)
 		last := len(n.Children)+i == total-1
 		branch, _ := connectors(childPrefix, last)
 		_, _ = fmt.Fprintf(w, "%s%s %s\n",
-			paint(o, colorDim, childPrefix+branch),
+			paint(o, dimStyle, childPrefix+branch),
 			paintKeyword(o, "tuple:"),
 			formatTuple(o, ev))
 	}
@@ -199,7 +201,7 @@ func formatNode(o opts, n *melange.Node) string {
 	case melange.NodeWildcard:
 		if len(n.Users) > 0 {
 			return paintKeyword(o, "wildcard:") + " " +
-				paint(o, colorType, n.Users[0].Type) + paintKeyword(o, ":*")
+				paint(o, typeStyle, n.Users[0].Type) + paintKeyword(o, ":*")
 		}
 		return paintKeyword(o, "wildcard")
 	case melange.NodeCycle:
@@ -228,8 +230,8 @@ func labelOr(label, fallback string) string {
 // green, relations as relation cyan, arrows as keyword-grey.
 func formatTuple(o opts, t melange.TupleRef) string {
 	arrow := paintKeyword(o, "→")
-	subj := paint(o, colorType, t.SubjectType) + paintKeyword(o, ":") + t.SubjectID
-	obj := paint(o, colorType, t.ObjectType) + paintKeyword(o, ":") + t.ObjectID
+	subj := paint(o, typeStyle, t.SubjectType) + paintKeyword(o, ":") + t.SubjectID
+	obj := paint(o, typeStyle, t.ObjectType) + paintKeyword(o, ":") + t.ObjectID
 	rel := paintRelation(o, t.Relation)
 	return fmt.Sprintf("%s %s %s %s %s", subj, arrow, rel, arrow, obj)
 }
@@ -268,7 +270,7 @@ func paintLabel(o opts, label string) string {
 // separated label token, in order:
 //
 //  1. Bracketed type restriction (`[type#rel]` or `[a, b]`)
-//     → colorTypeRestr on the whole token.
+//     → typeRestrStyle on the whole token.
 //  2. Userset identifier (`type:id#rel`)
 //     → paintUsersetIdent (type + id + rel partitions).
 //  3. Object identifier (`type:id`) with no `#`

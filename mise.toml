@@ -12,6 +12,10 @@ experimental = true
 # the current release.
 go = "1.27"
 
+# Docs site (docs/); keep in step with HUGO_VERSION in
+# .github/workflows/documentation.yml
+hugo-extended = "0.168"
+
 # Release automation
 goreleaser = "latest"
 node = "lts"

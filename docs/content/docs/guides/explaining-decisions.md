@@ -1,7 +1,7 @@
 ---
 title: Explaining Decisions
 description: "Use Explain to trace why a Melange permission check was allowed or denied, branch by branch."
-weight: 4
+weight: 6
 ---
 
 `Explain` returns the resolution tree behind a permission decision: every branch the engine walked, the matching tuples, and per-branch success or failure. Use it to debug a check or surface an audit path in an admin UI.

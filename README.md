@@ -36,7 +36,7 @@ That gives you:
 - **Transaction-aware.** Checks see uncommitted changes in the same transaction, so they work in triggers and RLS policies.
 - **Any language.** Anything that can run SQL can check permissions. Go and TypeScript clients are optional conveniences.
 - **No recursive lookups.** Role hierarchies are resolved at compile time and inlined into the generated SQL.
-- **OpenFGA compatible.** Schema 1.1 conformance, validated against the official OpenFGA test suite.
+- **OpenFGA compatible.** Every Schema 1.1 feature except conditions, validated against the official OpenFGA test suite.
 
 Inspired by [OpenFGA](https://openfga.dev) and built on ideas from [pgFGA](https://github.com/rover-app/pgfga).
 
