@@ -1,6 +1,7 @@
 package update
 
 import (
+	"path/filepath"
 	"testing"
 )
 
@@ -61,6 +62,18 @@ func TestCacheDir(t *testing.T) {
 	// Should end with "melange"
 	if !contains(dir, "melange") {
 		t.Errorf("cacheDir() = %q, should contain 'melange'", dir)
+	}
+}
+
+func TestCacheDir_XDGOverride(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", xdg)
+	dir, err := cacheDir()
+	if err != nil {
+		t.Fatalf("cacheDir() error: %v", err)
+	}
+	if want := filepath.Join(xdg, "melange"); dir != want {
+		t.Errorf("cacheDir() = %q, want %q", dir, want)
 	}
 }
 

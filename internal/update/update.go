@@ -138,14 +138,14 @@ func check(ctx context.Context) (*Info, error) {
 
 // cacheDir returns the cache directory path
 func cacheDir() (string, error) {
-	// Use XDG_CACHE_HOME if set, otherwise ~/.cache
+	// XDG_CACHE_HOME wins on every OS, not just where os.UserCacheDir
+	// honors it, so it can relocate the cache anywhere.
 	cacheHome := os.Getenv("XDG_CACHE_HOME")
 	if cacheHome == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
+		var err error
+		if cacheHome, err = os.UserCacheDir(); err != nil {
 			return "", err
 		}
-		cacheHome = filepath.Join(home, ".cache")
 	}
 	return filepath.Join(cacheHome, "melange"), nil
 }

@@ -34,7 +34,7 @@ over the environment's connection.
 By default, Melange automatically checks for new versions in the background and displays a notification if an update is available. The check is:
 
 - **Non-blocking**: Runs in a background goroutine with a 5-second timeout
-- **Cached**: Results are cached for 24 hours in `~/.cache/melange/update-check.json`
+- **Cached**: Results are cached for 24 hours in `melange/update-check.json` under the user cache directory (`~/.cache` on Linux, `~/Library/Caches` on macOS, `%LocalAppData%` on Windows)
 - **Fast**: Uses a 1-second wait time for displaying results
 - **Respectful**: Automatically disabled in CI environments (when `CI` env var is set)
 
@@ -57,10 +57,10 @@ melange --no-update-check migrate
 **To clear the cache:**
 
 ```bash
-rm -rf ~/.cache/melange/update-check.json
+rm -rf ~/.cache/melange/update-check.json    # Linux; adjust for your OS
 ```
 
-The cache respects the `XDG_CACHE_HOME` environment variable if set.
+The `XDG_CACHE_HOME` environment variable, if set, overrides the cache directory on every OS.
 
 ## Command Groups
 
