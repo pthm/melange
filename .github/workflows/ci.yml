@@ -141,6 +141,36 @@ jobs:
             ~/.cache/go-build
           key: go-${{ runner.os }}-unit-${{ hashFiles('**/go.sum') }}-${{ github.sha }}
 
+  # Release builds ship windows/amd64 and windows/arm64; this keeps path and
+  # terminal handling honest on a real Windows host. No Docker, so -short only.
+  windows-unit-tests:
+    name: Unit Tests (Windows)
+    runs-on: windows-latest
+    steps:
+      # Golden files compare byte-for-byte; stop git rewriting them to CRLF.
+      - name: Disable CRLF conversion
+        run: git config --global core.autocrlf false
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Build CLI
+        run: go build -o melange.exe .
+
+      - name: Smoke test CLI
+        run: ./melange.exe version
+
+      - name: Run unit tests (root module)
+        run: go test -short ./...
+
+      - name: Run unit tests (melange core module)
+        working-directory: melange
+        run: go test -short ./...
+
   integration-tests:
     name: Integration Tests (Go + TypeScript)
     runs-on: ubuntu-latest

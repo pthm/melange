@@ -48,6 +48,13 @@ Inspired by [OpenFGA](https://openfga.dev) and built on ideas from [pgFGA](https
 brew install pthm/tap/melange
 ```
 
+**Scoop** (Windows):
+
+```powershell
+scoop bucket add pthm https://github.com/pthm/scoop-bucket
+scoop install pthm/melange
+```
+
 **Go:**
 
 ```bash
@@ -60,7 +67,7 @@ go install github.com/pthm/melange@latest
 docker pull ghcr.io/pthm/melange:latest
 ```
 
-**Binaries:** download from [GitHub Releases](https://github.com/pthm/melange/releases). macOS binaries are code-signed.
+**Binaries and Linux packages:** `.tar.gz`, `.zip`, `.deb`, and `.rpm` for Linux, macOS, and Windows on [GitHub Releases](https://github.com/pthm/melange/releases). macOS binaries are code-signed. See the [installation guide](https://melange.sh/docs/getting-started/installation/) for package, Docker, and checksum instructions.
 
 The CLI tells you when a newer release is available. Pass `--no-update-check` to turn that off.
 
