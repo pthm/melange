@@ -323,5 +323,5 @@ func showUpdateNotice(info *update.Info) {
 	_, _ = fmt.Fprintf(noticeOut, "%s %s\n",
 		noticeAccent.Render("* A new version of melange is available: v"+info.LatestVersion),
 		noticeDim.Render("(current: "+info.CurrentVersion+")"))
-	_, _ = fmt.Fprintln(noticeOut, noticeDim.Render("  brew upgrade melange  or  go install github.com/pthm/melange@latest"))
+	_, _ = fmt.Fprintln(noticeOut, noticeDim.Render("  "+update.UpgradeHint()))
 }

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/pthm/melange/internal/update"
 	"github.com/pthm/melange/internal/version"
 )
 
@@ -13,8 +14,11 @@ const (
 	docsURL     = "https://melange.sh/docs/"
 	repoURL     = "https://github.com/pthm/melange"
 	releasesURL = repoURL + "/releases"
-	upgradeHint = "brew upgrade melange  or  go install github.com/pthm/melange@latest"
 )
+
+// upgradeHint goes in the update badge's title; resolved once, since the
+// binary does not move while the studio runs.
+var upgradeHint = update.UpgradeHint()
 
 // latestRelease is a newer melange release, set once the CLI's update check
 // reports one (SetLatestRelease); empty means none known. Package-level for
