@@ -38,7 +38,7 @@ jobs:
             go-${{ runner.os }}-openfga-
 
       - name: Setup Go workspace
-        run: go work init . ./cmd/melange ./docs ./melange ./test
+        run: go work init . ./docs ./melange ./test
 
       # TestOpenFGA_All runs every YAML case; the per-category tests are
       # subsets of it, kept for `just test-openfga-feature`, so CI skips them.

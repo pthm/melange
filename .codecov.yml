@@ -24,7 +24,6 @@ ignore:
   - "test/**"
   - "docs/**"
   - "clients/**"
-  - "cmd/melange/**"
   - "bin/**"
   - "scripts/**"
   - "**/*_test.go"

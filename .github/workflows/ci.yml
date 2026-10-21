@@ -42,7 +42,7 @@ jobs:
             go-${{ runner.os }}-lint-
 
       - name: Setup Go workspace
-        run: go work init . ./cmd/melange ./docs ./melange ./test
+        run: go work init . ./docs ./melange ./test
 
       - name: Install tools
         run: go install tool
@@ -62,8 +62,7 @@ jobs:
           # After `go install tool`, binary is in $GOPATH/bin which is in PATH
           golangci-lint run ./...
           cd melange && golangci-lint run ./...
-          cd ../cmd/melange && golangci-lint run ./...
-          cd ../../test && golangci-lint run ./...
+          cd ../test && golangci-lint run ./...
 
       - name: Save Go cache
         if: github.ref == 'refs/heads/main'
@@ -102,7 +101,7 @@ jobs:
             go-${{ runner.os }}-unit-
 
       - name: Setup Go workspace
-        run: go work init . ./cmd/melange ./docs ./melange ./test
+        run: go work init . ./docs ./melange ./test
 
       - name: Generate test authz package
         run: go run . generate client --runtime go --schema test/testutil/testdata/schema.fga --output test/authz/ --package authz --id-type int64
@@ -113,8 +112,6 @@ jobs:
       - name: Run unit tests (melange core module)
         working-directory: melange
         run: go test -short -race -coverprofile=coverage-runtime.out -covermode=atomic ./...
-
-      # cmd/melange is now a stdlib-only error-shim with no tests — nothing to run.
 
       - name: Install TypeScript dependencies
         working-directory: clients/typescript
@@ -215,7 +212,7 @@ jobs:
             go-${{ runner.os }}-integration-
 
       - name: Setup Go workspace
-        run: go work init . ./cmd/melange ./docs ./melange ./test
+        run: go work init . ./docs ./melange ./test
 
       - name: Generate test authz package
         run: go run . generate client --runtime go --schema test/testutil/testdata/schema.fga --output test/authz/ --package authz --id-type int64
