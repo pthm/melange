@@ -18,6 +18,7 @@ Task-oriented guides for using Melange's client libraries, SQL functions, and op
 {{< card link="expanding-permissions" title="Expanding Permissions" subtitle="OpenFGA-shaped UsersetTree for `who has access?`" icon="template" >}}
 {{< card link="contextual-tuples" title="Contextual Tuples" subtitle="Inject temporary tuples at check time for request context" icon="variable" >}}
 {{< card link="caching" title="Caching" subtitle="In-memory, request-scoped, and custom cache strategies" icon="lightning-bolt" >}}
+{{< card link="row-level-security" title="Row-Level Security" subtitle="Enforce permissions in PostgreSQL RLS policies" icon="lock-closed" >}}
 {{< card link="scaling" title="Scaling" subtitle="Expression indexes, materialized views, and dedicated tables" icon="trending-up" >}}
 {{< card link="testing-authorization" title="Testing Authorization" subtitle="Write integration tests for your permission setup" icon="beaker" >}}
 {{< card link="studio" title="Studio" subtitle="A local, read-only web console for a melange database" icon="desktop-computer" >}}
