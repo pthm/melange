@@ -16,13 +16,14 @@ go = "1.27"
 # .github/workflows/documentation.yml
 hugo-extended = "0.168"
 
-# Release automation
-goreleaser = "latest"
-node = "lts"
-pnpm = "latest"
+# Release automation — pinned exactly so an upstream release can't break the
+# release workflow after tags are pushed; nothing bumps these, update by hand.
+goreleaser = "2.18.3"
+node = "24.22.1"
+pnpm = "11.28.6"
 
 # macOS code signing and notarization
-"ubi:anchore/quill" = "latest"
+"ubi:anchore/quill" = "0.7.1"
 1password-cli = "latest"
 
 # Code search tool with semantic search (from crates.io)
