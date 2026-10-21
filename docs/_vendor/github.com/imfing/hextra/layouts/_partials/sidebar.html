@@ -20,14 +20,8 @@
   {{- end -}}
 {{- end -}}
 
-<aside class="hextra-sidebar-container hx:flex hx:flex-col hx:print:hidden hx:md:top-16 hx:md:shrink-0 hx:md:w-64 hx:md:self-start hx:max-md:[transform:translate3d(0,-100%,0)] {{ $sidebarClass }}">
-  {{- if (site.Params.search.enable | default true) -}}
-    <!-- Search bar on small screen -->
-    <div class="hx:px-4 hx:pt-4 hx:md:hidden">
-      {{ partial "search.html" (dict "location" "sidebar") }}
-    </div>
-  {{- end -}}
-  <div class="hextra-scrollbar hx:overflow-y-auto hx:overflow-x-hidden hx:p-4 hx:grow hx:md:h-[calc(100vh-var(--navbar-height)-var(--menu-height))]">
+<aside class="hextra-sidebar-container hx:flex hx:flex-col hx:print:hidden hx:md:top-[var(--hextra-navbar-height)] hx:md:shrink-0 hx:md:w-64 hx:md:self-start hx:max-md:[transform:translate3d(0,-100%,0)] {{ $sidebarClass }}">
+  <div class="hextra-scrollbar hx:overflow-y-auto hx:overflow-x-hidden hx:p-4 hx:grow hx:md:h-[calc(100vh-var(--hextra-navbar-height)-var(--menu-height))]">
     <ul class="hx:flex hx:flex-col hx:gap-1 hx:md:hidden">
       <!-- Nav -->
       {{ template "sidebar-main" (dict "context" site.Home "pageURL" $pageURL "page" $context "toc" true) -}}
@@ -80,7 +74,7 @@
   {{- $useMainMenu := and (eq $level 0) $toc -}}
   {{- $mainMenuEntries := slice -}}
 
-  {{- $items := slice -}}
+  {{- $items := where (union .context.RegularPages .context.Sections) "Params.sidebar.exclude" "!=" true -}}
   {{- if $useMainMenu -}}
     {{- range $menuItem := site.Menus.main -}}
       {{- $menuType := $menuItem.Params.type | default "" -}}
@@ -156,18 +150,18 @@
         {{- $mainMenuEntries = $mainMenuEntries | append (dict "type" "url" "link" $link "title" $menuTitle) -}}
       {{- end -}}
     {{- end -}}
-  {{- else -}}
-    {{- $items = where (union .context.RegularPages .context.Sections) "Params.sidebar.exclude" "!=" true -}}
   {{- end -}}
 
-  {{- $hasItems := gt (len $items) 0 -}}
-  {{- if $useMainMenu -}}
-    {{- $hasItems = gt (len $mainMenuEntries) 0 -}}
+  {{- $useMainMenuEntries := and $useMainMenu (gt (len $mainMenuEntries) 0) -}}
+  {{- $hasPageEntry := false -}}
+  {{- range $mainMenuEntries -}}
+    {{- if eq (index . "type") "page" -}}{{- $hasPageEntry = true -}}{{- end -}}
   {{- end -}}
+  {{- $hasItems := or (gt (len $items) 0) $useMainMenuEntries -}}
 
   {{- if $hasItems -}}
     {{- if eq $level 0 -}}
-      {{- if $useMainMenu -}}
+      {{- if $useMainMenuEntries -}}
         {{- /* Mixed list: page entries render trees; url entries render leaf links. */ -}}
         {{- range $entry := $mainMenuEntries -}}
           {{- if eq (index $entry "type") "page" -}}
@@ -212,7 +206,10 @@
             <li>{{ template "sidebar-item-link" dict "active" $active "open" false "title" (index $entry "title") "link" $link }}</li>
           {{- end -}}
         {{- end -}}
-      {{- else -}}
+      {{- end -}}
+      {{- /* Fall back to the page tree when no menu entry is page-backed,
+        so mobile navigation isn't limited to external menu links (#1024). */ -}}
+      {{- if not $hasPageEntry -}}
         {{- range $items.ByWeight }}
           {{- if .Params.sidebar.separator -}}
             <li class="[word-break:break-word] hx:mt-5 hx:mb-2 hx:px-2 hx:py-1.5 hx:text-sm hx:font-semibold hx:text-gray-900 hx:first:mt-0 hx:dark:text-gray-100">
@@ -255,8 +252,12 @@
 
 {{- define "sidebar-toc" -}}
   {{ $page := .page }}
-  {{ with $page.Fragments.Headings }}
-    <ul class='hx:flex hx:flex-col hx:gap-1 hx:relative hx:before:absolute hx:before:inset-y-1 hx:before:w-px hx:before:bg-gray-200 hx:before:content-[""] hx:dark:before:bg-neutral-800 hx:ltr:pl-3 hx:ltr:before:left-0 hx:rtl:pr-3 hx:rtl:before:right-0 hx:ltr:ml-3 hx:rtl:mr-3'>
+  {{ $headingData := partial "utils/headings.html" $page }}
+  {{ $headings := index $headingData "headings" }}
+  {{ with $headings }}
+    <ul
+      class='hx:flex hx:flex-col hx:gap-1 hx:relative hx:before:absolute hx:before:inset-y-1 hx:before:w-px hx:before:bg-gray-200 hx:before:content-[""] hx:dark:before:bg-neutral-800 hx:ltr:pl-3 hx:ltr:before:left-0 hx:rtl:pr-3 hx:rtl:before:right-0 hx:ltr:ml-3 hx:rtl:mr-3'
+    >
       {{- range . }}
         {{- with .Headings }}
           {{- range . -}}

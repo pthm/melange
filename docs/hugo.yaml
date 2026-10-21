@@ -34,7 +34,7 @@ markup:
 defaultContentLanguage: en
 languages:
   en:
-    languageName: English
+    label: English
     weight: 1
 
 menu:
