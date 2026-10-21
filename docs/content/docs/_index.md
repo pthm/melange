@@ -50,7 +50,7 @@ Read more about Melange's architecture and how it works [here](concepts/how-it-w
 ## Getting Started
 
 {{< cards >}}
-  {{< card link="getting-started/installation" title="Installation" subtitle="Install the Melange CLI via Homebrew, Go, or binary download" icon="download" >}}
+  {{< card link="getting-started/installation" title="Installation" subtitle="Install the Melange CLI on macOS, Linux, or Windows" icon="download" >}}
   {{< card link="getting-started/quick-start" title="Quick Start" subtitle="From zero to a working permission check" icon="play" >}}
   {{< card link="getting-started/project-setup" title="Project Setup" subtitle="Configure the init wizard, starter templates, and code generation" icon="cog" >}}
 {{< /cards >}}

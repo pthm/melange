@@ -192,7 +192,7 @@ func TestShowUpdateNotice(t *testing.T) {
 	showUpdateNotice(&update.Info{LatestVersion: "0.11.0", CurrentVersion: "0.10.0"})
 	want := `
 * A new version of melange is available: v0.11.0 (current: 0.10.0)
-  brew upgrade melange  or  go install github.com/pthm/melange@latest
+  ` + update.UpgradeHint() + `
 `
 	if got := buf.String(); got != want {
 		t.Errorf("update notice:\n%s\nwant:\n%s", got, want)

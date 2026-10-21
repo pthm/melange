@@ -121,8 +121,12 @@ dockers_v2:
     dockerfile: Dockerfile.goreleaser
     images:
       - "ghcr.io/pthm/melange"
+    # Floating tags follow patch releases (vX.Y) and, from 1.0, minor ones
+    # (vX). No v0: under 0.x a minor release can break compatibility.
     tags:
       - "v{{ .Version }}"
+      - "v{{ .Major }}.{{ .Minor }}"
+      - '{{ if gt .Major 0 }}v{{ .Major }}{{ end }}'
       - '{{ if not .Prerelease }}latest{{ end }}'
     platforms:
       - linux/amd64
@@ -144,3 +148,18 @@ homebrew_casks:
     homepage: "https://github.com/pthm/melange"
     description: "PostgreSQL Fine-Grained Authorization - OpenFGA to SQL compiler"
     license: "MIT"
+
+scoops:
+  - name: melange
+    ids:
+      - default
+    repository:
+      owner: pthm
+      name: scoop-bucket
+      token: "{{ .Env.SCOOP_BUCKET_GITHUB_TOKEN }}"
+    # Actions sets a missing secret to ""; a local run may not set it at all.
+    # Skips the push until the secret exists instead of failing mid-publish.
+    skip_upload: '{{ if envOrDefault "SCOOP_BUCKET_GITHUB_TOKEN" "" }}false{{ else }}true{{ end }}'
+    homepage: "https://github.com/pthm/melange"
+    description: "PostgreSQL Fine-Grained Authorization - OpenFGA to SQL compiler"
+    license: MIT

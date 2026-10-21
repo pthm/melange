@@ -138,14 +138,14 @@ func check(ctx context.Context) (*Info, error) {
 
 // cacheDir returns the cache directory path
 func cacheDir() (string, error) {
-	// Use XDG_CACHE_HOME if set, otherwise ~/.cache
+	// XDG_CACHE_HOME wins on every OS, not just where os.UserCacheDir
+	// honors it, so it can relocate the cache anywhere.
 	cacheHome := os.Getenv("XDG_CACHE_HOME")
 	if cacheHome == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
+		var err error
+		if cacheHome, err = os.UserCacheDir(); err != nil {
 			return "", err
 		}
-		cacheHome = filepath.Join(home, ".cache")
 	}
 	return filepath.Join(cacheHome, "melange"), nil
 }
@@ -234,4 +234,51 @@ func compareVersions(a, b string) int {
 	}
 
 	return 0
+}
+
+// UpgradeHint is the command that upgrades the running binary, chosen by
+// where it is installed; a link to the update docs when that is unknown.
+func UpgradeHint() string {
+	exe, err := os.Executable()
+	if err == nil {
+		exe, err = filepath.EvalSymlinks(exe)
+	}
+	if err != nil {
+		return upgradeDocs
+	}
+	home, _ := os.UserHomeDir()
+	return upgradeHintFor(exe, os.Getenv("GOBIN"), os.Getenv("GOPATH"), home)
+}
+
+const upgradeDocs = "See https://melange.sh/docs/getting-started/installation/#updating"
+
+// upgradeHintFor classifies a resolved executable path. A GOPATH set only
+// through `go env -w` is not seen and falls back to the docs link.
+func upgradeHintFor(exe, gobin, gopath, home string) string {
+	segs := strings.FieldsFunc(exe, func(r rune) bool { return r == '/' || r == '\\' })
+	for i := 0; i+1 < len(segs); i++ {
+		if strings.EqualFold(segs[i], "scoop") && strings.EqualFold(segs[i+1], "apps") {
+			return "scoop update melange"
+		}
+	}
+	if strings.Contains(exe, "/Caskroom/") || strings.Contains(exe, "/Cellar/") {
+		return "brew upgrade pthm/tap/melange"
+	}
+
+	bins := []string{gobin}
+	if gopath == "" && home != "" {
+		gopath = filepath.Join(home, "go")
+	}
+	for _, p := range filepath.SplitList(gopath) {
+		bins = append(bins, filepath.Join(p, "bin"))
+	}
+	dir := filepath.Dir(exe)
+	for _, b := range bins {
+		// ponytail: case-insensitive everywhere for Windows; a case-only
+		// mismatch on Linux is not a real install layout.
+		if b != "" && strings.EqualFold(filepath.Clean(b), dir) {
+			return "go install github.com/pthm/melange@latest"
+		}
+	}
+	return upgradeDocs
 }
