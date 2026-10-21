@@ -61,8 +61,11 @@ jobs:
     timeout-minutes: 60
     env:
       DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Determine version and announce mode
+        id: version
         env:
           DISPATCH_VERSION: ${{ github.event.inputs.version }}
           RP_TAG: ${{ needs.release-please.outputs.tag_name }}
@@ -96,6 +99,7 @@ jobs:
             exit 1
           fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
           if [ "$DRY_RUN" = "true" ]; then
             echo "::notice title=Dry run::Releasing $version in DRY RUN mode — no tags or publishes will leave the runner."
           else
@@ -340,3 +344,101 @@ jobs:
             --remove-label "autorelease: pending" \
             --add-label "autorelease: tagged"
           echo "✓ PR #${pr_number} relabelled: pending → tagged"
+
+  # Installs the just-published release through each package channel the
+  # docs advertise and checks the binary reports it. Like the go install
+  # smoke test, the release is already out, so a failure means "roll
+  # forward with a fix". The tap and bucket are cloned fresh, but retry
+  # briefly in case a mirror is still serving the previous manifest.
+  verify-install-channels:
+    needs: release
+    if: ${{ !inputs.dry_run }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    env:
+      VERSION: ${{ needs.release.outputs.version }}
+    steps:
+      - name: Smoke-test deb and Docker image
+        if: runner.os == 'Linux'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # goreleaser stamps the version without the leading v.
+          expected="melange ${VERSION#v} ("
+          gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --pattern "melange_${VERSION#v}_linux_amd64.deb" --dir "$RUNNER_TEMP"
+          sudo dpkg -i "$RUNNER_TEMP/melange_${VERSION#v}_linux_amd64.deb"
+          if ! /usr/bin/melange version | grep -qF "$expected"; then
+            echo "❌ deb-installed melange did not report ${VERSION}:"
+            /usr/bin/melange version
+            exit 1
+          fi
+          echo "✓ deb install works: $(/usr/bin/melange version)"
+          image="ghcr.io/pthm/melange:${VERSION}"
+          if ! docker run --rm "$image" version | grep -qF "$expected"; then
+            echo "❌ ${image} did not report ${VERSION}:"
+            docker run --rm "$image" version
+            exit 1
+          fi
+          echo "✓ ${image} works: $(docker run --rm "$image" version)"
+
+      - name: Smoke-test Homebrew cask
+        if: runner.os == 'macOS'
+        run: |
+          brew tap pthm/tap
+          for i in $(seq 1 5); do
+            if [ "$i" -gt 1 ]; then
+              echo "  tap has ${cask_version}, waiting for ${VERSION#v}... (${i}/5)"
+              sleep 30
+              git -C "$(brew --repo pthm/tap)" pull --quiet
+            fi
+            cask_version=$(brew info --cask --json=v2 pthm/tap/melange | jq -r '.casks[0].version')
+            [ "$cask_version" = "${VERSION#v}" ] && break
+          done
+          if [ "$cask_version" != "${VERSION#v}" ]; then
+            echo "❌ pthm/homebrew-tap still has melange ${cask_version}, expected ${VERSION#v} — check goreleaser's homebrew_casks publish."
+            exit 1
+          fi
+          brew install --cask pthm/tap/melange
+          if ! melange version | grep -qF "melange ${VERSION#v} ("; then
+            echo "❌ brew-installed melange did not report ${VERSION}:"
+            melange version
+            exit 1
+          fi
+          echo "✓ brew install pthm/tap/melange works: $(melange version)"
+
+      - name: Smoke-test Scoop manifest
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Runners are admin, which the Scoop installer refuses without -RunAsAdmin.
+          Invoke-RestMethod https://get.scoop.sh -OutFile "$env:RUNNER_TEMP\install-scoop.ps1"
+          & "$env:RUNNER_TEMP\install-scoop.ps1" -RunAsAdmin
+          $env:PATH = "$env:USERPROFILE\scoop\shims;$env:PATH"
+          scoop bucket add pthm https://github.com/pthm/scoop-bucket
+          $bucket = "$env:USERPROFILE\scoop\buckets\pthm"
+          $want = $env:VERSION.TrimStart('v')
+          foreach ($i in 1..5) {
+            if ($i -gt 1) {
+              Write-Host "  bucket has $have, waiting for $want... ($i/5)"
+              Start-Sleep -Seconds 30
+              git -C $bucket pull --quiet
+            }
+            $have = (Get-Content "$bucket\melange.json" -Raw | ConvertFrom-Json).version
+            if ($have -eq $want) { break }
+          }
+          if ($have -ne $want) {
+            Write-Host "❌ pthm/scoop-bucket still has melange $have, expected $want — check goreleaser's scoops publish."
+            exit 1
+          }
+          scoop install pthm/melange
+          $out = melange version
+          if (-not "$out".Contains("melange $want (")) {
+            Write-Host "❌ scoop-installed melange did not report $($env:VERSION):"
+            Write-Host $out
+            exit 1
+          }
+          Write-Host "✓ scoop install pthm/melange works: $out"
