@@ -112,10 +112,12 @@ func agentInstructions(a *initAnswers, configPath string) string {
 	w("")
 	w("Permissions are an OpenFGA model that Melange compiles into PostgreSQL functions.")
 	w("")
+	// AGENTS.md is committed and read on any OS, so paths use forward slashes.
+	schemaPath := filepath.ToSlash(a.SchemaPath)
 	if configPath != "" {
-		w("- Model: `%s`. Config: `%s`.", a.SchemaPath, configPath)
+		w("- Model: `%s`. Config: `%s`.", schemaPath, filepath.ToSlash(configPath))
 	} else {
-		w("- Model: `%s`.", a.SchemaPath)
+		w("- Model: `%s`.", schemaPath)
 	}
 	w("- Relationships come from the `melange_tuples` view over our tables, defined in our own migrations (Melange doesn't create it). Never insert tuples; change the underlying rows, or the view definition.")
 	if a.GenerateCode {
