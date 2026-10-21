@@ -157,9 +157,9 @@ scoops:
       owner: pthm
       name: scoop-bucket
       token: "{{ .Env.SCOOP_BUCKET_GITHUB_TOKEN }}"
-    # Actions sets a missing secret to "", so test for a value, not presence.
+    # Actions sets a missing secret to ""; a local run may not set it at all.
     # Skips the push until the secret exists instead of failing mid-publish.
-    skip_upload: '{{ if .Env.SCOOP_BUCKET_GITHUB_TOKEN }}false{{ else }}true{{ end }}'
+    skip_upload: '{{ if envOrDefault "SCOOP_BUCKET_GITHUB_TOKEN" "" }}false{{ else }}true{{ end }}'
     homepage: "https://github.com/pthm/melange"
     description: "PostgreSQL Fine-Grained Authorization - OpenFGA to SQL compiler"
     license: MIT
