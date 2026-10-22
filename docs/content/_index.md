@@ -1,5 +1,5 @@
 ---
-title: Melange
+title: "Melange | Zanzibar-Style Authorization for PostgreSQL"
 layout: hextra-home
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: Studio
-description: "melange studio: a local, read-only web console for exploring the deployed model, explaining checks, and browsing tuples."
+description: "melange studio: a local, read-only web console and permissions debugger for OpenFGA models in PostgreSQL. Visualize the deployed model, explain why a check was allowed or denied, and browse tuples."
 weight: 12
 ---
 

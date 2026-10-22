@@ -56,7 +56,7 @@ menu:
         icon: github
 
 params:
-  description: Zero-copy authorization for PostgreSQL - OpenFGA-compatible permission checking that queries your existing domain tables directly.
+  description: Fine-grained, relationship-based access control without an external service. Melange compiles OpenFGA schemas into SQL functions that run inside your existing PostgreSQL database.
   # Default og:image / twitter:image for pages without their own `images`.
   images: [images/og.png]
 
