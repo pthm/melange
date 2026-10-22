@@ -88,6 +88,10 @@ code, pre, kbd {
   font-size: 0.8125rem;
 }
 
+.homepage-install .hextra-code-block {
+  margin-top: 1rem;
+}
+
 .homepage-demo-label {
   margin: 1rem 0 0.5rem;
   font-family: 'Space Mono', monospace;

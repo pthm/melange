@@ -139,6 +139,104 @@ flowchart LR
 
 <div class="homepage-section-gap"></div>
 
+<!-- Install: tabs per platform, the visitor's OS preselected by the script below -->
+<div class="homepage-columns">
+<div>
+
+<p class="homepage-step">Install</p>
+
+{{< hextra/hero-section >}}
+  Install the CLI
+{{< /hextra/hero-section >}}
+
+<div class="hx:mt-6"></div>
+
+<div class="content">
+
+The `melange` CLI is a single binary with no runtime dependencies, published for macOS, Linux, and Windows on amd64 and arm64. You only need PostgreSQL 14 or later when you run `melange migrate`.
+
+</div>
+</div>
+<div>
+<div class="homepage-hero-demo homepage-install">
+
+{{< tabs >}}
+
+{{< tab name="macOS" >}}
+```bash
+brew install pthm/tap/melange
+```
+{{< /tab >}}
+
+{{< tab name="Debian / Ubuntu" >}}
+```bash
+VERSION=$(curl -fsSL https://api.github.com/repos/pthm/melange/releases/latest | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')
+curl -fsSLo /tmp/melange.deb "https://github.com/pthm/melange/releases/download/v${VERSION}/melange_${VERSION}_linux_$(dpkg --print-architecture).deb"
+sudo dpkg -i /tmp/melange.deb
+```
+{{< /tab >}}
+
+{{< tab name="Fedora / RHEL" >}}
+```bash
+VERSION=$(curl -fsSL https://api.github.com/repos/pthm/melange/releases/latest | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p')
+ARCH=$(uname -m | sed 's/x86_64/amd64/; s/aarch64/arm64/')
+sudo rpm -U "https://github.com/pthm/melange/releases/download/v${VERSION}/melange_${VERSION}_linux_${ARCH}.rpm"
+```
+{{< /tab >}}
+
+{{< tab name="Windows" >}}
+```text
+scoop bucket add pthm https://github.com/pthm/scoop-bucket
+scoop install pthm/melange
+```
+{{< /tab >}}
+
+{{< tab name="Go" >}}
+```bash
+go install github.com/pthm/melange@latest
+```
+{{< /tab >}}
+
+{{< tab name="Docker" >}}
+```bash
+docker pull ghcr.io/pthm/melange:latest
+```
+{{< /tab >}}
+
+{{< /tabs >}}
+
+</div>
+
+<div class="homepage-hero-buttons hx:mt-6">
+{{< hextra/hero-button text="Installation Guide" link="docs/getting-started/installation" >}}
+{{< hextra/hero-button text="Client Libraries" link="docs/getting-started/installation/#client-libraries" style="background: #000;" >}}
+</div>
+</div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  var group = document.querySelector('.homepage-install [role="tablist"]');
+  if (!group) return;
+  // Leave the visitor's own earlier tab choice alone.
+  try {
+    if (group.dataset.tabGroup && localStorage.getItem('hextra-tab-' + encodeURIComponent(group.dataset.tabGroup)) !== null) return;
+  } catch (e) {}
+  var p = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || navigator.userAgent;
+  var ua = navigator.userAgent;
+  var os = /win/i.test(p) ? 'Windows'
+    : !/linux|x11|cros/i.test(p) || /android/i.test(ua) ? null
+    : /fedora|red hat|centos|rocky|alma/i.test(ua) ? 'Fedora / RHEL' // Firefox names the distro; other browsers don't
+    : 'Debian / Ubuntu';
+  if (!os) return; // macOS is the default tab; phones and unknown platforms keep it
+  group.querySelectorAll('.hextra-tabs-toggle').forEach(function (b) {
+    if (b.textContent.trim() === os) b.click();
+  });
+});
+</script>
+
+<div class="homepage-section-gap"></div>
+
 <!-- Define Your Schema: 2-column -->
 <div class="homepage-columns">
 <div>
@@ -460,9 +558,6 @@ SELECT check_permission(
 <p class="homepage-demo-label">Terminal</p>
 
 ```bash
-# Install
-brew install pthm/tap/melange
-
 # Initialize your project
 melange init
 
