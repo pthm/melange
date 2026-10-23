@@ -7,7 +7,7 @@ import (
 	"github.com/pthm/melange/internal/sqlgen/sqldsl"
 )
 
-func generateCheckFunction(a RelationAnalysis, inline InlineSQLData, databaseSchema string, noWildcard bool, complexityByRelation map[string]map[string]int, needsNW map[string]map[string]bool) (string, error) {
+func generateCheckFunction(a RelationAnalysis, inline inlineIndex, databaseSchema string, noWildcard bool, complexityByRelation map[string]map[string]int, needsNW map[string]map[string]bool) (string, error) {
 	plan := BuildCheckPlanWithOrdering(a, filterInlineForCheck(inline, a), databaseSchema, noWildcard, complexityByRelation)
 	plan.NeedsNoWildcard = needsNW
 	blocks, err := BuildCheckBlocks(plan)

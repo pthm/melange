@@ -172,18 +172,20 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 	// caller.
 	expandEligible := make(map[string]map[string]bool, len(analyses))
 
+	inlineIx := newInlineIndex(inline)
+
 	// Generate specialized function for each relation
 	for _, a := range analyses {
 		if !a.Capabilities.CheckAllowed {
 			continue
 		}
-		fn, err := generateCheckFunction(a, inline, databaseSchema, false, complexityByRelation, needsNW)
+		fn, err := generateCheckFunction(a, inlineIx, databaseSchema, false, complexityByRelation, needsNW)
 		if err != nil {
 			return GeneratedSQL{}, fmt.Errorf("generating check function: %w", err)
 		}
 		result.Functions = append(result.Functions, fn)
 		if needsNW[a.ObjectType][a.Relation] {
-			noWildcardFn, err := generateCheckFunction(a, inline, databaseSchema, true, complexityByRelation, needsNW)
+			noWildcardFn, err := generateCheckFunction(a, inlineIx, databaseSchema, true, complexityByRelation, needsNW)
 			if err != nil {
 				return GeneratedSQL{}, fmt.Errorf("generating no-wildcard check function: %w", err)
 			}
@@ -199,7 +201,7 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 		if !explainEligible[a.ObjectType][a.Relation] {
 			continue
 		}
-		explainFn, err := generateExplainFunction(a, inline, databaseSchema, complexityByRelation)
+		explainFn, err := generateExplainFunction(a, inlineIx, databaseSchema, complexityByRelation)
 		if err != nil {
 			return GeneratedSQL{}, fmt.Errorf("generating explain function: %w", err)
 		}
@@ -240,20 +242,20 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 // same condition reachesWildcard tests). For every other relation the _nw body
 // is byte-identical to the base, so we skip emitting it and route the _nw
 // dispatcher / complex-closure call sites to the base function instead.
-func emitsNoWildcard(lookup map[string]*RelationAnalysis, a RelationAnalysis) bool {
-	return a.Features.HasWildcard || reachesWildcard(lookup, a.ObjectType, a.Relation)
+func emitsNoWildcard(g *relationGraph, a RelationAnalysis) bool {
+	return a.Features.HasWildcard || g.reachesWildcard(a.ObjectType, a.Relation)
 }
 
 // buildNoWildcardIndex maps object_type -> relation -> whether a _nw variant is
 // emitted. Absent/false entries mean the _nw name resolves to the base function.
 func buildNoWildcardIndex(analyses []RelationAnalysis) map[string]map[string]bool {
-	lookup := buildAnalysisLookup(analyses)
+	g := newRelationGraph(buildAnalysisLookup(analyses))
 	byType := make(map[string]map[string]bool, len(analyses))
 	for _, a := range analyses {
 		if !a.Capabilities.CheckAllowed {
 			continue
 		}
-		if !emitsNoWildcard(lookup, a) {
+		if !emitsNoWildcard(g, a) {
 			continue
 		}
 		m, ok := byType[a.ObjectType]

@@ -71,7 +71,7 @@ func TestEmitsNoWildcardCoversAllReferenceEdges(t *testing.T) {
 				"p.wild": pwild,
 				"t.ref":  ref,
 			}
-			if !emitsNoWildcard(lookup, *ref) {
+			if !emitsNoWildcard(newRelationGraph(lookup), *ref) {
 				t.Errorf("emitsNoWildcard=false for a relation reaching a wildcard via %s; "+
 					"relationReferences no longer propagates this edge, so a _nw variant "+
 					"would be wrongly skipped (wildcard leak on the base function)", e.name)
@@ -85,7 +85,7 @@ func TestEmitsNoWildcardCoversAllReferenceEdges(t *testing.T) {
 		"t.plain": &plain,
 		"t.other": {ObjectType: "t", Relation: "other"},
 	}
-	if emitsNoWildcard(lookup, plain) {
+	if emitsNoWildcard(newRelationGraph(lookup), plain) {
 		t.Errorf("emitsNoWildcard=true for a relation reaching no wildcard; _nw would be emitted needlessly")
 	}
 }

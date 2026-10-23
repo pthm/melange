@@ -42,7 +42,7 @@ func TestFilterInlineForCheck_KeepsObjectAndSubjectTypes(t *testing.T) {
 		},
 	}
 
-	out := filterInlineForCheck(inline, a)
+	out := filterInlineForCheck(newInlineIndex(inline), a)
 
 	gotClosure := objectTypesOf(out.ClosureRows)
 	for _, want := range []string{"element", "group", "workspace"} {
@@ -93,7 +93,7 @@ func TestFilterInlineForList_KeepsReferencedTypesDropsUnrelated(t *testing.T) {
 		},
 	}
 
-	out := filterInlineForList(inline, a)
+	out := filterInlineForList(newInlineIndex(inline), a)
 
 	gotClosure := objectTypesOf(out.ClosureRows)
 	for _, want := range []string{"element", "group", "folder", "workspace"} {
@@ -118,14 +118,14 @@ func TestFilterInlineForList_KeepsReferencedTypesDropsUnrelated(t *testing.T) {
 	}
 }
 
-func TestFilterRowsByObjectType_KeepsNonLitRows(t *testing.T) {
+func TestRowIndexFilter_KeepsNonLitRows(t *testing.T) {
 	// A row whose first column is not a plain Lit must be kept conservatively.
 	rows := []ValuesRow{
 		{Raw("something_dynamic"), Lit("r"), Lit("s")},
 		closureRow("keep", "r", "s"),
 		closureRow("drop", "r", "s"),
 	}
-	out := filterRowsByObjectType(rows, map[string]bool{"keep": true})
+	out := newRowIndex(rows).filter(map[string]bool{"keep": true})
 	if len(out) != 2 {
 		t.Fatalf("expected 2 rows (non-Lit + keep), got %d", len(out))
 	}

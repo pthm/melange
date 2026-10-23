@@ -44,7 +44,7 @@ func explainDispatcherPublicArgs() []FuncArg {
 	}
 }
 
-func generateExplainFunction(a RelationAnalysis, inline InlineSQLData, databaseSchema string, complexityByRelation map[string]map[string]int) (string, error) {
+func generateExplainFunction(a RelationAnalysis, inline inlineIndex, databaseSchema string, complexityByRelation map[string]map[string]int) (string, error) {
 	// Explain shares check's plan/blocks pipeline, so it must apply the same
 	// closure/userset filter check uses (generateCheckFunction). Without it the
 	// explain leaf embedded the full, unfiltered model VALUES — the last function

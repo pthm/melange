@@ -137,14 +137,14 @@ func TestReachesWildcard_Transitive(t *testing.T) {
 		},
 		"org.viewer": {ObjectType: "org", Relation: "viewer", Features: RelationFeatures{HasWildcard: true}},
 	}
-	if !reachesWildcard(lookup, "folder", "viewer") {
+	if !newRelationGraph(lookup).reachesWildcard("folder", "viewer") {
 		t.Error("folder.viewer must reach wildcard via org.viewer TTU parent")
 	}
-	if reachesWildcard(lookup, "org", "viewer") == false {
+	if newRelationGraph(lookup).reachesWildcard("org", "viewer") == false {
 		t.Error("org.viewer HasWildcard directly")
 	}
 	delete(lookup, "org.viewer")
-	if reachesWildcard(lookup, "folder", "viewer") {
+	if newRelationGraph(lookup).reachesWildcard("folder", "viewer") {
 		t.Error("no wildcard reachable once org.viewer removed")
 	}
 }

@@ -45,6 +45,9 @@ type ListPlan struct {
 	// Maps "objectType.relation" -> *RelationAnalysis
 	// Used by TTU block generation to determine if parent relations are simple or complex
 	AnalysisLookup map[string]*RelationAnalysis
+	// Graph is the reference graph over AnalysisLookup, shared by every plan
+	// of one generate call. Read it through graph().
+	Graph *relationGraph
 
 	// EnableMaterializedCTEs, when true, emits AS MATERIALIZED on
 	// multi-referenced CTEs in generated list functions. Default false: PG
@@ -79,9 +82,9 @@ func (p ListPlan) wrapExclusionCTEAndPagination(query, exclusionCTE string) stri
 	return wrapWithExclusionCTEAndPaginationOpts(query, exclusionCTE, p.MaterializeCTEs())
 }
 
-// BuildListObjectsPlanWithLookup creates a plan with analysis lookup for TTU optimization.
-func BuildListObjectsPlanWithLookup(a RelationAnalysis, inline InlineSQLData, databaseSchema string, lookup map[string]*RelationAnalysis) ListPlan {
-	plan := buildBasePlan(a, inline, databaseSchema, listObjectsFunctionName(a.ObjectType, a.Relation), lookup)
+// BuildListObjectsPlanWithLookup creates a plan using the shared reference graph.
+func BuildListObjectsPlanWithLookup(a RelationAnalysis, inline InlineSQLData, databaseSchema string, g *relationGraph) ListPlan {
+	plan := buildBasePlan(a, inline, databaseSchema, listObjectsFunctionName(a.ObjectType, a.Relation), g)
 	if a.Features.HasExclusion {
 		plan.Exclusions = buildExclusionInput(
 			a,
@@ -95,7 +98,7 @@ func BuildListObjectsPlanWithLookup(a RelationAnalysis, inline InlineSQLData, da
 		// may use a set-oriented anti-join against the excluded relation's
 		// list_objects function instead of a per-candidate check.
 		plan.Exclusions.Compose = &exclusionCompose{
-			Lookup:   lookup,
+			Graph:    g,
 			FromType: a.ObjectType,
 			FromRel:  a.Relation,
 		}
@@ -103,9 +106,9 @@ func BuildListObjectsPlanWithLookup(a RelationAnalysis, inline InlineSQLData, da
 	return plan
 }
 
-// BuildListSubjectsPlanWithLookup creates a plan with analysis lookup for TTU optimization.
-func BuildListSubjectsPlanWithLookup(a RelationAnalysis, inline InlineSQLData, databaseSchema string, lookup map[string]*RelationAnalysis) ListPlan {
-	plan := buildBasePlan(a, inline, databaseSchema, listSubjectsFunctionName(a.ObjectType, a.Relation), lookup)
+// BuildListSubjectsPlanWithLookup creates a plan using the shared reference graph.
+func BuildListSubjectsPlanWithLookup(a RelationAnalysis, inline InlineSQLData, databaseSchema string, g *relationGraph) ListPlan {
+	plan := buildBasePlan(a, inline, databaseSchema, listSubjectsFunctionName(a.ObjectType, a.Relation), g)
 	if a.Features.HasExclusion {
 		plan.Exclusions = buildExclusionInput(
 			a,
@@ -124,7 +127,11 @@ func BuildListSubjectsPlanWithLookup(a RelationAnalysis, inline InlineSQLData, d
 	return plan
 }
 
-func buildBasePlan(a RelationAnalysis, inline InlineSQLData, databaseSchema, functionName string, lookup map[string]*RelationAnalysis) ListPlan {
+func buildBasePlan(a RelationAnalysis, inline InlineSQLData, databaseSchema, functionName string, g *relationGraph) ListPlan {
+	var lookup map[string]*RelationAnalysis
+	if g != nil {
+		lookup = g.lookup
+	}
 	return ListPlan{
 		Analysis:       a,
 		Inline:         inline,
@@ -145,7 +152,7 @@ func buildBasePlan(a RelationAnalysis, inline InlineSQLData, databaseSchema, fun
 		// relation like folder.viewer ("... or viewer from org", org.viewer=
 		// [user:*]) drops the wildcard granted on the parent (ExcludeWildcard
 		// filters '*' from the parent-closure scan and the tail never expands).
-		AllowWildcard: a.Features.HasWildcard || reachesWildcard(lookup, a.ObjectType, a.Relation),
+		AllowWildcard: a.Features.HasWildcard || g.reachesWildcard(a.ObjectType, a.Relation),
 
 		HasUserset:      a.Features.HasUserset,
 		HasExclusion:    a.Features.HasExclusion,
@@ -161,7 +168,17 @@ func buildBasePlan(a RelationAnalysis, inline InlineSQLData, databaseSchema, fun
 		HasStandaloneAccess: computeHasStandaloneAccess(a),
 
 		AnalysisLookup: lookup,
+		Graph:          g,
 	}
+}
+
+// graph returns the plan's shared reference graph, building one from
+// AnalysisLookup when the plan was constructed without it (unit tests).
+func (p ListPlan) graph() *relationGraph {
+	if p.Graph != nil {
+		return p.Graph
+	}
+	return newRelationGraph(p.AnalysisLookup)
 }
 
 func (p ListPlan) ExcludeWildcard() bool {
