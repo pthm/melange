@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.2](https://github.com/pthm/melange/compare/v0.10.1...v0.10.2) (2026-10-24)
+
+
+### Performance
+
+* **sqlgen:** build reference graph and inline index once per call ([a19b519](https://github.com/pthm/melange/commit/a19b519b8e8ef90f6fb28ba3839b1a21fbb4a835))
+* **sqlgen:** faster codegen on large models, plus release build hardening ([503a5a0](https://github.com/pthm/melange/commit/503a5a0feb54e0bb98fe7a94942c409bea9cda22))
+
 ## [0.10.1](https://github.com/pthm/melange/compare/v0.10.0...v0.10.1) (2026-10-21)
 
 
