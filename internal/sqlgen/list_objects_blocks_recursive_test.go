@@ -392,16 +392,16 @@ func TestListCompositionSafeSelfAndTransitive(t *testing.T) {
 		}}},
 	}
 
-	if listCompositionSafe(lookup, "a", "rel", "a", "rel") {
+	if newRelationGraph(lookup).listCompositionSafe("a", "rel", "a", "rel") {
 		t.Error("self-composition must be unsafe")
 	}
-	if listCompositionSafe(lookup, "a", "rel", "b", "rel") {
+	if newRelationGraph(lookup).listCompositionSafe("a", "rel", "b", "rel") {
 		t.Error("transitive cycle a->b->c->a must be unsafe")
 	}
-	if !listCompositionSafe(lookup, "x", "rel", "b", "rel") {
+	if !newRelationGraph(lookup).listCompositionSafe("x", "rel", "b", "rel") {
 		t.Error("unreachable relation must be safe")
 	}
-	if listCompositionSafe(nil, "x", "rel", "b", "rel") {
+	if newRelationGraph(nil).listCompositionSafe("x", "rel", "b", "rel") {
 		t.Error("nil lookup must be unsafe (no analysis available)")
 	}
 }

@@ -1,5 +1,101 @@
 package sqlgen
 
+// relationGraph is the relationReferences edge set over an analysis lookup,
+// built once per generate call so composition/wildcard queries reuse it
+// instead of re-deriving every visited node's edges.
+//
+// Node ids cover every lookup key plus every referenced key (a referenced key
+// absent from the lookup is a sink: no analysis, no outgoing edges).
+type relationGraph struct {
+	lookup map[string]*RelationAnalysis
+	ids    map[string]int
+	adj    [][]int
+	// depthReach[n]: n reaches (or is) a DepthExceeded relation.
+	depthReach []bool
+	// wildcardReach[n]: n reaches (or is) a HasWildcard relation.
+	wildcardReach []bool
+}
+
+// newRelationGraph returns nil for a nil lookup; every query treats a nil
+// graph as "no analysis available" and answers conservatively.
+func newRelationGraph(lookup map[string]*RelationAnalysis) *relationGraph {
+	if lookup == nil {
+		return nil
+	}
+	g := &relationGraph{lookup: lookup, ids: make(map[string]int, len(lookup))}
+	id := func(key string) int {
+		if i, ok := g.ids[key]; ok {
+			return i
+		}
+		g.ids[key] = len(g.adj)
+		g.adj = append(g.adj, nil)
+		return len(g.adj) - 1
+	}
+	for key, a := range lookup {
+		from := id(key)
+		for _, ref := range relationReferences(a) {
+			to := id(ref)
+			g.adj[from] = append(g.adj[from], to)
+		}
+	}
+
+	rev := make([][]int, len(g.adj))
+	for from, tos := range g.adj {
+		for _, to := range tos {
+			rev[to] = append(rev[to], from)
+		}
+	}
+	// "reaches a node satisfying pred" is "reverse-reachable from those nodes":
+	// one multi-source BFS over reversed edges answers it for every node.
+	reachedBy := func(pred func(*RelationAnalysis) bool) []bool {
+		marked := make([]bool, len(g.adj))
+		var queue []int
+		for key, a := range lookup {
+			if pred(a) {
+				n := g.ids[key]
+				marked[n] = true
+				queue = append(queue, n)
+			}
+		}
+		for len(queue) > 0 {
+			n := queue[0]
+			queue = queue[1:]
+			for _, p := range rev[n] {
+				if !marked[p] {
+					marked[p] = true
+					queue = append(queue, p)
+				}
+			}
+		}
+		return marked
+	}
+	g.depthReach = reachedBy(func(a *RelationAnalysis) bool { return a.ListStrategy == ListStrategyDepthExceeded })
+	g.wildcardReach = reachedBy(func(a *RelationAnalysis) bool { return a.Features.HasWildcard })
+	return g
+}
+
+// reaches reports whether target is reachable from start along one or more
+// edges.
+func (g *relationGraph) reaches(start, target int) bool {
+	visited := make([]bool, len(g.adj))
+	visited[start] = true
+	queue := []int{start}
+	for len(queue) > 0 {
+		n := queue[0]
+		queue = queue[1:]
+		for _, next := range g.adj[n] {
+			if next == target {
+				return true
+			}
+			if !visited[next] {
+				visited[next] = true
+				queue = append(queue, next)
+			}
+		}
+	}
+	return false
+}
+
 // listCompositionSafe reports whether the list function for
 // (fromType, fromRelation) may compose with — i.e. call — the list function
 // for (targetType, targetRelation) without risking infinite recursion or an
@@ -24,8 +120,8 @@ package sqlgen
 // The edge set (relationReferences) over-approximates the calls generated SQL
 // can make, so a "safe" verdict is sound; an "unsafe" verdict merely keeps the
 // per-candidate check_permission_internal fallback, which is always correct.
-func listCompositionSafe(lookup map[string]*RelationAnalysis, fromType, fromRelation, targetType, targetRelation string) bool {
-	if lookup == nil {
+func (g *relationGraph) listCompositionSafe(fromType, fromRelation, targetType, targetRelation string) bool {
+	if g == nil {
 		return false
 	}
 	from := fromType + "." + fromRelation
@@ -33,30 +129,15 @@ func listCompositionSafe(lookup map[string]*RelationAnalysis, fromType, fromRela
 	if start == from {
 		return false
 	}
-
-	visited := map[string]bool{start: true}
-	queue := []string{start}
-	for len(queue) > 0 {
-		key := queue[0]
-		queue = queue[1:]
-		a, ok := lookup[key]
-		if !ok {
-			continue
-		}
-		if a.ListStrategy == ListStrategyDepthExceeded {
-			return false
-		}
-		for _, next := range relationReferences(a) {
-			if next == from {
-				return false
-			}
-			if !visited[next] {
-				visited[next] = true
-				queue = append(queue, next)
-			}
-		}
+	s, ok := g.ids[start]
+	if !ok {
+		return true // unknown target: no analysis, no outgoing edges
 	}
-	return true
+	if g.depthReach[s] {
+		return false
+	}
+	f, ok := g.ids[from]
+	return !ok || !g.reaches(s, f)
 }
 
 // relationReferences returns every "type.relation" key the generated functions
@@ -161,54 +242,35 @@ func relationReferences(a *RelationAnalysis) []string {
 // over-approximating edge set as relationReferences, so a "reaches" verdict is
 // sound) closes that gap. Callers skip composition and keep the subject_pool /
 // per-candidate fallback, which resolves wildcards correctly.
-func reachesWildcard(lookup map[string]*RelationAnalysis, targetType, targetRelation string) bool {
-	if lookup == nil {
+func (g *relationGraph) reachesWildcard(targetType, targetRelation string) bool {
+	if g == nil {
 		return true // no analysis: assume unsafe
 	}
-	start := targetType + "." + targetRelation
-	visited := map[string]bool{start: true}
-	queue := []string{start}
-	for len(queue) > 0 {
-		key := queue[0]
-		queue = queue[1:]
-		a, ok := lookup[key]
-		if !ok {
-			continue
-		}
-		if a.Features.HasWildcard {
-			return true
-		}
-		for _, next := range relationReferences(a) {
-			if !visited[next] {
-				visited[next] = true
-				queue = append(queue, next)
-			}
-		}
-	}
-	return false
+	n, ok := g.ids[targetType+"."+targetRelation]
+	return ok && g.wildcardReach[n]
 }
 
-// composableListTargetLookup reports whether the list_objects function for
+// composableListTarget reports whether the list_objects function for
 // (fromType, fromRelation) may compose with the list_objects function for
 // (targetType, targetRelation): the target must be list-generatable and
 // composition must be cycle-free and unable to reach an always-raising
 // DepthExceeded list function (listCompositionSafe checks DepthExceeded on
 // every reachable node, including the target itself).
-func composableListTargetLookup(lookup map[string]*RelationAnalysis, fromType, fromRelation, targetType, targetRelation string) bool {
-	if lookup == nil {
+func (g *relationGraph) composableListTarget(fromType, fromRelation, targetType, targetRelation string) bool {
+	if g == nil {
 		return false
 	}
-	target, ok := lookup[targetType+"."+targetRelation]
+	target, ok := g.lookup[targetType+"."+targetRelation]
 	if !ok || !target.Capabilities.ListAllowed {
 		return false
 	}
-	return listCompositionSafe(lookup, fromType, fromRelation, targetType, targetRelation)
+	return g.listCompositionSafe(fromType, fromRelation, targetType, targetRelation)
 }
 
 // composableListTarget is the ListPlan-scoped form of
-// composableListTargetLookup, from this plan's relation to the target.
+// relationGraph.composableListTarget, from this plan's relation to the target.
 func composableListTarget(plan ListPlan, targetType, targetRelation string) bool {
-	return composableListTargetLookup(plan.AnalysisLookup, plan.ObjectType, plan.Relation, targetType, targetRelation)
+	return plan.graph().composableListTarget(plan.ObjectType, plan.Relation, targetType, targetRelation)
 }
 
 // composableListSubjectsTarget reports whether this plan's list_subjects

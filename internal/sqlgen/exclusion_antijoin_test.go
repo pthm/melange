@@ -16,7 +16,7 @@ func exclusionWithCompose(lookup map[string]*RelationAnalysis) ExclusionConfig {
 		SubjectIDExpr:            SubjectID,
 		ComplexExcludedRelations: []string{"blocked"},
 		Compose: &exclusionCompose{
-			Lookup:   lookup,
+			Graph:    newRelationGraph(lookup),
 			FromType: "doc",
 			FromRel:  "can_read",
 		},

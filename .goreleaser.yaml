@@ -16,7 +16,6 @@ git:
 before:
   hooks:
     - ./scripts/verify-release.sh {{ .Tag }}
-    - go mod tidy
 
 builds:
   # Non-darwin builds (no signing needed)
@@ -25,6 +24,8 @@ builds:
     binary: melange
     env:
       - CGO_ENABLED=0
+    flags:
+      - -trimpath
     goos:
       - linux
       - windows
@@ -43,6 +44,8 @@ builds:
     binary: melange
     env:
       - CGO_ENABLED=0
+    flags:
+      - -trimpath
     goos:
       - darwin
     goarch:

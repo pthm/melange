@@ -44,8 +44,10 @@ func GenerateListSQL(analyses []RelationAnalysis, inline InlineSQLData, database
 func GenerateListSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, databaseSchema string, opts GenerateSQLOptions) (ListGeneratedSQL, error) {
 	var result ListGeneratedSQL
 
-	// Build analysis lookup for TTU parent relation complexity detection
-	analysisLookup := buildAnalysisLookup(analyses)
+	// One reference graph (over the analysis lookup) shared by every plan.
+	graph := newRelationGraph(buildAnalysisLookup(analyses))
+
+	inlineIx := newInlineIndex(inline)
 
 	// Generate specialized functions for each relation that can be generated
 	for _, a := range analyses {
@@ -56,10 +58,10 @@ func GenerateListSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLDat
 		// Filter the whole-model VALUES down to the object types this relation's
 		// functions can reference once (both list_objects and list_subjects share
 		// the same filtered set), instead of re-walking + re-filtering per call.
-		relInline := filterInlineForList(inline, a)
+		relInline := filterInlineForList(inlineIx, a)
 
 		// Generate list_objects function
-		objFn, err := generateListObjectsFunctionWithLookup(a, relInline, databaseSchema, analysisLookup, opts)
+		objFn, err := generateListObjectsFunctionWithLookup(a, relInline, databaseSchema, graph, opts)
 		if err != nil {
 			return ListGeneratedSQL{}, fmt.Errorf("generating list_objects function for %s.%s: %w",
 				a.ObjectType, a.Relation, err)
@@ -67,7 +69,7 @@ func GenerateListSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLDat
 		result.ListObjectsFunctions = append(result.ListObjectsFunctions, objFn)
 
 		// Generate list_subjects function
-		subjFn, err := generateListSubjectsFunctionWithLookup(a, relInline, databaseSchema, analysisLookup, opts)
+		subjFn, err := generateListSubjectsFunctionWithLookup(a, relInline, databaseSchema, graph, opts)
 		if err != nil {
 			return ListGeneratedSQL{}, fmt.Errorf("generating list_subjects function for %s.%s: %w",
 				a.ObjectType, a.Relation, err)
@@ -108,12 +110,12 @@ func listSubjectsFunctionName(objectType, relation string) string {
 	return ListSubjectsFunctionName(objectType, relation)
 }
 
-// generateListObjectsFunctionWithLookup generates a list_objects function with analysis lookup for TTU optimization.
-func generateListObjectsFunctionWithLookup(a RelationAnalysis, inline InlineSQLData, databaseSchema string, lookup map[string]*RelationAnalysis, opts GenerateSQLOptions) (string, error) {
+// generateListObjectsFunctionWithLookup generates a list_objects function using the shared reference graph.
+func generateListObjectsFunctionWithLookup(a RelationAnalysis, inline InlineSQLData, databaseSchema string, g *relationGraph, opts GenerateSQLOptions) (string, error) {
 	// inline is pre-filtered by the caller (filterInlineForList) so the embedded
 	// closure/userset tables stop growing with unrelated schema.
 	// Route to appropriate generator based on ListStrategy
-	plan := BuildListObjectsPlanWithLookup(a, inline, databaseSchema, lookup)
+	plan := BuildListObjectsPlanWithLookup(a, inline, databaseSchema, g)
 	plan.EnableMaterializedCTEs = opts.EnableMaterializedCTEs
 
 	switch a.ListStrategy {
@@ -153,12 +155,12 @@ func generateListObjectsFunctionWithLookup(a RelationAnalysis, inline InlineSQLD
 	}
 }
 
-// generateListSubjectsFunctionWithLookup generates a list_subjects function with analysis lookup for TTU optimization.
-func generateListSubjectsFunctionWithLookup(a RelationAnalysis, inline InlineSQLData, databaseSchema string, lookup map[string]*RelationAnalysis, opts GenerateSQLOptions) (string, error) {
+// generateListSubjectsFunctionWithLookup generates a list_subjects function using the shared reference graph.
+func generateListSubjectsFunctionWithLookup(a RelationAnalysis, inline InlineSQLData, databaseSchema string, g *relationGraph, opts GenerateSQLOptions) (string, error) {
 	// inline is pre-filtered by the caller (filterInlineForList) so the embedded
 	// closure/userset tables stop growing with unrelated schema.
 	// Route to appropriate generator based on ListStrategy
-	plan := BuildListSubjectsPlanWithLookup(a, inline, databaseSchema, lookup)
+	plan := BuildListSubjectsPlanWithLookup(a, inline, databaseSchema, g)
 	plan.EnableMaterializedCTEs = opts.EnableMaterializedCTEs
 
 	switch a.ListStrategy {

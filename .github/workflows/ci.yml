@@ -56,6 +56,13 @@ jobs:
       - name: Generate test authz package
         run: go run . generate client --runtime go --schema test/testutil/testdata/schema.fga --output test/authz/ --package authz --id-type int64
 
+      # Releases no longer tidy mid-build, so catch an untidy go.mod here.
+      # test/ is skipped: it is unpublished and lags each runtime release bump.
+      - name: Check go.mod files are tidy
+        env:
+          GOWORK: "off"
+        run: for dir in . melange; do (cd "$dir" && go mod tidy -diff) || exit 1; done
+
       - name: Lint all modules
         run: |
           # Uses golangci-lint version pinned in go.mod via tool directive

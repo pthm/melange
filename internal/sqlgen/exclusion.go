@@ -56,10 +56,10 @@ type ExclusionConfig struct {
 }
 
 // exclusionCompose carries the compile-time context the anti-join needs: the
-// relation-reference lookup and the listing relation to run the cycle-safety
+// relation-reference graph and the listing relation to run the cycle-safety
 // walk from.
 type exclusionCompose struct {
-	Lookup   map[string]*RelationAnalysis
+	Graph    *relationGraph
 	FromType string
 	FromRel  string
 }
@@ -183,7 +183,7 @@ func (c ExclusionConfig) complexExclusionAntiJoin(rel string) Expr {
 	if c.Compose == nil {
 		return nil
 	}
-	if !composableListTargetLookup(c.Compose.Lookup, c.Compose.FromType, c.Compose.FromRel, c.ObjectType, rel) {
+	if !c.Compose.Graph.composableListTarget(c.Compose.FromType, c.Compose.FromRel, c.ObjectType, rel) {
 		return nil
 	}
 	membership := composedListObjectsMembership(

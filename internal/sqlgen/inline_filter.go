@@ -1,6 +1,9 @@
 package sqlgen
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // filterInlineForCheck returns an InlineSQLData carrying only the closure and
 // userset VALUES rows a check function for relation a actually references,
@@ -29,7 +32,7 @@ import "strings"
 // making the embedded VALUES independent of unrelated schema growth: a
 // userset-subject check no longer scans closure rows for object types it can
 // never reference.
-func filterInlineForCheck(inline InlineSQLData, a RelationAnalysis) InlineSQLData {
+func filterInlineForCheck(ix inlineIndex, a RelationAnalysis) InlineSQLData {
 	closureTypes := map[string]bool{a.ObjectType: true}
 	for _, t := range a.AllowedSubjectTypes {
 		closureTypes[t] = true
@@ -42,8 +45,8 @@ func filterInlineForCheck(inline InlineSQLData, a RelationAnalysis) InlineSQLDat
 	}
 
 	return InlineSQLData{
-		ClosureRows: filterRowsByObjectType(inline.ClosureRows, closureTypes),
-		UsersetRows: filterRowsByObjectType(inline.UsersetRows, map[string]bool{a.ObjectType: true}),
+		ClosureRows: ix.closure.filter(closureTypes),
+		UsersetRows: ix.userset.filter(map[string]bool{a.ObjectType: true}),
 	}
 }
 
@@ -73,7 +76,7 @@ func filterInlineForCheck(inline InlineSQLData, a RelationAnalysis) InlineSQLDat
 // is extra safety. The result is a safe superset: it can only keep extra rows,
 // never drop a needed one, so the generated SQL is semantically identical while
 // the embedded VALUES stop growing with unrelated schema.
-func filterInlineForList(inline InlineSQLData, a RelationAnalysis) InlineSQLData {
+func filterInlineForList(ix inlineIndex, a RelationAnalysis) InlineSQLData {
 	keep := map[string]bool{a.ObjectType: true}
 	for _, t := range a.AllowedSubjectTypes {
 		keep[t] = true
@@ -84,28 +87,62 @@ func filterInlineForList(inline InlineSQLData, a RelationAnalysis) InlineSQLData
 		}
 	}
 	return InlineSQLData{
-		ClosureRows: filterRowsByObjectType(inline.ClosureRows, keep),
-		UsersetRows: filterRowsByObjectType(inline.UsersetRows, keep),
+		ClosureRows: ix.closure.filter(keep),
+		UsersetRows: ix.userset.filter(keep),
 	}
 }
 
-// filterRowsByObjectType keeps only VALUES rows whose first column (object_type,
-// a Lit) is in keep. Rows whose first column is not a plain Lit are kept
-// (conservatively) so a future non-literal row shape can never be silently
-// dropped.
-func filterRowsByObjectType(rows []ValuesRow, keep map[string]bool) []ValuesRow {
-	if len(rows) == 0 {
-		return nil
-	}
-	out := make([]ValuesRow, 0, len(rows))
-	for _, r := range rows {
+// inlineIndex is the whole-model InlineSQLData grouped by object type, built
+// once per generate call so each relation's filter costs O(kept rows) rather
+// than a scan (and a whole-model-sized allocation) of every row.
+type inlineIndex struct {
+	closure rowIndex
+	userset rowIndex
+}
+
+func newInlineIndex(inline InlineSQLData) inlineIndex {
+	return inlineIndex{closure: newRowIndex(inline.ClosureRows), userset: newRowIndex(inline.UsersetRows)}
+}
+
+// rowIndex maps each VALUES row's object_type (first column, a Lit) to its
+// positions. Rows whose first column is not a plain Lit go in other and are
+// always kept (conservatively), so a future non-literal row shape can never be
+// silently dropped. Empty rows are dropped.
+type rowIndex struct {
+	rows   []ValuesRow
+	byType map[string][]int
+	other  []int
+}
+
+func newRowIndex(rows []ValuesRow) rowIndex {
+	ix := rowIndex{rows: rows, byType: make(map[string][]int)}
+	for i, r := range rows {
 		if len(r) == 0 {
 			continue
 		}
-		lit, ok := r[0].(Lit)
-		if !ok || keep[string(lit)] {
-			out = append(out, r)
+		if lit, ok := r[0].(Lit); ok {
+			ix.byType[string(lit)] = append(ix.byType[string(lit)], i)
+		} else {
+			ix.other = append(ix.other, i)
 		}
+	}
+	return ix
+}
+
+// filter returns the rows whose object_type is in keep, plus every non-Lit
+// row, in their original order (so the emitted VALUES are byte-stable).
+func (ix rowIndex) filter(keep map[string]bool) []ValuesRow {
+	if len(ix.rows) == 0 {
+		return nil
+	}
+	pos := slices.Clone(ix.other)
+	for t := range keep {
+		pos = append(pos, ix.byType[t]...)
+	}
+	slices.Sort(pos)
+	out := make([]ValuesRow, len(pos))
+	for i, p := range pos {
+		out[i] = ix.rows[p]
 	}
 	return out
 }
