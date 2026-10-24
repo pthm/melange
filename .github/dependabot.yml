@@ -1,0 +1,37 @@
+# Routine dependency bumps as one grouped PR per ecosystem per week, so
+# fixes land through CI instead of piling up as security alerts.
+#
+# Everything under clients/typescript is a devDependency (the published
+# package ships only dist/ and has no runtime dependencies), so one group
+# covers it. Alerts between runs are picked up by the next weekly PR
+# (Dependabot security updates, which open fix PRs immediately, are a repo
+# setting and currently off).
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /clients/typescript
+    schedule:
+      interval: weekly
+    groups:
+      dev-dependencies:
+        dependency-type: development
+    commit-message:
+      prefix: chore(deps)
+
+  - package-ecosystem: gomod
+    directories:
+      - /
+      - /test
+    schedule:
+      interval: weekly
+    ignore:
+      # In-repo modules: versions move with each release (release.yml bumps
+      # the root go.mod to the new melange/ runtime tag).
+      - dependency-name: github.com/pthm/melange
+      - dependency-name: github.com/pthm/melange/*
+    groups:
+      go-dependencies:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: chore(deps)

@@ -11,8 +11,14 @@ overrides:
   # (GHSA-p9ff-h696-f583), the server.fs.deny query/Windows-path bypasses
   # (GHSA-v2wj-q39q-566r, GHSA-fx2h-pf6j-xcff), the optimized-deps .map path
   # traversal (GHSA-4w7w-66w2-5vf9) and the bundled launch-editor NTLMv2 hash
-  # disclosure (GHSA-v6wh-96g9-6wx3). Stay on the vite 7 line.
-  vite: "7.3.5"
+  # disclosure (GHSA-v6wh-96g9-6wx3). vite >=7.3.7 fixes the custom-middleware
+  # cross-origin script execution (GHSA-9jrq-w75r-8gcw), the server.fs.allow
+  # project/system path match bypass (GHSA-rq7h-c2jc-7f22) and the bundled
+  # launch-editor flag injection and Windows escaping/existence-check bypasses
+  # (GHSA-r825-w8mm-5pxw, GHSA-698v-4r3x-3vcv, GHSA-587h-7wmj-h5pm).
+  # A floor, not an exact pin, so lockfile refreshes pick up later fixes; the
+  # caret keeps us on the vite 7 line.
+  vite: "^7.3.7"
   # esbuild >=0.28.1 fixes the Deno-module integrity RCE
   # (GHSA-gv7w-rqvm-qjhr) and the Windows dev-server arbitrary file read
   # (GHSA-g7r4-m6w7-qqqr).
