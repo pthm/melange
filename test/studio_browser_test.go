@@ -10,8 +10,6 @@ import (
 	"testing"
 	"time"
 
-	cdplog "github.com/chromedp/cdproto/log"
-	"github.com/chromedp/cdproto/runtime"
 	"github.com/chromedp/chromedp"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -34,52 +32,44 @@ func startBrowser(t *testing.T) (ctx context.Context, reported func() []string) 
 	// ponytail: no sandbox, since Ubuntu 24.04 runners block the user
 	// namespaces Chrome's sandbox needs; the browser only visits the local
 	// test server.
-	// A cold first launch on a CI runner can take longer than chromedp's
-	// default 20s to expose its DevTools endpoint.
 	actx, cancel := chromedp.NewExecAllocator(context.Background(), append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.NoSandbox, chromedp.WindowSize(1280, 900), chromedp.WSURLReadTimeout(90*time.Second))...)
+		chromedp.NoSandbox, chromedp.WindowSize(1280, 900))...)
 	t.Cleanup(cancel)
 	ctx, cancel = chromedp.NewContext(actx)
 	t.Cleanup(cancel)
 	ctx, cancel = context.WithTimeout(ctx, 3*time.Minute) // includes the launch
 	t.Cleanup(cancel)
-
-	var mu sync.Mutex
-	var problems []string
-	report := func(s string) {
-		mu.Lock()
-		defer mu.Unlock()
-		problems = append(problems, s)
-	}
-	reported = func() []string {
-		mu.Lock()
-		defer mu.Unlock()
-		return append([]string(nil), problems...)
-	}
-	chromedp.ListenTarget(ctx, func(ev any) {
-		switch e := ev.(type) {
-		case *cdplog.EventEntryAdded: // CSP violations, failed loads
-			if e.Entry.Level == cdplog.LevelError || e.Entry.Source == cdplog.SourceSecurity {
-				report(e.Entry.URL + ": " + e.Entry.Text)
-			}
-		case *runtime.EventExceptionThrown:
-			report(e.ExceptionDetails.Error())
-		case *runtime.EventConsoleAPICalled:
-			if e.Type == runtime.APITypeError || e.Type == runtime.APITypeWarning {
-				args := make([]string, 0, len(e.Args))
-				for _, a := range e.Args {
-					args = append(args, string(a.Value)+a.Description)
-				}
-				report("console." + string(e.Type) + ": " + strings.Join(args, " "))
-			}
-		}
-	})
-	if err := chromedp.Run(ctx, cdplog.Enable()); err != nil {
+	if err := chromedp.Do(ctx); err != nil { // launches Chrome
 		if errors.Is(err, exec.ErrNotFound) {
 			t.Skipf("no Chrome to drive: %v", err)
 		}
 		require.NoError(t, err)
 	}
+
+	var mu sync.Mutex
+	var problems []string
+	reported = func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), problems...)
+	}
+	messages := chromedp.Console(ctx) // ends with ctx
+	go func() {
+		for m, err := range messages {
+			if err != nil {
+				return
+			}
+			// Exceptions, console.error/warn, and browser-log errors or
+			// security entries (CSP violations, failed loads).
+			bad := m.IsException() || m.Type == chromedp.ConsoleError || m.Source == "security" ||
+				(m.Type == chromedp.ConsoleWarning && m.Source == "")
+			if bad {
+				mu.Lock()
+				problems = append(problems, m.URL+": "+m.String())
+				mu.Unlock()
+			}
+		}
+	}()
 	return ctx, reported
 }
 
@@ -89,7 +79,7 @@ func TestStudio_Browser(t *testing.T) {
 	c := newStudio(t, openStudioDB(t, f.dsn), "public")
 
 	// Model page: run an Explain through the query form.
-	require.NoError(t, chromedp.Run(ctx,
+	require.NoError(t, chromedp.Do(ctx,
 		chromedp.Navigate(c.base+"/"),
 		chromedp.WaitVisible(`form.query`),
 		chromedp.SetValue(`form.query input[name=subject]`, "user:"+f.users[10]),
@@ -102,19 +92,23 @@ func TestStudio_Browser(t *testing.T) {
 	// Entity page: the badges and the group list load lazily, scrolling
 	// appends the rest of the list, and a relation chip explains itself.
 	entity := c.base + "/entity?" + url.Values{"type": {"organization"}, "id": {f.main}, "tab": {"by"}, "group": {"user"}}.Encode()
-	var badge string
-	var rows int
-	require.NoError(t, chromedp.Run(ctx,
+	require.NoError(t, chromedp.Do(ctx,
 		chromedp.Navigate(entity),
 		chromedp.WaitVisible(`#group-list .access-rows li`),
-		chromedp.Poll(`[...document.querySelectorAll('.subnav .badge')].every(b => b.textContent.trim() !== '…')`, nil),
-		chromedp.Text(`.subnav a[aria-current] .badge`, &badge),
-		chromedp.Poll(`(() => {
+		poll(`[...document.querySelectorAll('.subnav .badge')].every(b => b.textContent.trim() !== '…')`),
+	))
+	badge, err := chromedp.Run(ctx, chromedp.Text(`.subnav a[aria-current] .badge`))
+	require.NoError(t, err)
+	require.NoError(t, chromedp.Do(ctx,
+		poll(`(() => {
 			const more = document.querySelector('#group-list .more-rows');
 			if (more) { more.scrollIntoView(); return false; }
 			return true;
-		})()`, nil, chromedp.WithPollingInterval(50*time.Millisecond)),
-		chromedp.Evaluate(`document.querySelectorAll('#group-list .access-rows > li').length`, &rows),
+		})()`, chromedp.WithPollingInterval(50*time.Millisecond)),
+	))
+	rows, err := chromedp.Run(ctx, chromedp.Evaluate[int](`document.querySelectorAll('#group-list .access-rows > li').length`))
+	require.NoError(t, err)
+	require.NoError(t, chromedp.Do(ctx,
 		chromedp.Click(`#group-list .access-rows > li:first-child button.chip`),
 		chromedp.WaitVisible(`#group-list .access-rows > li:first-child .why-out .verdict`),
 	))
@@ -123,8 +117,8 @@ func TestStudio_Browser(t *testing.T) {
 	assert.Empty(t, reported(), "CSP violations or console errors")
 
 	// The listener does catch a violation: load an image from another origin.
-	require.NoError(t, chromedp.Run(ctx,
-		chromedp.Evaluate(`document.body.append(Object.assign(new Image(), {src: 'http://192.0.2.1/x.png'}))`, nil),
+	require.NoError(t, chromedp.Do(ctx,
+		js(`document.body.append(Object.assign(new Image(), {src: 'http://192.0.2.1/x.png'}))`),
 	))
 	require.Eventually(t, func() bool { return len(reported()) > 0 }, 10*time.Second, 50*time.Millisecond)
 	assert.Contains(t, strings.Join(reported(), "\n"), "Content Security Policy")
@@ -138,21 +132,17 @@ func TestStudio_BrowserBehaviour(t *testing.T) {
 	ctx, reported := startBrowser(t)
 	f := seedStudio(t, "public")
 	c := newStudio(t, openStudioDB(t, f.dsn), "public")
-	// Each step gets its own deadline, so a hang fails that subtest alone.
-	run := func(t *testing.T, actions ...chromedp.Action) {
+	run := func(t *testing.T, steps ...chromedp.Action[chromedp.Void]) {
 		t.Helper()
-		sctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		defer cancel()
-		require.NoError(t, chromedp.Run(sctx, actions...))
+		step(t, ctx, chromedp.Steps(steps...))
 	}
-	eval := func(t *testing.T, js string) (out any) {
+	eval := func(t *testing.T, expr string) any {
 		t.Helper()
-		run(t, chromedp.Evaluate(js, &out))
-		return out
+		return step(t, ctx, chromedp.Evaluate[any](expr))
 	}
 	// clear empties an input the way a user would, so its input listeners run.
-	clearInput := func(sel string) chromedp.Action {
-		return chromedp.Evaluate(`(() => { const i = document.querySelector('`+sel+`'); i.value = ''; i.dispatchEvent(new Event('input', {bubbles: true})); })()`, nil)
+	clearInput := func(sel string) chromedp.Action[chromedp.Void] {
+		return js(`(() => { const i = document.querySelector('` + sel + `'); i.value = ''; i.dispatchEvent(new Event('input', {bubbles: true})); })()`)
 	}
 
 	t.Run("slash focuses the filter, but not while typing", func(t *testing.T) {
@@ -164,7 +154,7 @@ func TestStudio_BrowserBehaviour(t *testing.T) {
 		assert.Equal(t, true, eval(t, `document.activeElement.name === 'subject'`))
 
 		run(t, chromedp.Navigate(c.base+"/browse/user"), chromedp.WaitVisible(`#entities .row`),
-			chromedp.Evaluate(`document.activeElement.blur()`, nil), chromedp.KeyEvent("/"))
+			js(`document.activeElement.blur()`), chromedp.KeyEvent("/"))
 		assert.Equal(t, true, eval(t, `document.activeElement.matches('.content .filter-bar input')`), "browse: / prefers the main pane's filter")
 	})
 
@@ -181,7 +171,7 @@ func TestStudio_BrowserBehaviour(t *testing.T) {
 
 	t.Run("theme toggle persists across a reload", func(t *testing.T) {
 		run(t, chromedp.Navigate(c.base+"/health"), chromedp.WaitVisible(`[data-theme-toggle]`),
-			chromedp.Evaluate(`localStorage.removeItem('studio-theme'); document.documentElement.dataset.theme`, nil))
+			js(`localStorage.removeItem('studio-theme'); document.documentElement.dataset.theme`))
 		before := eval(t, `document.documentElement.dataset.theme`)
 		run(t, chromedp.Click(`[data-theme-toggle]`))
 		after := eval(t, `document.documentElement.dataset.theme`)
@@ -189,7 +179,7 @@ func TestStudio_BrowserBehaviour(t *testing.T) {
 		assert.Equal(t, after, eval(t, `localStorage.getItem('studio-theme')`))
 		run(t, chromedp.Reload(), chromedp.WaitVisible(`[data-theme-toggle]`))
 		assert.Equal(t, after, eval(t, `document.documentElement.dataset.theme`), "theme.js applies the saved choice on load")
-		run(t, chromedp.Evaluate(`localStorage.removeItem('studio-theme')`, nil))
+		run(t, js(`localStorage.removeItem('studio-theme')`))
 	})
 
 	t.Run("modes show only their fields and what-if only in Explain", func(t *testing.T) {
@@ -219,13 +209,11 @@ func TestStudio_BrowserBehaviour(t *testing.T) {
 			chromedp.SetValue(`form.query input[name=object]`, "organization:"+f.extra[0]))
 		assert.Equal(t, true, eval(t, `document.querySelector('details.whatif textarea').disabled`), "closed panel: textarea disabled, so not sent")
 		// <details> fires toggle asynchronously; studio.js enables the box then.
-		run(t, chromedp.Click(`details.whatif summary`), chromedp.Poll(`!document.querySelector('details.whatif textarea').disabled`, nil))
+		run(t, chromedp.Click(`details.whatif summary`), poll(`!document.querySelector('details.whatif textarea').disabled`))
 		run(t, chromedp.SendKeys(`details.whatif textarea`, "user:"+outsider+" member organization:"+f.extra[0]),
-			chromedp.Evaluate(`document.querySelector('details.whatif textarea').dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', ctrlKey: true, bubbles: true}))`, nil),
+			js(`document.querySelector('details.whatif textarea').dispatchEvent(new KeyboardEvent('keydown', {key: 'Enter', ctrlKey: true, bubbles: true}))`),
 			chromedp.WaitVisible(`#query-result .whatif-tuples`))
-		var verdict string
-		run(t, chromedp.Text(`#query-result .verdict`, &verdict))
-		assert.Contains(t, verdict, "the what-if tuples grant it")
+		assert.Contains(t, step(t, ctx, chromedp.Text(`#query-result .verdict`)), "the what-if tuples grant it")
 	})
 
 	t.Run("a second click on an Explain chip collapses it", func(t *testing.T) {
@@ -233,12 +221,12 @@ func TestStudio_BrowserBehaviour(t *testing.T) {
 		chip := `#group-list .access-rows > li:first-child button.chip`
 		// Click through the element, as htmx sees it: a coordinate click can
 		// land on the sticky page header once the panel shifts the layout.
-		click := chromedp.Evaluate(`document.querySelector('`+chip+`').click()`, nil)
+		click := js(`document.querySelector('` + chip + `').click()`)
 		run(t, chromedp.Navigate(entity), chromedp.WaitVisible(chip),
-			chromedp.Poll(`!!document.querySelector('`+chip+`')['htmx-internal-data']`, nil), // htmx has processed it
+			poll(`!!document.querySelector('`+chip+`')['htmx-internal-data']`), // htmx has processed it
 			click, chromedp.WaitVisible(`#group-list .access-rows > li:first-child .why-out .verdict`))
 		assert.Equal(t, "true", eval(t, `document.querySelector('`+chip+`').getAttribute('aria-expanded')`))
-		run(t, click, chromedp.Poll(`document.querySelector('#group-list .access-rows > li:first-child .why-out').childElementCount === 0`, nil))
+		run(t, click, poll(`document.querySelector('#group-list .access-rows > li:first-child .why-out').childElementCount === 0`))
 		assert.Equal(t, "false", eval(t, `document.querySelector('`+chip+`').getAttribute('aria-expanded')`))
 	})
 
@@ -246,10 +234,32 @@ func TestStudio_BrowserBehaviour(t *testing.T) {
 		direct := c.base + "/entity?" + url.Values{"type": {"organization"}, "id": {f.main}, "tab": {"direct"}}.Encode()
 		run(t, chromedp.Navigate(direct), chromedp.WaitVisible(`#direct-tables tbody tr`),
 			chromedp.SendKeys(`#direct .filter-bar input`, "owner"),
-			chromedp.Poll(`[...document.querySelectorAll('#direct-tables .sec-head .badge')].some(b => b.textContent.includes(' of '))`, nil))
+			poll(`[...document.querySelectorAll('#direct-tables .sec-head .badge')].some(b => b.textContent.includes(' of '))`))
 		assert.Equal(t, "owner", eval(t, `document.querySelector('#direct .filter-bar input').value`))
 		assert.Equal(t, true, eval(t, `[...document.querySelectorAll('#direct-tables tbody tr:not(.more-rows)')].every(r => r.textContent.includes('owner'))`))
 	})
 
 	assert.Empty(t, reported(), "CSP violations or console errors")
+}
+
+// js runs a JavaScript expression and ignores its value.
+func js(expr string) chromedp.Action[chromedp.Void] { return chromedp.Evaluate[chromedp.Void](expr) }
+
+// poll waits until a JavaScript expression is truthy.
+func poll(expr string, opts ...chromedp.PollOption) chromedp.Action[chromedp.Void] {
+	return chromedp.Func(func(ctx context.Context, t *chromedp.Target) error {
+		_, err := chromedp.Poll[any](expr, opts...)(ctx, t)
+		return err
+	})
+}
+
+// step runs one action under its own deadline, so a hang fails that subtest
+// alone.
+func step[T any](t *testing.T, ctx context.Context, a chromedp.Action[T]) T {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	out, err := chromedp.Run(ctx, a)
+	require.NoError(t, err)
+	return out
 }
