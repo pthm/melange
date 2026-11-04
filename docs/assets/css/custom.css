@@ -3,25 +3,156 @@
   --primary-hue: 25deg;
   --primary-saturation: 85%;
   --primary-lightness: 45%;
+  /* Orange for text: the 45% primary is under 4.5:1 on white */
+  --brand-text: hsl(var(--primary-hue) var(--primary-saturation) 38%);
+  /* Hextra's font tokens, so theme components pick up the brand fonts too */
+  --hx-font-sans: 'Space Grotesk', 'Space Grotesk Fallback', sans-serif;
+  --hx-font-mono: 'Space Mono', 'Space Mono Fallback', monospace;
+  /* Shared by the mermaid diagrams and the landing page SVG */
+  --diagram-fill: #f5e6d8;
+  --diagram-stroke: #c46a1a;
+  --diagram-text: #1a1a1a;
 }
 
 .dark {
   --primary-hue: 25deg;
   --primary-saturation: 85%;
   --primary-lightness: 50%;
+  --brand-text: hsl(var(--primary-hue) var(--primary-saturation) var(--primary-lightness));
+  --diagram-fill: rgba(196, 106, 26, 0.15);
+  --diagram-stroke: #d4863a;
+  --diagram-text: #e5e5e5;
+}
+
+/*
+  Self-hosted Space Grotesk and Space Mono (SIL OFL), latin and latin-ext
+  subsets from Google Fonts. Same origin as the page, so no render-blocking
+  third-party stylesheet; the latin files are preloaded in head-end.html.
+*/
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url(/fonts/space-grotesk-300-700-latin-ext.woff2) format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: 'Space Grotesk';
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url(/fonts/space-grotesk-300-700-latin.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Space Mono';
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/space-mono-400-italic-latin-ext.woff2) format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: 'Space Mono';
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/space-mono-400-italic-latin.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Space Mono';
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  src: url(/fonts/space-mono-700-italic-latin-ext.woff2) format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: 'Space Mono';
+  font-style: italic;
+  font-weight: 700;
+  font-display: swap;
+  src: url(/fonts/space-mono-700-italic-latin.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Space Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/space-mono-400-latin-ext.woff2) format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: 'Space Mono';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url(/fonts/space-mono-400-latin.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Space Mono';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url(/fonts/space-mono-700-latin-ext.woff2) format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: 'Space Mono';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url(/fonts/space-mono-700-latin.woff2) format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/*
+  Local fallbacks sized to match the web fonts (size-adjust from average
+  glyph width, ascent/descent from the web fonts' hhea metrics), so text
+  doesn't shift when the web fonts swap in.
+*/
+@font-face {
+  font-family: 'Space Grotesk Fallback';
+  src: local('Arial'), local('Arimo'), local('Liberation Sans');
+  size-adjust: 108.55%;
+  ascent-override: 90.65%;
+  descent-override: 26.9%;
+  line-gap-override: 0%;
+}
+
+@font-face {
+  font-family: 'Space Mono Fallback';
+  src: local('Courier New'), local('Cousine'), local('Liberation Mono');
+  size-adjust: 101.98%;
+  ascent-override: 109.82%;
+  descent-override: 35.4%;
+  line-gap-override: 0%;
 }
 
 /* Typography: Space Mono for headings, Space Grotesk for body */
 body {
-  font-family: 'Space Grotesk', sans-serif;
+  font-family: var(--hx-font-sans);
 }
 
 h1, h2, h3, h4, h5, h6 {
-  font-family: 'Space Mono', monospace;
+  font-family: var(--hx-font-mono);
 }
 
 code, pre, kbd {
-  font-family: 'Space Mono', monospace;
+  font-family: var(--hx-font-mono);
 }
 
 /* Sharp square corners - remove all border-radius */
@@ -94,7 +225,7 @@ code, pre, kbd {
 
 .homepage-demo-label {
   margin: 1rem 0 0.5rem;
-  font-family: 'Space Mono', monospace;
+  font-family: var(--hx-font-mono);
   font-size: 0.75rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -115,12 +246,12 @@ code, pre, kbd {
 /* "Step n" eyebrow above each walkthrough heading */
 .homepage-step {
   margin-bottom: 0.75rem;
-  font-family: 'Space Mono', monospace;
+  font-family: var(--hx-font-mono);
   font-size: 0.8125rem;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: hsl(var(--primary-hue) var(--primary-saturation) var(--primary-lightness));
+  color: var(--brand-text);
 }
 
 /* Homepage two-column section spacing */
@@ -199,9 +330,10 @@ code, pre, kbd {
   background: rgba(255, 255, 255, 0.02);
 }
 
+/* Dim the text color rather than the paragraph, so links keep their contrast */
 .homepage-fit-card p {
   margin: 0;
-  opacity: 0.85;
+  color: color-mix(in srgb, currentColor 85%, transparent);
 }
 
 .homepage-fit-card p.homepage-fit-label {
@@ -209,14 +341,14 @@ code, pre, kbd {
   align-items: center;
   gap: 0.5rem;
   margin-bottom: 0.5rem;
-  font-family: 'Space Mono', monospace;
+  font-family: var(--hx-font-mono);
   font-size: 1.0625rem;
   font-weight: 700;
-  opacity: 1;
+  color: inherit;
 }
 
 .homepage-fit-card a {
-  color: hsl(var(--primary-hue) var(--primary-saturation) var(--primary-lightness));
+  color: var(--brand-text);
   text-decoration: underline;
   text-underline-offset: 3px;
 }
@@ -306,47 +438,109 @@ code, pre, kbd {
 .mermaid .node rect,
 .mermaid .node polygon,
 .mermaid .node circle {
-  fill: #f5e6d8 !important;
-  stroke: #c46a1a !important;
+  fill: var(--diagram-fill) !important;
+  stroke: var(--diagram-stroke) !important;
   stroke-width: 1.5px !important;
 }
 
 .mermaid .node .label,
 .mermaid .nodeLabel {
-  color: #1a1a1a !important;
+  color: var(--diagram-text) !important;
 }
 
 .mermaid .edgePath .path {
-  stroke: #c46a1a !important;
+  stroke: var(--diagram-stroke) !important;
   stroke-width: 1.5px !important;
 }
 
 .mermaid .arrowheadPath,
 .mermaid marker path {
-  fill: #c46a1a !important;
-  stroke: #c46a1a !important;
+  fill: var(--diagram-stroke) !important;
+  stroke: var(--diagram-stroke) !important;
 }
 
-.dark .mermaid .node rect,
-.dark .mermaid .node polygon,
-.dark .mermaid .node circle {
-  fill: rgba(196, 106, 26, 0.15) !important;
-  stroke: #d4863a !important;
+/* Landing page "How It Works" SVG (how-it-works-diagram shortcode), styled to match the mermaid diagrams */
+.hiw-diagram {
+  display: block;
+  width: 100%;
+  max-width: 30rem;
+  height: auto;
+  margin: 1.5rem auto 0;
 }
 
-.dark .mermaid .node .label,
-.dark .mermaid .nodeLabel {
-  color: #e5e5e5 !important;
+.hiw-nodes rect {
+  fill: var(--diagram-fill);
+  stroke: var(--diagram-stroke);
+  stroke-width: 1.5px;
 }
 
-.dark .mermaid .edgePath .path {
-  stroke: #d4863a !important;
+.hiw-nodes text {
+  fill: var(--diagram-text);
+  font-family: var(--hx-font-mono);
+  font-size: 13px;
+  text-anchor: middle;
+  dominant-baseline: central;
 }
 
-.dark .mermaid .arrowheadPath,
-.dark .mermaid marker path {
-  fill: #d4863a !important;
-  stroke: #d4863a !important;
+.hiw-edges path {
+  fill: none;
+  stroke: var(--diagram-stroke);
+  stroke-width: 1.5px;
+}
+
+#hiw-arrow path {
+  fill: var(--diagram-stroke);
+}
+
+/*
+  Light syntax theme: Hextra's github style has comments, numbers and some
+  names under 4.5:1 on the code background. Same hues, darkened to pass.
+  Scoped to light mode: Hextra's dark theme leaves some of these classes
+  empty, so unscoped overrides would darken them on the dark background.
+*/
+html:not(.dark) .highlight .chroma .na,
+html:not(.dark) .highlight .chroma .no,
+html:not(.dark) .highlight .chroma .nv,
+html:not(.dark) .highlight .chroma .vc,
+html:not(.dark) .highlight .chroma .vg,
+html:not(.dark) .highlight .chroma .vi,
+html:not(.dark) .highlight .chroma .m,
+html:not(.dark) .highlight .chroma .mb,
+html:not(.dark) .highlight .chroma .mf,
+html:not(.dark) .highlight .chroma .mh,
+html:not(.dark) .highlight .chroma .mi,
+html:not(.dark) .highlight .chroma .il,
+html:not(.dark) .highlight .chroma .mo { color: #007878; }
+html:not(.dark) .highlight .chroma .nb { color: #007399; }
+html:not(.dark) .highlight .chroma .sr { color: #007d1f; }
+html:not(.dark) .highlight .chroma .c,
+html:not(.dark) .highlight .chroma .ch,
+html:not(.dark) .highlight .chroma .cm,
+html:not(.dark) .highlight .chroma .c1 { color: #6c6c5c; }
+html:not(.dark) .highlight .chroma .bp,
+html:not(.dark) .highlight .chroma .cs,
+html:not(.dark) .highlight .chroma .cp,
+html:not(.dark) .highlight .chroma .cpf,
+html:not(.dark) .highlight .chroma .gh,
+html:not(.dark) .highlight .chroma .go,
+html:not(.dark) .highlight .chroma .gu { color: #6b6b6b; }
+
+/*
+  Mobile sidebar: Hextra marks the closed, off-screen sidebar aria-hidden but
+  its links stay focusable (axe aria-hidden-focus). visibility: hidden takes
+  them out of the tab order; the delay lets the close slide finish first.
+  Opening flips aria-hidden before Hextra focuses the first link, so the
+  0s transition makes it visible in time.
+*/
+@media (max-width: 767px) {
+  .hextra-sidebar-container {
+    transition: transform 0.4s cubic-bezier(0.52, 0.16, 0.04, 1), visibility 0s;
+  }
+
+  .hextra-sidebar-container[aria-hidden="true"] {
+    visibility: hidden;
+    transition-delay: 0s, 0.4s;
+  }
 }
 
 /* Align custom footer section with the rest of the layout */
@@ -479,7 +673,7 @@ code, pre, kbd {
 
 .studio-showcase-tab-title {
   display: block;
-  font-family: 'Space Mono', monospace;
+  font-family: var(--hx-font-mono);
   font-weight: 700;
 }
 
@@ -540,7 +734,7 @@ code, pre, kbd {
 
 .studio-showcase-url {
   margin-left: 0.75rem;
-  font-family: 'Space Mono', monospace;
+  font-family: var(--hx-font-mono);
   font-size: 0.75rem;
   opacity: 0.55;
 }
@@ -654,7 +848,7 @@ code, pre, kbd {
 }
 
 .release-badge {
-  font-family: 'Space Mono', monospace;
+  font-family: var(--hx-font-mono);
   font-size: 0.6875rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -748,16 +942,20 @@ code, pre, kbd {
   align-items: center;
   gap: 0.75rem;
   font-size: 0.875rem;
+}
+
+/* Dim only the date: opacity on the whole row pulled the orange label under 4.5:1 */
+.release-card-eyebrow time {
   opacity: 0.85;
 }
 
 .release-card-new {
-  font-family: 'Space Mono', monospace;
+  font-family: var(--hx-font-mono);
   font-size: 0.75rem;
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: hsl(var(--primary-hue) var(--primary-saturation) var(--primary-lightness));
+  color: var(--brand-text);
 }
 
 .release-card-title {
@@ -805,7 +1003,7 @@ code, pre, kbd {
 
 .release-card-links a,
 .update-more {
-  color: hsl(var(--primary-hue) var(--primary-saturation) var(--primary-lightness));
+  color: var(--brand-text);
 }
 
 .release-card-links a:hover,
@@ -858,7 +1056,7 @@ code, pre, kbd {
 }
 
 .updates-series span {
-  font-family: 'Space Grotesk', sans-serif;
+  font-family: var(--hx-font-sans);
   font-size: 0.875rem;
   font-weight: 400;
   opacity: 0.6;
@@ -952,7 +1150,7 @@ code, pre, kbd {
 
 .newer-release-links a {
   font-weight: 600;
-  color: hsl(var(--primary-hue) var(--primary-saturation) var(--primary-lightness));
+  color: var(--brand-text);
 }
 
 .newer-release-links a:hover {

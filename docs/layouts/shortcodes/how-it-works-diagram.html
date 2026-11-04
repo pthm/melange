@@ -1,0 +1,33 @@
+{{- /*
+  Static "How It Works" flow for the landing page: schema.fga is compiled by
+  melange migrate into PostgreSQL functions. Hand-drawn SVG rather than a
+  mermaid block, so the landing page doesn't load the ~1.5 MB mermaid
+  runtime. Colors come from the .hiw-* rules in assets/css/custom.css, so
+  the diagram follows the light/dark theme.
+
+  Usage:
+    {{< how-it-works-diagram >}}
+*/ -}}
+<svg class="hiw-diagram" viewBox="0 0 480 242" role="img" aria-labelledby="hiw-title">
+  <title id="hiw-title">schema.fga is compiled by melange migrate into PostgreSQL functions: check_permission(), list_accessible_objects() and list_accessible_subjects()</title>
+  <defs>
+    <marker id="hiw-arrow" viewBox="0 0 8 8" refX="8" refY="4" markerWidth="8" markerHeight="8" markerUnits="userSpaceOnUse" orient="auto">
+      <path d="M0 0 L8 4 L0 8 z" />
+    </marker>
+  </defs>
+  <g class="hiw-edges" marker-end="url(#hiw-arrow)">
+    <path d="M95 41 V70" />
+    <path d="M95 111 V140" />
+    <path d="M189 161 C219 161 219 101 249 101" />
+    <path d="M189 161 H249" />
+    <path d="M189 161 C219 161 219 221 249 221" />
+  </g>
+  <g class="hiw-nodes">
+    <rect x="1" y="1" width="188" height="40" /><text x="95" y="21">schema.fga</text>
+    <rect x="1" y="71" width="188" height="40" /><text x="95" y="91">melange migrate</text>
+    <rect x="1" y="141" width="188" height="40" /><text x="95" y="161">PostgreSQL functions</text>
+    <rect x="250" y="81" width="229" height="40" /><text x="364.5" y="101">check_permission()</text>
+    <rect x="250" y="141" width="229" height="40" /><text x="364.5" y="161">list_accessible_objects()</text>
+    <rect x="250" y="201" width="229" height="40" /><text x="364.5" y="221">list_accessible_subjects()</text>
+  </g>
+</svg>

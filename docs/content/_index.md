@@ -61,6 +61,9 @@ SELECT check_permission(
 </div>
 </div>
 
+<!-- The feature cards render h3s; this keeps the outline from jumping h1 -> h3 -->
+<h2 class="hx:sr-only">Features</h2>
+
 {{< hextra/feature-grid >}}
   {{< hextra/feature-card
     title="Pure PostgreSQL"
@@ -125,14 +128,7 @@ Melange is an **authorization compiler**. Like Protocol Buffers or GraphQL Code 
 </div>
 <div>
 
-```mermaid
-flowchart LR
-    schema["schema.fga"] --> melange["melange migrate"]
-    melange --> funcs["PostgreSQL Functions"]
-    funcs --> check["check_permission()"]
-    funcs --> list["list_accessible_objects()"]
-    funcs --> subjects["list_accessible_subjects()"]
-```
+{{< how-it-works-diagram >}}
 
 </div>
 </div>
