@@ -179,7 +179,7 @@ templ directRows(p directPage, ls labels) {
 		{{ name := ls.of(typ, id) }}
 		<tr>
 			<td><code>{ t.Relation }</code></td>
-			<td><code class="mute">{ typ }</code></td>
+			<td><span class="ent-type">{ typ }</span></td>
 			<td>
 				<a class="ent-link" href={ entityURL(typ, id) } title={ typ + ":" + id }><code class="trunc">{ id }</code></a>
 				if userset != "" {
@@ -205,7 +205,7 @@ templ refLink(typ, id string, ls labels) {
 templ refLabel(typ, id string, ls labels) {
 	{{ l := ls.of(typ, id) }}
 	<span class="ent" title={ refTitle(typ, id, l) }>
-		<code class="ent-id"><span class="mute">{ typ }:</span>{ id }</code>
+		<span class="ent-key"><span class="ent-type">{ typ }</span><code>{ id }</code></span>
 		if l != "" {
 			<span class="ent-name">{ l }</span>
 		}

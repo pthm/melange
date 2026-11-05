@@ -41,7 +41,7 @@
    the top-bar toggle, else the system preference. */
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --fg: #e5e5e5; --mute: #a3a3a3; --bg: #111; --panel: #171717; --strip: #1f1f1f; --line: #262626; --hover: #1f1f1f;
+  --fg: #e5e5e5; --mute: #a3a3a3; --bg: #111; --panel: #171717; --strip: #1f1f1f; --line: #262626; --hover: #262626;
   --accent: hsl(25 85% 55%); --accent-fg: #111; --accent-bg: hsl(25 85% 50% / 0.15);
   --ok: #4ac26b; --ok-bg: #12291a; --warn: #e0c040; --warn-bg: #29240f; --fail: #ff6a5c; --fail-bg: #331715;
 }
@@ -245,13 +245,17 @@ a.row:hover { background: var(--hover); }
    shrinks; the id keeps its width up to the container's. Each is cut off with an
    ellipsis rather than wrapping, and the title holds both in full. */
 .ent-link { text-decoration: none; display: inline-flex; max-width: 100%; min-width: 0; }
-.ent { display: inline-flex; align-items: baseline; gap: var(--sp-2); max-width: 100%; min-width: 0; }
-.ent > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ent-id { flex: none; max-width: 100%; }
-.ent-name { flex: 0 100 auto; color: var(--mute); }
-.ent-link:hover .ent-id, a.row:hover .ent-id { text-decoration: underline; }
-/* Narrow columns (access rows): id over label, each on its own line. */
-.who .ent { display: flex; flex-direction: column; align-items: stretch; gap: 2px; }
+.ent { display: inline-flex; align-items: center; gap: var(--sp-2); max-width: 100%; min-width: 0; }
+.ent-key { display: inline-flex; align-items: center; gap: 6px; flex: none; max-width: 100%; min-width: 0; }
+.ent-key > code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ent-name { flex: 0 100 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--mute); }
+.ent-link:hover .ent-key > code, a.row:hover .ent-key > code { text-decoration: underline; }
+/* An entity's type, set apart from its id. */
+.ent-type {
+  flex: none; display: inline-flex; align-items: center; height: 18px; padding: 0 5px;
+  border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--fg);
+  font: 12px/1 var(--font-mono); white-space: nowrap;
+}
 .trunc { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nowrap { white-space: nowrap; flex: none; }
 .scroll-x { overflow-x: auto; }
@@ -356,6 +360,11 @@ tr.more-rows { display: table-row; }
 .diff .diff-del { background: var(--fail-bg); color: var(--fail); }
 .diff-out > * + pre { margin-top: var(--sp-2); }
 
+/* Direct tuple rows are links to the other end: the id link's ::after
+   covers the row, so anywhere on it navigates. */
+table.direct tbody tr { position: relative; }
+table.direct tbody tr:not(.more-rows):hover { background: var(--hover); }
+table.direct .ent-link::after { content: ""; position: absolute; inset: 0; }
 /* direct tuples: relation | type | id | name. The first three size to their
    content (ids cut off at 40ch); the name takes the rest. */
 table.direct td:nth-child(-n+3) { white-space: nowrap; width: 1%; }
