@@ -18,7 +18,6 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"strings"
 
@@ -188,7 +187,6 @@ type Doctor struct {
 
 	// Cached data from checks (populated during Run)
 	parsedTypes   []schema.TypeDefinition
-	schemaContent string
 	lastMigration *migrator.MigrationRecord
 	expectedFuncs []string
 	currentFuncs  []string
@@ -442,12 +440,11 @@ func (d *Doctor) checkMigrationState(ctx context.Context, report *Report) error 
 
 	// Check if schema has changed since last migration
 	if d.parsedTypes != nil {
-		// Read schema content for checksum
-		schemaPath := m.SchemaPath()
-		content, err := readFileContent(schemaPath)
+		// Hash what migrate hashes: for a modular schema, the manifest plus
+		// every module, not the fga.mod bytes alone.
+		content, err := parser.ReadSchemaContent(m.SchemaPath())
 		if err == nil {
-			d.schemaContent = content
-			currentChecksum := migrator.ComputeSchemaChecksum(content)
+			currentChecksum := migrator.ComputeSchemaChecksum(string(content))
 
 			switch {
 			case currentChecksum != lastMigration.SchemaChecksum:
@@ -1177,15 +1174,6 @@ func truncatedJoin(items []string, maxItems int) string {
 		return strings.Join(items, "\n")
 	}
 	return strings.Join(items[:maxItems], "\n") + fmt.Sprintf("\n... and %d more", len(items)-maxItems)
-}
-
-// readFileContent reads file content as string.
-func readFileContent(path string) (string, error) {
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	return string(content), nil
 }
 
 func (d *Doctor) prefixIdent(identifier string) string {
