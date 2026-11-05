@@ -113,11 +113,11 @@ templ healthPage(env, schemaPath string, report *doctor.Report, errMsg string) {
 	@shell(page{Env: env, Active: "health"}, healthSidebar(cats)) {
 		@pageHead("Health", nil) {
 			<p class="page-meta">
-				The checks <code>melange doctor</code> runs, against this database
+				The checks <code>melange doctor</code> runs against this database.
 				if schemaPath != "" {
-					and <code>{ schemaPath }</code>.
+					Local schema: <code>{ schemaPath }</code>.
 				} else {
-					. No local schema file is configured, so file and drift checks report it missing.
+					No local schema file is configured, so the file and drift checks are skipped; pass <code>--schema</code> to run them.
 				}
 			</p>
 			if report != nil {

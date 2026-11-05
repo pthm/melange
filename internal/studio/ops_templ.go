@@ -566,19 +566,19 @@ func healthPage(env, schemaPath string, report *doctor.Report, errMsg string) te
 					}()
 				}
 				ctx = templ.InitializeContext(ctx)
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 46, "<p class=\"page-meta\">The checks <code>melange doctor</code> runs, against this database ")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 46, "<p class=\"page-meta\">The checks <code>melange doctor</code> runs against this database. ")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
 				if schemaPath != "" {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 47, "and <code>")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 47, "Local schema: <code>")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}
 					var templ_7745c5c3_Var30 string
 					templ_7745c5c3_Var30, templ_7745c5c3_Err = templ.JoinStringErrs(schemaPath)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 118, Col: 27}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 118, Col: 37}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var30))
 					if templ_7745c5c3_Err != nil {
@@ -589,7 +589,7 @@ func healthPage(env, schemaPath string, report *doctor.Report, errMsg string) te
 						return templ_7745c5c3_Err
 					}
 				} else {
-					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 49, ". No local schema file is configured, so file and drift checks report it missing.")
+					templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 49, "No local schema file is configured, so the file and drift checks are skipped; pass <code>--schema</code> to run them.")
 					if templ_7745c5c3_Err != nil {
 						return templ_7745c5c3_Err
 					}

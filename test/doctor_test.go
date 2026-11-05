@@ -924,3 +924,17 @@ func TestDoctor_CodegenVersionIgnoresVPrefix(t *testing.T) {
 	require.NoError(t, err)
 	assertCheck(t, filterCategory(report, "Migration State"), "schema_sync", doctor.StatusPass)
 }
+
+// TestDoctor_NoSchemaPathSkipsSchemaFile verifies that doctor without a local
+// schema (studio run with none configured) skips the schema file checks
+// rather than failing them.
+func TestDoctor_NoSchemaPathSkipsSchemaFile(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db := testutil.DB(t)
+	report, err := doctor.New(db, "", doctor.Options{SkipPerformance: true}).Run(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, filterCategory(report, "Schema File"))
+	assert.Zero(t, report.Errors)
+}
