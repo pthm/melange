@@ -1083,14 +1083,9 @@ func (d *Doctor) getCurrentFunctions(ctx context.Context) ([]string, error) {
 			FROM pg_proc p
 			JOIN pg_namespace n ON p.pronamespace = n.oid
 			WHERE n.nspname = %s
-			AND (
-				p.proname LIKE 'check_%%'
-				OR p.proname LIKE 'list_%%'
-				OR p.proname LIKE 'explain_%%'
-				OR p.proname LIKE 'expand_%%'
-			)
+			AND %s
 		`,
-		d.postgresSchema(),
+		d.postgresSchema(), migrator.GeneratedFunctionFilter,
 	))
 	if err != nil {
 		return nil, err

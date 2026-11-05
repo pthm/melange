@@ -860,18 +860,25 @@ func shouldSkipApply(lastMigration *MigrationRecord, currentChecksums map[string
 	return true
 }
 
-// getCurrentFunctions returns all melange-generated function names from pg_proc.
+// GeneratedFunctionFilter matches pg_proc rows (aliased p) named like a
+// per-relation function melange generates: check_, list_, expand_ or explain_.
+// Migrate's orphan cleanup and doctor's orphan report share it so a new family
+// can't be missed by one of them.
+const GeneratedFunctionFilter = `p.proname ~ '^(check|list|expand|explain)_'`
+
+// getCurrentFunctions returns the installed functions that orphan cleanup may
+// drop: those matching GeneratedFunctionFilter that a previous migration
+// recorded, so a user's own function that merely shares a prefix (say
+// explain_invoice) is never dropped.
 func (m *Migrator) getCurrentFunctions(ctx context.Context, db Execer) ([]string, error) {
 	rows, err := db.QueryContext(ctx, fmt.Sprintf(`
 		SELECT p.proname
 		FROM pg_proc p
 		JOIN pg_namespace n ON p.pronamespace = n.oid
 		WHERE n.nspname = %s
-		AND (
-			p.proname LIKE 'check_%%'
-			OR p.proname LIKE 'list_%%'
-		)
-	`, m.postgresSchema()))
+		AND %s
+		AND p.proname IN (SELECT unnest(function_names) FROM %s)
+	`, m.postgresSchema(), GeneratedFunctionFilter, m.prefixIdent("melange_migrations")))
 	if err != nil {
 		return nil, fmt.Errorf("querying pg_proc: %w", err)
 	}
