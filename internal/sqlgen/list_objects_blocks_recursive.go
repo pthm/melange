@@ -167,9 +167,6 @@ func BuildListObjectsRecursiveBlocks(plan ListPlan) (RecursiveBlockSet, error) {
 	for _, rel := range seedWhole {
 		block := buildRecursiveComposedClosureBlock(plan, rel)
 		block.Comments = []string{fmt.Sprintf("-- Closure relation %s recurses on its own: list it whole, gate only the seed", rel)}
-		if preds := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, Col{Table: "icr", Column: "object_id"}, SubjectType, SubjectID).BuildPredicates(); len(preds) > 0 {
-			block.Query.Where = And(preds...)
-		}
 		block.Propagatable = propagatableRelations[rel]
 		baseBlocks = append(baseBlocks, block)
 	}
@@ -393,6 +390,12 @@ func buildRecursiveComposedClosureBlock(plan ListPlan, rel string) TypedQueryBlo
 			Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
 			Alias:  "icr",
 		},
+	}
+	// plan.Exclusions is non-empty only when the walk is gated: an excluded
+	// object must not seed propagation from this arm any more than from the
+	// others.
+	if len(plan.Exclusions.BuildPredicates()) > 0 {
+		stmt.Where = And(buildExclusionInput(plan.Analysis, plan.DatabaseSchema, Col{Table: "icr", Column: "object_id"}, SubjectType, SubjectID).BuildPredicates()...)
 	}
 
 	return TypedQueryBlock{
