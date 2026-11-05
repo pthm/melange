@@ -155,11 +155,11 @@ func TestInfiniteScrollMarkup(t *testing.T) {
 	rows := renderHTML(t, directRows(directPage{Side: sideObject, More: true, Next: "/entity/direct?offset=100", Tuples: []melange.TupleRef{
 		{SubjectType: "group", SubjectID: "eng#member", Relation: "viewer", ObjectType: "doc", ObjectID: "1"},
 	}}, nil))
-	if !strings.Contains(rows, `<tr class="more-rows" hx-get="/entity/direct?offset=100" hx-trigger="intersect once" hx-swap="outerHTML"><td colspan="2"`) {
+	if !strings.Contains(rows, `<tr class="more-rows" hx-get="/entity/direct?offset=100" hx-trigger="intersect once" hx-swap="outerHTML"><td colspan="4"`) {
 		t.Errorf("direct rows sentinel:\n%s", rows)
 	}
-	if i, j := strings.Index(rows, "group:eng"), strings.Index(rows, ">viewer<"); i < 0 || j < 0 || i > j || !strings.Contains(rows, "#member") {
-		t.Errorf("object side shows subject (with #relation) then relation:\n%s", rows)
+	if i, j := strings.Index(rows, ">viewer<"), strings.Index(rows, ">group<"); i < 0 || j < 0 || i > j || !strings.Contains(rows, ">eng<") || !strings.Contains(rows, "#member") {
+		t.Errorf("object side shows relation, then the subject's type and id (with #relation):\n%s", rows)
 	}
 }
 

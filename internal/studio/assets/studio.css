@@ -355,3 +355,11 @@ tr.more-rows { display: table-row; }
 .diff .diff-add { background: var(--ok-bg); color: var(--ok); }
 .diff .diff-del { background: var(--fail-bg); color: var(--fail); }
 .diff-out > * + pre { margin-top: var(--sp-2); }
+
+/* direct tuples: relation | type | id | name. The first three size to their
+   content (ids cut off at 40ch); the name takes the rest. */
+table.direct td:nth-child(-n+3) { white-space: nowrap; width: 1%; }
+table.direct td:nth-child(3) .trunc { display: inline-block; max-width: 40ch; vertical-align: bottom; }
+/* max-width: 0 lets a cell shrink below its content, so long names end in
+   an ellipsis instead of widening the table. */
+.cell-trunc { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

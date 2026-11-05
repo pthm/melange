@@ -230,7 +230,7 @@ templ directTab(d entityData, self string) {
 		<div id="direct-tables" aria-live="polite">
 			<section class="sec">
 				@secHead("As subject", matchLabel(d.SubjectMatch, d.SubjectTotal)) {
-					<p class="help">Tuples where <code>{ self }</code> is the subject: <code>{ self } → relation → object</code>.</p>
+					<p class="help">Tuples where <code>{ self }</code> is the subject, read as <code>relation → object</code>.</p>
 				}
 				<div class="sec-body">
 					@directTable(d.AsSubject, d.Labels)
@@ -239,7 +239,7 @@ templ directTab(d entityData, self string) {
 			<section class="sec">
 				@secHead("As object", matchLabel(d.ObjectMatch, d.ObjectTotal)) {
 					<p class="help">
-						Tuples where <code>{ self }</code> is the object: <code>subject → relation → { self }</code>.
+						Tuples where <code>{ self }</code> is the object, read as <code>subject → relation</code>.
 						A <code>#relation</code> suffix means every subject with that relation.
 					</p>
 				}
