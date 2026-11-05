@@ -407,3 +407,24 @@ func TestCheckExpandFanoutAdvisory(t *testing.T) {
 			"expected both wildcard and recursive sections in details:\n%s", check.Details)
 	})
 }
+
+func TestHasLeadingColumn(t *testing.T) {
+	defs := []string{
+		"CREATE INDEX r_v ON public.r USING btree (v)",
+		"CREATE INDEX r_ab ON public.r USING btree (a, b)",
+		`CREATE INDEX r_q ON public.r USING btree ("Q")`,
+		"CREATE INDEX r_p ON public.r USING btree (p) WHERE (p IS NOT NULL)",
+		"CREATE INDEX r_e ON public.r USING btree (((e)::text))",
+	}
+	for col, want := range map[string]bool{
+		"v": true, "V": true, "a": true, "q": true,
+		"b": false, // not the leading key
+		"p": false, // partial
+		"e": false, // expression only
+		"z": false,
+	} {
+		if got := hasLeadingColumn(col, defs); got != want {
+			t.Errorf("hasLeadingColumn(%q) = %v, want %v", col, got, want)
+		}
+	}
+}
