@@ -768,7 +768,7 @@ func dequoteLinkingRelations(sqlList string) []string {
 	parts := strings.Split(sqlList, ",")
 	result := make([]string, 0, len(parts))
 	for _, part := range parts {
-		trimmed := strings.TrimSpace(strings.Trim(part, "'"))
+		trimmed := strings.Trim(strings.TrimSpace(part), "'")
 		if trimmed != "" {
 			result = append(result, trimmed)
 		}
