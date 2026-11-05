@@ -347,3 +347,11 @@ tr.more-rows { display: table-row; }
 #query-result.htmx-request { opacity: .5; }
 /* relation page: the Query action sits in the header's right column */
 .page-head > .head-actions { grid-column: 3; grid-row: 1 / span 3; align-self: center; }
+
+/* schema diff (History) */
+.diff > span { display: block; padding: 0 var(--sp-2); margin: 0 calc(-1 * var(--sp-2)); }
+.diff .diff-hunk { color: var(--mute); margin-top: var(--sp-2); }
+.diff .diff-hunk:first-child { margin-top: 0; }
+.diff .diff-add { background: var(--ok-bg); color: var(--ok); }
+.diff .diff-del { background: var(--fail-bg); color: var(--fail); }
+.diff-out > * + pre { margin-top: var(--sp-2); }

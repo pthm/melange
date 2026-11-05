@@ -62,12 +62,12 @@ func lineDiff(oldText, newText string) []diffLine {
 			out = append(out, diffLine{' ', ma[i]})
 			i++
 			j++
-		case j < len(mb) && (i == len(ma) || lcs[i][j+1] >= lcs[i+1][j]):
-			out = append(out, diffLine{'+', mb[j]})
-			j++
-		default:
+		case i < len(ma) && (j == len(mb) || lcs[i+1][j] >= lcs[i][j+1]):
 			out = append(out, diffLine{'-', ma[i]})
 			i++
+		default:
+			out = append(out, diffLine{'+', mb[j]})
+			j++
 		}
 	}
 	for _, l := range a[len(a)-suf:] {
@@ -120,4 +120,60 @@ func splitLines(s string) []string {
 		return nil
 	}
 	return strings.Split(s, "\n")
+}
+
+// fileDiff is the change to one schema file: the whole schema, or for a
+// modular one the fga.mod manifest or a module.
+type fileDiff struct {
+	Name  string
+	Hunks []diffHunk
+}
+
+// schemaFileDiffs diffs two recorded schemas file by file, so hunks carry
+// a module's own name and line numbers. Unchanged files are left out.
+func schemaFileDiffs(prev, cur string, modular bool) []fileDiff {
+	if !modular {
+		if hs := hunks(lineDiff(prev, cur)); len(hs) > 0 {
+			return []fileDiff{{Name: "schema", Hunks: hs}}
+		}
+		return nil
+	}
+	old := splitModules(prev)
+	oldText := map[string]string{}
+	for _, f := range old {
+		oldText[f.Name] = f.Text
+	}
+	var out []fileDiff
+	seen := map[string]bool{}
+	add := func(name, a, b string) {
+		if hs := hunks(lineDiff(a, b)); len(hs) > 0 {
+			out = append(out, fileDiff{Name: name, Hunks: hs})
+		}
+	}
+	for _, f := range splitModules(cur) {
+		seen[f.Name] = true
+		add(f.Name, oldText[f.Name], f.Text)
+	}
+	for _, f := range old {
+		if !seen[f.Name] {
+			add(f.Name, f.Text, "")
+		}
+	}
+	return out
+}
+
+type namedText struct{ Name, Text string }
+
+// splitModules splits a recorded modular schema back into files. It is
+// stored as the manifest followed by "\n---\n<module name>\n<contents>" per
+// module (parser.ReadManifestContents).
+func splitModules(s string) []namedText {
+	parts := strings.Split(s, "\n---\n")
+	out := make([]namedText, 0, len(parts))
+	out = append(out, namedText{Name: "fga.mod", Text: parts[0]})
+	for _, p := range parts[1:] {
+		name, text, _ := strings.Cut(p, "\n")
+		out = append(out, namedText{Name: name, Text: text})
+	}
+	return out
 }

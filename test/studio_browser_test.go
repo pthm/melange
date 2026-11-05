@@ -239,6 +239,13 @@ func TestStudio_BrowserBehaviour(t *testing.T) {
 		assert.Equal(t, true, eval(t, `[...document.querySelectorAll('#direct-tables tbody tr:not(.more-rows)')].every(r => r.textContent.includes('owner'))`))
 	})
 
+	t.Run("history schema changes load when opened", func(t *testing.T) {
+		run(t, chromedp.Navigate(c.base+"/history"), chromedp.WaitVisible(`details.disclose[hx-get] summary`),
+			chromedp.Click(`details.disclose[hx-get] summary`),
+			poll(`!document.querySelector('details.disclose[hx-get] .diff-out').textContent.includes('Loading')`))
+		assert.Contains(t, eval(t, `document.querySelector('details.disclose[hx-get] .diff-out').textContent`), "first recorded migration")
+	})
+
 	assert.Empty(t, reported(), "CSP violations or console errors")
 }
 

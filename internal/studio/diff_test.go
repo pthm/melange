@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// render prints hunks as a unified diff body, for comparing in tests.
-func render(hs []diffHunk) string {
+// unified prints hunks as a unified diff body, for comparing in tests.
+func unified(hs []diffHunk) string {
 	var b strings.Builder
 	for _, h := range hs {
 		fmt.Fprintf(&b, "@@ -%d +%d @@\n", h.OldStart, h.NewStart)
@@ -21,7 +21,7 @@ func render(hs []diffHunk) string {
 }
 
 func numbered(n int, edit func(i int) string) string {
-	var lines []string
+	lines := make([]string, 0, n)
 	for i := 1; i <= n; i++ {
 		lines = append(lines, edit(i))
 	}
@@ -45,7 +45,7 @@ func TestLineDiff(t *testing.T) {
 			name: "far apart changes make two hunks with correct line numbers",
 			old:  numbered(20, plain),
 			new:  strings.Replace(strings.Replace(numbered(20, plain), "l2\n", "", 1), "l18\n", "l18\nadded\n", 1),
-			want: "@@ -1 +1 @@\n l1\n-l2\n l3\n l4\n l5\n@@ -15 +14 @@\n l15\n l16\n l17\n l18\n+added\n l19\n l20\n",
+			want: "@@ -1 +1 @@\n l1\n-l2\n l3\n l4\n l5\n@@ -16 +15 @@\n l16\n l17\n l18\n+added\n l19\n l20\n",
 		},
 		{
 			name: "close changes merge into one hunk",
@@ -55,9 +55,28 @@ func TestLineDiff(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := render(hunks(lineDiff(tc.old, tc.new))); got != tc.want {
+			if got := unified(hunks(lineDiff(tc.old, tc.new))); got != tc.want {
 				t.Errorf("got:\n%s\nwant:\n%s", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestSchemaFileDiffs(t *testing.T) {
+	prev := "contents:\n  - a.fga\n  - b.fga\n---\na.fga\nmodule a\ntype x\n---\nb.fga\nmodule b\n"
+	cur := "contents:\n  - a.fga\n  - c.fga\n---\na.fga\nmodule a\ntype y\n---\nc.fga\nmodule c\n"
+	files := schemaFileDiffs(prev, cur, true)
+	got := make([]string, 0, len(files))
+	for _, f := range files {
+		got = append(got, f.Name+"\n"+unified(f.Hunks))
+	}
+	want := []string{
+		"fga.mod\n@@ -1 +1 @@\n contents:\n   - a.fga\n-  - b.fga\n+  - c.fga\n",
+		"a.fga\n@@ -1 +1 @@\n module a\n-type x\n+type y\n",
+		"c.fga\n@@ -1 +1 @@\n+module c\n",
+		"b.fga\n@@ -1 +1 @@\n-module b\n",
+	}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("got:\n%s\nwant:\n%s", strings.Join(got, "|"), strings.Join(want, "|"))
 	}
 }

@@ -72,6 +72,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /relation", s.relation)
 	mux.HandleFunc("GET /tuples", s.tuplesIndex)
 	mux.HandleFunc("GET /history", s.history)
+	mux.HandleFunc("GET /history/diff", s.historyDiff)
 	mux.HandleFunc("GET /health", s.health)
 	mux.HandleFunc("GET /browse/{type}", s.browse)
 	mux.HandleFunc("GET /browse/{type}/list", s.browseList)

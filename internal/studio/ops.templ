@@ -46,6 +46,9 @@ templ historyPage(env string, recs []migrator.MigrationRecord, deployed *migrato
 							if i == 0 {
 								<span class="badge ok">deployed</span>
 							}
+							if same := sameSchemaAs(recs, i); same != 0 {
+								<span class="badge warn" title="This migration's schema checksum matches an earlier one: it reverted the changes in between.">same schema as #{ fmt.Sprint(same) }</span>
+							}
 							<span class="mute end">{ rec.MigratedAt.UTC().Format("2 Jan 2006, 15:04:05 MST") }</span>
 						</div>
 					</div>
@@ -68,6 +71,14 @@ templ historyPage(env string, recs []migrator.MigrationRecord, deployed *migrato
 								}
 							</dd>
 						</dl>
+						if i+1 < len(recs) && recs[i+1].SchemaChecksum == rec.SchemaChecksum {
+							<p class="mute">Schema unchanged since #{ fmt.Sprint(recs[i+1].ID) }.</p>
+						} else {
+							<details class="disclose" hx-get={ fmt.Sprintf("/history/diff?id=%d", rec.ID) } hx-trigger="toggle once" hx-target="find .diff-out">
+								<summary>Schema changes</summary>
+								<div class="diff-out"><p class="mute">Loading…</p></div>
+							</details>
+						}
 						if i == 0 && deployed != nil && deployed.SchemaChecksum == rec.SchemaChecksum {
 							<details class="disclose">
 								<summary>Show schema</summary>
@@ -149,5 +160,32 @@ templ healthPage(env, schemaPath string, report *doctor.Report, errMsg string) {
 				</section>
 			}
 		</div>
+	}
+}
+
+// schemaDiff is the change from migration prevID's schema (prev) to cur,
+// file by file for a modular schema.
+templ schemaDiff(prevID int, cur, prev string, modular bool) {
+	switch  {
+		case cur == "":
+			<p class="mute">This migration didn't record its schema.</p>
+		case prevID == 0:
+			<p class="mute">The first recorded migration: nothing to compare with.</p>
+		case prev == "":
+			<p class="mute">#{ fmt.Sprint(prevID) } didn't record its schema, so there is nothing to compare with.</p>
+		default:
+			{{ files := schemaFileDiffs(prev, cur, modular) }}
+			if len(files) == 0 {
+				<p class="mute">No changes since #{ fmt.Sprint(prevID) }.</p>
+			} else {
+				<p class="mute">Changes since #{ fmt.Sprint(prevID) }.</p>
+				for _, f := range files {
+					<pre class="code diff">
+						for _, row := range diffRows(f) {
+							<span class={ row.Class }>{ row.Text }</span>
+						}
+					</pre>
+				}
+			}
 	}
 }
