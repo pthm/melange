@@ -366,7 +366,6 @@ tr.more-rows { display: table-row; }
 .diff .diff-hunk:first-child { margin-top: 0; }
 .diff .diff-add { background: var(--ok-bg); color: var(--ok); }
 .diff .diff-del { background: var(--fail-bg); color: var(--fail); }
-.diff-out > * + pre { margin-top: var(--sp-2); }
 
 /* Direct tuple rows are links to the other end: the id link's ::after
    covers the row, so anywhere on it navigates. */
@@ -380,3 +379,22 @@ table.direct td:nth-child(3) .trunc { display: inline-block; max-width: 40ch; ve
 /* max-width: 0 lets a cell shrink below its content, so long names end in
    an ellipsis instead of widening the table. */
 .cell-trunc { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diffstat { display: inline-flex; gap: var(--sp-2); }
+.diffstat .add { color: var(--ok); }
+.diffstat .del { color: var(--fail); }
+.model-changes { list-style: none; margin: 0 0 var(--sp-2); padding: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
+.model-changes .badge { margin-right: var(--sp-2); min-width: 72px; justify-content: center; }
+
+/* History picker: number and time, then what changed */
+.mig-list a { align-items: flex-start; padding-block: var(--sp-2); }
+.mig { display: flex; flex-direction: column; gap: 2px; min-width: 0; width: 100%; }
+.mig-top, .mig-sub { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+.mig-id { font: 700 13px/1.4 var(--font-mono); }
+.mig-time { color: var(--mute); }
+.mig-top .badge { margin-left: auto; }
+.mig-sub { font-size: 12px; }
+.mig-sub .badge { height: 18px; }
+.side-list .mig-list a[aria-current] .mig-time, .mig-list a[aria-current] .mig-time { color: inherit; }
+.mig-nav { display: flex; gap: var(--sp-4); }
+.mig-nav a { color: var(--accent); text-decoration: none; }
+.mig-nav a:hover { text-decoration: underline; }

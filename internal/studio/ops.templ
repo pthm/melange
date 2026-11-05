@@ -4,21 +4,44 @@ import (
 	"fmt"
 
 	"github.com/pthm/melange/internal/doctor"
-	"github.com/pthm/melange/pkg/migrator"
 )
 
-templ historySidebar(recs []migrator.MigrationRecord) {
+// historySidebar is the migration picker: each row has its number, time
+// and version, then what changed in its schema at a glance.
+templ historySidebar(d historyData) {
 	<div class="side-section">
 		<div class="side-title">Migrations</div>
-		<ul class="side-list">
-			for _, rec := range recs {
+		<ul class="side-list mig-list">
+			for i, e := range d.Entries {
 				<li>
-					<a href={ templ.URL(fmt.Sprintf("#m%d", rec.ID)) }>
-						<span class="stack-2">
-							{ rec.MigratedAt.UTC().Format("2 Jan 2006, 15:04") }
-							<span class="t-mono">{ rec.MelangeVersion }</span>
+					<a href={ templ.URL(fmt.Sprintf("/history?id=%d", e.Rec.ID)) } { current(i == d.Sel)... }>
+						<span class="mig">
+							<span class="mig-top">
+								<span class="mig-id">#{ fmt.Sprint(e.Rec.ID) }</span>
+								<span class="mig-time">{ e.Rec.MigratedAt.UTC().Format("2 Jan, 15:04") }</span>
+								if e.Deployed {
+									<span class="badge ok">deployed</span>
+								}
+							</span>
+							<span class="mig-sub">
+								switch  {
+									case e.Unchanged != 0:
+										<span class="mute">schema unchanged</span>
+									case e.RevertOf != 0:
+										<span class="badge warn">reverts to #{ fmt.Sprint(e.RevertOf) }</span>
+									default:
+										if e.Stats.Lines {
+											@diffStat(e.Stats)
+										}
+										if sum := shortSummary(e.Stats); sum != "" {
+											<span class="trunc mute">{ sum }</span>
+										}
+								}
+								if e.Stats.Breaking > 0 && e.RevertOf == 0 {
+									<span class="badge warn">{ num(e.Stats.Breaking) } breaking</span>
+								}
+							</span>
 						</span>
-						<span class="t-mono mute">#{ fmt.Sprint(rec.ID) }</span>
 					</a>
 				</li>
 			}
@@ -26,70 +49,147 @@ templ historySidebar(recs []migrator.MigrationRecord) {
 	</div>
 }
 
-templ historyPage(env string, recs []migrator.MigrationRecord, deployed *migrator.DeployedModel, errMsg string) {
-	@shell(page{Env: env, Active: "history"}, historySidebar(recs)) {
-		@pageHead("History", nil) {
-			<p class="page-meta">The last { fmt.Sprint(historyLimit) } rows of <code>melange_migrations</code>, newest first.</p>
-		}
-		if errMsg != "" {
-			@errorBox(errMsg)
-		}
-		if len(recs) == 0 && errMsg == "" {
-			<p class="mute">No migrations recorded.</p>
-		}
-		<div class="stack">
-			for i, rec := range recs {
-				<section class="sec" id={ fmt.Sprintf("m%d", rec.ID) }>
-					<div class="sec-head">
-						<div class="title-row">
-							<h2>Migration #{ fmt.Sprint(rec.ID) }</h2>
-							if i == 0 {
-								<span class="badge ok">deployed</span>
-							}
-							if same := sameSchemaAs(recs, i); same != 0 {
-								<span class="badge warn" title="This migration's schema checksum matches an earlier one: it reverted the changes in between.">same schema as #{ fmt.Sprint(same) }</span>
-							}
-							<span class="mute end">{ rec.MigratedAt.UTC().Format("2 Jan 2006, 15:04:05 MST") }</span>
-						</div>
-					</div>
-					<div class="sec-body stack">
-						<dl class="kv">
-							<dt>melange</dt>
-							<dd><code>{ rec.MelangeVersion }</code></dd>
-							<dt>codegen</dt>
-							<dd><code>{ rec.CodegenVersion }</code></dd>
-							<dt>schema checksum</dt>
-							<dd><code>{ rec.SchemaChecksum }</code></dd>
-							<dt>functions</dt>
-							<dd>{ num(len(rec.FunctionNames)) }</dd>
-							<dt>model</dt>
-							<dd>
-								if rec.SchemaFormat != "" {
-									recorded ({ rec.SchemaFormat } file)
-								} else {
-									<span class="mute">not recorded (migrated before melange stored deployed models)</span>
-								}
-							</dd>
-						</dl>
-						if i+1 < len(recs) && recs[i+1].SchemaChecksum == rec.SchemaChecksum {
-							<p class="mute">Schema unchanged since #{ fmt.Sprint(recs[i+1].ID) }.</p>
-						} else {
-							<details class="disclose" hx-get={ fmt.Sprintf("/history/diff?id=%d", rec.ID) } hx-trigger="toggle once" hx-target="find .diff-out">
-								<summary>Schema changes</summary>
-								<div class="diff-out"><p class="mute">Loading…</p></div>
-							</details>
-						}
-						if i == 0 && deployed != nil && deployed.SchemaChecksum == rec.SchemaChecksum {
-							<details class="disclose">
-								<summary>Show schema</summary>
-								@fgaSource(deployed.DSL)
-							</details>
-						}
-					</div>
-				</section>
+templ historyPage(d historyData) {
+	@shell(page{Env: d.Env, Active: "history"}, historySidebar(d)) {
+		if d.Sel < 0 {
+			@pageHead("History", nil) {
+				<p class="page-meta">Every recorded run of <code>melange migrate</code>, from <code>melange_migrations</code>.</p>
 			}
+			if d.Err != "" {
+				@errorBox(d.Err)
+			} else {
+				<section class="sec"><div class="sec-body mute">No migrations recorded.</div></section>
+			}
+		} else {
+			@migrationDetail(d, d.Entries[d.Sel])
+		}
+	}
+}
+
+// migrationDetail is one migration: when and by what it ran, how its schema
+// changed (as counts, model changes and a line diff), then its record.
+templ migrationDetail(d historyData, e historyEntry) {
+	{{ st := e.Stats }}
+	@pageHead(fmt.Sprintf("Migration #%d", e.Rec.ID), nil) {
+		<p class="page-meta">
+			{ e.Rec.MigratedAt.UTC().Format("Mon 2 Jan 2006, 15:04:05 MST") }
+			· melange <code>{ e.Rec.MelangeVersion }</code>
+			if e.Deployed {
+				<span class="badge ok">deployed</span>
+			}
+		</p>
+		<nav class="mig-nav" aria-label="Neighbouring migrations">
+			if d.Sel+1 < len(d.Entries) {
+				<a href={ templ.URL(fmt.Sprintf("/history?id=%d", d.Entries[d.Sel+1].Rec.ID)) }>← #{ fmt.Sprint(d.Entries[d.Sel+1].Rec.ID) } older</a>
+			}
+			if d.Sel > 0 {
+				<a href={ templ.URL(fmt.Sprintf("/history?id=%d", d.Entries[d.Sel-1].Rec.ID)) }>newer #{ fmt.Sprint(d.Entries[d.Sel-1].Rec.ID) } →</a>
+			}
+		</nav>
+		<div class="stats">
+			if e.Unchanged == 0 && st.Lines {
+				@statText(signed(st.LinesAdded, st.LinesRemoved), "lines", "")
+			}
+			if e.Unchanged == 0 && st.Model {
+				@statText(signed(st.TypesAdded, st.TypesRemoved), "types", "")
+				@statText(signed(st.RelsAdded, st.RelsRemoved)+changedSuffix(st.RelsChanged), "relations", "")
+				@statText(num(st.Breaking), "breaking", breakingTone(st.Breaking))
+			}
+			@statText(num(len(e.Rec.FunctionNames)), "functions", "")
 		</div>
 	}
+	if d.Err != "" {
+		@errorBox(d.Err)
+	}
+	<section class="sec">
+		@secHead("Changes", "") {
+			<p class="help">
+				switch  {
+					case d.Prev == nil:
+						The first recorded migration: nothing to compare with.
+					case e.Unchanged != 0:
+						The schema is identical to #{ fmt.Sprint(e.Unchanged) }; this run regenerated the functions{ codegenNote(d, e) }.
+					case e.RevertOf != 0:
+						The schema is identical to #{ fmt.Sprint(e.RevertOf) }: this migration reverted the changes made since.
+					default:
+						From #{ fmt.Sprint(d.Prev.ID) } to #{ fmt.Sprint(e.Rec.ID) }. Breaking changes narrow access or remove structure; additive ones don't.
+				}
+			</p>
+		}
+		if d.Prev != nil && e.Unchanged == 0 {
+			<div class="sec-body stack">
+				if len(st.Changes) > 0 {
+					<ul class="model-changes">
+						for _, c := range st.Changes {
+							<li>
+								<span class={ "badge", changeClass(c.Class) }>{ string(c.Class) }</span>
+								<span>{ c.Summary }</span>
+							</li>
+						}
+					</ul>
+				} else if st.Model {
+					<p class="mute">No model changes: only comments or formatting differ.</p>
+				}
+				if d.Prev.DSL != "" && d.Cur.DSL != "" {
+					for _, f := range schemaFileDiffs(d.Prev.DSL, d.Cur.DSL, d.Cur.Modular) {
+						<pre class="code diff">
+							for _, row := range diffRows(f) {
+								<span class={ row.Class }>{ row.Text }</span>
+							}
+						</pre>
+					}
+				} else {
+					<p class="mute">One of these migrations didn't record its schema, so there is no line diff.</p>
+				}
+			</div>
+		}
+	</section>
+	<section class="sec">
+		@secHead("Record", "") {
+			<p class="help">The row in <code>melange_migrations</code>.</p>
+		}
+		<div class="sec-body stack">
+			<dl class="kv">
+				<dt>melange</dt>
+				<dd><code>{ e.Rec.MelangeVersion }</code></dd>
+				<dt>codegen</dt>
+				<dd><code>{ e.Rec.CodegenVersion }</code></dd>
+				<dt>schema checksum</dt>
+				<dd><code>{ e.Rec.SchemaChecksum }</code></dd>
+				<dt>functions</dt>
+				<dd>{ num(len(e.Rec.FunctionNames)) }</dd>
+				<dt>schema</dt>
+				<dd>
+					if e.Rec.SchemaFormat != "" {
+						recorded ({ e.Rec.SchemaFormat })
+					} else if d.Cur.DSL != "" {
+						recorded
+					} else {
+						<span class="mute">not recorded (migrated before melange stored deployed models)</span>
+					}
+				</dd>
+			</dl>
+			if d.Cur.DSL != "" {
+				<details class="disclose">
+					<summary>Show schema</summary>
+					@fgaSource(d.Cur.DSL)
+				</details>
+			}
+		</div>
+	</section>
+}
+
+// statText is stat for a preformatted value, like "+3 −1".
+templ statText(value, label, tone string) {
+	<div class={ "stat", tone }><span class="t-heading">{ value }</span>{ label }</div>
+}
+
+// diffStat is a migration's changed line counts, like "+12 −3".
+templ diffStat(st migrationStats) {
+	<span class="diffstat t-mono" title={ fmt.Sprintf("%s added, %s removed", plural(st.LinesAdded, "line"), plural(st.LinesRemoved, "line")) }>
+		<span class="add">+{ num(st.LinesAdded) }</span>
+		<span class="del">−{ num(st.LinesRemoved) }</span>
+	</span>
 }
 
 templ healthSidebar(cats []healthCategory) {
@@ -160,32 +260,5 @@ templ healthPage(env, schemaPath string, report *doctor.Report, errMsg string) {
 				</section>
 			}
 		</div>
-	}
-}
-
-// schemaDiff is the change from migration prevID's schema (prev) to cur,
-// file by file for a modular schema.
-templ schemaDiff(prevID int, cur, prev string, modular bool) {
-	switch  {
-		case cur == "":
-			<p class="mute">This migration didn't record its schema.</p>
-		case prevID == 0:
-			<p class="mute">The first recorded migration: nothing to compare with.</p>
-		case prev == "":
-			<p class="mute">#{ fmt.Sprint(prevID) } didn't record its schema, so there is nothing to compare with.</p>
-		default:
-			{{ files := schemaFileDiffs(prev, cur, modular) }}
-			if len(files) == 0 {
-				<p class="mute">No changes since #{ fmt.Sprint(prevID) }.</p>
-			} else {
-				<p class="mute">Changes since #{ fmt.Sprint(prevID) }.</p>
-				for _, f := range files {
-					<pre class="code diff">
-						for _, row := range diffRows(f) {
-							<span class={ row.Class }>{ row.Text }</span>
-						}
-					</pre>
-				}
-			}
 	}
 }

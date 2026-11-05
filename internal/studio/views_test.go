@@ -93,7 +93,7 @@ func TestRenderedPagesSuitTheCSP(t *testing.T) {
 			AsSubject: directPage{Side: sideSubject, Tuples: []melange.TupleRef{{SubjectType: "user", SubjectID: "1", Relation: "owner", ObjectType: "doc", ObjectID: "1"}}},
 		}),
 		"health":   healthPage("", "schemas/schema.fga", report, ""),
-		"history":  historyPage("", nil, nil, "none"),
+		"history":  historyPage(historyData{Sel: -1, Err: "none"}),
 		"relation": relationPage(relationData{Model: testModel, Type: "doc", Relation: "viewer", Known: true, Funcs: []sqlFunc{{Name: "check_doc_viewer", Label: "check", Def: "SELECT 1"}}}),
 	} {
 		got := renderHTML(t, c)

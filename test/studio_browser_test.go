@@ -247,11 +247,11 @@ func TestStudio_BrowserBehaviour(t *testing.T) {
 		assert.Equal(t, "user", eval(t, `new URLSearchParams(location.search).get('type')`), "the first row's subject is a user")
 	})
 
-	t.Run("history schema changes load when opened", func(t *testing.T) {
-		run(t, chromedp.Navigate(c.base+"/history"), chromedp.WaitVisible(`details.disclose[hx-get] summary`),
-			chromedp.Click(`details.disclose[hx-get] summary`),
-			poll(`!document.querySelector('details.disclose[hx-get] .diff-out').textContent.includes('Loading')`))
-		assert.Contains(t, eval(t, `document.querySelector('details.disclose[hx-get] .diff-out').textContent`), "first recorded migration")
+	t.Run("history shows the selected migration", func(t *testing.T) {
+		run(t, chromedp.Navigate(c.base+"/history"), chromedp.WaitVisible(`.mig-list a[aria-current]`),
+			chromedp.Click(`.mig-list a[aria-current]`), chromedp.WaitVisible(`.page-head h1`))
+		assert.Contains(t, eval(t, `document.querySelector('.page-head h1').textContent`), "Migration #")
+		assert.Contains(t, eval(t, `document.body.textContent`), "first recorded migration")
 	})
 
 	assert.Empty(t, reported(), "CSP violations or console errors")

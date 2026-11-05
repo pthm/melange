@@ -1,54 +1,83 @@
 package studio
 
 import (
-	"database/sql"
-	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
-
-	"github.com/lib/pq"
+	"strings"
 
 	"github.com/pthm/melange/internal/doctor"
 	"github.com/pthm/melange/pkg/migrator"
+	"github.com/pthm/melange/pkg/schema"
 )
 
 // historyLimit bounds the migration audit trail shown on the History page.
 const historyLimit = 50
 
+// historyEntry is one migration in the History list, with how its schema
+// relates to the one before it.
+type historyEntry struct {
+	Rec       migrator.MigrationRecord
+	Stats     migrationStats
+	Deployed  bool // the newest row: what the database runs
+	Unchanged int  // the previous migration's id when the schema is identical
+	RevertOf  int  // an older migration whose schema this one restores
+}
+
+// historyData is the History page: the recent migrations for the picker and
+// one selected migration in detail.
+type historyData struct {
+	Env     string
+	Entries []historyEntry
+	Sel     int           // index into Entries; -1 when nothing is selected
+	Prev    *storedSchema // the selected migration's predecessor, if recorded
+	Cur     storedSchema
+	Err     string
+}
+
 func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 	m := migrator.NewMigrator(s.db, "")
 	m.SetDatabaseSchema(s.dbSchema)
 	recs, err := m.GetMigrationHistory(r.Context(), historyLimit)
-	// History rows omit the DSL; the deployed one comes from the model read.
-	deployed, _ := s.loadModel(r.Context())
-	render(w, r, historyPage(s.env, recs, deployed, errString(err)))
-}
-
-// historyDiff renders the schema change from the migration before id to id,
-// for a History row's disclosure.
-func (s *Server) historyDiff(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(r.URL.Query().Get("id"), 10, 64)
-	if err != nil {
-		http.Error(w, "bad id", http.StatusBadRequest)
-		return
+	d := historyData{Env: s.env, Sel: -1, Err: errString(err)}
+	ids := make([]int, len(recs))
+	for i, rec := range recs {
+		ids[i] = rec.ID
 	}
-	table := pq.QuoteIdentifier(s.dbSchema) + ".melange_migrations"
-	var cur, format sql.NullString
-	err = s.db.QueryRowContext(r.Context(), `SELECT schema_dsl, schema_format FROM `+table+` WHERE id = $1`, id).Scan(&cur, &format)
-	if err != nil {
-		render(w, r, errorBox(err.Error()))
-		return
+	// Stats are extra: a table too old to have the schema columns just
+	// shows none.
+	stats, _ := s.historyStats(r.Context(), ids)
+	for i, rec := range recs {
+		e := historyEntry{Rec: rec, Stats: stats[rec.ID], Deployed: i == 0, RevertOf: sameSchemaAs(recs, i)}
+		if i+1 < len(recs) && recs[i+1].SchemaChecksum == rec.SchemaChecksum {
+			e.Unchanged = recs[i+1].ID
+		}
+		d.Entries = append(d.Entries, e)
 	}
-	var prevID int
-	var prev sql.NullString
-	err = s.db.QueryRowContext(r.Context(),
-		`SELECT id, schema_dsl FROM `+table+` WHERE id < $1 ORDER BY id DESC LIMIT 1`, id).Scan(&prevID, &prev)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		render(w, r, errorBox(err.Error()))
-		return
+	if len(recs) > 0 {
+		d.Sel = 0
+		if want, err := strconv.Atoi(r.URL.Query().Get("id")); err == nil {
+			d.Sel = slices.IndexFunc(recs, func(rec migrator.MigrationRecord) bool { return rec.ID == want })
+			if d.Sel < 0 {
+				d.Err = fmt.Sprintf("Migration #%d is not among the last %d.", want, historyLimit)
+			}
+		}
 	}
-	render(w, r, schemaDiff(prevID, cur.String, prev.String, format.String == "modular"))
+	if d.Sel >= 0 {
+		id := recs[d.Sel].ID
+		schemas, err := s.loadSchemas(r.Context(), id, id)
+		if err != nil {
+			d.Err = err.Error()
+		}
+		if n := len(schemas); n > 0 && schemas[n-1].ID == id {
+			d.Cur = schemas[n-1]
+			if n == 2 {
+				d.Prev = &schemas[0]
+			}
+		}
+	}
+	render(w, r, historyPage(d))
 }
 
 // health runs the same checks as `melange doctor`. Doctor only reads, and the
@@ -145,4 +174,92 @@ func diffRows(f fileDiff) []diffRow {
 		}
 	}
 	return out
+}
+
+// statsSummary is a migration's model change in words, e.g. "1 type added ·
+// 4 relations added · 1 breaking". Empty when nothing changed.
+func statsSummary(st migrationStats) string {
+	var parts []string
+	add := func(n int, noun, verb string) {
+		if n > 0 {
+			parts = append(parts, plural(n, noun)+" "+verb)
+		}
+	}
+	add(st.TypesAdded, "type", "added")
+	add(st.TypesRemoved, "type", "removed")
+	add(st.RelsAdded, "relation", "added")
+	add(st.RelsRemoved, "relation", "removed")
+	add(st.RelsChanged, "relation", "changed")
+	if st.Breaking > 0 {
+		parts = append(parts, fmt.Sprintf("%s breaking", num(st.Breaking)))
+	}
+	return strings.Join(parts, " · ")
+}
+
+func changeClass(c schema.ChangeClass) string {
+	if c == schema.ClassBreaking {
+		return "warn"
+	}
+	return "ok"
+}
+
+// shortSummary is statsSummary for the narrow History picker: "+1 type ·
+// +4 rel · ~2 rel". Breaking changes get their own badge.
+func shortSummary(st migrationStats) string {
+	var parts []string
+	add := func(n int, sign, noun string) {
+		if n > 0 {
+			parts = append(parts, sign+num(n)+" "+noun)
+		}
+	}
+	add(st.TypesAdded, "+", "type")
+	add(st.TypesRemoved, "−", "type")
+	add(st.RelsAdded, "+", "rel")
+	add(st.RelsRemoved, "−", "rel")
+	add(st.RelsChanged, "~", "rel")
+	return strings.Join(parts, " · ")
+}
+
+func breakingTone(n int) string {
+	if n > 0 {
+		return "warn"
+	}
+	return "ok"
+}
+
+// codegenNote explains an unchanged schema's rerun when the codegen version
+// moved: ", with codegen v0.10.1 → v0.10.2".
+func codegenNote(d historyData, e historyEntry) string {
+	if d.Sel+1 >= len(d.Entries) {
+		return ""
+	}
+	prev := d.Entries[d.Sel+1].Rec.CodegenVersion
+	if migrator.SameCodegenVersion(prev, e.Rec.CodegenVersion) {
+		return ""
+	}
+	return ", with codegen " + prev + " → " + e.Rec.CodegenVersion
+}
+
+// signed is an added/removed pair as "+3 −1", leaving out a zero side
+// ("+3"), or "0" when both are zero.
+func signed(added, removed int) string {
+	var parts []string
+	if added > 0 {
+		parts = append(parts, "+"+num(added))
+	}
+	if removed > 0 {
+		parts = append(parts, "−"+num(removed))
+	}
+	if len(parts) == 0 {
+		return "0"
+	}
+	return strings.Join(parts, " ")
+}
+
+// changedSuffix appends a changed count, " ~2", when there is one.
+func changedSuffix(n int) string {
+	if n == 0 {
+		return ""
+	}
+	return " ~" + num(n)
 }
