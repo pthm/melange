@@ -38,6 +38,12 @@ You can override auto-discovery with `--config`:
 melange --config /path/to/custom-config.yaml migrate
 ```
 
+### Relative paths
+
+Relative paths in a discovered config file (`schema`, `generate.client.output`, `generate.migration.output`, and an environment's `schema`) are resolved against the directory the config was found from: the directory holding `melange.yaml`, or the one holding `melange/` for `melange/config.yaml`. Commands therefore read and write the same files from any subdirectory of the project.
+
+Paths in a config passed with `--config`, and values from flags or `MELANGE_*` environment variables, are relative to the current directory. Absolute paths are used as given.
+
 ## File Format
 
 Create a `melange.yaml` in your project root, or use `melange init` to generate one:
