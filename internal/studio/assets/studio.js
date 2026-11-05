@@ -70,6 +70,14 @@ document.addEventListener("htmx:confirm", (e) => {
   chip.setAttribute("aria-expanded", "true");
 });
 
+// "+N more" on an access row shows the relation chips collapsed after it.
+document.addEventListener("click", (e) => {
+  const more = e.target.closest("[data-more-chips]");
+  if (!more) return;
+  more.parentElement.classList.add("open");
+  more.remove();
+});
+
 // Keep the current sidebar link in view; on a large model it can sit far down.
 document.querySelector(".sidebar [aria-current]")?.scrollIntoView({ block: "center" });
 

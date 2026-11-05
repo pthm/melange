@@ -191,6 +191,10 @@ templ accessRows(typ string, rows []entityGroup, ls labels, self entityRef, self
 	@moreItem(p)
 }
 
+// chipLimit is how many relation chips an access row shows before the rest
+// collapse behind a "+N more" button (studio.js expands them).
+const chipLimit = 12
+
 templ accessEntity(typ string, ent entityGroup, ls labels, self entityRef, selfIsSubject bool) {
 	<li>
 		<div class="who">
@@ -201,10 +205,13 @@ templ accessEntity(typ string, ent entityGroup, ls labels, self entityRef, selfI
 			}
 		</div>
 		<div class="chips">
-			for _, rel := range ent.Relations {
+			for i, rel := range ent.Relations {
 				{{ sub, obj := typ+":"+ent.ID, self.Type+":"+self.ID }}
 				if selfIsSubject {
 					{{ sub, obj = obj, sub }}
+				}
+				if i == chipLimit {
+					<button type="button" class="chip more-chips" data-more-chips>+{ num(len(ent.Relations) - chipLimit) } more</button>
 				}
 				@explainChip(sub, rel, obj)
 			}

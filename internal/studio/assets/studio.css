@@ -317,18 +317,26 @@ details.disclose[open] > summary { margin-bottom: var(--sp-2); }
 .subnav li:has(.badge.zero) a:not([aria-current]) { color: var(--mute); }
 .side-list a > .badge, .side-list a > .t-mono:last-child { flex: none; }
 .access-rows { list-style: none; margin: 0; padding: 0; }
+/* access rows: the entity on one line, its relations under it */
 .access-rows > li {
-  display: grid; grid-template-columns: minmax(0, 260px) minmax(0, 1fr); gap: var(--sp-1) var(--sp-4);
-  align-items: start; padding: var(--sp-3) 0; border-bottom: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: var(--sp-2);
+  padding: var(--sp-3) 0; border-bottom: 1px solid var(--line);
 }
+.access-rows:not(.matrix) .chip { height: 20px; padding: 0 6px; font-size: 12px; color: var(--mute); }
+/* The row's entity is its heading: every row has the group's type (named
+   above the list, and in the hover text), so only the id shows, in bold. */
+.access-rows .who .ent-type { display: none; }
+.access-rows .who .ent-key > code { font-weight: 700; color: var(--fg); }
+/* Chips after the "+N more" button stay hidden until it is clicked. */
+.chips:not(.open) > .more-chips ~ .chip { display: none; }
+.chip.more-chips { border-style: dashed; color: var(--mute); }
 .access-rows > li:last-child { border-bottom: 0; }
 .access-rows .chips { margin-top: 0; }
 .access-rows .who { min-width: 0; }
-.access-rows .why-out { grid-column: 1 / -1; }
+.access-rows.matrix .why-out { grid-column: 1 / -1; }
 .access-rows .why-out:empty { display: none; }
-@media (max-width: 760px) { .access-rows > li { grid-template-columns: minmax(0, 1fr); } }
 /* matrix: one tight line per relation, chip then verdict, at every width */
-.access-rows.matrix > li { grid-template-columns: minmax(120px, max-content) minmax(0, 1fr); align-items: center; padding: var(--sp-1) 0; }
+.access-rows.matrix > li { display: grid; gap: var(--sp-1) var(--sp-4); grid-template-columns: minmax(120px, max-content) minmax(0, 1fr); align-items: center; padding: var(--sp-1) 0; }
 .chip[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
 .more { margin-top: var(--sp-2); }
 .more-rows { display: block; padding: var(--sp-3) 0; list-style: none; } /* infinite-scroll sentinel */
