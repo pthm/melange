@@ -7,9 +7,9 @@ experimental = true
 
 [tools]
 # Toolchain — pinned to major.minor so patch updates flow through but minor
-# bumps are explicit. Only the runtime module (melange/) keeps a lower `go`
-# directive, for library users; the CLI, compiler and test modules track
-# the current release.
+# bumps are explicit. Keep in step with the `toolchain` lines in go.mod. The
+# `go` lines stay at the oldest Go the code needs (what users must have);
+# CI's "Check minimum Go versions" step vets with those.
 go = "1.27"
 
 # Docs site (docs/); keep in step with HUGO_VERSION in

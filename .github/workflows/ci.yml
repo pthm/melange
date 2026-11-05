@@ -63,6 +63,14 @@ jobs:
           GOWORK: "off"
         run: for dir in . melange; do (cd "$dir" && go mod tidy -diff) || exit 1; done
 
+      # The go line is the oldest Go users need; the toolchain line is what we
+      # build with. Go lets a newer stdlib API compile under an older go line,
+      # so vet each published module with the toolchain its go line names.
+      - name: Check minimum Go versions
+        env:
+          GOWORK: "off"
+        run: for dir in . melange; do (cd "$dir" && GOTOOLCHAIN="go$(go mod edit -json | jq -r .Go)" go vet ./...) || exit 1; done
+
       - name: Lint all modules
         run: |
           # Uses golangci-lint version pinned in go.mod via tool directive

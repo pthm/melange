@@ -102,7 +102,7 @@ Open a new terminal for the `Path` change to apply. Windows binaries are not cod
 go install github.com/pthm/melange@latest
 ```
 
-Requires Go 1.27 or later. Install `github.com/pthm/melange`, not `.../cmd/melange`; that path was retired in v0.9.0.
+Requires Go 1.26 or later. Install `github.com/pthm/melange`, not `.../cmd/melange`; that path was retired in v0.9.0.
 
 ### Docker
 
