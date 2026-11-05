@@ -456,7 +456,7 @@ func (d *Doctor) checkMigrationState(ctx context.Context, report *Report) error 
 					Details:  fmt.Sprintf("File checksum: %s...\nDB checksum:   %s...", currentChecksum[:16], lastMigration.SchemaChecksum[:16]),
 					FixHint:  "Run 'melange migrate' to apply changes",
 				})
-			case lastMigration.CodegenVersion != migrator.CodegenVersion():
+			case !migrator.SameCodegenVersion(lastMigration.CodegenVersion, migrator.CodegenVersion()):
 				report.AddCheck(CheckResult{
 					Category: "Migration State",
 					Name:     "schema_sync",

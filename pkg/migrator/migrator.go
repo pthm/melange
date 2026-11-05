@@ -200,6 +200,12 @@ func canonicalVersion(v string) string {
 	return "v" + strings.TrimPrefix(strings.TrimSpace(v), "v")
 }
 
+// SameCodegenVersion reports whether a and b name the same codegen version,
+// ignoring the "v" prefix that only some build paths stamp.
+func SameCodegenVersion(a, b string) bool {
+	return canonicalVersion(a) == canonicalVersion(b)
+}
+
 // MigrationRecord represents a row in the melange_migrations table.
 type MigrationRecord struct {
 	// ID and MigratedAt identify the row and when it was written. Populated by
@@ -808,7 +814,7 @@ func migrationRecordMatches(lastMigration *MigrationRecord, schemaChecksum strin
 		return false
 	}
 	return lastMigration.SchemaChecksum == schemaChecksum &&
-		lastMigration.CodegenVersion == CodegenVersion() &&
+		SameCodegenVersion(lastMigration.CodegenVersion, CodegenVersion()) &&
 		lastMigration.SchemaDSL != ""
 }
 
