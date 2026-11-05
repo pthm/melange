@@ -37,6 +37,13 @@ type Config struct {
 	// falls through to the base. Absent map ⇒ behavior identical to before
 	// environments existed.
 	Environments map[string]EnvironmentConfig `mapstructure:"environments"`
+
+	// root is the directory a discovered config was found from: relative paths
+	// in the file (schema, generate output dirs) are resolved against it, so a
+	// command run from a subdirectory reads the same files as one run from the
+	// root. Empty for an explicit --config, whose paths stay relative to the
+	// working directory.
+	root string
 }
 
 // EnvironmentConfig is a named connection profile overlaid onto the base
@@ -114,7 +121,7 @@ func LoadConfig(explicitConfigPath string) (*Config, string, error) {
 	v.AutomaticEnv()
 
 	// 3. Find and load config file
-	configPath, err := findConfigFile(explicitConfigPath)
+	configPath, root, err := findConfigFile(explicitConfigPath)
 	if err != nil {
 		return nil, "", err
 	}
@@ -131,6 +138,7 @@ func LoadConfig(explicitConfigPath string) (*Config, string, error) {
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, configPath, fmt.Errorf("unmarshaling config: %w", err)
 	}
+	cfg.root = root
 
 	return &cfg, configPath, nil
 }
@@ -272,6 +280,18 @@ func (c *Config) ForEnvironment(envName string) (*Config, error) {
 	resolved.Database = resolveDatabase(c.Database, over, &dbMissing)
 	resolved.Schema = expandEnvRefs(schemaSource, &schemaMissing)
 
+	// A MELANGE_* variable is a value typed in this shell, so it stays relative
+	// to the working directory like a flag; values from the file are rebased.
+	if schemaSource != c.Schema || !envSet("MELANGE_SCHEMA") {
+		resolved.Schema = c.rebase(resolved.Schema)
+	}
+	if !envSet("MELANGE_GENERATE_CLIENT_OUTPUT") {
+		resolved.Generate.Client.Output = c.rebase(c.Generate.Client.Output)
+	}
+	if !envSet("MELANGE_GENERATE_MIGRATION_OUTPUT") {
+		resolved.Generate.Migration.Output = c.rebase(c.Generate.Migration.Output)
+	}
+
 	if len(dbMissing) > 0 {
 		// Return the best-effort config (unset refs expanded to empty) alongside
 		// the error so callers can still use non-connection fields (e.g. Schema)
@@ -281,6 +301,44 @@ func (c *Config) ForEnvironment(envName string) (*Config, error) {
 	}
 
 	return &resolved, nil
+}
+
+func envSet(name string) bool {
+	_, ok := os.LookupEnv(name)
+	return ok
+}
+
+// rebase resolves a relative path from the config file against c.root and
+// returns it relative to the working directory, so it reads naturally in
+// output ("../schemas/schema.fga" from a subdirectory). Run from the root,
+// the path is returned exactly as written. Results use forward slashes, which
+// every platform accepts, so generated files and messages read the same on
+// Windows.
+func (c *Config) rebase(path string) string {
+	if c.root == "" || !isRelative(path) {
+		return path
+	}
+	abs := filepath.Join(c.root, path)
+	cwd, err := os.Getwd()
+	if err != nil {
+		return filepath.ToSlash(abs)
+	}
+	if filepath.Clean(cwd) == filepath.Clean(c.root) {
+		return path
+	}
+	if rel, err := filepath.Rel(cwd, abs); err == nil {
+		return filepath.ToSlash(rel)
+	}
+	return filepath.ToSlash(abs)
+}
+
+// isRelative reports whether path is relative to a directory. On Windows a
+// path starting with a separator (\x, /x) or naming a drive (C:x) is not
+// absolute to filepath.IsAbs, but it does not hang off the current
+// directory either, so it is left as given.
+func isRelative(path string) bool {
+	return path != "" && !filepath.IsAbs(path) && filepath.VolumeName(path) == "" &&
+		path[0] != '/' && path[0] != '\\'
 }
 
 // dedupeStrings returns names with duplicates removed, preserving first-seen order.
@@ -464,18 +522,22 @@ func setDefaults(v *viper.Viper) {
 // boundary or after maxWalkDepth levels. This search order must stay in sync
 // with findExistingConfig in internal/cli/command/init.go so that configs written by
 // init are always discovered by other commands.
-func findConfigFile(explicitPath string) (string, error) {
+//
+// root is the directory the walk found the config from (the project root),
+// which for melange/config.yaml is the parent of melange/; init writes paths
+// relative to it. root is empty for an explicit path.
+func findConfigFile(explicitPath string) (path, root string, err error) {
 	if explicitPath != "" {
 		if _, err := os.Stat(explicitPath); err != nil {
-			return "", fmt.Errorf("config file not found: %s", explicitPath)
+			return "", "", fmt.Errorf("config file not found: %s", explicitPath)
 		}
-		return explicitPath, nil
+		return explicitPath, "", nil
 	}
 
 	// Auto-discovery: walk up to .git or maxWalkDepth
 	cwd, err := os.Getwd()
 	if err != nil {
-		return "", fmt.Errorf("getting cwd: %w", err)
+		return "", "", fmt.Errorf("getting cwd: %w", err)
 	}
 
 	dir := cwd
@@ -489,9 +551,9 @@ func findConfigFile(explicitPath string) (string, error) {
 			filepath.Join("melange", "melange.yaml"),
 			filepath.Join("melange", "melange.yml"),
 		} {
-			path := filepath.Join(dir, name)
-			if _, err := os.Stat(path); err == nil {
-				return path, nil
+			candidate := filepath.Join(dir, name)
+			if _, err := os.Stat(candidate); err == nil {
+				return candidate, dir, nil
 			}
 		}
 
@@ -509,7 +571,7 @@ func findConfigFile(explicitPath string) (string, error) {
 		dir = parent
 	}
 
-	return "", nil // No config found, use defaults
+	return "", "", nil // No config found, use defaults
 }
 
 // DSN returns the database connection string.

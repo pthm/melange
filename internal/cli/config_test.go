@@ -18,13 +18,13 @@ func TestFindConfigFile_ExplicitPath(t *testing.T) {
 	err := os.WriteFile(tmpFile, []byte("schema: test.fga"), 0o644)
 	require.NoError(t, err)
 
-	path, err := findConfigFile(tmpFile)
+	path, _, err := findConfigFile(tmpFile)
 	require.NoError(t, err)
 	assert.Equal(t, tmpFile, path)
 }
 
 func TestFindConfigFile_ExplicitPathNotFound(t *testing.T) {
-	_, err := findConfigFile("/nonexistent/path/config.yaml")
+	_, _, err := findConfigFile("/nonexistent/path/config.yaml")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "config file not found")
 }
@@ -51,7 +51,7 @@ func TestFindConfigFile_AutoDiscovery(t *testing.T) {
 	err = os.Chdir(nested)
 	require.NoError(t, err)
 
-	path, err := findConfigFile("")
+	path, _, err := findConfigFile("")
 	require.NoError(t, err)
 
 	// Resolve symlinks for comparison (macOS /var -> /private/var)
@@ -79,7 +79,7 @@ func TestFindConfigFile_PrefersMelangeYamlOverYml(t *testing.T) {
 	err = os.Chdir(root)
 	require.NoError(t, err)
 
-	path, err := findConfigFile("")
+	path, _, err := findConfigFile("")
 	require.NoError(t, err)
 
 	// Resolve symlinks for comparison (macOS /var -> /private/var)
@@ -106,7 +106,7 @@ func TestFindConfigFile_StopsAtGitRoot(t *testing.T) {
 	err = os.Chdir(project)
 	require.NoError(t, err)
 
-	path, err := findConfigFile("")
+	path, _, err := findConfigFile("")
 	require.NoError(t, err)
 	assert.Empty(t, path) // Should not find config above .git
 }
@@ -123,7 +123,7 @@ func TestFindConfigFile_NoConfigReturnsEmpty(t *testing.T) {
 	err = os.Chdir(root)
 	require.NoError(t, err)
 
-	path, err := findConfigFile("")
+	path, _, err := findConfigFile("")
 	require.NoError(t, err)
 	assert.Empty(t, path)
 }
@@ -767,5 +767,93 @@ func TestHasEnvironment(t *testing.T) {
 	}
 	if (&Config{}).HasEnvironment("anything") {
 		t.Error("HasEnvironment on a config without environments = true, want false")
+	}
+}
+
+// TestForEnvironment_RebasesPathsOnProjectRoot verifies that relative paths in
+// a discovered config resolve against the directory the config was found from,
+// whichever subdirectory the command runs in.
+func TestForEnvironment_RebasesPathsOnProjectRoot(t *testing.T) {
+	const body = `
+schema: authz/model.fga
+generate:
+  client:
+    output: internal/authz
+  migration:
+    output: /abs/migrations
+environments:
+  other:
+    schema: other/model.fga
+`
+	for _, tc := range []struct {
+		name, configFile, cwd string
+		env                   map[string]string
+		explicit              bool
+		wantSchema, wantOther string
+		wantClientOut         string
+	}{
+		{
+			name: "from root", configFile: "melange.yaml", cwd: ".",
+			wantSchema: "authz/model.fga", wantOther: "other/model.fga", wantClientOut: "internal/authz",
+		},
+		{
+			name: "from subdirectory", configFile: "melange.yaml", cwd: "sub/deeper",
+			wantSchema: "../../authz/model.fga", wantOther: "../../other/model.fga", wantClientOut: "../../internal/authz",
+		},
+		// init writes melange/config.yaml with paths relative to the project root.
+		{
+			name: "melange/ config from subdirectory", configFile: "melange/config.yaml", cwd: "sub",
+			wantSchema: "../authz/model.fga", wantOther: "../other/model.fga", wantClientOut: "../internal/authz",
+		},
+		{
+			name: "MELANGE_SCHEMA stays relative to cwd", configFile: "melange.yaml", cwd: "sub",
+			env: map[string]string{"MELANGE_SCHEMA": "env.fga"}, wantSchema: "env.fga", wantOther: "../other/model.fga", wantClientOut: "../internal/authz",
+		},
+		{
+			name: "explicit --config stays relative to cwd", configFile: "melange.yaml", cwd: "sub", explicit: true,
+			wantSchema: "authz/model.fga", wantOther: "other/model.fga", wantClientOut: "internal/authz",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			require.NoError(t, os.MkdirAll(filepath.Join(root, ".git"), 0o755))
+			require.NoError(t, os.MkdirAll(filepath.Join(root, tc.cwd), 0o755))
+			configPath := filepath.Join(root, tc.configFile)
+			require.NoError(t, os.MkdirAll(filepath.Dir(configPath), 0o755))
+			require.NoError(t, os.WriteFile(configPath, []byte(body), 0o644))
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			t.Chdir(filepath.Join(root, tc.cwd))
+
+			explicit := ""
+			if tc.explicit {
+				explicit = configPath
+			}
+			cfg, _, err := LoadConfig(explicit)
+			require.NoError(t, err)
+
+			base, err := cfg.ForEnvironment("")
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantSchema, base.Schema)
+			assert.Equal(t, tc.wantClientOut, base.Generate.Client.Output)
+			assert.Equal(t, "/abs/migrations", base.Generate.Migration.Output, "absolute paths are left alone")
+
+			other, err := cfg.ForEnvironment("other")
+			require.NoError(t, err)
+			assert.Equal(t, tc.wantOther, other.Schema)
+		})
+	}
+}
+
+func TestIsRelative(t *testing.T) {
+	for path, want := range map[string]bool{
+		"authz/model.fga": true,
+		"../x":            true,
+		"":                false,
+		"/abs/x":          false,
+		`\abs\x`:          false, // rooted on Windows, though not absolute there
+	} {
+		assert.Equal(t, want, isRelative(path), path)
 	}
 }
