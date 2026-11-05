@@ -46,7 +46,17 @@ func renderRecursiveListObjectsQuery(plan ListPlan, blocks RecursiveBlockSet) st
 		ColumnExprs: []Expr{Col{Table: "acc", Column: "object_id"}},
 		FromExpr:    TableAs("", "accessible", "acc"),
 	}
-	if predicates := exclusionConfig.BuildPredicates(); len(predicates) > 0 {
+	predicates := exclusionConfig.BuildPredicates()
+	if blocks.VerifyWithCheck {
+		predicates = append(predicates, CheckPermission{
+			Schema:      plan.DatabaseSchema,
+			Subject:     SubjectParams(),
+			Relation:    plan.Relation,
+			Object:      LiteralObject(plan.ObjectType, Col{Table: "acc", Column: "object_id"}),
+			ExpectAllow: true,
+		})
+	}
+	if len(predicates) > 0 {
 		finalStmt.Where = And(predicates...)
 	}
 

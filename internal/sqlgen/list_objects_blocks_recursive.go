@@ -11,6 +11,10 @@ type RecursiveBlockSet struct {
 	BaseBlocks         []TypedQueryBlock
 	RecursiveBlock     *TypedQueryBlock
 	SelfCandidateBlock *TypedQueryBlock
+	// VerifyWithCheck filters the final objects through check_permission. Set
+	// when the walk follows more than one linking relation: every propagating
+	// row follows every linking relation, so the walk is a superset there.
+	VerifyWithCheck bool
 	// HoistedCTEs are shared list_*_obj computations lifted out of the base
 	// blocks. The same list_<parent>_obj(p_subject_type, p_subject_id, NULL,
 	// NULL) call was previously inlined in both the userset-subject arm and the
@@ -151,6 +155,11 @@ func BuildListObjectsRecursiveBlocks(plan ListPlan) (RecursiveBlockSet, error) {
 	if len(selfRefLinkingRelations) > 0 {
 		result.RecursiveBlock = buildRecursiveTTUBlock(plan, selfRefLinkingRelations)
 	}
+	// ponytail: "r1 from owner" rows also walk parent edges and vice versa.
+	// Walking extra edges only adds rows, so a final check keeps it exact at
+	// one check per candidate. Upgrade path if this shape gets hot: tag each
+	// accessible row with the linking relations it may continue through.
+	result.VerifyWithCheck = len(selfRefLinkingRelations) > 1
 
 	return result, nil
 }

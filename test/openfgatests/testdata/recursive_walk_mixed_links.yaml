@@ -1,0 +1,42 @@
+# A relation inheriting self-referential walks over two linking relations
+# ("v from parent" through v, "r1 from owner" through r1) walked both in one
+# recursive CTE where every propagating row followed every linking relation.
+#
+# Before: the second linking relation rendered as '''parent' (a dequote bug),
+# so it was never walked and v from parent under-reported (dp missing for
+# carol). With that fixed, r1 rows followed parent edges too, over-reporting
+# (alice holds r1 on dg via a, but r1 does not recurse through parent, so dp
+# must not be listed).
+
+tests:
+  - name: recursive_walk_mixed_links
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type document
+            relations
+              define parent: [document]
+              define owner: [document]
+              define a: [user]
+              define v: [user] or v from parent
+              define r1: a or v or r1 from owner
+              define r2: r1
+        tuples:
+          - {user: 'document:dg', relation: parent, object: 'document:dp'}
+          - {user: 'document:dg', relation: owner, object: 'document:d'}
+          - {user: 'user:alice', relation: a, object: 'document:dg'}
+          - {user: 'user:carol', relation: v, object: 'document:dg'}
+        listObjectsAssertions:
+          - request: {user: 'user:alice', relation: r2, type: document}
+            expectation: ['document:d', 'document:dg']
+          - request: {user: 'user:carol', relation: r2, type: document}
+            expectation: ['document:d', 'document:dg', 'document:dp']
+        listUsersAssertions:
+          - request: {object: 'document:dp', relation: r2, filters: [user]}
+            expectation: ['user:carol']
+          - request: {object: 'document:d', relation: r2, filters: [user]}
+            expectation: ['user:alice', 'user:carol']
