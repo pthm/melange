@@ -564,17 +564,35 @@ func parentTargetNeedsSubjectPool(target *RelationAnalysis, currentParent ListPa
 	// Nested TTUs: ParentRelations are direct, ClosureParentRelations are
 	// inherited via implied relations. Both must satisfy the closure path's
 	// preconditions.
+	// parent_closure reads the target's satisfying relations on every
+	// ancestor, so a nested TTU is only representable when it is the target
+	// recursing on itself ("t from parent"). "u from parent" under t, or a TTU
+	// inherited through t's closure, grants t through some other relation the
+	// walk never reads.
 	for _, pr := range target.ParentRelations {
-		if nestedParentForcesSubjectPool(pr, target.ObjectType, currentParent.LinkingRelation) {
+		if pr.Relation != target.Relation || nestedParentForcesSubjectPool(pr, target.ObjectType, currentParent.LinkingRelation) {
 			return true
 		}
 	}
-	for _, pr := range target.ClosureParentRelations {
-		if nestedParentForcesSubjectPool(pr, target.ObjectType, currentParent.LinkingRelation) {
-			return true
-		}
+	return len(target.ClosureParentRelations) > 0
+}
+
+// parentClosureVia keeps the parent_closure rows reached through parent's
+// own linking relation; the CTE walks every linking relation at once.
+func parentClosureVia(parent ListParentRelationData) Expr {
+	return Eq{Left: Col{Table: "p", Column: "via"}, Right: Lit(parent.LinkingRelation)}
+}
+
+// parentClosureDepthGuard limits a parent_closure arm to the direct parent
+// unless an ancestor's grant legitimately flows down the chain: either the
+// target recurses ("t from parent", so t on the grandparent gives t on the
+// parent) or the listed relation does ("x from parent", so x on the parent
+// gives x here). "x: [user] or y from parent" with y non-recursive is one hop.
+func parentClosureDepthGuard(plan ListPlan, parent ListParentRelationData) []Expr {
+	if recursesVia(&plan.Analysis, parent.LinkingRelation) || recursesVia(parentRelationAnalysis(plan, parent), parent.LinkingRelation) {
+		return nil
 	}
-	return false
+	return []Expr{Eq{Left: Col{Table: "p", Column: "depth"}, Right: Int(0)}}
 }
 
 // nestedParentForcesSubjectPool returns true when a nested parent relation
@@ -691,6 +709,8 @@ func buildListSubjectsRecursiveTTUBlockParentClosure(plan ListPlan, parent ListP
 		whereConditions = append(whereConditions, Ne{Left: Col{Table: "t", Column: "subject_id"}, Right: Lit("*")})
 	}
 	whereConditions = append(whereConditions, exclusions.BuildPredicates()...)
+	whereConditions = append(whereConditions, parentClosureDepthGuard(plan, parent)...)
+	whereConditions = append(whereConditions, parentClosureVia(parent))
 
 	stmt := SelectStmt{
 		Distinct:    true,
@@ -771,6 +791,8 @@ func buildListSubjectsRecursiveTTUBlockParentClosureUsersetPattern(plan ListPlan
 		whereConditions = append(whereConditions, Ne{Left: Col{Table: memberAlias, Column: "subject_id"}, Right: Lit("*")})
 	}
 	whereConditions = append(whereConditions, memberExclusions.BuildPredicates()...)
+	whereConditions = append(whereConditions, parentClosureDepthGuard(plan, parent)...)
+	whereConditions = append(whereConditions, parentClosureVia(parent))
 
 	stmt := SelectStmt{
 		Distinct:    true,
@@ -1333,7 +1355,7 @@ func buildSelfClosureTTUBlocks(plan ListPlan, parent ListParentRelationData) []T
 		return nil // pure self-recursion: the plain closure path handles it
 	}
 
-	ownType := Eq{Left: Col{Table: "p", Column: "subject_type"}, Right: Lit(plan.ObjectType)}
+	ownType := And(Eq{Left: Col{Table: "p", Column: "subject_type"}, Right: Lit(plan.ObjectType)}, parentClosureVia(parent))
 	noWildcard := func(col Col) []Expr {
 		if plan.ExcludeWildcard() {
 			return []Expr{Ne{Left: col, Right: Lit("*")}}
@@ -1406,7 +1428,7 @@ func buildSelfClosureTTUBlocks(plan ListPlan, parent ListParentRelationData) []T
 				ColumnExprs: []Expr{Col{Table: "s", Column: "subject_id"}},
 				FromExpr:    TableAs("", "parent_closure", "p"),
 				Joins:       []JoinClause{lateral(t, parent.Relation, Col{Table: "p", Column: "subject_id"})},
-				Where: And(append([]Expr{Eq{Left: Col{Table: "p", Column: "subject_type"}, Right: Lit(t)}},
+				Where: And(append([]Expr{Eq{Left: Col{Table: "p", Column: "subject_type"}, Right: Lit(t)}, parentClosureVia(parent)},
 					noWildcard(Col{Table: "s", Column: "subject_id"})...)...),
 			},
 		})

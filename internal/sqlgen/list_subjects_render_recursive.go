@@ -179,12 +179,16 @@ func buildParentClosureCTESQL(plan ListPlan) string {
 			Col{Table: "link", Column: "subject_type"},
 			Col{Table: "link", Column: "subject_id"},
 			Raw("0 AS depth"),
+			Raw("link.relation AS via"),
 		},
 		FromExpr: TableAs("", "melange_tuples", "link"),
 		Where:    And(baseWhere...),
 	}
 
-	// Recursive case: walk parent chains
+	// Recursive case: walk parent chains. Each chain stays on the linking
+	// relation of its first hop (via): "v from parent" recurses through v's
+	// own "v from parent", never through another linking relation such as
+	// owner, so a parent -> owner chain grants nothing. Arms filter on via.
 	// Join on the parent's subject (which becomes the new object to search from).
 	//
 	// Only recurse OUT FROM nodes of the object's own type: the self-referential
@@ -199,6 +203,7 @@ func buildParentClosureCTESQL(plan ListPlan) string {
 			Col{Table: "link", Column: "subject_type"},
 			Col{Table: "link", Column: "subject_id"},
 			Raw("p.depth + 1 AS depth"),
+			Col{Table: "p", Column: "via"},
 		},
 		FromExpr: TableAs("", "parent_closure", "p"),
 		Joins: []JoinClause{{
@@ -213,7 +218,7 @@ func buildParentClosureCTESQL(plan ListPlan) string {
 		}},
 		Where: And(
 			Eq{Left: Col{Table: "p", Column: "subject_type"}, Right: Lit(plan.ObjectType)},
-			In{Expr: Col{Table: "link", Column: "relation"}, Values: linkingRelations},
+			Eq{Left: Col{Table: "link", Column: "relation"}, Right: Col{Table: "p", Column: "via"}},
 			Lt{Left: Col{Table: "p", Column: "depth"}, Right: Int(25)},
 		),
 	}

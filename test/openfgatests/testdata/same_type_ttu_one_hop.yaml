@@ -1,0 +1,319 @@
+# Same-type tuple-to-userset whose target relation differs from the relation
+# being defined ("x: [user] or y from parent", parent: [organization] on
+# organization) is a single hop: y on the grandparent grants nothing. The
+# Recursive list strategy used to treat any same-type TTU as recursion, so
+# list_objects under-reported (no seed for y) and list_subjects over-reported
+# (parent_closure read y on every ancestor). Chain: P -> C -> G -> H.
+# Every list assertion is also cross-checked against Check (list_check_parity).
+#
+#   r_one       the reported shape (one hop inside a union)
+#   r_rec       genuine recursion, must still reach G and H
+#   r_mix       x recurses, y does not: y on P grants x on C, G, H
+#   inner/can_x closure over a one-hop relation
+#   nested_t    target of r_nest; its own TTU points at a different relation
+#   viewer/can_view/r_cv  target that recurses only through an implied relation
+#   r_ttu_only  single-arm one hop (Composed strategy)
+
+tests:
+  - name: same_type_ttu_one_hop
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type organization
+            relations
+              define parent: [organization]
+              define a: [user]
+              define b: [user]
+              define r_one: [user] or a from parent
+              define r_rec: [user] or r_rec from parent
+              define r_mix: [user] or r_mix from parent or a from parent
+              define inner: [user] or a from parent
+              define can_x: inner
+              define nested_t: [user] or b from parent
+              define r_nest: [user] or nested_t from parent
+              define viewer: [user] or viewer from parent
+              define can_view: viewer
+              define r_cv: [user] or can_view from parent
+              define r_ttu_only: a from parent
+        tuples:
+          - {user: 'organization:P', relation: parent, object: 'organization:C'}
+          - {user: 'organization:C', relation: parent, object: 'organization:G'}
+          - {user: 'organization:G', relation: parent, object: 'organization:H'}
+          - {user: 'user:alice', relation: a, object: 'organization:P'}
+          - {user: 'user:alice2', relation: a, object: 'organization:C'}
+          - {user: 'user:bob', relation: r_rec, object: 'organization:P'}
+          - {user: 'user:carol', relation: r_mix, object: 'organization:P'}
+          - {user: 'user:dave', relation: b, object: 'organization:P'}
+          - {user: 'user:dave2', relation: nested_t, object: 'organization:P'}
+          - {user: 'user:erin', relation: viewer, object: 'organization:P'}
+          - {user: 'user:frank', relation: inner, object: 'organization:C'}
+        listObjectsAssertions:
+          - request: {user: 'user:alice', relation: r_one, type: organization}
+            expectation: ['organization:C']
+          - request: {user: 'user:alice2', relation: r_one, type: organization}
+            expectation: ['organization:G']
+          - request: {user: 'user:bob', relation: r_one, type: organization}
+            expectation: []
+          - request: {user: 'user:carol', relation: r_one, type: organization}
+            expectation: []
+          - request: {user: 'user:dave', relation: r_one, type: organization}
+            expectation: []
+          - request: {user: 'user:dave2', relation: r_one, type: organization}
+            expectation: []
+          - request: {user: 'user:erin', relation: r_one, type: organization}
+            expectation: []
+          - request: {user: 'user:frank', relation: r_one, type: organization}
+            expectation: []
+          - request: {user: 'user:alice', relation: r_rec, type: organization}
+            expectation: []
+          - request: {user: 'user:alice2', relation: r_rec, type: organization}
+            expectation: []
+          - request: {user: 'user:bob', relation: r_rec, type: organization}
+            expectation: ['organization:C', 'organization:G', 'organization:H', 'organization:P']
+          - request: {user: 'user:carol', relation: r_rec, type: organization}
+            expectation: []
+          - request: {user: 'user:dave', relation: r_rec, type: organization}
+            expectation: []
+          - request: {user: 'user:dave2', relation: r_rec, type: organization}
+            expectation: []
+          - request: {user: 'user:erin', relation: r_rec, type: organization}
+            expectation: []
+          - request: {user: 'user:frank', relation: r_rec, type: organization}
+            expectation: []
+          - request: {user: 'user:alice', relation: r_mix, type: organization}
+            expectation: ['organization:C', 'organization:G', 'organization:H']
+          - request: {user: 'user:alice2', relation: r_mix, type: organization}
+            expectation: ['organization:G', 'organization:H']
+          - request: {user: 'user:bob', relation: r_mix, type: organization}
+            expectation: []
+          - request: {user: 'user:carol', relation: r_mix, type: organization}
+            expectation: ['organization:C', 'organization:G', 'organization:H', 'organization:P']
+          - request: {user: 'user:dave', relation: r_mix, type: organization}
+            expectation: []
+          - request: {user: 'user:dave2', relation: r_mix, type: organization}
+            expectation: []
+          - request: {user: 'user:erin', relation: r_mix, type: organization}
+            expectation: []
+          - request: {user: 'user:frank', relation: r_mix, type: organization}
+            expectation: []
+          - request: {user: 'user:alice', relation: inner, type: organization}
+            expectation: ['organization:C']
+          - request: {user: 'user:alice2', relation: inner, type: organization}
+            expectation: ['organization:G']
+          - request: {user: 'user:bob', relation: inner, type: organization}
+            expectation: []
+          - request: {user: 'user:carol', relation: inner, type: organization}
+            expectation: []
+          - request: {user: 'user:dave', relation: inner, type: organization}
+            expectation: []
+          - request: {user: 'user:dave2', relation: inner, type: organization}
+            expectation: []
+          - request: {user: 'user:erin', relation: inner, type: organization}
+            expectation: []
+          - request: {user: 'user:frank', relation: inner, type: organization}
+            expectation: ['organization:C']
+          - request: {user: 'user:alice', relation: can_x, type: organization}
+            expectation: ['organization:C']
+          - request: {user: 'user:alice2', relation: can_x, type: organization}
+            expectation: ['organization:G']
+          - request: {user: 'user:bob', relation: can_x, type: organization}
+            expectation: []
+          - request: {user: 'user:carol', relation: can_x, type: organization}
+            expectation: []
+          - request: {user: 'user:dave', relation: can_x, type: organization}
+            expectation: []
+          - request: {user: 'user:dave2', relation: can_x, type: organization}
+            expectation: []
+          - request: {user: 'user:erin', relation: can_x, type: organization}
+            expectation: []
+          - request: {user: 'user:frank', relation: can_x, type: organization}
+            expectation: ['organization:C']
+          - request: {user: 'user:alice', relation: nested_t, type: organization}
+            expectation: []
+          - request: {user: 'user:alice2', relation: nested_t, type: organization}
+            expectation: []
+          - request: {user: 'user:bob', relation: nested_t, type: organization}
+            expectation: []
+          - request: {user: 'user:carol', relation: nested_t, type: organization}
+            expectation: []
+          - request: {user: 'user:dave', relation: nested_t, type: organization}
+            expectation: ['organization:C']
+          - request: {user: 'user:dave2', relation: nested_t, type: organization}
+            expectation: ['organization:P']
+          - request: {user: 'user:erin', relation: nested_t, type: organization}
+            expectation: []
+          - request: {user: 'user:frank', relation: nested_t, type: organization}
+            expectation: []
+          - request: {user: 'user:alice', relation: r_nest, type: organization}
+            expectation: []
+          - request: {user: 'user:alice2', relation: r_nest, type: organization}
+            expectation: []
+          - request: {user: 'user:bob', relation: r_nest, type: organization}
+            expectation: []
+          - request: {user: 'user:carol', relation: r_nest, type: organization}
+            expectation: []
+          - request: {user: 'user:dave', relation: r_nest, type: organization}
+            expectation: ['organization:G']
+          - request: {user: 'user:dave2', relation: r_nest, type: organization}
+            expectation: ['organization:C']
+          - request: {user: 'user:erin', relation: r_nest, type: organization}
+            expectation: []
+          - request: {user: 'user:frank', relation: r_nest, type: organization}
+            expectation: []
+          - request: {user: 'user:alice', relation: viewer, type: organization}
+            expectation: []
+          - request: {user: 'user:alice2', relation: viewer, type: organization}
+            expectation: []
+          - request: {user: 'user:bob', relation: viewer, type: organization}
+            expectation: []
+          - request: {user: 'user:carol', relation: viewer, type: organization}
+            expectation: []
+          - request: {user: 'user:dave', relation: viewer, type: organization}
+            expectation: []
+          - request: {user: 'user:dave2', relation: viewer, type: organization}
+            expectation: []
+          - request: {user: 'user:erin', relation: viewer, type: organization}
+            expectation: ['organization:C', 'organization:G', 'organization:H', 'organization:P']
+          - request: {user: 'user:frank', relation: viewer, type: organization}
+            expectation: []
+          - request: {user: 'user:alice', relation: can_view, type: organization}
+            expectation: []
+          - request: {user: 'user:alice2', relation: can_view, type: organization}
+            expectation: []
+          - request: {user: 'user:bob', relation: can_view, type: organization}
+            expectation: []
+          - request: {user: 'user:carol', relation: can_view, type: organization}
+            expectation: []
+          - request: {user: 'user:dave', relation: can_view, type: organization}
+            expectation: []
+          - request: {user: 'user:dave2', relation: can_view, type: organization}
+            expectation: []
+          - request: {user: 'user:erin', relation: can_view, type: organization}
+            expectation: ['organization:C', 'organization:G', 'organization:H', 'organization:P']
+          - request: {user: 'user:frank', relation: can_view, type: organization}
+            expectation: []
+          - request: {user: 'user:alice', relation: r_cv, type: organization}
+            expectation: []
+          - request: {user: 'user:alice2', relation: r_cv, type: organization}
+            expectation: []
+          - request: {user: 'user:bob', relation: r_cv, type: organization}
+            expectation: []
+          - request: {user: 'user:carol', relation: r_cv, type: organization}
+            expectation: []
+          - request: {user: 'user:dave', relation: r_cv, type: organization}
+            expectation: []
+          - request: {user: 'user:dave2', relation: r_cv, type: organization}
+            expectation: []
+          - request: {user: 'user:erin', relation: r_cv, type: organization}
+            expectation: ['organization:C', 'organization:G', 'organization:H']
+          - request: {user: 'user:frank', relation: r_cv, type: organization}
+            expectation: []
+          - request: {user: 'user:alice', relation: r_ttu_only, type: organization}
+            expectation: ['organization:C']
+          - request: {user: 'user:alice2', relation: r_ttu_only, type: organization}
+            expectation: ['organization:G']
+          - request: {user: 'user:bob', relation: r_ttu_only, type: organization}
+            expectation: []
+          - request: {user: 'user:carol', relation: r_ttu_only, type: organization}
+            expectation: []
+          - request: {user: 'user:dave', relation: r_ttu_only, type: organization}
+            expectation: []
+          - request: {user: 'user:dave2', relation: r_ttu_only, type: organization}
+            expectation: []
+          - request: {user: 'user:erin', relation: r_ttu_only, type: organization}
+            expectation: []
+          - request: {user: 'user:frank', relation: r_ttu_only, type: organization}
+            expectation: []
+        listUsersAssertions:
+          - request: {object: 'organization:P', relation: r_one, filters: [user]}
+            expectation: []
+          - request: {object: 'organization:C', relation: r_one, filters: [user]}
+            expectation: ['user:alice']
+          - request: {object: 'organization:G', relation: r_one, filters: [user]}
+            expectation: ['user:alice2']
+          - request: {object: 'organization:H', relation: r_one, filters: [user]}
+            expectation: []
+          - request: {object: 'organization:P', relation: r_rec, filters: [user]}
+            expectation: ['user:bob']
+          - request: {object: 'organization:C', relation: r_rec, filters: [user]}
+            expectation: ['user:bob']
+          - request: {object: 'organization:G', relation: r_rec, filters: [user]}
+            expectation: ['user:bob']
+          - request: {object: 'organization:H', relation: r_rec, filters: [user]}
+            expectation: ['user:bob']
+          - request: {object: 'organization:P', relation: r_mix, filters: [user]}
+            expectation: ['user:carol']
+          - request: {object: 'organization:C', relation: r_mix, filters: [user]}
+            expectation: ['user:alice', 'user:carol']
+          - request: {object: 'organization:G', relation: r_mix, filters: [user]}
+            expectation: ['user:alice', 'user:alice2', 'user:carol']
+          - request: {object: 'organization:H', relation: r_mix, filters: [user]}
+            expectation: ['user:alice', 'user:alice2', 'user:carol']
+          - request: {object: 'organization:P', relation: inner, filters: [user]}
+            expectation: []
+          - request: {object: 'organization:C', relation: inner, filters: [user]}
+            expectation: ['user:alice', 'user:frank']
+          - request: {object: 'organization:G', relation: inner, filters: [user]}
+            expectation: ['user:alice2']
+          - request: {object: 'organization:H', relation: inner, filters: [user]}
+            expectation: []
+          - request: {object: 'organization:P', relation: can_x, filters: [user]}
+            expectation: []
+          - request: {object: 'organization:C', relation: can_x, filters: [user]}
+            expectation: ['user:alice', 'user:frank']
+          - request: {object: 'organization:G', relation: can_x, filters: [user]}
+            expectation: ['user:alice2']
+          - request: {object: 'organization:H', relation: can_x, filters: [user]}
+            expectation: []
+          - request: {object: 'organization:P', relation: nested_t, filters: [user]}
+            expectation: ['user:dave2']
+          - request: {object: 'organization:C', relation: nested_t, filters: [user]}
+            expectation: ['user:dave']
+          - request: {object: 'organization:G', relation: nested_t, filters: [user]}
+            expectation: []
+          - request: {object: 'organization:H', relation: nested_t, filters: [user]}
+            expectation: []
+          - request: {object: 'organization:P', relation: r_nest, filters: [user]}
+            expectation: []
+          - request: {object: 'organization:C', relation: r_nest, filters: [user]}
+            expectation: ['user:dave2']
+          - request: {object: 'organization:G', relation: r_nest, filters: [user]}
+            expectation: ['user:dave']
+          - request: {object: 'organization:H', relation: r_nest, filters: [user]}
+            expectation: []
+          - request: {object: 'organization:P', relation: viewer, filters: [user]}
+            expectation: ['user:erin']
+          - request: {object: 'organization:C', relation: viewer, filters: [user]}
+            expectation: ['user:erin']
+          - request: {object: 'organization:G', relation: viewer, filters: [user]}
+            expectation: ['user:erin']
+          - request: {object: 'organization:H', relation: viewer, filters: [user]}
+            expectation: ['user:erin']
+          - request: {object: 'organization:P', relation: can_view, filters: [user]}
+            expectation: ['user:erin']
+          - request: {object: 'organization:C', relation: can_view, filters: [user]}
+            expectation: ['user:erin']
+          - request: {object: 'organization:G', relation: can_view, filters: [user]}
+            expectation: ['user:erin']
+          - request: {object: 'organization:H', relation: can_view, filters: [user]}
+            expectation: ['user:erin']
+          - request: {object: 'organization:P', relation: r_cv, filters: [user]}
+            expectation: []
+          - request: {object: 'organization:C', relation: r_cv, filters: [user]}
+            expectation: ['user:erin']
+          - request: {object: 'organization:G', relation: r_cv, filters: [user]}
+            expectation: ['user:erin']
+          - request: {object: 'organization:H', relation: r_cv, filters: [user]}
+            expectation: ['user:erin']
+          - request: {object: 'organization:P', relation: r_ttu_only, filters: [user]}
+            expectation: []
+          - request: {object: 'organization:C', relation: r_ttu_only, filters: [user]}
+            expectation: ['user:alice']
+          - request: {object: 'organization:G', relation: r_ttu_only, filters: [user]}
+            expectation: ['user:alice2']
+          - request: {object: 'organization:H', relation: r_ttu_only, filters: [user]}
+            expectation: []

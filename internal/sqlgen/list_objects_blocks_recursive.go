@@ -11,6 +11,10 @@ type RecursiveBlockSet struct {
 	BaseBlocks         []TypedQueryBlock
 	RecursiveBlock     *TypedQueryBlock
 	SelfCandidateBlock *TypedQueryBlock
+	// VerifyWithCheck filters the final objects through check_permission. Set
+	// when the walk follows more than one linking relation: every propagating
+	// row follows every linking relation, so the walk is a superset there.
+	VerifyWithCheck bool
 	// HoistedCTEs are shared list_*_obj computations lifted out of the base
 	// blocks. The same list_<parent>_obj(p_subject_type, p_subject_id, NULL,
 	// NULL) call was previously inlined in both the userset-subject arm and the
@@ -99,6 +103,22 @@ func collectHoistedListObjTargets(plan ListPlan, parentRelations []ListParentRel
 // This handles TTU patterns with depth tracking and recursive CTEs.
 func BuildListObjectsRecursiveBlocks(plan ListPlan) (RecursiveBlockSet, error) {
 	parentRelations := buildListParentRelations(plan.Analysis)
+
+	// gateWalk: the relation recurses on itself, so its exclusion decides
+	// whether a node passes the relation to its children (see the exclusion
+	// note below). An implied relation's own recursion ("v from parent" under
+	// "r: (v or r from parent) but not b") must not be gated by r's exclusion,
+	// and one CTE cannot carry both rules, so such relations are listed whole
+	// from their own list function and only seed r's walk.
+	gateWalk := slices.ContainsFunc(parentRelations, func(p ListParentRelationData) bool {
+		return p.IsSelfReferential && !p.IsClosurePattern
+	})
+	var seedWhole []string
+	if gateWalk {
+		plan, seedWhole = splitClosureWalks(plan, parentRelations)
+		parentRelations = buildListParentRelations(plan.Analysis)
+	}
+
 	selfRefSQL := buildSelfReferentialLinkingRelations(parentRelations)
 	selfRefLinkingRelations := dequoteLinkingRelations(selfRefSQL)
 
@@ -123,22 +143,31 @@ func BuildListObjectsRecursiveBlocks(plan ListPlan) (RecursiveBlockSet, error) {
 	// NON-recursive composed plan (no self-referential linking relation, so no
 	// RecursiveBlock) that outer filter is authoritative on the final object, and
 	// OpenFGA exclusion applies to the final object — so the per-arm copies on each
-	// UNION arm are pure redundancy. Strip them. For a GENUINELY recursive plan the
-	// per-step exclusion gates whether a node propagates to its descendants (the
-	// recursive block builds its own exclusion fresh), so per-arm exclusion is
-	// load-bearing there and must be kept.
-	recursive := len(selfRefLinkingRelations) > 0
-	if !recursive {
+	// UNION arm are pure redundancy. Strip them. When the relation recurses on
+	// ITSELF ("r: ([user] or r from parent) but not b") the per-step exclusion
+	// gates whether a node propagates to its descendants (the recursive block
+	// builds its own exclusion fresh), so per-arm exclusion is load-bearing there
+	// and must be kept. When the walk is only an implied relation's recursion
+	// ("r: v but not b", "v: [user] or v from parent") the exclusion is r's, not
+	// v's: an excluded ancestor still passes v down, so only the outer filter
+	// applies.
+	if !gateWalk {
 		plan.Exclusions = ExclusionConfig{}
 	}
 
-	baseBlocks, err := buildRecursiveBaseBlocks(plan, parentRelations, propagatableRelations, hoisted, recursive)
+	baseBlocks, err := buildRecursiveBaseBlocks(plan, parentRelations, propagatableRelations, hoisted, gateWalk)
 	if err != nil {
 		return RecursiveBlockSet{}, err
 	}
 	for _, rel := range compose {
 		block := buildRecursiveComposedClosureBlock(plan, rel)
 		block.Comments = []string{fmt.Sprintf("-- Closure relation %s: compose its list_objects", rel)}
+		baseBlocks = append(baseBlocks, block)
+	}
+	for _, rel := range seedWhole {
+		block := buildRecursiveComposedClosureBlock(plan, rel)
+		block.Comments = []string{fmt.Sprintf("-- Closure relation %s recurses on its own: list it whole, gate only the seed", rel)}
+		block.Propagatable = propagatableRelations[rel]
 		baseBlocks = append(baseBlocks, block)
 	}
 
@@ -149,8 +178,13 @@ func BuildListObjectsRecursiveBlocks(plan ListPlan) (RecursiveBlockSet, error) {
 	}
 
 	if len(selfRefLinkingRelations) > 0 {
-		result.RecursiveBlock = buildRecursiveTTUBlock(plan, selfRefLinkingRelations)
+		result.RecursiveBlock = buildRecursiveTTUBlock(plan, selfRefLinkingRelations, gateWalk)
 	}
+	// ponytail: "r1 from owner" rows also walk parent edges and vice versa.
+	// Walking extra edges only adds rows, so a final check keeps it exact at
+	// one check per candidate. Upgrade path if this shape gets hot: tag each
+	// accessible row with the linking relations it may continue through.
+	result.VerifyWithCheck = len(selfRefLinkingRelations) > 1
 
 	return result, nil
 }
@@ -356,6 +390,12 @@ func buildRecursiveComposedClosureBlock(plan ListPlan, rel string) TypedQueryBlo
 			Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
 			Alias:  "icr",
 		},
+	}
+	// plan.Exclusions is non-empty only when the walk is gated: an excluded
+	// object must not seed propagation from this arm any more than from the
+	// others.
+	if len(plan.Exclusions.BuildPredicates()) > 0 {
+		stmt.Where = And(buildExclusionInput(plan.Analysis, plan.DatabaseSchema, Col{Table: "icr", Column: "object_id"}, SubjectType, SubjectID).BuildPredicates()...)
 	}
 
 	return TypedQueryBlock{
@@ -715,14 +755,17 @@ func buildCheckPermissionCrossTypeTTUBlock(plan ListPlan, parent ListParentRelat
 // buildRecursiveTTUBlock builds the recursive term block for self-referential TTU.
 // Filters on a.propagatable to ensure only results from TTU-bearing relations
 // seed the recursive step (e.g., folder_viewer results do NOT propagate).
-func buildRecursiveTTUBlock(plan ListPlan, linkingRelations []string) *TypedQueryBlock {
-	exclusions := buildExclusionInput(
-		plan.Analysis,
-		plan.DatabaseSchema,
-		Col{Table: "child", Column: "object_id"},
-		SubjectType,
-		SubjectID,
-	)
+func buildRecursiveTTUBlock(plan ListPlan, linkingRelations []string, gateWalk bool) *TypedQueryBlock {
+	exclusions := ExclusionConfig{}
+	if gateWalk {
+		exclusions = buildExclusionInput(
+			plan.Analysis,
+			plan.DatabaseSchema,
+			Col{Table: "child", Column: "object_id"},
+			SubjectType,
+			SubjectID,
+		)
+	}
 
 	stmt := SelectStmt{
 		Distinct: true,
@@ -768,7 +811,7 @@ func dequoteLinkingRelations(sqlList string) []string {
 	parts := strings.Split(sqlList, ",")
 	result := make([]string, 0, len(parts))
 	for _, part := range parts {
-		trimmed := strings.TrimSpace(strings.Trim(part, "'"))
+		trimmed := strings.Trim(strings.TrimSpace(part), "'")
 		if trimmed != "" {
 			result = append(result, trimmed)
 		}
@@ -808,4 +851,28 @@ func coverListObjectsClosure(plan ListPlan, parents []ListParentRelationData) (c
 	plan.Analysis = a
 	plan.ComplexClosure = slices.DeleteFunc(slices.Clone(plan.ComplexClosure), isCovered)
 	return plan, compose
+}
+
+// splitClosureWalks removes the self-referential closure TTU patterns whose
+// source relation can be listed whole (composableListTarget) and returns
+// those source relations. Patterns that cannot be composed stay in the walk.
+// ponytail: those keep the gated walk and can under-report descendants of an
+// excluded ancestor; route them through check_permission_internal if a
+// cyclic schema needs it.
+func splitClosureWalks(plan ListPlan, parents []ListParentRelationData) (split ListPlan, whole []string) {
+	for _, p := range parents {
+		if p.IsSelfReferential && p.IsClosurePattern && !slices.Contains(whole, p.SourceRelation) &&
+			composableListTarget(plan, plan.ObjectType, p.SourceRelation) {
+			whole = append(whole, p.SourceRelation)
+		}
+	}
+	if len(whole) == 0 {
+		return plan, nil
+	}
+	a := plan.Analysis
+	a.ClosureParentRelations = slices.DeleteFunc(slices.Clone(a.ClosureParentRelations), func(p ParentRelationInfo) bool {
+		return slices.Contains(whole, p.SourceRelation) && p.Relation == p.SourceRelation
+	})
+	plan.Analysis = a
+	return plan, whole
 }

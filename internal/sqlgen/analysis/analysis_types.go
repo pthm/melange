@@ -940,13 +940,36 @@ func addTypesFromTTU(
 	lookup map[string]map[string]*RelationAnalysis,
 	objectType string,
 	parent *ParentRelationInfo,
-) {
+) (changed bool) {
 	targetTypes := getLinkingTypes(lookup, objectType, parent.LinkingRelation)
 	for _, targetType := range targetTypes {
 		if targetAnalysis, ok := lookup[targetType][parent.Relation]; ok {
-			collector.addFrom(targetAnalysis)
+			changed = collector.addFrom(targetAnalysis) || changed
 		}
 	}
+	return changed
+}
+
+// addTypesFromParts collects subject types from a's intersection group parts
+// and TTU targets.
+func addTypesFromParts(collector *subjectTypeCollector, lookup map[string]map[string]*RelationAnalysis, a *RelationAnalysis) (changed bool) {
+	for _, group := range a.IntersectionGroups {
+		for _, part := range group.Parts {
+			switch {
+			case part.IsThis:
+			case part.ParentRelation != nil:
+				changed = addTypesFromTTU(collector, lookup, a.ObjectType, part.ParentRelation) || changed
+			case part.Relation != "":
+				if partAnalysis, ok := lookup[a.ObjectType][part.Relation]; ok {
+					changed = collector.addFrom(partAnalysis) || changed
+				}
+			}
+		}
+	}
+	for i := range a.ParentRelations {
+		changed = addTypesFromTTU(collector, lookup, a.ObjectType, &a.ParentRelations[i]) || changed
+	}
+	return changed
 }
 
 // getLinkingTypes returns the allowed types for a linking relation.
@@ -1105,27 +1128,9 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		// AND has at most one satisfying relation (so closure lookup is trivial).
 		classifyIntersectionParts(a.ObjectType, a.IntersectionGroups, lookup)
 
-		// Propagate AllowedSubjectTypes from intersection group parts.
-		for _, group := range a.IntersectionGroups {
-			for _, part := range group.Parts {
-				if part.IsThis {
-					continue
-				}
-				if part.Relation != "" && part.ParentRelation == nil {
-					if partAnalysis, ok := lookup[a.ObjectType][part.Relation]; ok {
-						collector.addFrom(partAnalysis)
-					}
-				}
-				if part.ParentRelation != nil {
-					addTypesFromTTU(collector, lookup, a.ObjectType, part.ParentRelation)
-				}
-			}
-		}
-
-		// Propagate AllowedSubjectTypes from TTU target relations (ParentRelations).
-		for _, parent := range a.ParentRelations {
-			addTypesFromTTU(collector, lookup, a.ObjectType, &parent)
-		}
+		// Propagate AllowedSubjectTypes from intersection group parts and TTU
+		// target relations (ParentRelations).
+		addTypesFromParts(collector, lookup, a)
 
 		// First check: does this relation's features allow generation?
 		if !a.Features.CanGenerate() {
@@ -1486,6 +1491,12 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 						changed = true
 					}
 				}
+			}
+			// sortByDependency skips same-type TTU edges (they would form
+			// cycles), so "r3: r2 from parent" on the same type can run before
+			// r2 has any subject types. Re-collect them here.
+			if addTypesFromParts(collector, lookup, a) {
+				changed = true
 			}
 
 			if a.Capabilities.ListAllowed {

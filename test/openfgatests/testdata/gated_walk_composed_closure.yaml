@@ -1,0 +1,47 @@
+# In a self-recursive relation with an exclusion
+# ("r: ([user] or r from parent or both) but not c"), every arm seeding the
+# parent walk must drop excluded objects first, or an excluded node passes r
+# to its children. The arm for an intersection/exclusion closure relation
+# ("both: c and a", listed through its own list function) skipped the
+# exclusion, so list_objects over-reported every descendant of an object
+# where both held but c excluded r. Check was correct.
+
+tests:
+  - name: gated_walk_composed_closure
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type document
+            relations
+              define parent: [document]
+              define a: [user]
+              define b: [user]
+              define c: [user]
+              define both: c and a
+              define r: ([user] or r from parent or both) but not c
+              define r_other: ([user] or r_other from parent or both) but not b
+        tuples:
+          # excluded seed: both and c on top, so nothing flows to mid or leaf
+          - {user: 'document:top', relation: parent, object: 'document:mid'}
+          - {user: 'document:mid', relation: parent, object: 'document:leaf'}
+          - {user: 'user:alice', relation: c, object: 'document:top'}
+          - {user: 'user:alice', relation: a, object: 'document:top'}
+          # non-excluded seed for r_other: flows to its child
+          - {user: 'document:top', relation: parent, object: 'document:side'}
+          - {user: 'user:alice', relation: b, object: 'document:side'}
+        listObjectsAssertions:
+          - request: {user: 'user:alice', relation: r, type: document}
+            expectation: []
+          - request: {user: 'user:alice', relation: r_other, type: document}
+            expectation: ['document:leaf', 'document:mid', 'document:top']
+        listUsersAssertions:
+          - request: {object: 'document:leaf', relation: r, filters: [user]}
+            expectation: []
+          - request: {object: 'document:leaf', relation: r_other, filters: [user]}
+            expectation: ['user:alice']
+          - request: {object: 'document:side', relation: r_other, filters: [user]}
+            expectation: []

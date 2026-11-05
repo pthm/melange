@@ -1,6 +1,9 @@
 package sqlgen
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // ListGeneratedSQL contains all SQL generated for list functions.
 // This is separate from check function generation to keep concerns isolated.
@@ -367,8 +370,15 @@ func buildListParentRelations(a RelationAnalysis) []ListParentRelationData {
 
 		if len(p.AllowedLinkingTypes) > 0 {
 			var crossTypes []string
+			// Only "R from L" where R is the relation owning the arm recurses.
+			// "y from parent" under x is a single hop to the parent, even
+			// when parent links to the same type, so it takes the cross-type path.
+			owner := a.Relation
+			if p.SourceRelation != "" {
+				owner = p.SourceRelation
+			}
 			for _, t := range p.AllowedLinkingTypes {
-				if t == a.ObjectType {
+				if t == a.ObjectType && p.Relation == owner {
 					data.IsSelfReferential = true
 				} else {
 					crossTypes = append(crossTypes, t)
@@ -410,4 +420,15 @@ func buildSelfReferentialLinkingRelations(parentRelations []ListParentRelationDa
 	}
 
 	return formatSQLStringList(linkingRelations)
+}
+
+// recursesVia reports whether a has a direct "a from linking" arm on its own
+// type, i.e. a is closed under walking linking to same-type parents.
+func recursesVia(a *RelationAnalysis, linking string) bool {
+	if a == nil {
+		return false
+	}
+	return slices.ContainsFunc(a.ParentRelations, func(p ParentRelationInfo) bool {
+		return p.LinkingRelation == linking && p.Relation == a.Relation && slices.Contains(p.AllowedLinkingTypes, a.ObjectType)
+	})
 }

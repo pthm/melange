@@ -1,0 +1,42 @@
+# A same-type TTU whose target is only an alias ("r3: r2 from parent",
+# "r2: b") had no allowed subject types: sortByDependency skips same-type TTU
+# edges, so r3 was analysed before r2 collected b's types, and the fixpoint
+# pass never re-read TTU targets (direct or inside an intersection). The list
+# functions returned nothing (type guard "p_subject_type NOT IN ('')"); check
+# was correct.
+
+tests:
+  - name: same_type_ttu_alias_target
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type document
+            relations
+              define parent: [document]
+              define b: [user, user:*]
+              define r2: b
+              define r3: r2 from parent
+              define r_and: r2 from parent and (r_and from parent or r2 from parent)
+        tuples:
+          - {user: 'document:dp', relation: parent, object: 'document:d'}
+          - {user: 'document:dw', relation: parent, object: 'document:e'}
+          - {user: 'user:alice', relation: b, object: 'document:dp'}
+          - {user: 'user:*', relation: b, object: 'document:dw'}
+        listObjectsAssertions:
+          - request: {user: 'user:alice', relation: r3, type: document}
+            expectation: ['document:d', 'document:e']
+          - request: {user: 'user:bob', relation: r3, type: document}
+            expectation: ['document:e']
+          - request: {user: 'user:alice', relation: r_and, type: document}
+            expectation: ['document:d', 'document:e']
+        listUsersAssertions:
+          - request: {object: 'document:d', relation: r3, filters: [user]}
+            expectation: ['user:alice']
+          - request: {object: 'document:e', relation: r3, filters: [user]}
+            expectation: ['user:*']
+          - request: {object: 'document:d', relation: r_and, filters: [user]}
+            expectation: ['user:alice']

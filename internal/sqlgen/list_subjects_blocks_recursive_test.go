@@ -164,6 +164,7 @@ func TestClassifyParentRelation(t *testing.T) {
 			plan: ListPlan{ObjectType: "folder", AnalysisLookup: map[string]*RelationAnalysis{
 				"folder.viewer": {
 					ObjectType: "folder",
+					Relation:   "viewer",
 					ParentRelations: []ParentRelationInfo{{
 						Relation:            "viewer",
 						LinkingRelation:     "parent",
