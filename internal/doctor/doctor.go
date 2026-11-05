@@ -297,6 +297,9 @@ func (d *Doctor) Run(ctx context.Context) (*Report, error) {
 
 // checkSchemaFile validates the schema file exists and is valid.
 func (d *Doctor) checkSchemaFile(report *Report) {
+	if d.schemaPath == "" {
+		return // no local schema (studio without one): nothing to check
+	}
 	m := migrator.NewMigrator(d.db, d.schemaPath)
 	m.SetDatabaseSchema(d.databaseSchema)
 

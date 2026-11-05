@@ -100,8 +100,8 @@ func (s *Server) relationFuncs(r *http.Request, typ, rel string) (funcs []sqlFun
 	rows, err := s.db.QueryContext(r.Context(), `
 		SELECT p.proname, pg_get_functiondef(p.oid)
 		FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-		WHERE n.nspname = $1 AND p.proname = ANY($2)
-		ORDER BY array_position($2, p.proname::text), p.oid`, s.dbSchema, pq.Array(names))
+		WHERE n.nspname = $1 AND p.proname::text = ANY($2::text[])
+		ORDER BY array_position($2::text[], p.proname::text), p.oid`, s.dbSchema, pq.Array(names))
 	if err != nil {
 		return nil, err.Error()
 	}

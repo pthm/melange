@@ -239,6 +239,21 @@ func TestStudio_BrowserBehaviour(t *testing.T) {
 		assert.Equal(t, true, eval(t, `[...document.querySelectorAll('#direct-tables tbody tr:not(.more-rows)')].every(r => r.textContent.includes('owner'))`))
 	})
 
+	t.Run("a direct tuple row opens the entity from anywhere on the row", func(t *testing.T) {
+		direct := c.base + "/entity?" + url.Values{"type": {"organization"}, "id": {f.main}, "tab": {"direct"}}.Encode()
+		run(t, chromedp.Navigate(direct), chromedp.WaitVisible(`#direct-tables tbody tr td:first-child`),
+			chromedp.Click(`#direct-tables tbody tr:first-child td:first-child`),
+			chromedp.WaitNotPresent(`#direct`), chromedp.WaitVisible(`.page-head h1`))
+		assert.Equal(t, "user", eval(t, `new URLSearchParams(location.search).get('type')`), "the first row's subject is a user")
+	})
+
+	t.Run("history shows the selected migration", func(t *testing.T) {
+		run(t, chromedp.Navigate(c.base+"/history"), chromedp.WaitVisible(`.mig-list a[aria-current]`),
+			chromedp.Click(`.mig-list a[aria-current]`), chromedp.WaitVisible(`.page-head h1`))
+		assert.Contains(t, eval(t, `document.querySelector('.page-head h1').textContent`), "Migration #")
+		assert.Contains(t, eval(t, `document.body.textContent`), "first recorded migration")
+	})
+
 	assert.Empty(t, reported(), "CSP violations or console errors")
 }
 

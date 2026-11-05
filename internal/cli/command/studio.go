@@ -48,8 +48,19 @@ back, so nothing is committed.`,
 		if err != nil {
 			return err
 		}
-		return runStudio(dsn, resolveString(studioDBSchema, cfg.Database.Schema, "public"), resolveString(studioSchema, cfg.Schema), studioAddr)
+		return runStudio(dsn, resolveString(studioDBSchema, cfg.Database.Schema, "public"), studioSchemaPath(), studioAddr)
 	},
+}
+
+// studioSchemaPath is the local schema for the Health page: --schema, else
+// one configured in a config file or MELANGE_SCHEMA. Studio needs no schema,
+// so the built-in default path is not used: without a config it would only
+// report a file nobody asked for as missing.
+func studioSchemaPath() string {
+	if _, set := os.LookupEnv("MELANGE_SCHEMA"); studioSchema != "" || configPath != "" || set {
+		return resolveString(studioSchema, cfg.Schema)
+	}
+	return ""
 }
 
 func init() {

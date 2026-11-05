@@ -2,6 +2,7 @@ package studio
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"regexp"
 	"strings"
@@ -92,7 +93,7 @@ func TestRenderedPagesSuitTheCSP(t *testing.T) {
 			AsSubject: directPage{Side: sideSubject, Tuples: []melange.TupleRef{{SubjectType: "user", SubjectID: "1", Relation: "owner", ObjectType: "doc", ObjectID: "1"}}},
 		}),
 		"health":   healthPage("", "schemas/schema.fga", report, ""),
-		"history":  historyPage("", nil, nil, "none"),
+		"history":  historyPage(historyData{Sel: -1, Err: "none"}),
 		"relation": relationPage(relationData{Model: testModel, Type: "doc", Relation: "viewer", Known: true, Funcs: []sqlFunc{{Name: "check_doc_viewer", Label: "check", Def: "SELECT 1"}}}),
 	} {
 		got := renderHTML(t, c)
@@ -155,11 +156,11 @@ func TestInfiniteScrollMarkup(t *testing.T) {
 	rows := renderHTML(t, directRows(directPage{Side: sideObject, More: true, Next: "/entity/direct?offset=100", Tuples: []melange.TupleRef{
 		{SubjectType: "group", SubjectID: "eng#member", Relation: "viewer", ObjectType: "doc", ObjectID: "1"},
 	}}, nil))
-	if !strings.Contains(rows, `<tr class="more-rows" hx-get="/entity/direct?offset=100" hx-trigger="intersect once" hx-swap="outerHTML"><td colspan="2"`) {
+	if !strings.Contains(rows, `<tr class="more-rows" hx-get="/entity/direct?offset=100" hx-trigger="intersect once" hx-swap="outerHTML"><td colspan="4"`) {
 		t.Errorf("direct rows sentinel:\n%s", rows)
 	}
-	if i, j := strings.Index(rows, "group:eng"), strings.Index(rows, ">viewer<"); i < 0 || j < 0 || i > j || !strings.Contains(rows, "#member") {
-		t.Errorf("object side shows subject (with #relation) then relation:\n%s", rows)
+	if i, j := strings.Index(rows, ">viewer<"), strings.Index(rows, ">group<"); i < 0 || j < 0 || i > j || !strings.Contains(rows, ">eng<") || !strings.Contains(rows, "#member") {
+		t.Errorf("object side shows relation, then the subject's type and id (with #relation):\n%s", rows)
 	}
 }
 
@@ -254,5 +255,24 @@ func TestVerdictsAndSummaries(t *testing.T) {
 	}
 	if strings.Count(w, "what-if") < 3 {
 		t.Errorf("added evidence should be tagged what-if:\n%s", w)
+	}
+}
+
+func TestAccessEntityCollapsesChips(t *testing.T) {
+	rels := make([]string, chipLimit+3)
+	for i := range rels {
+		rels[i] = fmt.Sprintf("r%d", i)
+	}
+	got := renderHTML(t, accessEntity("user", entityGroup{ID: "1", Relations: rels}, nil, entityRef{Type: "doc", ID: "1"}, false))
+	more := strings.Index(got, "data-more-chips")
+	if more < 0 || !strings.Contains(got, "+3 more") {
+		t.Fatalf("no +3 more button:\n%s", got)
+	}
+	if i, j := strings.Index(got, fmt.Sprintf(">r%d<", chipLimit-1)), strings.Index(got, fmt.Sprintf(">r%d<", chipLimit)); i > more || j < more {
+		t.Errorf("button should sit between chip %d and %d:\n%s", chipLimit-1, chipLimit, got)
+	}
+	short := renderHTML(t, accessEntity("user", entityGroup{ID: "1", Relations: rels[:chipLimit]}, nil, entityRef{Type: "doc", ID: "1"}, false))
+	if strings.Contains(short, "data-more-chips") {
+		t.Errorf("no button at exactly chipLimit relations:\n%s", short)
 	}
 }

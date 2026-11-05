@@ -41,7 +41,7 @@
    the top-bar toggle, else the system preference. */
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --fg: #e5e5e5; --mute: #a3a3a3; --bg: #111; --panel: #171717; --strip: #1f1f1f; --line: #262626; --hover: #1f1f1f;
+  --fg: #e5e5e5; --mute: #a3a3a3; --bg: #111; --panel: #171717; --strip: #1f1f1f; --line: #262626; --hover: #262626;
   --accent: hsl(25 85% 55%); --accent-fg: #111; --accent-bg: hsl(25 85% 50% / 0.15);
   --ok: #4ac26b; --ok-bg: #12291a; --warn: #e0c040; --warn-bg: #29240f; --fail: #ff6a5c; --fail-bg: #331715;
 }
@@ -112,7 +112,7 @@ a { color: inherit; }
 .side-section + .side-section { margin-top: var(--sp-5); }
 .side-list { list-style: none; margin: 0; padding: 0; }
 .side-list a {
-  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2);
+  display: flex; align-items: center; justify-content: space-between; gap: var(--sp-2); min-width: 0;
   min-height: var(--control); padding: var(--sp-1) var(--sp-2); border-radius: var(--r); text-decoration: none;
 }
 .side-list a:hover { background: var(--hover); }
@@ -142,7 +142,7 @@ a { color: inherit; }
   display: grid; grid-template-columns: auto minmax(0, 1fr) auto; column-gap: var(--sp-3); row-gap: var(--sp-1); align-items: baseline;
 }
 .page-head > * { grid-column: 1 / 3; }
-.page-head > h1 { grid-column: 1; }
+.page-head > h1 { grid-column: 1; min-width: 0; overflow-wrap: anywhere; }
 .page-head > .page-id { grid-column: 2; color: var(--mute); }
 .page-head > .stats { grid-column: 3; grid-row: 1 / span 3; align-self: center; margin: 0; gap: 0; }
 .page-head .stat { flex-direction: column; align-items: flex-start; gap: 0; padding: 0 var(--sp-5); }
@@ -241,10 +241,23 @@ button.primary:hover { filter: brightness(1.08); }
 .rows > li:last-child { border-bottom: 0; }
 .row { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); padding: var(--sp-2) var(--sp-2); margin: 0 calc(-1 * var(--sp-2)); border-radius: var(--r); text-decoration: none; }
 a.row:hover { background: var(--hover); }
-.ent { text-decoration: none; display: inline-flex; align-items: baseline; gap: var(--sp-2); }
-.ent:hover > :first-child { text-decoration: underline; }
-.ent .t-mono { color: var(--mute); }
-.ent .name { font-weight: 600; }
+/* Entity reference: type:id leads, the label follows as context. The label
+   shrinks; the id keeps its width up to the container's. Each is cut off with an
+   ellipsis rather than wrapping, and the title holds both in full. */
+.ent-link { text-decoration: none; display: inline-flex; max-width: 100%; min-width: 0; }
+.ent { display: inline-flex; align-items: center; gap: var(--sp-2); max-width: 100%; min-width: 0; }
+.ent-key { display: inline-flex; align-items: center; gap: 6px; flex: none; max-width: 100%; min-width: 0; }
+.ent-key > code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ent-name { flex: 0 100 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--mute); }
+.ent-link:hover .ent-key > code, a.row:hover .ent-key > code { text-decoration: underline; }
+/* An entity's type, set apart from its id. */
+.ent-type {
+  flex: none; display: inline-flex; align-items: center; height: 18px; padding: 0 5px;
+  border: 1px solid var(--line); border-radius: var(--r-sm); color: var(--fg);
+  font: 12px/1 var(--font-mono); white-space: nowrap;
+}
+.trunc { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nowrap { white-space: nowrap; flex: none; }
 .scroll-x { overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; }
 th, td { text-align: left; padding: var(--sp-2) var(--sp-3); border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -302,18 +315,28 @@ details.disclose[open] > summary { margin-bottom: var(--sp-2); }
 .subnav .sec-body { padding: var(--sp-2); }
 .subnav .badge.zero { opacity: .6; }
 .subnav li:has(.badge.zero) a:not([aria-current]) { color: var(--mute); }
+.side-list a > .badge, .side-list a > .t-mono:last-child { flex: none; }
 .access-rows { list-style: none; margin: 0; padding: 0; }
+/* access rows: the entity on one line, its relations under it */
 .access-rows > li {
-  display: grid; grid-template-columns: minmax(180px, 300px) minmax(0, 1fr); gap: var(--sp-1) var(--sp-4);
-  align-items: start; padding: var(--sp-3) 0; border-bottom: 1px solid var(--line);
+  display: flex; flex-direction: column; gap: var(--sp-2);
+  padding: var(--sp-3) 0; border-bottom: 1px solid var(--line);
 }
+.access-rows:not(.matrix) .chip { height: 20px; padding: 0 6px; font-size: 12px; color: var(--mute); }
+/* The row's entity is its heading: every row has the group's type (named
+   above the list, and in the hover text), so only the id shows, in bold. */
+.access-rows .who .ent-type { display: none; }
+.access-rows .who .ent-key > code { font-weight: 700; color: var(--fg); }
+/* Chips after the "+N more" button stay hidden until it is clicked. */
+.chips:not(.open) > .more-chips ~ .chip { display: none; }
+.chip.more-chips { border-style: dashed; color: var(--mute); }
 .access-rows > li:last-child { border-bottom: 0; }
 .access-rows .chips { margin-top: 0; }
-.access-rows .why-out { grid-column: 1 / -1; }
+.access-rows .who { min-width: 0; }
+.access-rows.matrix .why-out { grid-column: 1 / -1; }
 .access-rows .why-out:empty { display: none; }
-@media (max-width: 760px) { .access-rows > li { grid-template-columns: minmax(0, 1fr); } }
 /* matrix: one tight line per relation, chip then verdict, at every width */
-.access-rows.matrix > li { grid-template-columns: minmax(120px, max-content) minmax(0, 1fr); align-items: center; padding: var(--sp-1) 0; }
+.access-rows.matrix > li { display: grid; gap: var(--sp-1) var(--sp-4); grid-template-columns: minmax(120px, max-content) minmax(0, 1fr); align-items: center; padding: var(--sp-1) 0; }
 .chip[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }
 .more { margin-top: var(--sp-2); }
 .more-rows { display: block; padding: var(--sp-3) 0; list-style: none; } /* infinite-scroll sentinel */
@@ -336,3 +359,62 @@ tr.more-rows { display: table-row; }
 #query-result.htmx-request { opacity: .5; }
 /* relation page: the Query action sits in the header's right column */
 .page-head > .head-actions { grid-column: 3; grid-row: 1 / span 3; align-self: center; }
+
+/* schema diff (History) */
+.diff > span { display: block; padding: 0 var(--sp-2); margin: 0 calc(-1 * var(--sp-2)); }
+.diff .diff-hunk { color: var(--mute); margin-top: var(--sp-2); }
+.diff .diff-hunk:first-child { margin-top: 0; }
+.diff .diff-add { background: var(--ok-bg); color: var(--ok); }
+.diff .diff-del { background: var(--fail-bg); color: var(--fail); }
+
+/* Direct tuple rows are links to the other end: the id link's ::after
+   covers the row, so anywhere on it navigates. */
+table.direct tbody tr { position: relative; }
+table.direct tbody tr:not(.more-rows):hover { background: var(--hover); }
+table.direct .ent-link::after { content: ""; position: absolute; inset: 0; }
+/* direct tuples: relation | type | id | name. The first three size to their
+   content (ids cut off at 40ch); the name takes the rest. */
+table.direct td:nth-child(-n+3) { white-space: nowrap; width: 1%; }
+table.direct td:nth-child(3) .trunc { display: inline-block; max-width: 40ch; vertical-align: bottom; }
+/* max-width: 0 lets a cell shrink below its content, so long names end in
+   an ellipsis instead of widening the table. */
+.cell-trunc { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diffstat { display: inline-flex; gap: var(--sp-2); }
+.diffstat .add { color: var(--ok); }
+.diffstat .del { color: var(--fail); }
+/* model changes (History): by type, one row per relation */
+.chg { display: flex; flex-direction: column; gap: var(--sp-4); }
+.chg-type h3 { display: flex; align-items: baseline; gap: var(--sp-3); margin: 0 0 var(--sp-1); padding-bottom: var(--sp-1); border-bottom: 1px solid var(--line); font-size: 14px; }
+.chg-type h3 code { font-weight: 700; color: var(--fg); }
+/* Rows share one set of columns (subgrid), so every relation's terms start
+   at the same x. */
+.chg-rels { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; column-gap: var(--sp-5); }
+.chg-rels > li {
+  grid-column: 1 / -1; display: grid; grid-template-columns: subgrid;
+  align-items: baseline; padding: 3px 0; border-bottom: 1px solid var(--line);
+}
+.chg-rels > li:last-child { border-bottom: 0; }
+.chg-items { display: flex; flex-wrap: wrap; gap: 2px var(--sp-4); min-width: 0; }
+.chg-item { font: 13px/1.5 var(--font-mono); }
+.chg-item.add, .chg-status.add { color: var(--ok); }
+.chg-item.del, .chg-status.del { color: var(--fail); }
+.chg-status { font-size: 13px; }
+.chg-flag { justify-self: end; color: var(--warn); font-size: 12px; }
+
+/* History picker: a fixed grid so badges line up in a right-hand column.
+   Row 1: number, time, deployed. Row 2: what changed, breaking count. */
+.mig-list a { padding-block: var(--sp-2); }
+.mig {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center;
+  column-gap: var(--sp-2); row-gap: 2px; width: 100%; min-width: 0;
+}
+.mig-id { font: 700 13px/1.4 var(--font-mono); }
+.mig-time { color: var(--mute); }
+.mig-sub { grid-column: 1 / 3; font-size: 12px; color: var(--mute); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mig-sub .diffstat { margin-right: var(--sp-2); }
+.mig-badge { justify-self: end; }
+.mig-badge .badge { height: 18px; font-size: 12px; }
+.mig-list a[aria-current] .mig-time, .mig-list a[aria-current] .mig-sub { color: inherit; }
+.mig-nav { display: flex; gap: var(--sp-4); }
+.mig-nav a { color: var(--accent); text-decoration: none; white-space: nowrap; }
+.mig-nav a:hover { text-decoration: underline; }

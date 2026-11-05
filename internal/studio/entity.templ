@@ -39,14 +39,14 @@ func groupPageURL(e entityRef, tab, group, q string, offset int) string {
 templ entityPage(d entityData) {
 	{{ self := d.Entity.Type + ":" + d.Entity.ID }}
 	{{ name := d.Labels.of(d.Entity.Type, d.Entity.ID) }}
-	{{ title := self }}
+	{{ tabTitle := self }}
 	if name != "" {
-		{{ title = name }}
+		{{ tabTitle = name }}
 	}
-	@shell(page{Env: d.Env, Active: "tuples", Title: title}, tuplesSidebar(d.Types, d.Entity.Type)) {
-		@pageHead(title, crumbs(d.Entity.Type, title)) {
+	@shell(page{Env: d.Env, Active: "tuples", Title: tabTitle}, tuplesSidebar(d.Types, d.Entity.Type)) {
+		@pageHead(d.Entity.ID, crumbs(d.Entity.Type, d.Entity.ID)) {
 			if name != "" {
-				<code class="page-id">{ self }</code>
+				<span class="page-id trunc" title={ name }>{ name }</span>
 			}
 			<nav class="tabs" aria-label="Entity views">
 				for _, t := range entityTabs {
@@ -102,7 +102,7 @@ templ accessTab(d entityData, self string) {
 						for _, t := range d.Groups {
 							<li>
 								<a href={ entityTabURL(d.Entity, d.Tab, t) } { current(t == d.Group)... }>
-									{ t }
+									<span class="trunc" title={ t }>{ t }</span>
 									<span class="badge" hx-get={ groupPartURL("count", d.Entity, d.Tab, t) } hx-trigger="intersect once" hx-swap="outerHTML">…</span>
 								</a>
 							</li>
@@ -191,6 +191,10 @@ templ accessRows(typ string, rows []entityGroup, ls labels, self entityRef, self
 	@moreItem(p)
 }
 
+// chipLimit is how many relation chips an access row shows before the rest
+// collapse behind a "+N more" button (studio.js expands them).
+const chipLimit = 12
+
 templ accessEntity(typ string, ent entityGroup, ls labels, self entityRef, selfIsSubject bool) {
 	<li>
 		<div class="who">
@@ -201,10 +205,13 @@ templ accessEntity(typ string, ent entityGroup, ls labels, self entityRef, selfI
 			}
 		</div>
 		<div class="chips">
-			for _, rel := range ent.Relations {
+			for i, rel := range ent.Relations {
 				{{ sub, obj := typ+":"+ent.ID, self.Type+":"+self.ID }}
 				if selfIsSubject {
 					{{ sub, obj = obj, sub }}
+				}
+				if i == chipLimit {
+					<button type="button" class="chip more-chips" data-more-chips>+{ num(len(ent.Relations) - chipLimit) } more</button>
 				}
 				@explainChip(sub, rel, obj)
 			}
@@ -230,7 +237,7 @@ templ directTab(d entityData, self string) {
 		<div id="direct-tables" aria-live="polite">
 			<section class="sec">
 				@secHead("As subject", matchLabel(d.SubjectMatch, d.SubjectTotal)) {
-					<p class="help">Tuples where <code>{ self }</code> is the subject: <code>{ self } → relation → object</code>.</p>
+					<p class="help">Tuples where <code>{ self }</code> is the subject, read as <code>relation → object</code>.</p>
 				}
 				<div class="sec-body">
 					@directTable(d.AsSubject, d.Labels)
@@ -239,7 +246,7 @@ templ directTab(d entityData, self string) {
 			<section class="sec">
 				@secHead("As object", matchLabel(d.ObjectMatch, d.ObjectTotal)) {
 					<p class="help">
-						Tuples where <code>{ self }</code> is the object: <code>subject → relation → { self }</code>.
+						Tuples where <code>{ self }</code> is the object, read as <code>subject → relation</code>.
 						A <code>#relation</code> suffix means every subject with that relation.
 					</p>
 				}
