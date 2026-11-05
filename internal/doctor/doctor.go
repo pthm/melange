@@ -279,7 +279,7 @@ func (d *Doctor) Run(ctx context.Context) (*Report, error) {
 			if err := d.checkExpressionIndexes(ctx, report); err != nil {
 				return nil, fmt.Errorf("checking expression indexes: %w", err)
 			}
-			if err := d.checkSourceTableIndexAdvisory(ctx, report); err != nil {
+			if err := d.checkSourceTableIndexes(ctx, report); err != nil {
 				return nil, fmt.Errorf("checking source-table indexes: %w", err)
 			}
 		case "r":
