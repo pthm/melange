@@ -1,6 +1,8 @@
 module github.com/pthm/melange/test
 
-go 1.27.3
+go 1.26.0
+
+toolchain go1.27.3
 
 require (
 	github.com/chromedp/chromedp v0.21.0
