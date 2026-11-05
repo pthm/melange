@@ -577,6 +577,12 @@ func parentTargetNeedsSubjectPool(target *RelationAnalysis, currentParent ListPa
 	return len(target.ClosureParentRelations) > 0
 }
 
+// parentClosureVia keeps the parent_closure rows reached through parent's
+// own linking relation; the CTE walks every linking relation at once.
+func parentClosureVia(parent ListParentRelationData) Expr {
+	return Eq{Left: Col{Table: "p", Column: "via"}, Right: Lit(parent.LinkingRelation)}
+}
+
 // parentClosureDepthGuard limits a parent_closure arm to the direct parent
 // unless an ancestor's grant legitimately flows down the chain: either the
 // target recurses ("t from parent", so t on the grandparent gives t on the
@@ -704,6 +710,7 @@ func buildListSubjectsRecursiveTTUBlockParentClosure(plan ListPlan, parent ListP
 	}
 	whereConditions = append(whereConditions, exclusions.BuildPredicates()...)
 	whereConditions = append(whereConditions, parentClosureDepthGuard(plan, parent)...)
+	whereConditions = append(whereConditions, parentClosureVia(parent))
 
 	stmt := SelectStmt{
 		Distinct:    true,
@@ -785,6 +792,7 @@ func buildListSubjectsRecursiveTTUBlockParentClosureUsersetPattern(plan ListPlan
 	}
 	whereConditions = append(whereConditions, memberExclusions.BuildPredicates()...)
 	whereConditions = append(whereConditions, parentClosureDepthGuard(plan, parent)...)
+	whereConditions = append(whereConditions, parentClosureVia(parent))
 
 	stmt := SelectStmt{
 		Distinct:    true,
@@ -1347,7 +1355,7 @@ func buildSelfClosureTTUBlocks(plan ListPlan, parent ListParentRelationData) []T
 		return nil // pure self-recursion: the plain closure path handles it
 	}
 
-	ownType := Eq{Left: Col{Table: "p", Column: "subject_type"}, Right: Lit(plan.ObjectType)}
+	ownType := And(Eq{Left: Col{Table: "p", Column: "subject_type"}, Right: Lit(plan.ObjectType)}, parentClosureVia(parent))
 	noWildcard := func(col Col) []Expr {
 		if plan.ExcludeWildcard() {
 			return []Expr{Ne{Left: col, Right: Lit("*")}}
@@ -1420,7 +1428,7 @@ func buildSelfClosureTTUBlocks(plan ListPlan, parent ListParentRelationData) []T
 				ColumnExprs: []Expr{Col{Table: "s", Column: "subject_id"}},
 				FromExpr:    TableAs("", "parent_closure", "p"),
 				Joins:       []JoinClause{lateral(t, parent.Relation, Col{Table: "p", Column: "subject_id"})},
-				Where: And(append([]Expr{Eq{Left: Col{Table: "p", Column: "subject_type"}, Right: Lit(t)}},
+				Where: And(append([]Expr{Eq{Left: Col{Table: "p", Column: "subject_type"}, Right: Lit(t)}, parentClosureVia(parent)},
 					noWildcard(Col{Table: "s", Column: "subject_id"})...)...),
 			},
 		})

@@ -1,0 +1,51 @@
+# list_subjects' parent_closure walk unioned every linking relation, so an
+# arm for "v from parent" (v recursing through parent) also followed owner
+# edges: d -parent-> dp -owner-> folder:f, picking up v on the folder.
+# OpenFGA only follows parent for v's recursion, so alice was listed for d
+# while check denied her (over-report). Each chain now stays on the linking
+# relation of its first hop.
+
+tests:
+  - name: parent_closure_mixed_links
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type folder
+            relations
+              define a: [user]
+              define v: [user]
+
+          type document
+            relations
+              define parent: [document]
+              define owner: [document, folder]
+              define a: [user]
+              define v: [user] or v from parent
+              define r: [user] or v from parent or a from owner
+        tuples:
+          - {user: 'document:dg', relation: parent, object: 'document:dp'}
+          - {user: 'document:dp', relation: parent, object: 'document:d'}
+          - {user: 'folder:f', relation: owner, object: 'document:dp'}
+          - {user: 'folder:f2', relation: owner, object: 'document:d'}
+          # v on a folder reached by parent then owner: grants nothing on d
+          - {user: 'user:alice', relation: v, object: 'folder:f'}
+          # a on the folder owning dp, not d: grants nothing on d
+          - {user: 'user:carol', relation: a, object: 'folder:f'}
+          # v on the grandparent: flows down parent
+          - {user: 'user:bob', relation: v, object: 'document:dg'}
+          # a on d's own owner: one hop
+          - {user: 'user:dan', relation: a, object: 'folder:f2'}
+        listUsersAssertions:
+          - request: {object: 'document:d', relation: r, filters: [user]}
+            expectation: ['user:bob', 'user:dan']
+          - request: {object: 'document:dp', relation: r, filters: [user]}
+            expectation: ['user:bob', 'user:carol']
+        listObjectsAssertions:
+          - request: {user: 'user:alice', relation: r, type: document}
+            expectation: []
+          - request: {user: 'user:bob', relation: r, type: document}
+            expectation: ['document:d', 'document:dp']
