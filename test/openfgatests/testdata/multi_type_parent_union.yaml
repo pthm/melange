@@ -1,0 +1,48 @@
+# A tuple-to-userset in a union over a linking relation with several types
+# ("viewer: [user] or viewer from parent", parent: [folder, project, team])
+# only found objects under the first type: dequoteLinkingRelations left a
+# stray quote on every later type (IN ('folder', '''project')). From v0.6.7
+# until v0.10.2. A lone "viewer from parent" took another strategy and was
+# unaffected.
+
+tests:
+  - name: multi_type_parent_union
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type folder
+            relations
+              define viewer: [user]
+
+          type project
+            relations
+              define viewer: [user]
+
+          type team
+            relations
+              define viewer: [user]
+
+          type document
+            relations
+              define parent: [folder, project, team]
+              define viewer: [user] or viewer from parent
+        tuples:
+          - {user: 'folder:f', relation: parent, object: 'document:in_folder'}
+          - {user: 'project:p', relation: parent, object: 'document:in_project'}
+          - {user: 'team:t', relation: parent, object: 'document:in_team'}
+          - {user: 'user:alice', relation: viewer, object: 'folder:f'}
+          - {user: 'user:alice', relation: viewer, object: 'project:p'}
+          - {user: 'user:alice', relation: viewer, object: 'team:t'}
+          - {user: 'user:bob', relation: viewer, object: 'document:in_team'}
+        listObjectsAssertions:
+          - request: {user: 'user:alice', relation: viewer, type: document}
+            expectation: ['document:in_folder', 'document:in_project', 'document:in_team']
+          - request: {user: 'user:bob', relation: viewer, type: document}
+            expectation: ['document:in_team']
+        listUsersAssertions:
+          - request: {object: 'document:in_team', relation: viewer, filters: [user]}
+            expectation: ['user:alice', 'user:bob']
