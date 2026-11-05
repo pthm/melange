@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.10.2](https://github.com/pthm/melange/compare/v0.10.1...v0.10.2) (2026-11-05)
+
+
+### Bug Fixes
+
+* **analysis:** propagate subject types through same-type TTU targets ([6162502](https://github.com/pthm/melange/commit/6162502cdcc07b692a1c948f083cc33a26197fca))
+* **sqlgen:** apply the gating exclusion to composed closure seeds ([2ee1fc5](https://github.com/pthm/melange/commit/2ee1fc5815d1d8d0e2c6871952559344f6b022d4))
+* **sqlgen:** don't gate an implied relation's parent walk with the outer exclusion ([17472ac](https://github.com/pthm/melange/commit/17472ac7a714bc2747096bfee12d7a73ac0202da))
+* **sqlgen:** keep list_subjects parent_closure chains on one linking relation ([0dec422](https://github.com/pthm/melange/commit/0dec422912c9e306077ce630562741334fa7e9ce))
+* **sqlgen:** list functions disagree with check for same-type tuple-to-userset ([2545df1](https://github.com/pthm/melange/commit/2545df198f0bca646ed7f572f7a7de6c68d393ef))
+* **sqlgen:** treat same-type TTU to a different relation as one hop in list functions ([e998d09](https://github.com/pthm/melange/commit/e998d0999830adbf52986fa8789be7e8fd45cca8))
+* **sqlgen:** verify list_objects walks over more than one linking relation ([d54882e](https://github.com/pthm/melange/commit/d54882efe12000b8725bf8e150e073e7e27c86f6))
+
+
+### Performance
+
+* **sqlgen:** build reference graph and inline index once per call ([a19b519](https://github.com/pthm/melange/commit/a19b519b8e8ef90f6fb28ba3839b1a21fbb4a835))
+* **sqlgen:** faster codegen on large models, plus release build hardening ([503a5a0](https://github.com/pthm/melange/commit/503a5a0feb54e0bb98fe7a94942c409bea9cda22))
+
 ## [0.10.1](https://github.com/pthm/melange/compare/v0.10.0...v0.10.1) (2026-10-21)
 
 
