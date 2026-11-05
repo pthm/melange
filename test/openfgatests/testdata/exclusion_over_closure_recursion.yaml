@@ -1,0 +1,54 @@
+# An exclusion on a relation whose recursion comes from an implied relation
+# ("r: v but not a", "v: [user] or v from parent") must not stop v flowing
+# past an excluded ancestor: a on dp excludes r on dp, but d still has v (from
+# dp) and no a, so r holds on d. list_objects applied r's exclusion at every
+# step of v's parent walk and dropped d. Check and list_users were correct.
+#
+# r_mixed also recurses on itself; r flows down only through non-excluded
+# nodes while v flows down regardless, which one walk cannot express, so v is
+# listed whole and only seeds r's walk.
+#
+# Chain: dg -> dp -> d -> e.
+
+tests:
+  - name: exclusion_over_closure_recursion
+    stages:
+      - model: |
+          model
+            schema 1.1
+
+          type user
+
+          type document
+            relations
+              define parent: [document]
+              define a: [user]
+              define v: [user] or v from parent
+              define r: v but not a
+              define r_mixed: (v or r_mixed from parent) but not a
+              define r_self: ([user] or r_self from parent) but not a
+        tuples:
+          - {user: 'document:dg', relation: parent, object: 'document:dp'}
+          - {user: 'document:dp', relation: parent, object: 'document:d'}
+          - {user: 'document:d', relation: parent, object: 'document:e'}
+          - {user: 'user:alice', relation: v, object: 'document:dg'}
+          - {user: 'user:alice', relation: a, object: 'document:dp'}
+          - {user: 'user:alice', relation: a, object: 'document:e'}
+          - {user: 'user:bob', relation: r_self, object: 'document:dg'}
+          - {user: 'user:bob', relation: a, object: 'document:dp'}
+        listObjectsAssertions:
+          - request: {user: 'user:alice', relation: r, type: document}
+            expectation: ['document:d', 'document:dg']
+          - request: {user: 'user:alice', relation: r_mixed, type: document}
+            expectation: ['document:d', 'document:dg']
+          - request: {user: 'user:bob', relation: r_self, type: document}
+            expectation: ['document:dg']
+        listUsersAssertions:
+          - request: {object: 'document:d', relation: r, filters: [user]}
+            expectation: ['user:alice']
+          - request: {object: 'document:e', relation: r, filters: [user]}
+            expectation: []
+          - request: {object: 'document:d', relation: r_mixed, filters: [user]}
+            expectation: ['user:alice']
+          - request: {object: 'document:d', relation: r_self, filters: [user]}
+            expectation: []
