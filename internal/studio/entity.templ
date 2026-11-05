@@ -39,14 +39,14 @@ func groupPageURL(e entityRef, tab, group, q string, offset int) string {
 templ entityPage(d entityData) {
 	{{ self := d.Entity.Type + ":" + d.Entity.ID }}
 	{{ name := d.Labels.of(d.Entity.Type, d.Entity.ID) }}
-	{{ title := self }}
+	{{ tabTitle := self }}
 	if name != "" {
-		{{ title = name }}
+		{{ tabTitle = name }}
 	}
-	@shell(page{Env: d.Env, Active: "tuples", Title: title}, tuplesSidebar(d.Types, d.Entity.Type)) {
-		@pageHead(title, crumbs(d.Entity.Type, title)) {
+	@shell(page{Env: d.Env, Active: "tuples", Title: tabTitle}, tuplesSidebar(d.Types, d.Entity.Type)) {
+		@pageHead(d.Entity.ID, crumbs(d.Entity.Type, d.Entity.ID)) {
 			if name != "" {
-				<code class="page-id">{ self }</code>
+				<span class="page-id trunc" title={ name }>{ name }</span>
 			}
 			<nav class="tabs" aria-label="Entity views">
 				for _, t := range entityTabs {
@@ -102,7 +102,7 @@ templ accessTab(d entityData, self string) {
 						for _, t := range d.Groups {
 							<li>
 								<a href={ entityTabURL(d.Entity, d.Tab, t) } { current(t == d.Group)... }>
-									{ t }
+									<span class="trunc" title={ t }>{ t }</span>
 									<span class="badge" hx-get={ groupPartURL("count", d.Entity, d.Tab, t) } hx-trigger="intersect once" hx-swap="outerHTML">…</span>
 								</a>
 							</li>

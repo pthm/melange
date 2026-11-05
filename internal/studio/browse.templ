@@ -12,7 +12,7 @@ templ tuplesSidebar(types []typeCount, active string) {
 			for _, t := range types {
 				<li>
 					<a href={ templ.URL("/browse/" + t.Type) } { current(t.Type == active)... }>
-						{ t.Type }
+						<span class="trunc" title={ t.Type }>{ t.Type }</span>
 						<span class="t-mono mute">{ num(t.Count) }</span>
 					</a>
 				</li>
@@ -39,7 +39,7 @@ templ tuplesPage(env string, types []typeCount, errMsg string) {
 						<li>
 							<a class="row" href={ templ.URL("/browse/" + t.Type) }>
 								<code>{ t.Type }</code>
-								<span class="mute">{ plural(t.Count, "entity") }</span>
+								<span class="mute nowrap">{ plural(t.Count, "entity") }</span>
 							</a>
 						</li>
 					}
@@ -130,7 +130,7 @@ templ entityRows(ents []entityRef, ls labels, p listPage) {
 		<li>
 			<a class="row" href={ entityURL(e.Type, e.ID) }>
 				@refLabel(e.Type, e.ID, ls)
-				<span class="mute">{ plural(e.Count, "tuple") }</span>
+				<span class="mute nowrap">{ plural(e.Count, "tuple") }</span>
 			</a>
 		</li>
 	}
@@ -188,21 +188,22 @@ templ directRows(p directPage, ls labels) {
 	@moreRow(listPage{More: p.More, Next: p.Next}, 2)
 }
 
-// refLink links an entity by its label when one resolved, keeping the raw
-// type:id beside it so the tuple identity is never hidden.
+// refLink links an entity: its type:id first, then its label when one
+// resolved, as context. The tuple identity always leads.
 templ refLink(typ, id string, ls labels) {
-	<a class="ent" href={ entityURL(typ, id) }>
+	<a class="ent-link" href={ entityURL(typ, id) }>
 		@refLabel(typ, id, ls)
 	</a>
 }
 
-// refLabel is refLink's content, for rows that are links themselves.
+// refLabel is refLink's content, for rows that are links themselves. Long
+// ids and labels are cut off with an ellipsis; the title has both in full.
 templ refLabel(typ, id string, ls labels) {
-	<span class="ent">
-		if l := ls.of(typ, id); l != "" {
-			<span class="name">{ l }</span><span class="t-mono">{ typ }:{ id }</span>
-		} else {
-			<code>{ typ }:{ id }</code>
+	{{ l := ls.of(typ, id) }}
+	<span class="ent" title={ refTitle(typ, id, l) }>
+		<code class="ent-id"><span class="mute">{ typ }:</span>{ id }</code>
+		if l != "" {
+			<span class="ent-name">{ l }</span>
 		}
 	</span>
 }

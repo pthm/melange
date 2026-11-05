@@ -70,6 +70,15 @@ func relationNames(m *migrator.DeployedModel) []string {
 	return out
 }
 
+// refTitle is an entity's full type:id and label, for the hover text of a
+// reference whose parts may be cut off.
+func refTitle(typ, id, label string) string {
+	if label == "" {
+		return typ + ":" + id
+	}
+	return typ + ":" + id + "\n" + label
+}
+
 func entityURL(typ, id string) templ.SafeURL {
 	return templ.URL("/entity?" + url.Values{"type": {typ}, "id": {id}}.Encode())
 }
