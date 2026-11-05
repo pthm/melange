@@ -13,8 +13,33 @@ import (
 )
 
 // labelColumns are tried in order; the first one a domain table has becomes
-// that type's display label.
+// that type's display label. Failing those, the first column whose name ends
+// in "name" (check_name, displayName), then description. Matching ignores
+// case.
 var labelColumns = []string{"name", "display_name", "title", "label", "username", "email", "slug"}
+
+// pickLabelColumn returns the column of cols (in table order) to label rows
+// by, or "" when none fits.
+func pickLabelColumn(cols []string) string {
+	for _, want := range labelColumns {
+		for _, c := range cols {
+			if strings.EqualFold(c, want) {
+				return c
+			}
+		}
+	}
+	for _, c := range cols {
+		if strings.HasSuffix(strings.ToLower(c), "name") {
+			return c
+		}
+	}
+	for _, c := range cols {
+		if strings.EqualFold(c, "description") {
+			return c
+		}
+	}
+	return ""
+}
 
 // labelSource is where a type's human-readable labels live.
 type labelSource struct {
@@ -89,6 +114,8 @@ type planNode struct {
 var (
 	// 'user'::text
 	literalExpr = regexp.MustCompile(`^'((?:[^']|'')*)'(?:::text)?$`)
+	// CASE WHEN ... THEN 'qa_trail'::text ELSE 'aa_trail'::text END
+	caseResultExpr = regexp.MustCompile(`\b(?:THEN|ELSE) '((?:[^']|'')*)'(?:::text)?`)
 	// (organization_members.user_id)::text, "Odd"."Col", issues_1.id
 	columnExpr = regexp.MustCompile(`^\(?("[^"]+"|\w+)\.("[^"]+"|\w+)\)?(?:::\w+)?$`)
 )
@@ -103,11 +130,12 @@ type colRef struct {
 // definition. EXPLAIN VERBOSE gives the planned view with nested views
 // inlined: one scan per UNION ALL branch, its output listing the five tuple
 // columns as expressions such as 'user'::text and (team_members.user_id)::text.
-// A branch whose type is a literal and whose id is a plain column tells us
-// "user ids are values of team_members.user_id"; following that column's
-// primary key or foreign key (keyTarget) lands on users.id, the table the
-// label lives in. Branches that compute types or ids (a CASE, a type column
-// read from the data) are skipped and left to the naming fallback.
+// A branch whose type is a literal (or a CASE choosing between literals) and
+// whose id is a plain column tells us "user ids are values of
+// team_members.user_id"; following that column's primary key or foreign key
+// (keyTarget) lands on users.id, the table the label lives in. Branches that
+// compute ids, or read the type from the data, are skipped and left to the
+// naming fallback.
 func (l *labeler) discoverFromView(ctx context.Context) (map[string]*labelSource, error) {
 	var raw []byte
 	err := l.db.QueryRowContext(ctx,
@@ -148,16 +176,17 @@ func (l *labeler) discoverFromView(ctx context.Context) (map[string]*labelSource
 			continue
 		}
 		for _, p := range [][2]int{{0, 1}, {3, 4}} { // subject_type/id, object_type/id
-			typ, okT := parseLiteral(b.Output[p[0]])
 			alias, col, okC := parseColumn(b.Output[p[1]])
 			t, okA := aliases[alias]
-			if !okT || !okC || !okA {
+			if !okC || !okA {
 				continue
 			}
-			if _, seen := cands[typ]; !seen {
-				order = append(order, typ)
+			for _, typ := range parseTypes(b.Output[p[0]]) {
+				if _, seen := cands[typ]; !seen {
+					order = append(order, typ)
+				}
+				cands[typ] = append(cands[typ], colRef{table: t, col: col})
 			}
-			cands[typ] = append(cands[typ], colRef{table: t, col: col})
 		}
 	}
 
@@ -217,6 +246,24 @@ func findAppend(n planNode) *planNode {
 	return nil
 }
 
+// parseTypes returns the types a branch's type expression can produce: the
+// literal itself, or each literal result of a CASE (CASE WHEN ... THEN
+// 'qa_trail' ELSE 'aa_trail' END), since every one of them is keyed by the
+// branch's id column. Anything else yields none.
+func parseTypes(expr string) []string {
+	if t, ok := parseLiteral(expr); ok {
+		return []string{t}
+	}
+	if !strings.HasPrefix(expr, "CASE ") {
+		return nil
+	}
+	var out []string
+	for _, m := range caseResultExpr.FindAllStringSubmatch(expr, -1) {
+		out = append(out, strings.ReplaceAll(m[1], "''", "'"))
+	}
+	return out
+}
+
 func parseLiteral(expr string) (string, bool) {
 	m := literalExpr.FindStringSubmatch(expr)
 	if m == nil {
@@ -265,29 +312,37 @@ func (l *labeler) keyTarget(ctx context.Context, c colRef) (*colRef, error) {
 	}
 }
 
-// labelColumn returns the first preset label column t has, or "".
+// labelColumn returns the column of t to label rows by (see
+// pickLabelColumn), or "".
 func (l *labeler) labelColumn(ctx context.Context, t tableRef) (string, error) {
-	var col string
-	err := l.db.QueryRowContext(ctx, `
+	rows, err := l.db.QueryContext(ctx, `
 		SELECT column_name FROM information_schema.columns
-		WHERE table_schema = $1 AND table_name = $2 AND column_name::text = ANY($3::text[])
-		ORDER BY array_position($3::text[], column_name::text) LIMIT 1`,
-		t.schema, t.name, pq.Array(labelColumns)).Scan(&col)
-	if errors.Is(err, sql.ErrNoRows) {
-		return "", nil
+		WHERE table_schema = $1 AND table_name = $2
+		ORDER BY ordinal_position`, t.schema, t.name)
+	if err != nil {
+		return "", err
 	}
-	return col, err
+	defer func() { _ = rows.Close() }()
+	var cols []string
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			return "", err
+		}
+		cols = append(cols, c)
+	}
+	return pickLabelColumn(cols), rows.Err()
 }
 
 // discoverByName is the fallback: type T is backed by table T or T+"s" in the
-// database schema, keyed by an "id" column.
+// database schema, keyed by an "id" column. Names match ignoring case.
 func (l *labeler) discoverByName(ctx context.Context, typ string) (*labelSource, error) {
-	var table string
+	var table, key string
 	err := l.db.QueryRowContext(ctx, `
-		SELECT c.table_name FROM information_schema.columns c
-		WHERE c.table_schema = $1 AND c.column_name = 'id'
-		  AND c.table_name::text = ANY(ARRAY[$2::text, $2::text || 's'])
-		ORDER BY c.table_name::text = $2::text DESC LIMIT 1`, l.dbSchema, typ).Scan(&table)
+		SELECT c.table_name, c.column_name FROM information_schema.columns c
+		WHERE c.table_schema = $1 AND lower(c.column_name) = 'id'
+		  AND lower(c.table_name) = ANY(ARRAY[lower($2::text), lower($2::text) || 's'])
+		ORDER BY lower(c.table_name) = lower($2::text) DESC, c.table_name = $2::text DESC LIMIT 1`, l.dbSchema, typ).Scan(&table, &key)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -301,7 +356,7 @@ func (l *labeler) discoverByName(ctx context.Context, typ string) (*labelSource,
 	}
 	return &labelSource{
 		table:  t.quoted(),
-		key:    pq.QuoteIdentifier("id"),
+		key:    pq.QuoteIdentifier(key),
 		column: pq.QuoteIdentifier(column),
 		Desc:   table + "." + column,
 		Via:    "matched by table name",
