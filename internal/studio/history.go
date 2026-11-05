@@ -2,6 +2,8 @@ package studio
 
 import (
 	"context"
+	"slices"
+	"strings"
 
 	"github.com/lib/pq"
 
@@ -151,4 +153,98 @@ func (s *Server) historyStats(ctx context.Context, ids []int) (map[int]migration
 		out[schemas[i].ID] = statsFor(schemas[i-1], schemas[i])
 	}
 	return out, nil
+}
+
+// changeGroup is one type's model changes, for the History detail: whether
+// the type itself was added or removed, then its relations.
+type changeGroup struct {
+	Type      string
+	Status    string // "added", "removed", or "" when the type changed
+	Relations []relationChange
+}
+
+// relationChange is one relation's changes: added, removed, or changed with
+// the grant and exclusion terms that moved.
+type relationChange struct {
+	Name     string
+	Status   string // "added", "removed" or "changed"
+	Items    []changeItem
+	Breaking bool
+}
+
+// changeItem is one term a changed relation gained (+) or lost (−).
+type changeItem struct {
+	Sign string // "+" or "−"
+	Text string
+}
+
+// groupChanges arranges schema.Diff's flat list by type, then relation, in
+// first-seen order, so a relation that swaps one grant for another reads as
+// one row instead of two sentences.
+func groupChanges(changes []schema.Change) []changeGroup {
+	var out []changeGroup
+	group := func(typ string) *changeGroup {
+		for i := range out {
+			if out[i].Type == typ {
+				return &out[i]
+			}
+		}
+		out = append(out, changeGroup{Type: typ})
+		return &out[len(out)-1]
+	}
+	for _, c := range changes {
+		g := group(c.Type)
+		if c.Relation == "" {
+			g.Status = lastWord(c.Summary) // "type X added" / "type X removed"
+			continue
+		}
+		var rc *relationChange
+		for i := range g.Relations {
+			if g.Relations[i].Name == c.Relation {
+				rc = &g.Relations[i]
+			}
+		}
+		if rc == nil {
+			g.Relations = append(g.Relations, relationChange{Name: c.Relation, Status: "changed"})
+			rc = &g.Relations[len(g.Relations)-1]
+		}
+		rc.Breaking = rc.Breaking || c.Class == schema.ClassBreaking
+		if c.Summary == "relation "+c.Type+"."+c.Relation+" "+lastWord(c.Summary) {
+			rc.Status = lastWord(c.Summary)
+			continue
+		}
+		detail := strings.TrimPrefix(c.Summary, c.Type+"."+c.Relation+" ")
+		switch {
+		case strings.HasPrefix(detail, "no longer grants "):
+			rc.Items = append(rc.Items, changeItem{"−", strings.TrimPrefix(detail, "no longer grants ")})
+		case strings.HasPrefix(detail, "grants "):
+			rc.Items = append(rc.Items, changeItem{"+", strings.TrimPrefix(detail, "grants ")})
+		case strings.HasPrefix(detail, "no longer excludes "):
+			rc.Items = append(rc.Items, changeItem{"−", "but not " + strings.TrimPrefix(detail, "no longer excludes ")})
+		case strings.HasPrefix(detail, "excludes "):
+			rc.Items = append(rc.Items, changeItem{"+", "but not " + strings.TrimPrefix(detail, "excludes ")})
+		default:
+			rc.Items = append(rc.Items, changeItem{"~", detail})
+		}
+	}
+	// Lost terms before gained ones, so a swap reads old → new.
+	for gi := range out {
+		for ri := range out[gi].Relations {
+			slices.SortStableFunc(out[gi].Relations[ri].Items, func(a, b changeItem) int {
+				return strings.Compare(signRank(a.Sign), signRank(b.Sign))
+			})
+		}
+	}
+	return out
+}
+
+func signRank(s string) string {
+	if s == "−" {
+		return "0"
+	}
+	return "1"
+}
+
+func lastWord(s string) string {
+	return s[strings.LastIndexByte(s, ' ')+1:]
 }

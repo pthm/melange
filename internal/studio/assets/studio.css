@@ -382,19 +382,39 @@ table.direct td:nth-child(3) .trunc { display: inline-block; max-width: 40ch; ve
 .diffstat { display: inline-flex; gap: var(--sp-2); }
 .diffstat .add { color: var(--ok); }
 .diffstat .del { color: var(--fail); }
-.model-changes { list-style: none; margin: 0 0 var(--sp-2); padding: 0; display: flex; flex-direction: column; gap: var(--sp-1); }
-.model-changes .badge { margin-right: var(--sp-2); min-width: 72px; justify-content: center; }
+/* model changes (History): by type, one row per relation */
+.chg { display: flex; flex-direction: column; gap: var(--sp-4); }
+.chg-type h3 { display: flex; align-items: baseline; gap: var(--sp-3); margin: 0 0 var(--sp-1); padding-bottom: var(--sp-1); border-bottom: 1px solid var(--line); font-size: 14px; }
+.chg-type h3 code { font-weight: 700; color: var(--fg); }
+/* Rows share one set of columns (subgrid), so every relation's terms start
+   at the same x. */
+.chg-rels { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: max-content minmax(0, 1fr) max-content; column-gap: var(--sp-5); }
+.chg-rels > li {
+  grid-column: 1 / -1; display: grid; grid-template-columns: subgrid;
+  align-items: baseline; padding: 3px 0; border-bottom: 1px solid var(--line);
+}
+.chg-rels > li:last-child { border-bottom: 0; }
+.chg-items { display: flex; flex-wrap: wrap; gap: 2px var(--sp-4); min-width: 0; }
+.chg-item { font: 13px/1.5 var(--font-mono); }
+.chg-item.add, .chg-status.add { color: var(--ok); }
+.chg-item.del, .chg-status.del { color: var(--fail); }
+.chg-status { font-size: 13px; }
+.chg-flag { justify-self: end; color: var(--warn); font-size: 12px; }
 
-/* History picker: number and time, then what changed */
-.mig-list a { align-items: flex-start; padding-block: var(--sp-2); }
-.mig { display: flex; flex-direction: column; gap: 2px; min-width: 0; width: 100%; }
-.mig-top, .mig-sub { display: flex; align-items: center; gap: var(--sp-2); min-width: 0; }
+/* History picker: a fixed grid so badges line up in a right-hand column.
+   Row 1: number, time, deployed. Row 2: what changed, breaking count. */
+.mig-list a { padding-block: var(--sp-2); }
+.mig {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center;
+  column-gap: var(--sp-2); row-gap: 2px; width: 100%; min-width: 0;
+}
 .mig-id { font: 700 13px/1.4 var(--font-mono); }
 .mig-time { color: var(--mute); }
-.mig-top .badge { margin-left: auto; }
-.mig-sub { font-size: 12px; }
-.mig-sub .badge { height: 18px; }
-.side-list .mig-list a[aria-current] .mig-time, .mig-list a[aria-current] .mig-time { color: inherit; }
+.mig-sub { grid-column: 1 / 3; font-size: 12px; color: var(--mute); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mig-sub .diffstat { margin-right: var(--sp-2); }
+.mig-badge { justify-self: end; }
+.mig-badge .badge { height: 18px; font-size: 12px; }
+.mig-list a[aria-current] .mig-time, .mig-list a[aria-current] .mig-sub { color: inherit; }
 .mig-nav { display: flex; gap: var(--sp-4); }
-.mig-nav a { color: var(--accent); text-decoration: none; }
+.mig-nav a { color: var(--accent); text-decoration: none; white-space: nowrap; }
 .mig-nav a:hover { text-decoration: underline; }

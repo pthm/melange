@@ -9,7 +9,6 @@ import (
 
 	"github.com/pthm/melange/internal/doctor"
 	"github.com/pthm/melange/pkg/migrator"
-	"github.com/pthm/melange/pkg/schema"
 )
 
 // historyLimit bounds the migration audit trail shown on the History page.
@@ -196,11 +195,14 @@ func statsSummary(st migrationStats) string {
 	return strings.Join(parts, " · ")
 }
 
-func changeClass(c schema.ChangeClass) string {
-	if c == schema.ClassBreaking {
-		return "warn"
+func signClass(sign string) string {
+	switch sign {
+	case "+":
+		return "add"
+	case "−":
+		return "del"
 	}
-	return "ok"
+	return ""
 }
 
 // shortSummary is statsSummary for the narrow History picker: "+1 type ·

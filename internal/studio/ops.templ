@@ -16,9 +16,9 @@ templ historySidebar(d historyData) {
 				<li>
 					<a href={ templ.URL(fmt.Sprintf("/history?id=%d", e.Rec.ID)) } { current(i == d.Sel)... }>
 						<span class="mig">
-							<span class="mig-top">
-								<span class="mig-id">#{ fmt.Sprint(e.Rec.ID) }</span>
-								<span class="mig-time">{ e.Rec.MigratedAt.UTC().Format("2 Jan, 15:04") }</span>
+							<span class="mig-id">#{ fmt.Sprint(e.Rec.ID) }</span>
+							<span class="mig-time">{ e.Rec.MigratedAt.UTC().Format("2 Jan, 15:04") }</span>
+							<span class="mig-badge">
 								if e.Deployed {
 									<span class="badge ok">deployed</span>
 								}
@@ -26,19 +26,19 @@ templ historySidebar(d historyData) {
 							<span class="mig-sub">
 								switch  {
 									case e.Unchanged != 0:
-										<span class="mute">schema unchanged</span>
+										schema unchanged
 									case e.RevertOf != 0:
-										<span class="badge warn">reverts to #{ fmt.Sprint(e.RevertOf) }</span>
+										reverts to #{ fmt.Sprint(e.RevertOf) }
 									default:
 										if e.Stats.Lines {
 											@diffStat(e.Stats)
 										}
-										if sum := shortSummary(e.Stats); sum != "" {
-											<span class="trunc mute">{ sum }</span>
-										}
+										{ shortSummary(e.Stats) }
 								}
+							</span>
+							<span class="mig-badge">
 								if e.Stats.Breaking > 0 && e.RevertOf == 0 {
-									<span class="badge warn">{ num(e.Stats.Breaking) } breaking</span>
+									<span class="badge warn" title={ plural(e.Stats.Breaking, "breaking change") }>{ num(e.Stats.Breaking) } breaking</span>
 								}
 							</span>
 						</span>
@@ -119,14 +119,7 @@ templ migrationDetail(d historyData, e historyEntry) {
 		if d.Prev != nil && e.Unchanged == 0 {
 			<div class="sec-body stack">
 				if len(st.Changes) > 0 {
-					<ul class="model-changes">
-						for _, c := range st.Changes {
-							<li>
-								<span class={ "badge", changeClass(c.Class) }>{ string(c.Class) }</span>
-								<span>{ c.Summary }</span>
-							</li>
-						}
-					</ul>
+					@modelChanges(groupChanges(st.Changes))
 				} else if st.Model {
 					<p class="mute">No model changes: only comments or formatting differ.</p>
 				}
@@ -179,6 +172,53 @@ templ migrationDetail(d historyData, e historyEntry) {
 	</section>
 }
 
+// modelChanges lists a migration's model changes by type and relation: one
+// row per relation, its lost (−) and gained (+) terms, and a breaking marker
+// in a column of its own.
+templ modelChanges(groups []changeGroup) {
+	<div class="chg">
+		for _, g := range groups {
+			<div class="chg-type">
+				<h3>
+					<code>{ g.Type }</code>
+					switch g.Status {
+						case "added":
+							<span class="chg-status add">new type</span>
+						case "removed":
+							<span class="chg-status del">type removed</span>
+					}
+				</h3>
+				if len(g.Relations) > 0 {
+					<ul class="chg-rels">
+						for _, r := range g.Relations {
+							<li>
+								<code class="chg-rel">{ r.Name }</code>
+								<span class="chg-items">
+									switch r.Status {
+										case "added":
+											<span class="chg-status add">added</span>
+										case "removed":
+											<span class="chg-status del">removed</span>
+										default:
+											for _, it := range r.Items {
+												<span class={ "chg-item", signClass(it.Sign) }>{ it.Sign } { it.Text }</span>
+											}
+									}
+								</span>
+								<span class="chg-flag">
+									if r.Breaking {
+										breaking
+									}
+								</span>
+							</li>
+						}
+					</ul>
+				}
+			</div>
+		}
+	</div>
+}
+
 // statText is stat for a preformatted value, like "+3 −1".
 templ statText(value, label, tone string) {
 	<div class={ "stat", tone }><span class="t-heading">{ value }</span>{ label }</div>
@@ -187,8 +227,12 @@ templ statText(value, label, tone string) {
 // diffStat is a migration's changed line counts, like "+12 −3".
 templ diffStat(st migrationStats) {
 	<span class="diffstat t-mono" title={ fmt.Sprintf("%s added, %s removed", plural(st.LinesAdded, "line"), plural(st.LinesRemoved, "line")) }>
-		<span class="add">+{ num(st.LinesAdded) }</span>
-		<span class="del">−{ num(st.LinesRemoved) }</span>
+		if st.LinesAdded > 0 {
+			<span class="add">+{ num(st.LinesAdded) }</span>
+		}
+		if st.LinesRemoved > 0 {
+			<span class="del">−{ num(st.LinesRemoved) }</span>
+		}
 	</span>
 }
 
