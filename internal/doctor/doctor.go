@@ -18,7 +18,6 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"strings"
 
@@ -188,7 +187,6 @@ type Doctor struct {
 
 	// Cached data from checks (populated during Run)
 	parsedTypes   []schema.TypeDefinition
-	schemaContent string
 	lastMigration *migrator.MigrationRecord
 	expectedFuncs []string
 	currentFuncs  []string
@@ -442,12 +440,11 @@ func (d *Doctor) checkMigrationState(ctx context.Context, report *Report) error 
 
 	// Check if schema has changed since last migration
 	if d.parsedTypes != nil {
-		// Read schema content for checksum
-		schemaPath := m.SchemaPath()
-		content, err := readFileContent(schemaPath)
+		// Hash what migrate hashes: for a modular schema, the manifest plus
+		// every module, not the fga.mod bytes alone.
+		content, err := parser.ReadSchemaContent(m.SchemaPath())
 		if err == nil {
-			d.schemaContent = content
-			currentChecksum := migrator.ComputeSchemaChecksum(content)
+			currentChecksum := migrator.ComputeSchemaChecksum(string(content))
 
 			switch {
 			case currentChecksum != lastMigration.SchemaChecksum:
@@ -459,7 +456,7 @@ func (d *Doctor) checkMigrationState(ctx context.Context, report *Report) error 
 					Details:  fmt.Sprintf("File checksum: %s...\nDB checksum:   %s...", currentChecksum[:16], lastMigration.SchemaChecksum[:16]),
 					FixHint:  "Run 'melange migrate' to apply changes",
 				})
-			case lastMigration.CodegenVersion != migrator.CodegenVersion():
+			case !migrator.SameCodegenVersion(lastMigration.CodegenVersion, migrator.CodegenVersion()):
 				report.AddCheck(CheckResult{
 					Category: "Migration State",
 					Name:     "schema_sync",
@@ -1083,14 +1080,9 @@ func (d *Doctor) getCurrentFunctions(ctx context.Context) ([]string, error) {
 			FROM pg_proc p
 			JOIN pg_namespace n ON p.pronamespace = n.oid
 			WHERE n.nspname = %s
-			AND (
-				p.proname LIKE 'check_%%'
-				OR p.proname LIKE 'list_%%'
-				OR p.proname LIKE 'explain_%%'
-				OR p.proname LIKE 'expand_%%'
-			)
+			AND %s
 		`,
-		d.postgresSchema(),
+		d.postgresSchema(), migrator.GeneratedFunctionFilter,
 	))
 	if err != nil {
 		return nil, err
@@ -1182,15 +1174,6 @@ func truncatedJoin(items []string, maxItems int) string {
 		return strings.Join(items, "\n")
 	}
 	return strings.Join(items[:maxItems], "\n") + fmt.Sprintf("\n... and %d more", len(items)-maxItems)
-}
-
-// readFileContent reads file content as string.
-func readFileContent(path string) (string, error) {
-	content, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	return string(content), nil
 }
 
 func (d *Doctor) prefixIdent(identifier string) string {

@@ -1371,3 +1371,59 @@ func TestMigration_GetMigrationHistory(t *testing.T) {
 	require.Len(t, one, 1)
 	assert.Equal(t, migrator.ComputeSchemaChecksum(schemaV2), one[0].SchemaChecksum)
 }
+
+// TestMigrate_RemovedRelationDropsEveryFunction verifies that removing a
+// relation drops all of its generated functions (check, list, expand, explain),
+// and that a user's function sharing a generated prefix survives.
+func TestMigrate_RemovedRelationDropsEveryFunction(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	const v1 = `
+model
+  schema 1.1
+
+type user
+
+type doc
+  relations
+    define owner: [user]
+    define old_relation: owner
+`
+	const v2 = `
+model
+  schema 1.1
+
+type user
+
+type doc
+  relations
+    define owner: [user]
+`
+
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+	m := migrator.NewMigrator(db, "")
+
+	_, err := db.ExecContext(ctx, `CREATE FUNCTION explain_invoice() RETURNS int LANGUAGE sql AS 'SELECT 1'`)
+	require.NoError(t, err)
+
+	for _, schema := range []string{v1, v2} {
+		types, err := parser.ParseSchemaString(schema)
+		require.NoError(t, err)
+		require.NoError(t, m.MigrateWithTypesAndOptions(ctx, types, migrator.InternalMigrateOptions{SchemaContent: schema}))
+	}
+
+	for _, fn := range []string{
+		"check_doc_old_relation",
+		"list_doc_old_relation_obj",
+		"list_doc_old_relation_sub",
+		"expand_doc_old_relation",
+		"explain_doc_old_relation",
+	} {
+		assert.False(t, functionExists(t, ctx, db, fn), "function %s should be dropped", fn)
+	}
+	assert.True(t, functionExists(t, ctx, db, "check_doc_owner"))
+	assert.True(t, functionExists(t, ctx, db, "explain_invoice"), "user function must not be dropped")
+}

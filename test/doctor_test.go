@@ -872,3 +872,55 @@ type document
 	assertCheck(t, dm, "recorded", doctor.StatusPass)
 	assertCheck(t, dm, "drift_safety", doctor.StatusWarn)
 }
+
+// TestDoctor_ModularSchemaInSyncAfterMigrate verifies that doctor hashes a
+// modular schema the way migrate does (manifest plus modules), so it reports
+// the schema in sync right after migrating it.
+func TestDoctor_ModularSchemaInSyncAfterMigrate(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+
+	dir := t.TempDir()
+	manifest := filepath.Join(dir, "fga.mod")
+	require.NoError(t, os.WriteFile(manifest, []byte("schema: '1.2'\ncontents:\n  - core.fga\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "core.fga"), []byte(`module core
+
+type user
+
+type doc
+  relations
+    define owner: [user]
+`), 0o644))
+
+	require.NoError(t, migrator.Migrate(ctx, db, manifest))
+
+	report, err := doctor.New(db, manifest, doctor.Options{SkipPerformance: true}).Run(ctx)
+	require.NoError(t, err)
+	assertCheck(t, filterCategory(report, "Migration State"), "schema_sync", doctor.StatusPass)
+}
+
+// TestDoctor_CodegenVersionIgnoresVPrefix verifies that a recorded codegen
+// version differing only by its "v" prefix (release binaries omit it, go
+// install builds include it) is not reported as a version change.
+func TestDoctor_CodegenVersionIgnoresVPrefix(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+
+	path := filepath.Join(t.TempDir(), "schema.fga")
+	require.NoError(t, os.WriteFile(path, []byte("model\n  schema 1.1\ntype user\ntype doc\n  relations\n    define owner: [user]\n"), 0o644))
+	require.NoError(t, migrator.Migrate(ctx, db, path))
+
+	_, err := db.ExecContext(ctx, `UPDATE melange_migrations SET codegen_version =
+		CASE WHEN codegen_version LIKE 'v%' THEN substr(codegen_version, 2) ELSE 'v' || codegen_version END`)
+	require.NoError(t, err)
+
+	report, err := doctor.New(db, path, doctor.Options{SkipPerformance: true}).Run(ctx)
+	require.NoError(t, err)
+	assertCheck(t, filterCategory(report, "Migration State"), "schema_sync", doctor.StatusPass)
+}

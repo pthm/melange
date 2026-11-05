@@ -583,3 +583,19 @@ func TestDowngradeGuardError(t *testing.T) {
 		}
 	}
 }
+
+func TestSameCodegenVersion(t *testing.T) {
+	for _, tc := range []struct {
+		a, b string
+		want bool
+	}{
+		{"0.10.2", "v0.10.2", true},
+		{"v0.10.2", "v0.10.2", true},
+		{" 0.10.2", "0.10.2", true},
+		{"0.10.2", "0.10.1", false},
+	} {
+		if got := SameCodegenVersion(tc.a, tc.b); got != tc.want {
+			t.Errorf("SameCodegenVersion(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
