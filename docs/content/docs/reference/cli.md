@@ -617,6 +617,8 @@ Performance checks run automatically when `melange_tuples` is a view (not a tabl
   - **Warning** if the source table has fewer than 10,000 rows (recommended for future scaling)
   - **Failure** if the source table has 10,000+ rows (critical at current scale)
   - Provides exact `CREATE INDEX` statements as fix hints
+  - A `varchar` or `text` column needs no expression index: casting it to `text` is a relabel, so an ordinary index on the column serves the lookup. `char(n)`, `uuid` and numeric columns need the `::text` expression index.
+- Checks each single-table branch for a composite index covering object lookups: the columns behind `object_id`, then `relation` (when it comes from a column), then `subject_id`. Without one, a check on a membership-style table reads every row for the object. Branches whose object or subject column is unique, that join tables, or whose ids are computed are skipped. Warns with the exact `CREATE INDEX` for the source table.
 
 **Expand Fan-Out Advisory:**
 

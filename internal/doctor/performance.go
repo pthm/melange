@@ -455,45 +455,6 @@ func (d *Doctor) checkExpandFanoutAdvisory(_ context.Context, report *Report) er
 	return nil
 }
 
-// checkSourceTableIndexAdvisory emits the schema-derived index recommendations
-// as advisory output when melange_tuples is a view. PostgreSQL won't allow
-// CREATE INDEX directly on a view, so the user must translate the DDL to the
-// source tables that back the view's UNION ALL branches — but they need to
-// know which indexes to create, and this is the most discoverable place.
-//
-// Unlike checkTableIndexes, this never escalates to fail: even if all
-// recommendations are missing, we can't auto-detect coverage across multiple
-// source tables, and the user owns those schemas.
-func (d *Doctor) checkSourceTableIndexAdvisory(_ context.Context, report *Report) error { //nolint:unparam // error return kept for consistent checker interface
-	analyses := d.getAnalyses()
-	if analyses == nil {
-		return nil
-	}
-	recs := sqlgen.RecommendIndexes(analyses)
-	if len(recs) == 0 {
-		return nil
-	}
-
-	var details strings.Builder
-	details.WriteString("Apply these to whichever source table(s) back the melange_tuples view. ")
-	details.WriteString("Replace 'melange_tuples' with the actual table name:\n\n")
-	for i, rec := range recs {
-		if i > 0 {
-			details.WriteByte('\n')
-		}
-		details.WriteString(rec.DDL)
-	}
-
-	report.AddCheck(CheckResult{
-		Category: "Performance",
-		Name:     "source_table_indexes_advisory",
-		Status:   StatusPass,
-		Message:  fmt.Sprintf("%d schema-derived index recommendation(s) — see --verbose for DDL", len(recs)),
-		Details:  details.String(),
-	})
-	return nil
-}
-
 // parseExistingIndexes converts raw pg_indexes definitions into the
 // structural form the coverage check needs. Expression-only indexes are
 // dropped (parseIndexColumns returns nil), matching today's behavior.

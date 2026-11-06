@@ -12,40 +12,64 @@ import (
 	"github.com/pthm/melange/test/testutil"
 )
 
-// TestDoctor_SourceTableIndexAdvisory verifies that when melange_tuples is a
-// view (the standard production setup), doctor emits index recommendations
-// derived from the user's schema as advisory output the user can apply to
-// their source tables. The recommendations come from sqlgen.RecommendIndexes
-// rather than a hardcoded list, so they match the actual access patterns of
-// generated SQL.
-func TestDoctor_SourceTableIndexAdvisory(t *testing.T) {
+// TestDoctor_SourceTableIndexes verifies that when melange_tuples is a view,
+// doctor names the composite index each single-table branch's object
+// lookups need, on the real source table and columns, and only when it is
+// missing and would help.
+func TestDoctor_SourceTableIndexes(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-
-	db := testutil.DB(t)
+	db := testutil.EmptyDB(t)
 	ctx := context.Background()
-
-	d := doctor.New(db, "testutil/testdata/schema.fga")
-	report, err := d.Run(ctx)
+	_, err := db.ExecContext(ctx, `
+		-- many members per org, relation from a column: needs (org, role, user)
+		CREATE TABLE members (org_id bigint NOT NULL, user_id varchar NOT NULL, role varchar NOT NULL);
+		CREATE INDEX members_org ON members (org_id);
+		-- object id unique: one row per repo, no composite needed
+		CREATE TABLE repos (id bigint PRIMARY KEY, org_id varchar NOT NULL);
+		-- already has an index leading with object then subject
+		CREATE TABLE team_members (team_id varchar NOT NULL, user_id varchar NOT NULL);
+		CREATE INDEX tm_team_user ON team_members (team_id, user_id);
+		CREATE TABLE teams (id varchar PRIMARY KEY, org_id varchar NOT NULL);
+		CREATE VIEW melange_tuples AS
+		  SELECT 'user'::text AS subject_type, user_id::text AS subject_id, role::text AS relation, 'org'::text AS object_type, org_id::text AS object_id FROM members
+		  UNION ALL
+		  SELECT 'org'::text, org_id::text, 'owner'::text, 'repo'::text, id::text FROM repos
+		  UNION ALL
+		  SELECT 'user'::text, user_id::text, 'member'::text, 'team'::text, team_id::text FROM team_members
+		  UNION ALL
+		  -- a join: no single index spans it
+		  SELECT 'user'::text, tm.user_id::text, 'member'::text, 'org'::text, t.org_id::text FROM team_members tm JOIN teams t ON t.id = tm.team_id
+		  UNION ALL
+		  -- a fixed object id: nothing to look up by
+		  SELECT 'user'::text, user_id::text, 'admin'::text, 'platform'::text, 'main'::text FROM members WHERE role = 'admin'`)
 	require.NoError(t, err)
 
-	perfChecks := filterCategory(report, "Performance")
-	check := findCheck(perfChecks, "source_table_indexes_advisory")
-	require.NotNil(t, check, "expected source_table_indexes_advisory check on a view-backed melange_tuples")
-	assert.Equal(t, doctor.StatusPass, check.Status, "advisory should not escalate to warn/fail on its own")
+	run := func() []doctor.CheckResult {
+		report, err := doctor.New(db, "").Run(ctx)
+		require.NoError(t, err)
+		var out []doctor.CheckResult
+		for _, c := range filterCategory(report, "Performance") {
+			if c.Name == "source_table_indexes" {
+				out = append(out, c)
+			}
+		}
+		return out
+	}
 
-	// Details should include at least the two universal recommendations.
-	assert.Containsf(t, check.Details, "CREATE INDEX IF NOT EXISTS",
-		"advisory Details should include DDL; got:\n%s", check.Details)
-	assert.Containsf(t, check.Details, "(object_type, object_id, relation, subject_type, subject_id)",
-		"advisory Details should include the object-keyed recommendation; got:\n%s", check.Details)
-	assert.Containsf(t, check.Details, "(subject_type, subject_id, relation, object_type, object_id)",
-		"advisory Details should include the subject-keyed recommendation; got:\n%s", check.Details)
+	checks := run()
+	require.Len(t, checks, 1, "only members needs a composite: %+v", checks)
+	assert.Equal(t, doctor.StatusWarn, checks[0].Status)
+	assert.Equal(t, "CREATE INDEX idx_members_by_object ON members ((org_id::text), role, user_id);", checks[0].FixHint,
+		"bigint org_id needs the ::text expression, varchar role and user_id don't")
+	assert.Contains(t, checks[0].Details, "org → role branch")
 
-	// Message should be terse enough for non-verbose output.
-	assert.Containsf(t, check.Message, "recommendation",
-		"Message should mention recommendations; got: %s", check.Message)
+	_, err = db.ExecContext(ctx, checks[0].FixHint)
+	require.NoError(t, err)
+	checks = run()
+	require.Len(t, checks, 1)
+	assert.Equal(t, doctor.StatusPass, checks[0].Status, "the hint's own index satisfies the check: %s", checks[0].Message)
 }
 
 // TestDoctor_TableIndexes_MissingRecommendations creates a real table named
