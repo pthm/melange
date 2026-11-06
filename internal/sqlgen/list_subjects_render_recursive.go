@@ -22,6 +22,9 @@ const (
 	frontierArrays = frontierType + ", " + frontierID + ", " + frontierVia
 )
 
+// closureColumns name the columns of the parent_closure walk's rows.
+var closureColumns = []string{"subject_type", "subject_id", "via"}
+
 // =============================================================================
 // Recursive List Subjects Render Functions
 // =============================================================================
@@ -48,8 +51,17 @@ func RenderListSubjectsRecursiveFunction(plan ListPlan, blocks SubjectsRecursive
 		sourcesWalk = append(renderParentClosureWalk(plan, selfWalks, true), renderUsersetFilterSources(plan, selfWalks))
 		decls = append(decls, Decl{Name: usersetFilterSources, Type: "TEXT[]"})
 	}
+	walksClosure := walksParents || len(selfWalks) > 0
+	if blocks.UsersetFilterChecked {
+		sourcesWalk = append(sourcesWalk, renderGrantReachWalk(plan)...)
+		decls = append(decls, grantReachWalkDecls()...)
+		// parentClosureWalkDecls declares v_level when the closure is walked.
+		if !walksClosure {
+			decls = append(decls, Decl{Name: walkLevel, Type: "INT"})
+		}
+	}
 	usersetFilter := renderUsersetFilterThenBranch(usersetFilterPaginatedQuery, sourcesWalk...)
-	if walksParents || len(selfWalks) > 0 {
+	if walksClosure {
 		decls = append(decls, parentClosureWalkDecls()...)
 	}
 
@@ -181,6 +193,133 @@ func parentClosureWalkDecls() []Decl {
 	}
 }
 
+// PL/pgSQL variables of renderGrantReachWalk: the reached (object, relation)
+// states and the frontier still to expand.
+const (
+	reachType         = "v_rw_type"
+	reachID           = "v_rw_id"
+	reachRelation     = "v_rw_rel"
+	reachNextType     = "v_rn_type"
+	reachNextID       = "v_rn_id"
+	reachNextRelation = "v_rn_rel"
+
+	reachArrays     = reachType + ", " + reachID + ", " + reachRelation
+	reachNextArrays = reachNextType + ", " + reachNextID + ", " + reachNextRelation
+)
+
+// grantReachWalkDecls declares the arrays of renderGrantReachWalk; walkLevel
+// is shared with the parent_closure walk.
+func grantReachWalkDecls() []Decl {
+	return []Decl{
+		{Name: reachType, Type: "TEXT[]"},
+		{Name: reachID, Type: "TEXT[]"},
+		{Name: reachRelation, Type: "TEXT[]"},
+		{Name: reachNextType, Type: "TEXT[]"},
+		{Name: reachNextID, Type: "TEXT[]"},
+		{Name: reachNextRelation, Type: "TEXT[]"},
+	}
+}
+
+// planGrantEdges returns the grant edges of the plan relation on its type.
+func planGrantEdges(plan ListPlan) []grantEdge {
+	return plan.graph().grantEdgesFrom(plan.ObjectType, plan.Relation)
+}
+
+// grantEdgesTable is the VALUES table of the grant edges; target_type is NULL
+// on the edges that follow userset subjects.
+func grantEdgesTable(edges []grantEdge, alias string) TypedValuesTable {
+	rows := make([]ValuesRow, len(edges))
+	for i, e := range edges {
+		target := []Expr{Raw("NULL"), Raw("NULL")}
+		if e.TargetType != "" {
+			target = []Expr{Lit(e.TargetType), Lit(e.TargetRelation)}
+		}
+		rows[i] = append(ValuesRow{Lit(e.Type), Lit(e.Relation), Lit(e.TupleRelation)}, target...)
+	}
+	return TypedValuesTable{Rows: rows, Alias: alias, Columns: []string{"type", "relation", "tuple_relation", "target_type", "target_relation"}}
+}
+
+// grantEdgeTuples joins the states unnested as states(type, id, relation) to
+// their grant edges e among edges and the tuples t those edges read.
+func grantEdgeTuples(edges []grantEdge, states, alias string) (TableExpr, []JoinClause) {
+	state := func(column string) Expr { return Col{Table: alias, Column: column} }
+	return TableAs("", "unnest("+states+")", alias+"(type, id, relation)"), []JoinClause{
+		{Type: "INNER", TableExpr: grantEdgesTable(edges, "e"), On: And(
+			Eq{Left: Col{Table: "e", Column: "type"}, Right: state("type")},
+			Eq{Left: Col{Table: "e", Column: "relation"}, Right: state("relation")},
+		)},
+		{Type: "INNER", Table: "melange_tuples", Alias: "t", On: And(
+			Eq{Left: Col{Table: "t", Column: "object_type"}, Right: state("type")},
+			Eq{Left: Col{Table: "t", Column: "object_id"}, Right: state("id")},
+			Eq{Left: Col{Table: "t", Column: "relation"}, Right: Col{Table: "e", Column: "tuple_relation"}},
+		)},
+	}
+}
+
+// renderGrantReachWalk collects into the v_rw_* arrays the (object, relation)
+// states permission resolution reaches from the listed relation on the listed
+// object, breadth first along its grant edges: a parent lookup's linking
+// tuple leads to the parent holding the looked-up relation, a userset grant
+// to the userset's object holding its relation, and a plain subject ends the
+// path. Every tuple that can grant the relation lies on a reached state.
+// States still to expand walkDepthLimit hops away raise M2002, as resolution
+// (and OpenFGA's ListUsers) following those same tuples would.
+func renderGrantReachWalk(plan ListPlan) []Stmt {
+	tuple := func(column string) Expr { return Col{Table: "t", Column: column} }
+	edge := func(column string) Expr { return Col{Table: "e", Column: column} }
+	edges := planGrantEdges(plan)
+	from, joins := grantEdgeTuples(edges, reachNextArrays, "f")
+	step := SelectStmt{
+		ColumnExprs: []Expr{
+			tuple("subject_type"),
+			UsersetObjectID{Source: tuple("subject_id")},
+			Raw("COALESCE(e.target_relation, " + UsersetRelation{Source: tuple("subject_id")}.SQL() + ")"),
+		},
+		FromExpr: from,
+		Joins:    joins,
+		Where: And(
+			Ne{Left: tuple("subject_id"), Right: Lit("*")},
+			Or(
+				And(IsNull{Expr: edge("target_type")}, HasUserset{Source: tuple("subject_id")}),
+				And(Eq{Left: tuple("subject_type"), Right: edge("target_type")}, NoUserset{Source: tuple("subject_id")}),
+			),
+		),
+	}
+	fresh := IndentLines(step.SQL(), "    ") + "\n    EXCEPT\n    SELECT * FROM unnest(" + reachArrays + ")"
+	walk := []Stmt{
+		Assign{Name: reachNextType, Value: Raw("ARRAY[" + Lit(plan.ObjectType).SQL() + "]")},
+		Assign{Name: reachNextID, Value: Raw("ARRAY[p_object_id]")},
+		Assign{Name: reachNextRelation, Value: Raw("ARRAY[" + Lit(plan.Relation).SQL() + "]")},
+		Assign{Name: reachType, Value: Raw(reachNextType)},
+		Assign{Name: reachID, Value: Raw(reachNextID)},
+		Assign{Name: reachRelation, Value: Raw(reachNextRelation)},
+		Assign{Name: walkLevel, Value: Int(0)},
+		While{
+			Cond: Gt{Left: Raw("cardinality(" + reachNextType + ")"), Right: Int(0)},
+			Body: []Stmt{
+				If{Cond: Gte{Left: Raw(walkLevel), Right: Int(walkDepthLimit)}, Then: raiseTooDeep()},
+				aggregateRowsInto(reachNextArrays, "n", fresh, "type", "id", "relation"),
+				Assign{Name: reachType, Value: Raw(reachType + " || " + reachNextType)},
+				Assign{Name: reachID, Value: Raw(reachID + " || " + reachNextID)},
+				Assign{Name: reachRelation, Value: Raw(reachRelation + " || " + reachNextRelation)},
+				Assign{Name: walkLevel, Value: Raw(walkLevel + " + 1")},
+			},
+		},
+	}
+	// Every candidate is of a reached state's type: a filter of any other type
+	// has no candidates (and no path for resolution to exceed the limit on).
+	var stateTypes []string
+	for _, e := range edges {
+		if !slices.Contains(stateTypes, e.Type) {
+			stateTypes = append(stateTypes, e.Type)
+		}
+	}
+	return []Stmt{
+		Comment{Text: "States whose tuples can grant the relation, for the checked candidates"},
+		If{Cond: In{Expr: Param("v_filter_type"), Values: stateTypes}, Then: walk},
+	}
+}
+
 // renderUsersetFilterSources sets v_uf_sources to the listed object and its
 // ancestors of the same type along the self-recursive linking relations, read
 // from the parent_closure walk.
@@ -250,7 +389,7 @@ func renderParentClosureWalk(plan ListPlan, recursing []string, crossLinks bool)
 
 	stmts := []Stmt{
 		Comment{Text: "Collect the object's ancestors breadth first into parent_closure"},
-		aggregateRowsInto(closureArrays, "seed", IndentLines(seed.SQL(), "    ")),
+		aggregateRowsInto(closureArrays, "seed", IndentLines(seed.SQL(), "    "), closureColumns...),
 		Assign{Name: closureDepth, Value: Raw(fillDepth("0", closureType))},
 	}
 	if len(recursing) == 0 {
@@ -301,7 +440,7 @@ func renderParentClosureWalk(plan ListPlan, recursing []string, crossLinks bool)
 					Cond: Gte{Left: Raw(walkLevel), Right: Int(walkDepthLimit)},
 					Then: raiseTooDeep(),
 				},
-				aggregateRowsInto(frontierArrays, "fresh", fresh),
+				aggregateRowsInto(frontierArrays, "fresh", fresh, closureColumns...),
 				Assign{Name: closureType, Value: Raw(closureType + " || " + frontierType)},
 				Assign{Name: closureID, Value: Raw(closureID + " || " + frontierID)},
 				Assign{Name: closureVia, Value: Raw(closureVia + " || " + frontierVia)},
@@ -312,14 +451,16 @@ func renderParentClosureWalk(plan ListPlan, recursing []string, crossLinks bool)
 	)
 }
 
-// aggregateRowsInto selects the (subject_type, subject_id, via) rows of query
-// into the parallel arrays named by into. The arrays are aggregated in one
-// pass over the same rows, so they stay aligned.
-func aggregateRowsInto(into, alias, query string) Stmt {
-	return RawStmt{SQLText: fmt.Sprintf(`SELECT array_agg(%[1]s.subject_type), array_agg(%[1]s.subject_id), array_agg(%[1]s.via) INTO %[2]s
-FROM (
-%[3]s
-) AS %[1]s(subject_type, subject_id, via);`, alias, into, query)}
+// aggregateRowsInto selects the rows of query, named alias(columns), into the
+// parallel arrays named by into, one per column. The arrays are aggregated in
+// one pass over the same rows, so they stay aligned.
+func aggregateRowsInto(into, alias, query string, columns ...string) Stmt {
+	aggregates := make([]string, len(columns))
+	for i, column := range columns {
+		aggregates[i] = "array_agg(" + alias + "." + column + ")"
+	}
+	return RawStmt{SQLText: fmt.Sprintf("SELECT %s INTO %s\nFROM (\n%s\n) AS %s(%s);",
+		strings.Join(aggregates, ", "), into, query, alias, strings.Join(columns, ", "))}
 }
 
 // fillDepth is an array holding depth once per element of typeArray.

@@ -492,3 +492,513 @@ tests:
               relation: viewer
             expectation:
               - group:g#member
+  # Under mutual recursion, a group nested in a granted group is listed too:
+  # h is granted b on f0, and g is a member of h.
+  - name: userset_filter_mutual_recursion_nested_group
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user, group#member]
+          type folder
+            relations
+              define parent: [folder]
+              define a: [group#member] or b from parent
+              define b: [group#member] or a from parent
+        tuples:
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: folder:f1
+            relation: parent
+            object: folder:f0
+          - user: group:h#member
+            relation: b
+            object: folder:f0
+          - user: group:g#member
+            relation: member
+            object: group:h
+          - user: group:x#member
+            relation: b
+            object: folder:elsewhere
+        listUsersAssertions:
+          - request:
+              filters:
+                - group#member
+              object: folder:f1
+              relation: a
+            expectation:
+              - group:g#member
+              - group:h#member
+  # Under mutual recursion, a parent lookup inside an intersection part is
+  # followed too (viewer from org1 and viewer from org2).
+  - name: userset_filter_mutual_recursion_intersection_link
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type org
+            relations
+              define viewer: [group#member]
+          type folder
+            relations
+              define parent: [folder]
+              define org1: [org]
+              define org2: [org]
+              define c: viewer from org1 and viewer from org2
+              define b: c or a from parent
+              define a: b from parent
+        tuples:
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: org:o1
+            relation: org1
+            object: folder:f0
+          - user: org:o2
+            relation: org2
+            object: folder:f0
+          - user: group:g#member
+            relation: viewer
+            object: org:o1
+          - user: group:g#member
+            relation: viewer
+            object: org:o2
+        listUsersAssertions:
+          - request:
+              filters:
+                - group#member
+              object: folder:f1
+              relation: a
+            expectation:
+              - group:g#member
+  # Plain-subject grants are not followed: 25 folders granted a down a chain do
+  # not make listing usersets raise.
+  - name: userset_filter_mutual_recursion_plain_subject_chain
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type folder
+            relations
+              define parent: [folder]
+              define a: [folder, group#member] or b from parent
+              define b: a from parent
+        tuples:
+          - user: group:g#member
+            relation: a
+            object: folder:f0
+          - user: folder:f1
+            relation: a
+            object: folder:f0
+          - user: folder:f2
+            relation: a
+            object: folder:f1
+          - user: folder:f3
+            relation: a
+            object: folder:f2
+          - user: folder:f4
+            relation: a
+            object: folder:f3
+          - user: folder:f5
+            relation: a
+            object: folder:f4
+          - user: folder:f6
+            relation: a
+            object: folder:f5
+          - user: folder:f7
+            relation: a
+            object: folder:f6
+          - user: folder:f8
+            relation: a
+            object: folder:f7
+          - user: folder:f9
+            relation: a
+            object: folder:f8
+          - user: folder:f10
+            relation: a
+            object: folder:f9
+          - user: folder:f11
+            relation: a
+            object: folder:f10
+          - user: folder:f12
+            relation: a
+            object: folder:f11
+          - user: folder:f13
+            relation: a
+            object: folder:f12
+          - user: folder:f14
+            relation: a
+            object: folder:f13
+          - user: folder:f15
+            relation: a
+            object: folder:f14
+          - user: folder:f16
+            relation: a
+            object: folder:f15
+          - user: folder:f17
+            relation: a
+            object: folder:f16
+          - user: folder:f18
+            relation: a
+            object: folder:f17
+          - user: folder:f19
+            relation: a
+            object: folder:f18
+          - user: folder:f20
+            relation: a
+            object: folder:f19
+          - user: folder:f21
+            relation: a
+            object: folder:f20
+          - user: folder:f22
+            relation: a
+            object: folder:f21
+          - user: folder:f23
+            relation: a
+            object: folder:f22
+          - user: folder:f24
+            relation: a
+            object: folder:f23
+          - user: folder:f25
+            relation: a
+            object: folder:f24
+        listUsersAssertions:
+          - request:
+              filters:
+                - group#member
+              object: folder:f0
+              relation: a
+            expectation:
+              - group:g#member
+  # Under mutual recursion, the only grant 26 parent hops away is too deep: the
+  # listing fails rather than coming back empty.
+  - name: userset_filter_mutual_recursion_too_deep
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type folder
+            relations
+              define parent: [folder]
+              define a: [group#member] or b from parent
+              define b: [group#member] or a from parent
+        tuples:
+          - user: group:g#member
+            relation: a
+            object: folder:f26
+          - user: folder:f1
+            relation: parent
+            object: folder:f0
+          - user: folder:f2
+            relation: parent
+            object: folder:f1
+          - user: folder:f3
+            relation: parent
+            object: folder:f2
+          - user: folder:f4
+            relation: parent
+            object: folder:f3
+          - user: folder:f5
+            relation: parent
+            object: folder:f4
+          - user: folder:f6
+            relation: parent
+            object: folder:f5
+          - user: folder:f7
+            relation: parent
+            object: folder:f6
+          - user: folder:f8
+            relation: parent
+            object: folder:f7
+          - user: folder:f9
+            relation: parent
+            object: folder:f8
+          - user: folder:f10
+            relation: parent
+            object: folder:f9
+          - user: folder:f11
+            relation: parent
+            object: folder:f10
+          - user: folder:f12
+            relation: parent
+            object: folder:f11
+          - user: folder:f13
+            relation: parent
+            object: folder:f12
+          - user: folder:f14
+            relation: parent
+            object: folder:f13
+          - user: folder:f15
+            relation: parent
+            object: folder:f14
+          - user: folder:f16
+            relation: parent
+            object: folder:f15
+          - user: folder:f17
+            relation: parent
+            object: folder:f16
+          - user: folder:f18
+            relation: parent
+            object: folder:f17
+          - user: folder:f19
+            relation: parent
+            object: folder:f18
+          - user: folder:f20
+            relation: parent
+            object: folder:f19
+          - user: folder:f21
+            relation: parent
+            object: folder:f20
+          - user: folder:f22
+            relation: parent
+            object: folder:f21
+          - user: folder:f23
+            relation: parent
+            object: folder:f22
+          - user: folder:f24
+            relation: parent
+            object: folder:f23
+          - user: folder:f25
+            relation: parent
+            object: folder:f24
+          - user: folder:f26
+            relation: parent
+            object: folder:f25
+        listUsersAssertions:
+          - request:
+              filters:
+                - group#member
+              object: folder:f0
+              relation: a
+            errorCode: 2002
+  # Resolution follows left only out of a and right only out of b: a chain of
+  # left tuples is one hop deep for a (f1 has no right tuple), not 25.
+  - name: userset_filter_mutual_recursion_relation_aware_walk
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type folder
+            relations
+              define left: [folder]
+              define right: [folder]
+              define a: [group#member] or b from left
+              define b: [group#member] or a from right
+        tuples:
+          - user: group:g#member
+            relation: a
+            object: folder:f0
+          - user: user:bob
+            relation: member
+            object: group:g
+          - user: folder:f1
+            relation: left
+            object: folder:f0
+          - user: folder:f2
+            relation: left
+            object: folder:f1
+          - user: folder:f3
+            relation: left
+            object: folder:f2
+          - user: folder:f4
+            relation: left
+            object: folder:f3
+          - user: folder:f5
+            relation: left
+            object: folder:f4
+          - user: folder:f6
+            relation: left
+            object: folder:f5
+          - user: folder:f7
+            relation: left
+            object: folder:f6
+          - user: folder:f8
+            relation: left
+            object: folder:f7
+          - user: folder:f9
+            relation: left
+            object: folder:f8
+          - user: folder:f10
+            relation: left
+            object: folder:f9
+          - user: folder:f11
+            relation: left
+            object: folder:f10
+          - user: folder:f12
+            relation: left
+            object: folder:f11
+          - user: folder:f13
+            relation: left
+            object: folder:f12
+          - user: folder:f14
+            relation: left
+            object: folder:f13
+          - user: folder:f15
+            relation: left
+            object: folder:f14
+          - user: folder:f16
+            relation: left
+            object: folder:f15
+          - user: folder:f17
+            relation: left
+            object: folder:f16
+          - user: folder:f18
+            relation: left
+            object: folder:f17
+          - user: folder:f19
+            relation: left
+            object: folder:f18
+          - user: folder:f20
+            relation: left
+            object: folder:f19
+          - user: folder:f21
+            relation: left
+            object: folder:f20
+          - user: folder:f22
+            relation: left
+            object: folder:f21
+          - user: folder:f23
+            relation: left
+            object: folder:f22
+          - user: folder:f24
+            relation: left
+            object: folder:f23
+          - user: folder:f25
+            relation: left
+            object: folder:f24
+        checkAssertions:
+          - tuple:
+              user: user:bob
+              relation: a
+              object: folder:f0
+            expectation: true
+        listUsersAssertions:
+          - request:
+              filters:
+                - group#member
+              object: folder:f0
+              relation: a
+            expectation:
+              - group:g#member
+  # A filter type no grant can reach lists nothing, however deep the parent
+  # chain: resolution has no path to follow.
+  - name: userset_filter_mutual_recursion_unreachable_filter
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type other
+            relations
+              define member: [user]
+          type folder
+            relations
+              define parent: [folder]
+              define a: [group#member] or b from parent
+              define b: [group#member] or a from parent
+        tuples:
+          - user: folder:f1
+            relation: parent
+            object: folder:f0
+          - user: folder:f2
+            relation: parent
+            object: folder:f1
+          - user: folder:f3
+            relation: parent
+            object: folder:f2
+          - user: folder:f4
+            relation: parent
+            object: folder:f3
+          - user: folder:f5
+            relation: parent
+            object: folder:f4
+          - user: folder:f6
+            relation: parent
+            object: folder:f5
+          - user: folder:f7
+            relation: parent
+            object: folder:f6
+          - user: folder:f8
+            relation: parent
+            object: folder:f7
+          - user: folder:f9
+            relation: parent
+            object: folder:f8
+          - user: folder:f10
+            relation: parent
+            object: folder:f9
+          - user: folder:f11
+            relation: parent
+            object: folder:f10
+          - user: folder:f12
+            relation: parent
+            object: folder:f11
+          - user: folder:f13
+            relation: parent
+            object: folder:f12
+          - user: folder:f14
+            relation: parent
+            object: folder:f13
+          - user: folder:f15
+            relation: parent
+            object: folder:f14
+          - user: folder:f16
+            relation: parent
+            object: folder:f15
+          - user: folder:f17
+            relation: parent
+            object: folder:f16
+          - user: folder:f18
+            relation: parent
+            object: folder:f17
+          - user: folder:f19
+            relation: parent
+            object: folder:f18
+          - user: folder:f20
+            relation: parent
+            object: folder:f19
+          - user: folder:f21
+            relation: parent
+            object: folder:f20
+          - user: folder:f22
+            relation: parent
+            object: folder:f21
+          - user: folder:f23
+            relation: parent
+            object: folder:f22
+          - user: folder:f24
+            relation: parent
+            object: folder:f23
+          - user: folder:f25
+            relation: parent
+            object: folder:f24
+        listUsersAssertions:
+          - request:
+              filters:
+                - other#member
+              object: folder:f0
+              relation: a
+            expectation: []

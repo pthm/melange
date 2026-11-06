@@ -1,5 +1,11 @@
 package sqlgen
 
+import (
+	"cmp"
+	"slices"
+	"strings"
+)
+
 // relationGraph is the relationReferences edge set over an analysis lookup,
 // built once per generate call so composition/wildcard queries reuse it
 // instead of re-deriving every visited node's edges.
@@ -94,6 +100,110 @@ func (g *relationGraph) reaches(start, target int) bool {
 		}
 	}
 	return false
+}
+
+// grantEdge is one step permission resolution takes from an object holding
+// (Type, Relation): through a tuple on it with relation TupleRelation, either
+// to the parent the tuple names, of TargetType and holding TargetRelation (a
+// parent lookup), or, when TargetType is empty, to the tuple's userset
+// subject, holding the userset's relation (a plain subject ends the path).
+type grantEdge struct {
+	Type, Relation, TupleRelation, TargetType, TargetRelation string
+}
+
+// grantEdgesFrom returns the grant edges out of every (type, relation)
+// resolution of (objectType, relation) reaches, sorted. It follows what
+// grants a relation (computed relations, intersection operands, parent
+// lookups and usersets), never what an exclusion subtracts. nil without
+// analysis.
+func (g *relationGraph) grantEdgesFrom(objectType, relation string) []grantEdge {
+	if g == nil || g.lookup[objectType+"."+relation] == nil {
+		return nil
+	}
+	var edges []grantEdge
+	type node struct{ objectType, relation string }
+	seen := map[node]bool{{objectType, relation}: true}
+	queue := []node{{objectType, relation}}
+	visit := func(n node) {
+		if !seen[n] && g.lookup[n.objectType+"."+n.relation] != nil {
+			seen[n] = true
+			queue = append(queue, n)
+		}
+	}
+	for len(queue) > 0 {
+		n := queue[0]
+		queue = queue[1:]
+		for _, rel := range g.sameObjectGrants(n.objectType, n.relation) {
+			edges = append(edges, grantEdge{Type: n.objectType, Relation: n.relation, TupleRelation: rel})
+			a := g.lookup[n.objectType+"."+rel]
+			if a == nil {
+				continue
+			}
+			for _, u := range slices.Concat(a.UsersetPatterns, a.SelfReferentialUsersets) {
+				visit(node{u.SubjectType, u.SubjectRelation})
+			}
+			parents := slices.Clone(a.ParentRelations)
+			for _, group := range a.IntersectionGroups {
+				for _, part := range group.Parts {
+					if part.ParentRelation != nil {
+						parents = append(parents, *part.ParentRelation)
+					}
+				}
+			}
+			for _, p := range parents {
+				for _, t := range p.AllowedLinkingTypes {
+					if g.lookup[t+"."+p.Relation] != nil {
+						edges = append(edges, grantEdge{
+							Type: n.objectType, Relation: n.relation, TupleRelation: p.LinkingRelation,
+							TargetType: t, TargetRelation: p.Relation,
+						})
+						visit(node{t, p.Relation})
+					}
+				}
+			}
+		}
+	}
+	slices.SortFunc(edges, func(a, b grantEdge) int {
+		return cmp.Or(
+			strings.Compare(a.Type, b.Type),
+			strings.Compare(a.Relation, b.Relation),
+			strings.Compare(a.TupleRelation, b.TupleRelation),
+			strings.Compare(a.TargetType, b.TargetType),
+			strings.Compare(a.TargetRelation, b.TargetRelation),
+		)
+	})
+	return slices.Compact(edges)
+}
+
+// sameObjectGrants returns relation and the relations of objectType that
+// grant it on the same object without a resolution step: computed relations
+// and intersection operands, transitively, excluding subtracted relations.
+func (g *relationGraph) sameObjectGrants(objectType, relation string) []string {
+	seen := map[string]bool{relation: true}
+	out := []string{relation}
+	for i := 0; i < len(out); i++ {
+		a := g.lookup[objectType+"."+out[i]]
+		if a == nil {
+			continue
+		}
+		next := slices.Concat(a.SatisfyingRelations, a.DirectImpliedBy, a.SimpleClosureRelations,
+			a.ComplexClosureRelations, composedClosureRelations(*a))
+		for _, group := range a.IntersectionGroups {
+			for _, part := range group.Parts {
+				if part.ParentRelation == nil {
+					next = append(next, part.Relation)
+				}
+			}
+		}
+		for _, rel := range next {
+			if rel != "" && !seen[rel] {
+				seen[rel] = true
+				out = append(out, rel)
+			}
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // listCompositionSafe reports whether the list function for

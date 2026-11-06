@@ -24,6 +24,10 @@ type SubjectsRecursiveBlockSet struct {
 	// its one-hop blocks from every source, instead of calling itself per
 	// parent (which never ends on a parent cycle).
 	UsersetFilterSelfWalks []string
+	// UsersetFilterChecked is set when the userset-filter blocks check
+	// candidates (buildListSubjectsRecursiveUsersetFilterCheckedBlock), which
+	// read the objects renderGrantReachWalk collects.
+	UsersetFilterChecked bool
 }
 
 // regularBranchTailValidated reports whether the recursive list_subjects regular
@@ -68,7 +72,7 @@ func BuildListSubjectsRecursiveBlocks(plan ListPlan) (SubjectsRecursiveBlockSet,
 	slices.Sort(selfWalks)
 	selfWalks = slices.Compact(selfWalks)
 
-	usersetBlocks, err := buildSubjectsRecursiveUsersetFilterTypedBlocks(plan, parentRelations, selfWalks)
+	usersetBlocks, checked, err := buildSubjectsRecursiveUsersetFilterTypedBlocks(plan, parentRelations, selfWalks)
 	if err != nil {
 		return SubjectsRecursiveBlockSet{}, err
 	}
@@ -87,6 +91,7 @@ func BuildListSubjectsRecursiveBlocks(plan ListPlan) (SubjectsRecursiveBlockSet,
 		ParentRelations:        parentRelations,
 		ParentClosureWalks:     walks,
 		UsersetFilterSelfWalks: selfWalks,
+		UsersetFilterChecked:   checked,
 	}, nil
 }
 
@@ -1095,7 +1100,7 @@ func buildListSubjectsRecursiveTTUBlockSubjectPool(plan ListPlan, parent ListPar
 // return from it. The nested call is then needed only for parents of another
 // type or relation, which their own functions resolve. Exclusions stay exact
 // because each block checks candidates against the relation on p_object_id.
-func buildSubjectsRecursiveUsersetFilterTypedBlocks(plan ListPlan, parentRelations []ListParentRelationData, selfWalks []string) ([]TypedQueryBlock, error) {
+func buildSubjectsRecursiveUsersetFilterTypedBlocks(plan ListPlan, parentRelations []ListParentRelationData, selfWalks []string) ([]TypedQueryBlock, bool, error) {
 	fromSources := len(selfWalks) > 0
 	source := Expr(Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID})
 	if fromSources {
@@ -1145,14 +1150,14 @@ func buildSubjectsRecursiveUsersetFilterTypedBlocks(plan ListPlan, parentRelatio
 		plan.HasExclusion,
 	)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if fromSources {
 		for i := range composed {
 			composed[i] = composedClosureFromSources(composed[i])
 		}
 	}
-	return append(blocks, composed...), nil
+	return append(blocks, composed...), needChecked, nil
 }
 
 // listTargetReachesBack reports whether listing relation on objectType can
@@ -1193,22 +1198,32 @@ func listTargetReachesBack(plan ListPlan, objectType, relation string) bool {
 
 // buildListSubjectsRecursiveUsersetFilterCheckedBlock lists the usersets of the
 // filter type that hold the relation on p_object_id, by checking every
-// candidate: each subject of that type in any tuple, as a userset of the
-// filter relation. It stands in for parent functions that would recurse back
-// into this one; check_permission detects cycles and enforces the depth limit.
+// candidate: each subject of that type granted directly on a state
+// renderGrantReachWalk reached, and each reached object of that type, as a
+// userset of the filter relation. It stands in for parent functions that would
+// recurse back into this one; check_permission detects cycles and enforces
+// the depth limit.
 func buildListSubjectsRecursiveUsersetFilterCheckedBlock(plan ListPlan) TypedQueryBlock {
-	candidates := SelectStmt{
+	from, joins := grantEdgeTuples(planGrantEdges(plan), reachArrays, "r")
+	granted := SelectStmt{
 		ColumnExprs: []Expr{Alias{Expr: NormalizedUsersetSubject(Col{Table: "t", Column: "subject_id"}, Param("v_filter_relation")), Name: "id"}},
-		FromExpr:    TableAs("", "melange_tuples", "t"),
+		FromExpr:    from,
+		Joins:       joins,
 		Where: And(
+			IsNull{Expr: Col{Table: "e", Column: "target_type"}},
 			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Param("v_filter_type")},
 			Ne{Left: Col{Table: "t", Column: "subject_id"}, Right: Lit("*")},
 		),
 	}
+	reachedOfFilterType := SelectStmt{
+		ColumnExprs: []Expr{Raw("r.id || '#' || v_filter_relation AS id")},
+		FromExpr:    TableAs("", "unnest("+reachType+", "+reachID+")", "r(type, id)"),
+		Where:       Eq{Left: Col{Table: "r", Column: "type"}, Right: Param("v_filter_type")},
+	}
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Alias{Expr: Col{Table: "cand", Column: "id"}, Name: "subject_id"}},
-		FromExpr:    UnionSubquery{Queries: []SelectStmt{candidates}, Alias: "cand"},
+		FromExpr:    UnionSubquery{Queries: []SelectStmt{granted, reachedOfFilterType}, Alias: "cand"},
 		Where:       usersetFilterFullCheck(plan, Col{Table: "cand", Column: "id"}),
 	}
 	return TypedQueryBlock{
