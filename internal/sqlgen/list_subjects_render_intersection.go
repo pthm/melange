@@ -85,7 +85,7 @@ func buildIntersectionRegularQuery(plan ListPlan, candidatesSQL string) string {
 	}
 
 	// Build the full CTE query using MultiCTE
-	cteQuery := MultiCTE(false, []CTEDef{
+	cteQuery := MultiCTE([]CTEDef{
 		{Name: "subject_candidates", Query: Raw(candidatesSQL)},
 		{Name: "filtered_candidates", Query: filteredCandidatesQuery},
 	}, finalQuery)

@@ -46,21 +46,9 @@ func RenderListObjectsRecursiveFunction(plan ListPlan, blocks RecursiveBlockSet)
 		return fn.SQL(), nil
 	}
 
-	fn.Decls = []Decl{
-		{Name: walkFrontier, Type: "TEXT[]"},
-		{Name: walkSeen, Type: "TEXT[]"},
-		{Name: walkStatic, Type: "TEXT[]"},
-		{Name: walkLevel, Type: "INT"},
-	}
+	fn.Decls = append(idWalkDecls(), Decl{Name: walkStatic, Type: "TEXT[]"})
 	// Only the seed depends on the subject kind; the walk and final query are shared.
-	seed := renderWalkSeed(plainBlocks)
-	if hasUserset {
-		seed = If{
-			Cond: HasUserset{Source: SubjectID},
-			Then: []Stmt{renderWalkSeed(blocks)},
-			Else: []Stmt{seed},
-		}
-	}
+	seed := seedBySubjectKind(renderWalkSeed(plainBlocks), renderWalkSeed(blocks), hasUserset)
 	fn.Body = renderListObjectsWalk(plan, blocks, seed)
 	return fn.SQL(), nil
 }
@@ -82,6 +70,19 @@ func renderComposedListObjectsQuery(plan ListPlan, blocks RecursiveBlockSet) str
 	})
 	query := WithCTE{CTEs: ctes, Query: accessibleObjectsSelect(plan, blocks, TableAs("", "accessible", "acc"))}.SQL()
 	return finishListObjectsQuery(plan, blocks, query)
+}
+
+// seedBySubjectKind returns plainSeed, or, when hasUserset, a branch that runs
+// usersetSeed instead for userset query subjects.
+func seedBySubjectKind(plainSeed, usersetSeed Stmt, hasUserset bool) Stmt {
+	if !hasUserset {
+		return plainSeed
+	}
+	return If{
+		Cond: HasUserset{Source: SubjectID},
+		Then: []Stmt{usersetSeed},
+		Else: []Stmt{plainSeed},
+	}
 }
 
 // renderWalkSeed selects the objects the subject reaches without the
@@ -106,21 +107,51 @@ FROM (
 
 // renderListObjectsWalk renders the breadth-first walk from seed and the final query.
 func renderListObjectsWalk(plan ListPlan, blocks RecursiveBlockSet, seed Stmt) []Stmt {
-	stepSQL := formatQueryBlockSQL(blocks.RecursiveBlock.Comments, blocks.RecursiveBlock.Query.SQL())
 	final := accessibleObjectsSelect(plan, blocks, unnestObjectIDs(walkSeen+" || "+walkStatic, "acc")).SQL()
 
-	return []Stmt{
+	stmts := []Stmt{
 		Comment{Text: "Seed: objects the subject reaches without the self-referential walk"},
 		seed,
+	}
+	stmts = append(stmts, renderIDWalk(0, *blocks.RecursiveBlock, renderWalkTooDeep(plan, blocks))...)
+	return append(stmts, ReturnQuery{Query: finishListObjectsQuery(plan, blocks, final)})
+}
+
+// idWalkDecls declares the variables of renderIDWalk.
+func idWalkDecls() []Decl {
+	return []Decl{
+		{Name: walkFrontier, Type: "TEXT[]"},
+		{Name: walkSeen, Type: "TEXT[]"},
+		{Name: walkLevel, Type: "INT"},
+	}
+}
+
+// seedFrontier selects the distinct IDs in the first column of the union of
+// blocks into walkFrontier, ready for renderIDWalk.
+func seedFrontier(blocks []TypedQueryBlock) Stmt {
+	return RawStmt{SQLText: fmt.Sprintf(`SELECT array_agg(DISTINCT seed.id) INTO %s FROM (
+%s
+) AS seed(id);`, walkFrontier, RenderUnionBlocks(renderTypedQueryBlocks(blocks)))}
+}
+
+// renderIDWalk walks object IDs breadth first, from the IDs a preceding
+// statement put in walkFrontier, at level firstLevel. Each pass replaces the
+// frontier with the IDs step reaches from it (selected as one column and
+// reading walkFrontier) that are not yet in walkSeen, so each object is
+// expanded once, at its shortest distance. Objects remaining at
+// walkDepthLimit run tooDeep. walkSeen ends up holding every object found.
+func renderIDWalk(firstLevel int, step TypedQueryBlock, tooDeep []Stmt) []Stmt {
+	stepSQL := formatQueryBlockSQL(step.Comments, step.Query.SQL())
+	return []Stmt{
 		Assign{Name: walkSeen, Value: Raw(walkFrontier)},
-		Assign{Name: walkLevel, Value: Int(0)},
+		Assign{Name: walkLevel, Value: Int(firstLevel)},
 		Comment{Text: "Walk breadth first, expanding each object once"},
 		While{
 			Cond: Gt{Left: Raw("cardinality(" + walkFrontier + ")"), Right: Int(0)},
 			Body: []Stmt{
 				If{
 					Cond: Gte{Left: Raw(walkLevel), Right: Int(walkDepthLimit)},
-					Then: renderWalkTooDeep(plan, blocks),
+					Then: tooDeep,
 				},
 				RawStmt{SQLText: fmt.Sprintf(`SELECT array_agg(fresh.object_id) INTO %s FROM (
 %s
@@ -131,8 +162,12 @@ func renderListObjectsWalk(plan ListPlan, blocks RecursiveBlockSet, seed Stmt) [
 				Assign{Name: walkLevel, Value: Raw(walkLevel + " + 1")},
 			},
 		},
-		ReturnQuery{Query: finishListObjectsQuery(plan, blocks, final)},
 	}
+}
+
+// raiseTooDeep raises M2002 (resolution too complex).
+func raiseTooDeep() []Stmt {
+	return []Stmt{Raise{Message: "resolution too complex", ErrCode: "M2002"}}
 }
 
 // renderWalkTooDeep renders what happens once the walk has expanded
@@ -145,9 +180,8 @@ func renderListObjectsWalk(plan ListPlan, blocks RecursiveBlockSet, seed Stmt) [
 // object's path is too deep). A valid path past the limit must cross the
 // frontier at such an object, so otherwise the walk is complete.
 func renderWalkTooDeep(plan ListPlan, blocks RecursiveBlockSet) []Stmt {
-	raise := Raise{Message: "resolution too complex", ErrCode: "M2002"}
 	if !blocks.VerifyWithCheck {
-		return []Stmt{raise}
+		return raiseTooDeep()
 	}
 
 	frontierObject := LiteralObject(plan.ObjectType, Col{Table: "f", Column: "object_id"})
@@ -168,7 +202,7 @@ func renderWalkTooDeep(plan ListPlan, blocks RecursiveBlockSet) []Stmt {
 				FromExpr:    unnestObjectIDs(walkFrontier, "f"),
 				Where:       Or(holdsWalkRelation...),
 			}},
-			Then: []Stmt{raise},
+			Then: raiseTooDeep(),
 		},
 		RawStmt{SQLText: "EXIT;"},
 	}

@@ -13,16 +13,19 @@ type SelfRefUsersetSubjectsBlockSet struct {
 	// UsersetFilterSelfBlock is the self-candidate block for userset filter path
 	UsersetFilterSelfBlock *TypedQueryBlock
 
-	// UsersetFilterRecursiveBlock is the recursive block for userset filter expansion
+	// UsersetFilterRecursiveBlock is one step of the userset filter walk:
+	// usersets of the filter type nested in a frontier userset.
 	UsersetFilterRecursiveBlock *TypedQueryBlock
 
 	// RegularBlocks are blocks for the regular path (individual subjects)
 	RegularBlocks []TypedQueryBlock
 
-	// UsersetObjectsBaseBlock is the base block for userset objects CTE
+	// UsersetObjectsBaseBlock seeds the regular walk: the usersets of the
+	// relation named on the object.
 	UsersetObjectsBaseBlock *TypedQueryBlock
 
-	// UsersetObjectsRecursiveBlock is the recursive block for userset objects CTE
+	// UsersetObjectsRecursiveBlock is one step of the regular walk: usersets
+	// nested in a frontier userset.
 	UsersetObjectsRecursiveBlock *TypedQueryBlock
 }
 
@@ -66,7 +69,6 @@ func buildSelfRefUsersetFilterBaseBlock(plan ListPlan) TypedQueryBlock {
 			Distinct: true,
 			ColumnExprs: []Expr{
 				Raw("split_part(t.subject_id, '#', 1) AS userset_object_id"),
-				Raw("0 AS depth"),
 			},
 			FromExpr: TableAs("", "melange_tuples", "t"),
 			Where: And(
@@ -108,7 +110,6 @@ func buildSelfRefUsersetFilterComposedClosureBlocks(plan ListPlan) []TypedQueryB
 				Distinct: true,
 				ColumnExprs: []Expr{
 					Raw("split_part(icr.subject_id, '#', 1) AS userset_object_id"),
-					Raw("0 AS depth"),
 				},
 				FromExpr: FunctionCallExpr{
 					Schema: plan.DatabaseSchema,
@@ -161,9 +162,8 @@ func buildSelfRefUsersetFilterRecursiveBlock(plan ListPlan) *TypedQueryBlock {
 		Query: SelectStmt{
 			ColumnExprs: []Expr{
 				Raw("split_part(t.subject_id, '#', 1) AS userset_object_id"),
-				Raw("ue.depth + 1 AS depth"),
 			},
-			FromExpr: TableAs("", "userset_expansion", "ue"),
+			FromExpr: UnnestAs{Array: Raw(walkFrontier), Alias: "ue", Column: "userset_object_id"},
 			Joins: []JoinClause{{
 				Type:   "INNER",
 				Schema: "",
@@ -174,10 +174,9 @@ func buildSelfRefUsersetFilterRecursiveBlock(plan ListPlan) *TypedQueryBlock {
 					Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "ue", Column: "userset_object_id"}},
 					Eq{Left: Col{Table: "t", Column: "relation"}, Right: Raw("v_filter_relation")},
 					Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Raw("v_filter_type")},
-					Like{Expr: Col{Table: "t", Column: "subject_id"}, Pattern: Raw("'%#' || v_filter_relation")},
+					Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Param("v_filter_relation")},
 				),
 			}},
-			Where: Raw("ue.depth < 25"),
 		},
 	}
 }
@@ -510,10 +509,12 @@ func buildSelfRefUsersetObjectsBaseBlock(plan ListPlan) *TypedQueryBlock {
 	q := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
 		Relations(plan.RelationList...).
-		Select("split_part(t.subject_id, '#', 1) AS userset_object_id", "0 AS depth").
+		Select("split_part(t.subject_id, '#', 1) AS userset_object_id").
 		WhereObjectID(ObjectID).
-		Where(Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(plan.ObjectType)}).
-		WhereUsersetRelationLike(plan.Relation)
+		Where(
+			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(plan.ObjectType)},
+			Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(plan.Relation)},
+		)
 
 	return &TypedQueryBlock{
 		Comments: []string{"-- Base case: find initial userset references"},
@@ -527,9 +528,8 @@ func buildSelfRefUsersetObjectsRecursiveBlock(plan ListPlan) *TypedQueryBlock {
 		Query: SelectStmt{
 			ColumnExprs: []Expr{
 				Raw("split_part(t.subject_id, '#', 1) AS userset_object_id"),
-				Raw("uo.depth + 1 AS depth"),
 			},
-			FromExpr: TableAs("", "userset_objects", "uo"),
+			FromExpr: UnnestAs{Array: Raw(walkFrontier), Alias: "uo", Column: "userset_object_id"},
 			Joins: []JoinClause{{
 				Type:   "INNER",
 				Schema: "",
@@ -540,10 +540,9 @@ func buildSelfRefUsersetObjectsRecursiveBlock(plan ListPlan) *TypedQueryBlock {
 					Eq{Left: Col{Table: "t", Column: "object_id"}, Right: Col{Table: "uo", Column: "userset_object_id"}},
 					Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(plan.Relation)},
 					Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(plan.ObjectType)},
-					Like{Expr: Col{Table: "t", Column: "subject_id"}, Pattern: Lit("%#" + plan.Relation)},
+					Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(plan.Relation)},
 				),
 			}},
-			Where: Raw("uo.depth < 25"),
 		},
 	}
 }

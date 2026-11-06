@@ -76,15 +76,6 @@ func (w WithCTE) SQL() string {
 	return sb.String()
 }
 
-// RecursiveCTE is a convenience constructor for a single recursive CTE.
-func RecursiveCTE(name string, columns []string, cteQuery, finalQuery SQLer) WithCTE {
-	return WithCTE{
-		Recursive: true,
-		CTEs:      []CTEDef{{Name: name, Columns: columns, Query: cteQuery}},
-		Query:     finalQuery,
-	}
-}
-
 // SimpleCTE is a convenience constructor for a single non-recursive CTE.
 func SimpleCTE(name string, cteQuery, finalQuery SQLer) WithCTE {
 	return WithCTE{
@@ -96,11 +87,10 @@ func SimpleCTE(name string, cteQuery, finalQuery SQLer) WithCTE {
 
 // MultiCTE creates a WITH clause with multiple CTEs.
 // Useful for complex queries with subject_pool, base_results, has_wildcard, etc.
-func MultiCTE(recursive bool, ctes []CTEDef, finalQuery SQLer) WithCTE {
+func MultiCTE(ctes []CTEDef, finalQuery SQLer) WithCTE {
 	return WithCTE{
-		Recursive: recursive,
-		CTEs:      ctes,
-		Query:     finalQuery,
+		CTEs:  ctes,
+		Query: finalQuery,
 	}
 }
 

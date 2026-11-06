@@ -22,12 +22,6 @@ func renderTypedQueryBlock(block TypedQueryBlock) QueryBlock {
 	}
 }
 
-// wrapQueryWithDepthForRender wraps a query to include depth column.
-func wrapQueryWithDepthForRender(sql, depthExpr, alias string) string {
-	return fmt.Sprintf("SELECT DISTINCT %s.object_id, %s AS depth\nFROM (\n%s\n) AS %s",
-		alias, depthExpr, sql, alias)
-}
-
 // wrapQueryWithPropagatable wraps a query to include a propagatable column,
 // which controls whether results from this block seed the recursive walk.
 func wrapQueryWithPropagatable(sql, alias string, propagatable bool) string {
@@ -55,18 +49,8 @@ func joinUnionBlocksSQL(blocks []string) string {
 }
 
 // joinUnionAllBlocksSQL joins multiple SQL blocks with UNION ALL.
-// Used where duplicate elimination is handled elsewhere (recursive CTE
-// bodies, the list_objects walk seed).
+// Used where duplicate elimination is handled elsewhere (the list_objects
+// walk seed).
 func joinUnionAllBlocksSQL(blocks []string) string {
 	return strings.Join(blocks, "\n    UNION ALL\n")
-}
-
-// appendUnionAll joins two SQL strings with UNION ALL.
-func appendUnionAll(base, additional string) string {
-	return joinUnionAllBlocksSQL([]string{base, additional})
-}
-
-// appendUnion joins two SQL strings with UNION (deduplicates).
-func appendUnion(base, additional string) string {
-	return joinUnionBlocksSQL([]string{base, additional})
 }

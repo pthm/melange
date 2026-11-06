@@ -145,7 +145,6 @@ var (
 	VisitedWithKey                  = sqldsl.VisitedWithKey
 	ListObjectsFunctionName         = sqldsl.ListObjectsFunctionName
 	ListSubjectsFunctionName        = sqldsl.ListSubjectsFunctionName
-	RecursiveCTE                    = sqldsl.RecursiveCTE
 	SimpleCTE                       = sqldsl.SimpleCTE
 	MultiCTE                        = sqldsl.MultiCTE
 	MultiLineComment                = sqldsl.MultiLineComment

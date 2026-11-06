@@ -2,16 +2,17 @@ package sqlgen
 
 import "fmt"
 
-// SelfRefUsersetBlockSet contains blocks for a self-referential userset list function.
-// These blocks are wrapped in a recursive CTE for member expansion.
+// SelfRefUsersetBlockSet contains blocks for a self-referential userset list function,
+// walked breadth first by renderIDWalk.
 type SelfRefUsersetBlockSet struct {
-	// BaseBlocks are the base case blocks (depth=0) in the CTE
+	// BaseBlocks seed the walk: the objects the subject holds the relation on directly.
 	BaseBlocks []TypedQueryBlock
 
-	// RecursiveBlock is the recursive term block that expands self-referential usersets
+	// RecursiveBlock is one step of the walk: the objects naming an object of
+	// the frontier as a userset of the relation.
 	RecursiveBlock *TypedQueryBlock
 
-	// SelfCandidateBlock is added outside the CTE (UNION with CTE result)
+	// SelfCandidateBlock is added outside the walk (UNION with its result)
 	SelfCandidateBlock *TypedQueryBlock
 }
 
@@ -29,10 +30,10 @@ func BuildListObjectsSelfRefUsersetBlocks(plan ListPlan) (SelfRefUsersetBlockSet
 	}, nil
 }
 
-// buildSelfRefUsersetBaseBlocks builds the base case blocks for self-referential userset CTE.
+// buildSelfRefUsersetBaseBlocks builds the blocks seeding the self-referential userset walk.
 func buildSelfRefUsersetBaseBlocks(plan ListPlan) ([]TypedQueryBlock, error) {
 	// A userset query subject (group:inner#member) is a member of objects naming
-	// it directly and of its own object; both must seed the recursion so the
+	// it directly and of its own object; both must seed the walk so the
 	// groups nesting those objects are expanded too.
 	usersetSubject := buildListObjectsUsersetSubjectBlock(plan)
 	usersetSubject.UsersetSubjectOnly = true
@@ -256,7 +257,6 @@ func buildSelfRefUsersetRecursiveBlock(plan ListPlan) *TypedQueryBlock {
 		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(plan.ObjectType)},
 		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
 		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(plan.Relation)},
-		Raw("me.depth < 25"),
 	)
 	conditions = append(conditions, exclusionPreds...)
 
@@ -266,9 +266,8 @@ func buildSelfRefUsersetRecursiveBlock(plan ListPlan) *TypedQueryBlock {
 			fmt.Sprintf("-- Patterns like [%s#%s] on %s.%s", plan.ObjectType, plan.Relation, plan.ObjectType, plan.Relation),
 		},
 		Query: SelectStmt{
-			Distinct:    true,
-			ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}, Raw("me.depth + 1 AS depth")},
-			FromExpr:    TableAs("", "member_expansion", "me"),
+			ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}},
+			FromExpr:    unnestObjectIDs(walkFrontier, "me"),
 			Joins: []JoinClause{{
 				Type:   "INNER",
 				Schema: "",

@@ -156,18 +156,6 @@ func (q *TupleQuery) WhereUsersetRelation(rel string) *TupleQuery {
 	return q
 }
 
-// WhereUsersetRelationLike adds an optimized LIKE condition for userset relation matching.
-// This replaces the combination of WhereHasUserset() + WhereUsersetRelation() with a single
-// LIKE pattern match: subject_id LIKE '%#relation' instead of position('#' in subject_id) > 0
-// AND split_part(subject_id, '#', 2) = 'relation'.
-func (q *TupleQuery) WhereUsersetRelationLike(rel string) *TupleQuery {
-	q.conditions = append(q.conditions, sqldsl.Like{
-		Expr:    q.col("subject_id"),
-		Pattern: sqldsl.Lit("%#" + rel),
-	})
-	return q
-}
-
 // InnerJoin adds an INNER JOIN clause with the query's schema.
 // For melange_tuples joins use JoinTuples instead — it keeps the reference
 // unqualified so pg_temp can shadow it for contextual tuples.

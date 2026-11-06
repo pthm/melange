@@ -112,23 +112,6 @@ func TestWithCTE_SQL(t *testing.T) {
 	}
 }
 
-func TestRecursiveCTE(t *testing.T) {
-	cte := RecursiveCTE(
-		"accessible",
-		[]string{"object_id", "depth"},
-		Raw("SELECT id, 0 FROM base UNION ALL SELECT id, depth + 1 FROM accessible"),
-		Raw("SELECT object_id FROM accessible"),
-	)
-
-	got := cte.SQL()
-	if !strings.Contains(got, "WITH RECURSIVE") {
-		t.Errorf("RecursiveCTE should produce WITH RECURSIVE, got: %s", got)
-	}
-	if !strings.Contains(got, "accessible(object_id, depth)") {
-		t.Errorf("RecursiveCTE should include column names, got: %s", got)
-	}
-}
-
 func TestSimpleCTE(t *testing.T) {
 	cte := SimpleCTE("filtered", Raw("SELECT * FROM data"), Raw("SELECT * FROM filtered"))
 

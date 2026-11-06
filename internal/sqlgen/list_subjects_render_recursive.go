@@ -41,14 +41,14 @@ func RenderListSubjectsRecursiveFunction(plan ListPlan, blocks SubjectsRecursive
 	}
 	regular = append(regular, ReturnQuery{Query: regularPaginatedQuery})
 
-	usersetFilter := renderUsersetFilterThenBranch(usersetFilterPaginatedQuery)
+	// The userset-filter blocks start from the sources the walk collects.
+	var sourcesWalk []Stmt
 	selfWalks := blocks.UsersetFilterSelfWalks
 	if len(selfWalks) > 0 {
-		// Before the final RETURN QUERY: collect the sources the blocks start from.
-		walk := append(renderParentClosureWalk(plan, selfWalks, true), renderUsersetFilterSources(plan, selfWalks))
-		usersetFilter = slices.Insert(usersetFilter, len(usersetFilter)-1, walk...)
+		sourcesWalk = append(renderParentClosureWalk(plan, selfWalks, true), renderUsersetFilterSources(plan, selfWalks))
 		decls = append(decls, Decl{Name: usersetFilterSources, Type: "TEXT[]"})
 	}
+	usersetFilter := renderUsersetFilterThenBranch(usersetFilterPaginatedQuery, sourcesWalk...)
 	if walksParents || len(selfWalks) > 0 {
 		decls = append(decls, parentClosureWalkDecls()...)
 	}
@@ -157,7 +157,7 @@ func buildSubjectsRecursiveRegularQuery(plan ListPlan, regularBlocks, ttuBlocks 
 	// Build the final query with wildcard handling
 	wildcardTailQuery := buildSubjectsWildcardTailQuery(plan)
 
-	return MultiCTE(false, ctes, wildcardTailQuery).SQL(), needsParentClosure
+	return MultiCTE(ctes, wildcardTailQuery).SQL(), needsParentClosure
 }
 
 func containsSubjectPool(sql string) bool {
@@ -299,7 +299,7 @@ func renderParentClosureWalk(plan ListPlan, recursing []string, crossLinks bool)
 			Body: []Stmt{
 				If{
 					Cond: Gte{Left: Raw(walkLevel), Right: Int(walkDepthLimit)},
-					Then: []Stmt{Raise{Message: "resolution too complex", ErrCode: "M2002"}},
+					Then: raiseTooDeep(),
 				},
 				aggregateRowsInto(frontierArrays, "fresh", fresh),
 				Assign{Name: closureType, Value: Raw(closureType + " || " + frontierType)},
