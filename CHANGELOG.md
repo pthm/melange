@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.10.3](https://github.com/pthm/melange/compare/v0.10.2...v0.10.3) (2026-11-06)
+
+
+### Features
+
+* **doctor:** recommend real composite indexes on a view's source tables ([8fca37c](https://github.com/pthm/melange/commit/8fca37cb0647fc03ecebf26a4b95cf10938f9543))
+* **doctor:** recommend real composite indexes on a view's source tables ([90fc37d](https://github.com/pthm/melange/commit/90fc37da9a18eefb240797aa10cd54f214ad7e9d))
+* **studio:** align the History picker's badges and group model changes by relation ([a1282e6](https://github.com/pthm/melange/commit/a1282e6ee7c93834d677bbaf59665c52f68554ed))
+* **studio:** detect more name columns, case-insensitively, with description as a fallback ([693fd7b](https://github.com/pthm/melange/commit/693fd7b535d4a87816e06a9c15719faec95e011d))
+* **studio:** give direct tuples separate relation, type, id and name columns ([1fee49f](https://github.com/pthm/melange/commit/1fee49f775ba6d4eee0afc90e4002d9fb3efee5b))
+* **studio:** list relations under each entity on the access tabs, collapsing long lists ([20b5773](https://github.com/pthm/melange/commit/20b5773a4e249d5bd3f10adc36c7acd53b631031))
+* **studio:** redesign History as a migration picker with one migration in detail ([178df7e](https://github.com/pthm/melange/commit/178df7effb0a8ea2b468c66b91e18346dcceafbf))
+* **studio:** show entity types as badges and highlight clickable rows on hover ([821f0d2](https://github.com/pthm/melange/commit/821f0d25942f1408498f10ae4b9e1795990ff513))
+* **studio:** show schema diffs between migrations on the History page ([98a6f42](https://github.com/pthm/melange/commit/98a6f4204c19dbbf35c1d6b49cad3fd76785064d))
+* **studio:** usability pass — id-first entities, History redesign, name detection ([b3afff4](https://github.com/pthm/melange/commit/b3afff4b396069a4176ea07b73e788e95ebfc1cb))
+
+
+### Bug Fixes
+
+* **cli:** resolve melange.yaml paths against the project root ([ac5c70a](https://github.com/pthm/melange/commit/ac5c70ac074cc6d403f4832b7b58414e66b13e9b))
+* **cli:** resolve melange.yaml paths against the project root, not the working directory ([8f35b79](https://github.com/pthm/melange/commit/8f35b7969c7acdd4d739f45f190b020b2273e871))
+* **doctor:** checksum the full modular schema, not the fga.mod manifest ([7ac78db](https://github.com/pthm/melange/commit/7ac78db6f195e25ec271a04cd15a2233ea8eac49))
+* **doctor:** don't ask for ::text expression indexes on varchar columns a plain index serves ([d22a62c](https://github.com/pthm/melange/commit/d22a62ca1846eeec0404ca964c153ad55e75d633))
+* **doctor:** don't ask for ::text expression indexes on varchar columns a plain index serves ([2d67ceb](https://github.com/pthm/melange/commit/2d67ceb8e96927665640e56bbd0e14bf5fae1120))
+* **doctor:** ignore the v prefix when comparing codegen versions ([319d269](https://github.com/pthm/melange/commit/319d269134f0603c73408141cf42455971a03442))
+* drop all orphaned functions on migrate; doctor sync and codegen version checks ([fad7322](https://github.com/pthm/melange/commit/fad7322ec1cfeb129bf4b6b3ad5abaf75031de1e))
+* **migrator:** drop expand_ and explain_ functions of removed relations ([bf3ced9](https://github.com/pthm/melange/commit/bf3ced919cee8b1d2a383722fa8d55ecd701e958))
+* **studio:** read a relation's generated SQL on Postgres 13 ([58ea332](https://github.com/pthm/melange/commit/58ea332f89dfa4488b30b38e8285bfc8e6118d0b))
+* **studio:** show entities id-first and stop long names breaking layouts ([6f8cc87](https://github.com/pthm/melange/commit/6f8cc873fadb9f8d6ecb497be70a8cc71b9dcaad))
+* **studio:** skip the schema file check when no schema is configured ([7bcb1ae](https://github.com/pthm/melange/commit/7bcb1ae96ddca959fbdd9ca515b42c01da9c302b))
+
 ## [0.10.2](https://github.com/pthm/melange/compare/v0.10.1...v0.10.2) (2026-11-05)
 
 
