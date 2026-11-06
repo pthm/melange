@@ -39,17 +39,18 @@ var relationReferencesReviewedFields = map[string]bool{
 	"SelfReferentialUsersets":      true,
 
 	// Reviewed: no relation references.
-	"ObjectType":                true,
-	"Relation":                  true,
-	"Features":                  true,
-	"Capabilities":              true,
-	"ListStrategy":              true,
-	"HasComplexUsersetPatterns": true,
-	"DirectSubjectTypes":        true,
-	"AllowedSubjectTypes":       true,
-	"MaxUsersetDepth":           true,
-	"ExceedsDepthLimit":         true,
-	"HasSelfReferentialUserset": true,
+	"ReachesItselfThroughParents": true, // a flag derived from ParentRelations
+	"ObjectType":                  true,
+	"Relation":                    true,
+	"Features":                    true,
+	"Capabilities":                true,
+	"ListStrategy":                true,
+	"HasComplexUsersetPatterns":   true,
+	"DirectSubjectTypes":          true,
+	"AllowedSubjectTypes":         true,
+	"MaxUsersetDepth":             true,
+	"ExceedsDepthLimit":           true,
+	"HasSelfReferentialUserset":   true,
 }
 
 func TestRelationReferencesFieldCoverage(t *testing.T) {

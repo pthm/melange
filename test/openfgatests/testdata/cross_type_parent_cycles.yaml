@@ -1,0 +1,519 @@
+# Parent relation cycles across types, where the relation changes along the
+# cycle (folder.a -> project.b -> folder.a). OpenFGA accepts these models;
+# melange rejected them at load time. Every path that could follow such a
+# cycle is cycle-safe (check functions detect revisits; list functions verify
+# with check or walk breadth first), so they are allowed now.
+tests:
+  # Two types whose relations recurse through each other (folder.a <-> project.b)
+  # on a parent cycle.
+  - name: cross_type_mutual_recursion_cycle
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type project
+            relations
+              define parent: [folder]
+              define b: [user, group#member] or a from parent
+          type folder
+            relations
+              define parent: [project]
+              define a: [user, group#member] or b from parent
+        tuples:
+          - user: project:p
+            relation: parent
+            object: folder:f
+          - user: folder:f
+            relation: parent
+            object: project:p
+          - user: user:alice
+            relation: b
+            object: project:p
+          - user: group:g#member
+            relation: a
+            object: folder:f
+          - user: user:bob
+            relation: member
+            object: group:g
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: a
+              object: folder:f
+            expectation: true
+          - tuple:
+              user: user:bob
+              relation: b
+              object: project:p
+            expectation: true
+          - tuple:
+              user: user:carol
+              relation: a
+              object: folder:f
+            expectation: false
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: folder
+              relation: a
+            expectation:
+              - folder:f
+          - request:
+              user: user:bob
+              type: project
+              relation: b
+            expectation:
+              - project:p
+        listUsersAssertions:
+          - request:
+              filters:
+                - user
+              object: folder:f
+              relation: a
+            expectation:
+              - user:alice
+              - user:bob
+          - request:
+              filters:
+                - group#member
+              object: project:p
+              relation: b
+            expectation:
+              - group:g#member
+  # Three types, three relations, one cycle.
+  - name: cross_type_three_relation_cycle
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type org
+            relations
+              define parent: [folder]
+              define c: [user] or a from parent
+          type project
+            relations
+              define parent: [org]
+              define b: [user] or c from parent
+          type folder
+            relations
+              define parent: [project]
+              define a: [user] or b from parent
+        tuples:
+          - user: project:p
+            relation: parent
+            object: folder:f
+          - user: org:o
+            relation: parent
+            object: project:p
+          - user: folder:f
+            relation: parent
+            object: org:o
+          - user: user:alice
+            relation: c
+            object: org:o
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: a
+              object: folder:f
+            expectation: true
+          - tuple:
+              user: user:alice
+              relation: b
+              object: project:p
+            expectation: true
+          - tuple:
+              user: user:bob
+              relation: a
+              object: folder:f
+            expectation: false
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: folder
+              relation: a
+            expectation:
+              - folder:f
+          - request:
+              user: user:alice
+              type: project
+              relation: b
+            expectation:
+              - project:p
+        listUsersAssertions:
+          - request:
+              filters:
+                - user
+              object: folder:f
+              relation: a
+            expectation:
+              - user:alice
+  # With an exclusion on the cycle: blocked on the folder stops alice there.
+  - name: cross_type_cycle_with_exclusion
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type project
+            relations
+              define parent: [folder]
+              define b: [user] or a from parent
+          type folder
+            relations
+              define parent: [project]
+              define blocked: [user]
+              define a: ([user] or b from parent) but not blocked
+        tuples:
+          - user: project:p
+            relation: parent
+            object: folder:f
+          - user: folder:f
+            relation: parent
+            object: project:p
+          - user: user:alice
+            relation: b
+            object: project:p
+          - user: user:bob
+            relation: b
+            object: project:p
+          - user: user:bob
+            relation: blocked
+            object: folder:f
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: a
+              object: folder:f
+            expectation: true
+          - tuple:
+              user: user:bob
+              relation: a
+              object: folder:f
+            expectation: false
+          - tuple:
+              user: user:bob
+              relation: b
+              object: project:p
+            expectation: true
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: folder
+              relation: a
+            expectation:
+              - folder:f
+        listUsersAssertions:
+          - request:
+              filters:
+                - user
+              object: folder:f
+              relation: a
+            expectation:
+              - user:alice
+  # Through an implied relation (folder.a: view, view: ... or b from parent).
+  - name: cross_type_cycle_through_implied
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type project
+            relations
+              define parent: [folder]
+              define b: [user] or a from parent
+          type folder
+            relations
+              define parent: [project]
+              define view: [user] or b from parent
+              define a: view
+        tuples:
+          - user: project:p
+            relation: parent
+            object: folder:f
+          - user: folder:f
+            relation: parent
+            object: project:p
+          - user: user:alice
+            relation: view
+            object: folder:f
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: b
+              object: project:p
+            expectation: true
+          - tuple:
+              user: user:alice
+              relation: a
+              object: folder:f
+            expectation: true
+          - tuple:
+              user: user:bob
+              relation: b
+              object: project:p
+            expectation: false
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: project
+              relation: b
+            expectation:
+              - project:p
+        listUsersAssertions:
+          - request:
+              filters:
+                - user
+              object: project:p
+              relation: b
+            expectation:
+              - user:alice
+  # With an intersection on the cycle.
+  - name: cross_type_cycle_with_intersection
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type project
+            relations
+              define parent: [folder]
+              define b: [user] or a from parent
+          type folder
+            relations
+              define parent: [project]
+              define ok: [user]
+              define a: ([user] or b from parent) and ok
+        tuples:
+          - user: project:p
+            relation: parent
+            object: folder:f
+          - user: folder:f
+            relation: parent
+            object: project:p
+          - user: user:alice
+            relation: b
+            object: project:p
+          - user: user:alice
+            relation: ok
+            object: folder:f
+          - user: user:bob
+            relation: b
+            object: project:p
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: a
+              object: folder:f
+            expectation: true
+          - tuple:
+              user: user:bob
+              relation: a
+              object: folder:f
+            expectation: false
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: folder
+              relation: a
+            expectation:
+              - folder:f
+        listUsersAssertions:
+          - request:
+              filters:
+                - user
+              object: folder:f
+              relation: a
+            expectation:
+              - user:alice
+  # A deep alternating chain still hits the depth limit (26 parent hops).
+  - name: cross_type_mutual_recursion_deep
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type project
+            relations
+              define parent: [folder]
+              define b: [user, group#member] or a from parent
+          type folder
+            relations
+              define parent: [project]
+              define a: [user, group#member] or b from parent
+        tuples:
+          - user: folder:f0
+            relation: parent
+            object: project:p0
+          - user: project:p0
+            relation: parent
+            object: folder:f1
+          - user: folder:f1
+            relation: parent
+            object: project:p1
+          - user: project:p1
+            relation: parent
+            object: folder:f2
+          - user: folder:f2
+            relation: parent
+            object: project:p2
+          - user: project:p2
+            relation: parent
+            object: folder:f3
+          - user: folder:f3
+            relation: parent
+            object: project:p3
+          - user: project:p3
+            relation: parent
+            object: folder:f4
+          - user: folder:f4
+            relation: parent
+            object: project:p4
+          - user: project:p4
+            relation: parent
+            object: folder:f5
+          - user: folder:f5
+            relation: parent
+            object: project:p5
+          - user: project:p5
+            relation: parent
+            object: folder:f6
+          - user: folder:f6
+            relation: parent
+            object: project:p6
+          - user: project:p6
+            relation: parent
+            object: folder:f7
+          - user: folder:f7
+            relation: parent
+            object: project:p7
+          - user: project:p7
+            relation: parent
+            object: folder:f8
+          - user: folder:f8
+            relation: parent
+            object: project:p8
+          - user: project:p8
+            relation: parent
+            object: folder:f9
+          - user: folder:f9
+            relation: parent
+            object: project:p9
+          - user: project:p9
+            relation: parent
+            object: folder:f10
+          - user: folder:f10
+            relation: parent
+            object: project:p10
+          - user: project:p10
+            relation: parent
+            object: folder:f11
+          - user: folder:f11
+            relation: parent
+            object: project:p11
+          - user: project:p11
+            relation: parent
+            object: folder:f12
+          - user: folder:f12
+            relation: parent
+            object: project:p12
+          - user: project:p12
+            relation: parent
+            object: folder:f13
+          - user: user:alice
+            relation: a
+            object: folder:f0
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: a
+              object: folder:f13
+            errorCode: 2002
+  # A cycle of pure parent lookups (no direct grant on the cycle) reaching a seed:
+  # lists must follow the cyclic branch, not only the path to the seed.
+  - name: cross_type_pure_parent_lookup_cycle
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type seed
+            relations
+              define a: [user]
+          type project
+            relations
+              define parent: [folder, seed]
+              define b: a from parent
+          type folder
+            relations
+              define parent: [project]
+              define a: b from parent
+        tuples:
+          - user: folder:f
+            relation: parent
+            object: project:p1
+          - user: project:p0
+            relation: parent
+            object: folder:f
+          - user: seed:s
+            relation: parent
+            object: project:p0
+          - user: user:alice
+            relation: a
+            object: seed:s
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: b
+              object: project:p1
+            expectation: true
+          - tuple:
+              user: user:alice
+              relation: a
+              object: folder:f
+            expectation: true
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: project
+              relation: b
+            expectation:
+              - project:p0
+              - project:p1
+          - request:
+              user: user:alice
+              type: folder
+              relation: a
+            expectation:
+              - folder:f
+        listUsersAssertions:
+          - request:
+              filters:
+                - user
+              object: project:p1
+              relation: b
+            expectation:
+              - user:alice

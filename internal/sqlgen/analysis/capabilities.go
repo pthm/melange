@@ -131,8 +131,10 @@ func DetermineListStrategy(a RelationAnalysis) ListStrategy {
 	// Composed also models only the anchor path: not intersection groups
 	// ("v from parent or (a but not c)" would lose its group), and not a
 	// second parent lookup ("v from parent or b from parent" would lose b).
+	// Nor a parent relation cycle across types (folder.a -> project.b ->
+	// folder.a): the anchor path leaves out the cyclic branch.
 	if a.IndirectAnchor != nil && !hasSelfReferentialParent(a) && !a.Features.HasIntersection &&
-		len(a.ParentRelations) <= 1 {
+		len(a.ParentRelations) <= 1 && !a.ReachesItselfThroughParents {
 		return ListStrategyComposed
 	}
 	if a.Features.HasIntersection {

@@ -59,10 +59,9 @@
 //
 // # Validation
 //
-// DetectCycles validates schemas before migration. It checks for:
-//   - Implied-by cycles within a type (admin -> owner -> admin)
-//   - Cross-type parent relation cycles
-//   - Allows hierarchical recursion (folder -> parent folder)
+// DetectCycles validates schemas before migration: it rejects implied-by cycles
+// within a type (admin -> owner -> admin) and allows parent relation cycles,
+// within a type (folder -> parent folder) or across types.
 //
 // Invalid schemas are rejected with ErrCyclicSchema before reaching the database.
 //

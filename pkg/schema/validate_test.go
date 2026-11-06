@@ -100,18 +100,10 @@ func TestDetectCycles_ParentDifferentRelations(t *testing.T) {
 		},
 	}
 
-	err := schema.DetectCycles(types)
-	if err == nil {
-		t.Fatal("expected error for parent relation cycle with differing relations")
-	}
-	if !schema.IsCyclicSchemaErr(err) {
-		t.Errorf("expected IsCyclicSchemaErr to return true")
-	}
-	if !strings.Contains(err.Error(), "parent") {
-		t.Errorf("error should mention 'parent', got: %s", err.Error())
-	}
-	if !strings.Contains(err.Error(), "cycle") {
-		t.Errorf("error should mention 'cycle', got: %s", err.Error())
+	// OpenFGA accepts parent relation cycles across types whose relation changes
+	// along the cycle; the generated functions are cycle-safe.
+	if err := schema.DetectCycles(types); err != nil {
+		t.Fatalf("expected no error for a cross-type parent cycle with differing relations, got: %v", err)
 	}
 }
 
