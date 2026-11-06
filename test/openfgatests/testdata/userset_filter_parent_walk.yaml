@@ -1,0 +1,494 @@
+# Recursive list_subjects with a userset filter (p_subject_type such as
+# group#member). Parent lookups used to recurse through list_accessible_subjects
+# once per hop with no visited set, so a parent cycle exhausted the stack
+# (SQLSTATE 54001) and long chains never raised M2002.
+tests:
+  # Listing usersets on a parent cycle must terminate.
+  - name: userset_filter_parent_cycle
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type folder
+            relations
+              define parent: [folder]
+              define editor: [user, group#member] or editor from parent
+        tuples:
+          - user: folder:a
+            relation: parent
+            object: folder:b
+          - user: folder:b
+            relation: parent
+            object: folder:a
+          - user: group:g#member
+            relation: editor
+            object: folder:b
+        listUsersAssertions:
+          - request:
+              filters:
+                - group#member
+              object: folder:a
+              relation: editor
+            expectation:
+              - group:g#member
+  # Past the depth limit the walk raises, as OpenFGA does. (OpenFGA already fails
+  # at 24 hops here, counting the userset as a step; melange counts parent hops.)
+  - name: userset_filter_parent_chain_too_deep
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type folder
+            relations
+              define parent: [folder]
+              define editor: [user, group#member] or editor from parent
+        tuples:
+          - user: group:g#member
+            relation: editor
+            object: folder:f0
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: folder:f1
+            relation: parent
+            object: folder:f2
+          - user: folder:f2
+            relation: parent
+            object: folder:f3
+          - user: folder:f3
+            relation: parent
+            object: folder:f4
+          - user: folder:f4
+            relation: parent
+            object: folder:f5
+          - user: folder:f5
+            relation: parent
+            object: folder:f6
+          - user: folder:f6
+            relation: parent
+            object: folder:f7
+          - user: folder:f7
+            relation: parent
+            object: folder:f8
+          - user: folder:f8
+            relation: parent
+            object: folder:f9
+          - user: folder:f9
+            relation: parent
+            object: folder:f10
+          - user: folder:f10
+            relation: parent
+            object: folder:f11
+          - user: folder:f11
+            relation: parent
+            object: folder:f12
+          - user: folder:f12
+            relation: parent
+            object: folder:f13
+          - user: folder:f13
+            relation: parent
+            object: folder:f14
+          - user: folder:f14
+            relation: parent
+            object: folder:f15
+          - user: folder:f15
+            relation: parent
+            object: folder:f16
+          - user: folder:f16
+            relation: parent
+            object: folder:f17
+          - user: folder:f17
+            relation: parent
+            object: folder:f18
+          - user: folder:f18
+            relation: parent
+            object: folder:f19
+          - user: folder:f19
+            relation: parent
+            object: folder:f20
+          - user: folder:f20
+            relation: parent
+            object: folder:f21
+          - user: folder:f21
+            relation: parent
+            object: folder:f22
+          - user: folder:f22
+            relation: parent
+            object: folder:f23
+          - user: folder:f23
+            relation: parent
+            object: folder:f24
+          - user: folder:f24
+            relation: parent
+            object: folder:f25
+          - user: folder:f25
+            relation: parent
+            object: folder:f26
+          - user: folder:f26
+            relation: parent
+            object: folder:f27
+          - user: folder:f27
+            relation: parent
+            object: folder:f28
+          - user: folder:f28
+            relation: parent
+            object: folder:f29
+          - user: folder:f29
+            relation: parent
+            object: folder:f30
+        listUsersAssertions:
+          - request:
+              filters:
+                - group#member
+              object: folder:f30
+              relation: editor
+            errorCode: 2002
+  # Other parent lookups (member from org) apply at every ancestor.
+  - name: userset_filter_org_at_ancestor
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type org
+            relations
+              define member: [group#member]
+          type folder
+            relations
+              define parent: [folder]
+              define org: [org]
+              define viewer: [group#member] or viewer from parent or member from org
+        tuples:
+          - user: group:g#member
+            relation: member
+            object: org:o0
+          - user: org:o0
+            relation: org
+            object: folder:f0
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: folder:f1
+            relation: parent
+            object: folder:f2
+          - user: folder:f2
+            relation: parent
+            object: folder:f0
+        listUsersAssertions:
+          - request:
+              filters:
+                - group#member
+              object: folder:f2
+              relation: viewer
+            expectation:
+              - group:g#member
+  # An exclusion on the walked relation blocks a userset at one ancestor
+  # without blocking others.
+  - name: userset_filter_exclusion_gate
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type folder
+            relations
+              define parent: [folder]
+              define blocked: [group#member]
+              define viewer: ([group#member] or viewer from parent) but not blocked
+        tuples:
+          - user: group:g#member
+            relation: viewer
+            object: folder:f0
+          - user: group:h#member
+            relation: viewer
+            object: folder:f0
+          - user: group:g#member
+            relation: blocked
+            object: folder:f1
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: folder:f1
+            relation: parent
+            object: folder:f2
+          - user: folder:f2
+            relation: parent
+            object: folder:f0
+        listUsersAssertions:
+          - request:
+              filters:
+                - group#member
+              object: folder:f2
+              relation: viewer
+            expectation:
+              - group:h#member
+  # A composed closure relation (editor, with an exclusion) on an ancestor
+  # keeps its exclusion: h is banned from editor on f0.
+  - name: userset_filter_composed_at_ancestor
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type folder
+            relations
+              define parent: [folder]
+              define banned: [group#member]
+              define editor: [group#member] but not banned
+              define viewer: editor or viewer from parent
+        tuples:
+          - user: group:g#member
+            relation: editor
+            object: folder:f0
+          - user: group:h#member
+            relation: editor
+            object: folder:f0
+          - user: group:h#member
+            relation: banned
+            object: folder:f0
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: folder:f1
+            relation: parent
+            object: folder:f0
+        listUsersAssertions:
+          - request:
+              filters:
+                - group#member
+              object: folder:f1
+              relation: viewer
+            expectation:
+              - group:g#member
+  # The same without a cycle. The one-hop parent block used to read editor's
+  # raw tuples and list the banned userset.
+  - name: userset_filter_composed_on_parent
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type folder
+            relations
+              define parent: [folder]
+              define banned: [group#member]
+              define editor: [group#member] but not banned
+              define viewer: editor or viewer from parent
+        tuples:
+          - user: group:g#member
+            relation: editor
+            object: folder:f0
+          - user: group:h#member
+            relation: editor
+            object: folder:f0
+          - user: group:h#member
+            relation: banned
+            object: folder:f0
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+        listUsersAssertions:
+          - request:
+              filters:
+                - group#member
+              object: folder:f1
+              relation: viewer
+            expectation:
+              - group:g#member
+  # Mutual recursion through two relations on a parent cycle must terminate.
+  - name: userset_filter_mutual_recursion_cycle
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type folder
+            relations
+              define parent: [folder]
+              define a: [group#member] or b from parent
+              define b: [group#member] or a from parent
+        tuples:
+          - user: group:g#member
+            relation: b
+            object: folder:f0
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: folder:f1
+            relation: parent
+            object: folder:f0
+        listUsersAssertions:
+          - request:
+              filters:
+                - group#member
+              object: folder:f1
+              relation: a
+            expectation:
+              - group:g#member
+  # A relation recursing on itself through two linking relations passes on
+  # through either at each hop (a -parent-> b -owner-> c -parent-> d).
+  - name: userset_filter_mixed_self_links
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type folder
+            relations
+              define parent: [folder]
+              define owner: [folder]
+              define viewer: [user, group#member] or viewer from parent or viewer from owner
+        tuples:
+          - user: folder:b
+            relation: parent
+            object: folder:a
+          - user: folder:c
+            relation: owner
+            object: folder:b
+          - user: folder:d
+            relation: parent
+            object: folder:c
+          - user: group:g#member
+            relation: viewer
+            object: folder:d
+        listUsersAssertions:
+          - request:
+              filters:
+                - group#member
+              object: folder:a
+              relation: viewer
+            expectation:
+              - group:g#member
+  # Under mutual recursion, usersets reached through another parent lookup
+  # (org:o#member via b's member from org) are still listed.
+  - name: userset_filter_mutual_recursion_other_link
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type org
+            relations
+              define member: [user]
+          type folder
+            relations
+              define parent: [folder]
+              define org: [org]
+              define a: [user] or b from parent
+              define b: [user] or a from parent or member from org
+        tuples:
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: org:o
+            relation: org
+            object: folder:f0
+        listUsersAssertions:
+          - request:
+              filters:
+                - org#member
+              object: folder:f1
+              relation: a
+            expectation:
+              - org:o#member
+  # A relation recursing on itself through an implied relation
+  # (viewer: editor, editor: ... or viewer from parent) on a parent cycle.
+  - name: userset_filter_implied_self_recursion_cycle
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type folder
+            relations
+              define parent: [folder]
+              define editor: [group#member] or viewer from parent
+              define viewer: editor
+        tuples:
+          - user: folder:a
+            relation: parent
+            object: folder:b
+          - user: folder:b
+            relation: parent
+            object: folder:a
+          - user: group:g#member
+            relation: editor
+            object: folder:b
+        listUsersAssertions:
+          - request:
+              filters:
+                - group#member
+              object: folder:a
+              relation: viewer
+            expectation:
+              - group:g#member
+  # The parent target relation's own exclusion (org.viewer but not blocked) holds
+  # for the one-hop parent block.
+  - name: userset_filter_parent_target_exclusion
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type org
+            relations
+              define blocked: [group#member]
+              define viewer: [group#member] but not blocked
+          type folder
+            relations
+              define parent: [folder]
+              define org: [org]
+              define viewer: [group#member] or viewer from parent or viewer from org
+        tuples:
+          - user: group:g#member
+            relation: viewer
+            object: org:o
+          - user: group:h#member
+            relation: viewer
+            object: org:o
+          - user: group:h#member
+            relation: blocked
+            object: org:o
+          - user: org:o
+            relation: org
+            object: folder:f
+        listUsersAssertions:
+          - request:
+              filters:
+                - group#member
+              object: folder:f
+              relation: viewer
+            expectation:
+              - group:g#member

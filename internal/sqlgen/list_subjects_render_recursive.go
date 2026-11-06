@@ -37,10 +37,21 @@ func RenderListSubjectsRecursiveFunction(plan ListPlan, blocks SubjectsRecursive
 	}
 	regular := []Stmt{Comment{Text: "Regular subject type: find direct subjects and expand usersets"}}
 	if walksParents {
-		decls = append(decls, parentClosureWalkDecls()...)
-		regular = append(regular, renderParentClosureWalk(plan, blocks.ParentClosureWalks)...)
+		regular = append(regular, renderParentClosureWalk(plan, blocks.ParentClosureWalks, false)...)
 	}
 	regular = append(regular, ReturnQuery{Query: regularPaginatedQuery})
+
+	usersetFilter := renderUsersetFilterThenBranch(usersetFilterPaginatedQuery)
+	selfWalks := blocks.UsersetFilterSelfWalks
+	if len(selfWalks) > 0 {
+		// Before the final RETURN QUERY: collect the sources the blocks start from.
+		walk := append(renderParentClosureWalk(plan, selfWalks, true), renderUsersetFilterSources(plan, selfWalks))
+		usersetFilter = slices.Insert(usersetFilter, len(usersetFilter)-1, walk...)
+		decls = append(decls, Decl{Name: usersetFilterSources, Type: "TEXT[]"})
+	}
+	if walksParents || len(selfWalks) > 0 {
+		decls = append(decls, parentClosureWalkDecls()...)
+	}
 
 	fn := PlpgsqlFunction{
 		Schema:  plan.DatabaseSchema,
@@ -56,7 +67,7 @@ func RenderListSubjectsRecursiveFunction(plan ListPlan, blocks SubjectsRecursive
 					Left:  Position{Needle: Lit("#"), Haystack: SubjectType},
 					Right: Int(0),
 				},
-				Then: renderUsersetFilterThenBranch(usersetFilterPaginatedQuery),
+				Then: usersetFilter,
 				Else: regular,
 			},
 		},
@@ -170,6 +181,23 @@ func parentClosureWalkDecls() []Decl {
 	}
 }
 
+// renderUsersetFilterSources sets v_uf_sources to the listed object and its
+// ancestors of the same type along the self-recursive linking relations, read
+// from the parent_closure walk.
+func renderUsersetFilterSources(plan ListPlan, selfWalks []string) Stmt {
+	ancestors := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Col{Table: "p", Column: "id"}},
+		FromExpr:    TableAs("", "unnest("+closureArrays+")", "p(type, id, via)"),
+		Where: And(
+			Eq{Left: Col{Table: "p", Column: "type"}, Right: Lit(plan.ObjectType)},
+			In{Expr: Col{Table: "p", Column: "via"}, Values: selfWalks},
+			Ne{Left: Col{Table: "p", Column: "id"}, Right: ObjectID},
+		),
+	}
+	return Assign{Name: usersetFilterSources, Value: Raw("ARRAY[p_object_id] || ARRAY(" + ancestors.SQL() + ")")}
+}
+
 // renderParentClosureWalk collects the ancestors of the listed object
 // reachable via TTU linking relations into the parent_closure arrays, so the
 // caller can find subjects that hold the checked relation on any ancestor
@@ -188,7 +216,7 @@ func parentClosureWalkDecls() []Decl {
 //
 // Ancestors still to expand walkDepthLimit hops away raise M2002, as OpenFGA's
 // ListUsers fails on a parent chain of 25 hops.
-func renderParentClosureWalk(plan ListPlan, recursing []string) []Stmt {
+func renderParentClosureWalk(plan ListPlan, recursing []string, crossLinks bool) []Stmt {
 	linkingRelationSet := make(map[string]bool)
 	allowedTypeSet := make(map[string]bool)
 	for _, parent := range buildListParentRelations(plan.Analysis) {
@@ -229,11 +257,20 @@ func renderParentClosureWalk(plan ListPlan, recursing []string) []Stmt {
 		return stmts
 	}
 
+	// A chain stays on its first linking relation, unless crossLinks: a
+	// relation that recurses on itself through several linking relations
+	// ("v from parent or v from owner") passes on through any of them.
+	nextVia := Expr(Col{Table: "f", Column: "via"})
+	followVia := Expr(Eq{Left: Col{Table: "link", Column: "relation"}, Right: Col{Table: "f", Column: "via"}})
+	if crossLinks {
+		nextVia = Col{Table: "link", Column: "relation"}
+		followVia = In{Expr: Col{Table: "link", Column: "relation"}, Values: recursing}
+	}
 	step := SelectStmt{
 		ColumnExprs: []Expr{
 			Col{Table: "link", Column: "subject_type"},
 			Col{Table: "link", Column: "subject_id"},
-			Col{Table: "f", Column: "via"},
+			nextVia,
 		},
 		FromExpr: TableAs("", "unnest("+frontierArrays+")", "f(subject_type, subject_id, via)"),
 		Joins: []JoinClause{{
@@ -243,7 +280,7 @@ func renderParentClosureWalk(plan ListPlan, recursing []string) []Stmt {
 			On: And(
 				Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Col{Table: "f", Column: "subject_type"}},
 				Eq{Left: Col{Table: "link", Column: "object_id"}, Right: Col{Table: "f", Column: "subject_id"}},
-				Eq{Left: Col{Table: "link", Column: "relation"}, Right: Col{Table: "f", Column: "via"}},
+				followVia,
 			),
 		}},
 		Where: And(
