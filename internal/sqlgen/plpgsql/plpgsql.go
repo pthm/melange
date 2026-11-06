@@ -163,6 +163,25 @@ func (f ForLoop) StmtSQL() string {
 	return sb.String()
 }
 
+// While renders WHILE <cond> LOOP <body> END LOOP;.
+type While struct {
+	Cond sqldsl.Expr
+	Body []Stmt
+}
+
+func (w While) StmtSQL() string {
+	var sb strings.Builder
+	sb.WriteString("WHILE ")
+	sb.WriteString(w.Cond.SQL())
+	sb.WriteString(" LOOP\n")
+	for _, stmt := range w.Body {
+		sb.WriteString(sqldsl.IndentLines(stmt.StmtSQL(), "    "))
+		sb.WriteString("\n")
+	}
+	sb.WriteString("END LOOP;")
+	return sb.String()
+}
+
 // Raise renders RAISE EXCEPTION 'message' USING ERRCODE = 'code';
 type Raise struct {
 	Message string

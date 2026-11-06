@@ -15,11 +15,15 @@ type RecursiveBlockSet struct {
 	// when the walk follows more than one linking relation: every propagating
 	// row follows every linking relation, so the walk is a superset there.
 	VerifyWithCheck bool
+	// WalkRelations are the relations that recurse through the linking
+	// relations ("v" for "v from parent"), set with VerifyWithCheck. An object
+	// passes the walk on only if the subject holds one of them on it.
+	WalkRelations []string
 	// HoistedCTEs are shared list_*_obj computations lifted out of the base
 	// blocks. The same list_<parent>_obj(p_subject_type, p_subject_id, NULL,
 	// NULL) call was previously inlined in both the userset-subject arm and the
 	// cross-type-TTU subject-first arm; these CTEs compute each distinct call
-	// once and the arms reference them. Rendered before the accessible CTE.
+	// once and the arms reference them. Rendered ahead of the base blocks.
 	HoistedCTEs []CTEDef
 }
 
@@ -99,8 +103,8 @@ func collectHoistedListObjTargets(plan ListPlan, parentRelations []ListParentRel
 	return targets, ctes
 }
 
-// BuildListObjectsRecursiveBlocks builds blocks for a recursive list_objects function.
-// This handles TTU patterns with depth tracking and recursive CTEs.
+// BuildListObjectsRecursiveBlocks builds blocks for a recursive list_objects function:
+// the seed blocks and, for self-referential TTU, the step of the breadth-first walk.
 func BuildListObjectsRecursiveBlocks(plan ListPlan) (RecursiveBlockSet, error) {
 	parentRelations := buildListParentRelations(plan.Analysis)
 
@@ -185,6 +189,13 @@ func BuildListObjectsRecursiveBlocks(plan ListPlan) (RecursiveBlockSet, error) {
 	// one check per candidate. Upgrade path if this shape gets hot: tag each
 	// accessible row with the linking relations it may continue through.
 	result.VerifyWithCheck = len(selfRefLinkingRelations) > 1
+	if result.VerifyWithCheck {
+		for _, p := range parentRelations {
+			if p.IsSelfReferential && !slices.Contains(result.WalkRelations, p.Relation) {
+				result.WalkRelations = append(result.WalkRelations, p.Relation)
+			}
+		}
+	}
 
 	return result, nil
 }
@@ -752,9 +763,10 @@ func buildCheckPermissionCrossTypeTTUBlock(plan ListPlan, parent ListParentRelat
 	}
 }
 
-// buildRecursiveTTUBlock builds the recursive term block for self-referential TTU.
-// Filters on a.propagatable to ensure only results from TTU-bearing relations
-// seed the recursive step (e.g., folder_viewer results do NOT propagate).
+// buildRecursiveTTUBlock builds one step of the breadth-first walk: the objects
+// linked by a self-referential relation to an object in the frontier. Only
+// propagating objects enter the frontier (e.g., folder_viewer results do NOT
+// propagate), so the step itself needs no propagation filter.
 func buildRecursiveTTUBlock(plan ListPlan, linkingRelations []string, gateWalk bool) *TypedQueryBlock {
 	exclusions := ExclusionConfig{}
 	if gateWalk {
@@ -768,10 +780,8 @@ func buildRecursiveTTUBlock(plan ListPlan, linkingRelations []string, gateWalk b
 	}
 
 	stmt := SelectStmt{
-		Distinct: true,
-		Columns:  []string{"child.object_id", "a.depth + 1 AS depth", "TRUE AS propagatable"},
-		From:     "accessible",
-		Alias:    "a",
+		ColumnExprs: []Expr{Col{Table: "child", Column: "object_id"}},
+		FromExpr:    unnestObjectIDs(walkFrontier, "a"),
 		Joins: []JoinClause{
 			{
 				Type:   "INNER",
@@ -786,18 +796,14 @@ func buildRecursiveTTUBlock(plan ListPlan, linkingRelations []string, gateWalk b
 				),
 			},
 		},
-		Where: And(
-			Col{Table: "a", Column: "propagatable"},
-			Lt{Left: Col{Table: "a", Column: "depth"}, Right: Int(25)},
-		),
 	}
 
 	if predicates := exclusions.BuildPredicates(); len(predicates) > 0 {
-		stmt.Where = And(append([]Expr{stmt.Where}, predicates...)...)
+		stmt.Where = And(predicates...)
 	}
 
 	return &TypedQueryBlock{
-		Comments: []string{"-- Self-referential TTU: follow linking relations to accessible parents"},
+		Comments: []string{"-- Self-referential TTU: follow linking relations from the frontier"},
 		Query:    stmt,
 	}
 }

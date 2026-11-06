@@ -1,0 +1,989 @@
+# Recursive parent walks (list_objects): the depth limit and deduplication.
+#
+# OpenFGA fails ListObjects with "resolution too complex" (2002) once a parent
+# chain reaches 25 hops and succeeds at 24; melange's breadth-first walk raises
+# M2002 at the same point instead of returning a truncated list. Check and
+# ListUsers are left out of the 25-hop stage: their cutoffs differ from
+# ListObjects in OpenFGA (Check fails at 26 hops) and are not yet aligned.
+#
+# The walk expands each object once, so cycles and objects reachable by
+# several paths must still list every object exactly once, and an exclusion
+# that gates the walk must hold whichever path reaches an object.
+tests:
+  - name: recursive_ttu_depth_limit_24_hops
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type folder
+            relations
+              define parent: [folder]
+              define editor: [user] or editor from parent
+        tuples:
+          - user: user:alice
+            relation: editor
+            object: folder:f0
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: folder:f1
+            relation: parent
+            object: folder:f2
+          - user: folder:f2
+            relation: parent
+            object: folder:f3
+          - user: folder:f3
+            relation: parent
+            object: folder:f4
+          - user: folder:f4
+            relation: parent
+            object: folder:f5
+          - user: folder:f5
+            relation: parent
+            object: folder:f6
+          - user: folder:f6
+            relation: parent
+            object: folder:f7
+          - user: folder:f7
+            relation: parent
+            object: folder:f8
+          - user: folder:f8
+            relation: parent
+            object: folder:f9
+          - user: folder:f9
+            relation: parent
+            object: folder:f10
+          - user: folder:f10
+            relation: parent
+            object: folder:f11
+          - user: folder:f11
+            relation: parent
+            object: folder:f12
+          - user: folder:f12
+            relation: parent
+            object: folder:f13
+          - user: folder:f13
+            relation: parent
+            object: folder:f14
+          - user: folder:f14
+            relation: parent
+            object: folder:f15
+          - user: folder:f15
+            relation: parent
+            object: folder:f16
+          - user: folder:f16
+            relation: parent
+            object: folder:f17
+          - user: folder:f17
+            relation: parent
+            object: folder:f18
+          - user: folder:f18
+            relation: parent
+            object: folder:f19
+          - user: folder:f19
+            relation: parent
+            object: folder:f20
+          - user: folder:f20
+            relation: parent
+            object: folder:f21
+          - user: folder:f21
+            relation: parent
+            object: folder:f22
+          - user: folder:f22
+            relation: parent
+            object: folder:f23
+          - user: folder:f23
+            relation: parent
+            object: folder:f24
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: editor
+              object: folder:f24
+            expectation: true
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: folder
+              relation: editor
+            expectation:
+              - folder:f0
+              - folder:f1
+              - folder:f2
+              - folder:f3
+              - folder:f4
+              - folder:f5
+              - folder:f6
+              - folder:f7
+              - folder:f8
+              - folder:f9
+              - folder:f10
+              - folder:f11
+              - folder:f12
+              - folder:f13
+              - folder:f14
+              - folder:f15
+              - folder:f16
+              - folder:f17
+              - folder:f18
+              - folder:f19
+              - folder:f20
+              - folder:f21
+              - folder:f22
+              - folder:f23
+              - folder:f24
+        listUsersAssertions:
+          - request:
+              filters:
+                - user
+              object: folder:f24
+              relation: editor
+            expectation:
+              - user:alice
+  - name: recursive_ttu_depth_limit_25_hops
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type folder
+            relations
+              define parent: [folder]
+              define editor: [user] or editor from parent
+        tuples:
+          - user: user:alice
+            relation: editor
+            object: folder:f0
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: folder:f1
+            relation: parent
+            object: folder:f2
+          - user: folder:f2
+            relation: parent
+            object: folder:f3
+          - user: folder:f3
+            relation: parent
+            object: folder:f4
+          - user: folder:f4
+            relation: parent
+            object: folder:f5
+          - user: folder:f5
+            relation: parent
+            object: folder:f6
+          - user: folder:f6
+            relation: parent
+            object: folder:f7
+          - user: folder:f7
+            relation: parent
+            object: folder:f8
+          - user: folder:f8
+            relation: parent
+            object: folder:f9
+          - user: folder:f9
+            relation: parent
+            object: folder:f10
+          - user: folder:f10
+            relation: parent
+            object: folder:f11
+          - user: folder:f11
+            relation: parent
+            object: folder:f12
+          - user: folder:f12
+            relation: parent
+            object: folder:f13
+          - user: folder:f13
+            relation: parent
+            object: folder:f14
+          - user: folder:f14
+            relation: parent
+            object: folder:f15
+          - user: folder:f15
+            relation: parent
+            object: folder:f16
+          - user: folder:f16
+            relation: parent
+            object: folder:f17
+          - user: folder:f17
+            relation: parent
+            object: folder:f18
+          - user: folder:f18
+            relation: parent
+            object: folder:f19
+          - user: folder:f19
+            relation: parent
+            object: folder:f20
+          - user: folder:f20
+            relation: parent
+            object: folder:f21
+          - user: folder:f21
+            relation: parent
+            object: folder:f22
+          - user: folder:f22
+            relation: parent
+            object: folder:f23
+          - user: folder:f23
+            relation: parent
+            object: folder:f24
+          - user: folder:f24
+            relation: parent
+            object: folder:f25
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: folder
+              relation: editor
+            errorCode: 2002
+  - name: recursive_ttu_walk_cycle
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type folder
+            relations
+              define parent: [folder]
+              define editor: [user] or editor from parent
+        tuples:
+          - user: user:alice
+            relation: editor
+            object: folder:a
+          - user: user:bob
+            relation: editor
+            object: folder:b
+          - user: folder:a
+            relation: parent
+            object: folder:b
+          - user: folder:b
+            relation: parent
+            object: folder:c
+          - user: folder:c
+            relation: parent
+            object: folder:a
+          - user: folder:c
+            relation: parent
+            object: folder:d
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: editor
+              object: folder:d
+            expectation: true
+          - tuple:
+              user: user:bob
+              relation: editor
+              object: folder:a
+            expectation: true
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: folder
+              relation: editor
+            expectation:
+              - folder:a
+              - folder:b
+              - folder:c
+              - folder:d
+        listUsersAssertions:
+          - request:
+              filters:
+                - user
+              object: folder:d
+              relation: editor
+            expectation:
+              - user:alice
+              - user:bob
+  - name: recursive_ttu_walk_overlapping_grants_with_gate
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type folder
+            relations
+              define parent: [folder]
+              define blocked: [user]
+              define viewer: ([user] or viewer from parent) but not blocked
+        # root -> mid -> leaf -> deep, plus a shortcut root -> leaf. alice is
+        # granted at root and again at mid, and blocked on mid only: mid is
+        # excluded (and passes nothing down), but leaf is still reached
+        # through the shortcut and passes viewer on to deep.
+        tuples:
+          - user: user:alice
+            relation: viewer
+            object: folder:root
+          - user: user:alice
+            relation: viewer
+            object: folder:mid
+          - user: user:alice
+            relation: blocked
+            object: folder:mid
+          - user: folder:root
+            relation: parent
+            object: folder:mid
+          - user: folder:mid
+            relation: parent
+            object: folder:leaf
+          - user: folder:root
+            relation: parent
+            object: folder:leaf
+          - user: folder:leaf
+            relation: parent
+            object: folder:deep
+          - user: folder:mid
+            relation: parent
+            object: folder:only_via_mid
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: viewer
+              object: folder:mid
+            expectation: false
+          - tuple:
+              user: user:alice
+              relation: viewer
+              object: folder:deep
+            expectation: true
+          - tuple:
+              user: user:alice
+              relation: viewer
+              object: folder:only_via_mid
+            expectation: false
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: folder
+              relation: viewer
+            expectation:
+              - folder:root
+              - folder:leaf
+              - folder:deep
+  # Two linking relations ("v from parent" through v, "r1 from owner" through
+  # r1): the walk follows both from every object and check_permission keeps
+  # only the objects that are really accessible. A long chain the subject's
+  # grant cannot use must not raise; a long chain it can use must.
+  - name: recursive_walk_mixed_links_useless_long_chain
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type document
+            relations
+              define parent: [document]
+              define owner: [document]
+              define a: [user]
+              define v: [user] or v from parent
+              define r1: a or v or r1 from owner
+              define r2: r1
+        tuples:
+          - user: user:alice
+            relation: a
+            object: document:dg
+          - user: document:dg
+            relation: owner
+            object: document:d
+          - user: document:dg
+            relation: parent
+            object: document:x1
+          - user: document:x1
+            relation: owner
+            object: document:x2
+          - user: document:x2
+            relation: parent
+            object: document:x3
+          - user: document:x3
+            relation: owner
+            object: document:x4
+          - user: document:x4
+            relation: parent
+            object: document:x5
+          - user: document:x5
+            relation: owner
+            object: document:x6
+          - user: document:x6
+            relation: parent
+            object: document:x7
+          - user: document:x7
+            relation: owner
+            object: document:x8
+          - user: document:x8
+            relation: parent
+            object: document:x9
+          - user: document:x9
+            relation: owner
+            object: document:x10
+          - user: document:x10
+            relation: parent
+            object: document:x11
+          - user: document:x11
+            relation: owner
+            object: document:x12
+          - user: document:x12
+            relation: parent
+            object: document:x13
+          - user: document:x13
+            relation: owner
+            object: document:x14
+          - user: document:x14
+            relation: parent
+            object: document:x15
+          - user: document:x15
+            relation: owner
+            object: document:x16
+          - user: document:x16
+            relation: parent
+            object: document:x17
+          - user: document:x17
+            relation: owner
+            object: document:x18
+          - user: document:x18
+            relation: parent
+            object: document:x19
+          - user: document:x19
+            relation: owner
+            object: document:x20
+          - user: document:x20
+            relation: parent
+            object: document:x21
+          - user: document:x21
+            relation: owner
+            object: document:x22
+          - user: document:x22
+            relation: parent
+            object: document:x23
+          - user: document:x23
+            relation: owner
+            object: document:x24
+          - user: document:x24
+            relation: parent
+            object: document:x25
+          - user: document:x25
+            relation: owner
+            object: document:x26
+          - user: document:x26
+            relation: parent
+            object: document:x27
+          - user: document:x27
+            relation: owner
+            object: document:x28
+          - user: document:x28
+            relation: parent
+            object: document:x29
+          - user: document:x29
+            relation: owner
+            object: document:x30
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: document
+              relation: r2
+            expectation:
+              - document:d
+              - document:dg
+  - name: recursive_walk_mixed_links_deep_chain
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type document
+            relations
+              define parent: [document]
+              define owner: [document]
+              define a: [user]
+              define v: [user] or v from parent
+              define r1: a or v or r1 from owner
+              define r2: r1
+        tuples:
+          - user: user:alice
+            relation: a
+            object: document:y0
+          - user: document:y0
+            relation: owner
+            object: document:y1
+          - user: document:y1
+            relation: owner
+            object: document:y2
+          - user: document:y2
+            relation: owner
+            object: document:y3
+          - user: document:y3
+            relation: owner
+            object: document:y4
+          - user: document:y4
+            relation: owner
+            object: document:y5
+          - user: document:y5
+            relation: owner
+            object: document:y6
+          - user: document:y6
+            relation: owner
+            object: document:y7
+          - user: document:y7
+            relation: owner
+            object: document:y8
+          - user: document:y8
+            relation: owner
+            object: document:y9
+          - user: document:y9
+            relation: owner
+            object: document:y10
+          - user: document:y10
+            relation: owner
+            object: document:y11
+          - user: document:y11
+            relation: owner
+            object: document:y12
+          - user: document:y12
+            relation: owner
+            object: document:y13
+          - user: document:y13
+            relation: owner
+            object: document:y14
+          - user: document:y14
+            relation: owner
+            object: document:y15
+          - user: document:y15
+            relation: owner
+            object: document:y16
+          - user: document:y16
+            relation: owner
+            object: document:y17
+          - user: document:y17
+            relation: owner
+            object: document:y18
+          - user: document:y18
+            relation: owner
+            object: document:y19
+          - user: document:y19
+            relation: owner
+            object: document:y20
+          - user: document:y20
+            relation: owner
+            object: document:y21
+          - user: document:y21
+            relation: owner
+            object: document:y22
+          - user: document:y22
+            relation: owner
+            object: document:y23
+          - user: document:y23
+            relation: owner
+            object: document:y24
+          - user: document:y24
+            relation: owner
+            object: document:y25
+          - user: document:y25
+            relation: owner
+            object: document:y26
+          - user: document:y26
+            relation: owner
+            object: document:y27
+          - user: document:y27
+            relation: owner
+            object: document:y28
+          - user: document:y28
+            relation: owner
+            object: document:y29
+          - user: document:y29
+            relation: owner
+            object: document:y30
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: document
+              relation: r2
+            errorCode: 2002
+  # The final relation's exclusion does not stop the walk relation: blocked
+  # objects at the limit still pass r1 (or v) on to unblocked descendants
+  # deeper than the limit, so the request must fail rather than stop there.
+  - name: recursive_walk_mixed_links_blocked_frontier
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type document
+            relations
+              define parent: [document]
+              define owner: [document]
+              define a: [user]
+              define blocked: [user]
+              define v: [user] or v from parent
+              define r1: a or v or r1 from owner
+              define r2: ([user] or r1) but not blocked
+        tuples:
+          - user: user:alice
+            relation: a
+            object: document:x0
+          - user: document:x0
+            relation: owner
+            object: document:x1
+          - user: document:x1
+            relation: owner
+            object: document:x2
+          - user: document:x2
+            relation: owner
+            object: document:x3
+          - user: document:x3
+            relation: owner
+            object: document:x4
+          - user: document:x4
+            relation: owner
+            object: document:x5
+          - user: document:x5
+            relation: owner
+            object: document:x6
+          - user: document:x6
+            relation: owner
+            object: document:x7
+          - user: document:x7
+            relation: owner
+            object: document:x8
+          - user: document:x8
+            relation: owner
+            object: document:x9
+          - user: document:x9
+            relation: owner
+            object: document:x10
+          - user: document:x10
+            relation: owner
+            object: document:x11
+          - user: document:x11
+            relation: owner
+            object: document:x12
+          - user: document:x12
+            relation: owner
+            object: document:x13
+          - user: document:x13
+            relation: owner
+            object: document:x14
+          - user: document:x14
+            relation: owner
+            object: document:x15
+          - user: document:x15
+            relation: owner
+            object: document:x16
+          - user: document:x16
+            relation: owner
+            object: document:x17
+          - user: document:x17
+            relation: owner
+            object: document:x18
+          - user: document:x18
+            relation: owner
+            object: document:x19
+          - user: document:x19
+            relation: owner
+            object: document:x20
+          - user: document:x20
+            relation: owner
+            object: document:x21
+          - user: document:x21
+            relation: owner
+            object: document:x22
+          - user: document:x22
+            relation: owner
+            object: document:x23
+          - user: document:x23
+            relation: owner
+            object: document:x24
+          - user: document:x24
+            relation: owner
+            object: document:x25
+          - user: document:x25
+            relation: owner
+            object: document:x26
+          - user: document:x26
+            relation: owner
+            object: document:x27
+          - user: document:x27
+            relation: owner
+            object: document:x28
+          - user: document:x28
+            relation: owner
+            object: document:x29
+          - user: document:x29
+            relation: owner
+            object: document:x30
+          - user: user:alice
+            relation: r2
+            object: document:x0
+          - user: user:alice
+            relation: blocked
+            object: document:x0
+          - user: user:alice
+            relation: r2
+            object: document:x1
+          - user: user:alice
+            relation: blocked
+            object: document:x1
+          - user: user:alice
+            relation: r2
+            object: document:x2
+          - user: user:alice
+            relation: blocked
+            object: document:x2
+          - user: user:alice
+            relation: r2
+            object: document:x3
+          - user: user:alice
+            relation: blocked
+            object: document:x3
+          - user: user:alice
+            relation: r2
+            object: document:x4
+          - user: user:alice
+            relation: blocked
+            object: document:x4
+          - user: user:alice
+            relation: r2
+            object: document:x5
+          - user: user:alice
+            relation: blocked
+            object: document:x5
+          - user: user:alice
+            relation: r2
+            object: document:x6
+          - user: user:alice
+            relation: blocked
+            object: document:x6
+          - user: user:alice
+            relation: r2
+            object: document:x7
+          - user: user:alice
+            relation: blocked
+            object: document:x7
+          - user: user:alice
+            relation: r2
+            object: document:x8
+          - user: user:alice
+            relation: blocked
+            object: document:x8
+          - user: user:alice
+            relation: r2
+            object: document:x9
+          - user: user:alice
+            relation: blocked
+            object: document:x9
+          - user: user:alice
+            relation: r2
+            object: document:x10
+          - user: user:alice
+            relation: blocked
+            object: document:x10
+          - user: user:alice
+            relation: r2
+            object: document:x11
+          - user: user:alice
+            relation: blocked
+            object: document:x11
+          - user: user:alice
+            relation: r2
+            object: document:x12
+          - user: user:alice
+            relation: blocked
+            object: document:x12
+          - user: user:alice
+            relation: r2
+            object: document:x13
+          - user: user:alice
+            relation: blocked
+            object: document:x13
+          - user: user:alice
+            relation: r2
+            object: document:x14
+          - user: user:alice
+            relation: blocked
+            object: document:x14
+          - user: user:alice
+            relation: r2
+            object: document:x15
+          - user: user:alice
+            relation: blocked
+            object: document:x15
+          - user: user:alice
+            relation: r2
+            object: document:x16
+          - user: user:alice
+            relation: blocked
+            object: document:x16
+          - user: user:alice
+            relation: r2
+            object: document:x17
+          - user: user:alice
+            relation: blocked
+            object: document:x17
+          - user: user:alice
+            relation: r2
+            object: document:x18
+          - user: user:alice
+            relation: blocked
+            object: document:x18
+          - user: user:alice
+            relation: r2
+            object: document:x19
+          - user: user:alice
+            relation: blocked
+            object: document:x19
+          - user: user:alice
+            relation: r2
+            object: document:x20
+          - user: user:alice
+            relation: blocked
+            object: document:x20
+          - user: user:alice
+            relation: r2
+            object: document:x21
+          - user: user:alice
+            relation: blocked
+            object: document:x21
+          - user: user:alice
+            relation: r2
+            object: document:x22
+          - user: user:alice
+            relation: blocked
+            object: document:x22
+          - user: user:alice
+            relation: r2
+            object: document:x23
+          - user: user:alice
+            relation: blocked
+            object: document:x23
+          - user: user:alice
+            relation: r2
+            object: document:x24
+          - user: user:alice
+            relation: blocked
+            object: document:x24
+          - user: user:alice
+            relation: r2
+            object: document:x25
+          - user: user:alice
+            relation: blocked
+            object: document:x25
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: document
+              relation: r2
+            errorCode: 2002
+  - name: recursive_walk_two_links_excluded_frontier
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type folder
+            relations
+              define parent: [folder]
+              define owner: [folder]
+              define b: [user]
+              define v: [user] or v from parent or v from owner
+              define r: v but not b
+        tuples:
+          - user: user:alice
+            relation: v
+            object: folder:f0
+          - user: user:alice
+            relation: b
+            object: folder:f25
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: folder:f1
+            relation: parent
+            object: folder:f2
+          - user: folder:f2
+            relation: parent
+            object: folder:f3
+          - user: folder:f3
+            relation: parent
+            object: folder:f4
+          - user: folder:f4
+            relation: parent
+            object: folder:f5
+          - user: folder:f5
+            relation: parent
+            object: folder:f6
+          - user: folder:f6
+            relation: parent
+            object: folder:f7
+          - user: folder:f7
+            relation: parent
+            object: folder:f8
+          - user: folder:f8
+            relation: parent
+            object: folder:f9
+          - user: folder:f9
+            relation: parent
+            object: folder:f10
+          - user: folder:f10
+            relation: parent
+            object: folder:f11
+          - user: folder:f11
+            relation: parent
+            object: folder:f12
+          - user: folder:f12
+            relation: parent
+            object: folder:f13
+          - user: folder:f13
+            relation: parent
+            object: folder:f14
+          - user: folder:f14
+            relation: parent
+            object: folder:f15
+          - user: folder:f15
+            relation: parent
+            object: folder:f16
+          - user: folder:f16
+            relation: parent
+            object: folder:f17
+          - user: folder:f17
+            relation: parent
+            object: folder:f18
+          - user: folder:f18
+            relation: parent
+            object: folder:f19
+          - user: folder:f19
+            relation: parent
+            object: folder:f20
+          - user: folder:f20
+            relation: parent
+            object: folder:f21
+          - user: folder:f21
+            relation: parent
+            object: folder:f22
+          - user: folder:f22
+            relation: parent
+            object: folder:f23
+          - user: folder:f23
+            relation: parent
+            object: folder:f24
+          - user: folder:f24
+            relation: parent
+            object: folder:f25
+          - user: folder:f25
+            relation: parent
+            object: folder:f26
+          - user: folder:f26
+            relation: parent
+            object: folder:f27
+          - user: folder:f27
+            relation: parent
+            object: folder:f28
+          - user: folder:f28
+            relation: parent
+            object: folder:f29
+          - user: folder:f29
+            relation: parent
+            object: folder:f30
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: folder
+              relation: r
+            errorCode: 2002

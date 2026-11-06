@@ -36,6 +36,26 @@ func TableAs(schema, name, alias string) TableRef {
 	return TableRef{Schema: schema, Name: name, Alias: alias}
 }
 
+// UnnestAs expands an array into a one-column table.
+//
+// Example: UnnestAs{Array: Raw("v_frontier"), Alias: "a", Column: "object_id"}
+// Renders: unnest(v_frontier) AS a(object_id)
+type UnnestAs struct {
+	Array  Expr
+	Alias  string
+	Column string
+}
+
+// TableSQL implements TableExpr.
+func (u UnnestAs) TableSQL() string {
+	return "unnest(" + u.Array.SQL() + ") AS " + u.Alias + "(" + u.Column + ")"
+}
+
+// TableAlias implements TableExpr.
+func (u UnnestAs) TableAlias() string {
+	return u.Alias
+}
+
 // FunctionCallExpr represents a function call that can be used as a table expression.
 // Used for LATERAL joins with table-returning functions.
 type FunctionCallExpr struct {

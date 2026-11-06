@@ -60,6 +60,7 @@ type (
 	TableExpr        = sqldsl.TableExpr
 	TableRef         = sqldsl.TableRef
 	FunctionCallExpr = sqldsl.FunctionCallExpr
+	UnnestAs         = sqldsl.UnnestAs
 
 	// Statements and structures
 	JoinClause        = sqldsl.JoinClause
@@ -211,6 +212,7 @@ type (
 	PlpgsqlFunction = plpgsql.PlpgsqlFunction
 	SqlFunction     = plpgsql.SqlFunction
 	ForLoop         = plpgsql.ForLoop
+	While           = plpgsql.While
 )
 
 var (
