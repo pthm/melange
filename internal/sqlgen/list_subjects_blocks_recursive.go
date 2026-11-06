@@ -14,6 +14,10 @@ type SubjectsRecursiveBlockSet struct {
 	UsersetFilterBlocks    []TypedQueryBlock
 	UsersetFilterSelfBlock *TypedQueryBlock
 	ParentRelations        []ListParentRelationData
+	// ParentClosureWalks are the linking relations the parent_closure walk
+	// must follow past the direct parent: those of parent relations whose
+	// blocks read parent_closure and whose grants flow down the chain.
+	ParentClosureWalks []string
 }
 
 // regularBranchTailValidated reports whether the recursive list_subjects regular
@@ -59,12 +63,14 @@ func BuildListSubjectsRecursiveBlocks(plan ListPlan) (SubjectsRecursiveBlockSet,
 		return p.IsClosurePattern && covered[p.SourceRelation]
 	})
 
+	ttuBlocks, walks := buildListSubjectsRecursiveTTUBlocks(plan, regularParents)
 	return SubjectsRecursiveBlockSet{
 		RegularBlocks:          regularBlocks,
-		RegularTTUBlocks:       buildListSubjectsRecursiveTTUBlocks(plan, regularParents),
+		RegularTTUBlocks:       ttuBlocks,
 		UsersetFilterBlocks:    usersetBlocks,
 		UsersetFilterSelfBlock: buildListSubjectsUsersetFilterSelfBlock(plan),
 		ParentRelations:        parentRelations,
+		ParentClosureWalks:     walks,
 	}, nil
 }
 
@@ -469,17 +475,26 @@ func buildListSubjectsRecursiveSimpleUsersetBlock(plan ListPlan, pattern listUse
 	}
 }
 
-// buildListSubjectsRecursiveTTUBlocks builds the TTU path blocks for recursive list_subjects.
-func buildListSubjectsRecursiveTTUBlocks(plan ListPlan, parentRelations []ListParentRelationData) []TypedQueryBlock {
+// buildListSubjectsRecursiveTTUBlocks builds the TTU path blocks for recursive
+// list_subjects, and the linking relations the parent_closure walk must follow
+// past the direct parent for them (sorted).
+func buildListSubjectsRecursiveTTUBlocks(plan ListPlan, parentRelations []ListParentRelationData) ([]TypedQueryBlock, []string) {
 	if len(parentRelations) == 0 {
-		return nil
+		return nil, nil
 	}
 
+	readsParentClosure := func(b TypedQueryBlock) bool { return containsParentClosure(b.Query.SQL()) }
 	blocks := make([]TypedQueryBlock, 0, len(parentRelations))
+	var walks []string
 	for _, parent := range parentRelations {
-		blocks = append(blocks, buildListSubjectsRecursiveTTUBlock(plan, parent)...)
+		parentBlocks := buildListSubjectsRecursiveTTUBlock(plan, parent)
+		blocks = append(blocks, parentBlocks...)
+		if parentGrantsFlowDown(plan, parent) && slices.ContainsFunc(parentBlocks, readsParentClosure) {
+			walks = append(walks, parent.LinkingRelation)
+		}
 	}
-	return blocks
+	slices.Sort(walks)
+	return blocks, slices.Compact(walks)
 }
 
 // parentRelationStrategy describes how a parent relation should be resolved
@@ -543,7 +558,7 @@ func parentTargetNeedsSubjectPool(target *RelationAnalysis, currentParent ListPa
 		return true
 	}
 	// parent_closure only recurses out of nodes of the listed object's own
-	// type (see buildParentClosureCTESQL), so a target that recurses on a
+	// type (see renderParentClosureWalk), so a target that recurses on a
 	// different type (document -> folder, folder.v: v from parent) would stop
 	// after one hop and miss grants on further ancestors.
 	if target.ObjectType != objectType && len(target.ParentRelations)+len(target.ClosureParentRelations) > 0 {
@@ -589,10 +604,25 @@ func parentClosureVia(parent ListParentRelationData) Expr {
 // parent) or the listed relation does ("x from parent", so x on the parent
 // gives x here). "x: [user] or y from parent" with y non-recursive is one hop.
 func parentClosureDepthGuard(plan ListPlan, parent ListParentRelationData) []Expr {
-	if recursesVia(&plan.Analysis, parent.LinkingRelation) || recursesVia(parentRelationAnalysis(plan, parent), parent.LinkingRelation) {
+	if parentGrantsFlowDown(plan, parent) {
 		return nil
 	}
 	return []Expr{Eq{Left: Col{Table: "p", Column: "depth"}, Right: Int(0)}}
+}
+
+// parentGrantsFlowDown reports whether grants on ancestors beyond the direct
+// parent reach the listed object through parent's linking relation, so the
+// parent_closure walk must follow that relation past the first hop. The walk
+// recurses only out of nodes of the listed type, so what flows down a chain is
+// the target relation on that type, not on another allowed parent type.
+func parentGrantsFlowDown(plan ListPlan, parent ListParentRelationData) bool {
+	if recursesVia(&plan.Analysis, parent.LinkingRelation) {
+		return true
+	}
+	if plan.AnalysisLookup == nil || !slices.Contains(parent.AllowedLinkingTypesSlice, plan.ObjectType) {
+		return false
+	}
+	return recursesVia(plan.AnalysisLookup[plan.ObjectType+"."+parent.Relation], parent.LinkingRelation)
 }
 
 // nestedParentForcesSubjectPool returns true when a nested parent relation
@@ -698,7 +728,7 @@ func buildListSubjectsRecursiveTTUBlockParentClosure(plan ListPlan, parent ListP
 	satisfyingRelations := collectParentSatisfyingRelations(plan, parent)
 
 	// Build query that scans for grants on parent ancestors
-	// parent_closure CTE returns (subject_type, subject_id, depth) where subject is the parent object
+	// parent_closure rows are (subject_type, subject_id, depth, via), the subject being an ancestor
 	whereConditions := []Expr{
 		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
 		In{Expr: Col{Table: "t", Column: "relation"}, Values: satisfyingRelations},

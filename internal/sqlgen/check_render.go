@@ -171,6 +171,23 @@ func renderCheckRecursiveIntersectionFunctionFromBlocks(plan CheckPlan, blocks C
 // evaluate cheaper EXISTS/Direct branches first in OR chains.
 const recursiveCheckCost = 1000
 
+// checkDepthLimit is the p_visited length at which check (and explain) raise
+// M2002. OpenFGA's Check resolves a parent or nested userset chain of 25 hops
+// and fails at 26, but it counts every rewrite as a step, while p_visited
+// grows only on recursive calls: computed relations and usersets resolved
+// inline add nothing. A limit of 26 would let a chain OpenFGA rejects
+// through (resolution_too_complex_throws_error), so check stays one hop
+// stricter on plain chains until it counts steps the way OpenFGA does.
+const checkDepthLimit = 25
+
+// checkDepthGuard raises M2002 once p_visited reaches checkDepthLimit.
+func checkDepthGuard() Stmt {
+	return If{
+		Cond: Gte{Left: ArrayLength{Array: Visited}, Right: Int(checkDepthLimit)},
+		Then: []Stmt{Raise{Message: "resolution too complex", ErrCode: "M2002"}},
+	}
+}
+
 func checkFunctionArgs() []FuncArg {
 	return []FuncArg{
 		{Name: "p_subject_type", Type: "TEXT"},
@@ -305,10 +322,7 @@ func buildCycleDetectionStmts() []Stmt {
 			Cond: ArrayContains{Value: Raw("v_key"), Array: Visited},
 			Then: []Stmt{ReturnInt{Value: 0}},
 		},
-		If{
-			Cond: Gte{Left: ArrayLength{Array: Visited}, Right: Int(25)},
-			Then: []Stmt{Raise{Message: "resolution too complex", ErrCode: "M2002"}},
-		},
+		checkDepthGuard(),
 	}
 }
 

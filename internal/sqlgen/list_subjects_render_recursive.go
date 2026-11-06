@@ -1,9 +1,25 @@
 package sqlgen
 
 import (
+	"fmt"
 	"maps"
 	"slices"
 	"strings"
+)
+
+// PL/pgSQL variables of the parent_closure walk. The closure and the frontier
+// are (subject_type, subject_id, via) rows held as parallel arrays.
+const (
+	closureType  = "v_pc_type"
+	closureID    = "v_pc_id"
+	closureVia   = "v_pc_via"
+	closureDepth = "v_pc_depth" // hops from the listed object, minus one
+	frontierType = "v_fr_type"
+	frontierID   = "v_fr_id"
+	frontierVia  = "v_fr_via"
+
+	closureArrays  = closureType + ", " + closureID + ", " + closureVia
+	frontierArrays = frontierType + ", " + frontierID + ", " + frontierVia
 )
 
 // =============================================================================
@@ -13,19 +29,18 @@ import (
 // This handles TTU patterns with subject_pool CTE and check_permission_internal calls.
 func RenderListSubjectsRecursiveFunction(plan ListPlan, blocks SubjectsRecursiveBlockSet) (string, error) {
 	usersetFilterPaginatedQuery := buildUsersetFilterQuery(plan, blocks)
-	regularPaginatedQuery := buildRegularPaginatedQuery(plan, blocks)
+	regularPaginatedQuery, walksParents := buildRegularPaginatedQuery(plan, blocks)
 
-	mainIf := If{
-		Cond: Gt{
-			Left:  Position{Needle: Lit("#"), Haystack: SubjectType},
-			Right: Int(0),
-		},
-		Then: renderUsersetFilterThenBranch(usersetFilterPaginatedQuery),
-		Else: []Stmt{
-			Comment{Text: "Regular subject type: find direct subjects and expand usersets"},
-			ReturnQuery{Query: regularPaginatedQuery},
-		},
+	decls := []Decl{
+		{Name: "v_filter_type", Type: "TEXT"},
+		{Name: "v_filter_relation", Type: "TEXT"},
 	}
+	regular := []Stmt{Comment{Text: "Regular subject type: find direct subjects and expand usersets"}}
+	if walksParents {
+		decls = append(decls, parentClosureWalkDecls()...)
+		regular = append(regular, renderParentClosureWalk(plan, blocks.ParentClosureWalks)...)
+	}
+	regular = append(regular, ReturnQuery{Query: regularPaginatedQuery})
 
 	fn := PlpgsqlFunction{
 		Schema:  plan.DatabaseSchema,
@@ -33,13 +48,17 @@ func RenderListSubjectsRecursiveFunction(plan ListPlan, blocks SubjectsRecursive
 		Args:    ListSubjectsArgs(),
 		Returns: ListSubjectsReturns(),
 		Header:  ListSubjectsFunctionHeader(plan.ObjectType, plan.Relation, plan.FeaturesString()),
-		Decls: []Decl{
-			{Name: "v_filter_type", Type: "TEXT"},
-			{Name: "v_filter_relation", Type: "TEXT"},
-		},
+		Decls:   decls,
 		Body: []Stmt{
 			Comment{Text: "Check if p_subject_type is a userset filter (contains '#')"},
-			mainIf,
+			If{
+				Cond: Gt{
+					Left:  Position{Needle: Lit("#"), Haystack: SubjectType},
+					Right: Int(0),
+				},
+				Then: renderUsersetFilterThenBranch(usersetFilterPaginatedQuery),
+				Else: regular,
+			},
 		},
 	}
 
@@ -55,15 +74,19 @@ func buildUsersetFilterQuery(plan ListPlan, blocks SubjectsRecursiveBlockSet) st
 	return hoistClosureCTE(wrapped, plan.Inline.ClosureRows)
 }
 
-func buildRegularPaginatedQuery(plan ListPlan, blocks SubjectsRecursiveBlockSet) string {
+// buildRegularPaginatedQuery returns the regular-subject query and whether it
+// reads parent_closure, which the function must then compute first.
+func buildRegularPaginatedQuery(plan ListPlan, blocks SubjectsRecursiveBlockSet) (string, bool) {
 	regularBlocks := renderTypedQueryBlocks(blocks.RegularBlocks)
 	ttuBlocks := renderTypedQueryBlocks(blocks.RegularTTUBlocks)
-	regularQuery := buildSubjectsRecursiveRegularQuery(plan, regularBlocks, ttuBlocks)
-	return plan.wrapPaginationWildcardFirst(regularQuery)
+	regularQuery, walksParents := buildSubjectsRecursiveRegularQuery(plan, regularBlocks, ttuBlocks)
+	return plan.wrapPaginationWildcardFirst(regularQuery), walksParents
 }
 
-// buildSubjectsRecursiveRegularQuery builds the regular path query with parent_closure and base_results CTEs.
-func buildSubjectsRecursiveRegularQuery(plan ListPlan, regularBlocks, ttuBlocks []QueryBlock) string {
+// buildSubjectsRecursiveRegularQuery builds the regular path query with
+// parent_closure and base_results CTEs, and reports whether it reads
+// parent_closure.
+func buildSubjectsRecursiveRegularQuery(plan ListPlan, regularBlocks, ttuBlocks []QueryBlock) (string, bool) {
 	// Join all base blocks with UNION
 	baseBlocksSQL := RenderUnionBlocks(regularBlocks)
 
@@ -88,10 +111,13 @@ func buildSubjectsRecursiveRegularQuery(plan ListPlan, regularBlocks, ttuBlocks 
 		ctes = append(ctes, CTEDef{Name: "subject_pool", Query: Raw(subjectPoolSQL)})
 	}
 
-	// Add parent_closure CTE if needed (for simple parent relations with optimization)
+	// parent_closure reads the ancestors the walk collected (renderParentClosureWalk).
 	if needsParentClosure {
-		parentClosureSQL := buildParentClosureCTESQL(plan)
-		ctes = append(ctes, CTEDef{Name: "parent_closure", Query: Raw(parentClosureSQL)})
+		ctes = append(ctes, CTEDef{Name: "parent_closure", Query: SelectStmt{
+			ColumnExprs: []Expr{Raw("*")},
+			FromExpr: TableAs("", fmt.Sprintf("unnest(%s, %s, %s, %s)", closureType, closureID, closureDepth, closureVia),
+				"p(subject_type, subject_id, depth, via)"),
+		}})
 	}
 
 	// Add base_results CTE.
@@ -120,11 +146,7 @@ func buildSubjectsRecursiveRegularQuery(plan ListPlan, regularBlocks, ttuBlocks 
 	// Build the final query with wildcard handling
 	wildcardTailQuery := buildSubjectsWildcardTailQuery(plan)
 
-	// Build the full CTE query - use RECURSIVE if we have parent_closure
-	recursive := needsParentClosure
-	cteQuery := MultiCTE(recursive, ctes, wildcardTailQuery)
-
-	return cteQuery.SQL()
+	return MultiCTE(false, ctes, wildcardTailQuery).SQL(), needsParentClosure
 }
 
 func containsSubjectPool(sql string) bool {
@@ -135,96 +157,137 @@ func containsParentClosure(sql string) bool {
 	return strings.Contains(sql, "parent_closure")
 }
 
-// buildParentClosureCTESQL builds a recursive CTE that pre-computes the transitive
-// closure of parent objects reachable from the target object via TTU linking relations.
-// The caller uses this closure to find subjects that hold the checked relation on any
-// ancestor, without re-traversing the parent graph for each candidate subject.
-//
-// When a relation has multiple TTU paths — from closure expansion (e.g., admin_role,
-// editor_role, viewer_role all satisfy a viewer relation) or from a union of TTUs
-// (e.g., member from team or staff from department) — all linking relations are
-// unioned into a single IN(...) clause so every path is covered in one pass.
-func buildParentClosureCTESQL(plan ListPlan) string {
-	// Get the parent relations info from the plan
-	parentRelations := buildListParentRelations(plan.Analysis)
-	if len(parentRelations) == 0 {
-		return ""
+func parentClosureWalkDecls() []Decl {
+	return []Decl{
+		{Name: closureType, Type: "TEXT[]"},
+		{Name: closureID, Type: "TEXT[]"},
+		{Name: closureVia, Type: "TEXT[]"},
+		{Name: frontierType, Type: "TEXT[]"},
+		{Name: frontierID, Type: "TEXT[]"},
+		{Name: frontierVia, Type: "TEXT[]"},
+		{Name: closureDepth, Type: "INT[]"},
+		{Name: walkLevel, Type: "INT"},
 	}
+}
 
-	// Collect all unique linking relations and allowed types across every parent relation.
+// renderParentClosureWalk collects the ancestors of the listed object
+// reachable via TTU linking relations into the parent_closure arrays, so the
+// caller can find subjects that hold the checked relation on any ancestor
+// without re-traversing the parent graph for each candidate subject.
+//
+// The walk is breadth first and expands each (ancestor, linking relation)
+// once, so an ancestor's depth is its shortest distance. Each chain stays on
+// the linking relation of its first hop (via): "v from parent" recurses
+// through v's own "v from parent", never through another linking relation such
+// as owner, so a parent -> owner chain grants nothing. A chain continues past
+// the direct parent only along the recursing linking relations (see
+// SubjectsRecursiveBlockSet.ParentClosureWalks), and only out of nodes of the
+// object's own type: cross-type linking relations (folder.org -> org) are
+// one-hop terminals whose targets feed the grant lookup but must not recurse
+// (org:o1 -> parent -> org:o0 would pull in grants from unrelated ancestors).
+//
+// Ancestors still to expand walkDepthLimit hops away raise M2002, as OpenFGA's
+// ListUsers fails on a parent chain of 25 hops.
+func renderParentClosureWalk(plan ListPlan, recursing []string) []Stmt {
 	linkingRelationSet := make(map[string]bool)
 	allowedTypeSet := make(map[string]bool)
-	for _, parent := range parentRelations {
+	for _, parent := range buildListParentRelations(plan.Analysis) {
 		linkingRelationSet[parent.LinkingRelation] = true
 		for _, t := range parent.AllowedLinkingTypesSlice {
 			allowedTypeSet[t] = true
 		}
 	}
-
 	linkingRelations := slices.Sorted(maps.Keys(linkingRelationSet))
 	allowedTypes := slices.Sorted(maps.Keys(allowedTypeSet))
 
-	// Base case: immediate parents (subject becomes the parent object)
-	baseWhere := []Expr{
+	// Seed: the direct parents (the link's subject becomes the parent object).
+	seedWhere := []Expr{
 		Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 		Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
 		In{Expr: Col{Table: "link", Column: "relation"}, Values: linkingRelations},
 	}
 	if len(allowedTypes) > 0 {
-		baseWhere = append(baseWhere, In{Expr: Col{Table: "link", Column: "subject_type"}, Values: allowedTypes})
+		seedWhere = append(seedWhere, In{Expr: Col{Table: "link", Column: "subject_type"}, Values: allowedTypes})
 	}
-
-	baseQuery := SelectStmt{
+	seed := SelectStmt{
+		Distinct: true,
 		ColumnExprs: []Expr{
 			Col{Table: "link", Column: "subject_type"},
 			Col{Table: "link", Column: "subject_id"},
-			Raw("0 AS depth"),
-			Raw("link.relation AS via"),
+			Col{Table: "link", Column: "relation"},
 		},
 		FromExpr: TableAs("", "melange_tuples", "link"),
-		Where:    And(baseWhere...),
+		Where:    And(seedWhere...),
 	}
 
-	// Recursive case: walk parent chains. Each chain stays on the linking
-	// relation of its first hop (via): "v from parent" recurses through v's
-	// own "v from parent", never through another linking relation such as
-	// owner, so a parent -> owner chain grants nothing. Arms filter on via.
-	// Join on the parent's subject (which becomes the new object to search from).
-	//
-	// Only recurse OUT FROM nodes of the object's own type: the self-referential
-	// linking relation (e.g. folder.parent -> folder) drives the recursion, while
-	// cross-type linking relations (e.g. folder.org -> org) are one-hop terminals
-	// whose targets feed the grant lookup but must not recurse. Without the
-	// p.subject_type guard the walk would follow a cross-type target's OWN
-	// same-named linking relation (org:o1 -> parent -> org:o0), pulling in grants
-	// from unrelated ancestors and over-reporting subjects.
-	recursiveQuery := SelectStmt{
+	stmts := []Stmt{
+		Comment{Text: "Collect the object's ancestors breadth first into parent_closure"},
+		aggregateRowsInto(closureArrays, "seed", IndentLines(seed.SQL(), "    ")),
+		Assign{Name: closureDepth, Value: Raw(fillDepth("0", closureType))},
+	}
+	if len(recursing) == 0 {
+		return stmts
+	}
+
+	step := SelectStmt{
 		ColumnExprs: []Expr{
 			Col{Table: "link", Column: "subject_type"},
 			Col{Table: "link", Column: "subject_id"},
-			Raw("p.depth + 1 AS depth"),
-			Col{Table: "p", Column: "via"},
+			Col{Table: "f", Column: "via"},
 		},
-		FromExpr: TableAs("", "parent_closure", "p"),
+		FromExpr: TableAs("", "unnest("+frontierArrays+")", "f(subject_type, subject_id, via)"),
 		Joins: []JoinClause{{
-			Type:   "INNER",
-			Schema: "",
-			Table:  "melange_tuples",
-			Alias:  "link",
+			Type:  "INNER",
+			Table: "melange_tuples",
+			Alias: "link",
 			On: And(
-				Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Col{Table: "p", Column: "subject_type"}},
-				Eq{Left: Col{Table: "link", Column: "object_id"}, Right: Col{Table: "p", Column: "subject_id"}},
+				Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Col{Table: "f", Column: "subject_type"}},
+				Eq{Left: Col{Table: "link", Column: "object_id"}, Right: Col{Table: "f", Column: "subject_id"}},
+				Eq{Left: Col{Table: "link", Column: "relation"}, Right: Col{Table: "f", Column: "via"}},
 			),
 		}},
 		Where: And(
-			Eq{Left: Col{Table: "p", Column: "subject_type"}, Right: Lit(plan.ObjectType)},
-			Eq{Left: Col{Table: "link", Column: "relation"}, Right: Col{Table: "p", Column: "via"}},
-			Lt{Left: Col{Table: "p", Column: "depth"}, Right: Int(25)},
+			Eq{Left: Col{Table: "f", Column: "subject_type"}, Right: Lit(plan.ObjectType)},
+			In{Expr: Col{Table: "f", Column: "via"}, Values: recursing},
 		),
 	}
+	fresh := IndentLines(step.SQL(), "    ") + "\n    EXCEPT\n    SELECT * FROM unnest(" + closureArrays + ")"
+	return append(stmts,
+		Assign{Name: frontierType, Value: Raw(closureType)},
+		Assign{Name: frontierID, Value: Raw(closureID)},
+		Assign{Name: frontierVia, Value: Raw(closureVia)},
+		Assign{Name: walkLevel, Value: Int(1)},
+		While{
+			Cond: Gt{Left: Raw("cardinality(" + frontierType + ")"), Right: Int(0)},
+			Body: []Stmt{
+				If{
+					Cond: Gte{Left: Raw(walkLevel), Right: Int(walkDepthLimit)},
+					Then: []Stmt{Raise{Message: "resolution too complex", ErrCode: "M2002"}},
+				},
+				aggregateRowsInto(frontierArrays, "fresh", fresh),
+				Assign{Name: closureType, Value: Raw(closureType + " || " + frontierType)},
+				Assign{Name: closureID, Value: Raw(closureID + " || " + frontierID)},
+				Assign{Name: closureVia, Value: Raw(closureVia + " || " + frontierVia)},
+				Assign{Name: closureDepth, Value: Raw(closureDepth + " || " + fillDepth(walkLevel, frontierType))},
+				Assign{Name: walkLevel, Value: Raw(walkLevel + " + 1")},
+			},
+		},
+	)
+}
 
-	// Union base and recursive cases
-	return baseQuery.SQL() + "\n        UNION\n        " + recursiveQuery.SQL()
+// aggregateRowsInto selects the (subject_type, subject_id, via) rows of query
+// into the parallel arrays named by into. The arrays are aggregated in one
+// pass over the same rows, so they stay aligned.
+func aggregateRowsInto(into, alias, query string) Stmt {
+	return RawStmt{SQLText: fmt.Sprintf(`SELECT array_agg(%[1]s.subject_type), array_agg(%[1]s.subject_id), array_agg(%[1]s.via) INTO %[2]s
+FROM (
+%[3]s
+) AS %[1]s(subject_type, subject_id, via);`, alias, into, query)}
+}
+
+// fillDepth is an array holding depth once per element of typeArray.
+func fillDepth(depth, typeArray string) string {
+	return fmt.Sprintf("array_fill(%s, ARRAY[COALESCE(cardinality(%s), 0)])", depth, typeArray)
 }
 
 // buildSubjectPoolCTESQL builds the subject_pool CTE SQL for complex parent relations.

@@ -71,10 +71,7 @@ func renderDispatcherWithCases(databaseSchema, fnName string, cases []Dispatcher
 	body := append([]Stmt{
 		Comment{Text: "Depth limit check: prevent excessively deep permission resolution chains"},
 		Comment{Text: "This catches both recursive TTU patterns and long userset chains"},
-		If{
-			Cond: Gte{Left: ArrayLength{Array: Visited}, Right: Int(25)},
-			Then: []Stmt{Raise{Message: "resolution too complex", ErrCode: "M2002"}},
-		},
+		checkDepthGuard(),
 	}, dispatchIfChain(cases, checkDispatchCall, Int(0))...)
 
 	internalFn := PlpgsqlFunction{
@@ -86,7 +83,7 @@ func renderDispatcherWithCases(databaseSchema, fnName string, cases []Dispatcher
 		Header: []string{
 			"Generated internal dispatcher for " + internalName,
 			"Routes to specialized functions with p_visited for cycle detection in TTU patterns",
-			"Enforces depth limit of 25 to prevent stack overflow from deep permission chains",
+			"Enforces the depth limit to prevent stack overflow from deep permission chains",
 			"Phase 5: All relations use specialized functions - no generic fallback",
 		},
 		// The internal dispatcher routes to specialized functions that may recurse

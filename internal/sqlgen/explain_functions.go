@@ -115,10 +115,7 @@ func renderExplainDispatcherWithCases(databaseSchema string, cases []DispatcherC
 		// dispatchIfChain in check_functions.go).
 		Body: append([]Stmt{
 			Comment{Text: "Depth limit check shared with check_permission_internal"},
-			If{
-				Cond: Gte{Left: ArrayLength{Array: Visited}, Right: Int(25)},
-				Then: []Stmt{Raise{Message: "resolution too complex", ErrCode: "M2002"}},
-			},
+			checkDepthGuard(),
 		}, dispatchIfChain(cases, explainDispatchCall, noEntry)...),
 		Header: []string{
 			"Generated internal dispatcher for explain_permission",

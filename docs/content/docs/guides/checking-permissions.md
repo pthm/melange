@@ -450,10 +450,11 @@ END;
 $$;
 ```
 
-The M2002 error occurs when permission resolution exceeds the depth limit (25 levels), which can happen with:
+The M2002 error occurs when permission resolution reaches the depth limit of 25 hops, which can happen with:
 - Deeply nested parent relationships
-- Complex userset chains
-- Cyclic permission structures
+- Deeply nested userset chains
+
+Cycles in the data do not cause it: a check skips objects it has already visited.
 {{< /tab >}}
 
 {{< /tabs >}}

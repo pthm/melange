@@ -173,10 +173,7 @@ func buildExplainCycleDetection(plan CheckPlan) []Stmt {
 				ReturnValue{Value: Raw(buildExplainTraceRoot(plan, "false", "v_root"))},
 			},
 		},
-		If{
-			Cond: Gte{Left: ArrayLength{Array: Visited}, Right: Int(25)},
-			Then: []Stmt{Raise{Message: "resolution too complex", ErrCode: "M2002"}},
-		},
+		checkDepthGuard(),
 	}
 }
 

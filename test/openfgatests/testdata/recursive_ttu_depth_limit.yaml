@@ -1,10 +1,11 @@
-# Recursive parent walks (list_objects): the depth limit and deduplication.
+# Recursive parent walks: the depth limit and deduplication.
 #
-# OpenFGA fails ListObjects with "resolution too complex" (2002) once a parent
-# chain reaches 25 hops and succeeds at 24; melange's breadth-first walk raises
-# M2002 at the same point instead of returning a truncated list. Check and
-# ListUsers are left out of the 25-hop stage: their cutoffs differ from
-# ListObjects in OpenFGA (Check fails at 26 hops) and are not yet aligned.
+# OpenFGA fails ListObjects and ListUsers with "resolution too complex" (2002)
+# once a parent chain reaches 25 hops and succeeds at 24; melange's
+# breadth-first walks raise M2002 at the same point instead of returning
+# truncated lists. OpenFGA's Check resolves 25 hops and fails at 26; melange's
+# check still fails at 25 (see checkDepthLimit), so only the 26-hop error is
+# asserted for Check.
 #
 # The walk expands each object once, so cycles and objects reachable by
 # several paths must still list every object exactly once, and an exclusion
@@ -234,6 +235,13 @@ tests:
           - request:
               user: user:alice
               type: folder
+              relation: editor
+            errorCode: 2002
+        listUsersAssertions:
+          - request:
+              filters:
+                - user
+              object: folder:f25
               relation: editor
             errorCode: 2002
   - name: recursive_ttu_walk_cycle
@@ -987,3 +995,473 @@ tests:
               type: folder
               relation: r
             errorCode: 2002
+  - name: recursive_ttu_depth_limit_26_hops_check
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type folder
+            relations
+              define parent: [folder]
+              define editor: [user] or editor from parent
+        tuples:
+          - user: user:alice
+            relation: editor
+            object: folder:f0
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: folder:f1
+            relation: parent
+            object: folder:f2
+          - user: folder:f2
+            relation: parent
+            object: folder:f3
+          - user: folder:f3
+            relation: parent
+            object: folder:f4
+          - user: folder:f4
+            relation: parent
+            object: folder:f5
+          - user: folder:f5
+            relation: parent
+            object: folder:f6
+          - user: folder:f6
+            relation: parent
+            object: folder:f7
+          - user: folder:f7
+            relation: parent
+            object: folder:f8
+          - user: folder:f8
+            relation: parent
+            object: folder:f9
+          - user: folder:f9
+            relation: parent
+            object: folder:f10
+          - user: folder:f10
+            relation: parent
+            object: folder:f11
+          - user: folder:f11
+            relation: parent
+            object: folder:f12
+          - user: folder:f12
+            relation: parent
+            object: folder:f13
+          - user: folder:f13
+            relation: parent
+            object: folder:f14
+          - user: folder:f14
+            relation: parent
+            object: folder:f15
+          - user: folder:f15
+            relation: parent
+            object: folder:f16
+          - user: folder:f16
+            relation: parent
+            object: folder:f17
+          - user: folder:f17
+            relation: parent
+            object: folder:f18
+          - user: folder:f18
+            relation: parent
+            object: folder:f19
+          - user: folder:f19
+            relation: parent
+            object: folder:f20
+          - user: folder:f20
+            relation: parent
+            object: folder:f21
+          - user: folder:f21
+            relation: parent
+            object: folder:f22
+          - user: folder:f22
+            relation: parent
+            object: folder:f23
+          - user: folder:f23
+            relation: parent
+            object: folder:f24
+          - user: folder:f24
+            relation: parent
+            object: folder:f25
+          - user: folder:f25
+            relation: parent
+            object: folder:f26
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: editor
+              object: folder:f26
+            errorCode: 2002
+  - name: userset_chain_depth_limit_26_levels_check
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user, group#member]
+        tuples:
+          - user: user:alice
+            relation: member
+            object: group:g0
+          - user: group:g0#member
+            relation: member
+            object: group:g1
+          - user: group:g1#member
+            relation: member
+            object: group:g2
+          - user: group:g2#member
+            relation: member
+            object: group:g3
+          - user: group:g3#member
+            relation: member
+            object: group:g4
+          - user: group:g4#member
+            relation: member
+            object: group:g5
+          - user: group:g5#member
+            relation: member
+            object: group:g6
+          - user: group:g6#member
+            relation: member
+            object: group:g7
+          - user: group:g7#member
+            relation: member
+            object: group:g8
+          - user: group:g8#member
+            relation: member
+            object: group:g9
+          - user: group:g9#member
+            relation: member
+            object: group:g10
+          - user: group:g10#member
+            relation: member
+            object: group:g11
+          - user: group:g11#member
+            relation: member
+            object: group:g12
+          - user: group:g12#member
+            relation: member
+            object: group:g13
+          - user: group:g13#member
+            relation: member
+            object: group:g14
+          - user: group:g14#member
+            relation: member
+            object: group:g15
+          - user: group:g15#member
+            relation: member
+            object: group:g16
+          - user: group:g16#member
+            relation: member
+            object: group:g17
+          - user: group:g17#member
+            relation: member
+            object: group:g18
+          - user: group:g18#member
+            relation: member
+            object: group:g19
+          - user: group:g19#member
+            relation: member
+            object: group:g20
+          - user: group:g20#member
+            relation: member
+            object: group:g21
+          - user: group:g21#member
+            relation: member
+            object: group:g22
+          - user: group:g22#member
+            relation: member
+            object: group:g23
+          - user: group:g23#member
+            relation: member
+            object: group:g24
+          - user: group:g24#member
+            relation: member
+            object: group:g25
+          - user: group:g25#member
+            relation: member
+            object: group:g26
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: member
+              object: group:g26
+            errorCode: 2002
+  # A one-hop lookup on the same type ("editor from parent" with editor not
+  # recursive) reads only the direct parent, however deep the chain is.
+  - name: same_type_one_hop_on_deep_chain
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type folder
+            relations
+              define parent: [folder]
+              define editor: [user]
+              define viewer: [user] or editor from parent
+        tuples:
+          - user: user:alice
+            relation: editor
+            object: folder:f29
+          - user: user:bob
+            relation: editor
+            object: folder:f0
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: folder:f1
+            relation: parent
+            object: folder:f2
+          - user: folder:f2
+            relation: parent
+            object: folder:f3
+          - user: folder:f3
+            relation: parent
+            object: folder:f4
+          - user: folder:f4
+            relation: parent
+            object: folder:f5
+          - user: folder:f5
+            relation: parent
+            object: folder:f6
+          - user: folder:f6
+            relation: parent
+            object: folder:f7
+          - user: folder:f7
+            relation: parent
+            object: folder:f8
+          - user: folder:f8
+            relation: parent
+            object: folder:f9
+          - user: folder:f9
+            relation: parent
+            object: folder:f10
+          - user: folder:f10
+            relation: parent
+            object: folder:f11
+          - user: folder:f11
+            relation: parent
+            object: folder:f12
+          - user: folder:f12
+            relation: parent
+            object: folder:f13
+          - user: folder:f13
+            relation: parent
+            object: folder:f14
+          - user: folder:f14
+            relation: parent
+            object: folder:f15
+          - user: folder:f15
+            relation: parent
+            object: folder:f16
+          - user: folder:f16
+            relation: parent
+            object: folder:f17
+          - user: folder:f17
+            relation: parent
+            object: folder:f18
+          - user: folder:f18
+            relation: parent
+            object: folder:f19
+          - user: folder:f19
+            relation: parent
+            object: folder:f20
+          - user: folder:f20
+            relation: parent
+            object: folder:f21
+          - user: folder:f21
+            relation: parent
+            object: folder:f22
+          - user: folder:f22
+            relation: parent
+            object: folder:f23
+          - user: folder:f23
+            relation: parent
+            object: folder:f24
+          - user: folder:f24
+            relation: parent
+            object: folder:f25
+          - user: folder:f25
+            relation: parent
+            object: folder:f26
+          - user: folder:f26
+            relation: parent
+            object: folder:f27
+          - user: folder:f27
+            relation: parent
+            object: folder:f28
+          - user: folder:f28
+            relation: parent
+            object: folder:f29
+          - user: folder:f29
+            relation: parent
+            object: folder:f30
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: viewer
+              object: folder:f30
+            expectation: true
+          - tuple:
+              user: user:bob
+              relation: viewer
+              object: folder:f30
+            expectation: false
+        listUsersAssertions:
+          - request:
+              filters:
+                - user
+              object: folder:f30
+              relation: viewer
+            expectation:
+              - user:alice
+        listObjectsAssertions:
+          - request:
+              user: user:bob
+              type: folder
+              relation: viewer
+            expectation:
+              - folder:f1
+  # folder.parent also allows ancestor, whose editor recurses; folder.editor
+  # does not, so over an all-folder chain viewer reads only the direct parent's
+  # editors. The walk must follow parent chains only where grants flow down on
+  # the listed type, or the deep chain would raise.
+  - name: mixed_type_parent_one_hop_on_deep_chain
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type ancestor
+            relations
+              define parent: [ancestor]
+              define editor: [user] or editor from parent
+          type folder
+            relations
+              define parent: [ancestor, folder]
+              define owner: [folder]
+              define editor: [user]
+              define reader: [user]
+              define viewer: editor from parent or reader from owner
+        tuples:
+          - user: user:alice
+            relation: editor
+            object: folder:f29
+          - user: user:bob
+            relation: editor
+            object: folder:f0
+          - user: user:carol
+            relation: reader
+            object: folder:o
+          - user: folder:o
+            relation: owner
+            object: folder:f30
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: folder:f1
+            relation: parent
+            object: folder:f2
+          - user: folder:f2
+            relation: parent
+            object: folder:f3
+          - user: folder:f3
+            relation: parent
+            object: folder:f4
+          - user: folder:f4
+            relation: parent
+            object: folder:f5
+          - user: folder:f5
+            relation: parent
+            object: folder:f6
+          - user: folder:f6
+            relation: parent
+            object: folder:f7
+          - user: folder:f7
+            relation: parent
+            object: folder:f8
+          - user: folder:f8
+            relation: parent
+            object: folder:f9
+          - user: folder:f9
+            relation: parent
+            object: folder:f10
+          - user: folder:f10
+            relation: parent
+            object: folder:f11
+          - user: folder:f11
+            relation: parent
+            object: folder:f12
+          - user: folder:f12
+            relation: parent
+            object: folder:f13
+          - user: folder:f13
+            relation: parent
+            object: folder:f14
+          - user: folder:f14
+            relation: parent
+            object: folder:f15
+          - user: folder:f15
+            relation: parent
+            object: folder:f16
+          - user: folder:f16
+            relation: parent
+            object: folder:f17
+          - user: folder:f17
+            relation: parent
+            object: folder:f18
+          - user: folder:f18
+            relation: parent
+            object: folder:f19
+          - user: folder:f19
+            relation: parent
+            object: folder:f20
+          - user: folder:f20
+            relation: parent
+            object: folder:f21
+          - user: folder:f21
+            relation: parent
+            object: folder:f22
+          - user: folder:f22
+            relation: parent
+            object: folder:f23
+          - user: folder:f23
+            relation: parent
+            object: folder:f24
+          - user: folder:f24
+            relation: parent
+            object: folder:f25
+          - user: folder:f25
+            relation: parent
+            object: folder:f26
+          - user: folder:f26
+            relation: parent
+            object: folder:f27
+          - user: folder:f27
+            relation: parent
+            object: folder:f28
+          - user: folder:f28
+            relation: parent
+            object: folder:f29
+          - user: folder:f29
+            relation: parent
+            object: folder:f30
+        checkAssertions:
+          - tuple:
+              user: user:bob
+              relation: viewer
+              object: folder:f30
+            expectation: false
+        listUsersAssertions:
+          - request:
+              filters:
+                - user
+              object: folder:f30
+              relation: viewer
+            expectation:
+              - user:alice
+              - user:carol
