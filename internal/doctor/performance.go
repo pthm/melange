@@ -3,9 +3,11 @@ package doctor
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
+	"github.com/lib/pq"
 	"github.com/pthm/melange/internal/sqlgen"
 	"github.com/pthm/melange/internal/sqlgen/sqldsl"
 )
@@ -150,25 +152,49 @@ func (d *Doctor) checkExpressionIndexes(ctx context.Context, report *Report) err
 		}
 
 		for _, cc := range uniqueCasts {
-			covered := isExpressionIndexed(cc.SourceColumn, indexDefs)
-			if !covered {
-				allCovered = false
-				severity, sizeNote := rowCountSeverity(rowCount)
+			colType, relabel, err := d.castToText(ctx, info.schema, table, cc.SourceColumn)
+			if err != nil {
+				return fmt.Errorf("reading the type of %s.%s: %w", table, cc.SourceColumn, err)
+			}
+			// A branch's casts are credited to every table it reads, so in a
+			// join the column may belong to another one; an index here
+			// couldn't serve it.
+			if colType == "" {
+				continue
+			}
+			if isExpressionIndexed(cc.SourceColumn, indexDefs) || (relabel && hasLeadingColumn(cc.SourceColumn, indexDefs)) {
+				continue
+			}
+			allCovered = false
+			severity, sizeNote := rowCountSeverity(rowCount)
 
-				tableName := table
-				if info.schema != "" {
-					tableName = info.schema + "." + table
-				}
+			tableName := table
+			if info.schema != "" {
+				tableName = info.schema + "." + table
+			}
 
+			if relabel {
+				// varchar (and text): the cast is a relabel, so an ordinary
+				// index on the column serves col::text = $1.
 				report.AddCheck(CheckResult{
 					Category: "Performance",
 					Name:     "expr_indexes",
 					Status:   severity,
-					Message:  fmt.Sprintf("Missing expression index on %s.%s::text (%s)", tableName, cc.SourceColumn, sizeNote),
-					Details:  fmt.Sprintf("Column %s is cast to text in the view (as %s) but has no expression index", cc.SourceColumn, cc.ViewColumn),
-					FixHint:  fmt.Sprintf("CREATE INDEX idx_%s_%s_text ON %s ((%s::text));", table, cc.SourceColumn, tableName, cc.SourceColumn),
+					Message:  fmt.Sprintf("Missing index on %s.%s (%s)", tableName, cc.SourceColumn, sizeNote),
+					Details:  fmt.Sprintf("Column %s (%s) is cast to text in the view (as %s) but has no index. Casting %s to text is a relabel, so a plain index on the column serves the lookup.", cc.SourceColumn, colType, cc.ViewColumn, colType),
+					FixHint:  fmt.Sprintf("CREATE INDEX idx_%s_%s ON %s (%s);", table, cc.SourceColumn, tableName, cc.SourceColumn),
 				})
+				continue
 			}
+			details := fmt.Sprintf("Column %s (%s) is cast to text in the view (as %s) but has no expression index. Casting %s to text converts the value, so a plain index on the column can't serve the lookup.", cc.SourceColumn, colType, cc.ViewColumn, colType)
+			report.AddCheck(CheckResult{
+				Category: "Performance",
+				Name:     "expr_indexes",
+				Status:   severity,
+				Message:  fmt.Sprintf("Missing expression index on %s.%s::text (%s)", tableName, cc.SourceColumn, sizeNote),
+				Details:  details,
+				FixHint:  fmt.Sprintf("CREATE INDEX idx_%s_%s_text ON %s ((%s::text));", table, cc.SourceColumn, tableName, cc.SourceColumn),
+			})
 		}
 	}
 
@@ -177,7 +203,7 @@ func (d *Doctor) checkExpressionIndexes(ctx context.Context, report *Report) err
 			Category: "Performance",
 			Name:     "expr_indexes",
 			Status:   StatusPass,
-			Message:  "All ::text cast columns have expression indexes",
+			Message:  "All ::text cast columns are indexed",
 		})
 	}
 
@@ -227,6 +253,46 @@ func (d *Doctor) getTableRowCount(ctx context.Context, table string) (int64, err
 		return 0, nil
 	}
 	return int64(count), nil
+}
+
+// castToText reports a column's type and whether casting it to text is a
+// relabel the planner sees through (the column is text, or pg_cast has a
+// binary-coercible cast, as for varchar), in which case an index on the plain
+// column serves col::text = $1. char(n) casts through a function that strips
+// padding, and uuid through its output function, so neither is a relabel.
+// A column the table doesn't have gives "", false. schema is the view's
+// qualifier for the table, if any; otherwise the database schema.
+func (d *Doctor) castToText(ctx context.Context, schema, table, column string) (colType string, relabel bool, err error) {
+	nsp := d.postgresSchema()
+	if schema != "" {
+		nsp = pq.QuoteLiteral(schema)
+	}
+	err = d.db.QueryRowContext(ctx, fmt.Sprintf(`
+		SELECT format_type(a.atttypid, a.atttypmod),
+		       a.atttypid = 'text'::regtype OR EXISTS (
+		           SELECT 1 FROM pg_cast c
+		           WHERE c.castsource = a.atttypid AND c.casttarget = 'text'::regtype AND c.castmethod = 'b')
+		FROM pg_attribute a
+		JOIN pg_class rel ON rel.oid = a.attrelid
+		JOIN pg_namespace n ON n.oid = rel.relnamespace
+		WHERE n.nspname = %s AND rel.relname = $1 AND lower(a.attname) = lower($2::text)
+		  AND a.attnum > 0 AND NOT a.attisdropped
+		LIMIT 1`, nsp), table, column).Scan(&colType, &relabel)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	return colType, relabel, err
+}
+
+// hasLeadingColumn reports whether a full (non-partial) index's first key is
+// the plain column. A partial index only serves rows its predicate admits.
+func hasLeadingColumn(column string, indexDefs []string) bool {
+	for _, ex := range parseExistingIndexes(indexDefs) {
+		if ex.predicate == "" && strings.EqualFold(strings.Trim(ex.columns[0], `"`), column) {
+			return true
+		}
+	}
+	return false
 }
 
 // isExpressionIndexed checks if any index definition covers a ::text cast on the given column.

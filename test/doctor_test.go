@@ -93,7 +93,13 @@ func TestDoctor_MissingExpressionIndex(t *testing.T) {
 		if c.Name == "expr_indexes" && c.Status != doctor.StatusPass {
 			hasWarning = true
 			assert.Contains(t, c.FixHint, "CREATE INDEX", "should provide CREATE INDEX fix hint")
-			assert.Contains(t, c.FixHint, "::text", "fix hint should include ::text cast")
+			// A relabel cast (text-like role) is served by a plain index; the
+			// bigint id columns need an expression index.
+			if strings.HasPrefix(c.Message, "Missing expression index") {
+				assert.Contains(t, c.FixHint, "::text", "expression index hint should include ::text cast")
+			} else {
+				assert.NotContains(t, c.FixHint, "::text", "plain index hint for a relabel cast")
+			}
 		}
 	}
 	assert.True(t, hasWarning, "should warn about missing expression index")
@@ -937,4 +943,50 @@ func TestDoctor_NoSchemaPathSkipsSchemaFile(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, filterCategory(report, "Schema File"))
 	assert.Zero(t, report.Errors)
+}
+
+// TestDoctor_ExpressionIndexesFollowCastType verifies that the expression
+// index check accounts for the column type: casting varchar to text is a
+// relabel, so a plain index serves col::text = $1 and no expression index is
+// needed, while char(n) and uuid casts convert the value and still need one.
+func TestDoctor_ExpressionIndexesFollowCastType(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+	_, err := db.ExecContext(ctx, `
+		CREATE TABLE r (v varchar NOT NULL, w varchar NOT NULL, k char(27) NOT NULL, u uuid NOT NULL);
+		CREATE INDEX r_v ON r (v); CREATE INDEX r_k ON r (k); CREATE INDEX r_u ON r (u);
+		CREATE TABLE s (v varchar NOT NULL, name text NOT NULL);
+		CREATE INDEX s_name ON s (name);
+		CREATE VIEW melange_tuples AS
+		  SELECT 'user'::text AS subject_type, k::text AS subject_id, 'owner'::text AS relation, 'doc'::text AS object_type, v::text AS object_id FROM r
+		  UNION ALL
+		  SELECT 'user'::text, w::text, 'owner'::text, 'doc'::text, u::text FROM r
+		  UNION ALL
+		  -- A join: name is s's, k is r's. Neither should be reported on the
+		  -- other table, and s.name (text) is served by its plain index.
+		  SELECT 'team'::text, r.k::text, 'member'::text, 'doc'::text, s.name::text FROM r JOIN s ON s.v = r.v`)
+	require.NoError(t, err)
+
+	report, err := doctor.New(db, "").Run(ctx)
+	require.NoError(t, err)
+	msgs := map[string]doctor.CheckResult{}
+	for _, c := range filterCategory(report, "Performance") {
+		if c.Name == "expr_indexes" && c.Status != doctor.StatusPass {
+			msg, _, _ := strings.Cut(c.Message, " (") // drop the size note
+			msgs[msg] = c
+		}
+	}
+	assert.Len(t, msgs, 3, "k, u and w warn; v and s.name are served by plain indexes, and joined columns aren't charged to the other table: %v", msgs)
+	for _, col := range []string{"k", "u"} {
+		c, ok := msgs["Missing expression index on r."+col+"::text"]
+		if assert.True(t, ok, col) {
+			assert.Contains(t, c.FixHint, "(("+col+"::text))")
+		}
+	}
+	if c, ok := msgs["Missing index on r.w"]; assert.True(t, ok, "varchar without any index") {
+		assert.Contains(t, c.FixHint, "ON r (w);", "a plain index, not an expression index")
+	}
 }
