@@ -37,7 +37,7 @@ Studio resolves its connection like the other database commands:
 | `--db`        | `database` settings in config, or the active `--env`  | Connection string                                          |
 | `--env`       | `MELANGE_ENV`, then `default_environment` in config, else the base config | [Environment profile](../../reference/configuration/#environments) to connect to |
 | `--db-schema` | `database.schema` in config, else `public`            | PostgreSQL schema holding `melange_tuples` and the generated functions |
-| `--schema`    | `schema` in config, else `schemas/schema.fga`         | Local `.fga` file for the Health page's file and drift checks |
+| `--schema`    | `schema` from a config file or `MELANGE_SCHEMA`; none without either | Local `.fga` file for the Health page's file and drift checks |
 
 ```bash
 # Point studio at the staging profile from melange.yaml
@@ -119,11 +119,13 @@ Selecting a type lists its entities, 100 at a time; scrolling to the end of the 
 
 {{< studio-screenshot name="browse" alt="The Tuples browser listing repositories by name, with their ids and tuple counts" >}}
 
+Entities show by type and id first, with their label after it as context. Long ids and labels are cut off with an ellipsis; hover for the full text.
+
 Selecting an entity opens three tabs:
 
-- **Can access**: what the entity can reach as a subject, one object type at a time, through `ListObjects`.
-- **Accessed by**: who can reach the entity as an object, one subject type at a time, through `ListSubjects`.
-- **Direct tuples**: the raw tuples with the entity as subject or as object, with exact counts and a filter.
+- **Can access**: what the entity can reach as a subject, one object type at a time, through `ListObjects`. Each entity is listed with its relations underneath; more than 12 collapse behind a **+N more** button.
+- **Accessed by**: who can reach the entity as an object, one subject type at a time, through `ListSubjects`, laid out the same way.
+- **Direct tuples**: the raw tuples with the entity as subject or as object, as relation, type, id and label columns, with exact counts and a filter. Click a row to open the entity at its other end.
 
 {{< studio-screenshot name="entity" alt="The Can access tab for user carol, listing her repositories with relation chips and an inline Explain" >}}
 
@@ -140,19 +142,30 @@ These are display limits, not limits of `ListObjects` or `ListSubjects`. Use the
 
 #### Labels
 
-Where it can, studio shows a readable name next to each id. It finds the name by planning `melange_tuples` with `EXPLAIN VERBOSE`: a view branch that maps a literal type to a plain column (for example `'user'` and `team_members.user_id`) is followed through primary and foreign keys to the domain table (`users.id`). The first of these columns that the table has becomes the label: `name`, `display_name`, `title`, `label`, `username`, `email`, `slug`.
+Where it can, studio shows a readable name next to each id. It finds the name by planning `melange_tuples` with `EXPLAIN VERBOSE`: a view branch that maps a type to a plain column (for example `'user'` and `team_members.user_id`) is followed through primary and foreign keys to the domain table (`users.id`). The type can be a literal or a `CASE` choosing between literals (`CASE WHEN … THEN 'qa_trail' ELSE 'aa_trail' END`); every type it can produce uses that column.
 
-If the view does not reveal a table, studio falls back to a table named after the type, or its plural (`user` or `users`), with an `id` column. The page header says where the labels came from, or that none were found. Discovery runs once per process; restart studio after schema changes.
+The label is the table's first column, ignoring case, among `name`, `display_name`, `title`, `label`, `username`, `email` and `slug`; failing those, the first column whose name ends in `name` (such as `check_name`); failing that, `description`. Studio does not follow foreign keys to find a label in another table.
+
+If the view does not reveal a table, studio falls back to a table named after the type, or its plural (`user` or `users`), with an `id` column, matching names regardless of case. The page header says where the labels came from, or that none were found. Discovery runs once per process; restart studio after schema changes.
 
 Labels need `SELECT` on the domain tables. Without it, entities show by id.
 
 ### History
 
-The History page shows the last 50 rows of `melange_migrations`, newest first: when each migration ran, the melange and codegen versions, the schema checksum, and how many functions it installed. This is the same data as [`melange history`](../../reference/cli/#history).
+The History page lists the last 50 rows of `melange_migrations` in its sidebar, newest first. Each shows when it ran, its line changes (`+12 −3`), a short summary of what changed in the model (`+1 type · +4 rel · ~2 rel`), and badges for the deployed migration and for breaking changes. A migration whose schema is identical to the one before says so, and one that restores an earlier schema says which.
+
+Selecting a migration shows it in detail:
+
+- Counts of changed lines, types and relations, breaking changes, and installed functions.
+- The model changes, by type and relation: the grants and exclusions each relation lost and gained. Breaking changes, which narrow access or remove structure, are marked; this is the same classification [`melange status`](../../reference/cli/#status) uses for drift.
+- A line diff against the previous migration, file by file for a modular schema.
+- The migration record: versions, schema checksum, function count, and the full schema it recorded.
+
+The record is the same data as [`melange history`](../../reference/cli/#history). Diffs and counts need migrations recorded by a version of melange that stores the schema; older rows show what they have.
 
 ### Health
 
-The Health page runs the same checks as [`melange doctor`](../../reference/cli/#doctor), grouped by category. The checks that compare a local schema file with the database use `--schema`, else `schema` in config, else `schemas/schema.fga`. If no file exists at that path, the Schema File check fails.
+The Health page runs the same checks as [`melange doctor`](../../reference/cli/#doctor), grouped by category. The checks that compare a local schema file with the database use `--schema`, else the `schema` of a config file or `MELANGE_SCHEMA`. With none of these, studio skips the schema file and drift checks and says so; it never needs a schema file to run.
 
 {{< studio-screenshot name="health" alt="The Health page showing melange doctor checks grouped by category with pass and warning counts" >}}
 
