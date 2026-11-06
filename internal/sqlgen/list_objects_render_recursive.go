@@ -1,6 +1,10 @@
 package sqlgen
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+	"strings"
+)
 
 // PL/pgSQL variables of the breadth-first walk.
 const (
@@ -8,6 +12,7 @@ const (
 	walkSeen     = "v_seen"     // every propagating object found so far
 	walkStatic   = "v_static"   // seed objects that do not propagate
 	walkLevel    = "v_level"
+	walkDeferred = "v_deferred" // propagating seeds one resolution step away
 )
 
 // walkDepthLimit is the number of levels the walk may expand, matching
@@ -47,6 +52,9 @@ func RenderListObjectsRecursiveFunction(plan ListPlan, blocks RecursiveBlockSet)
 	}
 
 	fn.Decls = append(idWalkDecls(), Decl{Name: walkStatic, Type: "TEXT[]"})
+	if deferredSeeds(blocks) {
+		fn.Decls = append(fn.Decls, Decl{Name: walkDeferred, Type: "TEXT[]"})
+	}
 	// Only the seed depends on the subject kind; the walk and final query are shared.
 	seed := seedBySubjectKind(renderWalkSeed(plainBlocks), renderWalkSeed(blocks), hasUserset)
 	fn.Body = renderListObjectsWalk(plan, blocks, seed)
@@ -85,27 +93,50 @@ func seedBySubjectKind(plainSeed, usersetSeed Stmt, hasUserset bool) Stmt {
 	}
 }
 
+// deferredSeeds reports whether some propagating seed block is Indirect.
+func deferredSeeds(blocks RecursiveBlockSet) bool {
+	return slices.ContainsFunc(blocks.BaseBlocks, func(b TypedQueryBlock) bool { return b.Propagatable && b.Indirect })
+}
+
 // renderWalkSeed selects the objects the subject reaches without the
-// self-referential walk into the frontier (propagating) and v_static.
+// self-referential walk into the frontier (propagating), v_deferred
+// (propagating, from Indirect blocks, when deferredSeeds) and v_static.
 func renderWalkSeed(blocks RecursiveBlockSet) Stmt {
+	deferred := deferredSeeds(blocks)
 	seedSQL := make([]string, 0, len(blocks.BaseBlocks))
 	for _, block := range blocks.BaseBlocks {
+		flags := Bool(block.Propagatable).SQL() + " AS propagatable"
+		if deferred {
+			flags += ", " + Bool(block.Indirect).SQL() + " AS indirect"
+		}
 		seedSQL = append(seedSQL, formatQueryBlockSQL(block.Comments,
-			wrapQueryWithPropagatable(block.Query.SQL(), "base", block.Propagatable)))
+			wrapQueryWithSeedFlags(block.Query.SQL(), "base", flags)))
 	}
+
+	seedIDs := func(filter string) string {
+		return "array_agg(DISTINCT seed.object_id) FILTER (WHERE " + filter + ")"
+	}
+	columns := []string{seedIDs("seed.propagatable")}
+	into := []string{walkFrontier}
+	if deferred {
+		columns = []string{seedIDs("seed.propagatable AND NOT seed.indirect"), seedIDs("seed.propagatable AND seed.indirect")}
+		into = append(into, walkDeferred)
+	}
+	columns = append(columns, seedIDs("NOT seed.propagatable"))
+	into = append(into, walkStatic)
+
 	seedQuery := WithCTE{
 		CTEs: blocks.HoistedCTEs,
-		Query: Raw(fmt.Sprintf(`SELECT array_agg(DISTINCT seed.object_id) FILTER (WHERE seed.propagatable),
-    array_agg(DISTINCT seed.object_id) FILTER (WHERE NOT seed.propagatable)
-INTO %s, %s
-FROM (
-%s
-) AS seed`, walkFrontier, walkStatic, joinUnionAllBlocksSQL(seedSQL))),
+		Query: Raw(fmt.Sprintf("SELECT %s\nINTO %s\nFROM (\n%s\n) AS seed",
+			strings.Join(columns, ",\n    "), strings.Join(into, ", "), joinUnionAllBlocksSQL(seedSQL))),
 	}
 	return RawStmt{SQLText: seedQuery.SQL() + ";"}
 }
 
 // renderListObjectsWalk renders the breadth-first walk from seed and the final query.
+//
+// Deferred seeds join the walk at level 1: added to the frontier the first
+// pass computes, or, without level-0 seeds, forming the frontier at level 1.
 func renderListObjectsWalk(plan ListPlan, blocks RecursiveBlockSet, seed Stmt) []Stmt {
 	final := accessibleObjectsSelect(plan, blocks, unnestObjectIDs(walkSeen+" || "+walkStatic, "acc")).SQL()
 
@@ -113,7 +144,21 @@ func renderListObjectsWalk(plan ListPlan, blocks RecursiveBlockSet, seed Stmt) [
 		Comment{Text: "Seed: objects the subject reaches without the self-referential walk"},
 		seed,
 	}
-	stmts = append(stmts, renderIDWalk(0, *blocks.RecursiveBlock, renderWalkTooDeep(plan, blocks))...)
+	step := *blocks.RecursiveBlock
+	tooDeep := renderWalkTooDeep(plan, blocks)
+	if deferredSeeds(blocks) {
+		stepSQL := formatQueryBlockSQL(step.Comments, step.Query.SQL()) +
+			"\n    UNION ALL\n    SELECT unnest(" + walkDeferred + ") WHERE " + walkLevel + " = 0"
+		stmts = append(stmts,
+			Comment{Text: "Seeds one resolution step away start at level 1"},
+			Assign{Name: walkLevel, Value: Raw("CASE WHEN " + walkFrontier + " IS NULL THEN 1 ELSE 0 END")},
+			Assign{Name: walkFrontier, Value: Raw("COALESCE(" + walkFrontier + ", " + walkDeferred + ")")},
+			Assign{Name: walkSeen, Value: Raw(walkFrontier)},
+		)
+		stmts = append(stmts, renderIDWalkLoop(stepSQL, tooDeep)...)
+	} else {
+		stmts = append(stmts, renderIDWalk(0, step, tooDeep)...)
+	}
 	return append(stmts, ReturnQuery{Query: finishListObjectsQuery(plan, blocks, final)})
 }
 
@@ -141,10 +186,16 @@ func seedFrontier(blocks []TypedQueryBlock) Stmt {
 // expanded once, at its shortest distance. Objects remaining at
 // walkDepthLimit run tooDeep. walkSeen ends up holding every object found.
 func renderIDWalk(firstLevel int, step TypedQueryBlock, tooDeep []Stmt) []Stmt {
-	stepSQL := formatQueryBlockSQL(step.Comments, step.Query.SQL())
-	return []Stmt{
+	return append([]Stmt{
 		Assign{Name: walkSeen, Value: Raw(walkFrontier)},
 		Assign{Name: walkLevel, Value: Int(firstLevel)},
+	}, renderIDWalkLoop(formatQueryBlockSQL(step.Comments, step.Query.SQL()), tooDeep)...)
+}
+
+// renderIDWalkLoop renders the loop of renderIDWalk over the rendered stepSQL,
+// once preceding statements have set walkSeen and walkLevel.
+func renderIDWalkLoop(stepSQL string, tooDeep []Stmt) []Stmt {
+	return []Stmt{
 		Comment{Text: "Walk breadth first, expanding each object once"},
 		While{
 			Cond: Gt{Left: Raw("cardinality(" + walkFrontier + ")"), Right: Int(0)},

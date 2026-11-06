@@ -256,20 +256,28 @@ func buildRecursiveBaseBlocks(plan ListPlan, parentRelations []ListParentRelatio
 
 	patterns := buildListUsersetPatternInputs(plan.Analysis)
 	for _, pattern := range patterns {
-		blocks = append(blocks, buildRecursiveUsersetBlocks(plan, pattern, propagatable, hoisted)...)
+		blocks = append(blocks, indirect(buildRecursiveUsersetBlocks(plan, pattern, propagatable, hoisted))...)
 	}
 
 	// Cross-type TTU blocks are a one-hop grant of the outer relation. They must
 	// propagate when that relation is itself self-referential (e.g. "local_admin:
 	// admin from org or local_admin from parent"): the object granted via the
 	// cross-type "admin from org" arm has to seed the recursive parent walk.
-	blocks = append(blocks, buildCrossTypeTTUBlocks(plan, parentRelations, propagatable, hoisted, recursive)...)
+	blocks = append(blocks, indirect(buildCrossTypeTTUBlocks(plan, parentRelations, propagatable, hoisted, recursive))...)
 
 	if seed := buildRecursiveSelfCandidateSeedBlock(plan, propagatable); seed != nil {
 		blocks = append(blocks, *seed)
 	}
 
 	return blocks, nil
+}
+
+// indirect marks blocks as Indirect.
+func indirect(blocks []TypedQueryBlock) []TypedQueryBlock {
+	for i := range blocks {
+		blocks[i].Indirect = true
+	}
+	return blocks
 }
 
 // buildRecursiveSelfCandidateSeedBlock seeds the recursive walk with the

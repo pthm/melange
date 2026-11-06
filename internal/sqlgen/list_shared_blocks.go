@@ -19,6 +19,12 @@ type TypedQueryBlock struct {
 	// for plain subjects, so that hot path is not slowed by blocks that
 	// cannot match.
 	UsersetSubjectOnly bool
+
+	// Indirect marks a block whose objects the subject reaches through one
+	// resolution step (a userset expansion or a cross-type parent lookup), so
+	// a breadth-first walk seeds them one level later, as OpenFGA counts the
+	// step toward its depth limit.
+	Indirect bool
 }
 
 // withoutUsersetSubjectBlocks drops UsersetSubjectOnly blocks, reporting

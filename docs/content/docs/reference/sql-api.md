@@ -519,7 +519,9 @@ COMMIT;
 The functions raise an exception with error code `M2002` when resolving a request takes more steps than OpenFGA allows. As in OpenFGA, a step is a parent relationship (tuple-to-userset) or a userset hop; computed relations and intersection or exclusion operands are not steps. The limits match OpenFGA's:
 
 - `check_permission` resolves a chain of 25 steps and raises at 26
-- the list functions resolve 24 and raise at 25, rather than return a partial list
+- the list functions resolve 24 and raise at 25, rather than return a partial list. A grant reached through a userset or a parent lookup into another type at the end of a parent chain counts as one more step, so 23 parent hops plus that step list fine and 24 raise.
+
+OpenFGA's own Check limit depends on which resolver it picks for the model. Its fast path for a relation that recurses on itself (`[user] or viewer from parent`) resolves 25 steps, as melange does. When the relation also grants through usersets or other relations (`[user, group#member] or viewer from parent`), OpenFGA's general resolver raises one step earlier, and melange's check does not follow it there. Deeply nested groups at the end of a parent chain are also counted as a single step by the list functions, where OpenFGA counts each level.
 
 ```sql
 RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';

@@ -1002,3 +1002,53 @@ tests:
               object: folder:f0
               relation: a
             expectation: []
+  # A filter on a relation that grants the listed one on the same object
+  # (editor for viewer) still walks every ancestor.
+  - name: userset_filter_same_object_grant_relation
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define owner: [user]
+              define member: [user] or owner
+          type folder
+            relations
+              define parent: [folder]
+              define editor: [user]
+              define viewer: [user, group#member] or editor or viewer from parent
+        tuples:
+          - user: folder:f1
+            relation: parent
+            object: folder:f2
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: user:u1
+            relation: editor
+            object: folder:f0
+          - user: group:g#member
+            relation: viewer
+            object: folder:f0
+          - user: user:u2
+            relation: owner
+            object: group:g
+        listUsersAssertions:
+          - request:
+              filters:
+                - folder#editor
+              object: folder:f2
+              relation: viewer
+            expectation:
+              - folder:f0#editor
+              - folder:f1#editor
+              - folder:f2#editor
+          - request:
+              filters:
+                - group#member
+              object: folder:f2
+              relation: viewer
+            expectation:
+              - group:g#member

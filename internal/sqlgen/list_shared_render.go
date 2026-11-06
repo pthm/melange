@@ -22,15 +22,12 @@ func renderTypedQueryBlock(block TypedQueryBlock) QueryBlock {
 	}
 }
 
-// wrapQueryWithPropagatable wraps a query to include a propagatable column,
-// which controls whether results from this block seed the recursive walk.
-func wrapQueryWithPropagatable(sql, alias string, propagatable bool) string {
-	propVal := "FALSE"
-	if propagatable {
-		propVal = "TRUE"
-	}
-	return fmt.Sprintf("SELECT %s.object_id, %s AS propagatable\nFROM (\n%s\n) AS %s",
-		alias, propVal, sql, alias)
+// wrapQueryWithSeedFlags wraps a query to select its object_id with flags,
+// the columns controlling how results from this block seed the recursive walk
+// (e.g. "TRUE AS propagatable").
+func wrapQueryWithSeedFlags(sql, alias, flags string) string {
+	return fmt.Sprintf("SELECT %s.object_id, %s\nFROM (\n%s\n) AS %s",
+		alias, flags, sql, alias)
 }
 
 // formatQueryBlockSQL formats a query block with comments.

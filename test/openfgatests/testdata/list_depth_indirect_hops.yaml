@@ -1,0 +1,620 @@
+# A listing whose grant ends a parent chain through one more resolution step
+# (a userset to expand, or a parent lookup into another type) counts that step
+# toward the depth limit, as OpenFGA's ListObjects and ListUsers do: 23 parent
+# hops plus the step list fine, 24 plus the step fail with 2002. (OpenFGA's
+# Check limit depends on its resolver choice, so these cases assert lists only.)
+tests:
+  # a group#member grant at the end of 23 parent hops
+  - name: list_depth_group_grant_after_23_hops
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type org
+            relations
+              define viewer: [user]
+          type folder
+            relations
+              define org: [org]
+              define parent: [folder]
+              define editor: [user, group#member] or viewer from org or editor from parent
+        tuples:
+          - user: group:g#member
+            relation: editor
+            object: folder:f0
+          - user: user:bob
+            relation: member
+            object: group:g
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: folder:f1
+            relation: parent
+            object: folder:f2
+          - user: folder:f2
+            relation: parent
+            object: folder:f3
+          - user: folder:f3
+            relation: parent
+            object: folder:f4
+          - user: folder:f4
+            relation: parent
+            object: folder:f5
+          - user: folder:f5
+            relation: parent
+            object: folder:f6
+          - user: folder:f6
+            relation: parent
+            object: folder:f7
+          - user: folder:f7
+            relation: parent
+            object: folder:f8
+          - user: folder:f8
+            relation: parent
+            object: folder:f9
+          - user: folder:f9
+            relation: parent
+            object: folder:f10
+          - user: folder:f10
+            relation: parent
+            object: folder:f11
+          - user: folder:f11
+            relation: parent
+            object: folder:f12
+          - user: folder:f12
+            relation: parent
+            object: folder:f13
+          - user: folder:f13
+            relation: parent
+            object: folder:f14
+          - user: folder:f14
+            relation: parent
+            object: folder:f15
+          - user: folder:f15
+            relation: parent
+            object: folder:f16
+          - user: folder:f16
+            relation: parent
+            object: folder:f17
+          - user: folder:f17
+            relation: parent
+            object: folder:f18
+          - user: folder:f18
+            relation: parent
+            object: folder:f19
+          - user: folder:f19
+            relation: parent
+            object: folder:f20
+          - user: folder:f20
+            relation: parent
+            object: folder:f21
+          - user: folder:f21
+            relation: parent
+            object: folder:f22
+          - user: folder:f22
+            relation: parent
+            object: folder:f23
+        listObjectsAssertions:
+          - request:
+              user: user:bob
+              type: folder
+              relation: editor
+            expectation:
+              - folder:f0
+              - folder:f1
+              - folder:f2
+              - folder:f3
+              - folder:f4
+              - folder:f5
+              - folder:f6
+              - folder:f7
+              - folder:f8
+              - folder:f9
+              - folder:f10
+              - folder:f11
+              - folder:f12
+              - folder:f13
+              - folder:f14
+              - folder:f15
+              - folder:f16
+              - folder:f17
+              - folder:f18
+              - folder:f19
+              - folder:f20
+              - folder:f21
+              - folder:f22
+              - folder:f23
+        listUsersAssertions:
+          - request:
+              filters:
+                - user
+              object: folder:f23
+              relation: editor
+            expectation:
+              - user:bob
+          - request:
+              filters:
+                - group#member
+              object: folder:f23
+              relation: editor
+            expectation:
+              - group:g#member
+  # a group#member grant at the end of 24 parent hops
+  - name: list_depth_group_grant_after_24_hops
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type org
+            relations
+              define viewer: [user]
+          type folder
+            relations
+              define org: [org]
+              define parent: [folder]
+              define editor: [user, group#member] or viewer from org or editor from parent
+        tuples:
+          - user: group:g#member
+            relation: editor
+            object: folder:f0
+          - user: user:bob
+            relation: member
+            object: group:g
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: folder:f1
+            relation: parent
+            object: folder:f2
+          - user: folder:f2
+            relation: parent
+            object: folder:f3
+          - user: folder:f3
+            relation: parent
+            object: folder:f4
+          - user: folder:f4
+            relation: parent
+            object: folder:f5
+          - user: folder:f5
+            relation: parent
+            object: folder:f6
+          - user: folder:f6
+            relation: parent
+            object: folder:f7
+          - user: folder:f7
+            relation: parent
+            object: folder:f8
+          - user: folder:f8
+            relation: parent
+            object: folder:f9
+          - user: folder:f9
+            relation: parent
+            object: folder:f10
+          - user: folder:f10
+            relation: parent
+            object: folder:f11
+          - user: folder:f11
+            relation: parent
+            object: folder:f12
+          - user: folder:f12
+            relation: parent
+            object: folder:f13
+          - user: folder:f13
+            relation: parent
+            object: folder:f14
+          - user: folder:f14
+            relation: parent
+            object: folder:f15
+          - user: folder:f15
+            relation: parent
+            object: folder:f16
+          - user: folder:f16
+            relation: parent
+            object: folder:f17
+          - user: folder:f17
+            relation: parent
+            object: folder:f18
+          - user: folder:f18
+            relation: parent
+            object: folder:f19
+          - user: folder:f19
+            relation: parent
+            object: folder:f20
+          - user: folder:f20
+            relation: parent
+            object: folder:f21
+          - user: folder:f21
+            relation: parent
+            object: folder:f22
+          - user: folder:f22
+            relation: parent
+            object: folder:f23
+          - user: folder:f23
+            relation: parent
+            object: folder:f24
+        listObjectsAssertions:
+          - request:
+              user: user:bob
+              type: folder
+              relation: editor
+            errorCode: 2002
+        listUsersAssertions:
+          - request:
+              filters:
+                - user
+              object: folder:f24
+              relation: editor
+            errorCode: 2002
+          - request:
+              filters:
+                - group#member
+              object: folder:f24
+              relation: editor
+            errorCode: 2002
+  # a viewer from org lookup at the end of 23 parent hops
+  - name: list_depth_org_grant_after_23_hops
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type org
+            relations
+              define viewer: [user]
+          type folder
+            relations
+              define org: [org]
+              define parent: [folder]
+              define editor: [user, group#member] or viewer from org or editor from parent
+        tuples:
+          - user: org:o
+            relation: org
+            object: folder:f0
+          - user: user:bob
+            relation: viewer
+            object: org:o
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: folder:f1
+            relation: parent
+            object: folder:f2
+          - user: folder:f2
+            relation: parent
+            object: folder:f3
+          - user: folder:f3
+            relation: parent
+            object: folder:f4
+          - user: folder:f4
+            relation: parent
+            object: folder:f5
+          - user: folder:f5
+            relation: parent
+            object: folder:f6
+          - user: folder:f6
+            relation: parent
+            object: folder:f7
+          - user: folder:f7
+            relation: parent
+            object: folder:f8
+          - user: folder:f8
+            relation: parent
+            object: folder:f9
+          - user: folder:f9
+            relation: parent
+            object: folder:f10
+          - user: folder:f10
+            relation: parent
+            object: folder:f11
+          - user: folder:f11
+            relation: parent
+            object: folder:f12
+          - user: folder:f12
+            relation: parent
+            object: folder:f13
+          - user: folder:f13
+            relation: parent
+            object: folder:f14
+          - user: folder:f14
+            relation: parent
+            object: folder:f15
+          - user: folder:f15
+            relation: parent
+            object: folder:f16
+          - user: folder:f16
+            relation: parent
+            object: folder:f17
+          - user: folder:f17
+            relation: parent
+            object: folder:f18
+          - user: folder:f18
+            relation: parent
+            object: folder:f19
+          - user: folder:f19
+            relation: parent
+            object: folder:f20
+          - user: folder:f20
+            relation: parent
+            object: folder:f21
+          - user: folder:f21
+            relation: parent
+            object: folder:f22
+          - user: folder:f22
+            relation: parent
+            object: folder:f23
+        listObjectsAssertions:
+          - request:
+              user: user:bob
+              type: folder
+              relation: editor
+            expectation:
+              - folder:f0
+              - folder:f1
+              - folder:f2
+              - folder:f3
+              - folder:f4
+              - folder:f5
+              - folder:f6
+              - folder:f7
+              - folder:f8
+              - folder:f9
+              - folder:f10
+              - folder:f11
+              - folder:f12
+              - folder:f13
+              - folder:f14
+              - folder:f15
+              - folder:f16
+              - folder:f17
+              - folder:f18
+              - folder:f19
+              - folder:f20
+              - folder:f21
+              - folder:f22
+              - folder:f23
+        listUsersAssertions:
+          - request:
+              filters:
+                - user
+              object: folder:f23
+              relation: editor
+            expectation:
+              - user:bob
+  # a viewer from org lookup at the end of 24 parent hops
+  - name: list_depth_org_grant_after_24_hops
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type org
+            relations
+              define viewer: [user]
+          type folder
+            relations
+              define org: [org]
+              define parent: [folder]
+              define editor: [user, group#member] or viewer from org or editor from parent
+        tuples:
+          - user: org:o
+            relation: org
+            object: folder:f0
+          - user: user:bob
+            relation: viewer
+            object: org:o
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: folder:f1
+            relation: parent
+            object: folder:f2
+          - user: folder:f2
+            relation: parent
+            object: folder:f3
+          - user: folder:f3
+            relation: parent
+            object: folder:f4
+          - user: folder:f4
+            relation: parent
+            object: folder:f5
+          - user: folder:f5
+            relation: parent
+            object: folder:f6
+          - user: folder:f6
+            relation: parent
+            object: folder:f7
+          - user: folder:f7
+            relation: parent
+            object: folder:f8
+          - user: folder:f8
+            relation: parent
+            object: folder:f9
+          - user: folder:f9
+            relation: parent
+            object: folder:f10
+          - user: folder:f10
+            relation: parent
+            object: folder:f11
+          - user: folder:f11
+            relation: parent
+            object: folder:f12
+          - user: folder:f12
+            relation: parent
+            object: folder:f13
+          - user: folder:f13
+            relation: parent
+            object: folder:f14
+          - user: folder:f14
+            relation: parent
+            object: folder:f15
+          - user: folder:f15
+            relation: parent
+            object: folder:f16
+          - user: folder:f16
+            relation: parent
+            object: folder:f17
+          - user: folder:f17
+            relation: parent
+            object: folder:f18
+          - user: folder:f18
+            relation: parent
+            object: folder:f19
+          - user: folder:f19
+            relation: parent
+            object: folder:f20
+          - user: folder:f20
+            relation: parent
+            object: folder:f21
+          - user: folder:f21
+            relation: parent
+            object: folder:f22
+          - user: folder:f22
+            relation: parent
+            object: folder:f23
+          - user: folder:f23
+            relation: parent
+            object: folder:f24
+        listObjectsAssertions:
+          - request:
+              user: user:bob
+              type: folder
+              relation: editor
+            errorCode: 2002
+        listUsersAssertions:
+          - request:
+              filters:
+                - user
+              object: folder:f24
+              relation: editor
+            errorCode: 2002
+  # A filter the relation cannot grant lists nothing, however deep the chain.
+  - name: list_depth_unreachable_filter_after_24_hops
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+              define other: [user]
+          type org
+            relations
+              define viewer: [user]
+          type folder
+            relations
+              define org: [org]
+              define parent: [folder]
+              define editor: [user, group#member] or viewer from org or editor from parent
+        tuples:
+          - user: group:g#member
+            relation: editor
+            object: folder:f0
+          - user: user:bob
+            relation: member
+            object: group:g
+          - user: org:o
+            relation: org
+            object: folder:f0
+          - user: user:bob
+            relation: viewer
+            object: org:o
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: folder:f1
+            relation: parent
+            object: folder:f2
+          - user: folder:f2
+            relation: parent
+            object: folder:f3
+          - user: folder:f3
+            relation: parent
+            object: folder:f4
+          - user: folder:f4
+            relation: parent
+            object: folder:f5
+          - user: folder:f5
+            relation: parent
+            object: folder:f6
+          - user: folder:f6
+            relation: parent
+            object: folder:f7
+          - user: folder:f7
+            relation: parent
+            object: folder:f8
+          - user: folder:f8
+            relation: parent
+            object: folder:f9
+          - user: folder:f9
+            relation: parent
+            object: folder:f10
+          - user: folder:f10
+            relation: parent
+            object: folder:f11
+          - user: folder:f11
+            relation: parent
+            object: folder:f12
+          - user: folder:f12
+            relation: parent
+            object: folder:f13
+          - user: folder:f13
+            relation: parent
+            object: folder:f14
+          - user: folder:f14
+            relation: parent
+            object: folder:f15
+          - user: folder:f15
+            relation: parent
+            object: folder:f16
+          - user: folder:f16
+            relation: parent
+            object: folder:f17
+          - user: folder:f17
+            relation: parent
+            object: folder:f18
+          - user: folder:f18
+            relation: parent
+            object: folder:f19
+          - user: folder:f19
+            relation: parent
+            object: folder:f20
+          - user: folder:f20
+            relation: parent
+            object: folder:f21
+          - user: folder:f21
+            relation: parent
+            object: folder:f22
+          - user: folder:f22
+            relation: parent
+            object: folder:f23
+          - user: folder:f23
+            relation: parent
+            object: folder:f24
+        listUsersAssertions:
+          - request:
+              filters:
+                - org
+              object: folder:f24
+              relation: editor
+            expectation: []
+          - request:
+              filters:
+                - group#other
+              object: folder:f24
+              relation: editor
+            expectation: []

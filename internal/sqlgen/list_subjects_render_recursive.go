@@ -40,7 +40,12 @@ func RenderListSubjectsRecursiveFunction(plan ListPlan, blocks SubjectsRecursive
 	}
 	regular := []Stmt{Comment{Text: "Regular subject type: find direct subjects and expand usersets"}}
 	if walksParents {
-		regular = append(regular, renderParentClosureWalk(plan, blocks.ParentClosureWalks, false)...)
+		// A subject type the relation cannot grant lists nothing: skip the walk
+		// (and its depth limit), as OpenFGA does.
+		regular = append(regular, If{
+			Cond: In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
+			Then: renderParentClosureWalk(plan, blocks.ParentClosureWalks, false),
+		})
 	}
 	regular = append(regular, ReturnQuery{Query: regularPaginatedQuery})
 
@@ -48,7 +53,10 @@ func RenderListSubjectsRecursiveFunction(plan ListPlan, blocks SubjectsRecursive
 	var sourcesWalk []Stmt
 	selfWalks := blocks.UsersetFilterSelfWalks
 	if len(selfWalks) > 0 {
-		sourcesWalk = append(renderParentClosureWalk(plan, selfWalks, true), renderUsersetFilterSources(plan, selfWalks))
+		sourcesWalk = []Stmt{
+			If{Cond: usersetFilterReachable(plan), Then: renderParentClosureWalk(plan, selfWalks, true)},
+			renderUsersetFilterSources(plan, selfWalks),
+		}
 		decls = append(decls, Decl{Name: usersetFilterSources, Type: "TEXT[]"})
 	}
 	walksClosure := walksParents || len(selfWalks) > 0
@@ -256,6 +264,17 @@ func grantEdgeTuples(edges []grantEdge, states, alias string) (TableExpr, []Join
 	}
 }
 
+// grantEdgeFollows holds when grant edge e follows tuple t: a userset subject
+// on an edge without a target type, else a plain subject of the target type.
+func grantEdgeFollows() Expr {
+	tuple := func(column string) Expr { return Col{Table: "t", Column: column} }
+	targetType := Col{Table: "e", Column: "target_type"}
+	return Or(
+		And(IsNull{Expr: targetType}, HasUserset{Source: tuple("subject_id")}),
+		And(Eq{Left: tuple("subject_type"), Right: targetType}, NoUserset{Source: tuple("subject_id")}),
+	)
+}
+
 // renderGrantReachWalk collects into the v_rw_* arrays the (object, relation)
 // states permission resolution reaches from the listed relation on the listed
 // object, breadth first along its grant edges: a parent lookup's linking
@@ -266,7 +285,6 @@ func grantEdgeTuples(edges []grantEdge, states, alias string) (TableExpr, []Join
 // (and OpenFGA's ListUsers) following those same tuples would.
 func renderGrantReachWalk(plan ListPlan) []Stmt {
 	tuple := func(column string) Expr { return Col{Table: "t", Column: column} }
-	edge := func(column string) Expr { return Col{Table: "e", Column: column} }
 	edges := planGrantEdges(plan)
 	from, joins := grantEdgeTuples(edges, reachNextArrays, "f")
 	step := SelectStmt{
@@ -279,10 +297,7 @@ func renderGrantReachWalk(plan ListPlan) []Stmt {
 		Joins:    joins,
 		Where: And(
 			Ne{Left: tuple("subject_id"), Right: Lit("*")},
-			Or(
-				And(IsNull{Expr: edge("target_type")}, HasUserset{Source: tuple("subject_id")}),
-				And(Eq{Left: tuple("subject_type"), Right: edge("target_type")}, NoUserset{Source: tuple("subject_id")}),
-			),
+			grantEdgeFollows(),
 		),
 	}
 	fresh := IndentLines(step.SQL(), "    ") + "\n    EXCEPT\n    SELECT * FROM unnest(" + reachArrays + ")"
@@ -306,18 +321,34 @@ func renderGrantReachWalk(plan ListPlan) []Stmt {
 			},
 		},
 	}
-	// Every candidate is of a reached state's type: a filter of any other type
-	// has no candidates (and no path for resolution to exceed the limit on).
-	var stateTypes []string
-	for _, e := range edges {
-		if !slices.Contains(stateTypes, e.Type) {
-			stateTypes = append(stateTypes, e.Type)
-		}
-	}
 	return []Stmt{
 		Comment{Text: "States whose tuples can grant the relation, for the checked candidates"},
-		If{Cond: In{Expr: Param("v_filter_type"), Values: stateTypes}, Then: walk},
+		If{Cond: usersetFilterReachable(plan), Then: walk},
 	}
+}
+
+// usersetFilterReachable holds when the userset filter (type and relation) is a
+// state resolution reaches (relationGraph.grantEdgesFrom) or a relation that
+// grants one on the same object (editor for viewer: editor): any other filter
+// has no candidates and no path for resolution to exceed the depth limit on.
+func usersetFilterReachable(plan ListPlan) Expr {
+	var filters []string
+	add := func(objectType, relation string) {
+		filter := "(" + Lit(objectType).SQL() + ", " + Lit(relation).SQL() + ")"
+		if !slices.Contains(filters, filter) {
+			filters = append(filters, filter)
+		}
+	}
+	for _, e := range planGrantEdges(plan) {
+		add(e.Type, e.Relation)
+		if e.TargetType == "" {
+			add(e.Type, e.TupleRelation)
+		}
+	}
+	if len(filters) == 0 {
+		return Bool(false)
+	}
+	return Raw("(v_filter_type, v_filter_relation) IN (" + strings.Join(filters, ", ") + ")")
 }
 
 // renderUsersetFilterSources sets v_uf_sources to the listed object and its
@@ -428,7 +459,7 @@ func renderParentClosureWalk(plan ListPlan, recursing []string, crossLinks bool)
 		),
 	}
 	fresh := IndentLines(step.SQL(), "    ") + "\n    EXCEPT\n    SELECT * FROM unnest(" + closureArrays + ")"
-	return append(stmts,
+	stmts = append(stmts,
 		Assign{Name: frontierType, Value: Raw(closureType)},
 		Assign{Name: frontierID, Value: Raw(closureID)},
 		Assign{Name: frontierVia, Value: Raw(closureVia)},
@@ -449,6 +480,73 @@ func renderParentClosureWalk(plan ListPlan, recursing []string, crossLinks bool)
 			},
 		},
 	)
+	return append(stmts, renderLastHopExpansionCheck(plan, recursing, crossLinks)...)
+}
+
+// renderLastHopExpansionCheck raises M2002 when an ancestor walkDepthLimit-1
+// hops away holds a tuple resolution would still follow there (a userset to
+// expand, or a link to a parent of another type): OpenFGA's ListUsers counts
+// that step and fails. Links the walk itself follows are covered by its own
+// limit. Each ancestor holds the relation its chain looks up: the listed
+// relation when crossLinks, else the relation looked up through its via.
+func renderLastHopExpansionCheck(plan ListPlan, recursing []string, crossLinks bool) []Stmt {
+	lookups := map[string][]string{}
+	for _, parent := range buildListParentRelations(plan.Analysis) {
+		via := parent.LinkingRelation
+		relation := parent.Relation
+		if crossLinks {
+			relation = plan.Relation
+		}
+		if slices.Contains(recursing, via) && !slices.Contains(lookups[via], relation) {
+			lookups[via] = append(lookups[via], relation)
+		}
+	}
+	var rows []ValuesRow
+	for _, via := range slices.Sorted(maps.Keys(lookups)) {
+		for _, relation := range lookups[via] {
+			for _, e := range plan.graph().grantEdgesFrom(plan.ObjectType, relation) {
+				walked := e.TargetType == plan.ObjectType && slices.Contains(recursing, e.TupleRelation)
+				if e.Type != plan.ObjectType || e.Relation != relation || walked {
+					continue
+				}
+				target := Expr(Raw("NULL"))
+				if e.TargetType != "" {
+					target = Lit(e.TargetType)
+				}
+				row := ValuesRow{Lit(via), Lit(e.TupleRelation), target}
+				if !slices.ContainsFunc(rows, func(r ValuesRow) bool { return r.SQL() == row.SQL() }) {
+					rows = append(rows, row)
+				}
+			}
+		}
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	tuple := func(column string) Expr { return Col{Table: "t", Column: column} }
+	edge := func(column string) Expr { return Col{Table: "e", Column: column} }
+	ancestor := func(column string) Expr { return Col{Table: "p", Column: column} }
+	expandsAtLastHop := SelectStmt{
+		ColumnExprs: []Expr{Int(1)},
+		FromExpr:    TableAs("", "unnest("+closureArrays+", "+closureDepth+")", "p(type, id, via, depth)"),
+		Joins: []JoinClause{
+			{Type: "INNER", TableExpr: TypedValuesTable{Rows: rows, Alias: "e", Columns: []string{"via", "tuple_relation", "target_type"}},
+				On: Eq{Left: edge("via"), Right: ancestor("via")}},
+			{Type: "INNER", Table: "melange_tuples", Alias: "t", On: And(
+				Eq{Left: tuple("object_type"), Right: ancestor("type")},
+				Eq{Left: tuple("object_id"), Right: ancestor("id")},
+				Eq{Left: tuple("relation"), Right: edge("tuple_relation")},
+			)},
+		},
+		Where: And(
+			// closureDepth counts hops minus one.
+			Eq{Left: ancestor("depth"), Right: Int(walkDepthLimit - 2)},
+			Eq{Left: ancestor("type"), Right: Lit(plan.ObjectType)},
+			Ne{Left: tuple("subject_id"), Right: Lit("*")},
+			grantEdgeFollows(),
+		),
+	}
+	return []Stmt{If{Cond: Exists{Query: expandsAtLastHop}, Then: raiseTooDeep()}}
 }
 
 // aggregateRowsInto selects the rows of query, named alias(columns), into the
