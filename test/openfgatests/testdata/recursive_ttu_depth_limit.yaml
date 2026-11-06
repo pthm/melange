@@ -3,9 +3,9 @@
 # OpenFGA fails ListObjects and ListUsers with "resolution too complex" (2002)
 # once a parent chain reaches 25 hops and succeeds at 24; melange's
 # breadth-first walks raise M2002 at the same point instead of returning
-# truncated lists. OpenFGA's Check resolves 25 hops and fails at 26; melange's
-# check still fails at 25 (see checkDepthLimit), so only the 26-hop error is
-# asserted for Check.
+# truncated lists. OpenFGA's Check resolves 25 hops and fails at 26, counting
+# parent lookups and userset hops as steps; so does melange's check (see
+# checkDepthLimit).
 #
 # The walk expands each object once, so cycles and objects reachable by
 # several paths must still list every object exactly once, and an exclusion
@@ -231,6 +231,12 @@ tests:
           - user: folder:f24
             relation: parent
             object: folder:f25
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: editor
+              object: folder:f25
+            expectation: true
         listObjectsAssertions:
           - request:
               user: user:alice
@@ -1093,6 +1099,100 @@ tests:
               relation: editor
               object: folder:f26
             errorCode: 2002
+  - name: userset_chain_depth_limit_25_levels_check
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user, group#member]
+        tuples:
+          - user: user:alice
+            relation: member
+            object: group:g0
+          - user: group:g0#member
+            relation: member
+            object: group:g1
+          - user: group:g1#member
+            relation: member
+            object: group:g2
+          - user: group:g2#member
+            relation: member
+            object: group:g3
+          - user: group:g3#member
+            relation: member
+            object: group:g4
+          - user: group:g4#member
+            relation: member
+            object: group:g5
+          - user: group:g5#member
+            relation: member
+            object: group:g6
+          - user: group:g6#member
+            relation: member
+            object: group:g7
+          - user: group:g7#member
+            relation: member
+            object: group:g8
+          - user: group:g8#member
+            relation: member
+            object: group:g9
+          - user: group:g9#member
+            relation: member
+            object: group:g10
+          - user: group:g10#member
+            relation: member
+            object: group:g11
+          - user: group:g11#member
+            relation: member
+            object: group:g12
+          - user: group:g12#member
+            relation: member
+            object: group:g13
+          - user: group:g13#member
+            relation: member
+            object: group:g14
+          - user: group:g14#member
+            relation: member
+            object: group:g15
+          - user: group:g15#member
+            relation: member
+            object: group:g16
+          - user: group:g16#member
+            relation: member
+            object: group:g17
+          - user: group:g17#member
+            relation: member
+            object: group:g18
+          - user: group:g18#member
+            relation: member
+            object: group:g19
+          - user: group:g19#member
+            relation: member
+            object: group:g20
+          - user: group:g20#member
+            relation: member
+            object: group:g21
+          - user: group:g21#member
+            relation: member
+            object: group:g22
+          - user: group:g22#member
+            relation: member
+            object: group:g23
+          - user: group:g23#member
+            relation: member
+            object: group:g24
+          - user: group:g24#member
+            relation: member
+            object: group:g25
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: member
+              object: group:g25
+            expectation: true
   - name: userset_chain_depth_limit_26_levels_check
     stages:
       - model: |
@@ -1465,3 +1565,639 @@ tests:
             expectation:
               - user:alice
               - user:carol
+  # A computed relation is not a step, as in OpenFGA: viewer -> editor over a
+  # parent chain resolves 25 hops and fails at 26 like editor itself.
+  - name: computed_relation_chain_25_hops_check
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type folder
+            relations
+              define parent: [folder]
+              define editor: [user] or editor from parent
+              define viewer: editor
+        tuples:
+          - user: user:alice
+            relation: editor
+            object: folder:f0
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: folder:f1
+            relation: parent
+            object: folder:f2
+          - user: folder:f2
+            relation: parent
+            object: folder:f3
+          - user: folder:f3
+            relation: parent
+            object: folder:f4
+          - user: folder:f4
+            relation: parent
+            object: folder:f5
+          - user: folder:f5
+            relation: parent
+            object: folder:f6
+          - user: folder:f6
+            relation: parent
+            object: folder:f7
+          - user: folder:f7
+            relation: parent
+            object: folder:f8
+          - user: folder:f8
+            relation: parent
+            object: folder:f9
+          - user: folder:f9
+            relation: parent
+            object: folder:f10
+          - user: folder:f10
+            relation: parent
+            object: folder:f11
+          - user: folder:f11
+            relation: parent
+            object: folder:f12
+          - user: folder:f12
+            relation: parent
+            object: folder:f13
+          - user: folder:f13
+            relation: parent
+            object: folder:f14
+          - user: folder:f14
+            relation: parent
+            object: folder:f15
+          - user: folder:f15
+            relation: parent
+            object: folder:f16
+          - user: folder:f16
+            relation: parent
+            object: folder:f17
+          - user: folder:f17
+            relation: parent
+            object: folder:f18
+          - user: folder:f18
+            relation: parent
+            object: folder:f19
+          - user: folder:f19
+            relation: parent
+            object: folder:f20
+          - user: folder:f20
+            relation: parent
+            object: folder:f21
+          - user: folder:f21
+            relation: parent
+            object: folder:f22
+          - user: folder:f22
+            relation: parent
+            object: folder:f23
+          - user: folder:f23
+            relation: parent
+            object: folder:f24
+          - user: folder:f24
+            relation: parent
+            object: folder:f25
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: viewer
+              object: folder:f25
+            expectation: true
+  - name: computed_relation_chain_26_hops_check
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type folder
+            relations
+              define parent: [folder]
+              define editor: [user] or editor from parent
+              define viewer: editor
+        tuples:
+          - user: user:alice
+            relation: editor
+            object: folder:f0
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: folder:f1
+            relation: parent
+            object: folder:f2
+          - user: folder:f2
+            relation: parent
+            object: folder:f3
+          - user: folder:f3
+            relation: parent
+            object: folder:f4
+          - user: folder:f4
+            relation: parent
+            object: folder:f5
+          - user: folder:f5
+            relation: parent
+            object: folder:f6
+          - user: folder:f6
+            relation: parent
+            object: folder:f7
+          - user: folder:f7
+            relation: parent
+            object: folder:f8
+          - user: folder:f8
+            relation: parent
+            object: folder:f9
+          - user: folder:f9
+            relation: parent
+            object: folder:f10
+          - user: folder:f10
+            relation: parent
+            object: folder:f11
+          - user: folder:f11
+            relation: parent
+            object: folder:f12
+          - user: folder:f12
+            relation: parent
+            object: folder:f13
+          - user: folder:f13
+            relation: parent
+            object: folder:f14
+          - user: folder:f14
+            relation: parent
+            object: folder:f15
+          - user: folder:f15
+            relation: parent
+            object: folder:f16
+          - user: folder:f16
+            relation: parent
+            object: folder:f17
+          - user: folder:f17
+            relation: parent
+            object: folder:f18
+          - user: folder:f18
+            relation: parent
+            object: folder:f19
+          - user: folder:f19
+            relation: parent
+            object: folder:f20
+          - user: folder:f20
+            relation: parent
+            object: folder:f21
+          - user: folder:f21
+            relation: parent
+            object: folder:f22
+          - user: folder:f22
+            relation: parent
+            object: folder:f23
+          - user: folder:f23
+            relation: parent
+            object: folder:f24
+          - user: folder:f24
+            relation: parent
+            object: folder:f25
+          - user: folder:f25
+            relation: parent
+            object: folder:f26
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: viewer
+              object: folder:f26
+            errorCode: 2002
+  # A userset hop check resolves inline (group.member is direct) is still a step:
+  # 25 parent hops in, following the group grant would take a 26th step, so the
+  # check fails for everyone, as in OpenFGA, even for alice's direct grant.
+  - name: inline_userset_hop_at_depth_limit_check
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type folder
+            relations
+              define parent: [folder]
+              define editor: [user, group#member] or editor from parent
+        tuples:
+          - user: user:alice
+            relation: editor
+            object: folder:f0
+          - user: group:g#member
+            relation: editor
+            object: folder:f0
+          - user: user:bob
+            relation: member
+            object: group:g
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: folder:f1
+            relation: parent
+            object: folder:f2
+          - user: folder:f2
+            relation: parent
+            object: folder:f3
+          - user: folder:f3
+            relation: parent
+            object: folder:f4
+          - user: folder:f4
+            relation: parent
+            object: folder:f5
+          - user: folder:f5
+            relation: parent
+            object: folder:f6
+          - user: folder:f6
+            relation: parent
+            object: folder:f7
+          - user: folder:f7
+            relation: parent
+            object: folder:f8
+          - user: folder:f8
+            relation: parent
+            object: folder:f9
+          - user: folder:f9
+            relation: parent
+            object: folder:f10
+          - user: folder:f10
+            relation: parent
+            object: folder:f11
+          - user: folder:f11
+            relation: parent
+            object: folder:f12
+          - user: folder:f12
+            relation: parent
+            object: folder:f13
+          - user: folder:f13
+            relation: parent
+            object: folder:f14
+          - user: folder:f14
+            relation: parent
+            object: folder:f15
+          - user: folder:f15
+            relation: parent
+            object: folder:f16
+          - user: folder:f16
+            relation: parent
+            object: folder:f17
+          - user: folder:f17
+            relation: parent
+            object: folder:f18
+          - user: folder:f18
+            relation: parent
+            object: folder:f19
+          - user: folder:f19
+            relation: parent
+            object: folder:f20
+          - user: folder:f20
+            relation: parent
+            object: folder:f21
+          - user: folder:f21
+            relation: parent
+            object: folder:f22
+          - user: folder:f22
+            relation: parent
+            object: folder:f23
+          - user: folder:f23
+            relation: parent
+            object: folder:f24
+          - user: folder:f24
+            relation: parent
+            object: folder:f25
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: editor
+              object: folder:f25
+            errorCode: 2002
+          - tuple:
+              user: user:bob
+              relation: editor
+              object: folder:f25
+            errorCode: 2002
+          - tuple:
+              user: user:carol
+              relation: editor
+              object: folder:f25
+            errorCode: 2002
+  # A recursive relation's computed call is not a step either.
+  - name: computed_call_in_recursive_relation_check
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type folder
+            relations
+              define parent: [folder]
+              define editor: [user] or editor from parent
+              define viewer: [user] or editor or viewer from parent
+        tuples:
+          - user: user:alice
+            relation: editor
+            object: folder:f0
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: folder:f1
+            relation: parent
+            object: folder:f2
+          - user: folder:f2
+            relation: parent
+            object: folder:f3
+          - user: folder:f3
+            relation: parent
+            object: folder:f4
+          - user: folder:f4
+            relation: parent
+            object: folder:f5
+          - user: folder:f5
+            relation: parent
+            object: folder:f6
+          - user: folder:f6
+            relation: parent
+            object: folder:f7
+          - user: folder:f7
+            relation: parent
+            object: folder:f8
+          - user: folder:f8
+            relation: parent
+            object: folder:f9
+          - user: folder:f9
+            relation: parent
+            object: folder:f10
+          - user: folder:f10
+            relation: parent
+            object: folder:f11
+          - user: folder:f11
+            relation: parent
+            object: folder:f12
+          - user: folder:f12
+            relation: parent
+            object: folder:f13
+          - user: folder:f13
+            relation: parent
+            object: folder:f14
+          - user: folder:f14
+            relation: parent
+            object: folder:f15
+          - user: folder:f15
+            relation: parent
+            object: folder:f16
+          - user: folder:f16
+            relation: parent
+            object: folder:f17
+          - user: folder:f17
+            relation: parent
+            object: folder:f18
+          - user: folder:f18
+            relation: parent
+            object: folder:f19
+          - user: folder:f19
+            relation: parent
+            object: folder:f20
+          - user: folder:f20
+            relation: parent
+            object: folder:f21
+          - user: folder:f21
+            relation: parent
+            object: folder:f22
+          - user: folder:f22
+            relation: parent
+            object: folder:f23
+          - user: folder:f23
+            relation: parent
+            object: folder:f24
+          - user: folder:f24
+            relation: parent
+            object: folder:f25
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: viewer
+              object: folder:f25
+            expectation: true
+  # An intersection operand is not a step.
+  - name: intersection_operand_depth_check
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type folder
+            relations
+              define parent: [folder]
+              define editor: [user] or editor from parent
+              define allowed: [user]
+              define viewer: editor and allowed
+        tuples:
+          - user: user:alice
+            relation: editor
+            object: folder:f0
+          - user: user:alice
+            relation: allowed
+            object: folder:f25
+          - user: user:alice
+            relation: allowed
+            object: folder:f26
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: folder:f1
+            relation: parent
+            object: folder:f2
+          - user: folder:f2
+            relation: parent
+            object: folder:f3
+          - user: folder:f3
+            relation: parent
+            object: folder:f4
+          - user: folder:f4
+            relation: parent
+            object: folder:f5
+          - user: folder:f5
+            relation: parent
+            object: folder:f6
+          - user: folder:f6
+            relation: parent
+            object: folder:f7
+          - user: folder:f7
+            relation: parent
+            object: folder:f8
+          - user: folder:f8
+            relation: parent
+            object: folder:f9
+          - user: folder:f9
+            relation: parent
+            object: folder:f10
+          - user: folder:f10
+            relation: parent
+            object: folder:f11
+          - user: folder:f11
+            relation: parent
+            object: folder:f12
+          - user: folder:f12
+            relation: parent
+            object: folder:f13
+          - user: folder:f13
+            relation: parent
+            object: folder:f14
+          - user: folder:f14
+            relation: parent
+            object: folder:f15
+          - user: folder:f15
+            relation: parent
+            object: folder:f16
+          - user: folder:f16
+            relation: parent
+            object: folder:f17
+          - user: folder:f17
+            relation: parent
+            object: folder:f18
+          - user: folder:f18
+            relation: parent
+            object: folder:f19
+          - user: folder:f19
+            relation: parent
+            object: folder:f20
+          - user: folder:f20
+            relation: parent
+            object: folder:f21
+          - user: folder:f21
+            relation: parent
+            object: folder:f22
+          - user: folder:f22
+            relation: parent
+            object: folder:f23
+          - user: folder:f23
+            relation: parent
+            object: folder:f24
+          - user: folder:f24
+            relation: parent
+            object: folder:f25
+          - user: folder:f25
+            relation: parent
+            object: folder:f26
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: viewer
+              object: folder:f25
+            expectation: true
+          - tuple:
+              user: user:alice
+              relation: viewer
+              object: folder:f26
+            errorCode: 2002
+  # The parent lookup inside an exclusion is not a step: 26 levels deep, alice
+  # is still allowed. (OpenFGA resolves deeper still here, because it finds no
+  # blocked tuple for alice without walking the chain; melange raises from 27.)
+  - name: exclusion_parent_lookup_depth_check
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type folder
+            relations
+              define parent: [folder]
+              define blocked: [user] or blocked from parent
+              define viewer: [user] but not blocked from parent
+        tuples:
+          - user: user:alice
+            relation: viewer
+            object: folder:f25
+          - user: user:alice
+            relation: viewer
+            object: folder:f26
+          - user: user:bob
+            relation: blocked
+            object: folder:f0
+          - user: folder:f0
+            relation: parent
+            object: folder:f1
+          - user: folder:f1
+            relation: parent
+            object: folder:f2
+          - user: folder:f2
+            relation: parent
+            object: folder:f3
+          - user: folder:f3
+            relation: parent
+            object: folder:f4
+          - user: folder:f4
+            relation: parent
+            object: folder:f5
+          - user: folder:f5
+            relation: parent
+            object: folder:f6
+          - user: folder:f6
+            relation: parent
+            object: folder:f7
+          - user: folder:f7
+            relation: parent
+            object: folder:f8
+          - user: folder:f8
+            relation: parent
+            object: folder:f9
+          - user: folder:f9
+            relation: parent
+            object: folder:f10
+          - user: folder:f10
+            relation: parent
+            object: folder:f11
+          - user: folder:f11
+            relation: parent
+            object: folder:f12
+          - user: folder:f12
+            relation: parent
+            object: folder:f13
+          - user: folder:f13
+            relation: parent
+            object: folder:f14
+          - user: folder:f14
+            relation: parent
+            object: folder:f15
+          - user: folder:f15
+            relation: parent
+            object: folder:f16
+          - user: folder:f16
+            relation: parent
+            object: folder:f17
+          - user: folder:f17
+            relation: parent
+            object: folder:f18
+          - user: folder:f18
+            relation: parent
+            object: folder:f19
+          - user: folder:f19
+            relation: parent
+            object: folder:f20
+          - user: folder:f20
+            relation: parent
+            object: folder:f21
+          - user: folder:f21
+            relation: parent
+            object: folder:f22
+          - user: folder:f22
+            relation: parent
+            object: folder:f23
+          - user: folder:f23
+            relation: parent
+            object: folder:f24
+          - user: folder:f24
+            relation: parent
+            object: folder:f25
+          - user: folder:f25
+            relation: parent
+            object: folder:f26
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: viewer
+              object: folder:f25
+            expectation: true
+          - tuple:
+              user: user:alice
+              relation: viewer
+              object: folder:f26
+            expectation: true

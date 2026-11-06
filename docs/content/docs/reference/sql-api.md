@@ -516,17 +516,16 @@ COMMIT;
 
 ### Error Code: M2002
 
-The functions raise an exception with error code `M2002` when the permission resolution reaches the depth limit of 25 hops:
+The functions raise an exception with error code `M2002` when resolving a request takes more steps than OpenFGA allows. As in OpenFGA, a step is a parent relationship (tuple-to-userset) or a userset hop; computed relations and intersection or exclusion operands are not steps. The limits match OpenFGA's:
+
+- `check_permission` resolves a chain of 25 steps and raises at 26
+- the list functions resolve 24 and raise at 25, rather than return a partial list
 
 ```sql
 RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';
 ```
 
-This can occur with:
-- Deeply nested parent relationships (tuple-to-userset chains)
-- Userset chains nested 25 or more levels deep (`check_permission`)
-
-For parent relationships, the list functions raise rather than return a partial list, as OpenFGA's `ListObjects` and `ListUsers` do, and expand each object once, so cycles in the data do not raise. Listing userset subjects (a `p_subject_type` such as `group#member`) is not covered yet.
+This can occur with deeply nested parent relationships or deeply nested userset chains. Cycles in the data do not raise: a check skips objects it has already visited, and the list functions expand each object once.
 
 Handle this error in your application:
 

@@ -450,7 +450,7 @@ END;
 $$;
 ```
 
-The M2002 error occurs when permission resolution reaches the depth limit of 25 hops, which can happen with:
+The M2002 error occurs when permission resolution takes more steps than OpenFGA allows (a check resolves 25 parent or userset hops and fails at 26), which can happen with:
 - Deeply nested parent relationships
 - Deeply nested userset chains
 

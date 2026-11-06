@@ -73,7 +73,7 @@ check_<type>_<relation>(p_subject_type TEXT, p_subject_id TEXT, p_object_id TEXT
 
 Note: `p_object_type` is not a parameter. The object type is baked into the function name and body.
 
-`p_visited` tracks already-visited relations for cycle detection at runtime. If `array_length(p_visited, 1) >= 25`, the function raises `SQLSTATE 'M2002'` (resolution too complex).
+`p_visited` tracks already-visited relations for cycle detection at runtime, and its length counts resolution steps the way OpenFGA does: a parent lookup or userset hop appends the caller's key, while computed relations and intersection or exclusion operands pass it on unchanged. If `array_length(p_visited, 1) >= 26`, the function raises `SQLSTATE 'M2002'` (resolution too complex), so a check resolves 25 steps as in OpenFGA.
 
 Each relation pattern produces different SQL. Direct assignment queries `melange_tuples` for an exact match. Implied relations call the implied-by function. Parent relations look up the parent object and call the parent's check function. Exclusions check the base relation and then negate the excluded relation.
 
@@ -121,7 +121,7 @@ The migrator:
 
 **Why precomputed closure**: resolving role hierarchies at runtime requires recursive graph traversal with cycle detection. By precomputing the closure, the generated SQL inlines all transitive implications into a single `IN (...)` clause.
 
-**Why `visited TEXT[]` parameter**: even with precomputed closures, certain patterns (parent relationships, usersets) can create cycles at runtime if the data forms a loop. The visited array prevents infinite recursion with a depth limit of 25.
+**Why `visited TEXT[]` parameter**: even with precomputed closures, certain patterns (parent relationships, usersets) can create cycles at runtime if the data forms a loop. The visited array detects cycles, and its length counts the steps taken so check can raise M2002 at the same depth as OpenFGA (see `checkDepthLimit`).
 
 ## Next Steps
 

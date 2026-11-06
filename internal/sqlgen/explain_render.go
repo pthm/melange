@@ -23,7 +23,7 @@ import (
 
 // RenderExplainFunction is the entry point for explain_* function generation.
 func RenderExplainFunction(plan CheckPlan, blocks CheckBlocks) (string, error) {
-	body := buildExplainCycleDetection(plan)
+	body := append(buildExplainCycleDetection(plan), inlineUsersetDepthGuard(blocks)...)
 	body = append(body, explainTruncationBailout(plan))
 	body = append(body, buildExplainUsersetSubjectStmts(plan, blocks)...)
 	// Standalone attempts (Direct, Implied, TTU, Userset) only emit when
@@ -294,7 +294,7 @@ func buildExplainDirectSelect(plan CheckPlan) SelectStmt {
 // "call the sibling explain_*, return on success, record failure on miss"
 // block.
 //
-//	v_child_trace := explain_{type}_{rel}(p_subject_type, p_subject_id, p_object_id, p_visited || ARRAY[v_key]);
+//	v_child_trace := explain_{type}_{rel}(p_subject_type, p_subject_id, p_object_id, p_visited, p_max_nodes);
 //	v_node_count := v_node_count + COALESCE((v_child_trace->>'node_count')::INTEGER, 0);
 //	IF (v_child_trace->>'result')::boolean THEN
 //	    v_root := <NodeImplied wrapping child trace's root, result=true>;
@@ -315,7 +315,8 @@ func buildExplainImpliedAttempts(plan CheckPlan, blocks CheckBlocks) []Stmt {
 
 	for _, call := range blocks.ImpliedFunctionCalls {
 		explainFnName := explainFunctionName(plan.ObjectType, call.Relation)
-		callExpr := fmt.Sprintf("%s(p_subject_type, p_subject_id, p_object_id, p_visited || ARRAY[v_key], p_max_nodes)",
+		// A computed relation is not a step (see checkDepthLimit).
+		callExpr := fmt.Sprintf("%s(p_subject_type, p_subject_id, p_object_id, p_visited, p_max_nodes)",
 			sqldsl.PrefixIdent(explainFnName, plan.DatabaseSchema))
 
 		label := sqldsl.QuoteLiteral("implied via " + call.Relation)
@@ -744,8 +745,9 @@ func buildExplainIntersectionPartStmts(plan CheckPlan, part IntersectionPartChec
 		return buildExplainComplexIntersectionPartStmts(plan, part)
 	}
 
+	// An operand on the same object is not a step (see checkDepthLimit).
 	dispatcherCall := fmt.Sprintf(
-		"%s(p_subject_type, p_subject_id, %s, %s, p_object_id, p_visited || ARRAY[v_key], p_max_nodes)",
+		"%s(p_subject_type, p_subject_id, %s, %s, p_object_id, p_visited, p_max_nodes)",
 		sqldsl.PrefixIdent("explain_permission_internal", plan.DatabaseSchema),
 		sqldsl.QuoteLiteral(part.Relation),
 		sqldsl.QuoteLiteral(plan.ObjectType),

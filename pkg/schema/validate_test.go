@@ -347,3 +347,40 @@ func TestDetectCycles_ComplexValidSchema(t *testing.T) {
 		t.Errorf("expected no error for complex valid schema, got: %v", err)
 	}
 }
+
+// Same-object cycles through intersection and exclusion operands are rejected
+// like implied-by cycles (OpenFGA rejects them too); a direct assignment
+// inside an intersection is not a cycle.
+func TestDetectCycles_SameObjectOperands(t *testing.T) {
+	cases := []struct {
+		name    string
+		a       schema.RelationDefinition
+		wantErr bool
+	}{
+		{"intersection operand", schema.RelationDefinition{Name: "a", IntersectionGroups: []schema.IntersectionGroup{{Relations: []string{"b", "c"}}}}, true},
+		{"excluded relation", schema.RelationDefinition{Name: "a", ExcludedRelations: []string{"b"}}, true},
+		{"excluded intersection", schema.RelationDefinition{Name: "a", ExcludedIntersectionGroups: []schema.IntersectionGroup{{Relations: []string{"b", "c"}}}}, true},
+		{"exclusion inside intersection", schema.RelationDefinition{Name: "a", IntersectionGroups: []schema.IntersectionGroup{{Relations: []string{"c"}, Exclusions: map[string][]string{"c": {"b"}}}}}, true},
+		{"direct assignment inside intersection", schema.RelationDefinition{Name: "a", IntersectionGroups: []schema.IntersectionGroup{{Relations: []string{"a", "c"}}}}, false},
+		{"self inside excluded intersection", schema.RelationDefinition{Name: "a", ExcludedIntersectionGroups: []schema.IntersectionGroup{{Relations: []string{"a", "c"}}}}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			types := []schema.TypeDefinition{{
+				Name: "doc",
+				Relations: []schema.RelationDefinition{
+					tc.a,
+					{Name: "b", ImpliedBy: []string{"a"}},
+					{Name: "c"},
+				},
+			}}
+			err := schema.DetectCycles(types)
+			if tc.wantErr && !schema.IsCyclicSchemaErr(err) {
+				t.Fatalf("expected a cyclic schema error, got %v", err)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+		})
+	}
+}

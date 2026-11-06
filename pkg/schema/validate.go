@@ -2,6 +2,7 @@ package schema
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -58,18 +59,22 @@ func DetectCycles(types []TypeDefinition) error {
 	return nil
 }
 
-// detectImpliedByCycles checks for cycles in implied-by relations within each type.
-// For example: admin implies owner, owner implies admin would be a cycle.
+// detectImpliedByCycles checks for cycles among the relations of each type that
+// resolve on the same object: implied-by relations (admin implies owner, owner
+// implies admin), intersection operands and exclusion operands
+// ("a: [user] or (b and c)" with "b: [user] or a"). OpenFGA rejects all of
+// them, and check functions count only parent and userset hops as steps, so
+// such a cycle would recurse without bound.
 func detectImpliedByCycles(types []TypeDefinition) error {
 	for _, t := range types {
 		graph := make(map[relationNode][]relationNode)
 
 		// Build graph for this type
-		// An edge from A to B means "A is implied by B" (B → A)
+		// An edge from A to B means A is resolved through B on the same object
 		for _, r := range t.Relations {
 			n := relationNode{objectType: t.Name, relation: r.Name}
-			for _, impliedBy := range r.ImpliedBy {
-				target := relationNode{objectType: t.Name, relation: impliedBy}
+			for _, rel := range sameObjectOperands(r) {
+				target := relationNode{objectType: t.Name, relation: rel}
 				graph[n] = append(graph[n], target)
 			}
 		}
@@ -191,6 +196,31 @@ func buildParentGraph(types []TypeDefinition) map[relationNode][]relationNode {
 	}
 
 	return graph
+}
+
+// sameObjectOperands returns the relations r resolves through on the same
+// object: implied-by relations, intersection operands and their exclusions,
+// and excluded relations and intersections. An intersection names r itself for
+// its direct assignment ("[user] and c"), which is not a cycle; excluded
+// intersections cannot hold a direct assignment, so r there is one.
+func sameObjectOperands(r RelationDefinition) []string {
+	rels := slices.Concat(r.ImpliedBy, r.ExcludedRelations)
+	for _, group := range r.IntersectionGroups {
+		for _, rel := range group.Relations {
+			if rel != r.Name {
+				rels = append(rels, rel)
+			}
+		}
+	}
+	for _, group := range r.ExcludedIntersectionGroups {
+		rels = append(rels, group.Relations...)
+	}
+	for _, group := range slices.Concat(r.IntersectionGroups, r.ExcludedIntersectionGroups) {
+		for _, excluded := range group.Exclusions {
+			rels = append(rels, excluded...)
+		}
+	}
+	return rels
 }
 
 // detectCycleInGraph uses DFS with three-color marking to detect cycles.

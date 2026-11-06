@@ -220,7 +220,7 @@ func TestRenderExplainFunction_ImpliedFunctionCallEmits(t *testing.T) {
 		// so a NULL return is normalised to an empty object (a malformed
 		// callee surfaces as a failure attempt, not a null-children
 		// NodeImplied).
-		"v_child_trace := COALESCE(explain_doc_editor(p_subject_type, p_subject_id, p_object_id, p_visited || ARRAY[v_key], p_max_nodes), '{}'::jsonb)",
+		"v_child_trace := COALESCE(explain_doc_editor(p_subject_type, p_subject_id, p_object_id, p_visited, p_max_nodes), '{}'::jsonb)",
 		// Tally the child's node count into our running counter
 		"v_node_count := v_node_count + COALESCE((v_child_trace->>'node_count')::INTEGER, 0)",
 		// Success path: wrap child's root in NodeImplied
@@ -432,8 +432,8 @@ func TestRenderExplainFunction_IntersectionFlow(t *testing.T) {
 		"v_intersection_pass := TRUE",
 		"-- Intersection part: writer",
 		"-- Intersection part: editor",
-		"explain_permission_internal(p_subject_type, p_subject_id, 'writer', 'document', p_object_id, p_visited || ARRAY[v_key], p_max_nodes)",
-		"explain_permission_internal(p_subject_type, p_subject_id, 'editor', 'document', p_object_id, p_visited || ARRAY[v_key], p_max_nodes)",
+		"explain_permission_internal(p_subject_type, p_subject_id, 'writer', 'document', p_object_id, p_visited, p_max_nodes)",
+		"explain_permission_internal(p_subject_type, p_subject_id, 'editor', 'document', p_object_id, p_visited, p_max_nodes)",
 		"v_intersection_children := v_intersection_children || jsonb_build_array(v_child_trace->'root')",
 		"v_intersection_pass := FALSE",
 		"'type', 'intersection'",

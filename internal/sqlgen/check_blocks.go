@@ -7,8 +7,11 @@ import (
 
 // CheckBlocks contains all the DSL blocks needed to generate a check function.
 type CheckBlocks struct {
-	DirectCheck             Expr       // EXISTS check for direct/implied tuple lookup
-	UsersetCheck            Expr       // EXISTS check for userset membership
+	DirectCheck  Expr // EXISTS check for direct/implied tuple lookup
+	UsersetCheck Expr // EXISTS check for userset membership
+	// InlineUsersetGrants finds the userset grants on the object that
+	// UsersetCheck resolves inline (simple patterns), without a recursive call.
+	InlineUsersetGrants     Expr
 	ExclusionCheck          Expr       // EXISTS check for exclusion (denial)
 	UsersetSubjectSelfCheck SelectStmt // Validates when subject IS a userset
 
@@ -67,6 +70,7 @@ func BuildCheckBlocks(plan CheckPlan) (CheckBlocks, error) {
 	}
 	if plan.HasUserset {
 		blocks.UsersetCheck = buildUsersetCheck(plan)
+		blocks.InlineUsersetGrants = buildInlineUsersetGrants(plan)
 	}
 	if plan.HasExclusion {
 		blocks.ExclusionCheck = buildExclusionCheck(plan)
@@ -131,22 +135,39 @@ func buildUsersetCheck(plan CheckPlan) Expr {
 	return Or(checks...)
 }
 
+// buildInlineUsersetGrants returns an EXISTS over the grants of the simple
+// userset patterns, or nil when there are none.
+func buildInlineUsersetGrants(plan CheckPlan) Expr {
+	var grants []Expr
+	for _, pattern := range plan.Analysis.UsersetPatterns {
+		if !pattern.IsComplex {
+			grants = append(grants, Exists{Query: usersetGrants(plan, pattern).Select("1")})
+		}
+	}
+	return orExprs(grants)
+}
+
+// usersetGrants selects the grants of pattern's userset on the object.
+func usersetGrants(plan CheckPlan, pattern UsersetPattern) *TupleQuery {
+	grantTuple := Col{Table: "grant_tuple", Column: "subject_id"}
+	return Tuples(plan.DatabaseSchema, "grant_tuple").
+		ObjectType(plan.ObjectType).
+		Relations(plan.Relation).
+		Where(
+			Eq{Left: Col{Table: "grant_tuple", Column: "object_id"}, Right: ObjectID},
+			Eq{Left: Col{Table: "grant_tuple", Column: "subject_type"}, Right: Lit(pattern.SubjectType)},
+			HasUserset{Source: grantTuple},
+			Eq{Left: UsersetRelation{Source: grantTuple}, Right: Lit(pattern.SubjectRelation)},
+		)
+}
+
 func buildUsersetPatternCheck(plan CheckPlan, pattern UsersetPattern, visitedWithKey Expr) Expr {
 	grantTuple := Col{Table: "grant_tuple", Column: "subject_id"}
 
-	baseWhere := []Expr{
-		Eq{Left: Col{Table: "grant_tuple", Column: "object_id"}, Right: ObjectID},
-		Eq{Left: Col{Table: "grant_tuple", Column: "subject_type"}, Right: Lit(pattern.SubjectType)},
-		HasUserset{Source: grantTuple},
-		Eq{Left: UsersetRelation{Source: grantTuple}, Right: Lit(pattern.SubjectRelation)},
-	}
-
 	if pattern.IsComplex {
 		// Complex pattern: use check_permission_internal for recursive membership verification
-		q := Tuples(plan.DatabaseSchema, "grant_tuple").
-			ObjectType(plan.ObjectType).
-			Relations(plan.Relation).
-			Where(append(baseWhere, CheckPermission{
+		return Exists{Query: usersetGrants(plan, pattern).
+			Where(CheckPermission{
 				Schema:   plan.DatabaseSchema,
 				Subject:  SubjectParams(),
 				Relation: pattern.SubjectRelation,
@@ -156,16 +177,13 @@ func buildUsersetPatternCheck(plan CheckPlan, pattern UsersetPattern, visitedWit
 				},
 				Visited:     visitedWithKey,
 				ExpectAllow: true,
-			})...).
-			Select("1")
-		return Exists{Query: q}
+			}).
+			Select("1")}
 	}
 
-	// Simple pattern: use tuple JOIN for membership lookup
-	q := Tuples(plan.DatabaseSchema, "grant_tuple").
-		ObjectType(plan.ObjectType).
-		Relations(plan.Relation).
-		Where(baseWhere...).
+	// Simple pattern: use tuple JOIN for membership lookup (a userset hop
+	// without a recursive call; inlineUsersetDepthGuard counts it).
+	return Exists{Query: usersetGrants(plan, pattern).
 		JoinTuples("membership",
 			Eq{Left: Col{Table: "membership", Column: "object_type"}, Right: Lit(pattern.SubjectType)},
 			Eq{Left: Col{Table: "membership", Column: "object_id"}, Right: UsersetObjectID{Source: grantTuple}},
@@ -173,8 +191,7 @@ func buildUsersetPatternCheck(plan CheckPlan, pattern UsersetPattern, visitedWit
 			Eq{Left: Col{Table: "membership", Column: "subject_type"}, Right: SubjectType},
 			SubjectIDMatch(Col{Table: "membership", Column: "subject_id"}, SubjectID, plan.AllowWildcard),
 		).
-		Select("1")
-	return Exists{Query: q}
+		Select("1")}
 }
 
 func buildExclusionCheck(plan CheckPlan) Expr {
@@ -629,6 +646,7 @@ func buildSimplePartCheck(plan CheckPlan, relation string) Expr {
 }
 
 func buildIntersectionPartCheck(plan CheckPlan, part IntersectionPart, visitedWithKey Expr) IntersectionPartCheck {
+	obj := LiteralObject(plan.ObjectType, ObjectID)
 	pc := IntersectionPartCheck{
 		Relation:         part.Relation,
 		ExcludedRelation: part.ExcludedRelation,
@@ -650,14 +668,9 @@ func buildIntersectionPartCheck(plan CheckPlan, part IntersectionPart, visitedWi
 		pc.Check = buildSimplePartCheck(plan, part.Relation)
 
 	default:
-		pc.Check = CheckPermission{
-			Schema:      plan.DatabaseSchema,
-			Subject:     SubjectParams(),
-			Relation:    part.Relation,
-			Object:      LiteralObject(plan.ObjectType, ObjectID),
-			Visited:     visitedWithKey,
-			ExpectAllow: true,
-		}
+		// An operand on the same object is not a step (see checkDepthLimit),
+		// so it passes p_visited on unchanged.
+		pc.Check = checkPermissionAllow(plan.DatabaseSchema, part.Relation, obj)
 	}
 
 	if part.ExcludedRelation != "" {
@@ -667,14 +680,7 @@ func buildIntersectionPartCheck(plan CheckPlan, part IntersectionPart, visitedWi
 			// Optimization: inline simple exclusions as NOT EXISTS
 			exclusionCheck = Not(buildSimplePartCheck(plan, part.ExcludedRelation))
 		} else {
-			exclusionCheck = CheckPermission{
-				Schema:      plan.DatabaseSchema,
-				Subject:     SubjectParams(),
-				Relation:    part.ExcludedRelation,
-				Object:      LiteralObject(plan.ObjectType, ObjectID),
-				Visited:     visitedWithKey,
-				ExpectAllow: false,
-			}
+			exclusionCheck = checkPermissionDeny(plan.DatabaseSchema, part.ExcludedRelation, obj)
 		}
 		pc.Check = And(pc.Check, exclusionCheck)
 	}

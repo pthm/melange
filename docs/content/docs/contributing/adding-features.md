@@ -104,7 +104,7 @@ Ensure no existing tests regress. Performance regressions >20% in ns/op should b
 
 - Start by reading existing patterns that are similar to what you're adding. Exclusion and Intersection are the most complex examples.
 - Use `Lit(value).SQL()` for SQL string escaping (doubles single quotes).
-- The `p_visited` array parameter is for cycle detection. Pass it through when calling other check functions.
+- The `p_visited` array parameter detects cycles and counts resolution steps. Append the caller's key when following a parent lookup or userset hop; pass it through unchanged for computed relations and intersection or exclusion operands (see `checkDepthLimit`).
 - Dispatchers are always regenerated. You don't need to manually update them.
 
 ## Next Steps
