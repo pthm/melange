@@ -16,6 +16,7 @@ When you run `melange migrate`, Melange generates:
 | `check_permission_bulk` | Check multiple permissions in a single call |
 | `list_accessible_objects` | List all objects a subject can access (with pagination) |
 | `list_accessible_subjects` | List all subjects with access to an object (with pagination) |
+| `accessible_{type}_{relation}` | The objects a subject can access, as a set to filter your own queries by |
 
 These are the primary entry points. Internally, Melange generates specialized per-relation functions (e.g., `check_document_viewer`) that the dispatchers route to.
 
@@ -280,6 +281,48 @@ JOIN list_accessible_subjects('document', '456', 'viewer', 'user', NULL, NULL) a
 SELECT subject_id, next_cursor
 FROM list_accessible_subjects('document', '456', 'viewer', 'team#member', NULL, NULL);
 ```
+
+## accessible_{type}_{relation}
+
+Returns the IDs of the objects of `type` on which the subject holds `relation`, for filtering your own queries. Each listable relation gets one, for example `accessible_document_viewer`.
+
+### Signature
+
+```sql
+accessible_{type}_{relation}(
+    p_subject_type TEXT,
+    p_subject_id TEXT
+) RETURNS TABLE(object_id TEXT)
+```
+
+It is a `LANGUAGE sql` function, so PostgreSQL inlines it into the calling query. Your filters, ordering and limit are planned together with the access set instead of around an opaque function call. Use it in `IN`, not as a list to page through:
+
+```sql
+SELECT d.*
+FROM documents d
+WHERE d.id::text IN (SELECT * FROM accessible_document_viewer('user', '123'))
+  AND d.archived = false
+ORDER BY d.created_at DESC
+LIMIT 50;
+```
+
+The inlined query reads `melange_tuples` through your query's `search_path`, so the schema holding it must be on the path. Rows can repeat; `IN` does not need them distinct.
+
+### accessible_{type}_{relation}_by_{link}
+
+A relation whose every grant comes through the same link to a single parent type, such as `can_read: reader from org` or `can_read: reader from org or admin from org`, also gets a parent-key form. It returns the IDs of the parents through which the subject holds the relation, so you filter on the column that holds the link:
+
+```sql
+SELECT s.*
+FROM subjects s
+WHERE s.organization_id IN (SELECT * FROM accessible_subject_can_read_by_org('user', '123'))
+ORDER BY s.created_at DESC
+LIMIT 50;
+```
+
+This reads a handful of parent IDs instead of the access set of every object under them, and an index on `(organization_id, created_at)` serves the page from the index. For a viewer of an organization holding a million subjects, the count dropped from 4.0 s to 0.5 s, and the page sorted by creation time from 4.1 s to 0.6 s, or 0.4 s with that index.
+
+It is exact when each object has a single link, held in that column (a many-to-one foreign key). It does not cover a subject that is a userset on the object type itself (`subject:s#can_read`). A relation that also grants directly, through a userset or a wildcard, or with an exclusion or intersection, has no parent-key form.
 
 ## explain_permission
 

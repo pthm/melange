@@ -18,9 +18,11 @@ type ListGeneratedSQL struct {
 	ListSubjectsFunctions []string
 
 	// AccessibleObjectsFunctions contains the accessible_{type}_{relation}
-	// functions (list_objects_accessible.go), each after the accessible
-	// functions it calls: PostgreSQL resolves a LANGUAGE sql body when it is
-	// created. Applied after every list function, which they may call.
+	// functions and their accessiblesk_ internal forms
+	// (list_objects_accessible.go) and the parent-key functions
+	// (list_objects_parent_key.go), each after the accessible functions it
+	// calls: PostgreSQL resolves a LANGUAGE sql body when it is created.
+	// Applied after every list function, which they may call.
 	AccessibleObjectsFunctions []NamedFunction
 
 	// ListObjectsDispatcher contains the list_accessible_objects dispatcher function
@@ -90,6 +92,9 @@ func GenerateListSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLDat
 		result.ListSubjectsFunctions = append(result.ListSubjectsFunctions, subjFn)
 	}
 
+	for _, pk := range parentKeyRelations(analyses) {
+		accessible = append(accessible, NamedFunction{Name: pk.functionName(), SQL: renderParentKeyFunction(databaseSchema, pk)})
+	}
 	result.AccessibleObjectsFunctions = orderAccessibleFunctions(accessible)
 
 	// Generate dispatchers (always generated, even if no specialized functions)

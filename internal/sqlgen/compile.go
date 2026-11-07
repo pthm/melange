@@ -437,7 +437,8 @@ func CollectDispatcherFunctions(generatedSQL GeneratedSQL, listSQL ListGenerated
 //   - Specialized check functions: check_{type}_{relation}
 //   - No-wildcard check variants: check_{type}_{relation}_nw
 //   - Specialized list functions: list_{type}_{relation}_obj, list_{type}_{relation}_sub
-//   - Accessible objects functions: accessible_{type}_{relation}
+//   - Accessible objects functions: accessible_{type}_{relation}, accessiblesk_{type}_{relation}
+//   - Parent-key accessible functions: accessible_{type}_{relation}_by_{link}
 //   - Dispatcher functions (always included): check_permission, list_accessible_objects, etc.
 func CollectFunctionNames(analyses []RelationAnalysis) []string {
 	var names []string
@@ -466,6 +467,10 @@ func CollectFunctionNames(analyses []RelationAnalysis) []string {
 				accessibleSubjectKindFunctionName(a.ObjectType, a.Relation),
 			)
 		}
+	}
+
+	for _, pk := range parentKeyRelations(analyses) {
+		names = append(names, pk.functionName())
 	}
 
 	// Dispatchers are always generated
