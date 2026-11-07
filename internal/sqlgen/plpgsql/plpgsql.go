@@ -209,10 +209,11 @@ type PlpgsqlFunction struct {
 	Body       []Stmt
 	Header     []string // Comment lines at the top of the function (without -- prefix)
 	SearchPath string   // If set, appends SET search_path = '<value>' to the function definition
-	// NoSearchPath omits the SET search_path clause entirely. Safe only for
-	// functions whose body references no unqualified melange_tuples (dispatchers
-	// and public wrappers, which use schema-qualified names). Omitting the SET
-	// lets LANGUAGE sql wrappers inline and avoids a per-call GUC save/restore.
+	// NoSearchPath omits the SET search_path clause, and with it the planner
+	// settings (writePlanSettings), entirely. Safe only for functions whose
+	// body references no unqualified melange_tuples (dispatchers and public
+	// wrappers, which use schema-qualified names). Omitting the SET lets
+	// LANGUAGE sql wrappers inline and avoids a per-call GUC save/restore.
 	NoSearchPath bool
 	Cost         int // If non-zero, appends COST <n> so the planner treats this function as costlier than the default (100)
 }
@@ -257,6 +258,7 @@ func (f PlpgsqlFunction) SQL() string {
 	}
 	if !f.NoSearchPath {
 		writeSearchPath(&sb, f.SearchPath, f.Schema)
+		writePlanSettings(&sb)
 	}
 	sb.WriteString(";")
 
@@ -351,7 +353,8 @@ type SqlFunction struct {
 	Body       sqldsl.SQLer // The body expression (e.g., a SelectStmt or function call)
 	Header     []string     // Comment lines at the top of the function (without -- prefix)
 	SearchPath string       // If set, appends SET search_path = '<value>' to the function definition
-	// NoSearchPath omits the SET search_path clause. See PlpgsqlFunction.NoSearchPath.
+	// NoSearchPath omits the SET search_path clause and the planner settings.
+	// See PlpgsqlFunction.NoSearchPath.
 	// For LANGUAGE sql wrappers this is what allows the planner to inline them.
 	NoSearchPath bool
 }
@@ -369,6 +372,7 @@ func (f SqlFunction) SQL() string {
 	sb.WriteString("$$ LANGUAGE sql STABLE PARALLEL RESTRICTED")
 	if !f.NoSearchPath {
 		writeSearchPath(&sb, f.SearchPath, f.Schema)
+		writePlanSettings(&sb)
 	}
 	sb.WriteString(";")
 
@@ -388,6 +392,20 @@ func writeSearchPath(sb *strings.Builder, searchPath, schema string) {
 		sb.WriteString("\nSET search_path = ")
 		sb.WriteString(sqldsl.QuoteLiteral(sp))
 	}
+}
+
+// writePlanSettings appends the planner settings of a generated function: a
+// generic plan, built once per session, and no JIT compilation.
+//
+// PL/pgSQL plans each statement afresh for its first five executions in a
+// session, and on a view over many tables that planning costs milliseconds per
+// call (tens for a composed relation). Generated statements bind the subject
+// kind as a literal (bindSubjectKind), so their generic plans fold the same
+// arms a custom plan would. JIT compilation is redone on every execution, and
+// a generic plan's estimates can exceed jit_above_cost for a query that reads
+// nothing: on phoebe's data a list that ran in 0.02ms took 15ms with JIT.
+func writePlanSettings(sb *strings.Builder) {
+	sb.WriteString("\nSET plan_cache_mode = 'force_generic_plan'\nSET jit = 'off'")
 }
 
 // writeHeader writes SQL comment lines to the builder.
