@@ -990,3 +990,78 @@ func TestDoctor_ExpressionIndexesFollowCastType(t *testing.T) {
 		assert.Contains(t, c.FixHint, "ON r (w);", "a plain index, not an expression index")
 	}
 }
+
+// TestDoctor_SubjectLookupIndexes verifies that a branch's subject column
+// needs an index leading with it, for the subject_id = ANY(ARRAY(...))
+// lookups of list_accessible_objects, including in joined branches, and that
+// cast columns with no index at all are left to the expr_indexes check.
+func TestDoctor_SubjectLookupIndexes(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db := testutil.EmptyDB(t)
+	ctx := context.Background()
+	_, err := db.ExecContext(ctx, `
+		CREATE TABLE members (org_id text NOT NULL, user_id text NOT NULL);
+		CREATE INDEX members_org_user ON members (org_id, user_id);
+		CREATE TABLE grants (doc_id text NOT NULL, grantee uuid NOT NULL);
+		CREATE INDEX grants_doc_grantee ON grants (doc_id, (grantee::text));
+		CREATE TABLE docs (id text PRIMARY KEY, folder_id text NOT NULL, code text NOT NULL);
+		CREATE INDEX docs_code ON docs (code);
+		CREATE TABLE folders (id text PRIMARY KEY, code text NOT NULL);
+		CREATE TABLE owners (doc_id text NOT NULL, owner uuid NOT NULL);
+		CREATE SCHEMA other;
+		CREATE TABLE other.shares (doc_id text NOT NULL, grantee uuid NOT NULL);
+		CREATE INDEX shares_grantee_text ON other.shares ((grantee::text));
+		CREATE VIEW melange_tuples AS
+		  -- user_id is indexed only behind org_id: reported.
+		  SELECT 'user'::text AS subject_type, user_id AS subject_id, 'member'::text AS relation, 'org'::text AS object_type, org_id AS object_id FROM members
+		  UNION ALL
+		  -- grantee::text is indexed only behind doc_id: expr_indexes passes it, this check reports it.
+		  SELECT 'user'::text, grantee::text, 'viewer'::text, 'doc'::text, doc_id FROM grants
+		  UNION ALL
+		  -- A join where both tables have code: the alias names folders, whose code has no index: reported.
+		  SELECT 'folder'::text, f.code, 'parent'::text, 'doc'::text, d.id FROM docs d JOIN folders f ON f.id = d.folder_id
+		  UNION ALL
+		  -- The same join without aliases, subject docs.code by table name: indexed.
+		  SELECT 'doc'::text, docs.code, 'self'::text, 'doc'::text, folders.id FROM docs JOIN folders ON folders.id = docs.folder_id
+		  UNION ALL
+		  -- owner has no index at all: left to expr_indexes.
+		  SELECT 'user'::text, owner::text, 'owner'::text, 'doc'::text, doc_id FROM owners
+		  UNION ALL
+		  -- A table in another schema, indexed there: neither check reports it.
+		  SELECT 'user'::text, grantee::text, 'editor'::text, 'doc'::text, doc_id FROM other.shares`)
+	require.NoError(t, err)
+
+	report, err := doctor.New(db, "").Run(ctx)
+	require.NoError(t, err)
+	reported := map[string]doctor.CheckResult{}
+	for _, c := range filterCategory(report, "Performance") {
+		if c.Name == "expr_indexes" && c.Status != doctor.StatusPass {
+			assert.NotContains(t, c.Message, "other.shares", "the index is found in the table's own schema")
+		}
+		if c.Name == "subject_lookup_indexes" && c.Status != doctor.StatusPass {
+			msg, _, _ := strings.Cut(c.Message, " for subject lookups")
+			reported[msg] = c
+		}
+	}
+	assert.Len(t, reported, 3, "members.user_id, grants.grantee and folders.code: %v", reported)
+	if c, ok := reported["Missing index on folders (code)"]; assert.True(t, ok, "the alias resolves the joined owner") {
+		assert.Contains(t, c.FixHint, "ON folders (code);")
+	}
+	if c, ok := reported["Missing index on members (user_id)"]; assert.True(t, ok) {
+		assert.Contains(t, c.FixHint, "ON members (user_id);")
+	}
+	if c, ok := reported["Missing index on grants ((grantee::text))"]; assert.True(t, ok) {
+		assert.Contains(t, c.FixHint, "ON grants ((grantee::text));")
+	}
+
+	_, err = db.ExecContext(ctx, `
+		CREATE INDEX members_user ON members (user_id);
+		CREATE INDEX grants_grantee_text ON grants ((grantee::text));
+		CREATE INDEX folders_code ON folders (code);`)
+	require.NoError(t, err)
+	report, err = doctor.New(db, "").Run(ctx)
+	require.NoError(t, err)
+	assertCheck(t, filterCategory(report, "Performance"), "subject_lookup_indexes", doctor.StatusPass)
+}

@@ -163,6 +163,15 @@ func InternalCheckCall(schema string, subjectType, subjectID Expr, relation stri
 //	}
 //
 // Renders: t.subject_id IN (SELECT obj.object_id FROM list_doc_viewer_obj(p_subject_type, p_subject_id, NULL, NULL) obj)
+//
+// With Array set it renders "expr = ANY(ARRAY(subquery))" instead, for a
+// lookup keyed by expr. PostgreSQL evaluates the uncorrelated ARRAY subquery
+// once and compares expr with it as a plain filter, which it pushes into every
+// branch of a UNION ALL tuples view; a branch with a WHERE clause or a join is
+// never pulled up into the query, so an IN semi-join can only scan it in full,
+// while the filter reaches the branch's index on expr. The array is searched
+// linearly, so it suits only a filter the index answers, not one applied to
+// each row of a scan, where IN hashes the set.
 type InFunctionSelect struct {
 	Expr      Expr // The expression to check (left side of IN)
 	Schema    string
@@ -170,31 +179,41 @@ type InFunctionSelect struct {
 	Args      []Expr // Function arguments
 	Alias     string // Alias for the function result
 	SelectCol string // Column to select from the function result
+	Array     bool   // Render = ANY(ARRAY(...)) for an index-keyed lookup
 }
 
-// SQL renders the IN subquery expression.
+// SQL renders the membership expression.
 func (i InFunctionSelect) SQL() string {
 	funcCall := Func{Schema: i.Schema, Name: i.FuncName, Args: i.Args}.SQL()
-	subquery := "SELECT " + i.Alias + "." + i.SelectCol + " FROM " + funcCall + " " + i.Alias
-	return i.Expr.SQL() + " IN (" + subquery + ")"
+	return memberOf(i.Expr, "SELECT "+i.Alias+"."+i.SelectCol+" FROM "+funcCall+" "+i.Alias, i.Array)
 }
 
 // InCTESelect represents "expr IN (SELECT column FROM cte)". It is the
 // hoisted-CTE counterpart to InFunctionSelect: instead of inlining a
 // list_*_obj function call, it references a CTE that computed that call once.
 //
-// Renders: t.subject_id IN (SELECT object_id FROM folder_editor_objs)
+// Renders: t.subject_id IN (SELECT folder_editor_objs.object_id FROM folder_editor_objs)
 type InCTESelect struct {
 	Expr      Expr   // The expression to check (left side of IN)
 	CTEName   string // The CTE to select from
 	SelectCol string // Column to select from the CTE
+	Array     bool   // Render = ANY(ARRAY(...)), as InFunctionSelect.Array
 }
 
-// SQL renders the IN subquery expression against a CTE. The selected column is
+// SQL renders the membership expression against a CTE. The selected column is
 // qualified with the CTE name so it never collides with an outer query column
 // of the same name (e.g. object_id in a WITH RECURSIVE list_objects body).
 func (i InCTESelect) SQL() string {
-	return i.Expr.SQL() + " IN (SELECT " + i.CTEName + "." + i.SelectCol + " FROM " + i.CTEName + ")"
+	return memberOf(i.Expr, "SELECT "+i.CTEName+"."+i.SelectCol+" FROM "+i.CTEName, i.Array)
+}
+
+// memberOf renders "expr IN (subquery)", or with array the equivalent
+// "expr = ANY(ARRAY(subquery))" (the same result, NULLs included).
+func memberOf(expr Expr, subquery string, array bool) string {
+	if array {
+		return expr.SQL() + " = ANY(ARRAY(" + subquery + "))"
+	}
+	return expr.SQL() + " IN (" + subquery + ")"
 }
 
 // ListObjectsFunctionName generates a list_TYPE_RELATION_obj function name.

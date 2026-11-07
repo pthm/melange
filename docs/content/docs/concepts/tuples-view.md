@@ -108,6 +108,8 @@ CREATE INDEX idx_org_members_user
     ON organization_members (user_id, role, organization_id);
 ```
 
+Every branch that reads its subject from a column needs an index that leads with that column, including branches that join tables. When a list follows a parent or group relation, it looks up a whole set of subject ids at once (`subject_id = ANY(ARRAY(...))`), and PostgreSQL applies that filter to each branch separately. With an index, each id is one probe. Without one, PostgreSQL compares every row of the branch with the whole set, which is far slower than a scan. `melange doctor` reports branches whose subject column has no such index.
+
 ### Parent Relationship Lookup
 
 For tables defining parent-child relationships:

@@ -509,11 +509,11 @@ type complexUsersetArm struct {
 // complexUsersetArms returns the arms proving that tuple t's userset subject
 // (group:g#member) holds the pattern relation for the query subject. When the
 // usersets the subject is a member of can be listed (usersetMemberSource),
-// they are matched as tuple subject IDs, so the lookup is an index probe per
-// userset rather than a scan of every userset tuple; the list function can
-// under-report userset query subjects (group:eng#member), so those also check
-// each candidate, in an arm plain subjects skip. Otherwise one arm checks each
-// candidate.
+// they are matched as an array of tuple subject IDs (see InFunctionSelect), so
+// the lookup is an index probe per userset rather than a scan of every userset
+// tuple; the list function can under-report userset query subjects
+// (group:eng#member), so those also check each candidate, in an arm plain
+// subjects skip. Otherwise one arm checks each candidate.
 func complexUsersetArms(plan ListPlan, pattern listUsersetPatternInput, hoisted hoistedListObjTargets) []complexUsersetArm {
 	check := usersetMembershipCheck(plan, pattern)
 	members := usersetMemberSource(plan, pattern, hoisted)
@@ -523,7 +523,7 @@ func complexUsersetArms(plan ListPlan, pattern listUsersetPatternInput, hoisted 
 	return []complexUsersetArm{
 		// An object ID holding '#' would name another userset (g#member||'#member'
 		// matches the subject g#member#member, whose object is g), so skip it.
-		{membership: []Expr{Raw(fmt.Sprintf("t.subject_id IN (SELECT m.object_id || %s FROM %s WHERE position('#' in m.object_id) = 0)",
+		{membership: []Expr{Raw(fmt.Sprintf("t.subject_id = ANY(ARRAY(SELECT m.object_id || %s FROM %s WHERE position('#' in m.object_id) = 0))",
 			Lit("#"+pattern.SubjectRelation).SQL(), members.TableSQL()))}},
 		{membership: append(usersetSubjectOfRelation(pattern), HasUserset{Source: SubjectID}, check), usersetSubjectOnly: true},
 	}
@@ -688,37 +688,35 @@ func buildSubjectFirstCrossTypeTTUBlock(plan ListPlan, parent ListParentRelation
 	}
 
 	// Reference the hoisted CTE for the parent's list_*_obj set when available,
-	// so the same call in the userset-subject arm is not evaluated twice.
-	var parentSource TableExpr
+	// so the same call in the userset-subject arm is not evaluated twice. The
+	// parents are matched as an array (see InFunctionSelect), so the lookup by
+	// subject_id reaches the index of each tuples-view branch.
+	childSubject := Col{Table: "child", Column: "subject_id"}
+	var parents Expr
 	if cteName := hoisted.name(parentType, parent.Relation); cteName != "" {
-		parentSource = TableAs("", cteName, "parent_obj")
+		parents = InCTESelect{Expr: childSubject, CTEName: cteName, SelectCol: "object_id", Array: true}
 	} else {
-		parentSource = FunctionCallExpr{
-			Schema: plan.DatabaseSchema,
-			Name:   ListObjectsFunctionName(parentType, parent.Relation),
-			Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
-			Alias:  "parent_obj",
+		parents = InFunctionSelect{
+			Expr:      childSubject,
+			Schema:    plan.DatabaseSchema,
+			FuncName:  ListObjectsFunctionName(parentType, parent.Relation),
+			Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
+			Alias:     "parent_obj",
+			SelectCol: "object_id",
+			Array:     true,
 		}
 	}
 
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "child", Column: "object_id"}},
-		FromExpr:    parentSource,
-		Joins: []JoinClause{
-			{
-				Type:  "INNER",
-				Table: "melange_tuples",
-				Alias: "child",
-				On: And(
-					Eq{Left: Col{Table: "child", Column: "object_type"}, Right: Lit(plan.ObjectType)},
-					Eq{Left: Col{Table: "child", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
-					Eq{Left: Col{Table: "child", Column: "subject_type"}, Right: Lit(parentType)},
-					Eq{Left: Col{Table: "child", Column: "subject_id"}, Right: Col{Table: "parent_obj", Column: "object_id"}},
-				),
-			},
-		},
-		Where: buildWhereFromPredicates(conditions),
+		FromExpr:    TableAs("", "melange_tuples", "child"),
+		Where: And(append([]Expr{
+			Eq{Left: Col{Table: "child", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+			Eq{Left: Col{Table: "child", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
+			Eq{Left: Col{Table: "child", Column: "subject_type"}, Right: Lit(parentType)},
+			parents,
+		}, conditions...)...),
 	}
 
 	return TypedQueryBlock{

@@ -39,12 +39,11 @@ func TestBuildCrossTypeTTUBlocksUsesSubjectFirstParentList(t *testing.T) {
 	}
 
 	sql := blocks[0].Query.SQL()
-	assertContains(t, sql, "FROM list_namespace_admin_obj(p_subject_type, p_subject_id, NULL, NULL) AS parent_obj")
-	assertContains(t, sql, "INNER JOIN melange_tuples AS child ON")
+	assertContains(t, sql, "child.subject_id = ANY(ARRAY(SELECT parent_obj.object_id FROM list_namespace_admin_obj(p_subject_type, p_subject_id, NULL, NULL) parent_obj))")
+	assertContains(t, sql, "FROM melange_tuples AS child")
 	assertContains(t, sql, "child.object_type = 'channel'")
 	assertContains(t, sql, "child.relation = 'namespace'")
 	assertContains(t, sql, "child.subject_type = 'namespace'")
-	assertContains(t, sql, "child.subject_id = parent_obj.object_id")
 	assertNotContains(t, sql, "check_permission_internal")
 
 	// Parity companion: per-candidate check, guarded to userset-typed subjects.
@@ -144,7 +143,7 @@ func TestBuildCrossTypeTTUBlocksVerifiesClosureSourceRelationWhenConstrained(t *
 	}
 
 	sql := blocks[0].Query.SQL()
-	assertContains(t, sql, "FROM list_namespace_admin_obj(p_subject_type, p_subject_id, NULL, NULL) AS parent_obj")
+	assertContains(t, sql, "child.subject_id = ANY(ARRAY(SELECT parent_obj.object_id FROM list_namespace_admin_obj(p_subject_type, p_subject_id, NULL, NULL) parent_obj))")
 	assertContains(t, sql, "check_permission_internal(p_subject_type, p_subject_id, 'reader', 'channel', child.object_id, ARRAY[]::TEXT[]) = 1")
 }
 
@@ -189,7 +188,7 @@ func TestBuildCrossTypeTTUBlocksSkipsClosureSourceCheckWhenUnconstrained(t *test
 	}
 
 	sql := blocks[0].Query.SQL()
-	assertContains(t, sql, "FROM list_namespace_admin_obj(p_subject_type, p_subject_id, NULL, NULL) AS parent_obj")
+	assertContains(t, sql, "child.subject_id = ANY(ARRAY(SELECT parent_obj.object_id FROM list_namespace_admin_obj(p_subject_type, p_subject_id, NULL, NULL) parent_obj))")
 	assertNotContains(t, sql, "check_permission_internal")
 }
 
@@ -291,7 +290,7 @@ func TestBuildCrossTypeTTUBlocksComposesAcyclicRecursiveParent(t *testing.T) {
 	}
 
 	sql := blocks[0].Query.SQL()
-	assertContains(t, sql, "FROM list_workspace_manage_obj(p_subject_type, p_subject_id, NULL, NULL) AS parent_obj")
+	assertContains(t, sql, "child.subject_id = ANY(ARRAY(SELECT parent_obj.object_id FROM list_workspace_manage_obj(p_subject_type, p_subject_id, NULL, NULL) parent_obj))")
 	assertNotContains(t, sql, "check_permission_internal")
 
 	parity := blocks[1].Query.SQL()
@@ -342,7 +341,7 @@ func TestBuildRecursiveComplexUsersetBlockComposesWhenSafe(t *testing.T) {
 	}
 	sql := blocks[0].Query.SQL()
 	// Membership probes the tuple subject IDs, so the index serves it.
-	assertContains(t, sql, "t.subject_id IN (SELECT m.object_id || '#view' FROM list_workspace_view_obj(p_subject_type, p_subject_id, NULL, NULL) AS m WHERE position('#' in m.object_id) = 0)")
+	assertContains(t, sql, "t.subject_id = ANY(ARRAY(SELECT m.object_id || '#view' FROM list_workspace_view_obj(p_subject_type, p_subject_id, NULL, NULL) AS m WHERE position('#' in m.object_id) = 0))")
 	assertNotContains(t, sql, "check_permission_internal")
 	// Userset-typed subjects keep a per-candidate check, in an arm plain subjects skip.
 	if blocks[0].UsersetSubjectOnly || !blocks[1].UsersetSubjectOnly {

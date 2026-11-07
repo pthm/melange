@@ -383,3 +383,19 @@ func TestHasBareUnion(t *testing.T) {
 		})
 	}
 }
+
+func TestParseFromTables_Aliases(t *testing.T) {
+	for line, want := range map[string][]TableRef{
+		"FROM trails t JOIN organization_checks oc ON oc.id = t.check_id": {{Name: "trails", Alias: "t"}, {Name: "organization_checks", Alias: "oc"}},
+		"FROM public.members AS m":            {{Schema: "public", Name: "members", Alias: "m"}},
+		"FROM ONLY docs d":                    {{Name: "docs", Alias: "d"}},
+		"FROM docs WHERE docs.id IS NOT NULL": {{Name: "docs"}},
+		"FROM docs, folders":                  {{Name: "docs"}, {Name: "folders"}},
+	} {
+		assert.Equal(t, want, parseFromTables(line), line)
+	}
+	ref := TableRef{Name: "trails", Alias: "t"}
+	assert.True(t, ref.Names("T"))
+	assert.False(t, ref.Names("trails"), "an aliased table is named by its alias")
+	assert.True(t, TableRef{Name: "trails"}.Names("trails"))
+}

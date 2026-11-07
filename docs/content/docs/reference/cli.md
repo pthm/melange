@@ -619,6 +619,7 @@ Performance checks run automatically when `melange_tuples` is a view (not a tabl
   - Provides exact `CREATE INDEX` statements as fix hints
   - A `varchar` or `text` column needs no expression index: casting it to `text` is a relabel, so an ordinary index on the column serves the lookup. `char(n)`, `uuid` and numeric columns need the `::text` expression index.
 - Checks each single-table branch for a composite index covering object lookups: the columns behind `object_id`, then `relation` (when it comes from a column), then `subject_id`. Without one, a check on a membership-style table reads every row for the object. Branches whose object or subject column is unique, that join tables, or whose ids are computed are skipped. Warns with the exact `CREATE INDEX` for the source table.
+- Checks each branch whose subject id is a column, joined branches included, for an index leading with that column (its `::text` expression when the cast converts the value). List functions look tuples up by a set of subject ids, and without the index each row of the branch is compared with the whole set. Severity follows the table's size, as for expression indexes. A cast column with no index at all is reported once, by the expression index check.
 
 **Expand Fan-Out Advisory:**
 

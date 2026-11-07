@@ -282,6 +282,9 @@ func (d *Doctor) Run(ctx context.Context) (*Report, error) {
 			if err := d.checkSourceTableIndexes(ctx, report); err != nil {
 				return nil, fmt.Errorf("checking source-table indexes: %w", err)
 			}
+			if err := d.checkSubjectLookupIndexes(ctx, report); err != nil {
+				return nil, fmt.Errorf("checking subject-lookup indexes: %w", err)
+			}
 		case "r":
 			if err := d.checkTableIndexes(ctx, report); err != nil {
 				return nil, fmt.Errorf("checking table indexes: %w", err)

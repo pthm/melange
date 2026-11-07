@@ -65,3 +65,26 @@ func TestObjectLookupCoverage(t *testing.T) {
 		t.Error("a composite unique index doesn't make the column unique")
 	}
 }
+
+func TestLeadsWithSubject(t *testing.T) {
+	plain := subjectLookupKey{Key: sourceKey{Column: "user_id"}}
+	relabel := subjectLookupKey{Key: sourceKey{Column: "user_id"}, Relabel: true}
+	converted := subjectLookupKey{Key: sourceKey{Column: "user_id", Expr: true}}
+	for name, tc := range map[string]struct {
+		key  subjectLookupKey
+		def  string
+		want bool
+	}{
+		"plain, leading":            {plain, "CREATE INDEX a ON t USING btree (user_id, org_id)", true},
+		"plain, behind another key": {plain, "CREATE INDEX a ON t USING btree (org_id, user_id)", false},
+		"relabel, plain index":      {relabel, "CREATE INDEX a ON t USING btree (user_id)", true},
+		"relabel, expression":       {relabel, "CREATE INDEX a ON t USING btree (((user_id)::text))", true},
+		"converted, expression":     {converted, "CREATE INDEX a ON t USING btree (((user_id)::text), org_id)", true},
+		"converted, plain index":    {converted, "CREATE INDEX a ON t USING btree (user_id)", false},
+		"partial":                   {plain, "CREATE INDEX a ON t USING btree (user_id) WHERE (org_id IS NOT NULL)", false},
+	} {
+		if got := leadsWithSubject(tc.key, []string{tc.def}); got != tc.want {
+			t.Errorf("%s: leadsWithSubject = %v, want %v", name, got, tc.want)
+		}
+	}
+}
