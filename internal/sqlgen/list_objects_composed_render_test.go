@@ -40,7 +40,7 @@ func TestComposedListObjects_SelfCandidateFoldedIntoUnion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildListObjectsComposedBlocks: %v", err)
 	}
-	sql := composedAccessibleObjectsQuery(blocks)
+	sql := composedAccessibleObjectsQuery(blocks).Full
 
 	if strings.Contains(sql, "IF EXISTS") {
 		t.Errorf("composed self-candidate must be a UNION arm, not an IF EXISTS gate:\n%s", sql)

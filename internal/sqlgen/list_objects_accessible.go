@@ -18,9 +18,19 @@ import (
 //
 // and the planner combines the access set with the application's filters,
 // ordering and limit instead of evaluating an opaque function. The paginated
-// list_{type}_{relation}_obj function is a wrapper over it, except for
+// list_{type}_{relation}_obj function pages the same query, except for
 // relations whose list is a breadth-first walk in PL/pgSQL; for those the
 // accessible function selects from the list function instead.
+//
+// The list function embeds the query rather than calling the accessible
+// function, and runs a query without the arms that only match userset
+// subjects when the subject is a plain one. PL/pgSQL replans a statement on
+// every call while its generic plan (built once, for any arguments) is
+// estimated as costlier than the plans built for the call's arguments. The
+// userset-only arms fold away from the latter for a plain subject but are
+// costed in full in the former, which kept every call replanning; and each
+// replan of a call to the accessible function parses and analyzes its body
+// again. On small sets the planning took several times as long as the query.
 //
 // Like every generated function body, it names melange_tuples unqualified:
 // contextual tuples shadow the table with a temporary view, which unqualified
@@ -50,13 +60,41 @@ $$ LANGUAGE sql STABLE PARALLEL RESTRICTED;`,
 }
 
 // renderListObjectsOverAccessible renders list_{type}_{relation}_obj as a
-// page of the accessible function: the IDs after the cursor, in order, up to
-// p_limit, with next_cursor set to the page's last ID when more remain.
-func renderListObjectsOverAccessible(plan ListPlan, header []string) string {
-	accessible := sqldsl.PrefixIdent(AccessibleObjectsFunctionName(plan.ObjectType, plan.Relation), plan.DatabaseSchema)
-	page := fmt.Sprintf(`WITH page AS (
+// page of q: the IDs after the cursor, in order, up to p_limit, with
+// next_cursor set to the page's last ID when more remain. A plain subject is
+// paged over q.Plain, and a userset subject over the accessible function.
+func renderListObjectsOverAccessible(plan ListPlan, header []string, q accessibleQuery) string {
+	body := listObjectsPage(q.Full)
+	if q.Split {
+		accessible := sqldsl.PrefixIdent(AccessibleObjectsFunctionName(plan.ObjectType, plan.Relation), plan.DatabaseSchema)
+		var plain []Stmt
+		if q.Plain != "" {
+			plain = []Stmt{listObjectsPage(q.Plain)}
+		}
+		body = If{
+			Cond: HasUserset{Source: SubjectID},
+			Then: []Stmt{listObjectsPage(fmt.Sprintf("SELECT * FROM %s(p_subject_type, p_subject_id)", accessible))},
+			Else: plain,
+		}
+	}
+	fn := PlpgsqlFunction{
+		Schema:  plan.DatabaseSchema,
+		Name:    plan.FunctionName,
+		Args:    ListObjectsArgs(),
+		Returns: ListObjectsReturns(),
+		Header:  header,
+		Body:    []Stmt{body},
+	}
+	return fn.SQL()
+}
+
+// listObjectsPage returns the page of query, which returns object_id.
+func listObjectsPage(query string) Stmt {
+	return ReturnQuery{Query: fmt.Sprintf(`WITH page AS (
     SELECT DISTINCT a.object_id
-    FROM %s(p_subject_type, p_subject_id) AS a(object_id)
+    FROM (
+%s
+    ) AS a(object_id)
     WHERE a.object_id > COALESCE(p_after, '')
     ORDER BY a.object_id
     LIMIT p_limit + 1
@@ -67,16 +105,29 @@ SELECT p.object_id,
     END AS next_cursor
 FROM page p
 ORDER BY p.object_id
-LIMIT p_limit`, accessible)
-	fn := PlpgsqlFunction{
-		Schema:  plan.DatabaseSchema,
-		Name:    plan.FunctionName,
-		Args:    ListObjectsArgs(),
-		Returns: ListObjectsReturns(),
-		Header:  header,
-		Body:    []Stmt{ReturnQuery{Query: page}},
+LIMIT p_limit`, IndentLines(query, "        "))}
+}
+
+// accessibleQuery is a relation's accessible query, as the accessible function
+// returns it (Full) and without the arms that only match userset subjects
+// (Plain, "" when no arm matches a plain subject). Split reports whether there
+// were such arms, so Plain differs from Full.
+type accessibleQuery struct {
+	Full, Plain string
+	Split       bool
+}
+
+// accessibleQueryOf renders blocks into the accessible query with render, and
+// again without their UsersetSubjectOnly blocks for plain subjects.
+func accessibleQueryOf(blocks []TypedQueryBlock, render func([]TypedQueryBlock) string) accessibleQuery {
+	plain, split := withoutUsersetSubjectBlocks(blocks)
+	q := accessibleQuery{Full: render(blocks), Split: split}
+	if !split {
+		q.Plain = q.Full
+	} else if len(plain) > 0 {
+		q.Plain = render(plain)
 	}
-	return fn.SQL()
+	return q
 }
 
 // unionAccessibleArms joins blocks, each a query returning object_id, with
@@ -93,7 +144,7 @@ func unionAccessibleArms(blocks []TypedQueryBlock) string {
 	for _, block := range blocks {
 		stmt := block.Query
 		stmt.Distinct = false
-		if block.UsersetSubjectOnly {
+		if block.UsersetSubjectOnly && !requiresUsersetSubject(stmt.Where) {
 			guard := Expr(HasUserset{Source: SubjectID})
 			if stmt.Where != nil {
 				guard = And(guard, stmt.Where)
@@ -111,12 +162,12 @@ type listObjectsWithAccessible struct {
 	List, Accessible string
 }
 
-// overAccessible returns the list function as a page of query's accessible
-// function.
-func overAccessible(plan ListPlan, header []string, query string) listObjectsWithAccessible {
+// overAccessible returns the list function paging q and the accessible
+// function returning it.
+func overAccessible(plan ListPlan, header []string, q accessibleQuery) listObjectsWithAccessible {
 	return listObjectsWithAccessible{
-		List:       renderListObjectsOverAccessible(plan, header),
-		Accessible: renderAccessibleObjectsFunction(plan, query),
+		List:       renderListObjectsOverAccessible(plan, header, q),
+		Accessible: renderAccessibleObjectsFunction(plan, q.Full),
 	}
 }
 
@@ -130,37 +181,53 @@ func overList(plan ListPlan, list string) listObjectsWithAccessible {
 
 // accessibleObjectsQuery returns the accessible query of a standard (direct,
 // userset or intersection) plan: the union of its blocks.
-func accessibleObjectsQuery(blocks BlockSet) string {
-	return unionAccessibleArms(blocks.Primary)
+func accessibleObjectsQuery(blocks BlockSet) accessibleQuery {
+	return accessibleQueryOf(blocks.Primary, unionAccessibleArms)
 }
 
 // composedAccessibleObjectsQuery returns the accessible query of a composed
 // plan: its blocks and self-candidate, for userset subjects or allowed
 // subject types (the type guard of the composed list function).
-func composedAccessibleObjectsQuery(blocks ComposedObjectsBlockSet) string {
+func composedAccessibleObjectsQuery(blocks ComposedObjectsBlockSet) accessibleQuery {
 	main := blocks.MainBlocks
 	if blocks.SelfBlock != nil {
 		main = append(slices.Clone(main), *blocks.SelfBlock)
 	}
 	guard := Or(HasUserset{Source: SubjectID}, In{Expr: SubjectType, Values: blocks.AllowedSubjectTypes})
-	return fmt.Sprintf("SELECT g.object_id\nFROM (\n%s\n) AS g\nWHERE %s",
-		IndentLines(unionAccessibleArms(main), "    "), guard.SQL())
+	return accessibleQueryOf(main, func(arms []TypedQueryBlock) string {
+		return fmt.Sprintf("SELECT g.object_id\nFROM (\n%s\n) AS g\nWHERE %s",
+			IndentLines(unionAccessibleArms(arms), "    "), guard.SQL())
+	})
 }
 
 // recursiveAccessibleObjectsQuery returns the accessible query of a recursive
 // plan without a self-referential walk: the union of its blocks, after the
 // hoisted CTEs, filtered as the accessible set (accessibleObjectsSelect), and
 // the self-candidate, which the filters do not apply to.
-func recursiveAccessibleObjectsQuery(plan ListPlan, blocks RecursiveBlockSet) string {
-	ctes := append(slices.Clone(blocks.HoistedCTEs),
-		CTEDef{Name: "accessible", Columns: []string{"object_id"}, Query: Raw(unionAccessibleArms(blocks.BaseBlocks))})
-	filtered := accessibleObjectsSelect(plan, blocks, TableAs("", "accessible", "acc"))
-	filtered.Distinct = false
-	arms := []string{filtered.SQL()}
-	if blocks.SelfCandidateBlock != nil {
-		arms = append(arms, blocks.SelfCandidateBlock.Query.SQL())
+func recursiveAccessibleObjectsQuery(plan ListPlan, blocks RecursiveBlockSet) accessibleQuery {
+	render := func(base []TypedQueryBlock, self *TypedQueryBlock) string {
+		var ctes []CTEDef
+		var arms []string
+		if len(base) > 0 {
+			ctes = append(slices.Clone(blocks.HoistedCTEs),
+				CTEDef{Name: "accessible", Columns: []string{"object_id"}, Query: Raw(unionAccessibleArms(base))})
+			filtered := accessibleObjectsSelect(plan, blocks, TableAs("", "accessible", "acc"))
+			filtered.Distinct = false
+			arms = append(arms, filtered.SQL())
+		}
+		if self != nil {
+			arms = append(arms, self.Query.SQL())
+		}
+		return WithCTE{CTEs: ctes, Query: Raw(joinUnionAllBlocksSQL(arms))}.SQL()
 	}
-	return WithCTE{CTEs: ctes, Query: Raw(joinUnionAllBlocksSQL(arms))}.SQL()
+	q := accessibleQueryOf(blocks.BaseBlocks, func(base []TypedQueryBlock) string { return render(base, nil) })
+	// The self-candidate only matches userset subjects: it joins the full query,
+	// which plain subjects then no longer share.
+	if self := blocks.SelfCandidateBlock; self != nil {
+		q.Full = render(blocks.BaseBlocks, self)
+		q.Split = true
+	}
+	return q
 }
 
 // accessibleCallRef matches a call of an accessible function in a function body.

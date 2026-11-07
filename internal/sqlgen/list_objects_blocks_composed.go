@@ -109,7 +109,8 @@ func buildComposedObjectsSelfBlock(plan ListPlan) (*TypedQueryBlock, error) {
 		Comments: []string{
 			"-- Self-candidate: when subject is a userset on the same object type",
 		},
-		Query: stmt,
+		Query:              stmt,
+		UsersetSubjectOnly: true,
 	}, nil
 }
 

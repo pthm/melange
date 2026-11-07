@@ -91,16 +91,14 @@ func (i If) StmtSQL() string {
 	sb.WriteString(" THEN\n")
 
 	for _, stmt := range i.Then {
-		sb.WriteString("    ")
-		sb.WriteString(stmt.StmtSQL())
+		sb.WriteString(sqldsl.IndentLines(stmt.StmtSQL(), "    "))
 		sb.WriteString("\n")
 	}
 
 	if len(i.Else) > 0 {
 		sb.WriteString("ELSE\n")
 		for _, stmt := range i.Else {
-			sb.WriteString("    ")
-			sb.WriteString(stmt.StmtSQL())
+			sb.WriteString(sqldsl.IndentLines(stmt.StmtSQL(), "    "))
 			sb.WriteString("\n")
 		}
 	}

@@ -1,5 +1,7 @@
 package sqlgen
 
+import "slices"
+
 // TypedQueryBlock represents a query with optional comments.
 // Uses SelectStmt for type-safe DSL construction.
 type TypedQueryBlock struct {
@@ -27,16 +29,24 @@ type TypedQueryBlock struct {
 	Indirect bool
 }
 
-// withoutUsersetSubjectBlocks drops UsersetSubjectOnly blocks, reporting
-// whether any were present.
+// withoutUsersetSubjectBlocks drops the blocks that only match userset
+// subjects, UsersetSubjectOnly or guarded on one, reporting whether any were
+// present.
 func withoutUsersetSubjectBlocks(blocks []TypedQueryBlock) ([]TypedQueryBlock, bool) {
 	plain := make([]TypedQueryBlock, 0, len(blocks))
 	for _, b := range blocks {
-		if !b.UsersetSubjectOnly {
+		if !b.UsersetSubjectOnly && !requiresUsersetSubject(b.Query.Where) {
 			plain = append(plain, b)
 		}
 	}
 	return plain, len(plain) != len(blocks)
+}
+
+// requiresUsersetSubject reports whether where is a conjunction that already
+// requires a userset query subject, as the self-candidate blocks' do.
+func requiresUsersetSubject(where Expr) bool {
+	and, ok := where.(AndExpr)
+	return ok && slices.Contains(and.Exprs, Expr(HasUserset{Source: SubjectID}))
 }
 
 // BlockSet contains query blocks for a list function.

@@ -803,8 +803,9 @@ func buildCheckPermissionCrossTypeTTUBlock(plan ListPlan, parent ListParentRelat
 	}
 
 	return TypedQueryBlock{
-		Comments: []string{comment},
-		Query:    q.Build(),
+		Comments:           []string{comment},
+		Query:              q.Build(),
+		UsersetSubjectOnly: usersetSubjectsOnly,
 	}
 }
 

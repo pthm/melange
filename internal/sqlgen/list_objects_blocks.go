@@ -169,7 +169,8 @@ func buildListObjectsUsersetSubjectBlock(plan ListPlan) TypedQueryBlock {
 			"-- Userset subject matching: subject IS a userset (e.g., group:fga#member)",
 			"-- matches tuples where subject_id has equivalent or satisfying relation via closure",
 		},
-		Query: q.Build(),
+		Query:              q.Build(),
+		UsersetSubjectOnly: true,
 	}
 }
 
@@ -590,7 +591,8 @@ func buildListObjectsSelfCandidateBlock(plan ListPlan) *TypedQueryBlock {
 	}
 
 	return &TypedQueryBlock{
-		Comments: []string{"-- Self-candidate: subject is userset on same object type"},
-		Query:    stmt,
+		Comments:           []string{"-- Self-candidate: subject is userset on same object type"},
+		Query:              stmt,
+		UsersetSubjectOnly: true,
 	}
 }
