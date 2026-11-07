@@ -229,17 +229,15 @@ func simpleExclusionQuery(databaseSchema, objectType, relation string, objectID,
 		Where(
 			Eq{Left: Col{Table: "excl", Column: "object_id"}, Right: objectID},
 			Eq{Left: Col{Table: "excl", Column: "subject_type"}, Right: subjectType},
-			Or(
-				Eq{Left: Col{Table: "excl", Column: "subject_id"}, Right: subjectID},
-				IsWildcard{Source: Col{Table: "excl", Column: "subject_id"}},
-			),
+			SubjectIDMatch(Col{Table: "excl", Column: "subject_id"}, subjectID, true),
 		)
 	return NotExists{Query: excl}
 }
 
 // SimpleExclusion creates a NOT EXISTS exclusion for a simple "but not" rule.
 // This checks for the absence of a tuple granting the excluded relation to the subject.
-// Wildcards are handled: if a wildcard tuple exists for the excluded relation, access is denied.
+// Wildcards are handled: if a wildcard tuple exists for the excluded relation,
+// access is denied to every object subject (not to a userset).
 func SimpleExclusion(databaseSchema, objectType, relation string, objectID, subjectType, subjectID Expr) Expr {
 	return simpleExclusionQuery(databaseSchema, objectType, relation, objectID, subjectType, subjectID)
 }

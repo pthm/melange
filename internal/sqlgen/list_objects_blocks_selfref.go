@@ -192,10 +192,7 @@ func buildSelfRefUsersetSimplePatternBlock(plan ListPlan, pattern listUsersetPat
 
 	if plan.AllowWildcard {
 		membershipConditions = append(membershipConditions,
-			Or(
-				Eq{Left: Col{Table: "m", Column: "subject_id"}, Right: SubjectID},
-				IsWildcard{Source: Col{Table: "m", Column: "subject_id"}},
-			),
+			SubjectIDMatch(Col{Table: "m", Column: "subject_id"}, SubjectID, true),
 		)
 	} else {
 		membershipConditions = append(membershipConditions,

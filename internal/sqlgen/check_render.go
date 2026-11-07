@@ -246,8 +246,9 @@ func buildUsersetSubjectStmts(plan CheckPlan, blocks CheckBlocks, converge bool)
 	// dead block (their satisfying set is disjoint from stored-userset relations).
 	// Check needs BOTH: closure-only relations (e.g. document.can_view) have empty
 	// own UsersetPatterns but a live Case 2 via ClosureUsersetPatterns.
-	hasUsersetPatterns := len(plan.Analysis.UsersetPatterns) > 0 ||
-		len(plan.Analysis.ClosureUsersetPatterns) > 0
+	hasUsersetPatterns := (len(plan.Analysis.UsersetPatterns) > 0 ||
+		len(plan.Analysis.ClosureUsersetPatterns) > 0) &&
+		len(standaloneUsersetSubjectRelations(plan.Analysis)) > 0
 
 	// case2Success is what a Case-2 userset match runs. When converging, hand off
 	// to the shared exclusion/return path via v_has_access; otherwise return

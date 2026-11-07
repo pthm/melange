@@ -534,7 +534,7 @@ func buildExplainUsersetSubjectStmts(plan CheckPlan, blocks CheckBlocks) []Stmt 
 		},
 	}
 
-	if len(plan.Analysis.UsersetPatterns) > 0 {
+	if len(plan.Analysis.UsersetPatterns) > 0 && len(standaloneUsersetSubjectRelations(plan.Analysis)) > 0 {
 		// Case 2 honors exclusion the way Check's Case 2 does, so route
 		// through the helper.
 		innerThen = append(innerThen,

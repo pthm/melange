@@ -210,10 +210,7 @@ func buildExclusionCheck(plan CheckPlan) Expr {
 			Where(
 				Eq{Left: Col{Table: "excl", Column: "object_id"}, Right: ObjectID},
 				Eq{Left: Col{Table: "excl", Column: "subject_type"}, Right: SubjectType},
-				Or(
-					Eq{Left: Col{Table: "excl", Column: "subject_id"}, Right: SubjectID},
-					IsWildcard{Source: Col{Table: "excl", Column: "subject_id"}},
-				),
+				SubjectIDMatch(Col{Table: "excl", Column: "subject_id"}, SubjectID, true),
 			).
 			Select("1")
 		checks = append(checks, Exists{Query: q})
@@ -430,12 +427,44 @@ func buildUsersetSubjectChecks(plan CheckPlan) (selfCheck, computedCheck SelectS
 		Limit:       1,
 	}
 
+	return selfCheck, usersetSubjectComputedCheck(plan, standaloneUsersetSubjectRelations(plan.Analysis))
+}
+
+// standaloneUsersetSubjectRelations returns the satisfying relations whose
+// direct userset grants give a userset subject the relation on their own
+// (Case 2 of userset subject handling): the relation itself, unless an
+// intersection group holds its direct assignment ([user, group#member] and
+// member from owner), and the simple closure relations. A complex closure
+// relation's grants can be constrained by its own intersection or exclusion,
+// and the check calls that relation's function instead; a group's direct part
+// matches the relation's own grants (buildThisCheck).
+func standaloneUsersetSubjectRelations(a RelationAnalysis) []string {
+	return slices.DeleteFunc(slices.Clone(a.SatisfyingRelations), func(rel string) bool {
+		if rel == a.Relation {
+			return directAssignmentInIntersection(a)
+		}
+		return slices.Contains(a.ComplexClosureRelations, rel)
+	})
+}
+
+// directAssignmentInIntersection reports whether some intersection group has
+// a part for the relation's own direct assignment ([user] and ...).
+func directAssignmentInIntersection(a RelationAnalysis) bool {
+	return slices.ContainsFunc(a.IntersectionGroups, func(g IntersectionGroupInfo) bool {
+		return slices.ContainsFunc(g.Parts, func(p IntersectionPart) bool { return p.IsThis })
+	})
+}
+
+// usersetSubjectComputedCheck matches a userset subject (group:eng#owner)
+// against direct userset grants of relations on the object (group:eng#member),
+// through the subject type's closure: owner satisfies member.
+func usersetSubjectComputedCheck(plan CheckPlan, relations []string) SelectStmt {
 	// The `c` closure join only kept tuples whose relation satisfies plan.Relation
 	// (c.object_type/relation are compile-time constants, c.satisfying_relation =
 	// t.relation) and fed c.satisfying_relation to the m join. That set is exactly
 	// plan.Analysis.SatisfyingRelations, so test t.relation against it directly and
 	// drop the `c` closure VALUES entirely — leaving only the subject-side subj_c.
-	computedCheck = SelectStmt{
+	return SelectStmt{
 		ColumnExprs: []Expr{Int(1)},
 		FromExpr:    TableAs("", "melange_tuples", "t"),
 		Joins: []JoinClause{
@@ -463,7 +492,7 @@ func buildUsersetSubjectChecks(plan CheckPlan) (selfCheck, computedCheck SelectS
 			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
 			// t.relation must satisfy plan.Relation (previously enforced by the c
 			// closure join; now tested directly against the static satisfying set).
-			In{Expr: Col{Table: "t", Column: "relation"}, Values: plan.Analysis.SatisfyingRelations},
+			In{Expr: Col{Table: "t", Column: "relation"}, Values: relations},
 			Ne{Left: Col{Table: "t", Column: "subject_id"}, Right: Lit("*")},
 			HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
 			// Finding 1.3: equality on the indexed t.subject_id (sargable) folds the
@@ -476,8 +505,6 @@ func buildUsersetSubjectChecks(plan CheckPlan) (selfCheck, computedCheck SelectS
 		),
 		Limit: 1,
 	}
-
-	return selfCheck, computedCheck
 }
 
 func buildParentRelationBlocks(plan CheckPlan) []ParentRelationBlock {
@@ -621,10 +648,7 @@ func buildSimpleRelationCheck(plan CheckPlan, relation string) Expr {
 		Where(
 			Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
 			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
-			Or(
-				Eq{Left: Col{Table: "t", Column: "subject_id"}, Right: SubjectID},
-				IsWildcard{Source: Col{Table: "t", Column: "subject_id"}},
-			),
+			SubjectIDMatch(Col{Table: "t", Column: "subject_id"}, SubjectID, true),
 		).
 		Select("1")
 
@@ -724,20 +748,6 @@ func buildParentCheck(plan CheckPlan, parent *ParentRelationInfo, visitedWithKey
 // resolves them for a standalone relation.
 func buildThisCheck(plan CheckPlan, part IntersectionPart, visitedWithKey Expr) Expr {
 	allowWildcard := part.HasWildcard && plan.AllowWildcard
-	subjectCol := Col{Table: "t", Column: "subject_id"}
-
-	var subjectCheck Expr
-	if allowWildcard {
-		subjectCheck = Or(
-			Eq{Left: subjectCol, Right: SubjectID},
-			IsWildcard{Source: subjectCol},
-		)
-	} else {
-		subjectCheck = And(
-			Eq{Left: subjectCol, Right: SubjectID},
-			NotExpr{Expr: IsWildcard{Source: subjectCol}},
-		)
-	}
 
 	q := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
@@ -745,14 +755,23 @@ func buildThisCheck(plan CheckPlan, part IntersectionPart, visitedWithKey Expr) 
 		Where(
 			Eq{Left: Col{Table: "t", Column: "object_id"}, Right: ObjectID},
 			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
-			subjectCheck,
+			SubjectIDMatch(Col{Table: "t", Column: "subject_id"}, SubjectID, allowWildcard),
 		).
 		Select("1")
 
-	checks := make([]Expr, 0, 1+len(plan.Analysis.UsersetPatterns))
+	checks := make([]Expr, 0, 2+len(plan.Analysis.UsersetPatterns))
 	checks = append(checks, Exists{Query: q})
 	for _, pattern := range plan.Analysis.UsersetPatterns {
 		checks = append(checks, buildUsersetPatternCheck(plan, pattern, visitedWithKey))
+	}
+	if len(plan.Analysis.UsersetPatterns) > 0 {
+		// A userset subject holding one of the part's userset grants through
+		// its closure (group:eng#owner for a group:eng#member grant), which
+		// userset subject handling leaves to this part.
+		checks = append(checks, And(
+			HasUserset{Source: SubjectID},
+			Exists{Query: usersetSubjectComputedCheck(plan, []string{part.Relation})},
+		))
 	}
 	if len(checks) == 1 {
 		return checks[0]

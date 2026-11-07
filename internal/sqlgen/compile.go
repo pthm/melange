@@ -2,7 +2,6 @@ package sqlgen
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 )
 
@@ -302,16 +301,9 @@ func computeHasStandaloneAccess(a RelationAnalysis) bool {
 		return true
 	}
 
-	// Check if any intersection group has a "This" part, meaning direct/userset access
-	// is constrained by the intersection rather than being standalone.
-	hasIntersectionWithThis := slices.ContainsFunc(a.IntersectionGroups, func(g IntersectionGroupInfo) bool {
-		return slices.ContainsFunc(g.Parts, func(p IntersectionPart) bool {
-			return p.IsThis
-		})
-	})
-
-	// Direct and userset are standalone only if not inside an intersection.
-	return (a.Features.HasDirect || a.Features.HasUserset) && !hasIntersectionWithThis
+	// Direct and userset are standalone only if no intersection group holds
+	// the direct assignment as a "This" part.
+	return (a.Features.HasDirect || a.Features.HasUserset) && !directAssignmentInIntersection(a)
 }
 
 // DispatcherData contains data for rendering the dispatcher template.
