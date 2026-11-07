@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -185,8 +186,19 @@ func writeChangedFunctions(b *strings.Builder, namedFunctions []NamedFunction, c
 	}
 
 	writeSectionHeader(b, fmt.Sprintf("Changed Functions (%d functions)", len(changedFns)))
+	// Accessible functions' bodies name melange_tuples unqualified, resolved
+	// when called (see writeDispatchers).
+	accessible := slices.ContainsFunc(changedFns, func(nf NamedFunction) bool {
+		return strings.HasPrefix(nf.Name, "accessible_")
+	})
+	if accessible {
+		fmt.Fprintf(b, "SET check_function_bodies = off;\n\n")
+	}
 	for _, nf := range changedFns {
 		fmt.Fprintf(b, "%s\n\n", nf.SQL)
+	}
+	if accessible {
+		fmt.Fprintf(b, "RESET check_function_bodies;\n\n")
 	}
 }
 
@@ -223,6 +235,16 @@ func writeDispatchers(b *strings.Builder, generatedSQL GeneratedSQL, listSQL Lis
 		for _, d := range listDispatchers {
 			fmt.Fprintf(b, "%s\n\n", d)
 		}
+	}
+
+	if len(listSQL.AccessibleObjectsFunctions) > 0 {
+		writeSectionHeader(b, "Accessible Objects Functions")
+		// Their bodies name melange_tuples unqualified, resolved when called.
+		fmt.Fprintf(b, "SET check_function_bodies = off;\n\n")
+		for _, fn := range listSQL.AccessibleObjectsFunctions {
+			fmt.Fprintf(b, "%s\n\n", fn.SQL)
+		}
+		fmt.Fprintf(b, "RESET check_function_bodies;\n\n")
 	}
 }
 

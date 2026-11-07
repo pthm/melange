@@ -400,15 +400,9 @@ func buildRecursiveComplexClosureBlock(plan ListPlan, rel string) TypedQueryBloc
 
 // buildRecursiveComposedClosureBlock builds a block for a single composed closure relation.
 func buildRecursiveComposedClosureBlock(plan ListPlan, rel string) TypedQueryBlock {
-	funcName := listObjectsFunctionName(plan.ObjectType, rel)
 	stmt := SelectStmt{
 		ColumnExprs: []Expr{Col{Table: "icr", Column: "object_id"}},
-		FromExpr: FunctionCallExpr{
-			Schema: plan.DatabaseSchema,
-			Name:   funcName,
-			Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
-			Alias:  "icr",
-		},
+		FromExpr:    accessibleObjectsCall(plan.DatabaseSchema, plan.ObjectType, rel, "icr"),
 	}
 	// plan.Exclusions is non-empty only when the walk is gated: an excluded
 	// object must not seed propagation from this arm any more than from the
@@ -576,7 +570,6 @@ func usersetMemberSource(plan ListPlan, pattern listUsersetPatternInput, hoisted
 		Alias:  "m",
 	}
 }
-
 
 // splitBlocksByPropagation partitions relations into propagatable and non-propagatable
 // sets, building one block per set. When all relations share the same propagatability

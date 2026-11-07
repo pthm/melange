@@ -120,12 +120,7 @@ func buildSelfRefUsersetComposedClosureBlocks(plan ListPlan) []TypedQueryBlock {
 			Comments: []string{fmt.Sprintf("-- Compose with closure relation: %s", rel)},
 			Query: SelectStmt{
 				ColumnExprs: []Expr{Col{Table: "icr", Column: "object_id"}},
-				FromExpr: FunctionCallExpr{
-					Schema: plan.DatabaseSchema,
-					Name:   listObjectsFunctionName(plan.ObjectType, rel),
-					Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
-					Alias:  "icr",
-				},
+				FromExpr:    accessibleObjectsCall(plan.DatabaseSchema, plan.ObjectType, rel, "icr"),
 			},
 		})
 	}

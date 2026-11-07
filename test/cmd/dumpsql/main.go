@@ -304,6 +304,15 @@ func dumpSQL(tc TestCase, opts dumpOptions) {
 			}
 		}
 
+		// Show accessible functions
+		if len(listSQL.AccessibleObjectsFunctions) > 0 {
+			fmt.Println("\n## ACCESSIBLE OBJECTS FUNCTIONS")
+			for _, fn := range listSQL.AccessibleObjectsFunctions {
+				fmt.Println()
+				fmt.Println(fn.SQL)
+			}
+		}
+
 		// Show list_subjects dispatcher
 		if listSQL.ListSubjectsDispatcher != "" {
 			fmt.Println("\n## LIST_SUBJECTS DISPATCHER")

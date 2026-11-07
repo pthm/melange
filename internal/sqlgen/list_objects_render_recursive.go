@@ -20,12 +20,14 @@ const (
 // on a parent chain of 25 hops and succeeds on 24.
 const walkDepthLimit = 25
 
-// RenderListObjectsRecursiveFunction renders a recursive list_objects function from plan and blocks.
+// RenderListObjectsRecursiveFunction renders the list_objects function of a
+// self-referential relation ("viewer from parent" in viewer), whose blocks
+// have a RecursiveBlock. Other recursive plans are listed over their
+// accessible function (recursiveAccessibleObjectsQuery).
 //
-// A self-referential relation ("viewer from parent" in viewer) is listed by a
-// breadth-first walk over its linking relations. Each object is expanded once,
-// at its shortest distance from a seed, so subtrees reached by several paths
-// and cycles are walked once. A chain longer than walkDepthLimit levels raises
+// The relation is listed by a breadth-first walk over its linking relations.
+// Each object is expanded once, at its shortest distance from a seed, so
+// subtrees reached by several paths and cycles are walked once. A chain longer than walkDepthLimit levels raises
 // M2002 (resolution too complex), as check_permission does, rather than
 // returning a truncated list (see renderListObjectsWalk for walks over several
 // linking relations).
@@ -40,18 +42,8 @@ func RenderListObjectsRecursiveFunction(plan ListPlan, blocks RecursiveBlockSet)
 		Args:    ListObjectsArgs(),
 		Returns: ListObjectsReturns(),
 		Header:  ListObjectsFunctionHeader(plan.ObjectType, plan.Relation, plan.FeaturesString()),
+		Decls:   append(idWalkDecls(), Decl{Name: walkStatic, Type: "TEXT[]"}),
 	}
-
-	if blocks.RecursiveBlock == nil {
-		var usersetQuery string
-		if hasUserset {
-			usersetQuery = renderComposedListObjectsQuery(plan, blocks)
-		}
-		fn.Body = listObjectsBodyBySubjectKind(renderComposedListObjectsQuery(plan, plainBlocks), usersetQuery)
-		return fn.SQL(), nil
-	}
-
-	fn.Decls = append(idWalkDecls(), Decl{Name: walkStatic, Type: "TEXT[]"})
 	if deferredSeeds(blocks) {
 		fn.Decls = append(fn.Decls, Decl{Name: walkDeferred, Type: "TEXT[]"})
 	}
@@ -59,46 +51,6 @@ func RenderListObjectsRecursiveFunction(plan ListPlan, blocks RecursiveBlockSet)
 	seed := seedBySubjectKind(renderWalkSeed(plainBlocks), renderWalkSeed(blocks), hasUserset)
 	fn.Body = renderListObjectsWalk(plan, blocks, seed)
 	return fn.SQL(), nil
-}
-
-// renderComposedListObjectsQuery renders the paginated query for a plan
-// without a self-referential walk: one arm per block, each filtered like the
-// accessible set (accessibleObjectsSelect).
-func renderComposedListObjectsQuery(plan ListPlan, blocks RecursiveBlockSet) string {
-	// An arm that lists another relation whole takes the page window too: the
-	// cursor always, the limit only when no filter of the accessible set runs
-	// after it (it could drop rows the limit counted).
-	limit := Expr(Raw("p_limit + 1"))
-	if accessibleObjectsSelect(plan, blocks, nil).Where != nil {
-		limit = Null{}
-	}
-	arms := make([]string, 0, len(blocks.BaseBlocks))
-	for _, block := range blocks.BaseBlocks {
-		block.Query = withPageWindow(block.Query, limit)
-		from := TableAs("", "(\n"+formatQueryBlockSQL(block.Comments, block.Query.SQL())+"\n)", "acc")
-		arms = append(arms, accessibleObjectsSelect(plan, blocks, from).SQL())
-	}
-	// Hoisted list_*_obj CTEs come first so the arms can reference them.
-	return finishListObjectsQuery(blocks, blocks.HoistedCTEs, arms)
-}
-
-// withPageWindow passes the page window (limit, p_after) to stmt when it
-// lists another relation's objects whole (SELECT ... FROM list_*_obj(subject,
-// NULL, NULL)), so that call returns only the window instead of its whole set.
-func withPageWindow(stmt SelectStmt, limit Expr) SelectStmt {
-	call, ok := stmt.FromExpr.(FunctionCallExpr)
-	if !ok || len(call.Args) != 4 || !strings.HasSuffix(call.Name, "_obj") {
-		return stmt
-	}
-	if _, isNull := call.Args[2].(Null); !isNull {
-		return stmt
-	}
-	if stmt.Where != nil {
-		limit = Null{} // the block's own filter runs after the call
-	}
-	call.Args = append(slices.Clone(call.Args[:2]), limit, Raw("p_after"))
-	stmt.FromExpr = call
-	return stmt
 }
 
 // seedBySubjectKind returns plainSeed, or, when hasUserset, a branch that runs

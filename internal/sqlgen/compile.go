@@ -411,7 +411,7 @@ func CollectNamedFunctions(
 		}
 	}
 
-	return result
+	return append(result, listSQL.AccessibleObjectsFunctions...)
 }
 
 // CollectDispatcherFunctions returns the dispatcher functions paired with their
@@ -445,6 +445,7 @@ func CollectDispatcherFunctions(generatedSQL GeneratedSQL, listSQL ListGenerated
 //   - Specialized check functions: check_{type}_{relation}
 //   - No-wildcard check variants: check_{type}_{relation}_nw
 //   - Specialized list functions: list_{type}_{relation}_obj, list_{type}_{relation}_sub
+//   - Accessible objects functions: accessible_{type}_{relation}
 //   - Dispatcher functions (always included): check_permission, list_accessible_objects, etc.
 func CollectFunctionNames(analyses []RelationAnalysis) []string {
 	var names []string
@@ -469,6 +470,7 @@ func CollectFunctionNames(analyses []RelationAnalysis) []string {
 			names = append(names,
 				listObjectsFunctionName(a.ObjectType, a.Relation),
 				listSubjectsFunctionName(a.ObjectType, a.Relation),
+				AccessibleObjectsFunctionName(a.ObjectType, a.Relation),
 			)
 		}
 	}

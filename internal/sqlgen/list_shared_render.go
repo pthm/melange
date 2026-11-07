@@ -41,15 +41,6 @@ func formatQueryBlockSQL(comments []string, sql string) string {
 	return strings.Join(lines, "\n")
 }
 
-// blockArms renders each block, with its comments, as a renderObjectsPage arm.
-func blockArms(blocks []TypedQueryBlock) []string {
-	arms := make([]string, len(blocks))
-	for i, block := range blocks {
-		arms[i] = formatQueryBlockSQL(block.Comments, block.Query.SQL())
-	}
-	return arms
-}
-
 // joinUnionBlocksSQL joins multiple SQL blocks with UNION.
 func joinUnionBlocksSQL(blocks []string) string {
 	return strings.Join(blocks, "\n    UNION\n")

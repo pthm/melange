@@ -39,20 +39,6 @@ func withoutUsersetSubjectBlocks(blocks []TypedQueryBlock) ([]TypedQueryBlock, b
 	return plain, len(plain) != len(blocks)
 }
 
-// listObjectsBodyBySubjectKind returns the function body: the plain-subject
-// query, or, when usersetQuery is non-empty, a branch that runs it only for
-// userset query subjects.
-func listObjectsBodyBySubjectKind(plainQuery, usersetQuery string) []Stmt {
-	if usersetQuery == "" {
-		return []Stmt{ReturnQuery{Query: plainQuery}}
-	}
-	return []Stmt{If{
-		Cond: HasUserset{Source: SubjectID},
-		Then: []Stmt{ReturnQuery{Query: usersetQuery}},
-		Else: []Stmt{ReturnQuery{Query: plainQuery}},
-	}}
-}
-
 // BlockSet contains query blocks for a list function.
 type BlockSet struct {
 	Primary       []TypedQueryBlock

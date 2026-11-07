@@ -217,15 +217,9 @@ func buildListObjectsComposedClosureBlocks(plan ListPlan) ([]TypedQueryBlock, er
 
 	var blocks []TypedQueryBlock
 	for _, rel := range composedClosureRelations(plan.Analysis) {
-		funcName := listObjectsFunctionName(plan.ObjectType, rel)
 		stmt := SelectStmt{
 			ColumnExprs: []Expr{Col{Table: "icr", Column: "object_id"}},
-			FromExpr: FunctionCallExpr{
-				Schema: plan.DatabaseSchema,
-				Name:   funcName,
-				Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
-				Alias:  "icr",
-			},
+			FromExpr:    accessibleObjectsCall(plan.DatabaseSchema, plan.ObjectType, rel, "icr"),
 		}
 
 		// Apply exclusion predicates to the composed results
@@ -402,12 +396,7 @@ func buildIntersectionPartQuery(plan ListPlan, part IntersectionPart) SelectStmt
 func buildIntersectionComposedPartQuery(plan ListPlan, part IntersectionPart) SelectStmt {
 	setArm := SelectStmt{
 		ColumnExprs: []Expr{Col{Table: "obj", Column: "object_id"}},
-		FromExpr: FunctionCallExpr{
-			Schema: plan.DatabaseSchema,
-			Name:   ListObjectsFunctionName(plan.ObjectType, part.Relation),
-			Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
-			Alias:  "obj",
-		},
+		FromExpr:    accessibleObjectsCall(plan.DatabaseSchema, plan.ObjectType, part.Relation, "obj"),
 	}
 
 	usersetCheck := CheckPermission{

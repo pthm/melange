@@ -17,6 +17,12 @@ type ListGeneratedSQL struct {
 	// for each specialized list_subjects function (list_{type}_{relation}_subjects).
 	ListSubjectsFunctions []string
 
+	// AccessibleObjectsFunctions contains the accessible_{type}_{relation}
+	// functions (list_objects_accessible.go), each after the accessible
+	// functions it calls: PostgreSQL resolves a LANGUAGE sql body when it is
+	// created. Applied after every list function, which they may call.
+	AccessibleObjectsFunctions []NamedFunction
+
 	// ListObjectsDispatcher contains the list_accessible_objects dispatcher function
 	// that routes to specialized functions or falls back to generic.
 	ListObjectsDispatcher string
@@ -53,6 +59,7 @@ func GenerateListSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLDat
 	inlineIx := newInlineIndex(inline)
 
 	// Generate specialized functions for each relation that can be generated
+	var accessible []NamedFunction
 	for _, a := range analyses {
 		if !a.Capabilities.ListAllowed {
 			continue
@@ -69,7 +76,8 @@ func GenerateListSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLDat
 			return ListGeneratedSQL{}, fmt.Errorf("generating list_objects function for %s.%s: %w",
 				a.ObjectType, a.Relation, err)
 		}
-		result.ListObjectsFunctions = append(result.ListObjectsFunctions, objFn)
+		result.ListObjectsFunctions = append(result.ListObjectsFunctions, objFn.List)
+		accessible = append(accessible, NamedFunction{Name: AccessibleObjectsFunctionName(a.ObjectType, a.Relation), SQL: objFn.Accessible})
 
 		// Generate list_subjects function
 		subjFn, err := generateListSubjectsFunctionWithLookup(a, relInline, databaseSchema, graph, opts)
@@ -79,6 +87,8 @@ func GenerateListSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLDat
 		}
 		result.ListSubjectsFunctions = append(result.ListSubjectsFunctions, subjFn)
 	}
+
+	result.AccessibleObjectsFunctions = orderAccessibleFunctions(accessible)
 
 	// Generate dispatchers (always generated, even if no specialized functions)
 	var err error
@@ -114,47 +124,51 @@ func listSubjectsFunctionName(objectType, relation string) string {
 }
 
 // generateListObjectsFunctionWithLookup generates a list_objects function using the shared reference graph.
-func generateListObjectsFunctionWithLookup(a RelationAnalysis, inline InlineSQLData, databaseSchema string, g *relationGraph, opts GenerateSQLOptions) (string, error) {
+func generateListObjectsFunctionWithLookup(a RelationAnalysis, inline InlineSQLData, databaseSchema string, g *relationGraph, opts GenerateSQLOptions) (listObjectsWithAccessible, error) {
 	// inline is pre-filtered by the caller (filterInlineForList) so the embedded
 	// closure/userset tables stop growing with unrelated schema.
 	// Route to appropriate generator based on ListStrategy
 	plan := BuildListObjectsPlanWithLookup(a, inline, databaseSchema, g)
 	plan.EnableMaterializedCTEs = opts.EnableMaterializedCTEs
+	header := ListObjectsFunctionHeader(plan.ObjectType, plan.Relation, plan.FeaturesString())
 
 	switch a.ListStrategy {
 	case ListStrategyDirect, ListStrategyUserset, ListStrategyIntersection:
-		// Use unified Plan → Blocks → Render architecture
 		blocks, err := BuildListObjectsBlocks(plan)
 		if err != nil {
-			return "", err
+			return listObjectsWithAccessible{}, err
 		}
-		return RenderListObjectsFunction(plan, blocks)
+		return overAccessible(plan, header, accessibleObjectsQuery(blocks)), nil
 	case ListStrategyRecursive:
-		// Use Plan → Blocks → Render for TTU patterns
 		blocks, err := BuildListObjectsRecursiveBlocks(plan)
 		if err != nil {
-			return "", err
+			return listObjectsWithAccessible{}, err
 		}
-		return RenderListObjectsRecursiveFunction(plan, blocks)
+		if blocks.RecursiveBlock == nil {
+			return overAccessible(plan, header, recursiveAccessibleObjectsQuery(plan, blocks)), nil
+		}
+		// A self-referential relation is listed by a PL/pgSQL walk.
+		list, err := RenderListObjectsRecursiveFunction(plan, blocks)
+		return overList(plan, list), err
 	case ListStrategyDepthExceeded:
-		// Use Plan → Render (no blocks needed - just raises error)
-		return RenderListObjectsDepthExceededFunction(plan), nil
+		// Raises M2002; the accessible function selects from it so it raises too.
+		return overList(plan, RenderListObjectsDepthExceededFunction(plan)), nil
 	case ListStrategySelfRefUserset:
-		// Use Plan → Blocks → Render for self-referential userset patterns
 		blocks, err := BuildListObjectsSelfRefUsersetBlocks(plan)
 		if err != nil {
-			return "", err
+			return listObjectsWithAccessible{}, err
 		}
-		return RenderListObjectsSelfRefUsersetFunction(plan, blocks)
+		list, err := RenderListObjectsSelfRefUsersetFunction(plan, blocks)
+		return overList(plan, list), err
 	case ListStrategyComposed:
-		// Use Plan → Blocks → Render for indirect anchor composition
 		blocks, err := BuildListObjectsComposedBlocks(plan)
 		if err != nil {
-			return "", err
+			return listObjectsWithAccessible{}, err
 		}
-		return RenderListObjectsComposedFunction(plan, blocks)
+		header = append(header, fmt.Sprintf("Indirect anchor: %s.%s via %s", blocks.AnchorType, blocks.AnchorRelation, blocks.FirstStepType))
+		return overAccessible(plan, header, composedAccessibleObjectsQuery(blocks)), nil
 	default:
-		return "", fmt.Errorf("unknown list strategy %v for %s.%s", a.ListStrategy, a.ObjectType, a.Relation)
+		return listObjectsWithAccessible{}, fmt.Errorf("unknown list strategy %v for %s.%s", a.ListStrategy, a.ObjectType, a.Relation)
 	}
 }
 

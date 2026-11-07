@@ -392,6 +392,21 @@ func (m *Migrator) applyGeneratedListSQL(ctx context.Context, db Execer, gen Lis
 		}
 	}
 
+	// Apply accessible functions last. Their LANGUAGE sql bodies name
+	// melange_tuples unqualified, resolved when called (the caller's
+	// search_path, or a contextual-tuples temp view), so creation skips
+	// validating them; the migration runs in a transaction, which scopes this.
+	if len(gen.AccessibleObjectsFunctions) > 0 {
+		if _, err := db.ExecContext(ctx, "SET LOCAL check_function_bodies = off"); err != nil {
+			return fmt.Errorf("disabling function body checks: %w", err)
+		}
+	}
+	for _, fn := range gen.AccessibleObjectsFunctions {
+		if _, err := db.ExecContext(ctx, fn.SQL); err != nil {
+			return fmt.Errorf("applying %s: %w", fn.Name, err)
+		}
+	}
+
 	return nil
 }
 
@@ -867,10 +882,11 @@ func shouldSkipApply(lastMigration *MigrationRecord, currentChecksums map[string
 }
 
 // GeneratedFunctionFilter matches pg_proc rows (aliased p) named like a
-// per-relation function melange generates: check_, list_, expand_ or explain_.
+// per-relation function melange generates: check_, list_, expand_, explain_
+// or accessible_.
 // Migrate's orphan cleanup and doctor's orphan report share it so a new family
 // can't be missed by one of them.
-const GeneratedFunctionFilter = `p.proname ~ '^(check|list|expand|explain)_'`
+const GeneratedFunctionFilter = `p.proname ~ '^(check|list|expand|explain|accessible)_'`
 
 // getCurrentFunctions returns the installed functions that orphan cleanup may
 // drop: those matching GeneratedFunctionFilter that a previous migration
@@ -1425,6 +1441,18 @@ func (m *Migrator) outputDryRun(dst io.Writer, write migrationWrite, generatedSQ
 	}
 	if listSQL.ListSubjectsDispatcher != "" {
 		_, _ = fmt.Fprintf(w, "%s\n\n", listSQL.ListSubjectsDispatcher)
+	}
+
+	// Accessible functions
+	_, _ = fmt.Fprintf(w, "-- ============================================================\n")
+	_, _ = fmt.Fprintf(w, "-- Accessible Objects Functions\n")
+	_, _ = fmt.Fprintf(w, "-- ============================================================\n\n")
+	if len(listSQL.AccessibleObjectsFunctions) > 0 {
+		_, _ = fmt.Fprintf(w, "SET check_function_bodies = off;\n\n")
+		for _, fn := range listSQL.AccessibleObjectsFunctions {
+			_, _ = fmt.Fprintf(w, "%s\n\n", fn.SQL)
+		}
+		_, _ = fmt.Fprintf(w, "RESET check_function_bodies;\n\n")
 	}
 
 	// Migration record
