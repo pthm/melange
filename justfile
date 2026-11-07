@@ -522,6 +522,11 @@ test-integration-all:
 test-kitchensink:
     cd {{TEST}} && {{GO_TEST}} -count=1 -timeout 10m -run 'TestKitchenSink' ./...
 
+# SaaS schema: differential list-vs-check correctness over the SaaS benchmark's model and view
+[group('Test')]
+test-saas:
+    cd {{TEST}} && {{GO_TEST}} -count=1 -timeout 10m -run 'TestSaaS' .
+
 # Kitchen-sink schema: dump the full rendered SQL for manual inspection
 [group('Test')]
 dump-kitchensink-sql:
@@ -589,6 +594,12 @@ bench-cloud *ARGS:
 [group('Test')]
 bench-kitchensink SCALE="":
     cd {{TEST}} && {{GO_TEST_BENCH_MEM}} -run=^$ -timeout 30m -bench='BenchmarkKitchenSink{{ if SCALE != "" { "/" + SCALE } else { "" } }}'
+
+# SaaS benchmarks: a multi-tenant model over a 27-branch view, warm and on fresh sessions
+# Use SCALE to limit: just bench-saas 1M   (5M needs MELANGE_BENCH_LARGE_SCALE=1)
+[group('Test')]
+bench-saas SCALE="":
+    cd {{TEST}} && {{GO_TEST_BENCH_MEM}} -run=^$ -timeout 60m -bench='BenchmarkSaaS{{ if SCALE != "" { "/" + SCALE } else { "" } }}'
 
 # Run tests with race detection
 [group('Test')]

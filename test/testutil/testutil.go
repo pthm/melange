@@ -457,6 +457,14 @@ func cleanupRemoteDB(db *sql.DB) {
 // Works with both *testing.T and *testing.B.
 func EmptyDB(tb testing.TB) *sql.DB {
 	tb.Helper()
+	db, _ := EmptyDBWithDSN(tb)
+	return db
+}
+
+// EmptyDBWithDSN is EmptyDB, also returning the database's DSN for opening
+// further connections to it.
+func EmptyDBWithDSN(tb testing.TB) (*sql.DB, string) {
+	tb.Helper()
 
 	adminDSN, err := ensureSingleton()
 	require.NoError(tb, err, "failed to start PostgreSQL container")
@@ -480,7 +488,7 @@ func EmptyDB(tb testing.TB) *sql.DB {
 	// Register cleanup
 	registerCleanup(tb, db, adminDSN, dbName)
 
-	return db
+	return db, dbDSN
 }
 
 // registerCleanup registers cleanup for the database connection and database itself.
