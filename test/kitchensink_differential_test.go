@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/pthm/melange/internal/sqlgen"
+	"github.com/pthm/melange/internal/sqlgen/sqldsl"
 	"github.com/pthm/melange/test/testutil"
 )
 
@@ -70,6 +72,7 @@ func TestKitchenSink_ListVsCheck(t *testing.T) {
 			for _, u := range subjectSample {
 				listed := setOf(listObjects(t, db, "user", u, p.relation, p.objType))
 				listedTotal += len(listed)
+				requireAccessibleMatchesList(t, db, u, p.relation, p.objType, listed)
 				for _, o := range objects {
 					allowed := checkPerm(t, db, "user", u, p.relation, p.objType, o) == 1
 					if allowed {
@@ -169,6 +172,31 @@ func listSubjects(t *testing.T, db *sql.DB, ot, oid, rel, st string) []string {
 	rows, err := db.Query(`SELECT subject_id FROM list_accessible_subjects($1,$2,$3,$4)`, ot, oid, rel, st)
 	require.NoError(t, err)
 	return scanStrings(t, rows)
+}
+
+// requireAccessibleMatchesList asserts that accessible_{ot}_{rel}, when the
+// relation has one, returns the objects list_objects listed for user:sid.
+func requireAccessibleMatchesList(t *testing.T, db *sql.DB, sid, rel, ot string, listed map[string]struct{}) {
+	t.Helper()
+	if acc, ok := accessibleObjects(t, db, "user", sid, rel, ot); ok {
+		require.ElementsMatchf(t, setToSlice(listed), acc, "accessible_%s_%s vs list_objects for user:%s", ot, rel, sid)
+	}
+}
+
+// accessibleObjects returns the distinct objects accessible_{ot}_{rel}
+// returns for the subject, and false when the relation has no accessible
+// function.
+func accessibleObjects(t *testing.T, db *sql.DB, st, sid, rel, ot string) ([]string, bool) {
+	t.Helper()
+	name := sqlgen.AccessibleObjectsFunctionName(ot, rel)
+	var exists bool
+	require.NoError(t, db.QueryRow(`SELECT EXISTS (SELECT 1 FROM pg_proc WHERE proname = $1)`, name).Scan(&exists))
+	if !exists {
+		return nil, false
+	}
+	rows, err := db.Query(`SELECT DISTINCT object_id FROM `+sqldsl.QuoteIdent(name)+`($1, $2)`, st, sid)
+	require.NoError(t, err)
+	return scanStrings(t, rows), true
 }
 
 func checkPerm(t *testing.T, db *sql.DB, st, sid, rel, ot, oid string) int {

@@ -721,6 +721,11 @@ func RunTest(t *testing.T, parent *Client, tc TestCase) {
 				// the derived-assertion sweep (check -> list), over a tuple-derived
 				// candidate universe. See list_check_parity.go.
 				runListCheckParityAssertions(t, ctx, client, storeID, modelID, stage)
+
+				// Cross-reference the accessible functions applications join
+				// against, and their parent-key forms, against the list and
+				// check assertions. See accessible_parity.go.
+				runAccessibleParityAssertions(t, ctx, client, storeID, modelID, stage)
 			})
 		}
 	})

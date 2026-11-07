@@ -67,6 +67,24 @@ func parentKeyRelations(analyses []RelationAnalysis) []parentKeyRelation {
 	return out
 }
 
+// ParentKeyFunction is a generated parent-key accessible function: Name
+// returns the IDs of the ParentType objects through whose Link the subject
+// holds Relation on ObjectType objects.
+type ParentKeyFunction struct {
+	ObjectType, Relation, Link, ParentType, Name string
+}
+
+// ParentKeyFunctions returns the parent-key accessible functions generated
+// for analyses.
+func ParentKeyFunctions(analyses []RelationAnalysis) []ParentKeyFunction {
+	pks := parentKeyRelations(analyses)
+	out := make([]ParentKeyFunction, len(pks))
+	for i, pk := range pks {
+		out[i] = ParentKeyFunction{ObjectType: pk.ObjectType, Relation: pk.Relation, Link: pk.Link, ParentType: pk.ParentType, Name: pk.functionName()}
+	}
+	return out
+}
+
 // parentKeyRelationOf reports whether a's grants are all parent relations
 // through one link to one parent type, each listable on the parent. Every
 // relation in a's closure must grant through parent relations only: a direct,
