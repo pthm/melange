@@ -8,26 +8,18 @@ import "fmt"
 // RenderListObjectsComposedFunction renders a list_objects function for composed access.
 // Composed functions handle indirect anchor patterns (TTU and userset composition).
 func RenderListObjectsComposedFunction(plan ListPlan, blocks ComposedObjectsBlockSet) (string, error) {
-	var selfSQL string
-	if blocks.SelfBlock != nil {
-		selfSQL = renderTypedQueryBlock(*blocks.SelfBlock).Query.SQL()
-	}
-
-	mainBlocks := renderTypedQueryBlocks(blocks.MainBlocks)
-	mainQuery := RenderUnionBlocks(mainBlocks)
-
-	// Fold the same-type userset self-candidate (OpenFGA's userset-defines-itself
+	// The same-type userset self-candidate (OpenFGA's userset-defines-itself
 	// reflexivity: a userset subject "objectType:X#rel" satisfies rel on
-	// objectType:X) into the main UNION rather than an IF EXISTS gate that
+	// objectType:X) is one more arm rather than an IF EXISTS gate that
 	// re-evaluated the identical predicate twice. Its WHERE requires
 	// position('#' in p_subject_id) > 0, so the type guard below (which only
 	// bails for plain subjects) never suppresses it. Mirrors the Recursive
-	// renderer, which already unions its self-candidate arm.
-	query := mainQuery
-	if selfSQL != "" {
-		query = joinUnionBlocksSQL([]string{mainQuery, selfSQL})
+	// renderer, which already has a self-candidate arm.
+	arms := blockArms(blocks.MainBlocks)
+	if blocks.SelfBlock != nil {
+		arms = append(arms, blockArms([]TypedQueryBlock{*blocks.SelfBlock})...)
 	}
-	paginatedSQL := plan.wrapPagination(query, "object_id")
+	paginatedSQL := renderObjectsPage(nil, arms)
 
 	// Build the body using plpgsql DSL types
 	body := []Stmt{

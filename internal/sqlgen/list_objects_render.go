@@ -2,9 +2,7 @@ package sqlgen
 
 // RenderListObjectsFunction renders a complete list_objects function from plan and blocks.
 func RenderListObjectsFunction(plan ListPlan, blocks BlockSet) (string, error) {
-	queryBlocks := renderTypedQueryBlocks(blocks.Primary)
-	query := RenderUnionBlocks(queryBlocks)
-	paginatedQuery := plan.wrapPagination(query, "object_id")
+	paginatedQuery := renderObjectsPage(nil, blockArms(blocks.Primary))
 
 	fn := PlpgsqlFunction{
 		Schema:  plan.DatabaseSchema,

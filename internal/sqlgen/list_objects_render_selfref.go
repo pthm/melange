@@ -42,16 +42,14 @@ func renderSelfRefUsersetListObjectsQuery(plan ListPlan, blocks SelfRefUsersetBl
 		SubjectID,
 	)
 
-	query := SelectStmt{
+	arms := []string{SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "me", Column: "object_id"}},
 		FromExpr:    unnestObjectIDs(walkSeen, "me"),
 		Where:       buildWhereFromPredicates(exclusionConfig.BuildPredicates()),
-	}.SQL()
+	}.SQL()}
 	if blocks.SelfCandidateBlock != nil {
-		selfCandidateSQL := renderTypedQueryBlock(*blocks.SelfCandidateBlock).Query.SQL()
-		query = joinUnionBlocksSQL([]string{query, selfCandidateSQL})
+		arms = append(arms, renderTypedQueryBlock(*blocks.SelfCandidateBlock).Query.SQL())
 	}
-
-	return plan.wrapPagination(query, "object_id")
+	return renderObjectsPage(nil, arms)
 }

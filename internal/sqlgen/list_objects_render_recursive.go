@@ -62,22 +62,43 @@ func RenderListObjectsRecursiveFunction(plan ListPlan, blocks RecursiveBlockSet)
 }
 
 // renderComposedListObjectsQuery renders the paginated query for a plan
-// without a self-referential walk: the union of its blocks.
+// without a self-referential walk: one arm per block, each filtered like the
+// accessible set (accessibleObjectsSelect).
 func renderComposedListObjectsQuery(plan ListPlan, blocks RecursiveBlockSet) string {
-	baseBlocksSQL := make([]string, 0, len(blocks.BaseBlocks))
-	for _, block := range blocks.BaseBlocks {
-		baseBlocksSQL = append(baseBlocksSQL, formatQueryBlockSQL(block.Comments, block.Query.SQL()))
+	// An arm that lists another relation whole takes the page window too: the
+	// cursor always, the limit only when no filter of the accessible set runs
+	// after it (it could drop rows the limit counted).
+	limit := Expr(Raw("p_limit + 1"))
+	if accessibleObjectsSelect(plan, blocks, nil).Where != nil {
+		limit = Null{}
 	}
-	// Hoisted list_*_obj CTEs come first so the accessible CTE (and its base
-	// blocks) can reference them.
-	ctes := append([]CTEDef{}, blocks.HoistedCTEs...)
-	ctes = append(ctes, CTEDef{
-		Name:    "accessible",
-		Columns: []string{"object_id"},
-		Query:   Raw(joinUnionBlocksSQL(baseBlocksSQL)),
-	})
-	query := WithCTE{CTEs: ctes, Query: accessibleObjectsSelect(plan, blocks, TableAs("", "accessible", "acc"))}.SQL()
-	return finishListObjectsQuery(plan, blocks, query)
+	arms := make([]string, 0, len(blocks.BaseBlocks))
+	for _, block := range blocks.BaseBlocks {
+		block.Query = withPageWindow(block.Query, limit)
+		from := TableAs("", "(\n"+formatQueryBlockSQL(block.Comments, block.Query.SQL())+"\n)", "acc")
+		arms = append(arms, accessibleObjectsSelect(plan, blocks, from).SQL())
+	}
+	// Hoisted list_*_obj CTEs come first so the arms can reference them.
+	return finishListObjectsQuery(blocks, blocks.HoistedCTEs, arms)
+}
+
+// withPageWindow passes the page window (limit, p_after) to stmt when it
+// lists another relation's objects whole (SELECT ... FROM list_*_obj(subject,
+// NULL, NULL)), so that call returns only the window instead of its whole set.
+func withPageWindow(stmt SelectStmt, limit Expr) SelectStmt {
+	call, ok := stmt.FromExpr.(FunctionCallExpr)
+	if !ok || len(call.Args) != 4 || !strings.HasSuffix(call.Name, "_obj") {
+		return stmt
+	}
+	if _, isNull := call.Args[2].(Null); !isNull {
+		return stmt
+	}
+	if stmt.Where != nil {
+		limit = Null{} // the block's own filter runs after the call
+	}
+	call.Args = append(slices.Clone(call.Args[:2]), limit, Raw("p_after"))
+	stmt.FromExpr = call
+	return stmt
 }
 
 // seedBySubjectKind returns plainSeed, or, when hasUserset, a branch that runs
@@ -138,7 +159,7 @@ func renderWalkSeed(blocks RecursiveBlockSet) Stmt {
 // Deferred seeds join the walk at level 1: added to the frontier the first
 // pass computes, or, without level-0 seeds, forming the frontier at level 1.
 func renderListObjectsWalk(plan ListPlan, blocks RecursiveBlockSet, seed Stmt) []Stmt {
-	final := accessibleObjectsSelect(plan, blocks, unnestObjectIDs(walkSeen+" || "+walkStatic, "acc")).SQL()
+	final := []string{accessibleObjectsSelect(plan, blocks, unnestObjectIDs(walkSeen+" || "+walkStatic, "acc")).SQL()}
 
 	stmts := []Stmt{
 		Comment{Text: "Seed: objects the subject reaches without the self-referential walk"},
@@ -159,7 +180,7 @@ func renderListObjectsWalk(plan ListPlan, blocks RecursiveBlockSet, seed Stmt) [
 	} else {
 		stmts = append(stmts, renderIDWalk(0, step, tooDeep)...)
 	}
-	return append(stmts, ReturnQuery{Query: finishListObjectsQuery(plan, blocks, final)})
+	return append(stmts, ReturnQuery{Query: finishListObjectsQuery(blocks, nil, final)})
 }
 
 // idWalkDecls declares the variables of renderIDWalk.
@@ -295,10 +316,11 @@ func accessibleObjectsSelect(plan ListPlan, blocks RecursiveBlockSet, from Table
 	return stmt
 }
 
-// finishListObjectsQuery adds the self-candidate block and pagination.
-func finishListObjectsQuery(plan ListPlan, blocks RecursiveBlockSet, query string) string {
+// finishListObjectsQuery adds the self-candidate arm, which the accessible
+// set's filters do not apply to, and paginates.
+func finishListObjectsQuery(blocks RecursiveBlockSet, ctes []CTEDef, arms []string) string {
 	if blocks.SelfCandidateBlock != nil {
-		query = joinUnionBlocksSQL([]string{query, blocks.SelfCandidateBlock.Query.SQL()})
+		arms = append(arms, blocks.SelfCandidateBlock.Query.SQL())
 	}
-	return plan.wrapPagination(query, "object_id")
+	return renderObjectsPage(ctes, arms)
 }
