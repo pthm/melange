@@ -423,23 +423,15 @@ func buildRecursiveComposedClosureBlock(plan ListPlan, rel string) TypedQueryBlo
 	}
 }
 
-// buildRecursiveComplexUsersetBlock builds a block for complex userset patterns.
-// Membership comes from usersetMembership: a semi-join against the userset
-// relation's list function when composition is safe, or a per-candidate
-// check_permission_internal call otherwise.
-func buildRecursiveComplexUsersetBlock(plan ListPlan, pattern listUsersetPatternInput, hoisted hoistedListObjTargets) TypedQueryBlock {
+// buildRecursiveComplexUsersetBlock builds a block for complex userset patterns,
+// with membership the predicate that the tuple's userset subject holds the
+// pattern relation for the query subject.
+func buildRecursiveComplexUsersetBlock(plan ListPlan, pattern listUsersetPatternInput, membership ...Expr) TypedQueryBlock {
 	q := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
 		Relations(pattern.SourceRelations...).
-		Where(
-			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(pattern.SubjectType)},
-			HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
-			Eq{
-				Left:  UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}},
-				Right: Lit(pattern.SubjectRelation),
-			},
-			recursiveUsersetMembership(plan, pattern, hoisted),
-		).
+		Where(Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(pattern.SubjectType)}).
+		Where(membership...).
 		SelectCol("object_id").
 		Distinct()
 
@@ -492,27 +484,70 @@ func buildRecursiveSimpleUsersetBlock(plan ListPlan, pattern listUsersetPatternI
 // buildRecursiveUsersetBlocks builds userset pattern blocks, splitting by propagatability
 // when source relations contain a mix of propagatable and non-propagatable relations.
 func buildRecursiveUsersetBlocks(plan ListPlan, pattern listUsersetPatternInput, propagatable map[string]bool, hoisted hoistedListObjTargets) []TypedQueryBlock {
-	return splitBlocksByPropagation(pattern.SourceRelations, propagatable, func(rels []string) TypedQueryBlock {
-		p := pattern
-		p.SourceRelations = rels
-		if p.IsComplex {
-			return buildRecursiveComplexUsersetBlock(plan, p, hoisted)
-		}
-		return buildRecursiveSimpleUsersetBlock(plan, p)
-	})
+	split := func(build func(listUsersetPatternInput) TypedQueryBlock) []TypedQueryBlock {
+		return splitBlocksByPropagation(pattern.SourceRelations, propagatable, func(rels []string) TypedQueryBlock {
+			p := pattern
+			p.SourceRelations = rels
+			return build(p)
+		})
+	}
+	if !pattern.IsComplex {
+		return split(func(p listUsersetPatternInput) TypedQueryBlock { return buildRecursiveSimpleUsersetBlock(plan, p) })
+	}
+	var blocks []TypedQueryBlock
+	for _, arm := range complexUsersetArms(plan, pattern, hoisted) {
+		blocks = append(blocks, split(func(p listUsersetPatternInput) TypedQueryBlock {
+			b := buildRecursiveComplexUsersetBlock(plan, p, arm.membership...)
+			b.UsersetSubjectOnly = arm.usersetSubjectOnly
+			return b
+		})...)
+	}
+	return blocks
 }
 
-// recursiveUsersetMembership is usersetMembership with the composed list_*_obj
-// semi-join swapped for a reference to the hoisted CTE when the target has been
-// hoisted. Behavior is identical -- the CTE computes the same list_*_obj set
-// once instead of inlining the call in this arm (and again in the subject-first
-// arm). Falls back to usersetMembership when the target is not hoisted.
-func recursiveUsersetMembership(plan ListPlan, pattern listUsersetPatternInput, hoisted hoistedListObjTargets) Expr {
-	cteName := hoisted.name(pattern.SubjectType, pattern.SubjectRelation)
-	if cteName == "" {
-		return usersetMembership(plan, pattern)
+// complexUsersetArm is the membership predicate of one arm of a complex
+// userset pattern over tuple t.
+type complexUsersetArm struct {
+	membership         []Expr
+	usersetSubjectOnly bool
+}
+
+// complexUsersetArms returns the arms proving that tuple t's userset subject
+// (group:g#member) holds the pattern relation for the query subject. When the
+// usersets the subject is a member of can be listed (usersetMemberSource),
+// they are matched as tuple subject IDs, so the lookup is an index probe per
+// userset rather than a scan of every userset tuple; the list function can
+// under-report userset query subjects (group:eng#member), so those also check
+// each candidate, in an arm plain subjects skip. Otherwise one arm checks each
+// candidate.
+func complexUsersetArms(plan ListPlan, pattern listUsersetPatternInput, hoisted hoistedListObjTargets) []complexUsersetArm {
+	check := usersetMembershipCheck(plan, pattern)
+	members := usersetMemberSource(plan, pattern, hoisted)
+	if members == nil {
+		return []complexUsersetArm{{membership: append(usersetSubjectOfRelation(pattern), check)}}
 	}
-	check := CheckPermission{
+	return []complexUsersetArm{
+		// An object ID holding '#' would name another userset (g#member||'#member'
+		// matches the subject g#member#member, whose object is g), so skip it.
+		{membership: []Expr{Raw(fmt.Sprintf("t.subject_id IN (SELECT m.object_id || %s FROM %s WHERE position('#' in m.object_id) = 0)",
+			Lit("#"+pattern.SubjectRelation).SQL(), members.TableSQL()))}},
+		{membership: append(usersetSubjectOfRelation(pattern), HasUserset{Source: SubjectID}, check), usersetSubjectOnly: true},
+	}
+}
+
+// usersetSubjectOfRelation restricts tuple t to userset subjects of the
+// pattern relation (group:g#member).
+func usersetSubjectOfRelation(pattern listUsersetPatternInput) []Expr {
+	return []Expr{
+		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
+		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(pattern.SubjectRelation)},
+	}
+}
+
+// usersetMembershipCheck checks that the query subject holds the pattern
+// relation on tuple t's userset object.
+func usersetMembershipCheck(plan ListPlan, pattern listUsersetPatternInput) Expr {
+	return CheckPermission{
 		Schema:   plan.DatabaseSchema,
 		Subject:  SubjectParams(),
 		Relation: pattern.SubjectRelation,
@@ -522,15 +557,26 @@ func recursiveUsersetMembership(plan ListPlan, pattern listUsersetPatternInput, 
 		},
 		ExpectAllow: true,
 	}
-	return Or(
-		InCTESelect{
-			Expr:      UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}},
-			CTEName:   cteName,
-			SelectCol: "object_id",
-		},
-		And(HasUserset{Source: SubjectID}, check),
-	)
 }
+
+// usersetMemberSource returns the objects (as m.object_id) on which the query
+// subject holds the pattern relation: the hoisted CTE, or the relation's list
+// function when composition is safe; nil when neither applies.
+func usersetMemberSource(plan ListPlan, pattern listUsersetPatternInput, hoisted hoistedListObjTargets) TableExpr {
+	if cteName := hoisted.name(pattern.SubjectType, pattern.SubjectRelation); cteName != "" {
+		return TableAs("", cteName, "m")
+	}
+	if !composableListTarget(plan, pattern.SubjectType, pattern.SubjectRelation) {
+		return nil
+	}
+	return FunctionCallExpr{
+		Schema: plan.DatabaseSchema,
+		Name:   ListObjectsFunctionName(pattern.SubjectType, pattern.SubjectRelation),
+		Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
+		Alias:  "m",
+	}
+}
+
 
 // splitBlocksByPropagation partitions relations into propagatable and non-propagatable
 // sets, building one block per set. When all relations share the same propagatability

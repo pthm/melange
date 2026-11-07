@@ -336,11 +336,21 @@ func TestBuildRecursiveComplexUsersetBlockComposesWhenSafe(t *testing.T) {
 		IsComplex:       true,
 	}
 
-	sql := buildRecursiveComplexUsersetBlock(plan, pattern, nil).Query.SQL()
-	assertContains(t, sql, "IN (SELECT obj.object_id FROM list_workspace_view_obj(p_subject_type, p_subject_id, NULL, NULL) obj)")
-	// Userset-typed subjects keep a guarded per-candidate check arm.
-	assertContains(t, sql, "position('#' in p_subject_id) > 0")
-	assertContains(t, sql, "check_permission_internal")
+	blocks := buildRecursiveUsersetBlocks(plan, pattern, nil, nil)
+	if len(blocks) != 2 {
+		t.Fatalf("expected a membership block and a userset-subject check block, got %d", len(blocks))
+	}
+	sql := blocks[0].Query.SQL()
+	// Membership probes the tuple subject IDs, so the index serves it.
+	assertContains(t, sql, "t.subject_id IN (SELECT m.object_id || '#view' FROM list_workspace_view_obj(p_subject_type, p_subject_id, NULL, NULL) AS m WHERE position('#' in m.object_id) = 0)")
+	assertNotContains(t, sql, "check_permission_internal")
+	// Userset-typed subjects keep a per-candidate check, in an arm plain subjects skip.
+	if blocks[0].UsersetSubjectOnly || !blocks[1].UsersetSubjectOnly {
+		t.Fatalf("expected only the check block to be userset-subject only")
+	}
+	check := blocks[1].Query.SQL()
+	assertContains(t, check, "position('#' in p_subject_id) > 0")
+	assertContains(t, check, "check_permission_internal")
 }
 
 func TestBuildRecursiveComplexUsersetBlockFallsBackWhenCyclic(t *testing.T) {
@@ -377,7 +387,11 @@ func TestBuildRecursiveComplexUsersetBlockFallsBackWhenCyclic(t *testing.T) {
 		IsComplex:       true,
 	}
 
-	sql := buildRecursiveComplexUsersetBlock(plan, pattern, nil).Query.SQL()
+	blocks := buildRecursiveUsersetBlocks(plan, pattern, nil, nil)
+	if len(blocks) != 1 || blocks[0].UsersetSubjectOnly {
+		t.Fatalf("expected one check block for every subject, got %d", len(blocks))
+	}
+	sql := blocks[0].Query.SQL()
 	assertContains(t, sql, "check_permission_internal")
 	assertNotContains(t, sql, "list_group_member_obj")
 }

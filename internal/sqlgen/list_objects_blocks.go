@@ -512,12 +512,7 @@ func buildListObjectsUsersetPatternBlocks(plan ListPlan) ([]TypedQueryBlock, err
 	var blocks []TypedQueryBlock
 	for _, pattern := range patterns {
 		if pattern.IsComplex {
-			// Complex userset: use check_permission_internal for membership verification
-			block, err := buildListObjectsComplexUsersetBlock(plan, pattern)
-			if err != nil {
-				return nil, err
-			}
-			blocks = append(blocks, block)
+			blocks = append(blocks, buildListObjectsComplexUsersetBlocks(plan, pattern)...)
 		} else {
 			// Simple userset: JOIN with membership tuples
 			block, err := buildListObjectsSimpleUsersetBlock(plan, pattern)
@@ -531,36 +526,28 @@ func buildListObjectsUsersetPatternBlocks(plan ListPlan) ([]TypedQueryBlock, err
 	return blocks, nil
 }
 
-// buildListObjectsComplexUsersetBlock builds a block for complex userset patterns.
-// Membership comes from usersetMembership: a semi-join against the userset
-// relation's list function when composition is safe, or a per-candidate
-// check_permission_internal call otherwise.
-func buildListObjectsComplexUsersetBlock(plan ListPlan, pattern listUsersetPatternInput) (TypedQueryBlock, error) {
-	q := Tuples(plan.DatabaseSchema, "t").
-		ObjectType(plan.ObjectType).
-		Relations(pattern.SourceRelations...).
-		Where(
-			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(pattern.SubjectType)},
-			HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
-			Eq{
-				Left:  UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}},
-				Right: Lit(pattern.SubjectRelation),
-			},
-			usersetMembership(plan, pattern),
-		).
-		SelectCol("object_id").
-		Distinct()
-
-	for _, pred := range plan.Exclusions.BuildPredicates() {
-		q.Where(pred)
+// buildListObjectsComplexUsersetBlocks builds the blocks for a complex userset
+// pattern, one per complexUsersetArms arm.
+func buildListObjectsComplexUsersetBlocks(plan ListPlan, pattern listUsersetPatternInput) []TypedQueryBlock {
+	var blocks []TypedQueryBlock
+	for _, arm := range complexUsersetArms(plan, pattern, nil) {
+		q := Tuples(plan.DatabaseSchema, "t").
+			ObjectType(plan.ObjectType).
+			Relations(pattern.SourceRelations...).
+			Where(Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(pattern.SubjectType)}).
+			Where(arm.membership...).
+			SelectCol("object_id").
+			Distinct()
+		for _, pred := range plan.Exclusions.BuildPredicates() {
+			q.Where(pred)
+		}
+		blocks = append(blocks, TypedQueryBlock{
+			Comments:           []string{"-- Via " + pattern.SubjectType + "#" + pattern.SubjectRelation + " (complex userset)"},
+			Query:              q.Build(),
+			UsersetSubjectOnly: arm.usersetSubjectOnly,
+		})
 	}
-
-	return TypedQueryBlock{
-		Comments: []string{
-			"-- Via " + pattern.SubjectType + "#" + pattern.SubjectRelation + " (complex userset, validated by check_permission)",
-		},
-		Query: q.Build(),
-	}, nil
+	return blocks
 }
 
 // buildListObjectsSimpleUsersetBlock builds a block for simple userset patterns.
