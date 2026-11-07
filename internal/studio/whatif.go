@@ -160,6 +160,11 @@ func (s *Server) explainWhatIf(ctx context.Context, tuples []melange.ContextualT
 	if _, err := tx.ExecContext(ctx, whatIfViewSQL(s.dbSchema, tuples)); err != nil {
 		return nil, fmt.Errorf("%s: creating the temporary view: %v", needs, err)
 	}
+	// As in Checker.setupContextualTuples: cached PL/pgSQL statements keep the
+	// melange_tuples they resolved, so they must resolve it again to see the view.
+	if _, err := tx.ExecContext(ctx, "DISCARD PLANS"); err != nil {
+		return nil, err
+	}
 	if _, err := tx.ExecContext(ctx, "SET TRANSACTION READ ONLY"); err != nil {
 		return nil, err
 	}

@@ -3,6 +3,7 @@ package test
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -288,5 +290,140 @@ func TestContextualTuples_ConcurrentIsolation(t *testing.T) {
 				isolationCheck(t, cb, "bob", nil, false)
 			})
 		}
+	}
+}
+
+// A pooled session runs contextual and plain requests in any order. PL/pgSQL
+// keeps each statement's parse tree, with melange_tuples already resolved,
+// across calls; creating the temp view later on the same session does not
+// invalidate a tree that resolved the base relation, so a contextual request
+// after a plain one must still see its contextual tuples.
+func TestContextualTuples_ReusedSession(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	admin := isolationFixture(t, "public")
+	isolationExec(t, admin, `INSERT INTO public.melange_tuples VALUES ('user', 'carol', 'writer', 'document', 'base')`)
+	role := isolationRole(t, admin, "public")
+	db := isolationPool(t, admin, role, nil)
+	c := melange.NewChecker(db)
+	ctx := context.Background()
+	bob := melange.Object{Type: "user", ID: "bob"}
+
+	list := func(facts []melange.ContextualTuple) []string {
+		t.Helper()
+		var ids []string
+		var err error
+		if facts == nil {
+			ids, err = c.ListObjectsAll(ctx, bob, melange.Relation("writer"), "document")
+		} else {
+			ids, _, err = c.ListObjectsWithContextualTuples(ctx, bob, melange.Relation("writer"), "document", facts, melange.PageOptions{})
+		}
+		require.NoError(t, err)
+		return ids
+	}
+	for round := range 3 {
+		assert.Equal(t, []string{"doc"}, list(isolationFacts("bob")), "contextual list, round %d", round)
+		assert.Empty(t, list(nil), "plain list, round %d", round)
+		isolationCheck(t, c, "bob", isolationFacts("bob"), true)
+		isolationCheck(t, c, "bob", nil, false)
+	}
+}
+
+// cancelAfterContextualView cancels the request once its temp view exists.
+type cancelAfterContextualView struct{ cancel context.CancelFunc }
+
+func (c cancelAfterContextualView) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	return context.WithValue(ctx, contextualQueryKey{}, data.SQL)
+}
+
+func (c cancelAfterContextualView) TraceQueryEnd(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryEndData) {
+	if query, _ := ctx.Value(contextualQueryKey{}).(string); strings.HasPrefix(query, "CREATE TEMP VIEW melange_tuples AS") && data.Err == nil {
+		c.cancel()
+	}
+}
+
+// cancelConnector wraps lib/pq, canceling the request once its temp view
+// exists. Its connections refuse a canceled request before sending it, as a
+// driver may, so the session stays healthy and goes back to the pool as is
+// (pgx and lib/pq themselves close a session whose request was canceled).
+type cancelConnector struct {
+	driver.Connector
+	cancel context.CancelFunc
+}
+
+func (c cancelConnector) Connect(ctx context.Context) (driver.Conn, error) {
+	conn, err := c.Connector.Connect(ctx)
+	return cancelConn{Conn: conn, cancel: c.cancel}, err
+}
+
+type cancelConn struct {
+	driver.Conn
+	cancel context.CancelFunc
+}
+
+func (c cancelConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	res, err := c.Conn.(driver.ExecerContext).ExecContext(ctx, query, args)
+	if err == nil && strings.HasPrefix(query, "CREATE TEMP VIEW melange_tuples AS") {
+		c.cancel()
+	}
+	return res, err
+}
+
+func (c cancelConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return c.Conn.(driver.QueryerContext).QueryContext(ctx, query, args)
+}
+
+// A request canceled after its view is created must not leave the view, and
+// its tuples, on the pooled session for later requests.
+func TestContextualTuples_CanceledRequestCleansUp(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	pools := map[string]func(t *testing.T, admin *sql.DB, cancel context.CancelFunc) *sql.DB{
+		"pgx": func(t *testing.T, admin *sql.DB, cancel context.CancelFunc) *sql.DB {
+			return isolationPool(t, admin, isolationRole(t, admin, "public"), cancelAfterContextualView{cancel: cancel})
+		},
+		"refusing driver": func(t *testing.T, admin *sql.DB, cancel context.CancelFunc) *sql.DB {
+			conn, err := admin.Conn(context.Background())
+			require.NoError(t, err)
+			var dsn string
+			err = conn.Raw(func(raw any) error {
+				dsn = raw.(*stdlib.Conn).Conn().Config().ConnString()
+				return nil
+			})
+			require.NoError(t, conn.Close())
+			require.NoError(t, err)
+			connector, err := pq.NewConnector(dsn)
+			require.NoError(t, err)
+			db := sql.OpenDB(cancelConnector{Connector: connector, cancel: cancel})
+			db.SetMaxOpenConns(1)
+			db.SetMaxIdleConns(1)
+			t.Cleanup(func() { assert.NoError(t, db.Close()) })
+			return db
+		},
+	}
+	for name, pool := range pools {
+		t.Run(name, func(t *testing.T) {
+			admin := isolationFixture(t, "public")
+			ctx, cancel := context.WithCancel(context.Background())
+			db := pool(t, admin, cancel)
+			c := melange.NewChecker(db)
+
+			_, err := c.CheckWithContextualTuples(ctx,
+				melange.Object{Type: "user", ID: "bob"}, melange.Relation("writer"), melange.Object{Type: "document", ID: "doc"}, isolationFacts("bob"))
+			require.Error(t, err)
+
+			var view sql.NullString
+			require.NoError(t, db.QueryRow("SELECT to_regclass('pg_temp.melange_tuples')::text").Scan(&view))
+			assert.False(t, view.Valid, "temp view %s outlived the canceled request", view.String)
+			isolationCheck(t, c, "bob", nil, false)
+		})
 	}
 }

@@ -3,10 +3,12 @@ package melange
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"log"
 	"strings"
 	"sync"
+	"time"
 )
 
 // schemaValidation tracks which database schemas have been validated.
@@ -845,7 +847,11 @@ func (c *Checker) prepareContextualTuples(ctx context.Context, tuples []Contextu
 			return nil, nil, err
 		}
 		cleanup := func() {
-			c.cleanupContextualTuples(ctx, conn)
+			if err := c.cleanupContextualTuples(ctx, conn); err != nil {
+				// The view may still be in place: close the session rather
+				// than pool it, or later requests would see the tuples.
+				_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			}
 			_ = conn.Close()
 		}
 		if err := c.setupContextualTuples(ctx, conn, tuples); err != nil {
@@ -854,14 +860,14 @@ func (c *Checker) prepareContextualTuples(ctx context.Context, tuples []Contextu
 		}
 		return conn, cleanup, nil
 	case *sql.Tx:
-		cleanup := func() { c.cleanupContextualTuples(ctx, q) }
+		cleanup := func() { _ = c.cleanupContextualTuples(ctx, q) }
 		if err := c.setupContextualTuples(ctx, q, tuples); err != nil {
 			cleanup()
 			return nil, nil, err
 		}
 		return q, cleanup, nil
 	case *sql.Conn:
-		cleanup := func() { c.cleanupContextualTuples(ctx, q) }
+		cleanup := func() { _ = c.cleanupContextualTuples(ctx, q) }
 		if err := c.setupContextualTuples(ctx, q, tuples); err != nil {
 			cleanup()
 			return nil, nil, err
@@ -921,15 +927,32 @@ SELECT subject_type, subject_id, relation, object_type, object_id FROM (VALUES `
 	if _, err := q.ExecContext(ctx, sb.String()); err != nil {
 		return err
 	}
+	// PL/pgSQL keeps each statement's parse tree, with melange_tuples resolved,
+	// across calls on a session. Creating the temp view does not invalidate a
+	// tree that resolved the base relation during an earlier plain request on
+	// this pooled session, so the generated functions would ignore the
+	// contextual tuples. Discarding the session's plans makes them resolve the
+	// name again. Dropping the view invalidates the plans that resolved it.
+	if _, err := q.ExecContext(ctx, "DISCARD PLANS"); err != nil {
+		return err
+	}
 	return nil
 }
 
+// contextualCleanupTimeout bounds the DROP VIEW of contextual tuple cleanup,
+// which runs even when the request's context is done.
+const contextualCleanupTimeout = 5 * time.Second
+
 // cleanupContextualTuples drops the temporary view created by setupContextualTuples.
-// This must be called after permission checks complete to prevent temp object leakage.
-// The cleanup is best-effort (ignores errors) since temp objects are automatically
-// cleaned up when the session ends anyway.
-func (c *Checker) cleanupContextualTuples(ctx context.Context, q Execer) {
-	_, _ = q.ExecContext(ctx, "DROP VIEW IF EXISTS pg_temp.melange_tuples")
+// This must be called after permission checks complete: a view left on a
+// pooled session would show its tuples to every later request on it. It runs
+// without the request's cancellation, which would otherwise stop the drop
+// from being sent after a canceled or timed-out request.
+func (c *Checker) cleanupContextualTuples(ctx context.Context, q Execer) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), contextualCleanupTimeout)
+	defer cancel()
+	_, err := q.ExecContext(ctx, "DROP VIEW IF EXISTS pg_temp.melange_tuples")
+	return err
 }
 
 // baseTuplesSchema returns the schema containing the melange_tuples relation,
