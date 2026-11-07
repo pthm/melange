@@ -189,7 +189,7 @@ func writeChangedFunctions(b *strings.Builder, namedFunctions []NamedFunction, c
 	// Accessible functions' bodies name melange_tuples unqualified, resolved
 	// when called (see writeDispatchers).
 	accessible := slices.ContainsFunc(changedFns, func(nf NamedFunction) bool {
-		return strings.HasPrefix(nf.Name, "accessible_")
+		return strings.HasPrefix(nf.Name, "accessible")
 	})
 	if accessible {
 		fmt.Fprintf(b, "SET check_function_bodies = off;\n\n")

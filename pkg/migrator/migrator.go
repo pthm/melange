@@ -882,11 +882,11 @@ func shouldSkipApply(lastMigration *MigrationRecord, currentChecksums map[string
 }
 
 // GeneratedFunctionFilter matches pg_proc rows (aliased p) named like a
-// per-relation function melange generates: check_, list_, expand_, explain_
-// or accessible_.
+// per-relation function melange generates: check_, list_, expand_, explain_,
+// accessible_ or accessiblesk_.
 // Migrate's orphan cleanup and doctor's orphan report share it so a new family
 // can't be missed by one of them.
-const GeneratedFunctionFilter = `p.proname ~ '^(check|list|expand|explain|accessible)_'`
+const GeneratedFunctionFilter = `p.proname ~ '^(check|list|expand|explain|accessible|accessiblesk)_'`
 
 // getCurrentFunctions returns the installed functions that orphan cleanup may
 // drop: those matching GeneratedFunctionFilter that a previous migration

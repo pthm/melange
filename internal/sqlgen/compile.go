@@ -463,6 +463,7 @@ func CollectFunctionNames(analyses []RelationAnalysis) []string {
 				listObjectsFunctionName(a.ObjectType, a.Relation),
 				listSubjectsFunctionName(a.ObjectType, a.Relation),
 				AccessibleObjectsFunctionName(a.ObjectType, a.Relation),
+				accessibleSubjectKindFunctionName(a.ObjectType, a.Relation),
 			)
 		}
 	}

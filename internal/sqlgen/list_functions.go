@@ -77,7 +77,9 @@ func GenerateListSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLDat
 				a.ObjectType, a.Relation, err)
 		}
 		result.ListObjectsFunctions = append(result.ListObjectsFunctions, objFn.List)
-		accessible = append(accessible, NamedFunction{Name: AccessibleObjectsFunctionName(a.ObjectType, a.Relation), SQL: objFn.Accessible})
+		accessible = append(accessible,
+			NamedFunction{Name: accessibleSubjectKindFunctionName(a.ObjectType, a.Relation), SQL: objFn.AccessibleKind},
+			NamedFunction{Name: AccessibleObjectsFunctionName(a.ObjectType, a.Relation), SQL: objFn.Accessible})
 
 		// Generate list_subjects function
 		subjFn, err := generateListSubjectsFunctionWithLookup(a, relInline, databaseSchema, graph, opts)
