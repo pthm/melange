@@ -161,3 +161,16 @@ CREATE INDEX IF NOT EXISTS idx_pr_reviewers_subj_text ON pull_request_reviewers 
 
 -- Repository bans: lookup for exclusion checks (includes wildcard support)
 CREATE INDEX IF NOT EXISTS idx_repo_bans_text ON repository_bans ((repository_id::TEXT), (user_id::TEXT));
+
+-- Subject lookups for the parent links and author/assignee branches: list
+-- functions find the objects linked to a set of subjects with
+-- subject_id = ANY(ARRAY(...)), which needs an index leading with the
+-- subject column (melange doctor's subject_lookup_indexes check).
+CREATE INDEX IF NOT EXISTS idx_teams_org_subj_text ON teams ((organization_id::TEXT), (id::TEXT));
+CREATE INDEX IF NOT EXISTS idx_repos_org_subj_text ON repositories ((organization_id::TEXT), (id::TEXT));
+CREATE INDEX IF NOT EXISTS idx_repos_owner_subj_text ON repositories ((owner_id::TEXT), (id::TEXT));
+CREATE INDEX IF NOT EXISTS idx_issues_repo_subj_text ON issues ((repository_id::TEXT), (id::TEXT));
+CREATE INDEX IF NOT EXISTS idx_issues_author_subj_text ON issues ((author_id::TEXT), (id::TEXT));
+CREATE INDEX IF NOT EXISTS idx_issues_assignee_subj_text ON issues ((assignee_id::TEXT), (id::TEXT));
+CREATE INDEX IF NOT EXISTS idx_prs_repo_subj_text ON pull_requests ((repository_id::TEXT), (id::TEXT));
+CREATE INDEX IF NOT EXISTS idx_prs_author_subj_text ON pull_requests ((author_id::TEXT), (id::TEXT));
