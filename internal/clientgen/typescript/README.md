@@ -4,7 +4,7 @@ TypeScript client code generator for Melange.
 
 ## Responsibility
 
-Generates type-safe TypeScript code from OpenFGA schemas, producing object type constants, relation constants, and factory functions.
+Generates type-safe TypeScript code from OpenFGA schemas, producing object type constants, relation constants, factory functions, and the names of the installed accessible functions.
 
 ## Architecture Role
 
@@ -12,7 +12,7 @@ Registered in the generator registry as "typescript". Invoked by the CLI via `me
 
 ## Generated Output
 
-The generator produces three TypeScript files:
+The generator produces four TypeScript files:
 
 ### types.ts
 
@@ -33,6 +33,15 @@ Contains factory functions and wildcard constructors:
 - Wildcard constructors (any + PascalCase) - e.g., `anyUser()`, `anyRepository()`
 
 All functions return `MelangeObject` from the `@pthm/melange` runtime package.
+
+### sql.ts
+
+Contains the exact names of the installed accessible functions of the selected relations, truncated names included:
+
+- `AccessibleFunctions` - `{ [type]: { [relation]: name } } as const`
+- `AccessibleByParentFunctions` - `{ [type]: { [relation]: { [link]: name } } } as const`, the parent-key forms
+
+Keys are the schema's names, quoted when they are not identifiers. A map is `{} as const` when its function family is off.
 
 ### index.ts
 
@@ -64,13 +73,16 @@ export function anyUser(): MelangeObject {
 export { ObjectTypes, Relations } from './types.js';
 export type { ObjectType, Relation } from './types.js';
 export * from './schema.js';
+export { AccessibleFunctions, AccessibleByParentFunctions } from './sql.js';
 ```
 
 ## Configuration
 
 Supports standard `clientgen.Config` options:
 
-- `RelationFilter` - Prefix filter for relations (e.g., "can_" to generate only permissions)
+- `Exposure` - The SQL API exposure the database is migrated with; decides the accessible names and, unless `Relations` is set, the relations
+- `Relations` - Relation patterns for the `Relations` constants
+- `RelationFilter` - Legacy prefix filter applied after them (e.g., "can_")
 - `Version` - Melange version for header comment
 - `SourcePath` - Schema file path for header comment
 
@@ -90,5 +102,7 @@ The `Package` and `IDType` config fields are not used (TypeScript doesn't have p
 melange generate client --runtime typescript --schema schema.fga --output src/authz/
 
 # Generate only permission relations
-melange generate client --runtime typescript --schema schema.fga --output src/authz/ --filter can_
+melange generate client --runtime typescript --schema schema.fga --output src/authz/ --include-relation 'can_*'
 ```
+
+`clients/typescript/test/fixtures/clientgen` holds this generator's output for `test/testutil/testdata/schema.fga`, which the TypeScript unit tests type-check with `tsc`. `TestGenerator_Fixtures` keeps it current; regenerate it with `just update-golden`.

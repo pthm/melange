@@ -24,6 +24,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Options == nil {
 		t.Error("Options should be initialized (non-nil map)")
 	}
+	if cfg.Exposure != nil || cfg.Relations != nil {
+		t.Error("Exposure and Relations should be nil (the default exposure)")
+	}
 }
 
 func TestListRuntimes(t *testing.T) {
@@ -133,9 +136,13 @@ func TestGenerate(t *testing.T) {
 		if !strings.Contains(code, "package mypkg") {
 			t.Error("should use custom package name")
 		}
-		// With filter "can_", "viewer" should be excluded
+		// With filter "can_", "viewer" should be excluded, and so should its
+		// accessible function name
 		if strings.Contains(code, "RelViewer") {
 			t.Error("should filter out relations not matching prefix")
+		}
+		if strings.Contains(code, "SQLAccessibleDocumentViewer") {
+			t.Error("should filter out accessible function names of relations not matching prefix")
 		}
 	})
 }
@@ -177,6 +184,11 @@ func TestGenerateGo(t *testing.T) {
 		}
 		if !strings.Contains(code, "TypeUser") {
 			t.Error("should contain TypeUser")
+		}
+		// The deprecated config sets no exposure: the default, with every
+		// accessible function.
+		if !strings.Contains(code, `SQLAccessibleDocumentOwner = "accessible_document_owner"`) {
+			t.Errorf("should contain the accessible function name:\n%s", code)
 		}
 	})
 

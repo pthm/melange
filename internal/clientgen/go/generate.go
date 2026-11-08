@@ -1,7 +1,8 @@
 // Package gogen implements the Go client code generator for melange.
 //
 // This generator produces type-safe Go code from authorization schemas,
-// including object type constants, relation constants, and constructor functions.
+// including object type constants, relation constants, constructor functions,
+// and the names of the installed accessible functions.
 //
 // Generated code uses the melange runtime (github.com/pthm/melange/melange)
 // for type definitions.
@@ -10,10 +11,13 @@ package gogen
 import (
 	"bytes"
 	"fmt"
-	"sort"
+	"go/format"
+	"go/token"
+	"slices"
 	"strings"
 
 	"github.com/pthm/melange/internal/clientgen"
+	"github.com/pthm/melange/pkg/compiler"
 	"github.com/pthm/melange/pkg/schema"
 )
 
@@ -39,21 +43,29 @@ func (g *Generator) DefaultConfig() *clientgen.Config {
 
 // Generate produces Go client code from the given type definitions.
 //
-// Returns a single file map entry with key "schema_gen.go".
+// Returns a single file map entry with key "schema_gen.go", formatted with
+// gofmt.
 //
 // Generated code includes:
-//   - ObjectType constants (TypeUser, TypeRepository, etc.)
-//   - Relation constants (RelCanRead, RelOwner, etc.)
+//   - ObjectType constants (TypeUser, TypeRepository, etc.) for every type
+//   - Relation constants (RelCanRead, RelOwner, etc.) for the relations the
+//     config selects (see clientgen.Config)
 //   - Constructor functions (User(id), Repository(id), etc.)
 //   - Wildcard constructors (AnyUser(), AnyRepository(), etc.)
+//   - The names of the installed accessible functions of the selected
+//     relations (SQLAccessibleRepositoryCanRead, and
+//     SQLAccessibleIssueCanReadByRepo for parent-key forms), and the
+//     SQLAccessibleFunction lookup
+//
+// It fails when two schema names map to one Go identifier, or a name is not
+// a valid Go identifier.
 func (g *Generator) Generate(types []schema.TypeDefinition, cfg *clientgen.Config) (map[string][]byte, error) {
-	// Validate schema before generating code
-	if err := schema.DetectCycles(types); err != nil {
-		return nil, err
-	}
-
 	if cfg == nil {
 		cfg = g.DefaultConfig()
+	}
+	m, err := clientgen.Resolve(types, cfg)
+	if err != nil {
+		return nil, err
 	}
 
 	// Apply defaults for empty fields
@@ -66,28 +78,9 @@ func (g *Generator) Generate(types []schema.TypeDefinition, cfg *clientgen.Confi
 		pkg = "authz"
 	}
 
-	// Collect unique object types
-	objectTypes := make([]string, 0, len(types))
-	for _, t := range types {
-		objectTypes = append(objectTypes, t.Name)
+	if err := declareIdentifiers(m); err != nil {
+		return nil, err
 	}
-	sort.Strings(objectTypes)
-
-	// Collect unique relations (with optional prefix filter)
-	relSet := make(map[string]bool)
-	for _, t := range types {
-		for _, r := range t.Relations {
-			if cfg.RelationFilter == "" || strings.HasPrefix(r.Name, cfg.RelationFilter) {
-				relSet[r.Name] = true
-			}
-		}
-	}
-
-	relations := make([]string, 0, len(relSet))
-	for r := range relSet {
-		relations = append(relations, r)
-	}
-	sort.Strings(relations)
 
 	// Generate code into buffer
 	var buf bytes.Buffer
@@ -121,20 +114,18 @@ func (g *Generator) Generate(types []schema.TypeDefinition, cfg *clientgen.Confi
 	// Write ObjectType constants
 	ew.writeln("// ObjectType constants from schema.")
 	ew.writeln("const (")
-	for _, t := range objectTypes {
-		constName := "Type" + pascalCase(t)
-		ew.writef("\t%s melange.ObjectType = %q\n", constName, t)
+	for _, t := range m.ObjectTypes {
+		ew.writef("\t%s melange.ObjectType = %q\n", typeConst(t), t)
 	}
 	ew.writeln(")")
 	ew.writeln("")
 
 	// Write Relation constants
-	ew.writeln("// Relations from schema.")
-	ew.writeln("// ALL relations are generated, not just \"can_*\" permissions.")
+	ew.writeln("// Relations from schema that the client selects: by default, the")
+	ew.writeln("// relations the SQL API exposes.")
 	ew.writeln("const (")
-	for _, r := range relations {
-		constName := "Rel" + pascalCase(r)
-		ew.writef("\t%s melange.Relation = %q\n", constName, r)
+	for _, r := range m.Relations {
+		ew.writef("\t%s melange.Relation = %q\n", relConst(r), r)
 	}
 	ew.writeln(")")
 	ew.writeln("")
@@ -142,9 +133,9 @@ func (g *Generator) Generate(types []schema.TypeDefinition, cfg *clientgen.Confi
 	// Write constructor functions
 	ew.writeln("// Object constructors.")
 	ew.writeln("")
-	for _, t := range objectTypes {
+	for _, t := range m.ObjectTypes {
 		funcName := pascalCase(t)
-		constName := "Type" + funcName
+		constName := typeConst(t)
 		ew.writef("// %s creates a %s object for relation checks.\n", funcName, t)
 		if idType == "string" {
 			ew.writef("func %s(id string) melange.Object { return melange.Object{Type: %s, ID: id} }\n\n", funcName, constName)
@@ -156,20 +147,130 @@ func (g *Generator) Generate(types []schema.TypeDefinition, cfg *clientgen.Confi
 	// Write wildcard constructors
 	ew.writeln("// Wildcard constructors for public access patterns.")
 	ew.writeln("")
-	for _, t := range objectTypes {
+	for _, t := range m.ObjectTypes {
 		funcName := "Any" + pascalCase(t)
-		constName := "Type" + pascalCase(t)
 		ew.writef("// %s returns a wildcard %s that matches type:* tuples.\n", funcName, t)
-		ew.writef("func %s() melange.Object { return melange.Object{Type: %s, ID: \"*\"} }\n\n", funcName, constName)
+		ew.writef("func %s() melange.Object { return melange.Object{Type: %s, ID: \"*\"} }\n\n", funcName, typeConst(t))
 	}
+
+	writeAccessible(ew, m)
 
 	if ew.err != nil {
 		return nil, ew.err
 	}
+	formatted, err := format.Source(buf.Bytes())
+	if err != nil {
+		return nil, fmt.Errorf("formatting generated code: %w", err)
+	}
 
 	return map[string][]byte{
-		"schema_gen.go": buf.Bytes(),
+		"schema_gen.go": formatted,
 	}, nil
+}
+
+// accessibleLookup is the generated function that maps a type and relation
+// to its accessible function name.
+const accessibleLookup = "SQLAccessibleFunction"
+
+// typeConst, relConst and accessibleConst name the generated constants.
+func typeConst(t string) string { return "Type" + pascalCase(t) }
+func relConst(r string) string  { return "Rel" + pascalCase(r) }
+func accessibleConst(f compiler.AccessibleFunction) string {
+	name := "SQLAccessible" + pascalCase(f.ObjectType) + pascalCase(f.Relation)
+	if f.Link != "" {
+		name += "By" + pascalCase(f.Link)
+	}
+	return name
+}
+
+// declareIdentifiers checks that every top-level identifier the file
+// declares is valid and names one thing.
+func declareIdentifiers(m *clientgen.Model) error {
+	ids := clientgen.NewIdentifiers(token.IsIdentifier)
+	if err := ids.Declare(accessibleLookup, "the accessible function lookup"); err != nil {
+		return err
+	}
+	for _, t := range m.ObjectTypes {
+		for _, d := range [][2]string{
+			{typeConst(t), fmt.Sprintf("the constant for type %q", t)},
+			{pascalCase(t), fmt.Sprintf("the constructor for type %q", t)},
+			{"Any" + pascalCase(t), fmt.Sprintf("the wildcard constructor for type %q", t)},
+		} {
+			if err := ids.Declare(d[0], d[1]); err != nil {
+				return err
+			}
+		}
+	}
+	for _, r := range m.Relations {
+		if err := ids.Declare(relConst(r), fmt.Sprintf("the constant for relation %q", r)); err != nil {
+			return err
+		}
+	}
+	for _, f := range slices.Concat(m.Accessible, m.AccessibleByParent) {
+		what := fmt.Sprintf("the accessible function name for %s#%s", f.ObjectType, f.Relation)
+		if f.Link != "" {
+			what = fmt.Sprintf("the parent-key accessible function name for %s#%s by %s", f.ObjectType, f.Relation, f.Link)
+		}
+		if err := ids.Declare(accessibleConst(f), what); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeAccessible writes the accessible function name constants and the
+// lookup from a type and relation to the per-relation name.
+func writeAccessible(ew *errWriter, m *clientgen.Model) {
+	if len(m.Accessible) > 0 {
+		ew.writeln("// Accessible functions installed for the relations above, as migrate")
+		ew.writeln("// names them: names longer than 63 bytes are truncated and hashed, so use")
+		ew.writeln("// these instead of building them. accessible_<type>_<relation>(subject_type,")
+		ew.writeln("// subject_id) returns the IDs of the objects on which the subject holds")
+		ew.writeln("// the relation. Names are unqualified: qualify them with the database")
+		ew.writeln("// schema when it is not on search_path.")
+		ew.writeln("const (")
+		for _, f := range m.Accessible {
+			ew.writef("\t%s = %q\n", accessibleConst(f), f.Name)
+		}
+		ew.writeln(")")
+		ew.writeln("")
+	}
+	if len(m.AccessibleByParent) > 0 {
+		ew.writeln("// Parent-key accessible functions installed for the relations above,")
+		ew.writeln("// named like the accessible functions. Each returns the IDs of the parent")
+		ew.writeln("// objects through whose link the subject holds the relation, to filter")
+		ew.writeln("// on the column that holds the link.")
+		ew.writeln("const (")
+		for _, f := range m.AccessibleByParent {
+			ew.writef("\t// %s lists the %s IDs through which the subject holds %s on %s objects linked by %s.\n",
+				accessibleConst(f), f.ParentType, f.Relation, f.ObjectType, f.Link)
+			ew.writef("\t%s = %q\n", accessibleConst(f), f.Name)
+		}
+		ew.writeln(")")
+		ew.writeln("")
+	}
+
+	ew.writef("// %s returns the name of the accessible function installed\n", accessibleLookup)
+	ew.writeln("// for a relation on a type, and false when there is none.")
+	ew.writef("func %s(objectType melange.ObjectType, relation melange.Relation) (string, bool) {\n", accessibleLookup)
+	if len(m.Accessible) > 0 {
+		ew.writeln("\tswitch objectType {")
+		for i, f := range m.Accessible {
+			if i == 0 || m.Accessible[i-1].ObjectType != f.ObjectType {
+				if i > 0 {
+					ew.writeln("\t\t}")
+				}
+				ew.writef("\tcase %s:\n", typeConst(f.ObjectType))
+				ew.writeln("\t\tswitch relation {")
+			}
+			ew.writef("\t\tcase %s:\n", relConst(f.Relation))
+			ew.writef("\t\t\treturn %s, true\n", accessibleConst(f))
+		}
+		ew.writeln("\t\t}")
+		ew.writeln("\t}")
+	}
+	ew.writeln("\treturn \"\", false")
+	ew.writeln("}")
 }
 
 // errWriter wraps a bytes.Buffer and captures the first error.
@@ -185,11 +286,11 @@ func (ew *errWriter) writeln(s string) {
 	_, ew.err = fmt.Fprintln(ew.w, s)
 }
 
-func (ew *errWriter) writef(format string, args ...any) {
+func (ew *errWriter) writef(layout string, args ...any) {
 	if ew.err != nil {
 		return
 	}
-	_, ew.err = fmt.Fprintf(ew.w, format, args...)
+	_, ew.err = fmt.Fprintf(ew.w, layout, args...)
 }
 
 // pascalCase converts snake_case to PascalCase.

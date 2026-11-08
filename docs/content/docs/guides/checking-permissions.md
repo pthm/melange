@@ -713,6 +713,13 @@ JOIN list_accessible_objects('user', '123', 'viewer', 'document') a
 
 {{< /tabs >}}
 
+To filter a query of your own, call the relation's [accessible function](../../reference/sql-api/#accessible_type_relation), which PostgreSQL inlines into the query. Take its name from the [generated client](../../reference/generated-code/#accessible-function-names) rather than building it, since long names are truncated and hashed:
+
+```go
+rows, err := db.QueryContext(ctx, `SELECT d.* FROM documents d
+    WHERE d.id::text IN (SELECT * FROM `+authz.SQLAccessibleDocumentViewer+`('user', $1))`, userID)
+```
+
 See [Listing Objects](../listing-objects/) for details.
 
 ## Schema Validation

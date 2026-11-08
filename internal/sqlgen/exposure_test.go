@@ -764,7 +764,11 @@ func goldenDigest(o exposureOutput) string {
 // testdata schemas. It was recorded from the output before exposure support,
 // which differs only by the list_*_sub calls now routed to
 // check_permission_internal and list_accessible_subjects_internal, and by
-// list_accessible_subjects_internal itself. Exposures that leave nothing out
+// list_accessible_subjects_internal itself. Some schema.golden entries were
+// re-recorded from post-exposure output when the long-name pull_request
+// relation was added: that relation's functions, the list_pull_request_*_sub
+// functions, the dispatchers and the function name digest. Those entries are
+// a snapshot, not a pre-exposure baseline. Exposures that leave nothing out
 // for the model must produce the same output, as must the signatures without
 // options. Run with -update-exposure-golden after an intended codegen change.
 func TestExposure_DefaultGolden(t *testing.T) {

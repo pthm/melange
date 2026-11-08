@@ -99,8 +99,29 @@ type ClientConfig struct {
 	Runtime string `mapstructure:"runtime"`
 	Output  string `mapstructure:"output"`
 	Package string `mapstructure:"package"`
-	Filter  string `mapstructure:"filter"`
-	IDType  string `mapstructure:"id_type"`
+	// Relations selects the relations that get constants. Without an
+	// include it starts from sql.relations, so the client names what
+	// migrate exposes, and its excludes only narrow that.
+	Relations SQLRelationsConfig `mapstructure:"relations"`
+	// Filter is a relation name prefix applied after Relations. Deprecated
+	// in favor of relations.include (for example "can_*").
+	Filter string `mapstructure:"filter"`
+	IDType string `mapstructure:"id_type"`
+}
+
+// RelationPatterns returns the client's relation selector. With its own
+// include patterns it is the client's include and exclude alone. Without
+// them it is sqlRelations, narrowed by the client's exclude patterns, so an
+// exclude never names a relation migrate does not expose.
+func (c ClientConfig) RelationPatterns(sqlRelations SQLRelationsConfig) compiler.RelationPatterns {
+	r := c.Relations
+	if len(r.Include) > 0 {
+		return compiler.RelationPatterns{Include: r.Include, Exclude: r.Exclude}
+	}
+	return compiler.RelationPatterns{
+		Include: sqlRelations.Include,
+		Exclude: slices.Concat(sqlRelations.Exclude, r.Exclude),
+	}
 }
 
 // MigrationGenConfig holds settings for `melange generate migration`, which
@@ -157,12 +178,18 @@ type SQLFunctionsConfig struct {
 // Validate reports the first invalid relation pattern, naming its key and,
 // when the value came from one, its environment variable.
 func (s SQLConfig) Validate() error {
+	return s.Relations.validate("sql.relations")
+}
+
+// validate reports the first invalid pattern of the relations section at
+// the config key section, as SQLConfig.Validate does.
+func (r SQLRelationsConfig) validate(section string) error {
 	for _, list := range []struct {
 		key      string
 		patterns []string
 	}{
-		{"sql.relations.include", s.Relations.Include},
-		{"sql.relations.exclude", s.Relations.Exclude},
+		{section + ".include", r.Include},
+		{section + ".exclude", r.Exclude},
 	} {
 		for _, p := range list.patterns {
 			if err := compiler.ValidateRelationPattern(p); err != nil {
@@ -283,13 +310,21 @@ func decodeConfig(v *viper.Viper) (*Config, error) {
 	if err := rejectUnknownSQLKeys(v); err != nil {
 		return nil, err
 	}
+	if err := rejectUnknownClientRelationKeys(v); err != nil {
+		return nil, err
+	}
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return nil, fmt.Errorf("unmarshaling config: %w", err)
 	}
-	cfg.SQL.Relations.Include = TrimPatterns(cfg.SQL.Relations.Include)
-	cfg.SQL.Relations.Exclude = TrimPatterns(cfg.SQL.Relations.Exclude)
+	for _, r := range []*SQLRelationsConfig{&cfg.SQL.Relations, &cfg.Generate.Client.Relations} {
+		r.Include = TrimPatterns(r.Include)
+		r.Exclude = TrimPatterns(r.Exclude)
+	}
 	if err := cfg.SQL.Validate(); err != nil {
+		return nil, err
+	}
+	if err := cfg.Generate.Client.Relations.validate("generate.client.relations"); err != nil {
 		return nil, err
 	}
 	return &cfg, nil
@@ -345,6 +380,26 @@ func rejectUnknownSQLKeys(v *viper.Viper) error {
 	}
 	return fmt.Errorf("%s: unknown key in the sql section; it accepts relations.include, relations.exclude and functions.{%s}",
 		unknown[0], strings.Join(sqlFunctionFamilies, ","))
+}
+
+// rejectUnknownClientRelationKeys fails on generate.client.relations set to
+// a value (such as "inherit": leaving the section out inherits) or holding a
+// key other than include and exclude, which would silently select every
+// relation.
+func rejectUnknownClientRelationKeys(v *viper.Viper) error {
+	const section = "generate.client.relations"
+	for _, key := range v.AllKeys() {
+		switch {
+		case key == section:
+			value := v.Get(key)
+			if _, isMap := value.(map[string]any); value != nil && !isMap {
+				return fmt.Errorf("%s: must be a section with include and exclude lists, or left out to inherit sql.relations", key)
+			}
+		case strings.HasPrefix(key, section+".") && key != section+".include" && key != section+".exclude":
+			return fmt.Errorf("%s: unknown key; %s accepts include and exclude", key, section)
+		}
+	}
+	return nil
 }
 
 // envRefPattern matches ${VAR} references (braced form only). We deliberately
@@ -701,6 +756,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("generate.client.runtime", "")
 	v.SetDefault("generate.client.output", "")
 	v.SetDefault("generate.client.package", "authz")
+	// Empty relation lists inherit sql.relations.
+	v.SetDefault("generate.client.relations.include", []string{})
+	v.SetDefault("generate.client.relations.exclude", []string{})
 	v.SetDefault("generate.client.filter", "")
 	v.SetDefault("generate.client.id_type", "string")
 

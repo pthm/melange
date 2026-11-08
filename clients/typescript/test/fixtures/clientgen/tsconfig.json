@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "paths": {
+      "@pthm/melange": ["../../../src/index.ts"]
+    }
+  },
+  "include": ["check.ts", "schema/*.ts", "schema-no-accessible/*.ts"]
+}

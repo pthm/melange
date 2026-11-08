@@ -76,8 +76,10 @@ generate:
     schema: schemas/schema.fga  # Overrides top-level schema
     output: internal/authz
     package: authz
-    filter: can_
     id_type: string
+    # Relations to generate constants for; leave out to inherit sql.relations
+    relations:
+      include: ["can_*"]
 
   # Migration file generation settings (for external frameworks)
   migration:
@@ -95,7 +97,7 @@ doctor:
   verbose: false
   skip_performance: false
 
-# Generated SQL API (used by migrate, generate migration, status, doctor)
+# Generated SQL API (used by migrate, generate migration, generate client, status, doctor)
 # Omit the section to generate everything. See "SQL API Settings" below.
 sql:
   relations:
@@ -180,8 +182,12 @@ Configure under `generate.client:`:
 | `schema` | string | (top-level `schema`) | Path to schema file |
 | `output` | string | - | Output directory for generated code |
 | `package` | string | `authz` | Package/module name |
-| `filter` | string | - | Relation prefix filter (e.g., `can_`) |
+| `relations.include` | list | `[]` | Patterns of the relations to generate constants for, as in [`sql.relations`](#sql-api-settings) |
+| `relations.exclude` | list | `[]` | Patterns of the relations to leave out |
+| `filter` | string | - | Deprecated: relation name prefix applied after the patterns (e.g., `can_`). Use `relations.include: ["can_*"]` |
 | `id_type` | string | `string` | ID type for constructors |
+
+Without a `relations.include`, the client inherits `sql.relations` (include and exclude), so its constants match the relations `melange migrate` exposes, and a client `exclude` only narrows that. A client `include` replaces `sql.relations`. `include: ["*"]` selects every relation. The generated accessible function names always follow what a migration with the `sql:` section installs: the client names the accessible functions of the exposed relations it selects, `accessible_{type}_{relation}` when `sql.functions.accessible` is on and the `_by_{link}` forms when `sql.functions.parent_key` is on. `generate.client.relations` cannot be set to a value such as `inherit`; leave it out instead. A key under it other than `include` and `exclude` stops every command when the configuration is loaded. See [Generated Code](../generated-code/#which-relations).
 
 ### Generate Migration Settings
 
@@ -233,8 +239,8 @@ and how unexposed relations behave.
 | `relations.exclude` | list | `[]` | Patterns of the relations not to expose. Exclude wins over include |
 | `functions.list_objects` | bool | `true` | Enable the `list_objects` family: `list_accessible_objects` |
 | `functions.list_subjects` | bool | `true` | Enable the `list_subjects` family: `list_accessible_subjects` and the `list_<type>_<relation>_sub` functions |
-| `functions.accessible` | bool | `true` | Enable the `accessible` family: `accessible_objects` |
-| `functions.parent_key` | bool | `true` | Enable the `parent_key` family: the `accessible_<type>_<relation>_by_<link>` functions |
+| `functions.accessible` | bool | `true` | Enable the `accessible` family: `accessible_objects`, and the `accessible_<type>_<relation>` names in generated clients |
+| `functions.parent_key` | bool | `true` | Enable the `parent_key` family: the `accessible_<type>_<relation>_by_<link>` functions, and their names in generated clients |
 | `functions.expand` | bool | `true` | Enable the `expand` family: `expand_permission` and the `expand_<type>_<relation>` functions |
 | `functions.explain` | bool | `true` | Enable the `explain` family: `explain_permission` and the `explain_<type>_<relation>` functions |
 
@@ -276,6 +282,8 @@ in `melange_migrations`. Removing the section, or a key of it, widens the
 database back to the default on the next migrate. The command-line flags
 (`--include-relation`, `--exclude-relation`, `--no-<family>`) apply to one run
 only and are not remembered, so keep a lasting restriction in the config file.
+`melange generate client` reads the section too, without those flags, so a
+restriction kept in the file also gives the client the matching names.
 `melange status` and `melange doctor` compare the local exposure with the
 recorded one and report a difference as exposure drift.
 
@@ -499,7 +507,9 @@ All configuration options can be set via environment variables with the `MELANGE
 | `MELANGE_GENERATE_CLIENT_SCHEMA` | `generate.client.schema` |
 | `MELANGE_GENERATE_CLIENT_OUTPUT` | `generate.client.output` |
 | `MELANGE_GENERATE_CLIENT_PACKAGE` | `generate.client.package` |
-| `MELANGE_GENERATE_CLIENT_FILTER` | `generate.client.filter` |
+| `MELANGE_GENERATE_CLIENT_RELATIONS_INCLUDE` | `generate.client.relations.include` |
+| `MELANGE_GENERATE_CLIENT_RELATIONS_EXCLUDE` | `generate.client.relations.exclude` |
+| `MELANGE_GENERATE_CLIENT_FILTER` | `generate.client.filter` (deprecated) |
 | `MELANGE_GENERATE_CLIENT_ID_TYPE` | `generate.client.id_type` |
 | `MELANGE_GENERATE_MIGRATION_OUTPUT` | `generate.migration.output` |
 | `MELANGE_GENERATE_MIGRATION_NAME` | `generate.migration.name` |

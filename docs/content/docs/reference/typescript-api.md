@@ -131,7 +131,7 @@ const checker = new Checker(pool, { cache });
 
 ## Generated Code
 
-`melange generate client --runtime typescript` produces type-safe constants and factory functions. See [Generated Code](../generated-code/) for details.
+`melange generate client --runtime typescript` produces type-safe constants and factory functions, and the `AccessibleFunctions` and `AccessibleByParentFunctions` maps of the installed accessible function names. See [Generated Code](../generated-code/) for details.
 
 ## Calling SQL Directly
 

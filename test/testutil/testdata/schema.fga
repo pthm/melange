@@ -61,3 +61,4 @@ type pull_request
     define can_review: can_read from repo but not author
     define can_review_strict: can_read from repo but not banned
     define can_delete: can_admin from repo
+    define can_read_security_advisories_and_vulnerability_reports: can_admin from repo

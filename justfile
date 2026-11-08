@@ -734,6 +734,14 @@ generate: build-dev
 update-upstream-models:
     cd {{TEST}} && {{GO_TEST}} -count=1 -run '^TestOpenFGA_UpstreamModelsVendored$' ./openfgatests -update-upstream-models
 
+# Re-record golden test output after an intended codegen or testdata change:
+# internal/sqlgen's default-exposure digests and the generated TypeScript
+# fixtures the TypeScript unit tests type-check
+[group('Generate')]
+update-golden:
+    {{GO_TEST}} -count=1 -run '^TestExposure_DefaultGolden$' ./internal/sqlgen -update-exposure-golden
+    {{GO_TEST}} -count=1 -run '^TestGenerator_Fixtures$' ./internal/clientgen/typescript -update-fixtures
+
 # Validate the test schema
 [group('Generate')]
 validate:

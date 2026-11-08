@@ -12,6 +12,7 @@ package clientgen
 import (
 	"fmt"
 
+	"github.com/pthm/melange/pkg/compiler"
 	"github.com/pthm/melange/pkg/schema"
 )
 
@@ -48,9 +49,24 @@ type Config struct {
 	// For TypeScript: not typically used (uses exports)
 	Package string
 
-	// RelationFilter limits which relations get constants generated.
-	// If empty, all relations are included.
+	// Exposure is the SQL API exposure the database is migrated with (the
+	// sql section of melange.yaml). Accessible function names are emitted
+	// for the functions it installs for its exposed relations, and unless
+	// Relations is set its relations get constants. nil is the default
+	// exposure: every relation and every function family.
+	Exposure *compiler.Exposure
+
+	// Relations selects the relations that get constants, with the pattern
+	// syntax of Exposure.Relations. nil follows Exposure. Accessible function
+	// names are emitted only for relations both select.
+	Relations *compiler.RelationPatterns
+
+	// RelationFilter is a relation name prefix applied after Exposure and
+	// Relations, to relation constants and accessible function names alike.
+	// If empty, it selects every relation.
 	// Example: "can_" generates only permission relations, omitting roles.
+	// It is kept for compatibility; prefer Relations with an include pattern
+	// such as "can_*".
 	RelationFilter string
 
 	// IDType specifies the type to use for object IDs in constructors.

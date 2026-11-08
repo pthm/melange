@@ -114,7 +114,7 @@ internal/
 ├── clientgen/         # Generator registry and implementations
 │   ├── generator.go   # Generator interface
 │   ├── go/            # Go generator
-│   └── typescript/    # TypeScript generator (stub)
+│   └── typescript/    # TypeScript generator
 ├── sqlgen/            # SQL DSL, query builders, code generation internals
 └── doctor/            # CLI health check logic
 ```

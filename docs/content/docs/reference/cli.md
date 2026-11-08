@@ -899,7 +899,7 @@ Colours are emitted as 24-bit ANSI true colour so the mapping matches the VS Cod
 
 ### generate client
 
-Generate type-safe client code from your schema.
+Generate type-safe client code from your schema: type and relation constants, constructors, and the exact names of the accessible functions migrate installs. See [Generated Code](../generated-code/) for the output.
 
 ```bash
 melange generate client \
@@ -908,6 +908,8 @@ melange generate client \
   --output internal/authz \
   --package authz
 ```
+
+The client follows the `sql:` section of `melange.yaml`: relation constants for the relations `sql.relations` exposes (or `generate.client.relations` when set), and function names for what a migration with `sql.relations` and `sql.functions` installs for them. The `--no-<family>` flags of `migrate` are not seen here, so keep the families in `melange.yaml`. See [Which Relations](../generated-code/#which-relations).
 
 **Flags:**
 
@@ -918,7 +920,11 @@ melange generate client \
 | `--output`  | stdout               | Output directory for generated code                       |
 | `--package` | `authz`              | Package name for generated code                           |
 | `--id-type` | `string`             | ID type for constructors (`string`, `int64`, `uuid.UUID`) |
-| `--filter`  | `""`                 | Only generate relations with this prefix (e.g., `can_`)   |
+| `--include-relation` | `generate.client.relations.include`, see below | Generate constants only for relations matching this pattern, `relation` or `type#relation` (repeatable) |
+| `--exclude-relation` | `generate.client.relations.exclude`, see below | Generate no constants for relations matching this pattern (repeatable). With no client include pattern, it narrows the inherited `sql.relations` |
+| `--filter`  | `""`                 | Deprecated: a relation name prefix applied after the patterns. Use `--include-relation 'can_*'` |
+
+The relation patterns resolve with the precedence flag, `MELANGE_GENERATE_CLIENT_RELATIONS_*` variable, `generate.client.relations` in the config file, then `sql.relations`, then every relation. Each list follows that precedence on its own. Without a client include pattern the client starts from `sql.relations`, include and exclude, and client exclude patterns only narrow it: `--exclude-relation can_edit` gives constants for the exposed relations except `can_edit`. A client include pattern replaces `sql.relations`, so the client can also name relations migrate does not expose (such as roles used when writing tuples).
 
 **Example with all options:**
 
@@ -929,7 +935,7 @@ melange generate client \
   --output internal/authz \
   --package authz \
   --id-type int64 \
-  --filter can_
+  --include-relation 'can_*'
 ```
 
 **Output to stdout:**
@@ -953,11 +959,16 @@ const (
     TypeRepository   melange.ObjectType = "repository"
 )
 
-// Relation constants (filtered by prefix "can_")
+// Relation constants (the relations matching "can_*")
 const (
     RelCanRead   melange.Relation = "can_read"
     RelCanWrite  melange.Relation = "can_write"
     RelCanDelete melange.Relation = "can_delete"
+)
+
+// Accessible function names, as installed
+const (
+    SQLAccessibleRepositoryCanRead = "accessible_repository_can_read"
 )
 
 // Type-safe constructors
@@ -977,10 +988,10 @@ func AnyUser() melange.Object {
 
 **Supported runtimes:**
 
-| Runtime      | Status      | Description                                       |
-| ------------ | ----------- | ------------------------------------------------- |
-| `go`         | Implemented | Type-safe Go code with constants and constructors |
-| `typescript` | Planned     | TypeScript types and factory functions            |
+| Runtime      | Description                                                                         |
+| ------------ | ----------------------------------------------------------------------------------- |
+| `go`         | `schema_gen.go`: constants, constructors and accessible function name constants    |
+| `typescript` | `types.ts`, `schema.ts`, `sql.ts`, `index.ts`: constants, factories and name maps   |
 
 ### generate migration
 

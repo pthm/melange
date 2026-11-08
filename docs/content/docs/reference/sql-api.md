@@ -446,7 +446,7 @@ ORDER BY d.created_at DESC
 LIMIT 50;
 ```
 
-The inlined query reads `melange_tuples` through your query's `search_path`, so the schema holding it must be on the path. Rows can repeat; `IN` does not need them distinct. Long type and relation names are shortened with a hash to fit PostgreSQL's 63-character limit; `accessible_objects` needs no names.
+The inlined query reads `melange_tuples` through your query's `search_path`, so the schema holding it must be on the path. Rows can repeat; `IN` does not need them distinct. Long type and relation names are shortened with a hash to fit PostgreSQL's 63-character limit; `accessible_objects` needs no names, and [generated clients](#names-in-generated-clients) carry the exact ones.
 
 ### accessible_{type}_{relation}_by_{link}
 
@@ -480,6 +480,14 @@ LIMIT 50;
 For a viewer of an organization holding a million subjects, a count took about 4 s filtering by `accessible_subject_can_read` and 70 ms filtering by `accessible_subject_can_read_by_org`. A page of 50 by creation time took 93 ms with `IN` and a sort, and 0.9 ms with the query above.
 
 It is exact when each object has a single link, held in that column (a many-to-one foreign key). It does not cover a subject that is a userset on the object type itself (`subject:s#can_read`). A relation that also grants directly, through a userset or a wildcard, or with an exclusion or intersection, has no parent-key form.
+
+### Names in generated clients
+
+Do not build these names by hand: a name longer than 63 bytes is truncated and hashed, so `pull_request#can_read_security_advisories_and_vulnerability_reports` is `accessible_pull_re_can_read_security_advisories_and_vu_d0edb52c`. [`melange generate client`](../generated-code/#accessible-function-names) emits the name of every accessible function migrate installs for an exposed relation: Go constants such as `SQLAccessibleDocumentViewer` and `SQLAccessibleSubjectCanReadByOrg` with the `SQLAccessibleFunction(type, relation)` lookup, and the TypeScript maps `AccessibleFunctions[type][relation]` and `AccessibleByParentFunctions[type][relation][link]`. It follows the `sql:` section, so a function the exposure installs only because an exposed relation resolves through it is not named. The names are unqualified: qualify them with the [database schema](../configuration/#custom-database-schema) when it is not on the `search_path`.
+
+A name is stable while the type, relation and link keep their names. The client stops naming `accessible_{type}_{relation}` when the relation is no longer listable or exposed, or `accessible` is turned off, and a parent-key form when the relation is no longer exposed, `parent_key` is turned off, or its grants change shape. The function itself can outlive its name: as [What is installed](#exposure) describes, `accessible_{type}_{relation}` stays installed while an exposed relation resolves through the relation and any of `list_objects`, `accessible` or `parent_key` is on, so migrate drops it only when the relation is renamed, stops being listable, is no longer reached from an exposed relation, or all three families are off. Do not rely on a function the client no longer names: it is kept only for what resolves through it, and a later migration can drop it.
+
+Calling a named function from a view or an RLS policy is fine: `melange migrate` refuses to drop a function that one depends on and lists it (see [Dependent objects](../../guides/migrations/#dependent-objects)). Regenerate the client when the model or the `sql:` section changes, so a name that went away fails to compile in your code.
 
 ## explain_permission
 

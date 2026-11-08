@@ -46,27 +46,8 @@ func addExposureFlags(f *pflag.FlagSet) {
 // widens a restricted database back to the default.
 func resolveExposure(cmd *cobra.Command, sqlCfg cli.SQLConfig) (compiler.Exposure, error) {
 	f := cmd.Flags()
-	for _, list := range []struct {
-		flag   string
-		target *[]string
-	}{
-		{"include-relation", &sqlCfg.Relations.Include},
-		{"exclude-relation", &sqlCfg.Relations.Exclude},
-	} {
-		if !f.Changed(list.flag) {
-			continue
-		}
-		patterns, err := f.GetStringSlice(list.flag)
-		if err != nil {
-			return compiler.Exposure{}, cli.ConfigError("reading --"+list.flag, err)
-		}
-		patterns = cli.TrimPatterns(patterns)
-		for _, p := range patterns {
-			if err := compiler.ValidateRelationPattern(p); err != nil {
-				return compiler.Exposure{}, cli.ConfigError("--"+list.flag, err)
-			}
-		}
-		*list.target = patterns
+	if err := applyRelationFlags(f, &sqlCfg.Relations); err != nil {
+		return compiler.Exposure{}, err
 	}
 	for _, family := range exposureFamilies {
 		if !f.Changed(family.flag) {
@@ -79,6 +60,34 @@ func resolveExposure(cmd *cobra.Command, sqlCfg cli.SQLConfig) (compiler.Exposur
 		*family.field(&sqlCfg.Functions) = !off
 	}
 	return sqlCfg.Exposure(), nil
+}
+
+// applyRelationFlags replaces relations' include and exclude lists with the
+// --include-relation and --exclude-relation values, for the flags given.
+func applyRelationFlags(f *pflag.FlagSet, relations *cli.SQLRelationsConfig) error {
+	for _, list := range []struct {
+		flag   string
+		target *[]string
+	}{
+		{"include-relation", &relations.Include},
+		{"exclude-relation", &relations.Exclude},
+	} {
+		if !f.Changed(list.flag) {
+			continue
+		}
+		patterns, err := f.GetStringSlice(list.flag)
+		if err != nil {
+			return cli.ConfigError("reading --"+list.flag, err)
+		}
+		patterns = cli.TrimPatterns(patterns)
+		for _, p := range patterns {
+			if err := compiler.ValidateRelationPattern(p); err != nil {
+				return cli.ConfigError("--"+list.flag, err)
+			}
+		}
+		*list.target = patterns
+	}
+	return nil
 }
 
 // warnUnmatchedPatterns warns about relation patterns that match no relation

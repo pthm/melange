@@ -169,7 +169,7 @@ Generate type-safe constants and factory functions from your schema:
 melange generate client --runtime typescript --schema schema.fga --output ./src/authz/
 ```
 
-This generates three files:
+This generates four files (`types.ts`, `schema.ts`, `sql.ts` and `index.ts`). The relations follow the `sql:` section of `melange.yaml`, or `generate.client.relations`; see [Generated Code](https://melange.sh/docs/reference/generated-code/).
 
 ### types.ts
 
@@ -208,16 +208,38 @@ export function anyUser(): MelangeObject {
 }
 ```
 
+### sql.ts
+
+The exact names of the installed accessible functions, truncated names included:
+
+```typescript
+export const AccessibleFunctions = {
+  repository: {
+    can_read: "accessible_repository_can_read",
+    owner: "accessible_repository_owner",
+  },
+} as const;
+
+export const AccessibleByParentFunctions = {} as const;
+```
+
 ### Usage
 
 ```typescript
 import { Checker } from '@pthm/melange';
-import { user, repository, Relations } from './authz/index.js';
+import { user, repository, Relations, AccessibleFunctions } from './authz/index.js';
 
 const decision = await checker.check(
   user('123'),
   Relations.CanRead,
   repository('456')
+);
+
+// Filter your own query by the access set
+const { rows } = await pool.query(
+  `SELECT * FROM repositories
+   WHERE id::text IN (SELECT * FROM ${AccessibleFunctions.repository.can_read}('user', $1))`,
+  ['123'],
 );
 ```
 

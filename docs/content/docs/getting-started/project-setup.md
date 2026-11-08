@@ -247,7 +247,7 @@ allowed, err := checker.Check(ctx,
 )
 ```
 
-The `--filter` option (configurable in `generate.client.filter`) lets you limit which relations are generated. For example, `--filter can_` generates only relations starting with `can_`.
+Relation constants follow the relations `sql.relations` exposes, so the client names what migrate installs. To choose them separately, set `generate.client.relations` (or pass `--include-relation` / `--exclude-relation`) with the same `include` / `exclude` patterns; for example, `--include-relation 'can_*'` generates only relations starting with `can_`. The older `--filter` option and `generate.client.filter` key still work but are deprecated. See [Which Relations](../../reference/generated-code/#which-relations).
 
 ## Coding Agent Instructions
 
