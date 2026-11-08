@@ -18,7 +18,7 @@ import (
 //
 // which reads the parents' few IDs instead of the access set of every object
 // under them: on phoebe's production-shaped data, counting a 1M-subject org
-// took 4.6s through accessible_subject_can_read and 0.5s through this form.
+// took 4.6s through accessible_subject_can_read and 70ms through this form.
 //
 // It is exact when each object has one link, held in that column, and does not
 // cover a subject that is a userset on the object type itself
@@ -118,28 +118,49 @@ func grantsThroughParentsOnly(a RelationAnalysis) bool {
 		len(a.ExcludedParentRelations) == 0 && len(a.ExcludedIntersectionGroups) == 0
 }
 
+// parentKeyRows is the planner's row estimate for a parent-key function: a
+// subject reaches a few parents. With the default of 1000, a query filtering
+// by the function hashes the whole child table instead of reading the
+// parents' rows through an index.
+const parentKeyRows = 10
+
 // renderParentKeyFunction renders the parent-key accessible function of pk:
-// the union of the parent relations' accessible sets.
+// the distinct union of the parent relations' accessible sets.
+//
+// Unlike the accessible functions it is PL/pgSQL, so it is not inlined into
+// the caller's query: inlined, the union of the parents' accessible sets is
+// planned with every call of the application's query, which is most of the
+// time for a subject with few parents, and its row estimate comes from the
+// union. Here it is planned once per session, and the planner sees
+// parentKeyRows. The IDs are distinct, so joining on them repeats no rows.
 func renderParentKeyFunction(schema string, pk parentKeyRelation) string {
+	// UNION makes the IDs distinct; a single arm needs DISTINCT instead.
+	distinct := ""
+	if len(pk.ParentRelations) == 1 {
+		distinct = "DISTINCT "
+	}
 	arms := make([]string, len(pk.ParentRelations))
 	for i, rel := range pk.ParentRelations {
-		arms[i] = fmt.Sprintf("    SELECT k.object_id FROM %s(p_subject_type, p_subject_id, %s) AS k",
-			sqldsl.PrefixIdent(accessibleSubjectKindFunctionName(pk.ParentType, rel), schema), subjectIsUserset)
+		arms[i] = fmt.Sprintf("SELECT %sk.object_id FROM %s(p_subject_type, p_subject_id, %s) AS k",
+			distinct, sqldsl.PrefixIdent(accessibleSubjectKindFunctionName(pk.ParentType, rel), schema), subjectIsUserset)
 	}
-	name := sqldsl.PrefixIdent(pk.functionName(), schema)
-	return fmt.Sprintf(`-- Objects of type %s through whose %s link the subject holds %s on %s objects.
--- Filter %s rows by the column holding their %s:
--- WHERE <%s column> IN (SELECT * FROM %s(subject_type, subject_id)).
--- Exact when each %s has one %s; a subject that is a userset on %s itself
--- is not covered.
-CREATE OR REPLACE FUNCTION %s(
-    p_subject_type TEXT,
-    p_subject_id TEXT
-) RETURNS TABLE(object_id TEXT) AS $$
-%s
-$$ LANGUAGE sql STABLE PARALLEL RESTRICTED;`,
-		pk.ParentType, pk.Link, pk.Relation, pk.ObjectType,
-		pk.ObjectType, pk.Link, pk.Link, name,
-		pk.ObjectType, pk.Link, pk.ObjectType,
-		name, strings.Join(arms, "\n    UNION ALL\n"))
+	name := pk.functionName()
+	fn := PlpgsqlFunction{
+		Schema: schema,
+		Name:   name,
+		Args: []FuncArg{
+			{Name: "p_subject_type", Type: "TEXT"},
+			{Name: "p_subject_id", Type: "TEXT"},
+		},
+		Returns: fmt.Sprintf("TABLE(object_id TEXT) ROWS %d", parentKeyRows),
+		Header: []string{
+			fmt.Sprintf("Objects of type %s through whose %s link the subject holds %s on %s objects.", pk.ParentType, pk.Link, pk.Relation, pk.ObjectType),
+			fmt.Sprintf("Filter %s rows by the column holding their %s:", pk.ObjectType, pk.Link),
+			fmt.Sprintf("WHERE <%s column> IN (SELECT * FROM %s(subject_type, subject_id)).", pk.Link, sqldsl.PrefixIdent(name, schema)),
+			fmt.Sprintf("Exact when each %s has one %s; a subject that is a userset on %s itself", pk.ObjectType, pk.Link, pk.ObjectType),
+			"is not covered.",
+		},
+		Body: []Stmt{ReturnQuery{Query: strings.Join(arms, "\n    UNION\n    ")}},
+	}
+	return fn.SQL()
 }

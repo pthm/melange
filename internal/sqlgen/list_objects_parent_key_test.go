@@ -86,18 +86,27 @@ func TestParentKey_FunctionUnionsParentSets(t *testing.T) {
 	sql := renderParentKeyFunction("", parentKeyFor(t, parentKeyModel)["subject.can_admin"])
 	for _, want := range []string{
 		"CREATE OR REPLACE FUNCTION accessible_subject_can_admin_by_org(",
-		"FROM accessiblesk_organization_admin(p_subject_type, p_subject_id, " + subjectIsUserset + ") AS k",
-		"UNION ALL",
-		"FROM accessiblesk_organization_member(p_subject_type, p_subject_id, " + subjectIsUserset + ") AS k",
-		"$$ LANGUAGE sql STABLE PARALLEL RESTRICTED;",
+		"SELECT k.object_id FROM accessiblesk_organization_admin(p_subject_type, p_subject_id, " + subjectIsUserset + ") AS k",
+		"\n        UNION\n",
+		"SELECT k.object_id FROM accessiblesk_organization_member(p_subject_type, p_subject_id, " + subjectIsUserset + ") AS k",
+		// Planned once per session, not inlined, and estimated small.
+		"RETURNS TABLE(object_id TEXT) ROWS 10 AS $$",
+		"$$ LANGUAGE plpgsql STABLE PARALLEL RESTRICTED",
+		"SET plan_cache_mode = 'force_generic_plan'",
 	} {
 		if !strings.Contains(sql, want) {
 			t.Errorf("missing %q in:\n%s", want, sql)
 		}
 	}
-	// Inlinable: no SET clause.
-	if strings.Contains(sql, "\nSET ") {
-		t.Errorf("parent-key function must have no SET clause:\n%s", sql)
+	if strings.Contains(sql, "UNION ALL") {
+		t.Errorf("parent IDs must be distinct:\n%s", sql)
+	}
+}
+
+func TestParentKey_SingleParentRelationIsDistinct(t *testing.T) {
+	sql := renderParentKeyFunction("", parentKeyFor(t, parentKeyModel)["subject.can_read"])
+	if !strings.Contains(sql, "SELECT DISTINCT k.object_id FROM accessiblesk_organization_reader(") {
+		t.Errorf("a single parent relation must select distinct IDs:\n%s", sql)
 	}
 }
 

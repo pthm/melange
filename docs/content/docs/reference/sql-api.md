@@ -320,7 +320,24 @@ ORDER BY s.created_at DESC
 LIMIT 50;
 ```
 
-This reads a handful of parent IDs instead of the access set of every object under them, and an index on `(organization_id, created_at)` serves the page from the index. For a viewer of an organization holding a million subjects, the count dropped from 4.0 s to 0.5 s, and the page sorted by creation time from 4.1 s to 0.6 s, or 0.4 s with that index.
+This reads a handful of parent IDs instead of the access set of every object under them. The function is PL/pgSQL rather than inlined, so it is planned once per session, and the planner expects a few rows from it (`ROWS 10`), so a filter on it reads the parents' rows through an index on the link column. Its IDs are distinct.
+
+To page by another column, take the top of each parent and merge them, so an index on `(organization_id, created_at)` reads at most a page per parent:
+
+```sql
+SELECT s.*
+FROM accessible_subject_can_read_by_org('user', '123') AS p(organization_id),
+     LATERAL (
+         SELECT * FROM subjects t
+         WHERE t.organization_id = p.organization_id
+         ORDER BY t.created_at DESC
+         LIMIT 50
+     ) s
+ORDER BY s.created_at DESC
+LIMIT 50;
+```
+
+For a viewer of an organization holding a million subjects, a count took about 4 s filtering by `accessible_subject_can_read` and 70 ms filtering by `accessible_subject_can_read_by_org`. A page of 50 by creation time took 93 ms with `IN` and a sort, and 0.9 ms with the query above.
 
 It is exact when each object has a single link, held in that column (a many-to-one foreign key). It does not cover a subject that is a userset on the object type itself (`subject:s#can_read`). A relation that also grants directly, through a userset or a wildcard, or with an exclusion or intersection, has no parent-key form.
 
