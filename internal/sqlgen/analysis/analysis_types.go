@@ -1121,10 +1121,12 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		for i := range a.ExcludedParentRelations {
 			a.ExcludedParentRelations[i].AllowedLinkingTypes = getLinkingTypes(lookup, a.ObjectType, a.ExcludedParentRelations[i].LinkingRelation)
 		}
-		for gi := range a.IntersectionGroups {
-			for pi := range a.IntersectionGroups[gi].Parts {
-				if pr := a.IntersectionGroups[gi].Parts[pi].ParentRelation; pr != nil {
-					pr.AllowedLinkingTypes = getLinkingTypes(lookup, a.ObjectType, pr.LinkingRelation)
+		for _, groups := range [][]IntersectionGroupInfo{a.IntersectionGroups, a.ExcludedIntersectionGroups} {
+			for gi := range groups {
+				for pi := range groups[gi].Parts {
+					if pr := groups[gi].Parts[pi].ParentRelation; pr != nil {
+						pr.AllowedLinkingTypes = getLinkingTypes(lookup, a.ObjectType, pr.LinkingRelation)
+					}
 				}
 			}
 		}

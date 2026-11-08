@@ -2,7 +2,11 @@ package sqlgen
 
 import (
 	"reflect"
+	"slices"
 	"testing"
+
+	"github.com/pthm/melange/pkg/parser"
+	"github.com/pthm/melange/pkg/schema"
 )
 
 // relationReferencesReviewedFields lists every RelationAnalysis field that has
@@ -131,6 +135,46 @@ func TestRelationReferencesEdgeExtraction(t *testing.T) {
 	for _, w := range want {
 		if !got[w] {
 			t.Errorf("relationReferences missing edge %q", w)
+		}
+	}
+}
+
+// A tuple-to-userset inside an excluded intersection reads the parent relation
+// on every type the link allows. Its linking types used to be left empty, so
+// relationReferences named the parent relation on no type at all: the folder
+// edges below were missing, which the exposure closure and the list
+// composition graph both build on.
+func TestRelationReferences_ExcludedIntersectionParents(t *testing.T) {
+	types, err := parser.ParseSchemaString(`model
+  schema 1.1
+type user
+type folder
+  relations
+    define a: [user]
+    define b: [user]
+type document
+  relations
+    define v: [user]
+    define owner: [folder]
+    define r: v but not (a from owner and b from owner)
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	analyses := ComputeCanGenerate(AnalyzeRelations(types, schema.ComputeRelationClosure(types)))
+	i := slices.IndexFunc(analyses, func(a RelationAnalysis) bool { return a.ObjectType == "document" && a.Relation == "r" })
+	if i < 0 {
+		t.Fatal("document#r not analyzed")
+	}
+	for _, p := range analyses[i].ExcludedIntersectionGroups[0].Parts {
+		if got := p.ParentRelation.AllowedLinkingTypes; !slices.Equal(got, []string{"folder"}) {
+			t.Errorf("excluded part %s from owner: AllowedLinkingTypes = %v, want [folder]", p.Relation, got)
+		}
+	}
+	refs := relationReferences(&analyses[i])
+	for _, want := range []string{"folder.a", "folder.b"} {
+		if !slices.Contains(refs, want) {
+			t.Errorf("relationReferences(document#r) = %v, missing %s", refs, want)
 		}
 	}
 }
