@@ -122,18 +122,19 @@ $$ LANGUAGE sql STABLE PARALLEL RESTRICTED;`,
 // when its query differs, over the internal accessible function with TRUE.
 func renderListObjectsOverAccessible(plan ListPlan, header []string, q accessibleQuery) string {
 	plain := bindSubjectKind(q.Plain, "FALSE")
+	plainPaged := bindSubjectKind(q.PlainPaged, "FALSE")
 	var body Stmt
 	if q.Plain != "" && plain == bindSubjectKind(q.Full, "TRUE") {
 		// Both kinds bind to the same query, so there is nothing to branch on.
-		body = listObjectsPage(plain)
+		body = listObjectsPage(plain, plainPaged)
 	} else {
 		internal := sqldsl.PrefixIdent(accessibleSubjectKindFunctionName(plan.ObjectType, plan.Relation), plan.DatabaseSchema)
 		byKind := If{
 			Cond: HasUserset{Source: SubjectID},
-			Then: []Stmt{listObjectsPage(fmt.Sprintf("SELECT k.object_id FROM %s(p_subject_type, p_subject_id, TRUE) AS k", internal))},
+			Then: []Stmt{listObjectsPage(fmt.Sprintf("SELECT k.object_id FROM %s(p_subject_type, p_subject_id, TRUE) AS k", internal), "")},
 		}
 		if q.Plain != "" {
-			byKind.Else = []Stmt{listObjectsPage(plain)}
+			byKind.Else = []Stmt{listObjectsPage(plain, plainPaged)}
 		}
 		body = byKind
 	}
@@ -152,7 +153,12 @@ func renderListObjectsOverAccessible(plan ListPlan, header []string, q accessibl
 // p_limit the whole set is returned by a statement of its own: a generic plan
 // of the paged statement assumes a short page and walks an index in object_id
 // order to stop early, which reads the whole index when there is no limit.
-func listObjectsPage(query string) Stmt {
+// The paged statement reads paged instead when it is set: the same objects,
+// with arms that already keep only a page of each parent (pagedAccessibleArms).
+func listObjectsPage(query, paged string) Stmt {
+	if paged == "" {
+		paged = query
+	}
 	all := fmt.Sprintf(`SELECT DISTINCT a.object_id, NULL::TEXT AS next_cursor
 FROM (
 %s
@@ -174,7 +180,7 @@ SELECT p.object_id,
     END AS next_cursor
 FROM page p
 ORDER BY p.object_id
-LIMIT p_limit`, IndentLines(query, "        "))
+LIMIT p_limit`, IndentLines(paged, "        "))
 	return If{
 		Cond: Raw("p_limit IS NULL"),
 		Then: []Stmt{ReturnQuery{Query: all}},
@@ -184,9 +190,11 @@ LIMIT p_limit`, IndentLines(query, "        "))
 
 // accessibleQuery is a relation's accessible query, as the accessible function
 // returns it (Full) and without the arms that only match userset subjects
-// (Plain, "" when no arm matches a plain subject).
+// (Plain, "" when no arm matches a plain subject). PlainPaged is Plain for a
+// list page, with its parent lookups reading a page of each parent
+// (pagedAccessibleArms), or "" when it has none.
 type accessibleQuery struct {
-	Full, Plain string
+	Full, Plain, PlainPaged string
 }
 
 // accessibleQueryOf renders blocks into the accessible query with render, and
@@ -213,16 +221,54 @@ func accessibleQueryOf(blocks []TypedQueryBlock, render func([]TypedQueryBlock) 
 func unionAccessibleArms(blocks []TypedQueryBlock) string {
 	arms := make([]string, 0, len(blocks))
 	for _, block := range blocks {
-		stmt := block.Query
-		stmt.Distinct = false
-		if block.UsersetSubjectOnly && !requiresUsersetSubject(stmt.Where) {
-			guard := Expr(HasUserset{Source: SubjectID})
-			if stmt.Where != nil {
-				guard = And(guard, stmt.Where)
-			}
-			stmt.Where = guard
+		arms = append(arms, accessibleArm(block))
+	}
+	return joinUnionAllBlocksSQL(arms)
+}
+
+// accessibleArm renders block as an arm of unionAccessibleArms.
+func accessibleArm(block TypedQueryBlock) string {
+	stmt := block.Query
+	stmt.Distinct = false
+	if block.UsersetSubjectOnly && !requiresUsersetSubject(stmt.Where) {
+		guard := Expr(HasUserset{Source: SubjectID})
+		if stmt.Where != nil {
+			guard = And(guard, stmt.Where)
 		}
-		arms = append(arms, formatQueryBlockSQL(block.Comments, stmt.SQL()))
+		stmt.Where = guard
+	}
+	return formatQueryBlockSQL(block.Comments, stmt.SQL())
+}
+
+// pagedAccessibleArms is unionAccessibleArms for a list page: a block read by
+// parent (ByParent) keeps the first p_limit + 1 objects after the cursor
+// under each parent, merged across parents, instead of every object of every
+// parent. Every object of the page is among its parent's first p_limit + 1,
+// so the page over these arms is the page over the full ones; with an index
+// on the link and object ID, a parent costs a page of index entries however
+// many objects it has.
+func pagedAccessibleArms(blocks []TypedQueryBlock) string {
+	arms := make([]string, 0, len(blocks))
+	for _, block := range blocks {
+		if block.ByParent == nil {
+			arms = append(arms, accessibleArm(block))
+			continue
+		}
+		by := block.ByParent
+		lookup := by.Lookup
+		lookup.Where = And(lookup.Where, Gt{Left: by.Object, Right: Raw("COALESCE(p_after, '')")})
+		arm := fmt.Sprintf(`SELECT x.object_id
+FROM %s AS par,
+LATERAL (
+%s
+    ORDER BY %s
+    LIMIT p_limit + 1
+) AS x`, by.Parents, IndentLines(lookup.SQL(), "    "), by.Object.SQL())
+		comments := slices.Clone(block.Comments)
+		if n := len(comments); n > 0 {
+			comments[n-1] += ", a page of each parent"
+		}
+		arms = append(arms, formatQueryBlockSQL(comments, arm))
 	}
 	return joinUnionAllBlocksSQL(arms)
 }
@@ -270,10 +316,17 @@ func composedAccessibleObjectsQuery(blocks ComposedObjectsBlockSet) accessibleQu
 		main = append(slices.Clone(main), *blocks.SelfBlock)
 	}
 	guard := Or(HasUserset{Source: SubjectID}, In{Expr: SubjectType, Values: blocks.AllowedSubjectTypes})
-	return accessibleQueryOf(main, func(arms []TypedQueryBlock) string {
-		return fmt.Sprintf("SELECT g.object_id\nFROM (\n%s\n) AS g\nWHERE %s",
-			IndentLines(unionAccessibleArms(arms), "    "), guard.SQL())
-	})
+	render := func(union func([]TypedQueryBlock) string) func([]TypedQueryBlock) string {
+		return func(arms []TypedQueryBlock) string {
+			return fmt.Sprintf("SELECT g.object_id\nFROM (\n%s\n) AS g\nWHERE %s",
+				IndentLines(union(arms), "    "), guard.SQL())
+		}
+	}
+	q := accessibleQueryOf(main, render(unionAccessibleArms))
+	if plain, _ := withoutUsersetSubjectBlocks(main); hasParentLookup(plain) {
+		q.PlainPaged = render(pagedAccessibleArms)(plain)
+	}
+	return q
 }
 
 // recursiveAccessibleObjectsQuery returns the accessible query of a recursive
@@ -281,14 +334,14 @@ func composedAccessibleObjectsQuery(blocks ComposedObjectsBlockSet) accessibleQu
 // hoisted CTEs, filtered as the accessible set (accessibleObjectsSelect), and
 // the self-candidate, which the filters do not apply to.
 func recursiveAccessibleObjectsQuery(plan ListPlan, blocks RecursiveBlockSet) accessibleQuery {
-	render := func(base []TypedQueryBlock, self *TypedQueryBlock) string {
+	filtered := accessibleObjectsSelect(plan, blocks, TableAs("", "accessible", "acc"))
+	filtered.Distinct = false
+	render := func(base []TypedQueryBlock, self *TypedQueryBlock, union func([]TypedQueryBlock) string) string {
 		var ctes []CTEDef
 		var arms []string
 		if len(base) > 0 {
 			ctes = append(slices.Clone(blocks.HoistedCTEs),
-				CTEDef{Name: "accessible", Columns: []string{"object_id"}, Query: Raw(unionAccessibleArms(base))})
-			filtered := accessibleObjectsSelect(plan, blocks, TableAs("", "accessible", "acc"))
-			filtered.Distinct = false
+				CTEDef{Name: "accessible", Columns: []string{"object_id"}, Query: Raw(union(base))})
 			arms = append(arms, filtered.SQL())
 		}
 		if self != nil {
@@ -296,13 +349,24 @@ func recursiveAccessibleObjectsQuery(plan ListPlan, blocks RecursiveBlockSet) ac
 		}
 		return WithCTE{CTEs: ctes, Query: Raw(joinUnionAllBlocksSQL(arms))}.SQL()
 	}
-	q := accessibleQueryOf(blocks.BaseBlocks, func(base []TypedQueryBlock) string { return render(base, nil) })
+	q := accessibleQueryOf(blocks.BaseBlocks, func(base []TypedQueryBlock) string { return render(base, nil, unionAccessibleArms) })
 	// The self-candidate only matches userset subjects: it joins the full query
 	// but not the plain one.
 	if self := blocks.SelfCandidateBlock; self != nil {
-		q.Full = render(blocks.BaseBlocks, self)
+		q.Full = render(blocks.BaseBlocks, self, unionAccessibleArms)
+	}
+	// A page of each parent is a page of the accessible set only when nothing
+	// filters the set afterwards: an exclusion or check over it could drop a
+	// parent's first objects and need the ones its page left out.
+	if plain, _ := withoutUsersetSubjectBlocks(blocks.BaseBlocks); filtered.Where == nil && hasParentLookup(plain) {
+		q.PlainPaged = render(plain, nil, pagedAccessibleArms)
 	}
 	return q
+}
+
+// hasParentLookup reports whether any of blocks can be read by parent.
+func hasParentLookup(blocks []TypedQueryBlock) bool {
+	return slices.ContainsFunc(blocks, func(b TypedQueryBlock) bool { return b.ByParent != nil })
 }
 
 // accessibleCallRef matches a call of an accessible function in a function body.

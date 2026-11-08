@@ -726,6 +726,11 @@ func RunTest(t *testing.T, parent *Client, tc TestCase) {
 				// against, and their parent-key forms, against the list and
 				// check assertions. See accessible_parity.go.
 				runAccessibleParityAssertions(t, ctx, client, storeID, modelID, stage)
+
+				// Page every list assertion with small page sizes: the paged
+				// statement differs from the unlimited one the other sweeps run.
+				// See list_paging_parity.go.
+				runListPagingParityAssertions(t, ctx, client, storeID, stage)
 			})
 		}
 	})

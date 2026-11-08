@@ -27,6 +27,23 @@ type TypedQueryBlock struct {
 	// a breadth-first walk seeds them one level later, as OpenFGA counts the
 	// step toward its depth limit.
 	Indirect bool
+
+	// ByParent, when set, reads the block's objects one parent at a time, so
+	// a list page takes each parent's first objects after the cursor instead
+	// of every object under every parent (pagedAccessibleArms).
+	ByParent *ParentLookup
+}
+
+// ParentLookup is a block's query split for reading parent by parent: Parents
+// is a FROM item returning the parents' IDs as object_id, and Lookup the
+// block's query for the objects under the parent par.object_id, selecting
+// Object. Lookup stays DISTINCT: a page limits each parent's objects, so a
+// repeated linking tuple (overlapping view branches, a contextual tuple
+// repeating a stored one) must not use up a place in it.
+type ParentLookup struct {
+	Parents string
+	Lookup  SelectStmt
+	Object  Col
 }
 
 // withoutUsersetSubjectBlocks drops the blocks that only match userset

@@ -693,10 +693,12 @@ func buildSubjectFirstCrossTypeTTUBlock(plan ListPlan, parent ListParentRelation
 	// subject_id reaches the index of each tuples-view branch.
 	childSubject := Col{Table: "child", Column: "subject_id"}
 	var parents Expr
+	var parentsFrom string
 	if cteName := hoisted.name(parentType, parent.Relation); cteName != "" {
 		parents = InCTESelect{Expr: childSubject, CTEName: cteName, SelectCol: "object_id", Array: true}
+		parentsFrom = cteName
 	} else {
-		parents = InFunctionSelect{
+		call := InFunctionSelect{
 			Expr:      childSubject,
 			Schema:    plan.DatabaseSchema,
 			FuncName:  ListObjectsFunctionName(parentType, parent.Relation),
@@ -705,23 +707,29 @@ func buildSubjectFirstCrossTypeTTUBlock(plan ListPlan, parent ListParentRelation
 			SelectCol: "object_id",
 			Array:     true,
 		}
+		parents = call
+		parentsFrom = Func{Schema: call.Schema, Name: call.FuncName, Args: call.Args}.SQL()
 	}
 
+	link := []Expr{
+		Eq{Left: Col{Table: "child", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+		Eq{Left: Col{Table: "child", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
+		Eq{Left: Col{Table: "child", Column: "subject_type"}, Right: Lit(parentType)},
+	}
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "child", Column: "object_id"}},
 		FromExpr:    TableAs("", "melange_tuples", "child"),
-		Where: And(append([]Expr{
-			Eq{Left: Col{Table: "child", Column: "object_type"}, Right: Lit(plan.ObjectType)},
-			Eq{Left: Col{Table: "child", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
-			Eq{Left: Col{Table: "child", Column: "subject_type"}, Right: Lit(parentType)},
-			parents,
-		}, conditions...)...),
+		Where:       And(slices.Concat(link, []Expr{parents}, conditions)...),
 	}
+	// The same lookup for one parent, par.object_id (see ParentLookup).
+	lookup := stmt
+	lookup.Where = And(slices.Concat(link, []Expr{Eq{Left: childSubject, Right: Col{Table: "par", Column: "object_id"}}}, conditions)...)
 
 	return TypedQueryBlock{
 		Comments: []string{fmt.Sprintf("-- Cross-type TTU subject-first: %s -> %s.%s", parent.LinkingRelation, parentType, parent.Relation)},
 		Query:    stmt,
+		ByParent: &ParentLookup{Parents: parentsFrom, Lookup: lookup, Object: Col{Table: "child", Column: "object_id"}},
 	}
 }
 

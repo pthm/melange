@@ -64,6 +64,8 @@ func TestSaaS_ListVsCheck(t *testing.T) {
 			for _, u := range subjects {
 				listed := setOf(listObjects(t, db, "user", u, p.relation, p.objType))
 				requireAccessibleMatchesList(t, db, u, p.relation, p.objType, listed)
+				require.Equalf(t, setToSlice(listed), pagedObjects(t, db, "user", u, p.relation, p.objType, 7),
+					"pages of list_objects(%s.%s) for user:%s", p.objType, p.relation, u)
 				for _, o := range objects {
 					allowed := checkPerm(t, db, "user", u, p.relation, p.objType, o) == 1
 					if allowed {

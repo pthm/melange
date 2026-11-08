@@ -1,6 +1,9 @@
 package sqlgen
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // ComposedObjectsBlockSet contains blocks for a composed list_objects function.
 // Composed functions handle indirect anchor patterns (TTU and userset composition).
@@ -129,27 +132,31 @@ func buildComposedTTUObjectsBlock(plan ListPlan, anchor *IndirectAnchorInfo, tar
 		Array:     true,
 	}
 
-	conditions := make([]Expr, 0, 4+len(exclusionPreds))
-	conditions = append(conditions,
+	link := []Expr{
 		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 		Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(anchor.Path[0].LinkingRelation)},
 		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(targetType)},
-		inSubquery,
-	)
-	conditions = append(conditions, exclusionPreds...)
-
+	}
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}},
 		FromExpr:    TableAs("", "melange_tuples", "t"),
-		Where:       And(conditions...),
+		Where:       And(slices.Concat(link, []Expr{inSubquery}, exclusionPreds)...),
 	}
+	// The same lookup for one parent, par.object_id (see ParentLookup).
+	lookup := stmt
+	lookup.Where = And(slices.Concat(link, []Expr{Eq{Left: Col{Table: "t", Column: "subject_id"}, Right: Col{Table: "par", Column: "object_id"}}}, exclusionPreds)...)
 
 	return &TypedQueryBlock{
 		Comments: []string{
 			fmt.Sprintf("-- TTU composition: %s -> %s", anchor.Path[0].LinkingRelation, targetType),
 		},
 		Query: stmt,
+		ByParent: &ParentLookup{
+			Parents: Func{Schema: inSubquery.Schema, Name: inSubquery.FuncName, Args: inSubquery.Args}.SQL(),
+			Lookup:  lookup,
+			Object:  Col{Table: "t", Column: "object_id"},
+		},
 	}, nil
 }
 

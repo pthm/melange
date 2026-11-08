@@ -73,6 +73,8 @@ func TestKitchenSink_ListVsCheck(t *testing.T) {
 				listed := setOf(listObjects(t, db, "user", u, p.relation, p.objType))
 				listedTotal += len(listed)
 				requireAccessibleMatchesList(t, db, u, p.relation, p.objType, listed)
+				require.Equalf(t, setToSlice(listed), pagedObjects(t, db, "user", u, p.relation, p.objType, 7),
+					"pages of list_objects(%s.%s) for user:%s", p.objType, p.relation, u)
 				for _, o := range objects {
 					allowed := checkPerm(t, db, "user", u, p.relation, p.objType, o) == 1
 					if allowed {
@@ -172,6 +174,31 @@ func listSubjects(t *testing.T, db *sql.DB, ot, oid, rel, st string) []string {
 	rows, err := db.Query(`SELECT subject_id FROM list_accessible_subjects($1,$2,$3,$4)`, ot, oid, rel, st)
 	require.NoError(t, err)
 	return scanStrings(t, rows)
+}
+
+// pagedObjects pages list_accessible_objects with pages of size and returns
+// the objects of all pages, in order.
+func pagedObjects(t *testing.T, db *sql.DB, st, sid, rel, ot string, size int) []string {
+	t.Helper()
+	out := []string{}
+	var cursor sql.NullString
+	for pages := 0; ; pages++ {
+		require.Less(t, pages, 100_000, "list_accessible_objects(%s.%s) for %s:%s did not stop paging", ot, rel, st, sid)
+		rows, err := db.Query(`SELECT object_id, next_cursor FROM list_accessible_objects($1, $2, $3, $4, $5, $6)`, st, sid, rel, ot, size, cursor)
+		require.NoError(t, err)
+		var next sql.NullString
+		for rows.Next() {
+			var id string
+			require.NoError(t, rows.Scan(&id, &next))
+			out = append(out, id)
+		}
+		require.NoError(t, rows.Err())
+		_ = rows.Close()
+		if !next.Valid {
+			return out
+		}
+		cursor = next
+	}
 }
 
 // requireAccessibleMatchesList asserts that accessible_{ot}_{rel}, when the
