@@ -1310,3 +1310,40 @@ func TestDoctor_CodegenChangeHintNamesDependents(t *testing.T) {
 	var depErr *migrator.DependentObjectsError
 	require.ErrorAs(t, err, &depErr, "the premise: a plain migrate refuses")
 }
+
+// The Generated Client category warns when the client names what the
+// database does not install, fails with Strict, and is absent without a
+// client.
+func TestDoctor_ClientSkew(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db := newTuplesDB(t)
+	path := writeSchema(t, clientCheckSchema)
+	noParentKey := migrator.Exposure{Functions: compiler.FunctionFamilies{ParentKey: new(bool)}}
+	_, err := migrateExposure(t, db, path, &noParentKey, false)
+	require.NoError(t, err)
+
+	run := func(client *doctor.ClientCheck) []doctor.CheckResult {
+		t.Helper()
+		local := migrator.Exposure{}
+		report, err := doctor.New(db, path, doctor.Options{SkipPerformance: true, Exposure: &local, Client: client}).Run(context.Background())
+		require.NoError(t, err)
+		return filterCategory(report, "Generated Client")
+	}
+	client := func(strict bool) *doctor.ClientCheck {
+		return &doctor.ClientCheck{Runtime: "go", FilesSkipped: "not configured here", Names: clientNames(t, migrator.Exposure{}), Strict: strict}
+	}
+
+	checks := run(client(false))
+	require.Len(t, checks, 2, "no client_file check without the files")
+	c := findCheck(checks, "client_functions")
+	require.NotNil(t, c)
+	assert.Equal(t, doctor.StatusWarn, c.Status)
+	assert.Contains(t, c.Details, "accessible_document_can_view_by_parent")
+	assert.Contains(t, c.FixHint, "Run 'melange migrate' to apply")
+	assertCheck(t, checks, "client_relations", doctor.StatusPass)
+
+	assertCheck(t, run(client(true)), "client_functions", doctor.StatusFail)
+	assert.Empty(t, run(nil))
+}

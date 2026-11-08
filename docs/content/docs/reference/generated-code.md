@@ -269,6 +269,17 @@ Run `melange generate client` after any schema or `sql:` change to keep the gene
 
 A function name changes when its type, relation or link is renamed. The client stops emitting it when the relation stops being listable, is no longer exposed, or its family is turned off, and a parent-key form appears or disappears as the relation's grants change shape (adding a direct grant to `can_read: reader from org` removes `accessible_{type}_can_read_by_org`). After regenerating, a name that went away is a compile error in Go and a type error in TypeScript. The database function can stay installed after its name goes: `accessible_{type}_{relation}` is kept while an exposed relation resolves through it and any of `list_objects`, `accessible` or `parent_key` is on (see [What is installed](../sql-api/#exposure)), but it is no longer part of the API and a later migration can drop it. When migrate does drop a function that a view or policy calls, it refuses; see [Dependent objects](../../guides/migrations/#dependent-objects).
 
+### Checking a client
+
+A generated client can drift from the database in two places, and [`melange generate client --check`](../cli/#checking-a-generated-client) checks both:
+
+1. **The files against `melange.yaml`.** `--check` regenerates the client in memory and compares it with the files in `generate.client.output`. It needs no database, so it fits a pre-merge CI step. The header's version and source lines, CRLF line endings and trailing whitespace at the end are ignored; any other change is drift, including reformatting the generated files, so exclude them from formatters.
+2. **`melange.yaml` against the database.** With `--db` or `--env`, every accessible function name and relation constant the configuration generates is checked against what the database's last migration installed and exposes. Run it after `migrate`.
+
+A client narrower than the database is fine: a relation the database exposes without a constant in the client is never reported. A client wider than the database is reported by what it would do: an accessible function that is not installed, or a relation `melange.yaml` exposes that the database does not, is an error (the call fails with `42883` or `M2003`); a constant for a relation that neither `melange.yaml` nor the database exposes is info, since constants are also used for writing tuples.
+
+`melange doctor` runs the same check when `generate.client.runtime` is configured, from `melange.yaml` only. Keep the relation selection in `generate.client.relations` rather than in `--include-relation`, and the families in `sql.functions` rather than in `migrate`'s `--no-<family>` flags, so the client, `--check`, doctor and `migrate` all see one configuration.
+
 ## Configuration
 
 All options can be set in `melange.yaml` under `generate.client`:
@@ -284,7 +295,7 @@ generate:
       include: ["can_*"]
 ```
 
-See [Configuration](../configuration/) for the full reference.
+`generate.client.output` is also where `generate client --check` and doctor look for the files. See [Configuration](../configuration/) for the full reference.
 
 ## Next Steps
 

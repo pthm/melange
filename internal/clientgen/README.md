@@ -27,6 +27,8 @@ The public `pkg/clientgen` package wraps this internal registry, providing a sta
 - `Config` - Language-agnostic generation options (package name, ID type, the SQL API exposure and relation selector, etc.)
 - `Resolve()` - Validates and compiles the schema as migrate does, and selects what both generators emit: every type, the selected relations, and the installed accessible functions of those relations (from `compiler.AccessibleFunctions`, so the names are the ones migrate creates)
 - `Identifiers` - Detects two schema names that map to one generated identifier
+- `Model.Selected` - The selected relations as type and relation pairs, which the generators do not emit; `generate client --check` and doctor compare them with the database
+- `CompareFiles()` / `Normalize()` / `HeaderVersion()` - Compare generated files with the ones on disk, ignoring the header's version and source lines, CRLF line endings and trailing whitespace at the end
 
 ## Adding a New Generator
 

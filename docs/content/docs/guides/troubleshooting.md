@@ -160,6 +160,13 @@ relation and the setting to change.
 `exclude`, or turn its family back on) and run `melange migrate`. `melange
 status` shows the recorded exposure. See [SQL API: Exposure](../../reference/sql-api/#exposure).
 
+When the relation comes from a generated client constant, the client and the
+database disagree on the exposure: `melange generate client --check --db`
+reports every such relation (`relation_not_exposed`) and accessible function
+name, with the fix. A migration run with `--include-relation` or
+`--no-<family>` that `melange.yaml` does not have is the usual cause. See
+[Checking a generated client](../../reference/cli/#checking-a-generated-client).
+
 ### "explain on demand failed" or "cannot compile them on demand"
 
 The database was migrated with `sql.functions.explain` (or `expand`) off, so
@@ -208,6 +215,18 @@ and studio's [SQL API page](../studio/#sql-api) has the same with a Copy
 button. In application code, use the names the
 [generated client](../../reference/generated-code/#accessible-function-names)
 carries.
+
+### "function accessible_... does not exist" with a name from the generated client
+
+The client names an accessible function the database did not install: it was
+generated under a wider `sql:` section than the database was migrated with,
+or from an older schema.
+
+**Fix**: run `melange generate client --check --db` (or `--env`). It compares
+the files with what `melange.yaml` generates, then every accessible function
+name with what the last migration installed, and says for each whether
+`melange migrate` installs it or the client should be regenerated. `melange
+doctor` reports the same under Generated Client.
 
 ### melange functions reports missing functions or drift
 

@@ -184,6 +184,10 @@ type Options struct {
 	// exposure, so there is nothing to drift from. The expected functions
 	// always follow the recorded exposure, which is what is installed.
 	Exposure *sqlgen.Exposure
+
+	// Client is the generated client to check (the Generated Client
+	// category), nil for none.
+	Client *ClientCheck
 }
 
 // Doctor performs health checks on the melange authorization infrastructure.
@@ -216,6 +220,10 @@ type Doctor struct {
 	// first use, only by a check that needs it for its fix hint.
 	plan     *migrator.MigrationPlan
 	planDone bool
+
+	// stateRead reports that the local schema and the migration record
+	// above were read, by Run's checks or by CompareClient.
+	stateRead bool
 }
 
 // migratePlan returns what an unforced `melange migrate` of the local schema
@@ -405,6 +413,7 @@ func (d *Doctor) DatabaseSchema() string {
 // Run executes all health checks and returns a report.
 func (d *Doctor) Run(ctx context.Context) (*Report, error) {
 	report := &Report{}
+	d.stateRead = true
 
 	// Run checks in order, building up cached data
 	d.checkSchemaFile(report)
@@ -416,6 +425,7 @@ func (d *Doctor) Run(ctx context.Context) (*Report, error) {
 	if err := d.checkGeneratedFunctions(ctx, report); err != nil {
 		return nil, fmt.Errorf("checking generated functions: %w", err)
 	}
+	d.checkGeneratedClient(ctx, report)
 	if err := d.checkTuplesSource(ctx, report); err != nil {
 		return nil, fmt.Errorf("checking tuples source: %w", err)
 	}

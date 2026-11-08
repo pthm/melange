@@ -1,13 +1,18 @@
 package command
 
 import (
+	"bytes"
 	"os"
+	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/pthm/melange/internal/cli"
 )
 
 const clientSchema = `model
@@ -223,4 +228,170 @@ func TestCLI_GenerateClientTypeScript(t *testing.T) {
 	types := read("out/types.ts")
 	assert.Contains(t, types, "CanView: \"can_view\"")
 	assert.NotContains(t, types, "CanEdit")
+}
+
+// clientConfig is a melange.yaml generating the Go client into out/, with
+// extra appended.
+func clientConfig(runtime, extra string) string {
+	return "schema: schema.fga\ngenerate:\n  client:\n    runtime: " + runtime + "\n    output: out\n" + extra
+}
+
+// exitCode returns the CLI exit code of err, 0 for nil.
+func exitCode(t *testing.T, err error) int {
+	t.Helper()
+	if err == nil {
+		return 0
+	}
+	var exit *cli.ExitError
+	require.ErrorAs(t, err, &exit)
+	return exit.Code
+}
+
+// captureStderr runs fn with os.Stderr redirected and returns what it wrote.
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	prev := os.Stderr
+	r, w, err := os.Pipe()
+	require.NoError(t, err)
+	os.Stderr = w
+	defer func() { os.Stderr = prev }()
+	var buf bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		_, _ = buf.ReadFrom(r)
+		close(done)
+	}()
+	fn()
+	_ = w.Close()
+	<-done
+	return buf.String()
+}
+
+// --check passes on a client generated from melange.yaml and fails, naming
+// the file, once melange.yaml changes what it generates.
+func TestCLI_GenerateClientCheck(t *testing.T) {
+	seedDir(t, clientConfig("go", ""), map[string]string{"schema.fga": clientSchema})
+	_, err := executeCLI(t, "generate", "client")
+	require.NoError(t, err)
+	out, err := executeCLI(t, "generate", "client", "--check")
+	require.NoError(t, err, out)
+	assert.Contains(t, out, "out matches melange.yaml")
+	_, err = os.Stat("out/schema_gen.go")
+	require.NoError(t, err)
+
+	writeFile(t, "melange.yaml", clientConfig("go", "sql:\n  functions:\n    accessible: false\n"))
+	out, err = executeCLI(t, "generate", "client", "--check")
+	assert.Equal(t, cli.ExitGeneral, exitCode(t, err))
+	assert.Contains(t, out, filepath.Join("out", "schema_gen.go")+": differs (first difference at line")
+
+	writeFile(t, "melange.yaml", clientConfig("go", ""))
+	require.NoError(t, os.Remove("out/schema_gen.go"))
+	out, err = executeCLI(t, "generate", "client", "--check")
+	assert.Equal(t, cli.ExitGeneral, exitCode(t, err))
+	assert.Contains(t, out, filepath.Join("out", "schema_gen.go")+": missing")
+}
+
+// The header's source line differs when generation runs from another
+// directory, and its version line with another melange: neither is drift.
+func TestCLI_GenerateClientCheckFromSubdir(t *testing.T) {
+	seedDir(t, clientConfig("go", ""), map[string]string{"schema.fga": clientSchema, "sub/keep": ""})
+	_, err := executeCLI(t, "generate", "client")
+	require.NoError(t, err)
+	content, err := os.ReadFile("out/schema_gen.go")
+	require.NoError(t, err)
+	require.Contains(t, string(content), "// source: schema.fga")
+	old := strings.Replace(string(content), "// source: schema.fga", "// melange version: v0.0.1\n// source: elsewhere/schema.fga", 1)
+	writeFile(t, "out/schema_gen.go", strings.ReplaceAll(old, "\n", "\r\n"))
+
+	t.Chdir("sub")
+	out, err := executeCLI(t, "generate", "client", "--check")
+	require.NoError(t, err, out)
+}
+
+// All four TypeScript files are compared; sql.ts has no header.
+func TestCLI_GenerateClientCheckTypeScript(t *testing.T) {
+	seedDir(t, clientConfig("typescript", ""), map[string]string{"schema.fga": clientSchema})
+	_, err := executeCLI(t, "generate", "client")
+	require.NoError(t, err)
+	_, err = executeCLI(t, "generate", "client", "--check")
+	require.NoError(t, err)
+
+	content, err := os.ReadFile("out/sql.ts")
+	require.NoError(t, err)
+	writeFile(t, "out/sql.ts", strings.Replace(string(content), "accessible_document_owner", "accessible_document_ownr", 1))
+	out, err := executeCLI(t, "generate", "client", "--check")
+	assert.Equal(t, cli.ExitGeneral, exitCode(t, err))
+	assert.Contains(t, out, filepath.Join("out", "sql.ts")+": differs")
+	assert.NotContains(t, out, "types.ts")
+}
+
+func TestCLI_GenerateClientCheckNoOutput(t *testing.T) {
+	_, err := runCLIWithFiles(t, "", map[string]string{"schema.fga": clientSchema},
+		"generate", "client", "--runtime", "go", "--schema", "schema.fga", "--check")
+	assert.Equal(t, cli.ExitConfig, exitCode(t, err))
+	assert.Contains(t, err.Error(), "output directory")
+}
+
+// A client generated with relation flags checks exactly with the same
+// flags, and is drift without them.
+func TestCLI_GenerateClientCheckFlags(t *testing.T) {
+	seedDir(t, clientConfig("go", ""), map[string]string{"schema.fga": clientSchema})
+	_, err := executeCLI(t, "generate", "client", "--include-relation", "can_*")
+	require.NoError(t, err)
+	_, err = executeCLI(t, "generate", "client", "--check", "--include-relation", "can_*")
+	require.NoError(t, err)
+	_, err = executeCLI(t, "generate", "client", "--check")
+	assert.Equal(t, cli.ExitGeneral, exitCode(t, err))
+}
+
+func TestCLI_GenerateClientDBWithoutCheck(t *testing.T) {
+	for _, args := range [][]string{
+		{"--db", "postgres://localhost/x"},
+		{"--db-schema", "authz"},
+		{"--format", "json"},
+		{"--strict"},
+	} {
+		_, err := runCLIWithFiles(t, clientConfig("go", ""), map[string]string{"schema.fga": clientSchema},
+			append([]string{"generate", "client"}, args...)...)
+		assert.Equal(t, cli.ExitConfig, exitCode(t, err), "%v", args)
+		assert.Contains(t, err.Error(), "applies to --check")
+	}
+}
+
+// Relation flags on a configured client reach this run only; the hint says
+// where doctor and --check read the selection from.
+func TestCLI_GenerateClientFlagHint(t *testing.T) {
+	const hint = "doctor and --check read generate.client.relations from melange.yaml"
+	seedDir(t, clientConfig("go", ""), map[string]string{"schema.fga": clientSchema})
+	stderr := captureStderr(t, func() {
+		_, err := executeCLI(t, "generate", "client", "--include-relation", "can_*")
+		require.NoError(t, err)
+	})
+	assert.Contains(t, stderr, hint)
+	stderr = captureStderr(t, func() {
+		_, err := executeCLI(t, "generate", "client")
+		require.NoError(t, err)
+	})
+	assert.NotContains(t, stderr, hint)
+
+	seedDir(t, "", map[string]string{"schema.fga": clientSchema})
+	stderr = captureStderr(t, func() {
+		_, err := executeCLI(t, "generate", "client", "--runtime", "go", "--schema", "schema.fga", "--filter", "can_")
+		require.NoError(t, err)
+	})
+	assert.NotContains(t, stderr, hint, "no configured client")
+}
+
+func TestCLI_GenerateClientCheckJSON(t *testing.T) {
+	seedDir(t, clientConfig("go", ""), map[string]string{"schema.fga": clientSchema})
+	_, err := executeCLI(t, "generate", "client")
+	require.NoError(t, err)
+	out, err := executeCLI(t, "generate", "client", "--check", "--format", "json")
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"files": [], "database": null}`, out)
+
+	require.NoError(t, os.Remove("out/schema_gen.go"))
+	out, err = executeCLI(t, "generate", "client", "--check", "--format", "json")
+	assert.Equal(t, cli.ExitGeneral, exitCode(t, err))
+	assert.JSONEq(t, `{"files": [{"file": "schema_gen.go", "status": "missing"}], "database": null}`, out)
 }

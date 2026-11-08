@@ -46,3 +46,34 @@ func TestMigrateExitError(t *testing.T) {
 	require.Contains(t, msg, "--force")
 	require.Contains(t, msg, "policy docs_read on table docs depends on accessible_document_viewer")
 }
+
+// Exposure flags that make a migration differ from melange.yaml's sql
+// section warn when a client is configured, since generate client follows
+// the section. The warning comes before connecting.
+func TestCLI_MigrateWarnsClientExposureFlags(t *testing.T) {
+	const warning = "the exposure flags differ from melange.yaml's sql section"
+	const client = "schema: schema.fga\ngenerate:\n  client:\n    runtime: go\n"
+	for _, tc := range []struct {
+		name, config string
+		args         []string
+		warns        bool
+	}{
+		{"flag narrows", client, []string{"--no-expand"}, true},
+		{"flag repeats the config", client + "sql:\n  functions:\n    expand: false\n", []string{"--no-expand"}, false},
+		{"no flags", client + "sql:\n  functions:\n    expand: false\n", nil, false},
+		{"no client", "schema: schema.fga\n", []string{"--include-relation", "can_*"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			seedDir(t, tc.config, map[string]string{"schema.fga": "model\n  schema 1.1\n\ntype user\n"})
+			stderr := captureStderr(t, func() {
+				_, err := executeCLI(t, append([]string{"migrate"}, tc.args...)...)
+				require.Error(t, err, "no database is configured")
+			})
+			if tc.warns {
+				require.Contains(t, stderr, warning)
+			} else {
+				require.NotContains(t, stderr, warning)
+			}
+		})
+	}
+}

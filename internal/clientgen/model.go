@@ -18,6 +18,10 @@ type Model struct {
 	// Relations is the relation names selected on at least one type, sorted.
 	Relations []string
 
+	// Selected is every selected relation, in model order. The generators
+	// emit relation names only; checks compare the pairs with a database.
+	Selected []RelationRef
+
 	// Accessible is the accessible_<t>_<r> functions installed for the
 	// selected relations, sorted by type and relation.
 	Accessible []compiler.AccessibleFunction
@@ -26,6 +30,11 @@ type Model struct {
 	// functions installed for the selected relations, sorted by type,
 	// relation and link.
 	AccessibleByParent []compiler.AccessibleFunction
+}
+
+// RelationRef names a relation of a type.
+type RelationRef struct {
+	Type, Relation string
 }
 
 // Resolve validates types as a migration does, compiles them under
@@ -84,6 +93,7 @@ func Resolve(types []schema.TypeDefinition, cfg *Config) (*Model, error) {
 		for _, r := range t.Relations {
 			if selected(t.Name, r.Name) {
 				relSet[r.Name] = true
+				m.Selected = append(m.Selected, RelationRef{Type: t.Name, Relation: r.Name})
 			}
 		}
 	}

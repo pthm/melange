@@ -96,6 +96,8 @@ migrate:
 doctor:
   verbose: false
   skip_performance: false
+  skip_client: false      # skip the Generated Client checks
+  strict_client: false    # fail, not warn, on a client name the database lacks
 
 # Generated SQL API (used by migrate, generate migration, generate client, status, doctor)
 # Omit the section to generate everything. See "SQL API Settings" below.
@@ -180,7 +182,7 @@ Configure under `generate.client:`:
 |-----|------|---------|-------------|
 | `runtime` | string | - | Target runtime: `go`, `typescript` |
 | `schema` | string | (top-level `schema`) | Path to schema file |
-| `output` | string | - | Output directory for generated code |
+| `output` | string | - | Output directory for generated code; `generate client --check` and doctor compare the files here |
 | `package` | string | `authz` | Package/module name |
 | `relations.include` | list | `[]` | Patterns of the relations to generate constants for, as in [`sql.relations`](#sql-api-settings) |
 | `relations.exclude` | list | `[]` | Patterns of the relations to leave out |
@@ -220,6 +222,10 @@ Configure under `doctor:`:
 |-----|------|---------|-------------|
 | `verbose` | bool | `false` | Show detailed output |
 | `skip_performance` | bool | `false` | Skip performance checks (view analysis) |
+| `skip_client` | bool | `false` | Skip the Generated Client checks |
+| `strict_client` | bool | `false` | Report a name the generated client uses that the database does not answer for as a failure instead of a warning |
+
+The Generated Client checks run when `generate.client.runtime` is set. They read `generate.client.*` and the `sql:` section from the configuration only, never from command flags; see [doctor](../cli/#doctor).
 
 ### SQL API Settings
 
@@ -519,6 +525,8 @@ All configuration options can be set via environment variables with the `MELANGE
 | `MELANGE_MIGRATE_FORCE` | `migrate.force` |
 | `MELANGE_DOCTOR_VERBOSE` | `doctor.verbose` |
 | `MELANGE_DOCTOR_SKIP_PERFORMANCE` | `doctor.skip_performance` |
+| `MELANGE_DOCTOR_SKIP_CLIENT` | `doctor.skip_client` |
+| `MELANGE_DOCTOR_STRICT_CLIENT` | `doctor.strict_client` |
 | `MELANGE_SQL_RELATIONS_INCLUDE` | `sql.relations.include` |
 | `MELANGE_SQL_RELATIONS_EXCLUDE` | `sql.relations.exclude` |
 | `MELANGE_SQL_FUNCTIONS_LIST_OBJECTS` | `sql.functions.list_objects` |

@@ -64,6 +64,12 @@ records it in the `exposure` column of `melange_migrations` (a JSON object;
   default. Exposure flags such as `--include-relation` apply to one run and
   are not remembered, so the next migrate without them applies the config
   again.
+- **The generated client follows the config, not the flags.** `melange
+  generate client` names the accessible functions and relations of the `sql:`
+  section. A migrate with exposure flags that narrow it installs less than the
+  client names; when `generate.client.runtime` is set, migrate warns.
+  `melange generate client --check --db` and doctor's Generated Client checks
+  report each name the database does not answer for.
 - **Status and doctor follow it.** `melange status` reports `exposure_drift`
   and `melange doctor` warns (`exposure_sync`) when the local exposure differs
   from the recorded one. Doctor expects the functions of the recorded

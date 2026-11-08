@@ -145,6 +145,11 @@ type MigrateConfig struct {
 type DoctorConfig struct {
 	Verbose         bool `mapstructure:"verbose"`
 	SkipPerformance bool `mapstructure:"skip_performance"`
+	// SkipClient skips the Generated Client checks, and StrictClient
+	// reports a client name the database does not answer for as a failure
+	// instead of a warning.
+	SkipClient   bool `mapstructure:"skip_client"`
+	StrictClient bool `mapstructure:"strict_client"`
 }
 
 // SQLConfig is the sql section: which relations the public SQL API answers
@@ -774,6 +779,8 @@ func setDefaults(v *viper.Viper) {
 	// Doctor defaults
 	v.SetDefault("doctor.verbose", false)
 	v.SetDefault("doctor.skip_performance", false)
+	v.SetDefault("doctor.skip_client", false)
+	v.SetDefault("doctor.strict_client", false)
 
 	// SQL API exposure defaults: every relation, every function family.
 	v.SetDefault("sql.relations.include", []string{"*"})

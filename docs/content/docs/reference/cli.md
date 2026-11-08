@@ -183,6 +183,12 @@ restricted earlier is widened back. Flags are not remembered: the next
 `melange.yaml`. A pattern that matches no relation of the schema prints a
 warning.
 
+`melange generate client` follows the `sql:` section, never these flags. When
+`generate.client.runtime` is configured and the flags make the exposure differ
+from the section, `migrate` warns that the generated client may name functions
+or relations this migration does not install. It still migrates; check the
+client afterwards with `melange generate client --check --db`.
+
 ```bash
 # Expose only the can_* relations, without the expand and explain functions
 # (melange explain and expand then compile them on demand)
@@ -622,11 +628,14 @@ melange doctor \
 | `--schema`           | `schemas/schema.fga` | Path to schema.fga file                      |
 | `--verbose`          | `false`              | Show detailed output with additional context |
 | `--skip-performance` | `false`              | Skip performance checks (view analysis)      |
+| `--skip-client`      | `false`              | Skip the Generated Client checks             |
+| `--strict-client`    | `false`              | Fail, rather than warn, when the generated client names something the database does not answer for |
 | `--format`           | `text`               | Output format: `text` or `json`              |
 
 `doctor` also takes the [SQL API exposure flags](#migrate) (`--include-relation`,
 `--exclude-relation`, `--no-<family>`), which override the `sql:` section of the
-configuration for the exposure checks.
+configuration for the exposure checks. They do not reach the Generated Client
+checks, which read `melange.yaml` only.
 
 With `--format json`, the report is a list of `checks` (each with `category`, `name`, `status` of `pass`, `warn`, or `fail`, `message`, and optional `details` and `fix`) plus `passed`, `warnings`, and `errors` counts. The command exits non-zero when any check fails.
 
@@ -689,6 +698,16 @@ The doctor command performs the following checks:
 - Identifies orphan functions: installed functions the last migration recorded that the schema no longer generates. A function only named like a generated one (your own `explain_invoice`) is not an orphan, since no migration recorded it. Without a migration record nothing is an orphan, since `melange migrate` drops only recorded functions
 - Warns about exposure patterns that match no relation in the schema (`exposure_patterns`), usually a typo or a renamed relation
 
+**Generated Client** (when `generate.client.runtime` is configured):
+
+The same check as [`melange generate client --check --db`](#checking-a-generated-client), from `generate.client.*` and the `sql:` section of `melange.yaml` (or their `MELANGE_*` variables) alone. A client generated with relation flags can only be compared with what the configuration generates, so keep the selection in `generate.client.relations`.
+
+- `client_file`: the files under `generate.client.output` against a fresh generation. Skipped when the directory does not exist (a production image without sources; `--verbose` says so). A difference is a warning; a file that cannot be read, or a configuration that does not generate, is a failure
+- `client_functions`: every accessible function name the client uses against the functions installed by the last migration
+- `client_relations`: every relation the client has a constant for against the relations the database exposes
+
+A client name the database does not answer for is a warning by default, since the working tree may be ahead of the database: run doctor after `migrate`. `--strict-client` or `doctor.strict_client: true` makes it a failure. The details list the first 10 findings, and the fix hint follows what a plain `migrate` would do, as below. `--skip-client` or `doctor.skip_client: true` skips the category.
+
 **Tuples Source:**
 
 - Verifies `melange_tuples` view/table exists
@@ -747,6 +766,8 @@ This shows:
 | Exposure out of sync     | Run `melange migrate`, or change the `sql:` section back |
 | Pattern matches nothing  | Fix the pattern in the `sql:` section                 |
 | Missing functions        | Run `melange migrate`, or `--force` when the fix hint says so |
+| Generated client differs | Run `melange generate client`; keep the relation selection in `melange.yaml` |
+| Client names what the database lacks | Run `melange migrate` with `melange.yaml`'s `sql:` section, or regenerate the client |
 | Orphan functions         | Run `melange migrate` (cleanup is automatic); change their dependents first if any |
 | melange_tuples missing   | Create a view over your domain tables                 |
 | Missing columns          | Update melange_tuples to include all required columns |
@@ -1068,8 +1089,17 @@ The client follows the `sql:` section of `melange.yaml`: relation constants for 
 | `--include-relation` | `generate.client.relations.include`, see below | Generate constants only for relations matching this pattern, `relation` or `type#relation` (repeatable) |
 | `--exclude-relation` | `generate.client.relations.exclude`, see below | Generate no constants for relations matching this pattern (repeatable). With no client include pattern, it narrows the inherited `sql.relations` |
 | `--filter`  | `""`                 | Deprecated: a relation name prefix applied after the patterns. Use `--include-relation 'can_*'` |
+| `--check`   | `false`              | Write nothing: compare the output directory with a fresh generation, and with a database the client's names with it (see below) |
+| `--db`      |                      | With `--check`: the database to check the client's names against. The database check runs only with `--db`, `--env` or `MELANGE_ENV` (with `--env`, the configured database with that environment applied); `database.url` alone does not start it |
+| `--db-schema` | (config, else `public`) | With `--check`: the PostgreSQL schema melange was migrated into |
+| `--format`  | `text`               | With `--check`: output format, `text` or `json` |
+| `--strict`  | `false`              | With `--check`: exit 1 on warnings too |
+
+`--db`, `--db-schema`, `--format` and `--strict` without `--check` are a configuration error (exit 2).
 
 The relation patterns resolve with the precedence flag, `MELANGE_GENERATE_CLIENT_RELATIONS_*` variable, `generate.client.relations` in the config file, then `sql.relations`, then every relation. Each list follows that precedence on its own. Without a client include pattern the client starts from `sql.relations`, include and exclude, and client exclude patterns only narrow it: `--exclude-relation can_edit` gives constants for the exposed relations except `can_edit`. A client include pattern replaces `sql.relations`, so the client can also name relations migrate does not expose (such as roles used when writing tuples).
+
+When `generate.client.runtime` is configured and `--include-relation`, `--exclude-relation` or `--filter` is given, the command prints a hint to stderr: doctor and `--check` without the flags read `generate.client.relations` from `melange.yaml`, so the patterns belong there.
 
 **Example with all options:**
 
@@ -1137,6 +1167,61 @@ func AnyUser() melange.Object {
 | ------------ | ----------------------------------------------------------------------------------- |
 | `go`         | `schema_gen.go`: constants, constructors and accessible function name constants    |
 | `typescript` | `types.ts`, `schema.ts`, `sql.ts`, `index.ts`: constants, factories and name maps   |
+
+#### Checking a generated client
+
+`--check` checks the two links between a generated client and the database:
+
+1. **Files against the configuration.** It regenerates the client in memory and compares it with the files in the output directory (`--output` or `generate.client.output`, which `--check` requires; without one it exits 2). No database is needed. Only the generated file names are compared; other files in the directory are ignored. Before comparing, CRLF line endings become LF, the header's `melange version:` and `source:` lines are dropped (they change with the release and with the directory generation ran from), and trailing whitespace at the end of the file is removed. Any other difference is drift, so a formatter that rewrites the generated files (prettier, for one) makes them differ: exclude them from formatting.
+2. **Configuration against the database.** With `--db`, `--env` or `MELANGE_ENV`, it checks every name the configured client uses against the database's last migration (`melange_migrations`), the model and exposure it recorded, and `pg_proc` in `--db-schema`. When the files match, this covers the files too. When they differ, the output says that the database check covers the names the configuration generates.
+
+Pass the same relation flags to `--check` that the client was generated with; without them it compares with what `melange.yaml` generates.
+
+```bash
+# Before merge: is the committed client what melange.yaml generates?
+melange generate client --check
+
+# After migrate: does production install everything the client names?
+melange generate client --check --env production
+```
+
+Run the database check after `migrate`: before it, every pending exposure change is reported as an error. Use [`diff`](#diff) and [`status`](#status) before migrating.
+
+The database check reports names the client uses that the database does not answer for as expected. A client narrower than the database (or than `sql.relations`) is never reported.
+
+| Code | Severity | Meaning |
+| ---- | -------- | ------- |
+| `function_not_installed` | error | An accessible function the client names is not installed: its family was off, its relation not exposed, the deployed model generates none for it, or it is missing from `pg_proc` |
+| `function_signature` | error | Installed with other arguments than this melange generates |
+| `function_collision` | error | The model generates the name for more than one relation; the database keeps one definition, so a call may answer for another relation. Rename one of the relations |
+| `function_owner` | error | The name belongs to another relation in the database's SQL API (a collision, or a name another codegen version computes differently); info when a newer melange migrated the database |
+| `relation_not_exposed` | error | `melange.yaml` exposes the relation and the database was migrated without it, so `check_permission` raises `M2003` |
+| `function_internal` | warning | Installed only as an internal function (the relation is not exposed, or `sql.functions.accessible` was off), so a later migration may drop it or change its signature |
+| `function_orphan` | warning | Installed and recorded, but this melange does not generate it for the deployed model, so the next `migrate` drops it; info when a newer melange migrated the database |
+| `function_unmanaged` | warning | A function no migration recorded has the name, such as the application's own |
+| `relation_undefined` | warning | The deployed model does not define the relation, so `check_permission` denies it |
+| `relation_internal` | info | The client has a constant for a relation neither `melange.yaml` nor the database exposes (constants used for writing tuples) |
+| `family_off` | info | `melange.yaml` turns `list_objects`, `list_subjects`, `explain` or `expand` on and the database has it off; the client names none of their functions |
+
+Each error and warning has a fix. A fix that runs `migrate` follows what a plain `melange migrate` would do, as doctor's [fix hints](#doctor) do. A database built from `generate migration` files records nothing, so the check compares under the local exposure; a database migrated by an older melange without a recorded model is compared with the local schema under the recorded exposure. Both add a note.
+
+`--check` exits 1 on any file drift or database error, and on a warning only with `--strict`; info findings never fail it. Text output lists each drifted file as `<output>/<file>: missing` or `differs (first difference at line N)`, with the version that generated it when it differs from this melange, then the findings. With `--format json`:
+
+```json
+{
+  "files": [{"file": "schema_gen.go", "status": "differs", "line": 42, "on_disk_version": "v0.9.0"}],
+  "database": {
+    "findings": [
+      {"code": "function_not_installed", "severity": "error", "type": "document", "relation": "can_view",
+       "link": "parent", "function": "accessible_document_can_view_by_parent",
+       "message": "...", "fix": "Run 'melange migrate' to apply the local schema and melange.yaml's sql section"}
+    ],
+    "errors": 1, "warnings": 0, "functions_checked": 7, "relations_checked": 6
+  }
+}
+```
+
+`database` is `null` without a database. Doctor runs the same check as its [Generated Client](#doctor) category.
 
 ### generate migration
 
@@ -1473,7 +1558,7 @@ This displays the Melange license and attribution for all embedded third-party d
 | Code | Meaning                                                              |
 | ---- | -------------------------------------------------------------------- |
 | 0    | Success                                                              |
-| 1    | General error (validation, runtime, IO)                              |
+| 1    | General error (validation, runtime, IO), or `generate client --check` found drift or an error |
 | 2    | Configuration error (invalid config file, missing required settings) |
 | 3    | Schema parse error                                                   |
 | 4    | Database connection error                                            |
@@ -1545,7 +1630,12 @@ melange migrate
 
 # Run health checks
 melange doctor
+
+# Check the generated client against production
+melange generate client --check --env production
 ```
+
+Before merge, `melange generate client --check` (no database) fails the build when the committed client is not what `melange.yaml` generates.
 
 Keep `--force` out of routine pipelines. A plain `migrate` already re-applies
 after a Melange upgrade, and `--force` turns the dependent-object refusal into a

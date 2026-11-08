@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	_ "github.com/lib/pq"
@@ -37,7 +38,11 @@ function family), so keep a lasting restriction in the configuration file.
 
 Functions the new SQL no longer generates are dropped. When views, policies,
 rules or functions depend on one, migrate refuses and lists them; --force
-drops them together with their dependents (CASCADE).`,
+drops them together with their dependents (CASCADE).
+
+melange generate client follows the sql section, not the exposure flags:
+when a client is configured and the flags change the exposure, migrate
+warns that the client may name what it does not install.`,
 	Example: `  # Apply schema to database
   melange migrate --db postgres://localhost/mydb
 
@@ -76,6 +81,7 @@ drops them together with their dependents (CASCADE).`,
 		if err != nil {
 			return err
 		}
+		warnClientExposure(cmd, exposure)
 
 		// Get DSN
 		dsn, err := resolveDSN(migrateDB)
@@ -104,6 +110,17 @@ func init() {
 	f.BoolVar(&migrateForce, "force", false, "re-apply even if unchanged, and drop removed functions with CASCADE, together with the views, policies and functions that depend on them")
 	f.StringVar(&migrateIfDeployedChecksum, "if-deployed-checksum", "", "apply only if the deployed schema checksum matches this value (from `melange status --format json`); the exposure is not compared")
 	addExposureFlags(f)
+}
+
+// warnClientExposure warns when exposure flags make this migration's SQL
+// API differ from melange.yaml's sql section, which generate client follows,
+// so a configured client may name what this migration does not install.
+func warnClientExposure(cmd *cobra.Command, exposure migrator.Exposure) {
+	if quiet || cfg.Generate.Client.Runtime == "" || !slices.ContainsFunc(exposureFlagNames(), cmd.Flags().Changed) ||
+		migrator.SameExposure(exposure, cfg.SQL.Exposure()) {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "warning: the exposure flags differ from melange.yaml's sql section, which melange generate client follows; the generated client may name functions or relations this migration does not install (check with melange generate client --check --db)")
 }
 
 // resolveDSN gets the database DSN from flag or config.

@@ -9,6 +9,9 @@ Validates that the authorization system is properly configured by checking:
 - **Schema File** - Exists, parses correctly, no cyclic dependencies
 - **Migration State** - Tracking table exists, schema is in sync
 - **Generated Functions** - All expected functions present, no orphans
+- **Generated Client** - When `Options.Client` is set: the generated files
+  match a fresh generation, and every name the client uses is installed and
+  exposed (`internal/sqlapi.CompareClient`)
 - **Tuples Source** - `melange_tuples` view exists with correct columns
 - **Data Health** - Tuples reference valid types and relations
 
@@ -22,6 +25,7 @@ melange doctor
                ├── pkg/parser (schema parsing)
                ├── pkg/schema (validation)
                ├── pkg/migrator (migration state)
+               ├── internal/sqlapi (deployed SQL API, client comparison)
                └── internal/sqlgen (function analysis)
 ```
 
@@ -47,6 +51,10 @@ and never suggests `--force` with this melange, which would override the
 downgrade guard. The undecodable-model hint may suggest `--force` with the
 newer melange.
 
+`Doctor.CompareClient` runs the client comparison outside `Run` (for
+`melange generate client --check --db`), reading the local schema and the
+migration record itself, so its fix hints come from the same helpers.
+
 ## Key Checks
 
 | Category | Validates |
@@ -54,5 +62,6 @@ newer melange.
 | Schema File | File exists, syntax valid, no cycles |
 | Migration State | Tracking table, schema checksum match |
 | Generated Functions | Dispatchers present, no missing/orphan functions |
+| Generated Client | `client_file`, `client_functions`, `client_relations`: Warn by default, Fail on an error with `ClientCheck.Strict` |
 | Tuples Source | View exists, required columns present |
 | Data Health | Tuple types and relations match schema |
