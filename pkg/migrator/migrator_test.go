@@ -103,7 +103,7 @@ func TestShouldSkipMigration(t *testing.T) {
 	checksum := ComputeSchemaChecksum("test schema")
 
 	t.Run("nil record does not skip", func(t *testing.T) {
-		if shouldSkipMigration(nil, checksum) {
+		if shouldSkipMigration(nil, checksum, "{}") {
 			t.Error("should not skip when no previous migration exists")
 		}
 	})
@@ -115,7 +115,7 @@ func TestShouldSkipMigration(t *testing.T) {
 			CodegenVersion: CodegenVersion(),
 			SchemaDSL:      "model", // model already recorded
 		}
-		if !shouldSkipMigration(rec, checksum) {
+		if !shouldSkipMigration(rec, checksum, "{}") {
 			t.Error("should skip when checksum and codegen version match")
 		}
 	})
@@ -127,7 +127,7 @@ func TestShouldSkipMigration(t *testing.T) {
 			CodegenVersion: CodegenVersion(),
 			SchemaDSL:      "model",
 		}
-		if shouldSkipMigration(rec, checksum) {
+		if shouldSkipMigration(rec, checksum, "{}") {
 			t.Error("dev builds must fall through to phase 2: codegen can change without a version bump")
 		}
 	})
@@ -139,7 +139,7 @@ func TestShouldSkipMigration(t *testing.T) {
 			CodegenVersion: CodegenVersion(),
 			// SchemaDSL empty: an older record with no deployed model.
 		}
-		if shouldSkipMigration(rec, checksum) {
+		if shouldSkipMigration(rec, checksum, "{}") {
 			t.Error("should not skip when the deployed model has not been recorded")
 		}
 	})
@@ -149,7 +149,7 @@ func TestShouldSkipMigration(t *testing.T) {
 			SchemaChecksum: "different-checksum",
 			CodegenVersion: CodegenVersion(),
 		}
-		if shouldSkipMigration(rec, checksum) {
+		if shouldSkipMigration(rec, checksum, "{}") {
 			t.Error("should not skip when checksum differs")
 		}
 	})
@@ -159,7 +159,7 @@ func TestShouldSkipMigration(t *testing.T) {
 			SchemaChecksum: checksum,
 			CodegenVersion: "99",
 		}
-		if shouldSkipMigration(rec, checksum) {
+		if shouldSkipMigration(rec, checksum, "{}") {
 			t.Error("should not skip when codegen version differs")
 		}
 	})
@@ -169,7 +169,7 @@ func TestShouldSkipMigration(t *testing.T) {
 			SchemaChecksum: "other",
 			CodegenVersion: "99",
 		}
-		if shouldSkipMigration(rec, checksum) {
+		if shouldSkipMigration(rec, checksum, "{}") {
 			t.Error("should not skip when both differ")
 		}
 	})
@@ -297,7 +297,7 @@ func TestOutputDryRun(t *testing.T) {
 			SchemaDSL:      "model\n  schema 1.1\n-- it's fine", // embedded quote exercises escaping
 			SchemaFormat:   "single",
 			ModelJSON:      []byte(`[{"Name":"user"}]`),
-		}, gen, listSQL)
+		}, gen, listSQL, nil)
 		output := buf.String()
 
 		// Deployed-model columns are emitted so an applied dry-run script is
@@ -358,7 +358,7 @@ func TestOutputDryRun(t *testing.T) {
 	})
 
 	t.Run("reports write errors", func(t *testing.T) {
-		err := m.outputDryRun(failWriter{}, migrationWrite{SchemaChecksum: "abc"}, GeneratedSQL{}, ListGeneratedSQL{})
+		err := m.outputDryRun(failWriter{}, migrationWrite{SchemaChecksum: "abc"}, GeneratedSQL{}, ListGeneratedSQL{}, nil)
 		if !errors.Is(err, io.ErrClosedPipe) {
 			t.Fatalf("got %v, want io.ErrClosedPipe", err)
 		}
@@ -366,7 +366,7 @@ func TestOutputDryRun(t *testing.T) {
 
 	t.Run("omits version when empty", func(t *testing.T) {
 		var buf bytes.Buffer
-		m.outputDryRun(&buf, migrationWrite{SchemaChecksum: "abc"}, GeneratedSQL{}, ListGeneratedSQL{})
+		m.outputDryRun(&buf, migrationWrite{SchemaChecksum: "abc"}, GeneratedSQL{}, ListGeneratedSQL{}, nil)
 		output := buf.String()
 
 		if strings.Contains(output, "-- Melange version:") {
@@ -377,7 +377,7 @@ func TestOutputDryRun(t *testing.T) {
 	t.Run("sorts function names in migration record", func(t *testing.T) {
 		var buf bytes.Buffer
 		expected := []string{"check_z_viewer", "check_a_owner", "check_m_editor"}
-		m.outputDryRun(&buf, migrationWrite{SchemaChecksum: "abc", FunctionNames: expected}, GeneratedSQL{}, ListGeneratedSQL{})
+		m.outputDryRun(&buf, migrationWrite{SchemaChecksum: "abc", FunctionNames: expected}, GeneratedSQL{}, ListGeneratedSQL{}, nil)
 		output := buf.String()
 
 		// Should appear sorted in the INSERT
@@ -514,7 +514,7 @@ func TestOutputDryRun_DatabaseSchema(t *testing.T) {
 		m.SetDatabaseSchema("authz")
 
 		var buf bytes.Buffer
-		m.outputDryRun(&buf, migrationWrite{SchemaChecksum: "abc"}, GeneratedSQL{}, ListGeneratedSQL{})
+		m.outputDryRun(&buf, migrationWrite{SchemaChecksum: "abc"}, GeneratedSQL{}, ListGeneratedSQL{}, nil)
 		output := buf.String()
 
 		if !strings.Contains(output, "Database schema: authz") {
@@ -532,7 +532,7 @@ func TestOutputDryRun_DatabaseSchema(t *testing.T) {
 		m := NewMigrator(nil, "")
 
 		var buf bytes.Buffer
-		m.outputDryRun(&buf, migrationWrite{SchemaChecksum: "abc"}, GeneratedSQL{}, ListGeneratedSQL{})
+		m.outputDryRun(&buf, migrationWrite{SchemaChecksum: "abc"}, GeneratedSQL{}, ListGeneratedSQL{}, nil)
 		output := buf.String()
 
 		if !strings.Contains(output, "public") {

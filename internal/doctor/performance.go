@@ -352,7 +352,7 @@ func (d *Doctor) checkTableIndexes(ctx context.Context, report *Report) error { 
 		// file check has already reported the underlying problem.
 		return nil
 	}
-	recs := sqlgen.RecommendIndexes(analyses)
+	recs := d.installedIndexRecommendations(analyses)
 	if len(recs) == 0 {
 		return nil
 	}
@@ -402,6 +402,36 @@ func (d *Doctor) checkTableIndexes(ctx context.Context, report *Report) error { 
 	return nil
 }
 
+// installedIndexRecommendations returns sqlgen.RecommendIndexes for the
+// functions the installed exposure generates: a recommendation lists only
+// its installed beneficiaries and is left out when it has none, so a
+// restricted exposure gets no advice for functions it never installed.
+func (d *Doctor) installedIndexRecommendations(analyses []sqlgen.RelationAnalysis) []sqlgen.IndexRecommendation {
+	recs := sqlgen.RecommendIndexes(analyses)
+	exposure := d.installedExposure()
+	if exposure.IsDefault() {
+		return recs
+	}
+	installed := make(map[string]bool)
+	for _, fn := range sqlgen.CollectFunctionNamesWithOptions(analyses, sqlgen.GenerateSQLOptions{Exposure: exposure}) {
+		installed[fn] = true
+	}
+	out := recs[:0]
+	for _, rec := range recs {
+		var benefits []string
+		for _, fn := range rec.BenefitsFunctions {
+			if installed[fn] {
+				benefits = append(benefits, fn)
+			}
+		}
+		if len(benefits) > 0 {
+			rec.BenefitsFunctions = benefits
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
 // checkExpandFanoutAdvisory emits a schema-derived advisory when the
 // schema has relations that can produce large Expand responses. The
 // heuristic is intentionally coarse — Expand's response size is
@@ -425,8 +455,13 @@ func (d *Doctor) checkExpandFanoutAdvisory(_ context.Context, report *Report) er
 		return nil
 	}
 
+	// Only relations the installed expand dispatcher answers for.
+	expandable := sqlgen.ExpandPublic(analyses, d.installedExposure())
 	var wildcardRels, recursiveRels []string
 	for _, a := range analyses {
+		if !expandable(a.ObjectType, a.Relation) {
+			continue
+		}
 		if a.Features.HasWildcard {
 			wildcardRels = append(wildcardRels, a.ObjectType+"#"+a.Relation)
 		}

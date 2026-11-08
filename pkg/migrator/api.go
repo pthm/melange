@@ -23,6 +23,10 @@ import (
 //  4. Generates specialized check_permission and list_accessible functions
 //  5. Applies generated SQL atomically via transaction
 //
+// The SQL API exposure recorded by the last migration is kept (the default
+// when none is recorded), so a database migrated by `melange migrate` with a
+// restricted exposure stays restricted. Use MigrateWithOptions to change it.
+//
 // Example usage on application startup:
 //
 //	if err := migrator.Migrate(ctx, db, "schemas/schema.fga"); err != nil {
@@ -74,7 +78,8 @@ func Migrate(ctx context.Context, db Execer, schemaPath string) error {
 //
 //	err := migrator.MigrateFromString(ctx, db, embeddedSchema)
 //
-// The migration is idempotent and transactional (when using *sql.DB).
+// The migration is idempotent and transactional (when using *sql.DB). Like
+// Migrate, it keeps the recorded SQL API exposure.
 func MigrateFromString(ctx context.Context, db Execer, content string) error {
 	types, err := parser.ParseSchemaString(content)
 	if err != nil {
@@ -93,13 +98,13 @@ func MigrateFromString(ctx context.Context, db Execer, content string) error {
 // MigrateWithOptions performs migration with control over dry-run and skip behavior.
 // Use this when you need to preview migrations, force re-application, or detect skips.
 //
-// Skip detection has two phases. Phase 1 compares the schema content hash and
-// melange version against the last migration — if both match, migration is
-// skipped entirely (skipped=true). Phase 2 generates SQL and compares function
-// checksums; if the output is identical to what's already applied, the functions
-// are not re-applied (only the migration record is updated). This avoids
-// redundant function regeneration even across melange version upgrades when the
-// generated SQL hasn't changed.
+// Skip detection has two phases. Phase 1 compares the schema content hash,
+// melange version and exposure against the last migration; if all match, the
+// migration is skipped entirely (skipped=true). Phase 2 generates SQL and
+// compares function checksums; if the output is identical to what's already
+// applied, the functions are not re-applied (only the migration record is
+// updated). This avoids redundant function regeneration even across melange
+// version upgrades when the generated SQL hasn't changed.
 //
 // Returns (skipped, error):
 //   - skipped=true if migration was skipped due to unchanged schema (only when Force=false and DryRun=nil)
@@ -146,6 +151,7 @@ func MigrateWithOptions(ctx context.Context, db Execer, schemaPath string, opts 
 		SchemaContent:      string(schemaContent),
 		SchemaFormat:       schemaFormat(m.SchemaPath()),
 		IfDeployedChecksum: opts.IfDeployedChecksum,
+		Exposure:           opts.Exposure,
 	}
 
 	// Skip detection (both phases) happens inside migrateWithTypesAndOptions;

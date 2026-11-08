@@ -46,12 +46,19 @@ func writeSchema(t *testing.T, content string) string {
 // newTuplesDB returns an empty database with a minimal melange_tuples table.
 func newTuplesDB(t *testing.T) *sql.DB {
 	t.Helper()
-	db := testutil.EmptyDB(t)
+	db, _ := newTuplesDBWithDSN(t)
+	return db
+}
+
+// newTuplesDBWithDSN is newTuplesDB, also returning the database's DSN.
+func newTuplesDBWithDSN(t *testing.T) (*sql.DB, string) {
+	t.Helper()
+	db, dsn := testutil.EmptyDBWithDSN(t)
 	_, err := db.ExecContext(context.Background(), `CREATE TABLE melange_tuples (
 		subject_type TEXT NOT NULL, subject_id TEXT NOT NULL, relation TEXT NOT NULL,
 		object_type TEXT NOT NULL, object_id TEXT NOT NULL)`)
 	require.NoError(t, err)
-	return db
+	return db, dsn
 }
 
 // stampVersion sets the codegen version for the test, restoring it afterwards.
@@ -235,7 +242,7 @@ func migrateBehindLock(t *testing.T, db *sql.DB, schemaPath string, opts migrato
 func copyLastRecord(overrides map[string]string) string {
 	cols := []string{
 		"melange_version", "schema_checksum", "codegen_version", "function_names",
-		"function_checksums", "schema_dsl", "schema_format", "model_json",
+		"function_checksums", "schema_dsl", "schema_format", "model_json", "exposure",
 	}
 	exprs := make([]string, len(cols))
 	for i, c := range cols {

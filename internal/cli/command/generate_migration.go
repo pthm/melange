@@ -110,31 +110,12 @@ Three comparison modes determine orphaned functions to drop:
 			return cli.SchemaParseError("schema has cycles", err)
 		}
 
-		closureRows := schema.ComputeRelationClosure(types)
-		analyses := compiler.AnalyzeRelations(types, closureRows)
-		analyses = compiler.ComputeCanGenerate(analyses)
-		inlineData := compiler.BuildInlineSQLData(closureRows, analyses)
-
-		generatedSQL, err := compiler.GenerateSQL(analyses, inlineData, databaseSchema)
-		if err != nil {
-			return cli.GeneralError("generating check SQL", err)
-		}
-
-		listSQL, err := compiler.GenerateListSQL(analyses, inlineData, databaseSchema)
-		if err != nil {
-			return cli.GeneralError("generating list SQL", err)
-		}
-
-		expectedFunctions := compiler.CollectFunctionNames(analyses)
-		namedFunctions := compiler.CollectNamedFunctions(generatedSQL, listSQL, analyses)
-
 		// Resolve previous state
 		opts := compiler.MigrationOptions{
 			DatabaseSchema: databaseSchema,
 			Version:        version.Version,
 			SchemaChecksum: migrator.ComputeSchemaChecksum(string(schemaContent)),
 			CodegenVersion: migrator.CodegenVersion(),
-			NamedFunctions: namedFunctions,
 		}
 
 		// previousTypes drives the semantic-diff header, when a previous model can
@@ -150,7 +131,11 @@ Three comparison modes determine orphaned functions to drop:
 				opts.PreviousFunctionNames = prevState.FunctionNames
 				opts.PreviousChecksums = prevState.FunctionChecksums
 				opts.PreviousSource = "database"
+				opts.PreviousExposure = prevState.Exposure
 				previousTypes = prevState.Types
+				// Generate under the recorded exposure, as migrate does.
+				// Without --db, opts.Exposure stays the default.
+				opts.Exposure = *prevState.Exposure
 			}
 		} else if genMigrationGitRef != "" {
 			prevState, err := previousStateFromSchema(genMigrationGitRef, schemaPath, databaseSchema, true)
@@ -175,8 +160,14 @@ Three comparison modes determine orphaned functions to drop:
 			previousTypes = prevState.Types
 		}
 
+		current, err := compileSchema(types, databaseSchema, opts.Exposure)
+		if err != nil {
+			return cli.GeneralError("compiling schema", err)
+		}
+		opts.NamedFunctions = current.named
+
 		// Generate migration SQL
-		result := compiler.GenerateMigrationSQL(generatedSQL, listSQL, expectedFunctions, opts)
+		result := compiler.GenerateMigrationSQL(current.check, current.list, current.names, opts)
 
 		// Document what the migration changes, when a previous model is known.
 		if previousTypes != nil {
@@ -296,6 +287,11 @@ type previousState struct {
 	// the semantic-diff header. Nil when unavailable (e.g. a database migrated
 	// before model storage existed), in which case no header is emitted.
 	Types []schema.TypeDefinition
+
+	// Exposure is the exposure the previous functions were generated with: the
+	// recorded one for --db, nil (unknown) for a previous schema, which is
+	// compiled under the default exposure.
+	Exposure *compiler.Exposure
 }
 
 // previousStateFromDB reads function names and checksums from the most recent
@@ -340,6 +336,7 @@ func previousStateFromDB(dsn, databaseSchema string) (*previousState, error) {
 		FunctionNames:     rec.FunctionNames,
 		FunctionChecksums: rec.FunctionChecksums,
 		Types:             prevTypes,
+		Exposure:          &rec.Exposure,
 	}, nil
 }
 
@@ -357,28 +354,51 @@ func previousStateFromSchema(pathOrRef, schemaPath, databaseSchema string, isGit
 		return nil, err
 	}
 
+	// The exposure this schema was deployed with is unknown; the default
+	// installs a superset of any other, so every function it may have left
+	// behind is dropped as an orphan (DROP IF EXISTS).
+	prev, err := compileSchema(types, databaseSchema, compiler.Exposure{})
+	if err != nil {
+		return nil, cli.GeneralError("compiling previous schema", err)
+	}
+
+	return &previousState{
+		FunctionNames:     prev.names,
+		FunctionChecksums: migrator.ComputeFunctionChecksums(prev.named),
+		Types:             types,
+	}, nil
+}
+
+// compiledSchema is a schema's generated SQL under one exposure, with the
+// function names and name/SQL pairs a migration tracks.
+type compiledSchema struct {
+	check compiler.GeneratedSQL
+	list  compiler.ListGeneratedSQL
+	names []string
+	named []compiler.NamedFunction
+}
+
+// compileSchema runs the compilation pipeline for types under exposure.
+func compileSchema(types []schema.TypeDefinition, databaseSchema string, exposure compiler.Exposure) (compiledSchema, error) {
 	closureRows := schema.ComputeRelationClosure(types)
 	analyses := compiler.AnalyzeRelations(types, closureRows)
 	analyses = compiler.ComputeCanGenerate(analyses)
 	inlineData := compiler.BuildInlineSQLData(closureRows, analyses)
+	opts := compiler.GenerateSQLOptions{Exposure: exposure}
 
-	genSQL, err := compiler.GenerateSQL(analyses, inlineData, databaseSchema)
+	check, err := compiler.GenerateSQLWithOptions(analyses, inlineData, databaseSchema, opts)
 	if err != nil {
-		return nil, cli.GeneralError("generating check SQL for previous schema", err)
+		return compiledSchema{}, fmt.Errorf("generating check SQL: %w", err)
 	}
-	listSQL, err := compiler.GenerateListSQL(analyses, inlineData, databaseSchema)
+	list, err := compiler.GenerateListSQLWithOptions(analyses, inlineData, databaseSchema, opts)
 	if err != nil {
-		return nil, cli.GeneralError("generating list SQL for previous schema", err)
+		return compiledSchema{}, fmt.Errorf("generating list SQL: %w", err)
 	}
-
-	names := compiler.CollectFunctionNames(analyses)
-	namedFns := compiler.CollectNamedFunctions(genSQL, listSQL, analyses)
-	checksums := migrator.ComputeFunctionChecksums(namedFns)
-
-	return &previousState{
-		FunctionNames:     names,
-		FunctionChecksums: checksums,
-		Types:             types,
+	return compiledSchema{
+		check: check,
+		list:  list,
+		names: compiler.CollectFunctionNamesWithOptions(analyses, opts),
+		named: compiler.CollectNamedFunctionsWithOptions(check, list, analyses, opts),
 	}, nil
 }
 

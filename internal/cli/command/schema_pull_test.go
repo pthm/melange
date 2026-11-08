@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pthm/melange/pkg/compiler"
 	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/pkg/parser"
 )
@@ -51,20 +52,30 @@ func TestPullHeader_ModularNotesBundle(t *testing.T) {
 
 func TestClassifySync(t *testing.T) {
 	rec := &migrator.MigrationRecord{SchemaChecksum: "deadbeef"}
+	restricted := migrator.Exposure{Relations: compiler.RelationPatterns{Include: []string{"viewer"}}}
+	restrictedRec := &migrator.MigrationRecord{SchemaChecksum: "deadbeef", Exposure: restricted.Normalized()}
+	defaultExposure := migrator.Exposure{Relations: compiler.RelationPatterns{Include: []string{"*"}}}
 	cases := []struct {
 		name          string
 		localChecksum string
+		localExposure *migrator.Exposure
 		rec           *migrator.MigrationRecord
 		want          string
 	}{
-		{"no migration record", "deadbeef", nil, syncNotRecorded},
-		{"no local schema", "", rec, syncUnknown},
-		{"matching checksum", "deadbeef", rec, syncInSync},
-		{"differing checksum", "cafe", rec, syncDrift},
+		{"no migration record", "deadbeef", nil, nil, syncNotRecorded},
+		{"no local schema", "", nil, rec, syncUnknown},
+		{"matching checksum", "deadbeef", nil, rec, syncInSync},
+		{"differing checksum", "cafe", nil, rec, syncDrift},
+		{"no local exposure keeps the recorded one", "deadbeef", nil, restrictedRec, syncInSync},
+		{"matching exposure", "deadbeef", &restricted, restrictedRec, syncInSync},
+		{"equivalent default exposure", "deadbeef", &defaultExposure, rec, syncInSync},
+		{"exposure-only change", "deadbeef", &defaultExposure, restrictedRec, syncExposureDrift},
+		{"exposure narrowed", "deadbeef", &restricted, rec, syncExposureDrift},
+		{"schema drift wins", "cafe", &restricted, rec, syncDrift},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := classifySync(tc.localChecksum, tc.rec); got != tc.want {
+			if got := classifySync(tc.localChecksum, tc.localExposure, tc.rec); got != tc.want {
 				t.Errorf("classifySync = %q, want %q", got, tc.want)
 			}
 		})

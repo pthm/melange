@@ -1291,3 +1291,38 @@ func TestExposure_CollectNamedFunctionsPairing(t *testing.T) {
 		}
 	}
 }
+
+func TestExposureNormalized(t *testing.T) {
+	off, on := false, true
+	for _, tc := range []struct {
+		name        string
+		e           Exposure
+		wantDefault bool
+	}{
+		{"zero value", Exposure{}, true},
+		{"include star", Exposure{Relations: RelationPatterns{Include: []string{"*"}}}, true},
+		{"include star star", Exposure{Relations: RelationPatterns{Include: []string{"viewer", "**#*"}}}, true},
+		{"families explicitly on", Exposure{Functions: FunctionFamilies{ListObjects: &on, Explain: &on}}, true},
+		{"include one", Exposure{Relations: RelationPatterns{Include: []string{"viewer"}}}, false},
+		{"exclude one", Exposure{Relations: RelationPatterns{Exclude: []string{"*"}}}, false},
+		{"family off", Exposure{Functions: FunctionFamilies{Expand: &off}}, false},
+		{"star inside a part", Exposure{Relations: RelationPatterns{Include: []string{"*er"}}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.e.IsDefault(); got != tc.wantDefault {
+				t.Errorf("IsDefault() = %v, want %v", got, tc.wantDefault)
+			}
+		})
+	}
+
+	n := Exposure{
+		Relations: RelationPatterns{Include: []string{"viewer", "doc#owner", "viewer"}, Exclude: []string{"b", "a"}},
+		Functions: FunctionFamilies{ListSubjects: &on, Expand: &off},
+	}.Normalized()
+	if !slices.Equal(n.Relations.Include, []string{"doc#owner", "viewer"}) || !slices.Equal(n.Relations.Exclude, []string{"a", "b"}) {
+		t.Errorf("patterns not sorted and deduplicated: %+v", n.Relations)
+	}
+	if n.Functions.ListSubjects != nil || n.Functions.Expand == nil || *n.Functions.Expand {
+		t.Errorf("enabled flags should be nil and disabled ones kept: %+v", n.Functions)
+	}
+}

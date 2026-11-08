@@ -256,7 +256,7 @@ func TestDatabaseAhead_UncommittedSchemaStaysDrift(t *testing.T) {
 }
 
 func TestSyncDescription_CoversEveryState(t *testing.T) {
-	for _, state := range []string{syncInSync, syncDrift, syncUnknown, syncDatabaseAhead} {
+	for _, state := range []string{syncInSync, syncDrift, syncExposureDrift, syncUnknown, syncDatabaseAhead} {
 		if got := syncDescription(state); got == "" || got == "not recorded" {
 			t.Errorf("syncDescription(%q) = %q, want a state-specific description", state, got)
 		}

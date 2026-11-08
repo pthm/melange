@@ -3,6 +3,7 @@ package compiler
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"sort"
@@ -46,6 +47,19 @@ type MigrationOptions struct {
 	// checksum comparison. Required alongside PreviousChecksums for change detection;
 	// if either is absent, change detection is skipped and all functions are emitted.
 	NamedFunctions []NamedFunction
+	// Exposure is the exposure the SQL was generated with (GenerateSQLOptions),
+	// recorded in the UP header when it is not the default.
+	Exposure Exposure
+	// PreviousExposure is the exposure the previous state was generated with,
+	// nil when unknown (a previous schema read from git or a file). Change
+	// detection needs it once Exposure is restricted: a function the previous
+	// exposure did not install has no previous checksum to compare, so with an
+	// unknown previous exposure every function is emitted (full output) while
+	// orphans are still dropped. With the default Exposure, nil is taken to
+	// be the default too, as the previous schema is taken to be the deployed
+	// one: a previous state generated under a restricted exposure must say so
+	// here, or the functions it left out are not emitted.
+	PreviousExposure *Exposure
 }
 
 // GenerateMigrationSQL is the terminal step of the generate migration pipeline.
@@ -102,7 +116,8 @@ func generateUpSQL(
 
 	// Determine which specialized functions changed (nil = include all)
 	var changed map[string]bool
-	if opts.PreviousChecksums != nil && len(opts.NamedFunctions) > 0 {
+	unknownExposure := opts.PreviousExposure == nil && !opts.Exposure.IsDefault()
+	if opts.PreviousChecksums != nil && len(opts.NamedFunctions) > 0 && !unknownExposure {
 		currentChecksums := computeCurrentChecksums(opts.NamedFunctions)
 		changed = changedFunctionNames(currentChecksums, opts.PreviousChecksums)
 	}
@@ -118,11 +133,19 @@ func generateUpSQL(
 	if opts.CodegenVersion != "" {
 		fmt.Fprintf(&b, "-- Codegen version: %s\n", opts.CodegenVersion)
 	}
+	if !opts.Exposure.IsDefault() {
+		exposure, err := json.Marshal(opts.Exposure.Normalized())
+		if err == nil {
+			fmt.Fprintf(&b, "-- Exposure: %s\n", exposure)
+		}
+	}
 	if opts.PreviousFunctionNames != nil && opts.PreviousSource != "" {
 		fmt.Fprintf(&b, "-- Previous state: %s\n", opts.PreviousSource)
 	}
 	if changed != nil {
 		fmt.Fprintf(&b, "-- Changed functions: %d of %d\n", len(changed), len(opts.NamedFunctions))
+	} else if opts.PreviousChecksums != nil && unknownExposure {
+		b.WriteString("-- Previous exposure unknown: every function is included\n")
 	}
 	b.WriteString("\n")
 

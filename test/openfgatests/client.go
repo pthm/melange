@@ -18,6 +18,7 @@ package openfgatests
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -62,6 +63,14 @@ type Client struct {
 	// "oracle". The six gRPC methods delegate to it verbatim, so the same test
 	// runner validates a YAML case's expected values against real OpenFGA.
 	openfgaBackend *openfgaserver.Server
+
+	// restrictExposure makes each stage migrate with an exposure that
+	// includes only the relations its assertions name (see StageExposure),
+	// so the assertions check the closure of a restricted exposure.
+	restrictExposure bool
+	// exposure is the exposure the next model is migrated with; nil is the
+	// default.
+	exposure *migrator.Exposure
 }
 
 // NewOpenFGAClient returns a Client backed by a real in-process OpenFGA server
@@ -123,7 +132,20 @@ func (c *Client) forSubtest(tb testing.TB) *Client {
 			openfgaBackend: c.openfgaBackend,
 		}
 	}
-	return NewClientWithSchema(tb, c.databaseSchema)
+	sub := NewClientWithSchema(tb, c.databaseSchema)
+	sub.restrictExposure = c.restrictExposure
+	return sub
+}
+
+// NewRestrictedExposureClient is NewClientWithSchema, except that each stage's
+// model is migrated with an exposure that includes only the relations the
+// stage's assertions name. Every assertion still goes through the public
+// dispatchers, so it passes only when the closure installs everything an
+// exposed relation's functions call.
+func NewRestrictedExposureClient(tb testing.TB, databaseSchema string) *Client {
+	c := NewClientWithSchema(tb, databaseSchema)
+	c.restrictExposure = true
+	return c
 }
 
 // NewClientWithSchema creates a test client that installs melange objects
@@ -679,9 +701,52 @@ func (c *Client) loadModel(ctx context.Context, db *sql.DB, m *model) error {
 
 	// Use the Migrator to apply generated SQL for this model
 	// The empty string for schemasDir is fine since we're using MigrateWithTypes directly
+	// MigrateWithTypes drops no orphans, and a case's stages share one
+	// database. Under a restricted exposure, start each stage from no
+	// generated functions, so a callee missing from this stage's closure
+	// fails instead of resolving to a copy an earlier stage installed.
+	if c.restrictExposure {
+		if err := c.dropGeneratedFunctions(ctx, db); err != nil {
+			return err
+		}
+	}
 	mig := migrator.NewMigrator(db, "")
 	mig.SetDatabaseSchema(c.databaseSchema)
+	mig.SetExposure(c.exposure)
 	return mig.MigrateWithTypes(ctx, m.types)
+}
+
+// dropGeneratedFunctions drops every function in the client's schema named
+// like a generated one (migrator.GeneratedFunctionFilter).
+func (c *Client) dropGeneratedFunctions(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, fmt.Sprintf(`
+		SELECT p.oid::regprocedure::text
+		FROM pg_proc p
+		JOIN pg_namespace n ON p.pronamespace = n.oid
+		WHERE n.nspname = COALESCE(NULLIF($1, ''), current_schema())
+		AND %s
+	`, migrator.GeneratedFunctionFilter), c.databaseSchema)
+	if err != nil {
+		return fmt.Errorf("listing generated functions: %w", err)
+	}
+	var functions []string
+	for rows.Next() {
+		var fn string
+		if err := rows.Scan(&fn); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scanning generated function: %w", err)
+		}
+		functions = append(functions, fn)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return fmt.Errorf("listing generated functions: %w", err)
+	}
+	for _, fn := range functions {
+		if _, err := db.ExecContext(ctx, "DROP FUNCTION "+fn); err != nil {
+			return fmt.Errorf("dropping %s: %w", fn, err)
+		}
+	}
+	return nil
 }
 
 // refreshTuples updates the melange_tuples view with the current store tuples.

@@ -16,8 +16,10 @@ package doctor
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 
@@ -176,6 +178,12 @@ type Options struct {
 	// melange version that generated the deployed functions. Nil skips the
 	// check (update checks disabled, or the fetch failed).
 	Advisories []update.Advisory
+
+	// Exposure is the SQL API exposure configured locally, the one migrate
+	// would apply. Nil means none is configured: migrate keeps the recorded
+	// exposure, so there is nothing to drift from. The expected functions
+	// always follow the recorded exposure, which is what is installed.
+	Exposure *sqlgen.Exposure
 }
 
 // Doctor performs health checks on the melange authorization infrastructure.
@@ -482,7 +490,60 @@ func (d *Doctor) checkMigrationState(ctx context.Context, report *Report) error 
 		}
 	}
 
+	d.checkExposureSync(report)
 	return nil
+}
+
+// checkExposureSync compares the local exposure with the one the database
+// was migrated with. An exposure-only change re-applies on the next migrate,
+// so a difference is pending work, like a changed schema file.
+func (d *Doctor) checkExposureSync(report *Report) {
+	if d.opts.Exposure == nil || d.lastMigration == nil {
+		return
+	}
+	if migrator.SameExposure(*d.opts.Exposure, d.lastMigration.Exposure) {
+		report.AddCheck(CheckResult{
+			Category: "Migration State",
+			Name:     "exposure_sync",
+			Status:   StatusPass,
+			Message:  "SQL API exposure is in sync with database",
+		})
+		return
+	}
+	report.AddCheck(CheckResult{
+		Category: "Migration State",
+		Name:     "exposure_sync",
+		Status:   StatusWarn,
+		Message:  "SQL API exposure differs from the one the database was migrated with",
+		Details:  fmt.Sprintf("Local: %s\nDB:    %s", describeExposure(*d.opts.Exposure), describeExposure(d.lastMigration.Exposure)),
+		FixHint:  "Run 'melange migrate' to apply it",
+	})
+}
+
+// installedExposure is the exposure the installed functions were generated
+// with: the recorded one, else the local one (nothing migrated yet), else
+// the default.
+func (d *Doctor) installedExposure() sqlgen.Exposure {
+	switch {
+	case d.lastMigration != nil:
+		return d.lastMigration.Exposure
+	case d.opts.Exposure != nil:
+		return *d.opts.Exposure
+	default:
+		return sqlgen.Exposure{}
+	}
+}
+
+// describeExposure renders an exposure for check details.
+func describeExposure(e sqlgen.Exposure) string {
+	if e.IsDefault() {
+		return "default (every relation, every function family)"
+	}
+	b, err := json.Marshal(e.Normalized())
+	if err != nil {
+		return fmt.Sprintf("%+v", e)
+	}
+	return string(b)
 }
 
 // checkDeployedModel reports whether the database has recorded its authorization
@@ -630,8 +691,19 @@ func (d *Doctor) checkGeneratedFunctions(ctx context.Context, report *Report) er
 	}
 	d.currentFuncs = currentFuncs
 
-	// Check dispatchers exist
+	// The expected functions follow the closure of the installed exposure;
+	// under a restricted one that includes the raising helper the public
+	// dispatchers call, so it is checked with them.
+	analyses := d.getAnalyses()
 	dispatchers := sqlgen.DispatcherFunctionNames
+	if analyses != nil {
+		exposure := d.installedExposure()
+		d.expectedFuncs = sqlgen.CollectFunctionNamesWithOptions(analyses, sqlgen.GenerateSQLOptions{Exposure: exposure})
+		if slices.Contains(d.expectedFuncs, sqlgen.UnexposedFunctionName) {
+			dispatchers = append(slices.Clone(dispatchers), sqlgen.UnexposedFunctionName)
+		}
+		d.checkExposurePatterns(report, analyses)
+	}
 
 	currentSet := make(map[string]bool)
 	for _, fn := range currentFuncs {
@@ -663,9 +735,8 @@ func (d *Doctor) checkGeneratedFunctions(ctx context.Context, report *Report) er
 	}
 
 	// If we have parsed types, check for expected functions
-	if analyses := d.getAnalyses(); analyses != nil {
-		expectedFuncs := sqlgen.CollectFunctionNames(analyses)
-		d.expectedFuncs = expectedFuncs
+	if analyses != nil {
+		expectedFuncs := d.expectedFuncs
 
 		// Build expected set and find missing functions in a single pass.
 		expectedSet := make(map[string]bool, len(expectedFuncs))
@@ -735,6 +806,28 @@ func (d *Doctor) checkGeneratedFunctions(ctx context.Context, report *Report) er
 	}
 
 	return nil
+}
+
+// checkExposurePatterns warns about relation patterns that match no relation
+// of the local schema: usually a typo, or a relation since renamed. It checks
+// the local exposure, else the recorded one.
+func (d *Doctor) checkExposurePatterns(report *Report, analyses []sqlgen.RelationAnalysis) {
+	exposure := d.installedExposure()
+	if d.opts.Exposure != nil {
+		exposure = *d.opts.Exposure
+	}
+	unmatched := exposure.UnmatchedPatterns(analyses)
+	if len(unmatched) == 0 {
+		return
+	}
+	report.AddCheck(CheckResult{
+		Category: "Generated Functions",
+		Name:     "exposure_patterns",
+		Status:   StatusWarn,
+		Message:  fmt.Sprintf("%d SQL API exposure pattern(s) match no relation in the schema", len(unmatched)),
+		Details:  truncatedJoin(unmatched, 10),
+		FixHint:  "Check the exposure's relation include/exclude patterns for typos or renamed relations",
+	})
 }
 
 // checkTuplesSource validates the melange_tuples view/table.

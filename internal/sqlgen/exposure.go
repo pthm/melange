@@ -2,6 +2,7 @@ package sqlgen
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -84,6 +85,67 @@ func (e Exposure) Validate() error {
 		}
 	}
 	return nil
+}
+
+// Normalized returns e in canonical form, so that two exposures that select
+// the same API for every model compare equal: patterns sorted and
+// deduplicated, an Include that matches every relation dropped, and enabled
+// family flags set to nil. The default exposure normalizes to the zero
+// value. It does not resolve e against a model, so an Include that happens
+// to name every relation of one model stays as written.
+func (e Exposure) Normalized() Exposure {
+	var out Exposure
+	if !slices.ContainsFunc(e.Relations.Include, matchesEverything) {
+		out.Relations.Include = sortedUnique(e.Relations.Include)
+	}
+	out.Relations.Exclude = sortedUnique(e.Relations.Exclude)
+	out.Functions = FunctionFamilies{
+		ListObjects:  normalizedFlag(e.Functions.ListObjects),
+		ListSubjects: normalizedFlag(e.Functions.ListSubjects),
+		Accessible:   normalizedFlag(e.Functions.Accessible),
+		ParentKey:    normalizedFlag(e.Functions.ParentKey),
+		Expand:       normalizedFlag(e.Functions.Expand),
+		Explain:      normalizedFlag(e.Functions.Explain),
+	}
+	return out
+}
+
+// normalizedFlag returns a family flag in canonical form: nil when enabled,
+// a pointer to false when disabled.
+func normalizedFlag(flag *bool) *bool {
+	if enabled(flag) {
+		return nil
+	}
+	off := false
+	return &off
+}
+
+// IsDefault reports whether e normalizes to the default exposure.
+func (e Exposure) IsDefault() bool {
+	n := e.Normalized()
+	return len(n.Relations.Include) == 0 && len(n.Relations.Exclude) == 0 && n.Functions == FunctionFamilies{}
+}
+
+// matchesEverything reports whether every part of the pattern is only '*',
+// so it matches every relation.
+func matchesEverything(p string) bool {
+	for _, part := range strings.Split(p, "#") {
+		if part == "" || strings.Trim(part, "*") != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// sortedUnique returns a sorted copy of patterns without duplicates, or nil
+// when there are none.
+func sortedUnique(patterns []string) []string {
+	if len(patterns) == 0 {
+		return nil
+	}
+	out := slices.Clone(patterns)
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // ValidateRelationPattern reports whether p is a valid relation pattern.
@@ -324,6 +386,13 @@ func (c *exposureClosure) public(family apiFamily, objectType, relation string) 
 	default:
 		return c.exposed[k]
 	}
+}
+
+// ExpandPublic reports whether the expand dispatcher answers for a relation
+// under e rather than raising: every relation under the default exposure.
+func ExpandPublic(analyses []RelationAnalysis, e Exposure) func(objectType, relation string) bool {
+	c := newExposureClosure(analyses, e)
+	return func(objectType, relation string) bool { return c.public(familyExpand, objectType, relation) }
 }
 
 // unexposed returns the relations the model defines that family's public
