@@ -729,6 +729,11 @@ tidy:
 generate: build-dev
     ./bin/melange generate client --runtime go --schema {{TEST}}/testutil/testdata/schema.fga --output {{TEST}}/authz/ --package authz --id-type int64
 
+# Re-vendor the upstream OpenFGA suite's models for internal/sqlgen's exposure tests
+[group('Generate')]
+update-upstream-models:
+    cd {{TEST}} && {{GO_TEST}} -count=1 -run '^TestOpenFGA_UpstreamModelsVendored$' ./openfgatests -update-upstream-models
+
 # Validate the test schema
 [group('Generate')]
 validate:

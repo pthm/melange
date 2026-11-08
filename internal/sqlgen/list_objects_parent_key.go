@@ -40,10 +40,12 @@ func (pk parentKeyRelation) functionName() string {
 	return SafeIdentifier("accessible_", pk.ObjectType, pk.Relation+"_by_"+pk.Link, "")
 }
 
-// parentKeyRelations returns the relations that get a parent-key function. A
-// name that another accessible function already has is skipped: the
-// relation's own accessible function still covers it.
-func parentKeyRelations(analyses []RelationAnalysis) []parentKeyRelation {
+// parentKeyRelations returns the relations that get a parent-key function
+// under exposure. A name that another accessible function already has is
+// skipped: the relation's own accessible function still covers it. Names are
+// taken over the whole model, so an exposure can drop a parent-key function
+// but never adds or renames one.
+func parentKeyRelations(analyses []RelationAnalysis, exposure *exposureClosure) []parentKeyRelation {
 	lookup := buildAnalysisLookup(analyses)
 	taken := make(map[string]bool, len(analyses))
 	for _, a := range analyses {
@@ -62,7 +64,9 @@ func parentKeyRelations(analyses []RelationAnalysis) []parentKeyRelation {
 			continue
 		}
 		taken[name] = true
-		out = append(out, pk)
+		if exposure.installsParentKey(pk.ObjectType, pk.Relation) {
+			out = append(out, pk)
+		}
 	}
 	return out
 }
@@ -75,9 +79,15 @@ type ParentKeyFunction struct {
 }
 
 // ParentKeyFunctions returns the parent-key accessible functions generated
-// for analyses.
+// for analyses under the default exposure.
 func ParentKeyFunctions(analyses []RelationAnalysis) []ParentKeyFunction {
-	pks := parentKeyRelations(analyses)
+	return ParentKeyFunctionsWithOptions(analyses, GenerateSQLOptions{})
+}
+
+// ParentKeyFunctionsWithOptions returns the parent-key accessible functions
+// GenerateListSQLWithOptions generates for analyses under opts.Exposure.
+func ParentKeyFunctionsWithOptions(analyses []RelationAnalysis, opts GenerateSQLOptions) []ParentKeyFunction {
+	pks := parentKeyRelations(analyses, newExposureClosure(analyses, opts.Exposure))
 	out := make([]ParentKeyFunction, len(pks))
 	for i, pk := range pks {
 		out[i] = ParentKeyFunction{ObjectType: pk.ObjectType, Relation: pk.Relation, Link: pk.Link, ParentType: pk.ParentType, Name: pk.functionName()}

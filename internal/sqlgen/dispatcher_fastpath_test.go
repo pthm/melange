@@ -27,7 +27,7 @@ func TestBulkDispatcher_UnknownTypeFallbackDenominatedByTypeOnly(t *testing.T) {
 		analyses[i].DirectSubjectTypes = []string{"user"}
 	}
 
-	sql := generateBulkDispatcher(analyses, "")
+	sql := generateBulkDispatcher(analyses, "", nil)
 
 	// Final fallback keys on object_type alone over the distinct known types.
 	if !strings.Contains(sql, "t.object_type NOT IN ('document', 'folder')") {
@@ -50,7 +50,7 @@ func TestListDispatcher_PerTypeSentinel(t *testing.T) {
 		mkAnalysis("folder", "viewer", RelationFeatures{HasDirect: true}, true),
 	}
 
-	sql, err := generateListObjectsDispatcher(analyses, "")
+	sql, err := generateListObjectsDispatcher(analyses, "", nil)
 	if err != nil {
 		t.Fatalf("generateListObjectsDispatcher: %v", err)
 	}
@@ -91,15 +91,15 @@ func TestDispatchers_SimpleExpressionFastPath(t *testing.T) {
 		analyses[i].DirectSubjectTypes = []string{"user"}
 	}
 
-	checkSQL, err := generateDispatcher(analyses, "", false, nil)
+	checkSQL, err := generateDispatcher(analyses, "", false, nil, nil)
 	if err != nil {
 		t.Fatalf("generateDispatcher: %v", err)
 	}
-	explainSQL, err := generateExplainDispatcher(analyses, "", ComputeExplainEligibility(analyses))
+	explainSQL, err := generateExplainDispatcher(analyses, "", ComputeExplainEligibility(analyses), nil)
 	if err != nil {
 		t.Fatalf("generateExplainDispatcher: %v", err)
 	}
-	expandSQL := generateExpandDispatcher(analyses, "", ComputeExpandEligibility(analyses))
+	expandSQL := generateExpandDispatcher(analyses, "", ComputeExpandEligibility(analyses), nil)
 
 	for name, sql := range map[string]string{
 		"check":   checkSQL,

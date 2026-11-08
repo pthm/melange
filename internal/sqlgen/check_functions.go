@@ -3,6 +3,7 @@ package sqlgen
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/pthm/melange/internal/sqlgen/sqldsl"
 )
@@ -17,20 +18,26 @@ func generateCheckFunction(a RelationAnalysis, inline inlineIndex, databaseSchem
 	return RenderCheckFunction(plan, blocks)
 }
 
-func generateDispatcher(analyses []RelationAnalysis, databaseSchema string, noWildcard bool, needsNW map[string]map[string]bool) (string, error) {
+// generateDispatcher renders check_permission (or check_permission_nw) and its
+// internal dispatcher. The internal one routes every check function the
+// exposure installs; the public one raises for the relations it leaves out.
+func generateDispatcher(analyses []RelationAnalysis, databaseSchema string, noWildcard bool, needsNW map[string]map[string]bool, exposure *exposureClosure) (string, error) {
 	fnName := "check_permission"
 	if noWildcard {
 		fnName = "check_permission_nw"
 	}
 
-	cases := buildDispatcherCases(analyses, databaseSchema, noWildcard, needsNW)
+	cases := buildDispatcherCases(analyses, databaseSchema, noWildcard, needsNW, exposure.installsCheck)
+	unexposed := exposure.unexposed(familyCheck)
 	if len(cases) == 0 {
-		return renderEmptyDispatcher(databaseSchema, fnName), nil
+		return renderEmptyDispatcher(databaseSchema, fnName, unexposed), nil
 	}
-	return renderDispatcherWithCases(databaseSchema, fnName, cases), nil
+	return renderDispatcherWithCases(databaseSchema, fnName, cases, unexposed), nil
 }
 
-func buildDispatcherCases(analyses []RelationAnalysis, databaseSchema string, noWildcard bool, needsNW map[string]map[string]bool) []DispatcherCase {
+// buildDispatcherCases returns an arm per CheckAllowed relation that include
+// accepts.
+func buildDispatcherCases(analyses []RelationAnalysis, databaseSchema string, noWildcard bool, needsNW map[string]map[string]bool, include func(objectType, relation string) bool) []DispatcherCase {
 	// The _nw dispatcher routes to the base function for relations that reach
 	// no wildcard (no _nw variant emitted; identical body). needsNW is supplied
 	// by callers that already computed it; fall back to computing it here so
@@ -40,7 +47,7 @@ func buildDispatcherCases(analyses []RelationAnalysis, databaseSchema string, no
 	}
 	var cases []DispatcherCase
 	for _, a := range analyses {
-		if !a.Capabilities.CheckAllowed {
+		if !a.Capabilities.CheckAllowed || !include(a.ObjectType, a.Relation) {
 			continue
 		}
 		inlineable := isInlineable(a.Features)
@@ -65,7 +72,7 @@ func isInlineable(f RelationFeatures) bool {
 		!f.HasUserset && !f.HasRecursive && !f.HasExclusion && !f.HasIntersection
 }
 
-func renderDispatcherWithCases(databaseSchema, fnName string, cases []DispatcherCase) string {
+func renderDispatcherWithCases(databaseSchema, fnName string, cases []DispatcherCase, unexposed []relationKey) string {
 	internalName := fnName + "_internal"
 
 	body := append([]Stmt{
@@ -100,7 +107,7 @@ func renderDispatcherWithCases(databaseSchema, fnName string, cases []Dispatcher
 		Name:    fnName,
 		Args:    dispatcherPublicArgs(),
 		Returns: "INTEGER",
-		Body:    Raw("SELECT " + sqldsl.PrefixIdent(internalName, databaseSchema) + "(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, ARRAY[]::TEXT[])"),
+		Body:    guardedPublicBody(databaseSchema, unexposed, sqldsl.PrefixIdent(internalName, databaseSchema)+"(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, ARRAY[]::TEXT[])", false),
 		Header: []string{
 			"Generated dispatcher for " + fnName,
 			"Routes to specialized functions for all known type/relation pairs",
@@ -113,7 +120,7 @@ func renderDispatcherWithCases(databaseSchema, fnName string, cases []Dispatcher
 	return internalFn.SQL() + "\n\n" + publicFn.SQL() + "\n"
 }
 
-func renderEmptyDispatcher(databaseSchema, fnName string) string {
+func renderEmptyDispatcher(databaseSchema, fnName string, unexposed []relationKey) string {
 	internalFn := SqlFunction{
 		Schema:  databaseSchema,
 		Name:    fnName + "_internal",
@@ -132,28 +139,53 @@ func renderEmptyDispatcher(databaseSchema, fnName string) string {
 		Name:         fnName,
 		Args:         dispatcherPublicArgs(),
 		Returns:      "INTEGER",
-		Body:         Raw("SELECT 0"),
+		Body:         guardedPublicBody(databaseSchema, unexposed, "0", false),
 		NoSearchPath: true,
 	}
 
 	return internalFn.SQL() + "\n\n" + publicFn.SQL() + "\n"
 }
 
-func generateBulkDispatcher(analyses []RelationAnalysis, databaseSchema string) string {
-	cases := buildDispatcherCases(analyses, databaseSchema, false, nil)
+// generateBulkDispatcher renders check_permission_bulk over the exposed
+// relations. A batch naming any relation the exposure leaves out raises
+// before any row is checked, as check_permission would for that row.
+func generateBulkDispatcher(analyses []RelationAnalysis, databaseSchema string, exposure *exposureClosure) string {
+	cases := buildDispatcherCases(analyses, databaseSchema, false, nil, func(objectType, relation string) bool {
+		return exposure.public(familyCheck, objectType, relation)
+	})
+	guard := bulkUnexposedGuard(databaseSchema, exposure.unexposed(familyCheck))
 	if len(cases) == 0 {
-		return renderEmptyBulkDispatcher(databaseSchema)
+		return renderEmptyBulkDispatcher(databaseSchema, guard)
 	}
-	return renderBulkDispatcherWithCases(cases, databaseSchema)
+	return renderBulkDispatcherWithCases(cases, databaseSchema, guard)
 }
 
-func renderEmptyBulkDispatcher(databaseSchema string) string {
+// bulkUnexposedGuard returns the statements that raise when a batch row
+// names one of keys, or nil when keys is empty.
+func bulkUnexposedGuard(databaseSchema string, keys []relationKey) []Stmt {
+	if len(keys) == 0 {
+		return nil
+	}
+	objectType, relation := Col{Table: "u", Column: "object_type"}, Col{Table: "u", Column: "relation"}
+	query := SelectStmt{
+		ColumnExprs: []Expr{Func{Schema: databaseSchema, Name: UnexposedFunctionName, Args: []Expr{objectType, relation}}},
+		From:        "UNNEST(p_relations, p_object_types) AS u(relation, object_type)",
+		Where:       unexposedGuard(objectType, relation, keys),
+		Limit:       1,
+	}
+	return []Stmt{
+		Comment{Text: "Raise " + NotExposedErrCode + " if any request names a relation that is not exposed"},
+		RawStmt{SQLText: "PERFORM " + strings.TrimPrefix(query.SQL(), "SELECT ") + ";"},
+	}
+}
+
+func renderEmptyBulkDispatcher(databaseSchema string, guard []Stmt) string {
 	fn := PlpgsqlFunction{
 		Schema:  databaseSchema,
 		Name:    "check_permission_bulk",
 		Args:    bulkDispatcherArgs(),
 		Returns: "TABLE(idx INTEGER, allowed INTEGER)",
-		Body:    []Stmt{ReturnQuery{Query: "SELECT NULL::INTEGER, NULL::INTEGER WHERE false"}},
+		Body:    append(guard, ReturnQuery{Query: "SELECT NULL::INTEGER, NULL::INTEGER WHERE false"}),
 		Header: []string{
 			"Generated bulk dispatcher for check_permission_bulk (no relations defined)",
 			"Returns no rows (caller treats missing results as deny)",
@@ -189,11 +221,12 @@ func groupCasesByObjectType(cases []DispatcherCase) []typeGroup {
 	return groups
 }
 
-func renderBulkDispatcherWithCases(cases []DispatcherCase, databaseSchema string) string {
+func renderBulkDispatcherWithCases(cases []DispatcherCase, databaseSchema string, guard []Stmt) string {
 	groups := groupCasesByObjectType(cases)
 
 	// Build one IF block per object type + a final fallback RETURN QUERY.
-	body := make([]Stmt, 0, len(groups)+1)
+	body := make([]Stmt, 0, len(guard)+len(groups)+1)
+	body = append(body, guard...)
 	for _, g := range groups {
 		body = append(body, buildBulkTypeGroupIf(g))
 	}

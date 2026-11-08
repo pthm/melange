@@ -14,6 +14,8 @@ import (
 // be walked by relationReferences: a missed edge lets listCompositionSafe
 // approve a cyclic composition, and generated list functions have no runtime
 // cycle guard — the result is infinite recursion at query time.
+// A missed edge also leaves a function out of a restricted Exposure's
+// installed set, so the call that needs it denies silently.
 //
 // When RelationAnalysis gains a field, this test fails. Decide whether the
 // field carries (type, relation) references; if so, add it to

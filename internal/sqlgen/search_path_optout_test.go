@@ -124,7 +124,7 @@ func TestDispatchers_DepthGuardPreserved(t *testing.T) {
 		mkAnalysis("document", "viewer", RelationFeatures{HasDirect: true}, true),
 	}
 	analyses[0].DirectSubjectTypes = []string{"user"}
-	checkSQL, err := generateDispatcher(analyses, "authz", false, nil)
+	checkSQL, err := generateDispatcher(analyses, "authz", false, nil, nil)
 	if err != nil {
 		t.Fatalf("generateDispatcher: %v", err)
 	}

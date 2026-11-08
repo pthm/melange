@@ -46,7 +46,7 @@ func parentKeyFor(t *testing.T, model string) map[string]parentKeyRelation {
 	}
 	analyses := ComputeCanGenerate(AnalyzeRelations(types, schema.ComputeRelationClosure(types)))
 	out := map[string]parentKeyRelation{}
-	for _, pk := range parentKeyRelations(analyses) {
+	for _, pk := range parentKeyRelations(analyses, nil) {
 		out[pk.ObjectType+"."+pk.Relation] = pk
 	}
 	return out

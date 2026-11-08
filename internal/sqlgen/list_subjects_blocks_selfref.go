@@ -81,9 +81,8 @@ func buildSelfRefUsersetFilterBaseBlock(plan ListPlan) TypedQueryBlock {
 					Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Param("v_filter_relation")},
 					ExistsExpr(closureExistsStmt),
 				),
-				CheckPermissionExpr(
+				CheckPermissionInternalExpr(
 					plan.DatabaseSchema,
-					"check_permission",
 					SubjectRef{Type: Param("v_filter_type"), ID: Col{Table: "t", Column: "subject_id"}},
 					plan.Relation,
 					ObjectRef{Type: Lit(plan.ObjectType), ID: ObjectID},
@@ -472,9 +471,8 @@ func buildSelfRefUsersetRegularSimplePatternBlock(plan ListPlan, pattern listUse
 	}
 
 	if pattern.IsClosurePattern {
-		grantConditions = append(grantConditions, CheckPermissionExpr(
+		grantConditions = append(grantConditions, CheckPermissionInternalExpr(
 			plan.DatabaseSchema,
-			"check_permission",
 			SubjectRef{Type: SubjectType, ID: Col{Table: "s", Column: "subject_id"}},
 			pattern.SourceRelation,
 			ObjectRef{Type: Lit(plan.ObjectType), ID: ObjectID},

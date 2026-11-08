@@ -1461,7 +1461,7 @@ func buildListSubjectsRecursiveUsersetFilterTTUIntermediateBlock(plan ListPlan, 
 func buildListSubjectsRecursiveUsersetFilterTTUNestedBlock(plan ListPlan, parent ListParentRelationData, source Expr, parentTypes []string) TypedQueryBlock {
 	lateralCall := LateralFunction{
 		Schema: plan.DatabaseSchema,
-		Name:   "list_accessible_subjects",
+		Name:   listSubjectsInternalDispatcherName,
 		Args: []Expr{
 			Col{Table: "link", Column: "subject_type"},
 			Col{Table: "link", Column: "subject_id"},

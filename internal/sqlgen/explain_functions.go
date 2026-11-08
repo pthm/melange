@@ -69,26 +69,29 @@ func generateExplainFunction(a RelationAnalysis, inline inlineIndex, databaseSch
 // response rather than NULL or an error.
 //
 // eligible is the precomputed (object_type, relation) → bool map from
-// ComputeExplainEligibility; only eligible pairs become CASE branches.
-func generateExplainDispatcher(analyses []RelationAnalysis, databaseSchema string, eligible map[string]map[string]bool) (string, error) {
-	cases := buildExplainDispatcherCases(analyses, databaseSchema, eligible)
+// ComputeExplainEligibility; only eligible pairs the exposure installs become
+// branches. The public wrapper raises for the relations the exposure leaves
+// out.
+func generateExplainDispatcher(analyses []RelationAnalysis, databaseSchema string, eligible map[string]map[string]bool, exposure *exposureClosure) (string, error) {
+	cases := buildExplainDispatcherCases(analyses, databaseSchema, eligible, exposure)
+	unexposed := exposure.unexposed(familyExplain)
 	if len(cases) == 0 {
-		return renderEmptyExplainDispatcher(databaseSchema), nil
+		return renderEmptyExplainDispatcher(databaseSchema, unexposed), nil
 	}
-	return renderExplainDispatcherWithCases(databaseSchema, cases), nil
+	return renderExplainDispatcherWithCases(databaseSchema, cases, unexposed), nil
 }
 
 // buildExplainDispatcherCases mirrors buildDispatcherCases but only emits
 // cases for relations whose explain renderer can produce a correct trace
 // according to the precomputed eligibility map. Unsupported (type, relation)
 // pairs fall through to the dispatcher's else branch — the no-entry sentinel.
-func buildExplainDispatcherCases(analyses []RelationAnalysis, databaseSchema string, eligible map[string]map[string]bool) []DispatcherCase {
+func buildExplainDispatcherCases(analyses []RelationAnalysis, databaseSchema string, eligible map[string]map[string]bool, exposure *exposureClosure) []DispatcherCase {
 	var cases []DispatcherCase
 	for _, a := range analyses {
 		if !a.Capabilities.CheckAllowed {
 			continue
 		}
-		if !eligible[a.ObjectType][a.Relation] {
+		if !eligible[a.ObjectType][a.Relation] || !exposure.installsExplain(a.ObjectType, a.Relation) {
 			continue
 		}
 		cases = append(cases, DispatcherCase{
@@ -101,7 +104,7 @@ func buildExplainDispatcherCases(analyses []RelationAnalysis, databaseSchema str
 	return cases
 }
 
-func renderExplainDispatcherWithCases(databaseSchema string, cases []DispatcherCase) string {
+func renderExplainDispatcherWithCases(databaseSchema string, cases []DispatcherCase, unexposed []relationKey) string {
 	noEntry := Raw(explainNoEntrySentinelSQL(
 		"explain not yet supported for this (object_type, relation) — no generated explain function for the requested pair. Confirm the pair exists in the migrated schema.",
 	))
@@ -137,7 +140,7 @@ func renderExplainDispatcherWithCases(databaseSchema string, cases []DispatcherC
 		Name:    "explain_permission",
 		Args:    explainDispatcherPublicArgs(),
 		Returns: "JSONB",
-		Body:    Raw("SELECT " + sqldsl.PrefixIdent("explain_permission_internal", databaseSchema) + "(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, ARRAY[]::TEXT[], p_max_nodes)"),
+		Body:    guardedPublicBody(databaseSchema, unexposed, sqldsl.PrefixIdent("explain_permission_internal", databaseSchema)+"(p_subject_type, p_subject_id, p_relation, p_object_type, p_object_id, ARRAY[]::TEXT[], p_max_nodes)", true),
 		Header: []string{
 			"Generated public dispatcher for explain_permission",
 			"Companion to check_permission — returns a JSONB Trace describing",
@@ -152,8 +155,9 @@ func renderExplainDispatcherWithCases(databaseSchema string, cases []DispatcherC
 // renderEmptyExplainDispatcher emits a no-op dispatcher when the schema has
 // no eligible relations. Returns a structurally valid Trace with an empty
 // union root so callers parsing the output don't choke on NULL.
-func renderEmptyExplainDispatcher(databaseSchema string) string {
-	body := "SELECT " + explainNoEntrySentinelSQL("no relations defined")
+func renderEmptyExplainDispatcher(databaseSchema string, unexposed []relationKey) string {
+	sentinel := explainNoEntrySentinelSQL("no relations defined")
+	body := "SELECT " + sentinel
 
 	internalFn := SqlFunction{
 		Schema:  databaseSchema,
@@ -173,7 +177,7 @@ func renderEmptyExplainDispatcher(databaseSchema string) string {
 		Name:         "explain_permission",
 		Args:         explainDispatcherPublicArgs(),
 		Returns:      "JSONB",
-		Body:         Raw(body),
+		Body:         guardedPublicBody(databaseSchema, unexposed, sentinel, true),
 		NoSearchPath: true,
 	}
 

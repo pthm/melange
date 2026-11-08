@@ -76,9 +76,10 @@ type GeneratedSQL struct {
 	// callers can deserialise without special-casing.
 	ExplainDispatcher string
 
-	// ExplainEligible records the (object_type, relation) pairs for which an
-	// explain function was generated. CollectNamedFunctions reads this
-	// directly; hand-built GeneratedSQL values must populate it via
+	// ExplainEligible records the (object_type, relation) pairs eligible for
+	// an explain function, over the whole model; one is generated for each
+	// pair the exposure installs. CollectNamedFunctions reads this directly;
+	// hand-built GeneratedSQL values must populate it via
 	// ComputeExplainEligibility(analyses) before calling CollectNamedFunctions.
 	ExplainEligible map[string]map[string]bool
 
@@ -93,8 +94,9 @@ type GeneratedSQL struct {
 	// pairs so OpenFGA tooling deserialises without special-casing.
 	ExpandDispatcher string
 
-	// ExpandEligible records the (object_type, relation) pairs for which an
-	// expand function was generated. Stage 2 slice 2.1 gates many shapes
+	// ExpandEligible records the (object_type, relation) pairs eligible for an
+	// expand function, over the whole model; one is generated for each pair
+	// the exposure installs. Stage 2 slice 2.1 gates many shapes
 	// (TTU, intersection, exclusion, usersets, wildcards, complex usersets)
 	// out — those route to the dispatcher's empty-leaf sentinel until the
 	// follow-up slices land.
@@ -104,6 +106,29 @@ type GeneratedSQL struct {
 	// functions efficient against melange_tuples. Advisory only — users
 	// translate the DDL to their source tables. See RecommendIndexes.
 	IndexRecommendations []IndexRecommendation
+
+	// exposure is the exposure this output was generated with, resolved
+	// against the model, so CollectNamedFunctions pairs names with the
+	// functions actually emitted. Set by GenerateSQLWithOptions; hand-built
+	// values leave it unset (the default exposure).
+	exposure generatedExposure
+}
+
+// generatedExposure records the exposure a GeneratedSQL or ListGeneratedSQL
+// was generated with. set distinguishes generated output (whose closure may
+// be nil, the default exposure) from hand-built values.
+type generatedExposure struct {
+	set     bool
+	closure *exposureClosure
+}
+
+// resolve returns the recorded closure, or the closure of fallback for
+// hand-built output.
+func (g generatedExposure) resolve(analyses []RelationAnalysis, fallback Exposure) *exposureClosure {
+	if g.set {
+		return g.closure
+	}
+	return newExposureClosure(analyses, fallback)
 }
 
 // GenerateSQLOptions tunes codegen behavior for GenerateSQLWithOptions and
@@ -119,6 +144,11 @@ type GenerateSQLOptions struct {
 	// wins (typically queries whose inner CTE is recomputed many times due to
 	// inlining and produces non-trivial row counts).
 	EnableMaterializedCTEs bool
+
+	// Exposure selects the generated SQL API (see Exposure). The zero value
+	// exposes every relation and generates every function family. Generation
+	// rejects an invalid pattern (see Exposure.Validate).
+	Exposure Exposure
 }
 
 // GenerateSQL generates specialized SQL functions for all relations in the schema
@@ -141,12 +171,17 @@ func GenerateSQL(analyses []RelationAnalysis, inline InlineSQLData, databaseSche
 
 // GenerateSQLWithOptions is the option-aware variant of GenerateSQL.
 //
-// Currently the option set only affects list-function codegen (via
-// GenerateListSQLWithOptions); check-function output is independent of the
-// options today. The option is accepted here to keep a single public surface
-// the migrator can configure once.
-func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, databaseSchema string, _ GenerateSQLOptions) (GeneratedSQL, error) {
+// opts.Exposure selects which check, expand and explain functions are emitted
+// and which relations the public dispatchers answer for. The function bodies
+// themselves do not depend on it. EnableMaterializedCTEs only affects list
+// functions (GenerateListSQLWithOptions).
+func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, databaseSchema string, opts GenerateSQLOptions) (GeneratedSQL, error) {
+	if err := opts.Exposure.Validate(); err != nil {
+		return GeneratedSQL{}, err
+	}
 	var result GeneratedSQL
+	exposure := newExposureClosure(analyses, opts.Exposure)
+	result.exposure = generatedExposure{set: true, closure: exposure}
 
 	complexityByRelation := buildClosureComplexityIndex(analyses)
 	// needsNW maps type->relation->whether a distinct _nw check function is
@@ -173,9 +208,19 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 
 	inlineIx := newInlineIndex(inline)
 
-	// Generate specialized function for each relation
+	// Generate specialized function for each relation the exposure installs.
 	for _, a := range analyses {
 		if !a.Capabilities.CheckAllowed {
+			continue
+		}
+		expandFn, expandOK := generateExpandFunction(a, databaseSchema)
+		if expandOK {
+			if expandEligible[a.ObjectType] == nil {
+				expandEligible[a.ObjectType] = make(map[string]bool)
+			}
+			expandEligible[a.ObjectType][a.Relation] = true
+		}
+		if !exposure.installsCheck(a.ObjectType, a.Relation) {
 			continue
 		}
 		fn, err := generateCheckFunction(a, inlineIx, databaseSchema, false, complexityByRelation, needsNW)
@@ -190,14 +235,10 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 			}
 			result.NoWildcardFunctions = append(result.NoWildcardFunctions, noWildcardFn)
 		}
-		if expandFn, ok := generateExpandFunction(a, databaseSchema); ok {
+		if expandOK && exposure.installsExpand(a.ObjectType, a.Relation) {
 			result.ExpandFunctions = append(result.ExpandFunctions, expandFn)
-			if expandEligible[a.ObjectType] == nil {
-				expandEligible[a.ObjectType] = make(map[string]bool)
-			}
-			expandEligible[a.ObjectType][a.Relation] = true
 		}
-		if !explainEligible[a.ObjectType][a.Relation] {
+		if !explainEligible[a.ObjectType][a.Relation] || !exposure.installsExplain(a.ObjectType, a.Relation) {
 			continue
 		}
 		explainFn, err := generateExplainFunction(a, inlineIx, databaseSchema, complexityByRelation)
@@ -210,22 +251,27 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 
 	// Generate dispatchers
 	var err error
-	result.Dispatcher, err = generateDispatcher(analyses, databaseSchema, false, nil)
+	result.Dispatcher, err = generateDispatcher(analyses, databaseSchema, false, nil, exposure)
 	if err != nil {
 		return GeneratedSQL{}, fmt.Errorf("generating dispatcher: %w", err)
 	}
-	result.DispatcherNoWildcard, err = generateDispatcher(analyses, databaseSchema, true, needsNW)
+	if exposure != nil {
+		// The public dispatchers' guards call the raising helper; it comes
+		// first so the LANGUAGE sql wrappers that name it can be created.
+		result.Dispatcher = renderUnexposedFunction(databaseSchema) + "\n\n" + result.Dispatcher
+	}
+	result.DispatcherNoWildcard, err = generateDispatcher(analyses, databaseSchema, true, needsNW, exposure)
 	if err != nil {
 		return GeneratedSQL{}, fmt.Errorf("generating no-wildcard dispatcher: %w", err)
 	}
-	result.ExplainDispatcher, err = generateExplainDispatcher(analyses, databaseSchema, explainEligible)
+	result.ExplainDispatcher, err = generateExplainDispatcher(analyses, databaseSchema, explainEligible, exposure)
 	if err != nil {
 		return GeneratedSQL{}, fmt.Errorf("generating explain dispatcher: %w", err)
 	}
-	result.ExpandDispatcher = generateExpandDispatcher(analyses, databaseSchema, expandEligible)
+	result.ExpandDispatcher = generateExpandDispatcher(analyses, databaseSchema, expandEligible, exposure)
 
 	// Generate bulk dispatcher
-	result.BulkDispatcher = generateBulkDispatcher(analyses, databaseSchema)
+	result.BulkDispatcher = generateBulkDispatcher(analyses, databaseSchema, exposure)
 
 	// Index recommendations are advisory and derived from the same analyses;
 	// emitting them here keeps the per-schema output self-contained.
@@ -342,11 +388,26 @@ type NamedFunction struct {
 // The analyses slice must be the same slice, in the same order, passed to
 // GenerateSQL and GenerateListSQL that produced generatedSQL and listSQL.
 // The function walks all three in lockstep; mismatched ordering will silently
-// produce incorrect name-to-SQL pairings.
+// produce incorrect name-to-SQL pairings. Each output is walked with the
+// exposure it was generated with; hand-built values use the default.
 func CollectNamedFunctions(
 	generatedSQL GeneratedSQL,
 	listSQL ListGeneratedSQL,
 	analyses []RelationAnalysis,
+) []NamedFunction {
+	return CollectNamedFunctionsWithOptions(generatedSQL, listSQL, analyses, GenerateSQLOptions{})
+}
+
+// CollectNamedFunctionsWithOptions is the option-aware variant of
+// CollectNamedFunctions. Output from GenerateSQLWithOptions and
+// GenerateListSQLWithOptions is walked with the exposure it was generated
+// with; opts.Exposure applies only to hand-built values, and must then be
+// the exposure their functions were emitted under.
+func CollectNamedFunctionsWithOptions(
+	generatedSQL GeneratedSQL,
+	listSQL ListGeneratedSQL,
+	analyses []RelationAnalysis,
+	opts GenerateSQLOptions,
 ) []NamedFunction {
 	var result []NamedFunction
 	checkIdx, noWildcardIdx, explainIdx, expandIdx := 0, 0, 0, 0
@@ -359,9 +420,11 @@ func CollectNamedFunctions(
 	if needsNW == nil {
 		needsNW = buildNoWildcardIndex(analyses)
 	}
+	checkExposure := generatedSQL.exposure.resolve(analyses, opts.Exposure)
+	listExposure := listSQL.exposure.resolve(analyses, opts.Exposure)
 
 	for _, a := range analyses {
-		if a.Capabilities.CheckAllowed {
+		if a.Capabilities.CheckAllowed && checkExposure.installsCheck(a.ObjectType, a.Relation) {
 			result = append(result, NamedFunction{
 				Name: functionName(a.ObjectType, a.Relation),
 				SQL:  generatedSQL.Functions[checkIdx],
@@ -374,14 +437,14 @@ func CollectNamedFunctions(
 				})
 				noWildcardIdx++
 			}
-			if expandEligible[a.ObjectType][a.Relation] {
+			if expandEligible[a.ObjectType][a.Relation] && checkExposure.installsExpand(a.ObjectType, a.Relation) {
 				result = append(result, NamedFunction{
 					Name: expandFunctionName(a.ObjectType, a.Relation),
 					SQL:  generatedSQL.ExpandFunctions[expandIdx],
 				})
 				expandIdx++
 			}
-			if explainEligible[a.ObjectType][a.Relation] {
+			if explainEligible[a.ObjectType][a.Relation] && checkExposure.installsExplain(a.ObjectType, a.Relation) {
 				result = append(result, NamedFunction{
 					Name: explainFunctionName(a.ObjectType, a.Relation),
 					SQL:  generatedSQL.ExplainFunctions[explainIdx],
@@ -389,12 +452,17 @@ func CollectNamedFunctions(
 				explainIdx++
 			}
 		}
-		if a.Capabilities.ListAllowed {
+		if !a.Capabilities.ListAllowed {
+			continue
+		}
+		if listExposure.installsListObjects(a.ObjectType, a.Relation) {
 			result = append(result, NamedFunction{
 				Name: listObjectsFunctionName(a.ObjectType, a.Relation),
 				SQL:  listSQL.ListObjectsFunctions[listObjIdx],
 			})
 			listObjIdx++
+		}
+		if listExposure.installsListSubjects(a.ObjectType, a.Relation) {
 			result = append(result, NamedFunction{
 				Name: listSubjectsFunctionName(a.ObjectType, a.Relation),
 				SQL:  listSQL.ListSubjectsFunctions[listSubjIdx],
@@ -409,7 +477,9 @@ func CollectNamedFunctions(
 // CollectDispatcherFunctions returns the dispatcher functions paired with their
 // SQL, named by their public entry point. Dispatchers are excluded from
 // CollectNamedFunctions, so without these entries a codegen change that only
-// alters dispatcher SQL is invisible to checksum-based skip detection.
+// alters dispatcher SQL is invisible to checksum-based skip detection. An
+// entry's SQL includes the functions rendered with it: the *_internal
+// dispatcher and, under a restricted exposure, the raising helper.
 func CollectDispatcherFunctions(generatedSQL GeneratedSQL, listSQL ListGeneratedSQL) []NamedFunction {
 	all := []NamedFunction{
 		{Name: "check_permission", SQL: generatedSQL.Dispatcher},
@@ -441,37 +511,55 @@ func CollectDispatcherFunctions(generatedSQL GeneratedSQL, listSQL ListGenerated
 //   - Parent-key accessible functions: accessible_{type}_{relation}_by_{link}
 //   - Dispatcher functions (always included): check_permission, list_accessible_objects, etc.
 func CollectFunctionNames(analyses []RelationAnalysis) []string {
+	return CollectFunctionNamesWithOptions(analyses, GenerateSQLOptions{})
+}
+
+// CollectFunctionNamesWithOptions is the option-aware variant of
+// CollectFunctionNames: the names GenerateSQLWithOptions and
+// GenerateListSQLWithOptions emit for opts.Exposure, plus
+// UnexposedFunctionName when the exposure leaves something out.
+func CollectFunctionNamesWithOptions(analyses []RelationAnalysis, opts GenerateSQLOptions) []string {
 	var names []string
 	explainEligible := ComputeExplainEligibility(analyses)
 	expandEligible := ComputeExpandEligibility(analyses)
 	needsNW := buildNoWildcardIndex(analyses)
+	exposure := newExposureClosure(analyses, opts.Exposure)
 
 	for _, a := range analyses {
-		if a.Capabilities.CheckAllowed {
+		if a.Capabilities.CheckAllowed && exposure.installsCheck(a.ObjectType, a.Relation) {
 			names = append(names, functionName(a.ObjectType, a.Relation))
 			if needsNW[a.ObjectType][a.Relation] {
 				names = append(names, functionNameNoWildcard(a.ObjectType, a.Relation))
 			}
-			if expandEligible[a.ObjectType][a.Relation] {
+			if expandEligible[a.ObjectType][a.Relation] && exposure.installsExpand(a.ObjectType, a.Relation) {
 				names = append(names, expandFunctionName(a.ObjectType, a.Relation))
 			}
-			if explainEligible[a.ObjectType][a.Relation] {
+			if explainEligible[a.ObjectType][a.Relation] && exposure.installsExplain(a.ObjectType, a.Relation) {
 				names = append(names, explainFunctionName(a.ObjectType, a.Relation))
 			}
 		}
-		if a.Capabilities.ListAllowed {
-			names = append(names,
-				listObjectsFunctionName(a.ObjectType, a.Relation),
-				listSubjectsFunctionName(a.ObjectType, a.Relation),
-				AccessibleObjectsFunctionName(a.ObjectType, a.Relation),
-			)
+		if !a.Capabilities.ListAllowed {
+			continue
+		}
+		listObjects := exposure.installsListObjects(a.ObjectType, a.Relation)
+		if listObjects {
+			names = append(names, listObjectsFunctionName(a.ObjectType, a.Relation))
+		}
+		if exposure.installsListSubjects(a.ObjectType, a.Relation) {
+			names = append(names, listSubjectsFunctionName(a.ObjectType, a.Relation))
+		}
+		if listObjects {
+			names = append(names, AccessibleObjectsFunctionName(a.ObjectType, a.Relation))
 		}
 	}
 
-	for _, pk := range parentKeyRelations(analyses) {
+	for _, pk := range parentKeyRelations(analyses, exposure) {
 		names = append(names, pk.functionName())
 	}
 
+	if exposure != nil {
+		names = append(names, UnexposedFunctionName)
+	}
 	// Dispatchers are always generated
 	return append(names, DispatcherFunctionNames...)
 }
@@ -491,6 +579,7 @@ var DispatcherFunctionNames = []string{
 	accessibleObjectsDispatcherName,
 	"list_accessible_objects",
 	"list_accessible_subjects",
+	listSubjectsInternalDispatcherName,
 }
 
 // buildClosureComplexityIndex returns, for each object type, a map from relation

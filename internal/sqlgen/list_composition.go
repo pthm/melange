@@ -254,13 +254,17 @@ func (g *relationGraph) listCompositionSafe(fromType, fromRelation, targetType, 
 // for a may reference — same-type closure/implied/excluded relations, TTU
 // parents, and userset targets, both direct and inherited through closure.
 // Deliberately over-inclusive: extra edges can only make listCompositionSafe
-// more conservative, never incorrect.
+// more conservative, never incorrect, and only install more functions under
+// a restricted Exposure.
 //
 // MAINTENANCE: this must cover every reference-carrying field of
-// RelationAnalysis; a missed edge means listCompositionSafe can approve a
-// cyclic composition, which recurses infinitely at query time. A companion
-// reflection test (TestRelationReferencesFieldCoverage) fails when
-// RelationAnalysis gains a new field that has not been reviewed for edges.
+// RelationAnalysis. A missed edge means listCompositionSafe can approve a
+// cyclic composition, which recurses infinitely at query time, and that a
+// restricted Exposure leaves a function the generated bodies call
+// uninstalled or unrouted, which denies silently. A companion reflection test
+// (TestRelationReferencesFieldCoverage) fails when RelationAnalysis gains a
+// new field that has not been reviewed for edges, and TestExposure_ClosureSound
+// fails when a generated body calls a relation that is not an edge.
 // analysis/analysis_types.go's sortByDependency walks a related (narrower)
 // edge set for ordering; keep both in mind when adding reference kinds.
 func relationReferences(a *RelationAnalysis) []string {

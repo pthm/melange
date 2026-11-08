@@ -29,9 +29,14 @@ type ListGeneratedSQL struct {
 	// that routes to specialized functions or falls back to generic.
 	ListObjectsDispatcher string
 
-	// ListSubjectsDispatcher contains the list_accessible_subjects dispatcher function
-	// that routes to specialized functions or falls back to generic.
+	// ListSubjectsDispatcher contains the list_accessible_subjects_internal
+	// dispatcher, which generated list_subjects functions call, and the public
+	// list_accessible_subjects dispatcher.
 	ListSubjectsDispatcher string
+
+	// exposure is the exposure this output was generated with; see
+	// GeneratedSQL.exposure.
+	exposure generatedExposure
 }
 
 // GenerateListSQL generates specialized SQL functions for list operations using
@@ -52,8 +57,16 @@ func GenerateListSQL(analyses []RelationAnalysis, inline InlineSQLData, database
 // GenerateListSQLWithOptions is the option-aware variant of GenerateListSQL.
 // The opts.EnableMaterializedCTEs flag is threaded into each ListPlan so render
 // functions can decide whether to emit "AS MATERIALIZED" on paged/returned.
+// opts.Exposure selects which list, accessible and parent-key functions are
+// emitted and which relations the public dispatchers answer for; the shared
+// reference graph and every composition decision stay over the whole model.
 func GenerateListSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, databaseSchema string, opts GenerateSQLOptions) (ListGeneratedSQL, error) {
+	if err := opts.Exposure.Validate(); err != nil {
+		return ListGeneratedSQL{}, err
+	}
 	var result ListGeneratedSQL
+	exposure := newExposureClosure(analyses, opts.Exposure)
+	result.exposure = generatedExposure{set: true, closure: exposure}
 
 	// One reference graph (over the analysis lookup) shared by every plan.
 	graph := newRelationGraph(buildAnalysisLookup(analyses))
@@ -66,6 +79,11 @@ func GenerateListSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLDat
 		if !a.Capabilities.ListAllowed {
 			continue
 		}
+		listObjects := exposure.installsListObjects(a.ObjectType, a.Relation)
+		listSubjects := exposure.installsListSubjects(a.ObjectType, a.Relation)
+		if !listObjects && !listSubjects {
+			continue
+		}
 
 		// Filter the whole-model VALUES down to the object types this relation's
 		// functions can reference once (both list_objects and list_subjects share
@@ -73,37 +91,41 @@ func GenerateListSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLDat
 		relInline := filterInlineForList(inlineIx, a)
 
 		// Generate list_objects function
-		objFn, err := generateListObjectsFunctionWithLookup(a, relInline, databaseSchema, graph, opts)
-		if err != nil {
-			return ListGeneratedSQL{}, fmt.Errorf("generating list_objects function for %s.%s: %w",
-				a.ObjectType, a.Relation, err)
+		if listObjects {
+			objFn, err := generateListObjectsFunctionWithLookup(a, relInline, databaseSchema, graph, opts)
+			if err != nil {
+				return ListGeneratedSQL{}, fmt.Errorf("generating list_objects function for %s.%s: %w",
+					a.ObjectType, a.Relation, err)
+			}
+			result.ListObjectsFunctions = append(result.ListObjectsFunctions, objFn.List)
+			accessible = append(accessible, NamedFunction{Name: AccessibleObjectsFunctionName(a.ObjectType, a.Relation), SQL: objFn.Accessible})
 		}
-		result.ListObjectsFunctions = append(result.ListObjectsFunctions, objFn.List)
-		accessible = append(accessible, NamedFunction{Name: AccessibleObjectsFunctionName(a.ObjectType, a.Relation), SQL: objFn.Accessible})
 
 		// Generate list_subjects function
-		subjFn, err := generateListSubjectsFunctionWithLookup(a, relInline, databaseSchema, graph, opts)
-		if err != nil {
-			return ListGeneratedSQL{}, fmt.Errorf("generating list_subjects function for %s.%s: %w",
-				a.ObjectType, a.Relation, err)
+		if listSubjects {
+			subjFn, err := generateListSubjectsFunctionWithLookup(a, relInline, databaseSchema, graph, opts)
+			if err != nil {
+				return ListGeneratedSQL{}, fmt.Errorf("generating list_subjects function for %s.%s: %w",
+					a.ObjectType, a.Relation, err)
+			}
+			result.ListSubjectsFunctions = append(result.ListSubjectsFunctions, subjFn)
 		}
-		result.ListSubjectsFunctions = append(result.ListSubjectsFunctions, subjFn)
 	}
 
-	for _, pk := range parentKeyRelations(analyses) {
+	for _, pk := range parentKeyRelations(analyses, exposure) {
 		accessible = append(accessible, NamedFunction{Name: pk.functionName(), SQL: renderParentKeyFunction(databaseSchema, pk)})
 	}
 	result.AccessibleObjectsFunctions = append(orderAccessibleFunctions(accessible),
-		NamedFunction{Name: accessibleObjectsDispatcherName, SQL: generateAccessibleObjectsDispatcher(databaseSchema)})
+		NamedFunction{Name: accessibleObjectsDispatcherName, SQL: generateAccessibleObjectsDispatcher(analyses, databaseSchema, exposure)})
 
 	// Generate dispatchers (always generated, even if no specialized functions)
 	var err error
-	result.ListObjectsDispatcher, err = generateListObjectsDispatcher(analyses, databaseSchema)
+	result.ListObjectsDispatcher, err = generateListObjectsDispatcher(analyses, databaseSchema, exposure)
 	if err != nil {
 		return ListGeneratedSQL{}, fmt.Errorf("generating list_objects dispatcher: %w", err)
 	}
 
-	result.ListSubjectsDispatcher, err = generateListSubjectsDispatcher(analyses, databaseSchema)
+	result.ListSubjectsDispatcher, err = generateListSubjectsDispatcher(analyses, databaseSchema, exposure)
 	if err != nil {
 		return ListGeneratedSQL{}, fmt.Errorf("generating list_subjects dispatcher: %w", err)
 	}

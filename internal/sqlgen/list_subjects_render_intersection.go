@@ -4,13 +4,13 @@ package sqlgen
 // Intersection List Subjects Render Functions
 // =============================================================================
 // RenderListSubjectsIntersectionFunction renders an intersection list_subjects function from plan and blocks.
-// Intersection gathers candidates then filters with check_permission at the end.
+// Intersection gathers candidates then filters with check_permission_internal at the end.
 func RenderListSubjectsIntersectionFunction(plan ListPlan, blocks SubjectsIntersectionBlockSet) (string, error) {
 	// Render regular candidate blocks
 	regularCandidateBlocks := renderTypedQueryBlocks(blocks.RegularCandidateBlocks)
 	regularCandidatesSQL := RenderUnionBlocks(regularCandidateBlocks)
 
-	// Build regular query with check_permission filter
+	// Build regular query with check_permission_internal filter
 	regularQuery := buildIntersectionRegularQuery(plan, regularCandidatesSQL)
 	regularPaginatedQuery := plan.wrapPaginationWildcardFirst(regularQuery)
 
@@ -18,7 +18,7 @@ func RenderListSubjectsIntersectionFunction(plan ListPlan, blocks SubjectsInters
 	usersetCandidateBlocks := renderTypedQueryBlocks(blocks.UsersetFilterCandidateBlocks)
 	usersetCandidatesSQL := RenderUnionBlocks(usersetCandidateBlocks)
 
-	// Build userset filter query with check_permission filter and self block
+	// Build userset filter query with check_permission_internal filter and self block
 	usersetFilterQuery := buildIntersectionUsersetFilterQuery(plan, usersetCandidatesSQL, blocks.UsersetFilterSelfBlock)
 	usersetFilterPaginatedQuery := hoistClosureCTE(
 		plan.wrapPaginationWildcardFirst(usersetFilterQuery),
@@ -61,16 +61,15 @@ func RenderListSubjectsIntersectionFunction(plan ListPlan, blocks SubjectsInters
 }
 
 // buildIntersectionRegularQuery builds the regular path query for intersection.
-// It wraps candidates in a CTE and filters with check_permission.
+// It wraps candidates in a CTE and filters with check_permission_internal.
 func buildIntersectionRegularQuery(plan ListPlan, candidatesSQL string) string {
 	// Build the filtered_candidates CTE query
 	filteredCandidatesQuery := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "c", Column: "subject_id"}},
 		FromExpr:    TableAs("", "subject_candidates", "c"),
-		Where: CheckPermissionExpr(
+		Where: CheckPermissionInternalExpr(
 			plan.DatabaseSchema,
-			"check_permission",
 			SubjectRef{Type: SubjectType, ID: Col{Table: "c", Column: "subject_id"}},
 			plan.Relation,
 			LiteralObject(plan.ObjectType, ObjectID),
@@ -95,14 +94,13 @@ func buildIntersectionRegularQuery(plan ListPlan, candidatesSQL string) string {
 
 // buildIntersectionUsersetFilterQuery builds the userset filter path query for intersection.
 func buildIntersectionUsersetFilterQuery(plan ListPlan, candidatesSQL string, selfBlock *TypedQueryBlock) string {
-	// Build the main query with check_permission filter
+	// Build the main query with check_permission_internal filter
 	mainQuery := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "c", Column: "subject_id"}},
 		FromExpr:    TableAs("", "userset_candidates", "c"),
-		Where: CheckPermissionExpr(
+		Where: CheckPermissionInternalExpr(
 			plan.DatabaseSchema,
-			"check_permission",
 			SubjectRef{Type: Param("v_filter_type"), ID: Col{Table: "c", Column: "subject_id"}},
 			plan.Relation,
 			LiteralObject(plan.ObjectType, ObjectID),
