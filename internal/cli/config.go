@@ -1,19 +1,37 @@
 package cli
 
 import (
+	"bytes"
 	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/spf13/viper"
+
+	"github.com/pthm/melange/pkg/compiler"
 )
 
 const (
 	maxWalkDepth = 25
 )
+
+// configFileNames are the names findConfigFile looks for in each directory,
+// in order, as slash-separated paths.
+var configFileNames = []string{
+	"melange.yaml",
+	"melange.yml",
+	"melange/config.yaml",
+	"melange/config.yml",
+	"melange/melange.yaml",
+	"melange/melange.yml",
+}
+
+// sqlFunctionFamilies are the keys of the sql.functions section.
+var sqlFunctionFamilies = []string{"list_objects", "list_subjects", "accessible", "parent_key", "expand", "explain"}
 
 // Config represents the melange configuration from melange.yaml.
 type Config struct {
@@ -27,6 +45,10 @@ type Config struct {
 	Generate GenerateConfig `mapstructure:"generate"`
 	Migrate  MigrateConfig  `mapstructure:"migrate"`
 	Doctor   DoctorConfig   `mapstructure:"doctor"`
+
+	// SQL selects the generated SQL API (the exposure). It describes the
+	// schema, not a connection, so environments cannot override it.
+	SQL SQLConfig `mapstructure:"sql"`
 
 	// DefaultEnvironment names the environment applied when neither the --env
 	// flag nor MELANGE_ENV selects one. Empty means "use the base config".
@@ -104,23 +126,110 @@ type DoctorConfig struct {
 	SkipPerformance bool `mapstructure:"skip_performance"`
 }
 
+// SQLConfig is the sql section: which relations the public SQL API answers
+// for and which function families are generated. Check functions are always
+// generated. The section is declarative: migrate applies exactly what it
+// resolves to, so removing it restores the default API.
+type SQLConfig struct {
+	Relations SQLRelationsConfig `mapstructure:"relations"`
+	Functions SQLFunctionsConfig `mapstructure:"functions"`
+}
+
+// SQLRelationsConfig holds the relation patterns: "relation" or
+// "type#relation", with '*' and '?' globs within a part. A relation is
+// exposed when it matches an include pattern (every relation when include is
+// empty) and no exclude pattern.
+type SQLRelationsConfig struct {
+	Include []string `mapstructure:"include"`
+	Exclude []string `mapstructure:"exclude"`
+}
+
+// SQLFunctionsConfig enables the optional function families.
+type SQLFunctionsConfig struct {
+	ListObjects  bool `mapstructure:"list_objects"`
+	ListSubjects bool `mapstructure:"list_subjects"`
+	Accessible   bool `mapstructure:"accessible"`
+	ParentKey    bool `mapstructure:"parent_key"`
+	Expand       bool `mapstructure:"expand"`
+	Explain      bool `mapstructure:"explain"`
+}
+
+// Validate reports the first invalid relation pattern, naming its key and,
+// when the value came from one, its environment variable.
+func (s SQLConfig) Validate() error {
+	for _, list := range []struct {
+		key      string
+		patterns []string
+	}{
+		{"sql.relations.include", s.Relations.Include},
+		{"sql.relations.exclude", s.Relations.Exclude},
+	} {
+		for _, p := range list.patterns {
+			if err := compiler.ValidateRelationPattern(p); err != nil {
+				key := list.key
+				if env := envKey(key); os.Getenv(env) != "" {
+					key += " (from " + env + ")"
+				}
+				return fmt.Errorf("%s: %w", key, err)
+			}
+		}
+	}
+	return nil
+}
+
+// Exposure returns the exposure the section selects.
+func (s SQLConfig) Exposure() compiler.Exposure {
+	disabled := func(on bool) *bool {
+		if on {
+			return nil
+		}
+		off := false
+		return &off
+	}
+	return compiler.Exposure{
+		Relations: compiler.RelationPatterns{
+			Include: s.Relations.Include,
+			Exclude: s.Relations.Exclude,
+		},
+		Functions: compiler.FunctionFamilies{
+			ListObjects:  disabled(s.Functions.ListObjects),
+			ListSubjects: disabled(s.Functions.ListSubjects),
+			Accessible:   disabled(s.Functions.Accessible),
+			ParentKey:    disabled(s.Functions.ParentKey),
+			Expand:       disabled(s.Functions.Expand),
+			Explain:      disabled(s.Functions.Explain),
+		},
+	}
+}
+
+// TrimPatterns returns patterns with surrounding whitespace removed, so a
+// comma-separated environment variable may put spaces after the commas.
+// Whitespace inside a pattern is still rejected by validation.
+func TrimPatterns(patterns []string) []string {
+	if patterns == nil {
+		return nil
+	}
+	out := make([]string, len(patterns))
+	for i, p := range patterns {
+		out[i] = strings.TrimSpace(p)
+	}
+	return out
+}
+
+// envKey returns the environment variable that binds a config key.
+func envKey(key string) string {
+	return "MELANGE_" + strings.ToUpper(strings.ReplaceAll(key, ".", "_"))
+}
+
 // LoadConfig discovers and loads configuration with proper precedence:
 // flags > env > config file > defaults.
 //
 // Returns the loaded config, the path to the config file (empty if none found),
 // and any error encountered.
 func LoadConfig(explicitConfigPath string) (*Config, string, error) {
-	v := viper.New()
+	v := newViper()
 
-	// 1. Set defaults first (lowest precedence)
-	setDefaults(v)
-
-	// 2. Set up environment variable binding
-	v.SetEnvPrefix("MELANGE")
-	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-	v.AutomaticEnv()
-
-	// 3. Find and load config file
+	// Find and load config file
 	configPath, root, err := findConfigFile(explicitConfigPath)
 	if err != nil {
 		return nil, "", err
@@ -133,14 +242,109 @@ func LoadConfig(explicitConfigPath string) (*Config, string, error) {
 		}
 	}
 
-	// 4. Unmarshal into Config struct
-	var cfg Config
-	if err := v.Unmarshal(&cfg); err != nil {
-		return nil, configPath, fmt.Errorf("unmarshaling config: %w", err)
+	cfg, err := decodeConfig(v)
+	if err != nil {
+		return nil, configPath, err
 	}
 	cfg.root = root
 
-	return &cfg, configPath, nil
+	return cfg, configPath, nil
+}
+
+// ParseConfig loads configuration from YAML content instead of a file, with
+// the same defaults, environment variables and validation as LoadConfig. It
+// reads a config file as it was at another revision.
+func ParseConfig(content []byte) (*Config, error) {
+	v := newViper()
+	v.SetConfigType("yaml")
+	if err := v.ReadConfig(bytes.NewReader(content)); err != nil {
+		return nil, fmt.Errorf("reading config: %w", err)
+	}
+	return decodeConfig(v)
+}
+
+// newViper returns a viper with the defaults registered (lowest precedence)
+// and MELANGE_* environment variables bound over them. Only keys with a
+// default bind, so every key needs one.
+func newViper() *viper.Viper {
+	v := viper.New()
+	setDefaults(v)
+	v.SetEnvPrefix("MELANGE")
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	v.AutomaticEnv()
+	return v
+}
+
+// decodeConfig unmarshals and validates the merged configuration.
+func decodeConfig(v *viper.Viper) (*Config, error) {
+	if err := rejectEnvironmentSQL(v); err != nil {
+		return nil, err
+	}
+	if err := rejectUnknownSQLKeys(v); err != nil {
+		return nil, err
+	}
+	var cfg Config
+	if err := v.Unmarshal(&cfg); err != nil {
+		return nil, fmt.Errorf("unmarshaling config: %w", err)
+	}
+	cfg.SQL.Relations.Include = TrimPatterns(cfg.SQL.Relations.Include)
+	cfg.SQL.Relations.Exclude = TrimPatterns(cfg.SQL.Relations.Exclude)
+	if err := cfg.SQL.Validate(); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
+// rejectEnvironmentSQL fails on an sql section inside an environment
+// profile. The exposure describes the schema, so it is the same in every
+// environment; silently ignoring the section would deploy a different API
+// than the file appears to ask for.
+func rejectEnvironmentSQL(v *viper.Viper) error {
+	for name, env := range v.GetStringMap("environments") {
+		if m, ok := env.(map[string]any); ok {
+			if _, ok := m["sql"]; ok {
+				return fmt.Errorf("environments.%s.sql: the sql section applies to every environment and cannot be set per environment; move it to the top level", name)
+			}
+		}
+	}
+	return nil
+}
+
+// rejectUnknownSQLKeys fails on a key in the sql section that is not one of
+// its settings. Elsewhere unknown keys are ignored, but here a misspelled key
+// keeps the default, and since migrate applies the section declaratively it
+// would widen a restricted database back to the default API.
+func rejectUnknownSQLKeys(v *viper.Viper) error {
+	known := map[string]bool{"sql.relations.include": true, "sql.relations.exclude": true}
+	for _, family := range sqlFunctionFamilies {
+		known["sql.functions."+family] = true
+	}
+	sections := map[string]bool{"sql": true, "sql.relations": true, "sql.functions": true}
+	var unknown []string
+	for _, key := range v.AllKeys() {
+		if known[key] || (key != "sql" && !strings.HasPrefix(key, "sql.")) {
+			continue
+		}
+		// An empty section ("functions:" with nothing under it) is a key
+		// of its own with a nil value.
+		if sections[key] {
+			value := v.Get(key)
+			if _, isMap := value.(map[string]any); value == nil || isMap {
+				continue
+			}
+			return fmt.Errorf("%s: must be a section of keys, not a value", key)
+		}
+		unknown = append(unknown, key)
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	slices.Sort(unknown)
+	if unknown[0] == "sql.functions.check" {
+		return fmt.Errorf("sql.functions.check: check functions are always generated and cannot be turned off")
+	}
+	return fmt.Errorf("%s: unknown key in the sql section; it accepts relations.include, relations.exclude and functions.{%s}",
+		unknown[0], strings.Join(sqlFunctionFamilies, ","))
 }
 
 // envRefPattern matches ${VAR} references (braced form only). We deliberately
@@ -512,16 +716,22 @@ func setDefaults(v *viper.Viper) {
 	// Doctor defaults
 	v.SetDefault("doctor.verbose", false)
 	v.SetDefault("doctor.skip_performance", false)
+
+	// SQL API exposure defaults: every relation, every function family.
+	v.SetDefault("sql.relations.include", []string{"*"})
+	v.SetDefault("sql.relations.exclude", []string{})
+	for _, family := range sqlFunctionFamilies {
+		v.SetDefault("sql.functions."+family, true)
+	}
 }
 
 // findConfigFile locates the config file to load. When explicitPath is given,
 // it is validated and returned directly. Otherwise the function walks upward
-// from the current directory, checking six candidate names at each level:
-// melange.yaml, melange.yml, melange/config.yaml, melange/config.yml,
-// melange/melange.yaml, and melange/melange.yml. The walk stops at a .git
-// boundary or after maxWalkDepth levels. This search order must stay in sync
-// with findExistingConfig in internal/cli/command/init.go so that configs written by
-// init are always discovered by other commands.
+// from the current directory, checking configFileNames in order at each
+// level. The walk stops at a .git boundary or after maxWalkDepth levels.
+// findExistingConfig in internal/cli/command/init.go reads the same list
+// through ConfigSearchPaths, so configs written by init are always
+// discovered by other commands.
 //
 // root is the directory the walk found the config from (the project root),
 // which for melange/config.yaml is the parent of melange/; init writes paths
@@ -542,16 +752,8 @@ func findConfigFile(explicitPath string) (path, root string, err error) {
 
 	dir := cwd
 	for i := 0; i < maxWalkDepth; i++ {
-		// Try melange.yaml then melange.yml
-		for _, name := range []string{
-			"melange.yaml",
-			"melange.yml",
-			filepath.Join("melange", "config.yaml"),
-			filepath.Join("melange", "config.yml"),
-			filepath.Join("melange", "melange.yaml"),
-			filepath.Join("melange", "melange.yml"),
-		} {
-			candidate := filepath.Join(dir, name)
+		for _, name := range configFileNames {
+			candidate := filepath.Join(dir, filepath.FromSlash(name))
 			if _, err := os.Stat(candidate); err == nil {
 				return candidate, dir, nil
 			}
@@ -572,6 +774,37 @@ func findConfigFile(explicitPath string) (path, root string, err error) {
 	}
 
 	return "", "", nil // No config found, use defaults
+}
+
+// ConfigSearchPaths returns the paths findConfigFile would try, in order,
+// when run from dir: dir and then each parent up to the repository root, at
+// most maxWalkDepth levels. dir and the results are slash-separated paths
+// relative to the repository root ("" for the root itself), so they can name
+// files at a git ref.
+func ConfigSearchPaths(dir string) []string {
+	dir = strings.Trim(dir, "/")
+	if dir == "." {
+		dir = ""
+	}
+	var paths []string
+	for i := 0; i < maxWalkDepth; i++ {
+		for _, name := range configFileNames {
+			if dir == "" {
+				paths = append(paths, name)
+			} else {
+				paths = append(paths, dir+"/"+name)
+			}
+		}
+		if dir == "" {
+			break
+		}
+		if j := strings.LastIndex(dir, "/"); j >= 0 {
+			dir = dir[:j]
+		} else {
+			dir = ""
+		}
+	}
+	return paths
 }
 
 // DSN returns the database connection string.

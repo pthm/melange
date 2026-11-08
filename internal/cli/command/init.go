@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 	"sigs.k8s.io/yaml"
 
+	"github.com/pthm/melange/internal/cli"
 	"github.com/pthm/melange/internal/cli/style"
 	"github.com/pthm/melange/pkg/clientgen"
 )
@@ -630,20 +631,14 @@ func writeSchema(schemaPath, template string) error {
 }
 
 // findExistingConfig looks for a config file in the current directory using
-// the same candidate list as lib/cli.findConfigFile. It returns the first path
+// the same candidate names as cli.findConfigFile. It returns the first path
 // found, or an empty string if no config exists. This allows runInit to warn
 // the user before overwriting an existing configuration.
 func findExistingConfig() string {
-	for _, name := range []string{
-		"melange.yaml",
-		"melange.yml",
-		filepath.Join("melange", "config.yaml"),
-		filepath.Join("melange", "config.yml"),
-		filepath.Join("melange", "melange.yaml"),
-		filepath.Join("melange", "melange.yml"),
-	} {
-		if _, err := os.Stat(name); err == nil {
-			return name
+	for _, name := range cli.ConfigSearchPaths("") {
+		path := filepath.FromSlash(name)
+		if _, err := os.Stat(path); err == nil {
+			return path
 		}
 	}
 	return ""

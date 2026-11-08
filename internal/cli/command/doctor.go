@@ -12,6 +12,7 @@ import (
 
 	"github.com/pthm/melange/internal/cli"
 	"github.com/pthm/melange/internal/doctor"
+	"github.com/pthm/melange/pkg/compiler"
 )
 
 var (
@@ -26,7 +27,12 @@ var (
 var doctorCmd = &cobra.Command{
 	Use:   "doctor",
 	Short: "Run health checks",
-	Long:  `Run health checks on authorization infrastructure.`,
+	Long: `Run health checks on authorization infrastructure.
+
+The functions doctor expects follow the SQL API exposure the database was
+migrated with. The local exposure (the sql section of the configuration and
+the exposure flags) is compared with it, and patterns that match no relation
+are reported.`,
 	Example: `  # Run health checks
   melange doctor --db postgres://localhost/mydb
 
@@ -48,12 +54,17 @@ var doctorCmd = &cobra.Command{
 		verboseFlag := resolveBool(doctorVerbose, cfg.Doctor.Verbose)
 		skipPerf := resolveBool(doctorSkipPerformance, cfg.Doctor.SkipPerformance)
 
+		exposure, err := resolveExposure(cmd, cfg.SQL)
+		if err != nil {
+			return err
+		}
+
 		dsn, err := resolveDSN(doctorDB)
 		if err != nil {
 			return err
 		}
 
-		return runDoctor(dsn, databaseSchema, schemaPath, verboseFlag, skipPerf, doctorFormat)
+		return runDoctor(dsn, databaseSchema, schemaPath, verboseFlag, skipPerf, doctorFormat, exposure)
 	},
 }
 
@@ -65,9 +76,10 @@ func init() {
 	f.BoolVar(&doctorVerbose, "verbose", false, "show detailed output")
 	f.BoolVar(&doctorSkipPerformance, "skip-performance", false, "skip performance checks")
 	f.StringVar(&doctorFormat, "format", "text", "output format: text (default) or json")
+	addExposureFlags(f)
 }
 
-func runDoctor(dsn, databaseSchema, schemaPath string, verboseFlag, skipPerformance bool, format string) error {
+func runDoctor(dsn, databaseSchema, schemaPath string, verboseFlag, skipPerformance bool, format string, exposure compiler.Exposure) error {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return cli.DBConnectError("connecting to database", err)
@@ -80,7 +92,7 @@ func runDoctor(dsn, databaseSchema, schemaPath string, verboseFlag, skipPerforma
 		fmt.Println("melange doctor - Health Check")
 	}
 
-	opts := doctor.Options{SkipPerformance: skipPerformance}
+	opts := doctor.Options{SkipPerformance: skipPerformance, Exposure: &exposure}
 	if info := awaitUpdateInfo(advisoryWait); info != nil {
 		opts.Advisories = info.Advisories
 	}

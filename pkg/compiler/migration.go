@@ -60,6 +60,12 @@ type MigrationOptions struct {
 	// one: a previous state generated under a restricted exposure must say so
 	// here, or the functions it left out are not emitted.
 	PreviousExposure *Exposure
+	// PreviousExposureUnknown says the previous exposure is unknown even with
+	// the default Exposure, overriding the assumption above: every function is
+	// emitted (full output) while orphans are still dropped. A caller sets it
+	// when the previous state may have been generated under a restricted
+	// exposure it cannot recover.
+	PreviousExposureUnknown bool
 }
 
 // GenerateMigrationSQL is the terminal step of the generate migration pipeline.
@@ -116,7 +122,7 @@ func generateUpSQL(
 
 	// Determine which specialized functions changed (nil = include all)
 	var changed map[string]bool
-	unknownExposure := opts.PreviousExposure == nil && !opts.Exposure.IsDefault()
+	unknownExposure := opts.PreviousExposureUnknown || (opts.PreviousExposure == nil && !opts.Exposure.IsDefault())
 	if opts.PreviousChecksums != nil && len(opts.NamedFunctions) > 0 && !unknownExposure {
 		currentChecksums := computeCurrentChecksums(opts.NamedFunctions)
 		changed = changedFunctionNames(currentChecksums, opts.PreviousChecksums)
@@ -153,9 +159,15 @@ func generateUpSQL(
 	if opts.PreviousFunctionNames != nil {
 		orphans := computeOrphans(opts.PreviousFunctionNames, expectedFunctions)
 		if len(orphans) > 0 {
+			// Without CASCADE, as melange migrate does unless forced: a
+			// view, RLS policy or function that calls one of them makes the
+			// drop fail instead of being dropped with it, which for a policy
+			// would widen access. Generated functions never block each
+			// other: their string bodies record no pg_depend edges.
 			writeSectionHeader(&b, "Drop removed functions")
+			b.WriteString("-- These fail if other database objects depend on them; change or drop those first.\n")
 			for _, fn := range orphans {
-				fmt.Fprintf(&b, "DROP FUNCTION IF EXISTS %s CASCADE;\n", sqldsl.PrefixIdent(fn, opts.DatabaseSchema))
+				fmt.Fprintf(&b, "DROP FUNCTION IF EXISTS %s;\n", sqldsl.PrefixIdent(fn, opts.DatabaseSchema))
 			}
 			b.WriteString("\n")
 		}

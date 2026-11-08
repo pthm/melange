@@ -21,6 +21,63 @@ When you run `melange migrate`, Melange generates:
 
 These are the primary entry points. Internally, Melange generates specialized per-relation functions (e.g., `check_document_viewer`) that the dispatchers route to.
 
+## Exposure
+
+Which of these functions exist, and which relations they answer for, depends
+on the SQL API exposure: the [`sql:` section](../configuration/#sql-api-settings)
+of `melange.yaml` and the exposure flags of `melange migrate`. The default
+exposes every relation and generates every function family, which is the API
+this page describes. A restricted exposure names the relations an application
+queries (`relations.include` / `relations.exclude`) and the families it uses
+(`functions.*`).
+
+| Family | Public functions | Per-relation functions |
+|--------|------------------|------------------------|
+| check (always on) | `check_permission`, `check_permission_nw`, `check_permission_bulk` | `check_{type}_{relation}` |
+| `list_objects` | `list_accessible_objects` | `list_{type}_{relation}_obj` |
+| `list_subjects` | `list_accessible_subjects` | `list_{type}_{relation}_sub` |
+| `accessible` | `accessible_objects` | `accessible_{type}_{relation}` |
+| `parent_key` | | `accessible_{type}_{relation}_by_{link}` |
+| `expand` | `expand_permission` | `expand_{type}_{relation}` |
+| `explain` | `explain_permission` | `explain_{type}_{relation}` |
+
+**What is installed.** A relation usually resolves through others:
+`document#can_view` may read `document#viewer`, which reads `folder#viewer`
+through a parent. Migrate installs the functions of the exposed relations and
+of every relation they reach this way, directly or through other relations, so
+an exposed relation always resolves completely. Check functions are installed
+for all of them. The `list_*_obj` and `accessible_*` functions are installed
+for all of them when any of `list_objects`, `accessible` or `parent_key` is on,
+since the three read each other; `list_*_sub`, `expand_*` and `explain_*` when
+their family is on. The `_by_{link}` parent-key functions are installed for
+exposed relations only. Everything outside that set is not generated, and
+migrate drops it if an earlier exposure installed it.
+
+**Public and internal dispatchers.** The public dispatchers on this page
+answer only for exposed relations of an enabled family. Generated functions
+call each other through internal dispatchers (`check_permission_internal`,
+`check_permission_nw_internal`, `list_accessible_subjects_internal`,
+`explain_permission_internal`, `expand_permission_internal`), which route
+every installed function, so a relation an exposed one reaches resolves even
+though it is not exposed. `expand_permission` answers for every relation it
+installs, because clients follow the computed and tuple-to-userset pointers in
+an expand tree through it.
+
+**Unexposed and unknown relations.** A public dispatcher raises
+[`M2003`](#error-code-m2003) for a relation the model defines on that type but
+the exposure does not expose, including every relation of a disabled family
+(`list_accessible_subjects` with `list_subjects: false`). A type and relation
+the model does not define keep the [unknown-pair](#unknown-typerelation)
+result: `0`, an empty set, or the sentinel. With the default exposure nothing
+raises, so the API behaves as it did before exposure existed.
+
+{{< callout type="info" >}}
+The exposure shapes the API surface; it is not an access-control boundary. The
+per-relation functions and the internal dispatchers of an installed relation
+stay callable, exposed or not. Use database privileges to restrict who may
+call them.
+{{< /callout >}}
+
 ## check_permission
 
 Checks whether a subject has a specific relation on an object.
@@ -632,14 +689,31 @@ END;
 $$;
 ```
 
+### Error Code: M2003
+
+A public dispatcher raises `M2003` when the requested relation is defined by
+the model on that type but is not exposed by the
+[SQL API exposure](#exposure) the database was migrated with, or its function
+family is disabled:
+
+```
+ERROR:  relation "viewer" on type "document" is not exposed
+```
+
+`check_permission_bulk` raises for the whole call when any row names an
+unexposed relation, as `check_permission` would for that row. The error never
+occurs under the default exposure. Fix it by adding the relation (or family)
+to the `sql:` section and migrating, or by querying an exposed relation.
+
 ### Unknown Type/Relation
 
-When an unknown object type or relation is queried, the functions return:
+When an object type or relation the model does not define is queried, the functions return:
 - `check_permission`: `0` (denied)
 - `list_accessible_objects`: Empty result set
 - `list_accessible_subjects`: Empty result set
 
-No error is raised for unknown types/relations.
+No error is raised for unknown types/relations. A relation the model defines
+but the exposure leaves out raises [`M2003`](#error-code-m2003) instead.
 
 ## Usage from Different Languages
 
@@ -834,13 +908,13 @@ let all_accessible_ids: Vec<String> = rows.iter()
 
 ## Specialized Functions
 
-In addition to the dispatcher functions, Melange generates specialized functions for each type/relation pair. These are called internally by the dispatchers but can also be called directly if you know the exact type and relation:
+In addition to the dispatcher functions, Melange generates specialized functions for each type/relation pair the [exposure](#exposure) installs. These are called internally by the dispatchers but can also be called directly if you know the exact type and relation:
 
 | Pattern | Function Name |
 |---------|---------------|
 | Check | `check_{type}_{relation}(subject_type, subject_id, object_id, visited)` |
-| List objects | `list_{type}_{relation}_objects(subject_type, subject_id, p_limit, p_after)` |
-| List subjects | `list_{type}_{relation}_subjects(object_id, subject_type, p_limit, p_after)` |
+| List objects | `list_{type}_{relation}_obj(subject_type, subject_id, p_limit, p_after)` |
+| List subjects | `list_{type}_{relation}_sub(object_id, subject_type, p_limit, p_after)` |
 
 For example, for a `document` type with a `viewer` relation:
 
@@ -850,11 +924,11 @@ SELECT check_document_viewer('user', '123', '456', ARRAY[]::TEXT[]);
 
 -- List objects using specialized function (with pagination)
 SELECT object_id, next_cursor
-FROM list_document_viewer_objects('user', '123', 100, NULL);
+FROM list_document_viewer_obj('user', '123', 100, NULL);
 
 -- List subjects using specialized function (with pagination)
 SELECT subject_id, next_cursor
-FROM list_document_viewer_subjects('456', 'user', 100, NULL);
+FROM list_document_viewer_sub('456', 'user', 100, NULL);
 ```
 
 {{< callout type="info" >}}

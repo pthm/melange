@@ -52,7 +52,9 @@ var statusCmd = &cobra.Command{
 	Short: "Show schema, tuples, and deployed-model status",
 	Long: `Show whether the schema file and melange_tuples view are present, and what
 model the database has deployed — including whether the local schema file is
-in sync with it.`,
+in sync with it. A matching schema whose local SQL API exposure (the sql
+section of the configuration and the exposure flags) differs from the
+recorded one is reported as exposure_drift.`,
 	Example: `  # Check status
   melange status --db postgres://localhost/mydb
 
@@ -62,14 +64,19 @@ in sync with it.`,
 		databaseSchema := resolveString(statusDBSchema, cfg.Database.Schema, "public")
 		schemaPath := resolveString(statusSchema, cfg.Schema)
 
+		exposure, err := resolveExposure(cmd, cfg.SQL)
+		if err != nil {
+			return err
+		}
+
 		dsn, err := resolveDSN(statusDB)
 		if err != nil {
 			return err
 		}
 
-		// No local exposure is configured yet: nil compares the schema only,
-		// matching migrate, which keeps the recorded exposure when given none.
-		return runStatus(dsn, databaseSchema, schemaPath, statusFormat, nil)
+		// The local exposure is what migrate would apply, so a difference from
+		// the recorded one is reported as exposure_drift.
+		return runStatus(dsn, databaseSchema, schemaPath, statusFormat, &exposure)
 	},
 }
 
@@ -79,6 +86,7 @@ func init() {
 	f.StringVar(&statusDBSchema, "db-schema", "", "database schema (default: config database.schema, else public)")
 	f.StringVar(&statusSchema, "schema", "", "path to schema.fga or fga.mod file")
 	f.StringVar(&statusFormat, "format", "text", "output format: text (default) or json")
+	addExposureFlags(f)
 }
 
 // statusReport is the machine-readable status, shared by text and JSON output.
@@ -450,6 +458,11 @@ func printStatusText(w io.Writer, r statusReport, s *migrator.Status, schemaPath
 			_, _ = fmt.Fprintf(w, " · %s", st.Muted.Render(d.MigratedAt))
 		}
 		_, _ = fmt.Fprintln(w)
+		if d.Exposure != nil {
+			if exposure, err := json.Marshal(d.Exposure); err == nil {
+				_, _ = fmt.Fprintf(w, "Exposure:     %s\n", exposure)
+			}
+		}
 		_, _ = fmt.Fprintf(w, "Sync:         %s\n", syncStyled(r.Sync))
 		printDriftDetail(w, r.Drift)
 		if !d.ModelRecorded {

@@ -127,19 +127,48 @@ Common causes:
 
 ### Migration "schema unchanged" when it shouldn't be
 
-Melange tracks schema changes via SHA256 checksum. If you've updated Melange itself but not the schema, the new codegen may produce different SQL.
+The skip check compares the schema checksum, the codegen version and the SQL
+API exposure, and then the checksums of the generated functions. An upgraded
+Melange that generates different SQL is therefore applied by a plain `melange
+migrate`. The check does not inspect the database, so a function changed or
+dropped by hand since the last migration is not detected.
 
-**Fix**: force re-migration:
+**Fix**: run `melange doctor` to see what differs. If the functions were changed
+outside Melange, re-apply them:
 
 ```bash
 melange migrate --force
 ```
 
+`--force` also drops functions the new SQL no longer generates with `CASCADE`,
+together with any views or policies that call them. Run `melange migrate
+--dry-run` first and check its drops; see
+[Dependent objects](../migrations/#dependent-objects).
+
+### "relation ... is not exposed" (SQLSTATE M2003)
+
+The database was migrated with a restricted SQL API exposure (the `sql:`
+section of `melange.yaml`), and the relation, or its function family, is not
+part of it.
+
+**Fix**: add the relation to `sql.relations.include` (or remove it from
+`exclude`, or turn its family back on) and run `melange migrate`. `melange
+status` shows the recorded exposure. See [SQL API: Exposure](../../reference/sql-api/#exposure).
+
+### Migration refused: functions that other database objects depend on
+
+A view, policy or function calls a generated function the migration would
+drop. The error lists each dependent.
+
+**Fix**: change or drop the dependents and migrate again, or run `melange
+migrate --force` to drop them with `CASCADE`. See
+[Dependent objects](../migrations/#dependent-objects).
+
 ### Schema out of sync after updating Melange
 
 `melange doctor` detects when the codegen version has changed since the last migration.
 
-**Fix**: run `melange migrate --force` to regenerate all SQL functions with the current Melange version.
+**Fix**: run `melange migrate`. The codegen version is part of the skip check, so the migration regenerates the SQL functions with the current Melange version without `--force`.
 
 ## Debugging Techniques
 

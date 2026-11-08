@@ -30,6 +30,14 @@ func runCLI(t *testing.T, config string, args ...string) (string, error) {
 // for commands that read the local schema before doing anything else.
 func runCLIWithFiles(t *testing.T, config string, files map[string]string, args ...string) (string, error) {
 	t.Helper()
+	seedDir(t, config, files)
+	return executeCLI(t, args...)
+}
+
+// seedDir chdirs into a scratch directory holding config as melange.yaml
+// (none when empty) and files.
+func seedDir(t *testing.T, config string, files map[string]string) {
+	t.Helper()
 
 	dir := t.TempDir()
 	if config != "" {
@@ -44,6 +52,12 @@ func runCLIWithFiles(t *testing.T, config string, files map[string]string, args 
 		writeFile(t, filepath.Join(dir, name), content)
 	}
 	t.Chdir(dir)
+}
+
+// executeCLI runs the root command in the current directory and returns
+// everything written to stdout.
+func executeCLI(t *testing.T, args ...string) (string, error) {
+	t.Helper()
 
 	// Flag values are bound to package globals, so a value set by one run would
 	// otherwise leak into the next. Reset the whole command tree, then the
@@ -64,6 +78,15 @@ func runCLIWithFiles(t *testing.T, config string, files map[string]string, args 
 	}
 	os.Stdout = w
 
+	// Read while the command runs: output larger than the pipe buffer (a
+	// generated migration) would otherwise block the write.
+	var buf bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		_, _ = buf.ReadFrom(r)
+		close(done)
+	}()
+
 	rootCmd.SetArgs(args)
 	rootCmd.SetOut(&bytes.Buffer{})
 	rootCmd.SetErr(&bytes.Buffer{})
@@ -71,15 +94,19 @@ func runCLIWithFiles(t *testing.T, config string, files map[string]string, args 
 
 	_ = w.Close()
 	os.Stdout = stdout
-	var buf bytes.Buffer
-	_, _ = buf.ReadFrom(r)
+	<-done
 	return buf.String(), runErr
 }
 
 // resetFlags restores every flag in the command tree to its declared default.
 func resetFlags(cmd *cobra.Command) {
 	reset := func(f *pflag.Flag) {
-		_ = f.Value.Set(f.DefValue)
+		// A slice flag's Set appends once it has been set, so replace it.
+		if slice, ok := f.Value.(pflag.SliceValue); ok {
+			_ = slice.Replace(nil)
+		} else {
+			_ = f.Value.Set(f.DefValue)
+		}
 		f.Changed = false
 	}
 	cmd.Flags().VisitAll(reset)

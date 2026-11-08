@@ -94,6 +94,20 @@ migrate:
 doctor:
   verbose: false
   skip_performance: false
+
+# Generated SQL API (used by migrate, generate migration, status, doctor)
+# Omit the section to generate everything. See "SQL API Settings" below.
+sql:
+  relations:
+    include: ["document#can_*", "folder#can_view"]
+    exclude: ["document#can_admin"]
+  functions:
+    list_objects: true
+    list_subjects: true
+    accessible: true
+    parent_key: true
+    expand: false
+    explain: false
 ```
 
 ## Minimal Configuration
@@ -190,7 +204,7 @@ Configure under `migrate:`:
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `dry_run` | bool | `false` | Output SQL without applying |
-| `force` | bool | `false` | Force migration even if unchanged |
+| `force` | bool | `false` | Re-apply even if unchanged, and drop removed functions with `CASCADE` together with the objects that depend on them (see [Dependent objects](../../guides/migrations/#dependent-objects)) |
 
 ### Doctor Settings
 
@@ -200,6 +214,77 @@ Configure under `doctor:`:
 |-----|------|---------|-------------|
 | `verbose` | bool | `false` | Show detailed output |
 | `skip_performance` | bool | `false` | Skip performance checks (view analysis) |
+
+### SQL API Settings
+
+The `sql:` section selects the generated SQL API: which relations the public
+functions (`check_permission`, `list_accessible_objects` and the others)
+answer for, and which function families are generated. By default every
+relation is exposed and every family is generated. Restricting the API keeps
+the installed function count down: the functions of relations that no exposed
+relation reaches, and of the families turned off, are not generated. A relation
+an exposed relation reads through keeps its functions, so that the exposed one
+resolves completely. See [Exposure](../sql-api/#exposure) for what is installed
+and how unexposed relations behave.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `relations.include` | list | `["*"]` | Patterns of the relations to expose. An empty list matches every relation |
+| `relations.exclude` | list | `[]` | Patterns of the relations not to expose. Exclude wins over include |
+| `functions.list_objects` | bool | `true` | Enable the `list_objects` family: `list_accessible_objects` |
+| `functions.list_subjects` | bool | `true` | Enable the `list_subjects` family: `list_accessible_subjects` and the `list_<type>_<relation>_sub` functions |
+| `functions.accessible` | bool | `true` | Enable the `accessible` family: `accessible_objects` |
+| `functions.parent_key` | bool | `true` | Enable the `parent_key` family: the `accessible_<type>_<relation>_by_<link>` functions |
+| `functions.expand` | bool | `true` | Enable the `expand` family: `expand_permission` and the `expand_<type>_<relation>` functions |
+| `functions.explain` | bool | `true` | Enable the `explain` family: `explain_permission` and the `explain_<type>_<relation>` functions |
+
+Check functions (`check_permission`, `check_permission_nw`,
+`check_permission_bulk`) are always generated. A key the section leaves out
+keeps its default. A key the section does not know, such as a misspelled
+`functions.expnd`, or `functions.check`, which cannot be turned off, stops
+every command when the configuration is loaded: ignoring it would keep the
+default for the key that was meant.
+
+With a family off, its public function raises `M2003` for every relation the
+model defines. `list_objects`, `accessible` and `parent_key` read each other,
+so the `list_<type>_<relation>_obj` and `accessible_<type>_<relation>`
+functions stay installed while any of the three is on: turning off
+`list_objects` or `accessible` alone removes no per-relation functions, and
+only all three off removes them.
+
+**Patterns.** A pattern is `relation`, which matches that relation on every
+type, or `type#relation`. `*` matches any run of characters and `?` one
+character, within one part: neither crosses `#`. `can_*` matches every
+relation starting with `can_`; `document#*` matches every relation of
+`document`. A pattern may not be empty, have more than one `#`, an empty
+part, or contain whitespace, `:` or `@`. An invalid pattern stops every
+command when the configuration is loaded, with an error naming the key (and
+the environment variable, when the value came from one). A valid pattern
+that matches no relation of the schema is a warning from `melange migrate`
+and `melange doctor`, not an error.
+
+**Declarative.** The section describes the API the database should have.
+`melange migrate` always applies the exposure it resolves to (config file,
+then `MELANGE_SQL_*` variables, then flags, over the defaults), and records it
+in `melange_migrations`. Removing the section, or a key of it, widens the
+database back to the default on the next migrate. The command-line flags
+(`--include-relation`, `--exclude-relation`, `--no-<family>`) apply to one run
+only and are not remembered, so keep a lasting restriction in the config file.
+`melange status` and `melange doctor` compare the local exposure with the
+recorded one and report a difference as exposure drift.
+
+{{< callout type="info" >}}
+Only the CLI is declarative. A Go program that calls `migrator.Migrate` or
+`migrator.MigrateWithOptions` without an `Exposure` keeps the exposure the
+database last recorded, so an application that migrates on startup does not
+undo a restriction applied with `melange migrate`. See
+[Programmatic Alternative](../cli/#programmatic-alternative).
+{{< /callout >}}
+
+The `sql:` section applies to every environment: the exposure describes the
+schema, not a connection. An `sql:` key inside an
+[environment profile](#environments) is rejected when the configuration is
+loaded.
 
 ## Custom Database Schema
 
@@ -343,7 +428,9 @@ diagnostic commands.
 ### Overlay semantics
 
 An environment's `database` block overlays the base one — fields it sets win,
-fields it omits fall through. To keep behaviour predictable, when an environment
+fields it omits fall through. An environment can set `database` and `schema`
+only; the [`sql:` section](#sql-api-settings) is the same for every
+environment, and an environment that sets it is rejected. To keep behaviour predictable, when an environment
 supplies a discrete connection (`host`/`name`) on top of a base that uses a
 `url`, the base URL is dropped rather than decomposed. In that case the
 environment must provide a complete connection (including `user`); melange does
@@ -415,6 +502,14 @@ All configuration options can be set via environment variables with the `MELANGE
 | `MELANGE_MIGRATE_FORCE` | `migrate.force` |
 | `MELANGE_DOCTOR_VERBOSE` | `doctor.verbose` |
 | `MELANGE_DOCTOR_SKIP_PERFORMANCE` | `doctor.skip_performance` |
+| `MELANGE_SQL_RELATIONS_INCLUDE` | `sql.relations.include` |
+| `MELANGE_SQL_RELATIONS_EXCLUDE` | `sql.relations.exclude` |
+| `MELANGE_SQL_FUNCTIONS_LIST_OBJECTS` | `sql.functions.list_objects` |
+| `MELANGE_SQL_FUNCTIONS_LIST_SUBJECTS` | `sql.functions.list_subjects` |
+| `MELANGE_SQL_FUNCTIONS_ACCESSIBLE` | `sql.functions.accessible` |
+| `MELANGE_SQL_FUNCTIONS_PARENT_KEY` | `sql.functions.parent_key` |
+| `MELANGE_SQL_FUNCTIONS_EXPAND` | `sql.functions.expand` |
+| `MELANGE_SQL_FUNCTIONS_EXPLAIN` | `sql.functions.explain` |
 | `MELANGE_ENV` | selects an [environment profile](#environments) (like `--env`) |
 | `CI` | _(special)_ |
 
@@ -428,6 +523,17 @@ melange migrate
 ```
 
 **Boolean values:** Use `true`/`false` or `1`/`0` for boolean environment variables.
+
+**List values:** Separate the entries of a list variable with commas; spaces
+around the commas are ignored. A variable replaces the whole list from the
+config file:
+
+```bash
+export MELANGE_SQL_RELATIONS_INCLUDE="document#can_*, folder#can_view"
+```
+
+An empty variable is ignored, so the config file value (or the default)
+applies.
 
 ## Configuration Inheritance
 

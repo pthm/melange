@@ -48,8 +48,12 @@ The second argument to `current_setting` (`missing_ok = true`) makes it return `
 A policy that calls `check_permission` cannot be created until the function exists. Run `melange migrate` first, then create your policies. Later migrations replace function bodies in place, so existing policies keep working when the model changes.
 
 {{< callout type="warning" >}}
-**Call the dispatchers, not the specialized functions.** Reference `check_permission` and `list_accessible_objects` in policies, not generated functions such as `check_document_viewer`. Migrations drop functions that the model no longer needs with `CASCADE`, which silently drops any policy that depends on them.
+**Call the dispatchers, not the specialized functions.** Reference `check_permission` and `list_accessible_objects` in policies, not generated functions such as `check_document_viewer`. Migrations drop functions that the model or the [SQL API exposure](../../reference/sql-api/#exposure) no longer needs. `melange migrate` refuses a drop that a policy depends on and lists the policy; `melange migrate --force` drops the function with `CASCADE`, which drops the policy too and widens access to its table. A migration written by `melange generate migration` drops without `CASCADE`, so applying it fails on such a drop; its DOWN migration drops with `CASCADE`. See [Dependent objects](../migrations/#dependent-objects).
 {{< /callout >}}
+
+With a restricted exposure, the relations a policy checks must be exposed: a
+public dispatcher raises `M2003` for a relation the model defines but the
+exposure leaves out, which fails the query the policy applies to.
 
 ### Use a role that does not bypass RLS
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -510,6 +511,41 @@ var (
 	dropStatements = regexp.MustCompile(`(?m)^DROP FUNCTION IF EXISTS .*;$`)
 )
 
+// A static UP drops removed functions without CASCADE, so a view that calls
+// one makes the migration fail instead of silently losing the view.
+func TestMigrateExposure_StaticMigrationRefusesDependents(t *testing.T) {
+	db, path := exposureDB(t)
+	ctx := context.Background()
+	_, err := migrateExposure(t, db, path, nil, false)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `CREATE VIEW alice_viewer AS SELECT check_document_viewer('user', 'alice', '1') AS allowed`)
+	require.NoError(t, err)
+
+	types, err := parser.ParseSchemaString(exposureSchema)
+	require.NoError(t, err)
+	closureRows := schema.ComputeRelationClosure(types)
+	analyses := compiler.ComputeCanGenerate(compiler.AnalyzeRelations(types, closureRows))
+	inline := compiler.BuildInlineSQLData(closureRows, analyses)
+	opts := compiler.GenerateSQLOptions{Exposure: *editorOnly()}
+	gen, err := compiler.GenerateSQLWithOptions(analyses, inline, "", opts)
+	require.NoError(t, err)
+	list, err := compiler.GenerateListSQLWithOptions(analyses, inline, "", opts)
+	require.NoError(t, err)
+	result := compiler.GenerateMigrationSQL(gen, list, compiler.CollectFunctionNamesWithOptions(analyses, opts), compiler.MigrationOptions{
+		Exposure:              *editorOnly(),
+		PreviousFunctionNames: lastRecord(t, db).FunctionNames,
+		PreviousExposure:      &compiler.Exposure{},
+	})
+	require.Contains(t, result.Up, "DROP FUNCTION IF EXISTS check_document_viewer;")
+
+	_, err = db.ExecContext(ctx, result.Up)
+	var pgErr *pgconn.PgError
+	require.ErrorAs(t, err, &pgErr)
+	assert.Equal(t, "2BP01", pgErr.Code)
+	assert.True(t, dependentExists(t, db, "view"), "the dependent survives")
+	assertFunctions(t, ctx, db, deExposed)
+}
+
 // `generate migration` output under a restricted exposure applies cleanly
 // and installs exactly what migrate installs.
 func TestMigrateExposure_StaticMigrationMatchesMigrate(t *testing.T) {
@@ -607,9 +643,9 @@ func TestMigrateExposure_Doctor(t *testing.T) {
 	assert.Nil(t, findCheck(fns, "orphans"))
 }
 
-// `melange status` reports the recorded exposure and, given no local one,
-// stays in sync after an exposure-only change, as migrate keeps the recorded
-// exposure when given none.
+// `melange status` reports the recorded exposure and compares the local one
+// (here from flags, with no melange.yaml) against it: an exposure-only
+// difference is exposure_drift, since migrate would apply the local one.
 func TestMigrateExposure_Status(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -617,26 +653,19 @@ func TestMigrateExposure_Status(t *testing.T) {
 	db, dsn := newTuplesDBWithDSN(t)
 	path := writeSchema(t, exposureSchema)
 	cli := buildMelangeCLI(t)
-	status := func() (report struct {
-		Sync     string `json:"sync"`
-		Deployed *struct {
-			Exposure *migrator.Exposure `json:"exposure"`
-		} `json:"deployed"`
-	}) {
+	status := func(flags ...string) statusJSON {
 		t.Helper()
-		out := cli.run(t, "status", "--db", dsn, "--schema", path, "--format", "json")
-		require.NoError(t, json.Unmarshal([]byte(out), &report), out)
-		require.NotNil(t, report.Deployed, out)
-		return report
+		return cli.status(t, t.TempDir(), append([]string{"--db", dsn, "--schema", path}, flags...)...)
 	}
 
 	_, err := migrateExposure(t, db, path, editorOnly(), false)
 	require.NoError(t, err)
-	report := status()
+	report := status("--include-relation", "document#editor")
 	assert.Equal(t, "in_sync", report.Sync)
 	if assert.NotNil(t, report.Deployed.Exposure, "a restricted exposure is reported") {
 		assert.True(t, migrator.SameExposure(*editorOnly(), *report.Deployed.Exposure))
 	}
+	assert.Equal(t, "exposure_drift", status().Sync, "the default local exposure differs from the recorded one")
 
 	_, err = migrateExposure(t, db, path, &migrator.Exposure{}, false)
 	require.NoError(t, err)
@@ -645,9 +674,10 @@ func TestMigrateExposure_Status(t *testing.T) {
 	assert.Nil(t, report.Deployed.Exposure, "the default exposure is omitted")
 }
 
-// `melange generate migration --db` generates under the exposure the database
-// records and compares against it, so its UP keeps a restricted database
-// restricted instead of widening it or emitting every function.
+// `melange generate migration --db` compares against the exposure the
+// database records and generates under the local one: the same exposure
+// changes nothing, and the default (no melange.yaml, no flags) widens the
+// database back, as `melange migrate` would.
 func TestMigrateExposure_GenerateMigrationFromDB(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -664,17 +694,32 @@ func TestMigrateExposure_GenerateMigrationFromDB(t *testing.T) {
 	require.NoError(t, m.MigrateWithTypesAndOptions(ctx, types, migrator.InternalMigrateOptions{
 		SchemaContent: exposureSchema, Exposure: editorOnly(),
 	}))
+	cli := buildMelangeCLI(t)
+	generate := func(flags ...string) string {
+		return cli.run(t, append([]string{"generate", "migration", "--db", dsn, "--schema", path, "--up"}, flags...)...)
+	}
 
-	up := buildMelangeCLI(t).run(t, "generate", "migration", "--db", dsn, "--schema", path, "--up")
+	up := generate("--include-relation", "document#editor")
 	assert.Contains(t, up, `-- Exposure: {"relations":{"include":["document#editor"]}`)
 	assert.Contains(t, up, "-- Changed functions: 0 of ", "the recorded exposure is the previous one")
 	assert.NotContains(t, up, "Previous exposure unknown")
-	assert.NotContains(t, up, "FUNCTION check_document_viewer(", "viewer stays outside the closure")
+	assert.NotContains(t, up, `FUNCTION "public"."check_document_viewer"(`, "viewer stays outside the closure")
 
 	_, err = db.ExecContext(ctx, up)
 	require.NoError(t, err)
 	assertFunctionsDropped(t, ctx, db, deExposed)
 	requireNotExposed(t, db, "viewer", "editor")
+
+	up = generate()
+	assert.NotContains(t, up, "-- Exposure:")
+	assert.Contains(t, up, "-- Changed functions: ", "the recorded exposure is the previous one")
+	assert.Contains(t, up, `FUNCTION "public"."check_document_viewer"(`, "widening creates the functions left out")
+	assert.NotContains(t, up, `FUNCTION "public"."check_document_editor"(`, "functions both install are unchanged")
+	_, err = db.ExecContext(ctx, up)
+	require.NoError(t, err)
+	var allowed int
+	require.NoError(t, db.QueryRowContext(ctx,
+		`SELECT check_permission('user', 'alice', 'viewer', 'document', '1')`).Scan(&allowed))
 }
 
 // melangeCLI is the melange binary built from the root module.
@@ -695,13 +740,190 @@ func buildMelangeCLI(t *testing.T) melangeCLI {
 // stdout, failing the test on a non-zero exit.
 func (c melangeCLI) run(t *testing.T, args ...string) string {
 	t.Helper()
+	return c.runIn(t, t.TempDir(), args...)
+}
+
+// runIn is run in dir, which may hold a melange.yaml.
+func (c melangeCLI) runIn(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	out, stderr, err := c.exec(dir, args...)
+	require.NoError(t, err, "melange %v: %s", args, stderr)
+	return out
+}
+
+// exec runs the CLI in dir and returns its stdout, stderr and exit error.
+func (c melangeCLI) exec(dir string, args ...string) (stdout, stderr string, err error) {
 	cmd := exec.Command(string(c), append(args, "--no-update-check")...)
-	cmd.Dir = t.TempDir()
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
+	cmd.Dir = dir
+	var errBuf bytes.Buffer
+	cmd.Stderr = &errBuf
 	out, err := cmd.Output()
-	require.NoError(t, err, "melange %v: %s", args, stderr.String())
-	return string(out)
+	return string(out), errBuf.String(), err
+}
+
+// statusJSON is the part of `melange status --format json` the tests read.
+type statusJSON struct {
+	Sync     string `json:"sync"`
+	Deployed *struct {
+		Exposure *migrator.Exposure `json:"exposure"`
+	} `json:"deployed"`
+}
+
+// status runs `melange status --format json` in dir.
+func (c melangeCLI) status(t *testing.T, dir string, args ...string) statusJSON {
+	t.Helper()
+	out := c.runIn(t, dir, append([]string{"status", "--format", "json"}, args...)...)
+	var report statusJSON
+	require.NoError(t, json.Unmarshal([]byte(out), &report), out)
+	require.NotNil(t, report.Deployed, out)
+	return report
+}
+
+// doctorCheckJSON is a check of `melange doctor --format json`.
+type doctorCheckJSON struct {
+	Name    string `json:"name"`
+	Status  string `json:"status"` // pass, warn or fail
+	Details string `json:"details"`
+}
+
+// doctorCheck runs `melange doctor --format json` in dir and returns the
+// named check, nil when doctor did not report it. Doctor exits non-zero on
+// any failed check, which is not what these tests look at.
+func (c melangeCLI) doctorCheck(t *testing.T, dir, name string, args ...string) *doctorCheckJSON {
+	t.Helper()
+	out, stderr, _ := c.exec(dir, append([]string{"doctor", "--format", "json", "--skip-performance"}, args...)...)
+	var report struct {
+		Checks []doctorCheckJSON `json:"checks"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &report), "%s\n%s", out, stderr)
+	for i := range report.Checks {
+		if report.Checks[i].Name == name {
+			return &report.Checks[i]
+		}
+	}
+	return nil
+}
+
+// The sql section of melange.yaml drives migrate, status and doctor through
+// its whole life: a restricted section is applied and recorded, an edit to
+// the section alone is reported as drift until migrate applies it, and
+// removing the section widens the database back to the default.
+func TestCLI_ExposureFromConfigLifecycle(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db, dsn := newTuplesDBWithDSN(t)
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "schema.fga"), []byte(exposureSchema), 0o644))
+	writeConfig := func(sqlSection string) {
+		t.Helper()
+		content := "schema: schema.fga\ndatabase:\n  url: " + dsn + "\n" + sqlSection
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "melange.yaml"), []byte(content), 0o644))
+	}
+	cli := buildMelangeCLI(t)
+	migrate := func() { t.Helper(); cli.runIn(t, dir, "migrate") }
+	syncState := func() string { t.Helper(); return cli.status(t, dir).Sync }
+	exposureSync := func() string {
+		t.Helper()
+		c := cli.doctorCheck(t, dir, "exposure_sync")
+		require.NotNil(t, c, "doctor compares the local exposure")
+		return c.Status
+	}
+
+	// A restricted section is applied and recorded; status and doctor agree.
+	writeConfig("sql:\n  relations:\n    include: [document#editor]\n")
+	migrate()
+	assert.True(t, migrator.SameExposure(*editorOnly(), lastRecord(t, db).Exposure))
+	requireNotExposed(t, db, "viewer", "editor")
+	assert.Equal(t, "in_sync", syncState())
+	assert.Equal(t, "pass", exposureSync())
+	if c := cli.doctorCheck(t, dir, "missing"); c != nil {
+		assert.NotEqual(t, "fail", c.Status, "no false missing functions: %s", c.Details)
+	}
+
+	// Changing only the section is drift until migrate applies it.
+	viewerAndEditor := "sql:\n  relations:\n    include: [document#editor, document#viewer]\n  functions:\n    expand: false\n"
+	writeConfig(viewerAndEditor)
+	assert.Equal(t, "exposure_drift", syncState())
+	assert.Equal(t, "warn", exposureSync())
+	migrate()
+	want := migrator.Exposure{
+		Relations: compiler.RelationPatterns{Include: []string{"document#editor", "document#viewer"}},
+		Functions: compiler.FunctionFamilies{Expand: new(bool)},
+	}
+	assert.True(t, migrator.SameExposure(want, lastRecord(t, db).Exposure), "%+v", lastRecord(t, db).Exposure)
+	requireNotExposed(t, db, "auditor", "viewer")
+	assert.Equal(t, "in_sync", syncState())
+	assert.Equal(t, "pass", exposureSync())
+
+	// A pattern that matches nothing is a doctor warning, not an error.
+	writeConfig("sql:\n  relations:\n    include: [document#editor, document#vewer]\n")
+	if c := cli.doctorCheck(t, dir, "exposure_patterns"); assert.NotNil(t, c) {
+		assert.Equal(t, "warn", c.Status)
+		assert.Contains(t, c.Details, "document#vewer")
+	}
+
+	// Flags apply to one run only: they do not persist.
+	writeConfig(viewerAndEditor)
+	cli.runIn(t, dir, "migrate", "--include-relation", "document#owner")
+	assert.Equal(t, "exposure_drift", syncState(), "the file still asks for viewer and editor")
+	assert.Equal(t, "in_sync", cli.status(t, dir, "--include-relation", "document#owner").Sync)
+
+	// Removing the section widens the database back to the default.
+	writeConfig("")
+	assert.Equal(t, "exposure_drift", syncState())
+	migrate()
+	assert.True(t, lastRecord(t, db).Exposure.IsDefault(), "%+v", lastRecord(t, db).Exposure)
+	assert.Equal(t, "in_sync", syncState())
+	assert.Equal(t, "pass", exposureSync())
+	var allowed int
+	require.NoError(t, db.QueryRowContext(context.Background(),
+		`SELECT check_permission('user', 'alice', 'auditor', 'document', '1')`).Scan(&allowed))
+	for name := range deExposed {
+		assert.True(t, functionExists(t, context.Background(), db, name), "%s is installed again", name)
+	}
+}
+
+// An invalid pattern in melange.yaml stops migrate before it connects, and
+// a dependent object on a function the new exposure drops makes migrate
+// refuse, naming the dependent and --force.
+func TestCLI_ExposureRefusals(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db, dsn := newTuplesDBWithDSN(t)
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "schema.fga"), []byte(exposureSchema), 0o644))
+	cli := buildMelangeCLI(t)
+	cfg := func(sqlSection string) {
+		t.Helper()
+		content := "schema: schema.fga\ndatabase:\n  url: " + dsn + "\n" + sqlSection
+		require.NoError(t, os.WriteFile(filepath.Join(dir, "melange.yaml"), []byte(content), 0o644))
+	}
+
+	cfg("sql:\n  relations:\n    exclude: [\"a#b#c\"]\n")
+	_, stderr, err := cli.exec(dir, "migrate")
+	require.Error(t, err)
+	assert.Contains(t, stderr, "sql.relations.exclude")
+	assert.Empty(t, getFunctionNames(t, context.Background(), db), "nothing is applied")
+
+	cfg("")
+	cli.runIn(t, dir, "migrate")
+	_, err = db.ExecContext(context.Background(), `CREATE TABLE docs (id TEXT PRIMARY KEY);
+		ALTER TABLE docs ENABLE ROW LEVEL SECURITY;
+		CREATE POLICY docs_read ON docs USING (id IN (SELECT object_id FROM accessible_document_viewer('user', current_user)))`)
+	require.NoError(t, err)
+
+	cfg("sql:\n  relations:\n    include: [document#editor]\n")
+	_, stderr, err = cli.exec(dir, "migrate")
+	require.Error(t, err)
+	assert.Contains(t, stderr, "--force")
+	assert.Contains(t, stderr, "policy docs_read on table docs")
+	assert.True(t, lastRecord(t, db).Exposure.IsDefault(), "the refused exposure is not recorded")
+
+	cli.runIn(t, dir, "migrate", "--force")
+	assert.True(t, migrator.SameExposure(*editorOnly(), lastRecord(t, db).Exposure))
+	assert.False(t, dependentExists(t, db, "rls policy"), "--force drops the dependent with CASCADE")
 }
 
 // An exposure-only change that generates byte-identical SQL (here, excluding
