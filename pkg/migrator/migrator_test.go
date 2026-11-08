@@ -7,10 +7,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/pthm/melange/internal/version"
+	"github.com/pthm/melange/pkg/parser"
 )
 
 // withVersion temporarily overrides the build version so tests can exercise
@@ -596,6 +598,108 @@ func TestSameCodegenVersion(t *testing.T) {
 	} {
 		if got := SameCodegenVersion(tc.a, tc.b); got != tc.want {
 			t.Errorf("SameCodegenVersion(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
+// planAction is the decision migrateOnce and Plan share; each case names the
+// phase that decides it.
+func TestPlanAction(t *testing.T) {
+	types, err := parser.ParseSchemaString("model\n  schema 1.1\ntype user\ntype doc\n  relations\n    define owner: [user]\n    define viewer: [user] or owner\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := NewMigrator(nil, "").compile(types, Exposure{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checksum := ComputeSchemaChecksum("schema")
+	// matching is the record a migration of this schema and SQL writes.
+	matching := func() *MigrationRecord {
+		checksums := make(map[string]string, len(c.checksums))
+		for name, sum := range c.checksums {
+			checksums[name] = sum
+		}
+		return &MigrationRecord{
+			SchemaChecksum:    checksum,
+			CodegenVersion:    CodegenVersion(),
+			FunctionNames:     slices.Clone(c.names),
+			FunctionChecksums: checksums,
+			SchemaDSL:         "model",
+		}
+	}
+	for _, tc := range []struct {
+		name     string
+		version  string
+		rec      func() *MigrationRecord
+		checksum string
+		key      string
+		want     PlanAction
+	}{
+		{"no record", "v0.10.0", func() *MigrationRecord { return nil }, checksum, "{}", PlanApply},
+		{"matching record (phase 1)", "v0.10.0", matching, checksum, "{}", PlanSkip},
+		{"matching record on a dev build (phase 2)", "dev", matching, checksum, "{}", PlanSkip},
+		{"schema changed, same SQL", "v0.10.0", func() *MigrationRecord {
+			r := matching()
+			r.SchemaChecksum = "other"
+			return r
+		}, checksum, "{}", PlanRecordOnly},
+		{"older codegen, same SQL", "v0.10.0", func() *MigrationRecord {
+			r := matching()
+			r.CodegenVersion = "v0.9.0"
+			return r
+		}, checksum, "{}", PlanRecordOnly},
+		{"model not recorded, same SQL", "v0.10.0", func() *MigrationRecord {
+			r := matching()
+			r.SchemaDSL = ""
+			return r
+		}, checksum, "{}", PlanRecordOnly},
+		{"exposure changed, same SQL", "v0.10.0", matching, checksum, `{"relations":{"include":["doc#owner"]}}`, PlanRecordOnly},
+		{"one function changed", "v0.10.0", func() *MigrationRecord {
+			r := matching()
+			r.SchemaChecksum = "other"
+			r.FunctionChecksums["check_doc_viewer"] = "edited"
+			return r
+		}, checksum, "{}", PlanApply},
+		{"recorded function no longer generated", "v0.10.0", func() *MigrationRecord {
+			r := matching()
+			r.SchemaChecksum = "other"
+			r.FunctionNames = append(r.FunctionNames, "check_doc_removed")
+			return r
+		}, checksum, "{}", PlanApply},
+		{"record without function checksums", "v0.10.0", func() *MigrationRecord {
+			r := matching()
+			r.SchemaChecksum = "other"
+			r.FunctionChecksums = nil
+			return r
+		}, checksum, "{}", PlanApply},
+		{"no schema content", "v0.10.0", matching, "", "{}", PlanApply},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withVersion(t, tc.version)
+			if got := planAction(tc.rec(), tc.checksum, tc.key, c); got != tc.want {
+				t.Errorf("planAction = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// A database a newer melange migrated is refused before anything else, even
+// when the SQL matches; a version that cannot be ordered is not ahead.
+func TestPlanActionRefusesAhead(t *testing.T) {
+	withVersion(t, "v0.10.0")
+	for _, tc := range []struct {
+		recorded string
+		want     PlanAction
+	}{
+		{"v0.11.0", PlanRefusedAhead},
+		{"0.11.0", PlanRefusedAhead},
+		{"v0.10.0-3-gabc1234", PlanApply},
+		{"dev", PlanApply},
+	} {
+		rec := &MigrationRecord{CodegenVersion: tc.recorded}
+		if got := planAction(rec, "checksum", "{}", compiled{}); got != tc.want {
+			t.Errorf("recorded %q: planAction = %s, want %s", tc.recorded, got, tc.want)
 		}
 	}
 }

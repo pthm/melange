@@ -27,6 +27,10 @@ func MigrateFromString(ctx context.Context, db Execer, content string) error
 
 // MigrateWithOptions provides control over dry-run and skip behavior.
 func MigrateWithOptions(ctx context.Context, db Execer, schemaPath string, opts MigrateOptions) (skipped bool, err error)
+
+// PlanWithOptions predicts what MigrateWithOptions would do with opts,
+// unforced, without changing the database.
+func PlanWithOptions(ctx context.Context, db Execer, schemaPath string, opts MigrateOptions) (*MigrationPlan, error)
 ```
 
 ### Migrator Type
@@ -45,6 +49,10 @@ func (m *Migrator) MigrateWithTypes(ctx context.Context, types []TypeDefinition)
 // without it, it records nothing and refuses an exposure change like
 // MigrateWithTypes.
 func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeDefinition, opts InternalMigrateOptions) error
+
+// Plan predicts what MigrateWithTypesAndOptions would do with opts, unforced.
+// It reads the database and takes no lock; Force and DryRun are ignored.
+func (m *Migrator) Plan(ctx context.Context, types []TypeDefinition, opts InternalMigrateOptions) (*MigrationPlan, error)
 
 // GetStatus returns the current migration status.
 func (m *Migrator) GetStatus(ctx context.Context) (*Status, error)
@@ -79,7 +87,22 @@ type MigrationRecord struct {
     CodegenVersion string
     FunctionNames  []string
 }
+
+// MigrationPlan is what an unforced migration would do (Plan).
+type MigrationPlan struct {
+    Action   PlanAction         // PlanApply, PlanRecordOnly, PlanSkip or PlanRefusedAhead
+    Record   *MigrationRecord   // last migration; nil when none is recorded
+    Exposure Exposure           // the exposure the migration generates with
+    Orphans  []OrphanedFunction // what an applying (or forced) run drops, with dependents
+}
 ```
+
+`PlanRecordOnly` means the generated SQL is the SQL the last migration
+recorded: the migration records the new state and applies nothing, so a
+function dropped or edited by hand stays that way. `PlanSkip` does nothing
+at all. Both are fixed by `Force: true`, which also drops `Orphans` with
+`CASCADE`, dependents included. `PlanRefusedAhead` means a newer melange
+migrated the database and migrate returns `*DatabaseAheadError`.
 
 ## Usage Examples
 
@@ -157,6 +180,23 @@ if err != nil {
 // skipped is always false when Force=true
 ```
 
+### Predict a Migration
+
+```go
+// Readiness check: the last migration recorded exactly what this schema,
+// exposure and codegen version generate. Plan reads the migration record,
+// not the installed functions, so PlanSkip does not detect a function
+// dropped or edited by hand; `melange doctor` and `melange functions` check
+// those.
+plan, err := migrator.PlanWithOptions(ctx, db, "schemas/schema.fga", migrator.MigrateOptions{})
+if err != nil {
+    log.Fatal(err)
+}
+if plan.Action != migrator.PlanSkip {
+    log.Printf("migration pending: %s", plan.Action)
+}
+```
+
 ### Check Migration Status
 
 ```go
@@ -232,12 +272,18 @@ When you run migration, the following steps occur:
 
 ## Skip-If-Unchanged Optimization
 
-Migrations are skipped when both conditions are met:
+Migrations are skipped when all of these match the last migration:
 
-- Schema content hash matches last migration
-- Codegen version matches last migration
+- Schema content hash
+- Codegen version
+- SQL API exposure
 
-This avoids redundant function regeneration on every restart. Use `Force: true` to bypass.
+When one differs, the SQL is generated and compared with the function
+checksums the last migration recorded; identical SQL is recorded without
+being applied. Neither phase looks at the installed functions, so one
+dropped or edited by hand is restored only by `Force: true`. This avoids
+redundant function regeneration on every restart. `Plan` predicts the
+outcome without migrating.
 
 ## Transaction Support
 

@@ -1134,6 +1134,126 @@ func shouldSkipApply(lastMigration *MigrationRecord, currentChecksums map[string
 	return true
 }
 
+// PlanAction is what an unforced migration would do; see Migrator.Plan.
+type PlanAction string
+
+const (
+	// PlanApply applies every generated function, drops the orphans and
+	// records the migration (when it has the schema text to record).
+	PlanApply PlanAction = "apply"
+	// PlanRecordOnly records the migration and applies nothing: the
+	// generated SQL is the SQL the last migration recorded (phase 2).
+	PlanRecordOnly PlanAction = "record_only"
+	// PlanSkip does nothing: the schema, codegen version and exposure match
+	// the last migration (phase 1), or the generated SQL and the record both
+	// do (phase 2).
+	PlanSkip PlanAction = "skip"
+	// PlanRefusedAhead applies nothing and returns *DatabaseAheadError: a
+	// newer melange migrated the database.
+	PlanRefusedAhead PlanAction = "refused_ahead"
+)
+
+// OrphanedFunction is an installed function an applying migration drops,
+// with the objects that depend on it (as FunctionDependent.Object names
+// them). An unforced migration refuses to drop one with dependents
+// (*DependentObjectsError); a forced one drops them with CASCADE.
+type OrphanedFunction struct {
+	Name       string
+	Dependents []string
+}
+
+// MigrationPlan predicts an unforced migration; see Migrator.Plan.
+type MigrationPlan struct {
+	Action PlanAction
+
+	// Record is the last migration, nil when none is recorded.
+	Record *MigrationRecord
+
+	// Exposure is the exposure the migration generates with: the requested
+	// one, else the recorded one, else the default. Unset for
+	// PlanRefusedAhead.
+	Exposure Exposure
+
+	// Orphans are what an applying migration drops: installed functions that
+	// any migration recorded and this one does not generate. Filled for every
+	// action but PlanRefusedAhead, since a forced migration applies, and drops
+	// them, whatever the action.
+	Orphans []OrphanedFunction
+}
+
+// planAction decides what an unforced migration does once the downgrade
+// guard has passed or not: refuse a database a newer melange migrated, skip
+// (phase 1, or phase 2 with a matching record), record only (phase 2), or
+// apply. key is exposureJSON of the exposure c was generated with. Without
+// a schema checksum the migration records nothing and always applies.
+// migrateOnce and Plan both decide through it.
+func planAction(rec *MigrationRecord, checksum, key string, c compiled) PlanAction {
+	switch {
+	case downgradeGuardError(rec) != nil:
+		return PlanRefusedAhead
+	case checksum == "":
+		return PlanApply
+	case shouldSkipMigration(rec, checksum, key):
+		return PlanSkip
+	case !shouldSkipApply(rec, c.checksums, c.names):
+		return PlanApply
+	case migrationRecordMatches(rec, checksum, key):
+		return PlanSkip
+	default:
+		return PlanRecordOnly
+	}
+}
+
+// Plan predicts what MigrateWithTypesAndOptions would do with opts unforced,
+// without changing the database or taking the migration lock: the action,
+// and the orphans an applying (or forced) run drops, with their dependents.
+// opts.Force and opts.DryRun are ignored, and opts.IfDeployedChecksum is not
+// evaluated. It returns the error the migration would fail with before
+// applying anything (a cycle, an invalid exposure, or
+// *UnrecordedExposureChangeError without opts.SchemaContent), except that a
+// database a newer melange migrated is PlanRefusedAhead.
+//
+// A migration that commits between Plan and the run can change the outcome.
+// A readiness check can wait for PlanSkip: the database then has exactly what
+// this schema, exposure and codegen version generate, as recorded.
+func (m *Migrator) Plan(ctx context.Context, types []TypeDefinition, opts InternalMigrateOptions) (*MigrationPlan, error) {
+	if err := DetectCycles(types); err != nil {
+		return nil, err
+	}
+	rec, err := m.getLastMigration(ctx, m.db)
+	if err != nil {
+		return nil, fmt.Errorf("checking last migration: %w", err)
+	}
+	plan := &MigrationPlan{Record: rec}
+	if downgradeGuardError(rec) != nil {
+		plan.Action = PlanRefusedAhead
+		return plan, nil
+	}
+	requested := m.requestedExposure(opts.Exposure)
+	if plan.Exposure, err = effectiveExposure(requested, rec); err != nil {
+		return nil, err
+	}
+	var checksum string
+	if opts.SchemaContent != "" {
+		checksum = ComputeSchemaChecksum(opts.SchemaContent)
+	} else if err := unrecordedExposureGuard(requested, rec); err != nil {
+		return nil, err
+	}
+	c, err := m.compile(types, plan.Exposure)
+	if err != nil {
+		return nil, err
+	}
+	drops, err := m.dryRunDrops(ctx, c.names, false)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range drops {
+		plan.Orphans = append(plan.Orphans, OrphanedFunction{Name: d.Function, Dependents: d.Dependents})
+	}
+	plan.Action = planAction(rec, checksum, exposureJSON(plan.Exposure), c)
+	return plan, nil
+}
+
 // GeneratedFunctionFilter matches pg_proc rows (aliased p) named like a
 // per-relation function melange generates: check_, list_, expand_, explain_,
 // accessible_ or accessiblesk_.
@@ -1660,18 +1780,22 @@ func (m *Migrator) migrateOnce(ctx context.Context, types []TypeDefinition, opts
 	// 6. Phase 2 skip: generated SQL is identical to what's already applied.
 	// The schema, melange version or exposure changed (phase 1 didn't skip),
 	// but the generated functions are byte-for-byte identical. Record the new
-	// state but skip re-applying the functions.
-	if !opts.Force && schemaChecksum != "" && shouldSkipApply(lastMigration, c.checksums, c.names) {
-		// Nothing changed at all (dev-build re-run that bypassed phase 1):
-		// pure no-op, don't insert a migration record per run.
-		if migrationRecordMatches(lastMigration, schemaChecksum, exposureKey) {
+	// state but skip re-applying the functions. Plan predicts this same
+	// decision. Unforced, the downgrade guard above already refused a
+	// database that is ahead.
+	if !opts.Force {
+		switch planAction(lastMigration, schemaChecksum, exposureKey, c) {
+		case PlanSkip:
+			// Nothing changed at all (dev-build re-run that bypassed phase
+			// 1): pure no-op, don't insert a migration record per run.
 			return true, nil
+		case PlanRecordOnly:
+			skipped, err := m.recordMigrationOnly(ctx, write, opts.IfDeployedChecksum, requested)
+			if !errors.Is(err, errDeployedFunctionsChanged) {
+				return skipped, err
+			}
+			// Fall through: apply in full against what is deployed now.
 		}
-		skipped, err := m.recordMigrationOnly(ctx, write, opts.IfDeployedChecksum, requested)
-		if !errors.Is(err, errDeployedFunctionsChanged) {
-			return skipped, err
-		}
-		// Fall through: apply in full against what is deployed now.
 	}
 
 	// 7. Apply everything atomically

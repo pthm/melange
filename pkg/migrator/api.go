@@ -127,24 +127,57 @@ func MigrateWithOptions(ctx context.Context, db Execer, schemaPath string, opts 
 	m := NewMigrator(db, schemaPath)
 	m.SetDatabaseSchema(opts.DatabaseSchema)
 
+	types, internalOpts, err := m.schemaFileOptions(opts)
+	if err != nil {
+		return false, err
+	}
+
+	// Skip detection (both phases) happens inside migrateWithTypesAndOptions;
+	// its skipped result covers the phase 1 fast path and the phase 2 no-op
+	// that dev builds rely on (see shouldSkipMigration).
+	return m.migrateWithTypesAndOptions(ctx, types, internalOpts)
+}
+
+// PlanWithOptions predicts what MigrateWithOptions would do with opts
+// unforced, without changing the database; see Migrator.Plan. It reads and
+// parses the schema file the same way. opts.Force and opts.DryRun are
+// ignored, and opts.IfDeployedChecksum is not evaluated.
+//
+// Example: a readiness check that waits for the database to be migrated
+//
+//	plan, err := migrator.PlanWithOptions(ctx, db, "schemas/schema.fga", migrator.MigrateOptions{})
+//	ready := err == nil && plan.Action == migrator.PlanSkip
+func PlanWithOptions(ctx context.Context, db Execer, schemaPath string, opts MigrateOptions) (*MigrationPlan, error) {
+	m := NewMigrator(db, schemaPath)
+	m.SetDatabaseSchema(opts.DatabaseSchema)
+	types, internalOpts, err := m.schemaFileOptions(opts)
+	if err != nil {
+		return nil, err
+	}
+	return m.Plan(ctx, types, internalOpts)
+}
+
+// schemaFileOptions reads and parses m's schema file, and converts opts to
+// the internal options with the schema text, for MigrateWithOptions and
+// PlanWithOptions.
+func (m *Migrator) schemaFileOptions(opts MigrateOptions) ([]TypeDefinition, InternalMigrateOptions, error) {
 	if !m.HasSchema() {
-		return false, fmt.Errorf("no schema found at %s", m.SchemaPath())
+		return nil, InternalMigrateOptions{}, fmt.Errorf("no schema found at %s", m.SchemaPath())
 	}
 
 	// Read schema content for checksum. For fga.mod manifests, this includes
 	// the manifest itself plus all referenced module files.
 	schemaContent, err := parser.ReadSchemaContent(m.SchemaPath())
 	if err != nil {
-		return false, fmt.Errorf("reading schema: %w", err)
+		return nil, InternalMigrateOptions{}, fmt.Errorf("reading schema: %w", err)
 	}
 
 	types, err := parser.ParseSchema(m.SchemaPath())
 	if err != nil {
-		return false, fmt.Errorf("parsing schema: %w", err)
+		return nil, InternalMigrateOptions{}, fmt.Errorf("parsing schema: %w", err)
 	}
 
-	// Convert to internal MigrateOptions
-	internalOpts := InternalMigrateOptions{
+	return types, InternalMigrateOptions{
 		DryRun:             opts.DryRun,
 		Force:              opts.Force,
 		Version:            opts.Version,
@@ -152,12 +185,7 @@ func MigrateWithOptions(ctx context.Context, db Execer, schemaPath string, opts 
 		SchemaFormat:       schemaFormat(m.SchemaPath()),
 		IfDeployedChecksum: opts.IfDeployedChecksum,
 		Exposure:           opts.Exposure,
-	}
-
-	// Skip detection (both phases) happens inside migrateWithTypesAndOptions;
-	// its skipped result covers the phase 1 fast path and the phase 2 no-op
-	// that dev builds rely on (see shouldSkipMigration).
-	return m.migrateWithTypesAndOptions(ctx, types, internalOpts)
+	}, nil
 }
 
 // Schema format values recorded in melange_migrations.schema_format and
