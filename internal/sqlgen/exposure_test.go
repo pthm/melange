@@ -1330,3 +1330,25 @@ func TestExposureNormalized(t *testing.T) {
 		t.Errorf("enabled flags should be nil and disabled ones kept: %+v", n.Functions)
 	}
 }
+
+// Exposing document#and_ttu installs folder#a, which its TTU part reads, and
+// nothing for document#a, which only shares the name.
+func TestExposure_TTUIntersectionPartInstallsParentOnly(t *testing.T) {
+	m := mustExposureModel(t, intersectionThisStandaloneModel)
+	base := newExposureBaseline(generateExposed(t, m, Exposure{}))
+	o := generateExposed(t, m, Exposure{Relations: RelationPatterns{Include: []string{"document#and_ttu"}}})
+	assertExposureSound(t, m, "include document#and_ttu", o, base)
+	for _, want := range []string{"check_document_and_ttu", "check_folder_a", "list_folder_a_obj"} {
+		if !slices.Contains(o.names, want) {
+			t.Errorf("installed names %v, missing %s", o.names, want)
+		}
+	}
+	for _, unwanted := range []string{
+		"check_document_a", "list_document_a_obj", "list_document_a_sub",
+		"accessible_document_a", "expand_document_a", "explain_document_a",
+	} {
+		if slices.Contains(o.names, unwanted) {
+			t.Errorf("installed names include %s, which document#and_ttu never reads", unwanted)
+		}
+	}
+}

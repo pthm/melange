@@ -47,13 +47,17 @@ queries (`relations.include` / `relations.exclude`) and the families it uses
 `document#can_view` may read `document#viewer`, which reads `folder#viewer`
 through a parent. Migrate installs the functions of the exposed relations and
 of every relation they reach this way, directly or through other relations, so
-an exposed relation always resolves completely. Check functions are installed
-for all of them. The `list_*_obj` and `accessible_*` functions are installed
-for all of them when any of `list_objects`, `accessible` or `parent_key` is on,
-since the three read each other; `list_*_sub`, `expand_*` and `explain_*` when
-their family is on. The `_by_{link}` parent-key functions are installed for
-exposed relations only. Everything outside that set is not generated, and
-migrate drops it if an earlier exposure installed it.
+an exposed relation always resolves completely. A tuple-to-userset inside an
+intersection or exclusion, such as `[user] and viewer from parent`, reads
+`viewer` on the parent's types only, so it installs nothing for a `viewer`
+relation on the object's own type. Check functions are installed for the
+exposed relations and every relation they reach. The `list_*_obj` and
+`accessible_*` functions are installed for all of them when any of
+`list_objects`, `accessible` or `parent_key` is on, since the three read each
+other; `list_*_sub`, `expand_*` and `explain_*` when their family is on. The
+`_by_{link}` parent-key functions are installed for exposed relations only.
+Everything outside that set is not generated, and migrate drops it if an
+earlier exposure installed it.
 
 **Public and internal dispatchers.** The public dispatchers on this page
 answer only for exposed relations of an enabled family. Generated functions

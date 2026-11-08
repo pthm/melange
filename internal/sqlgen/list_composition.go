@@ -253,9 +253,13 @@ func (g *relationGraph) listCompositionSafe(fromType, fromRelation, targetType, 
 // relationReferences returns every "type.relation" key the generated functions
 // for a may reference — same-type closure/implied/excluded relations, TTU
 // parents, and userset targets, both direct and inherited through closure.
-// Deliberately over-inclusive: extra edges can only make listCompositionSafe
-// more conservative, never incorrect, and only install more functions under
-// a restricted Exposure.
+// A tuple-to-userset intersection part contributes parent edges for its
+// relation and no same-type edge: it reads the relation on the linking types,
+// never on a.ObjectType, which may define an unrelated relation of the same
+// name. An IsThis part contributes a harmless self edge. Otherwise the set
+// errs on the side of inclusion: extra edges can only make
+// listCompositionSafe more conservative, never incorrect, and only install
+// more functions under a restricted Exposure.
 //
 // MAINTENANCE: this must cover every reference-carrying field of
 // RelationAnalysis. A missed edge means listCompositionSafe can approve a
@@ -311,10 +315,16 @@ func relationReferences(a *RelationAnalysis) []string {
 	groups := func(gs ...IntersectionGroupInfo) {
 		for _, g := range gs {
 			for _, p := range g.Parts {
-				sameType(p.Relation, p.ExcludedRelation)
 				if p.ParentRelation != nil {
+					// A TTU part reads p.Relation on the parent types,
+					// never on a.ObjectType.
 					parents(*p.ParentRelation)
+				} else {
+					sameType(p.Relation)
 				}
+				// Never set on a TTU part today, but check and list_objects
+				// would apply it on a.ObjectType if it were.
+				sameType(p.ExcludedRelation)
 			}
 		}
 	}

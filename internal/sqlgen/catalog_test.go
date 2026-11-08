@@ -495,6 +495,27 @@ func TestCatalog_Examples(t *testing.T) {
 	}
 }
 
+// document#and_ttu depends on folder#a through its TTU part, not on
+// document#a, and its check function does not call check_document_a.
+func TestCatalog_TTUIntersectionPartDependsOnParent(t *testing.T) {
+	m := mustExposureModel(t, intersectionThisStandaloneModel)
+	cat, err := BuildCatalog(m.analyses, CatalogOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := cat.Find("document", "and_ttu")
+	if !slices.Equal(r.DependsOn, []string{"folder#a"}) {
+		t.Errorf("document#and_ttu DependsOn = %v, want [folder#a]", r.DependsOn)
+	}
+	i := slices.IndexFunc(r.Functions, func(f CatalogFunction) bool { return f.Kind == KindCheck })
+	if i < 0 {
+		t.Fatalf("document#and_ttu has no check function: %+v", r.Functions)
+	}
+	if calls := r.Functions[i].Calls; slices.Contains(calls, "check_document_a") {
+		t.Errorf("check_document_and_ttu calls %v, want no check_document_a", calls)
+	}
+}
+
 // TestCatalog_Reasons checks why a family is not installed, under exposures
 // that leave a relation out, turn families off, and for a relation with no
 // access path.

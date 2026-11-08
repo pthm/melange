@@ -1,0 +1,171 @@
+# A tuple-to-userset inside an intersection (`a from parent`) reads `a` on
+# the parent's types only. The object's own type may define a relation of the
+# same name, which the part never reads: tuples on it must not satisfy the
+# part, and a restricted exposure of the intersection must not need it. The
+# relation reference graph used to add that same-type edge, which installed
+# document#a's functions for an exposure of document#v alone and made
+# `a: [user] but not v` look cyclic, so list_objects for it checked v per row
+# instead of anti-joining list_document_v_obj.
+tests:
+  - name: intersection_ttu_part_shadowed_relation
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type folder
+            relations
+              define a: [user]
+          type document
+            relations
+              define parent: [folder]
+              define a: [user]
+              define v: [user] and a from parent
+        tuples:
+          - user: folder:f1
+            relation: parent
+            object: document:d1
+          - user: user:carol
+            relation: a
+            object: folder:f1
+          - user: user:carol
+            relation: v
+            object: document:d1
+          - user: user:alice
+            relation: v
+            object: document:d1
+          # a on the document itself, which `a from parent` does not read
+          - user: user:alice
+            relation: a
+            object: document:d1
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: v
+              object: document:d1
+            expectation: false
+          - tuple:
+              user: user:carol
+              relation: v
+              object: document:d1
+            expectation: true
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: document
+              relation: v
+            expectation: []
+          - request:
+              user: user:carol
+              type: document
+              relation: v
+            expectation:
+              - document:d1
+        listUsersAssertions:
+          - request:
+              object: document:d1
+              relation: v
+              filters:
+                - user
+            expectation:
+              - user:carol
+  - name: intersection_ttu_part_newly_composable_exclusion
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type folder
+            relations
+              define a: [user]
+          type document
+            relations
+              define parent: [folder]
+              define v: [user] and a from parent
+              define a: [user] but not v
+        tuples:
+          - user: folder:f1
+            relation: parent
+            object: document:d1
+          - user: folder:f2
+            relation: parent
+            object: document:d2
+          - user: user:carol
+            relation: a
+            object: folder:f1
+          - user: user:bob
+            relation: a
+            object: folder:f2
+          # carol and bob hold v, which excludes them from a
+          - user: user:carol
+            relation: v
+            object: document:d1
+          - user: user:carol
+            relation: a
+            object: document:d1
+          - user: user:bob
+            relation: v
+            object: document:d2
+          - user: user:bob
+            relation: a
+            object: document:d2
+          # alice's direct v lacks a on the folder, so v does not exclude her
+          - user: user:alice
+            relation: v
+            object: document:d1
+          - user: user:alice
+            relation: a
+            object: document:d1
+        checkAssertions:
+          - tuple:
+              user: user:alice
+              relation: a
+              object: document:d1
+            expectation: true
+          - tuple:
+              user: user:carol
+              relation: a
+              object: document:d1
+            expectation: false
+          - tuple:
+              user: user:bob
+              relation: a
+              object: document:d2
+            expectation: false
+          - tuple:
+              user: user:carol
+              relation: v
+              object: document:d1
+            expectation: true
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: document
+              relation: a
+            expectation:
+              - document:d1
+          - request:
+              user: user:carol
+              type: document
+              relation: a
+            expectation: []
+          - request:
+              user: user:bob
+              type: document
+              relation: a
+            expectation: []
+        listUsersAssertions:
+          - request:
+              object: document:d1
+              relation: a
+              filters:
+                - user
+            expectation:
+              - user:alice
+          - request:
+              object: document:d1
+              relation: v
+              filters:
+                - user
+            expectation:
+              - user:carol
