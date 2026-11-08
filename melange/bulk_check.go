@@ -230,7 +230,7 @@ func (b *BulkCheckBuilder) Execute() (*BulkCheckResults, error) {
 			uniqueResults[uIdx] = checkOutcome{allowed: allowed == 1}
 		}
 		if err := rows.Err(); err != nil {
-			return nil, err
+			return nil, c.mapError("check_permission_bulk", err)
 		}
 
 		// 9. Cache store for DB results.

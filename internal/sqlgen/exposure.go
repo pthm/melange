@@ -391,8 +391,45 @@ func (c *exposureClosure) public(family apiFamily, objectType, relation string) 
 // ExpandPublic reports whether the expand dispatcher answers for a relation
 // under e rather than raising: every relation under the default exposure.
 func ExpandPublic(analyses []RelationAnalysis, e Exposure) func(objectType, relation string) bool {
-	c := newExposureClosure(analyses, e)
-	return func(objectType, relation string) bool { return c.public(familyExpand, objectType, relation) }
+	return NewPublicAPI(analyses, e).Expand
+}
+
+// PublicAPI reports which relations each public dispatcher family answers
+// for under an exposure, for tools that call the dispatchers for a relation
+// the user names. For a relation the model defines, false means the
+// dispatcher raises NotExposedErrCode. Under the default exposure every
+// method reports true.
+type PublicAPI struct{ c *exposureClosure }
+
+// NewPublicAPI resolves e against analyses.
+func NewPublicAPI(analyses []RelationAnalysis, e Exposure) PublicAPI {
+	return PublicAPI{newExposureClosure(analyses, e)}
+}
+
+// Check covers check_permission, check_permission_nw and check_permission_bulk.
+func (p PublicAPI) Check(objectType, relation string) bool {
+	return p.c.public(familyCheck, objectType, relation)
+}
+
+// ListObjects covers list_accessible_objects.
+func (p PublicAPI) ListObjects(objectType, relation string) bool {
+	return p.c.public(familyListObjects, objectType, relation)
+}
+
+// ListSubjects covers list_accessible_subjects.
+func (p PublicAPI) ListSubjects(objectType, relation string) bool {
+	return p.c.public(familyListSubjects, objectType, relation)
+}
+
+// Explain covers explain_permission.
+func (p PublicAPI) Explain(objectType, relation string) bool {
+	return p.c.public(familyExplain, objectType, relation)
+}
+
+// Expand covers expand_permission, which also answers for the relations an
+// exposed relation's expand pointers lead to.
+func (p PublicAPI) Expand(objectType, relation string) bool {
+	return p.c.public(familyExpand, objectType, relation)
 }
 
 // unexposed returns the relations the model defines that family's public

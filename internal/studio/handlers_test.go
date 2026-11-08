@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/pthm/melange/internal/doctor"
+	"github.com/pthm/melange/internal/sqlapi"
 	"github.com/pthm/melange/melange"
 	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/pkg/schema"
@@ -287,7 +288,7 @@ func TestWhatIfAndMatrixHelpers(t *testing.T) {
 	if isAdded(melange.TupleRef{SubjectType: "user", SubjectID: "bob", Relation: "editor", ObjectType: "doc", ObjectID: "1"}, added) {
 		t.Error("isAdded should not match another relation")
 	}
-	if a, e := matrixCounts([]matrixCell{{Allowed: true}, {Allowed: false}, {Err: "timed out", Allowed: true}, {Allowed: true}}); a != 2 || e != 1 {
-		t.Errorf("matrixCounts = %d allowed, %d errors; want 2, 1 (an errored cell counts as neither)", a, e)
+	if a, e, s := matrixCounts([]matrixCell{{Allowed: true}, {Allowed: false}, {Err: "timed out", Allowed: true}, {Allowed: true}, {Skip: &sqlapi.Unavailable{}}}); a != 2 || e != 1 || s != 1 {
+		t.Errorf("matrixCounts = %d allowed, %d errors, %d skipped; want 2, 1, 1 (an errored cell counts as neither)", a, e, s)
 	}
 }

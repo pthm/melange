@@ -6,7 +6,7 @@
  */
 
 import type { MelangeObject, Relation, Decision } from './types.js';
-import type { Queryable } from './database.js';
+import { queryMelange, type Queryable } from './database.js';
 import type { Cache } from './cache.js';
 import { MelangeError, BulkCheckDeniedError } from './errors.js';
 import { validateObject, validateRelation } from './validator.js';
@@ -186,7 +186,8 @@ export class BulkCheckBuilder {
 
       const func = prefixIdent('check_permission_bulk', databaseSchema);
 
-      const result = await db.query<{ idx: number; allowed: number }>(
+      const result = await queryMelange<{ idx: number; allowed: number }>(
+        db,
         `SELECT idx, allowed FROM ${func}($1, $2, $3, $4, $5)`,
         [subjectTypes, subjectIds, relations, objectTypes, objectIds],
       );

@@ -230,16 +230,20 @@ func isAdded(e melange.TupleRef, added []melange.ContextualTuple) bool {
 	return false
 }
 
-// matrixCounts tallies a check matrix: allowed relations and failed checks.
-func matrixCounts(cells []matrixCell) (allowed, errs int) {
+// matrixCounts tallies a check matrix: allowed relations, failed checks and
+// relations not checked because the SQL API does not expose them.
+func matrixCounts(cells []matrixCell) (allowed, errs, skipped int) {
 	for _, c := range cells {
-		if c.Err != "" {
+		switch {
+		case c.Skip != nil:
+			skipped++
+		case c.Err != "":
 			errs++
-		} else if c.Allowed {
+		case c.Allowed:
 			allowed++
 		}
 	}
-	return allowed, errs
+	return allowed, errs, skipped
 }
 
 func relationURL(typ, rel string) templ.SafeURL {

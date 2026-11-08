@@ -790,6 +790,16 @@ melange explain user:alice viewer document:1 --db postgres://localhost/mydb
 
 `--format=json` returns the raw `Trace` JSONB for tooling.
 
+Explain reads the [exposure](../sql-api/#exposure) recorded by the last
+migration. When the relation is not exposed, or the database was migrated
+with `sql.functions.explain` off, it exits with an error that names
+`type#relation` and the setting to change instead of the database's
+`M2003`. For a relation that is not exposed the setting is
+`sql.relations.include` (or `--include-relation`, which replaces the list, so
+pass it with every pattern already included); with the family off it is
+`sql.functions.explain`. A relation the model does not define is still
+explained as denied, with the family on or off.
+
 ### expand
 
 Return the OpenFGA-shaped `UsersetTree` for a `(object, relation)` pair — the structured "who has access?" answer. See the [Expanding Permissions guide](../../guides/expanding-permissions/) for the tree structure and the shallow-by-default resolution model.
@@ -835,6 +845,14 @@ user:*
 ```
 
 `--flatten` chases every `Leaf.Computed` and `Leaf.TupleToUserset` pointer with follow-up Expand calls. Cost is N round-trips per N distinct pointers; suitable for admin flows, not the request path. `--format=json` returns the raw `UsersetTree` JSONB for tooling.
+
+Expand follows the recorded [exposure](../sql-api/#exposure) like
+`explain`: a relation `expand_permission` does not answer for, or a database
+migrated with `sql.functions.expand` off, fails with a message that names
+`type#relation` and the setting to change (`sql.relations.include` or
+`sql.functions.expand`). `expand_permission` answers for every
+relation an exposed relation's pointers lead to, so `--recursive` and
+pointers into relations that are installed but not exposed keep working.
 
 ### studio
 

@@ -14,7 +14,9 @@ import (
 
 	"github.com/lib/pq"
 
+	"github.com/pthm/melange/internal/sqlapi"
 	"github.com/pthm/melange/melange"
+	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/pkg/schema"
 )
 
@@ -40,8 +42,11 @@ type entityData struct {
 	SubjectMatch, ObjectMatch int // those passing Query
 	Query                     string
 	ModelErr                  string
-	Labels                    labels
-	Types                     []typeCount
+	// Unavailable says why the access tab lists nothing: its list function
+	// family is not installed.
+	Unavailable *sqlapi.Unavailable
+	Labels      labels
+	Types       []typeCount
 }
 
 func (s *Server) entity(w http.ResponseWriter, r *http.Request) {
@@ -79,6 +84,8 @@ func (s *Server) entity(w http.ResponseWriter, r *http.Request) {
 	case err != nil:
 	case model == nil:
 		d.ModelErr = modelErr
+	case d.Tab != tabDirect && tabOff(model, d.Tab) != nil:
+		d.Unavailable = tabOff(model, d.Tab)
 	case d.Tab == tabCan:
 		for _, t := range model.Types {
 			if len(t.Relations) > 0 {
@@ -318,31 +325,70 @@ func (s *Server) shared(ctx context.Context, key, other string, compute func(con
 	}
 }
 
+// tabOff says why an access tab cannot list anything: its list function
+// family is not installed. nil when it is.
+func tabOff(model *migrator.DeployedModel, tab string) *sqlapi.Unavailable {
+	// Without types only a family that is off is unavailable, and no
+	// analysis is needed.
+	return sqlapi.New(model.Exposure, nil).Unavailable(tabFamily(tab), "", "")
+}
+
+// tabFamily is the list function family an access tab calls.
+func tabFamily(tab string) sqlapi.Family {
+	if tab == tabCan {
+		return sqlapi.ListObjects
+	}
+	return sqlapi.ListSubjects
+}
+
 func (s *Server) computeGroup(ctx context.Context, self entityRef, tab, other string) typeGroup {
-	empty := typeGroup{Type: other}
 	model, reason := s.loadModel(ctx)
 	if model == nil {
-		empty.Errs = []string{reason}
-		return empty
+		return typeGroup{Type: other, Errs: []string{reason}}
 	}
 	obj := melange.Object{Type: melange.ObjectType(self.Type), ID: self.ID}
 	page := melange.PageOptions{Limit: groupLimit}
-	var rows []accessRow
+	api := apiOf(model)
 	if tab == tabCan {
-		rows = listRelations(ctx, relationsOf(model.Types, other), other, func(ctx context.Context, rel string) ([]string, error) {
+		return accessGroup(ctx, api, tab, other, relationsOf(model.Types, other), other, func(ctx context.Context, rel string) ([]string, error) {
 			ids, _, err := s.checker.ListObjects(ctx, obj, melange.Relation(rel), melange.ObjectType(other), page)
 			return ids, err
 		})
-	} else {
-		rows = listRelations(ctx, relationsOf(model.Types, self.Type), other, func(ctx context.Context, rel string) ([]string, error) {
-			ids, _, err := s.checker.ListSubjects(ctx, obj, melange.Relation(rel), melange.ObjectType(other), page)
-			return ids, err
-		})
 	}
-	if groups := groupByType(rows); len(groups) > 0 {
-		return groups[0]
+	return accessGroup(ctx, api, tab, self.Type, relationsOf(model.Types, self.Type), other, func(ctx context.Context, rel string) ([]string, error) {
+		ids, _, err := s.checker.ListSubjects(ctx, obj, melange.Relation(rel), melange.ObjectType(other), page)
+		return ids, err
+	})
+}
+
+// accessGroup lists other's entities on an access tab: one list call per
+// relation of objectType that the tab's list function answers for. The
+// others are recorded in Skipped and not called.
+func accessGroup(ctx context.Context, api *sqlapi.API, tab, objectType string, rels []string, other string, list func(context.Context, string) ([]string, error)) typeGroup {
+	family := tabFamily(tab)
+	var listed []string
+	var skipped []*sqlapi.Unavailable
+	for _, rel := range rels {
+		if u := api.Unavailable(family, objectType, rel); u != nil {
+			skipped = append(skipped, u)
+		} else {
+			listed = append(listed, rel)
+		}
 	}
-	return empty
+	g := typeGroup{Type: other}
+	if groups := groupByType(listRelations(ctx, listed, other, list)); len(groups) > 0 {
+		g = groups[0]
+	}
+	g.Skipped = skipped
+	for _, rel := range listed {
+		if u := api.Unavailable(sqlapi.Explain, objectType, rel); u != nil {
+			if g.NoExplain == nil {
+				g.NoExplain = map[string]*sqlapi.Unavailable{}
+			}
+			g.NoExplain[rel] = u
+		}
+	}
+	return g
 }
 
 // listRelations runs list once per relation, sharing listSlots, each
@@ -396,6 +442,11 @@ type typeGroup struct {
 	Entities []entityGroup
 	Errs     []string
 	Capped   bool
+	// Skipped are the relations the tab's list function does not answer
+	// for, which were not listed; NoExplain says why a listed relation
+	// cannot be explained.
+	Skipped   []*sqlapi.Unavailable
+	NoExplain map[string]*sqlapi.Unavailable
 }
 
 type entityGroup struct {

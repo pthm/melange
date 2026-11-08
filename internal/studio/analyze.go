@@ -16,6 +16,7 @@ import (
 	"github.com/a-h/templ"
 	"github.com/lib/pq"
 
+	"github.com/pthm/melange/internal/sqlapi"
 	"github.com/pthm/melange/internal/sqlgen/sqldsl"
 	"github.com/pthm/melange/melange"
 	"github.com/pthm/melange/pkg/schema"
@@ -78,6 +79,10 @@ func (s *Server) analyze(w http.ResponseWriter, r *http.Request) {
 		render(w, r, errorBox(fmt.Sprintf("%s#%s is not a relation in the deployed model", object.Type, relation)))
 		return
 	}
+	if u := apiOf(model).Unavailable(sqlapi.Check, string(object.Type), relation); u != nil {
+		render(w, r, errorBox(u.Error()))
+		return
+	}
 	start := time.Now()
 	a, err := s.analyzeCheck(r.Context(), subject, relation, object)
 	took := time.Since(start)
@@ -86,7 +91,7 @@ func (s *Server) analyze(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &pqErr) && pqErr.Code == "57014":
 		render(w, r, errorBox(fmt.Sprintf("Timed out after %s; this check is very slow.", analyzeTimeout)))
 	case err != nil:
-		render(w, r, errorBox(failedAfter(err, took)))
+		render(w, r, errorBox(callFailed(sqlapi.Check, object, relation, err, took)))
 	default:
 		if model != nil {
 			a.Links = checkFuncLinks(model.Types)

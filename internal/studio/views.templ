@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pthm/melange/internal/sqlapi"
 	"github.com/pthm/melange/melange"
 	"github.com/pthm/melange/pkg/migrator"
 )
@@ -326,10 +327,25 @@ templ explainChip(sub, rel, obj string) {
 	<button class="chip" data-explain aria-expanded="false" title={ "Explain " + sub + " " + rel + " " + obj } hx-post="/explain" hx-vals={ explainVals(sub, rel, obj) } hx-target="next .why-out">{ rel }</button>
 }
 
+// relationChip is explainChip, or, when the relation cannot be explained
+// (no is why), the relation's name with the reason on hover.
+templ relationChip(sub, rel, obj string, no *sqlapi.Unavailable) {
+	if no == nil {
+		@explainChip(sub, rel, obj)
+	} else {
+		<span class="chip off" title={ no.Error() }>{ rel }</span>
+	}
+}
+
+// unavailable labels a relation a view did not query, with why on hover.
+templ unavailable(u *sqlapi.Unavailable) {
+	<span class="badge" title={ u.Error() }>{ u.Label() }</span>
+}
+
 // matrixView lists one subject's answer for every relation on an object, in
 // model order; each relation explains itself inline.
 templ matrixView(sub, obj string, cells []matrixCell, notes []string, took time.Duration) {
-	{{ allowedN, errN := matrixCounts(cells) }}
+	{{ allowedN, errN, skipN := matrixCounts(cells) }}
 	<p class="verdict">
 		<span class="badge accent">matrix</span>
 		What <code>{ sub }</code> can do on <code>{ obj }</code>
@@ -337,6 +353,9 @@ templ matrixView(sub, obj string, cells []matrixCell, notes []string, took time.
 			· { num(allowedN) } of { plural(len(cells), "relation") } allowed
 			if errN > 0 {
 				· { plural(errN, "error") }
+			}
+			if skipN > 0 {
+				· { num(skipN) } not exposed
 			}
 			· { ms(took) } in parallel
 			· click a relation to explain
@@ -349,10 +368,12 @@ templ matrixView(sub, obj string, cells []matrixCell, notes []string, took time.
 		for _, c := range cells {
 			<li>
 				<div class="who">
-					@explainChip(sub, c.Relation, obj)
+					@relationChip(sub, c.Relation, obj, c.NoExplain)
 				</div>
 				<div>
-					if c.Err != "" {
+					if c.Skip != nil {
+						@unavailable(c.Skip)
+					} else if c.Err != "" {
 						<span class="badge warn">error</span> <span class="mute">{ c.Err }</span>
 					} else if c.Allowed {
 						<span class="badge ok">allowed</span>
@@ -467,13 +488,13 @@ templ traceNode(n *melange.Node, added []melange.ContextualTuple) {
 
 // expandView renders an Expand tree. top marks a form query (not a pointer
 // drill-in), which gets a heading naming the userset.
-templ expandView(t *melange.UsersetTree, top bool, took time.Duration) {
+templ expandView(t *melange.UsersetTree, top bool, took time.Duration, check func(string) *sqlapi.Unavailable) {
 	if t.Root != nil {
 		if top {
 			<p class="verdict"><span class="badge accent">expand</span> Who has <code>{ t.Root.Name }</code> <span class="mute">· { ms(took) }</span></p>
 		}
 		<ul class="tree">
-			@expandNode(t.Root, t.Root.Name)
+			@expandNode(t.Root, t.Root.Name, check)
 		</ul>
 	}
 }
@@ -481,33 +502,33 @@ templ expandView(t *melange.UsersetTree, top bool, took time.Duration) {
 // expandNode prints a node's userset name only where it adds something (see
 // showNodeName). The root's name is the query, already in the heading or the
 // pointer that was drilled.
-templ expandNode(n *melange.UsersetTreeNode, parent string) {
+templ expandNode(n *melange.UsersetTreeNode, parent string, check func(string) *sqlapi.Unavailable) {
 	<li>
 		if showNodeName(n, parent) {
 			<code class="strong">{ n.Name }</code>
 		}
 		switch  {
 			case n.Leaf != nil:
-				@expandLeaf(n.Leaf)
+				@expandLeaf(n.Leaf, check)
 			case n.Union != nil:
 				<span class="kind">any of</span>
-				@expandNodes(n.Union.Nodes, n.Name)
+				@expandNodes(n.Union.Nodes, n.Name, check)
 			case n.Intersection != nil:
 				<span class="kind">all of</span>
-				@expandNodes(n.Intersection.Nodes, n.Name)
+				@expandNodes(n.Intersection.Nodes, n.Name, check)
 			case n.Difference != nil:
 				<span class="kind">but not</span>
 				<ul>
 					<li>
 						<span class="mute">base</span>
 						<ul>
-							@expandNode(n.Difference.Base, n.Name)
+							@expandNode(n.Difference.Base, n.Name, check)
 						</ul>
 					</li>
 					<li>
 						<span class="mute">minus</span>
 						<ul>
-							@expandNode(n.Difference.Subtract, n.Name)
+							@expandNode(n.Difference.Subtract, n.Name, check)
 						</ul>
 					</li>
 				</ul>
@@ -515,15 +536,15 @@ templ expandNode(n *melange.UsersetTreeNode, parent string) {
 	</li>
 }
 
-templ expandNodes(nodes []*melange.UsersetTreeNode, parent string) {
+templ expandNodes(nodes []*melange.UsersetTreeNode, parent string, check func(string) *sqlapi.Unavailable) {
 	<ul>
 		for _, c := range nodes {
-			@expandNode(c, parent)
+			@expandNode(c, parent, check)
 		}
 	</ul>
 }
 
-templ expandLeaf(l *melange.Leaf) {
+templ expandLeaf(l *melange.Leaf, check func(string) *sqlapi.Unavailable) {
 	if l.Users != nil {
 		<span class="kind">direct</span>
 		<span class="inline-gap">
@@ -540,7 +561,7 @@ templ expandLeaf(l *melange.Leaf) {
 	}
 	if l.Computed != nil {
 		<span class="kind">same as</span>
-		@pointer(l.Computed.Userset)
+		@pointer(l.Computed.Userset, check)
 	}
 	if l.TupleToUserset != nil {
 		<span class="kind">from</span>
@@ -548,7 +569,7 @@ templ expandLeaf(l *melange.Leaf) {
 		<ul>
 			for _, c := range l.TupleToUserset.Computed {
 				<li>
-					@pointer(c.Userset)
+					@pointer(c.Userset, check)
 				</li>
 			}
 		</ul>
@@ -572,11 +593,15 @@ templ modelDatalists(m *migrator.DeployedModel) {
 
 // pointer renders an unresolved userset with an inline drill-in: htmx fetches
 // the next Expand level into the sibling div, so a tree is chased one click at
-// a time instead of all at once.
-templ pointer(userset string) {
+// a time instead of all at once. check says why a pointer has no drill-in.
+templ pointer(userset string, check func(string) *sqlapi.Unavailable) {
 	<code>{ userset }</code>
-	<button class="chip" hx-get={ "/expand?" + url.Values{"userset": {userset}}.Encode() } hx-target="next .sub">expand</button>
-	<div class="sub"></div>
+	if u := check(userset); u != nil {
+		@unavailable(u)
+	} else {
+		<button class="chip" hx-get={ "/expand?" + url.Values{"userset": {userset}}.Encode() } hx-target="next .sub">expand</button>
+		<div class="sub"></div>
+	}
 }
 
 templ stat(n int, label, tone string) {

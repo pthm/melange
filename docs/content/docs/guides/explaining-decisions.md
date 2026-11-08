@@ -206,6 +206,18 @@ Every `(object_type, relation)` pair in the OpenFGA compatibility suite generate
 
 A sentinel response means the requested pair has no generated function. Check what you passed against the migrated schema before treating it as a bug.
 
+## Restricted Exposure
+
+With a restricted SQL API [exposure](../../reference/sql-api/#exposure),
+`explain_permission` answers only for exposed relations, and only when
+`sql.functions.explain` is on. For any other relation the model defines it
+raises `M2003`, which the Go and TypeScript runtimes report as a
+`ValidationError` with code 2000 (see
+[Errors](../../reference/errors/#postgresql-error-mapping)). `melange explain`
+and studio check the exposure recorded by the last migration first and say
+which relation is not exposed, or that the explain functions are not
+installed, and how to change it.
+
 ## See Also
 
 - [Expanding Permissions](../expanding-permissions/): the companion `Expand` API for "who has access?"

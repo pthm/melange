@@ -234,6 +234,7 @@ button.primary:hover { filter: brightness(1.08); }
 .chips { display: flex; flex-wrap: wrap; gap: var(--sp-1); margin-top: var(--sp-1); }
 .chip { height: 22px; padding: 0 var(--sp-2); border-radius: var(--r); border: 1px solid var(--line); background: var(--panel); color: var(--fg); }
 .chip:hover { border-color: var(--accent); color: var(--accent); background: var(--panel); }
+.chip.off, .chip.off:hover { display: inline-flex; align-items: center; border-style: dashed; border-color: var(--line); color: var(--mute); cursor: default; }
 
 /* ---------- lists & tables ---------- */
 .rows { list-style: none; margin: 0; padding: 0; }

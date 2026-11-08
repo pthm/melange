@@ -230,6 +230,21 @@ Expand matches `Check` across the full supported schema feature set:
 
 Every `(object_type, relation)` pair in the OpenFGA compatibility suite generates a specialised `expand_*` function. The dispatcher returns an empty `Leaf.Users` sentinel for pairs that don't exist in the schema; a sentinel response means the requested pair was not migrated.
 
+## Restricted Exposure
+
+With a restricted SQL API [exposure](../../reference/sql-api/#exposure),
+`expand_permission` answers for the exposed relations and for every relation
+their pointers lead to, so `ExpandRecursive`, `expandRecursive`,
+`melange expand --recursive` and studio's drill-in follow the whole tree. For
+any other relation the model defines it raises `M2003`, which the Go and
+TypeScript runtimes report as a `ValidationError` with code 2000 (see
+[Errors](../../reference/errors/#postgresql-error-mapping)). With
+`sql.functions.expand` off it raises for every relation, and a database that
+has no `expand_permission` at all reports `ErrMissingFunction`
+(`MissingFunctionError` in TypeScript). `melange expand` and studio check the
+recorded exposure first and say which relation is not exposed and how to
+expose it.
+
 ## Caching
 
 Opt-in via `ExpandCache` — see [Caching](./caching/#expandcache).

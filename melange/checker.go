@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"log"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -359,15 +361,23 @@ func (c *Checker) mapError(operation string, err error) error {
 			return fmt.Errorf("%w: %v", ErrNoTuplesTable, err)
 		}
 	case pgUndefinedFunction:
-		if strings.Contains(err.Error(), "check_permission") ||
-			strings.Contains(err.Error(), "list_accessible") ||
-			strings.Contains(err.Error(), "explain_permission") {
+		errStr := err.Error()
+		if strings.Contains(errStr, "check_permission") ||
+			strings.Contains(errStr, "list_accessible") ||
+			strings.Contains(errStr, "explain_permission") ||
+			strings.Contains(errStr, "expand_permission") {
 			return fmt.Errorf("%w: %v", ErrMissingFunction, err)
 		}
 	case pgResolutionTooComplex:
 		return &ValidationError{
 			Code:    ErrorCodeResolutionTooComplex,
 			Message: "resolution too complex: depth limit exceeded",
+		}
+	case pgNotExposed:
+		// The database message names the relation and the type.
+		return &ValidationError{
+			Code:    ErrorCodeValidation,
+			Message: pgMessage(err),
 		}
 	}
 
@@ -413,22 +423,22 @@ func (c *Checker) validateListUsersRequest(_ context.Context, _ Querier, relatio
 }
 
 // sqlState extracts the SQLSTATE code from a PostgreSQL error.
-// Works with multiple drivers via interface detection:
-//   - pgx/pgconn: SQLState() string
-//   - lib/pq: Code field (via error interface)
+// Works with multiple drivers via interface detection, also through wrapping:
+//   - pgx/pgconn, lib/pq: SQLState() string
+//   - some error wrappers: Code() string
 //
 // Returns empty string if the error doesn't contain a SQLSTATE.
 func sqlState(err error) string {
 	// Try SQLState() method (pgx/pgconn, and some pq versions)
-	type sqlStateErr interface{ SQLState() string }
-	if e, ok := err.(sqlStateErr); ok {
-		return e.SQLState()
+	var se interface{ SQLState() string }
+	if errors.As(err, &se) {
+		return se.SQLState()
 	}
 
 	// Try Code() method (some error wrappers)
-	type codeErr interface{ Code() string }
-	if e, ok := err.(codeErr); ok {
-		return e.Code()
+	var ce interface{ Code() string }
+	if errors.As(err, &ce) {
+		return ce.Code()
 	}
 
 	// Fallback: string matching for known patterns (last resort)
@@ -447,6 +457,27 @@ func sqlState(err error) string {
 	}
 
 	return ""
+}
+
+// pgMessage returns the primary message of a PostgreSQL error, without the
+// driver's decoration ("pq: ", "ERROR: ", the SQLSTATE suffix): the Message
+// field that lib/pq's *pq.Error and pgx's *pgconn.PgError both carry, read
+// by reflection since the runtime imports no driver. Falls back to
+// err.Error().
+func pgMessage(err error) string {
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		v := reflect.ValueOf(e)
+		if v.Kind() == reflect.Pointer {
+			v = v.Elem()
+		}
+		if v.Kind() != reflect.Struct {
+			continue
+		}
+		if f := v.FieldByName("Message"); f.IsValid() && f.Kind() == reflect.String && f.String() != "" {
+			return f.String()
+		}
+	}
+	return err.Error()
 }
 
 // ListObjects returns object IDs of the given type that subject has relation on,
@@ -520,7 +551,10 @@ func (c *Checker) ListObjects(ctx context.Context, subject SubjectLike, relation
 		nextCursor = cursor // All rows have the same cursor, keep the last one
 	}
 
-	return ids, nextCursor, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, c.mapError("list_accessible_objects", err)
+	}
+	return ids, nextCursor, nil
 }
 
 // ListObjectsAll returns all object IDs by automatically paginating through
@@ -624,7 +658,10 @@ func (c *Checker) ListObjectsWithContextualTuples(
 		nextCursor = cursor
 	}
 
-	return ids, nextCursor, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, c.mapError("list_accessible_objects", err)
+	}
+	return ids, nextCursor, nil
 }
 
 // ListSubjects returns subject IDs of the given type that have relation on object,
@@ -692,7 +729,10 @@ func (c *Checker) ListSubjects(ctx context.Context, object ObjectLike, relation 
 		nextCursor = cursor
 	}
 
-	return ids, nextCursor, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, c.mapError("list_accessible_subjects", err)
+	}
+	return ids, nextCursor, nil
 }
 
 // ListSubjectsAll returns all subject IDs by automatically paginating through
@@ -790,7 +830,10 @@ func (c *Checker) ListSubjectsWithContextualTuples(
 		nextCursor = cursor
 	}
 
-	return ids, nextCursor, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, c.mapError("list_accessible_subjects", err)
+	}
+	return ids, nextCursor, nil
 }
 
 // validateContextualTuples validates all contextual tuples for basic shape errors.

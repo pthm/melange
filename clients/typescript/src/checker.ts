@@ -17,7 +17,7 @@ import type {
 import type { Trace, ExplainOptions } from './trace.js';
 import type { UsersetTree, ExpandOptions, Computed } from './expand.js';
 import { flattenUsers } from './expand.js';
-import type { Queryable } from './database.js';
+import { queryMelange, type Queryable } from './database.js';
 import { Cache, NoopCache } from './cache.js';
 import { validateObject, validateRelation } from './validator.js';
 import { MelangeError } from './errors.js';
@@ -170,7 +170,8 @@ export class Checker {
 
     // Execute check_permission
     // TODO: Support contextual tuples when implemented in PostgreSQL functions
-    const result = await this.db.query<{ allowed: number }>(
+    const result = await queryMelange<{ allowed: number }>(
+      this.db,
       `SELECT ${func}($1, $2, $3, $4, $5) as allowed`,
       [subject.type, subject.id, relation, object.type, object.id]
     );
@@ -250,7 +251,8 @@ export class Checker {
 
     const func = prefixIdent('list_accessible_objects', this.databaseSchema);
 
-    const result = await this.db.query<{ object_id: string; next_cursor: string }>(
+    const result = await queryMelange<{ object_id: string; next_cursor: string }>(
+      this.db,
       `SELECT * FROM ${func}($1, $2, $3, $4, $5, $6)`,
       [subject.type, subject.id, relation, objectType, limit, after ?? null]
     );
@@ -312,7 +314,8 @@ export class Checker {
 
     const func = prefixIdent('list_accessible_subjects', this.databaseSchema);
 
-    const result = await this.db.query<{ subject_id: string; next_cursor: string }>(
+    const result = await queryMelange<{ subject_id: string; next_cursor: string }>(
+      this.db,
       `SELECT * FROM ${func}($1, $2, $3, $4, $5, $6)`,
       [object.type, object.id, relation, subjectType, limit, after ?? null]
     );
@@ -403,7 +406,8 @@ export class Checker {
     // parse — pg's default JSONB handling returns it already-parsed but the
     // cast keeps behaviour deterministic across pg-versions and driver
     // configurations.
-    const result = await this.db.query<{ trace: string | Trace }>(
+    const result = await queryMelange<{ trace: string | Trace }>(
+      this.db,
       `SELECT ${func}($1, $2, $3, $4, $5, $6)::text AS trace`,
       [subject.type, subject.id, relation, object.type, object.id, maxNodes]
     );
@@ -453,7 +457,8 @@ export class Checker {
         ? options.maxLeaf
         : null;
 
-    const result = await this.db.query<{ tree: string | UsersetTree }>(
+    const result = await queryMelange<{ tree: string | UsersetTree }>(
+      this.db,
       `SELECT ${func}($1, $2, $3, $4, $5)::text AS tree`,
       [object.type, object.id, relation, subjectType, maxLeaf]
     );

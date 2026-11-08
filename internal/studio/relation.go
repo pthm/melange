@@ -8,6 +8,7 @@ import (
 
 	"github.com/lib/pq"
 
+	"github.com/pthm/melange/internal/sqlapi"
 	"github.com/pthm/melange/internal/sqlgen/sqldsl"
 	"github.com/pthm/melange/pkg/compiler"
 	"github.com/pthm/melange/pkg/migrator"
@@ -28,6 +29,9 @@ type relationData struct {
 	UsedBy         []relEdge
 	Funcs          []sqlFunc
 	FuncErr        string
+	// Unavailable lists the public function families that do not answer
+	// for the relation under the recorded exposure.
+	Unavailable []*sqlapi.Unavailable
 }
 
 // relEdge is a link between two relations; Kinds says how (computed,
@@ -60,6 +64,12 @@ func (s *Server) relation(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		d.Define = defineText(d.Model.DSL, d.Type, d.Relation)
+		api := apiOf(d.Model)
+		for _, f := range []sqlapi.Family{sqlapi.Check, sqlapi.ListObjects, sqlapi.ListSubjects, sqlapi.Explain, sqlapi.Expand} {
+			if u := api.Unavailable(f, d.Type, d.Relation); u != nil {
+				d.Unavailable = append(d.Unavailable, u)
+			}
+		}
 		d.DependsOn, d.UsedBy = ix.dependsOn(d.Type, d.Relation), ix.usedBy(d.Type, d.Relation)
 		o := newModelOrder(d.Model)
 		byModel := func(a, b relEdge) int {

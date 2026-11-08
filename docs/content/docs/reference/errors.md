@@ -109,14 +109,51 @@ The runtime maps PostgreSQL error codes to sentinel errors:
 | SQLSTATE | PostgreSQL Error | Mapped To |
 |----------|-----------------|-----------|
 | `42P01` | Undefined table | `ErrNoTuplesTable` |
-| `42883` | Undefined function | `ErrMissingFunction` |
+| `42883` | Undefined function (`check_permission`, `list_accessible_*`, `explain_permission` or `expand_permission`) | `ErrMissingFunction` |
 | `M2002` | Custom (raised by generated functions) | `ValidationError` with code 2002 |
-| `M2003` | Custom (raised by a public dispatcher for a relation the model defines but the [exposure](../sql-api/#exposure) does not expose) | Not mapped: the driver's error is returned; match on its SQLSTATE |
+| `M2003` | Custom (raised by a public dispatcher for a relation the model defines but the [exposure](../sql-api/#exposure) does not expose) | `ValidationError` with code 2000 and the database message |
+
+Every `Checker` method that calls a public function maps these codes: `Check`,
+`CheckWithContextualTuples`, bulk checks, the `ListObjects*` and
+`ListSubjects*` methods, `Explain`, `Expand` and `ExpandRecursive`, whether
+the driver reports the error when the query is sent or while its rows are
+read.
 
 `M2003` only occurs when the database was migrated with a restricted SQL API
-exposure (the `sql:` section of `melange.yaml`). A relation the model does not
-define is not an error: checks deny and lists return nothing. See
-[SQL API: M2003](../sql-api/#error-code-m2003).
+exposure (the `sql:` section of `melange.yaml`). The `ValidationError` message
+is the database's, which names the relation and the type:
+
+```go
+_, err := checker.Check(ctx, user, "viewer", doc)
+if melange.GetValidationErrorCode(err) == melange.ErrorCodeValidation {
+    // err.Error() == `relation "viewer" on type "document" is not exposed`
+}
+```
+
+A relation the model does not define is not an error: checks deny and lists
+return nothing. See [SQL API: M2003](../sql-api/#error-code-m2003).
+
+{{< callout type="info" >}}
+The `M2003` mapping, and `expand_permission` in the `42883` mapping, are in
+the runtimes released after v0.10.3. With v0.10.3 and earlier, `M2003` comes
+back as the driver's error wrapped with the function name (match on its
+SQLSTATE), and a missing `expand_permission` is not `ErrMissingFunction`.
+{{< /callout >}}
+
+### TypeScript client
+
+`@pthm/melange` maps `M2003` and the melange `42883` case on every `Checker`
+method that calls a public function, including bulk checks. It does not map
+`M2002` or `42P01`:
+
+| SQLSTATE | Thrown |
+|----------|--------|
+| `M2003` | `ValidationError` with `code` 2000 (`ErrorCodeValidation`) and the database message; the driver error is its `cause` |
+| `42883` naming a melange function | `MissingFunctionError`; the driver error is its `cause` |
+
+Other database errors, including `M2002` and `42P01`, are thrown unchanged
+as the driver's error; match them on its `code`. The mapping is in releases after
+v0.10.3; earlier releases throw the driver's error for both codes.
 
 ## Migration Errors
 

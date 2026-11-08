@@ -263,7 +263,7 @@ func TestAccessEntityCollapsesChips(t *testing.T) {
 	for i := range rels {
 		rels[i] = fmt.Sprintf("r%d", i)
 	}
-	got := renderHTML(t, accessEntity("user", entityGroup{ID: "1", Relations: rels}, nil, entityRef{Type: "doc", ID: "1"}, false))
+	got := renderHTML(t, accessEntity("user", entityGroup{ID: "1", Relations: rels}, nil, entityRef{Type: "doc", ID: "1"}, false, nil))
 	more := strings.Index(got, "data-more-chips")
 	if more < 0 || !strings.Contains(got, "+3 more") {
 		t.Fatalf("no +3 more button:\n%s", got)
@@ -271,7 +271,7 @@ func TestAccessEntityCollapsesChips(t *testing.T) {
 	if i, j := strings.Index(got, fmt.Sprintf(">r%d<", chipLimit-1)), strings.Index(got, fmt.Sprintf(">r%d<", chipLimit)); i > more || j < more {
 		t.Errorf("button should sit between chip %d and %d:\n%s", chipLimit-1, chipLimit, got)
 	}
-	short := renderHTML(t, accessEntity("user", entityGroup{ID: "1", Relations: rels[:chipLimit]}, nil, entityRef{Type: "doc", ID: "1"}, false))
+	short := renderHTML(t, accessEntity("user", entityGroup{ID: "1", Relations: rels[:chipLimit]}, nil, entityRef{Type: "doc", ID: "1"}, false, nil))
 	if strings.Contains(short, "data-more-chips") {
 		t.Errorf("no button at exactly chipLimit relations:\n%s", short)
 	}

@@ -97,6 +97,27 @@ const users = flattenUsers(tree);
 
 `UsersetTree`, `UsersetTreeNode`, `Leaf`, `Users`, `Computed`, `TupleToUserset`, `Difference`, and `Nodes` type mirrors live in `@pthm/melange` (source: `clients/typescript/src/expand.ts`). Field names match OpenFGA's `openfgav1.UsersetTree` proto so existing OpenFGA tooling deserialises the JSON without adapters.
 
+## Errors
+
+Every `Checker` method that calls a public function maps two database errors
+(see [Errors](../errors/#typescript-client)): SQLSTATE `M2003`, a relation the
+[SQL API exposure](../sql-api/#exposure) leaves out, throws `ValidationError`
+with `code` 2000 (`ErrorCodeValidation`) and the database message, and a
+missing melange function (`42883`) throws `MissingFunctionError`. Both keep the
+driver error as `cause`. Other errors are thrown unchanged.
+
+```typescript
+import { ValidationError, ErrorCodeValidation } from '@pthm/melange';
+
+try {
+  await checker.check(user, 'viewer', doc);
+} catch (err) {
+  if (err instanceof ValidationError && err.code === ErrorCodeValidation) {
+    // e.g. relation "viewer" on type "document" is not exposed
+  }
+}
+```
+
 ## Caching
 
 ```typescript

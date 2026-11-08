@@ -24,6 +24,14 @@ templ relationPage(d relationData) {
 					Deployed model, migrated { d.Model.MigratedAt.UTC().Format("2 Jan 2006, 15:04 MST") } by melange <code>{ d.Model.MelangeVersion }</code>
 				</p>
 			}
+			if len(d.Unavailable) > 0 {
+				<p class="page-meta">
+					Not answered by the SQL API (exposure recorded by the last migration; hover for why):
+					for _, u := range d.Unavailable {
+						<span class="badge warn" title={ u.Error() }>{ u.Family.Name() }: { u.Label() }</span>
+					}
+				</p>
+			}
 		}
 		<div>
 			if d.Err != "" {

@@ -3,6 +3,8 @@ package studio
 import (
 	"net/url"
 	"strconv"
+
+	"github.com/pthm/melange/internal/sqlapi"
 )
 
 var entityTabs = []struct{ ID, Label string }{
@@ -75,7 +77,11 @@ templ entityPage(d entityData) {
 // selected type's entities on the right.
 templ accessTab(d entityData, self string) {
 	{{ subject := d.Tab == tabCan }}
-	if len(d.Groups) == 0 {
+	if d.Unavailable != nil {
+		<section class="sec">
+			<div class="sec-body mute">{ d.Unavailable.Error() }</div>
+		</section>
+	} else if len(d.Groups) == 0 {
 		<section class="sec">
 			<div class="sec-body mute">
 				if subject {
@@ -159,6 +165,15 @@ templ accessList(g typeGroup, matched int, rows []entityGroup, ls labels, self e
 		for _, e := range g.Errs {
 			@errorBox(e)
 		}
+		if len(g.Skipped) > 0 {
+			<p class="mute">
+				Not listed:
+				for _, u := range g.Skipped {
+					<code>{ u.Relation }</code>
+					@unavailable(u)
+				}
+			</p>
+		}
 		if matched == 0 {
 			if len(g.Entities) == 0 {
 				<p class="mute">None.</p>
@@ -176,17 +191,17 @@ templ accessList(g typeGroup, matched int, rows []entityGroup, ls labels, self e
 				}
 			</p>
 			<ul class="access-rows">
-				@accessRows(g.Type, rows, ls, self, selfIsSubject, p)
+				@accessRows(g, rows, ls, self, selfIsSubject, p)
 			</ul>
 		}
 	} else {
-		@accessRows(g.Type, rows, ls, self, selfIsSubject, p)
+		@accessRows(g, rows, ls, self, selfIsSubject, p)
 	}
 }
 
-templ accessRows(typ string, rows []entityGroup, ls labels, self entityRef, selfIsSubject bool, p listPage) {
+templ accessRows(g typeGroup, rows []entityGroup, ls labels, self entityRef, selfIsSubject bool, p listPage) {
 	for _, ent := range rows {
-		@accessEntity(typ, ent, ls, self, selfIsSubject)
+		@accessEntity(g.Type, ent, ls, self, selfIsSubject, g.NoExplain)
 	}
 	@moreItem(p)
 }
@@ -195,7 +210,8 @@ templ accessRows(typ string, rows []entityGroup, ls labels, self entityRef, self
 // collapse behind a "+N more" button (studio.js expands them).
 const chipLimit = 12
 
-templ accessEntity(typ string, ent entityGroup, ls labels, self entityRef, selfIsSubject bool) {
+// noExplain says why a relation cannot be explained, by relation.
+templ accessEntity(typ string, ent entityGroup, ls labels, self entityRef, selfIsSubject bool, noExplain map[string]*sqlapi.Unavailable) {
 	<li>
 		<div class="who">
 			if ent.ID == "*" {
@@ -213,7 +229,7 @@ templ accessEntity(typ string, ent entityGroup, ls labels, self entityRef, selfI
 				if i == chipLimit {
 					<button type="button" class="chip more-chips" data-more-chips>+{ num(len(ent.Relations) - chipLimit) } more</button>
 				}
-				@explainChip(sub, rel, obj)
+				@relationChip(sub, rel, obj, noExplain[rel])
 			}
 		</div>
 		<div class="why-out"></div>

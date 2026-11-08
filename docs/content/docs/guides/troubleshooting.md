@@ -149,7 +149,9 @@ together with any views or policies that call them. Run `melange migrate
 
 The database was migrated with a restricted SQL API exposure (the `sql:`
 section of `melange.yaml`), and the relation, or its function family, is not
-part of it.
+part of it. The Go and TypeScript runtimes report it as a `ValidationError`
+with code 2000; `melange explain`, `melange expand` and studio name the
+relation and the setting to change.
 
 **Fix**: add the relation to `sql.relations.include` (or remove it from
 `exclude`, or turn its family back on) and run `melange migrate`. `melange

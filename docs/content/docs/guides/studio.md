@@ -169,6 +169,31 @@ The Health page runs the same checks as [`melange doctor`](../../reference/cli/#
 
 {{< studio-screenshot name="health" alt="The Health page showing melange doctor checks grouped by category with pass and warning counts" >}}
 
+## Restricted SQL API Exposure
+
+A database migrated with a restricted [exposure](../../reference/sql-api/#exposure)
+(the `sql:` section of `melange.yaml`) answers for fewer relations or function
+families, and its public functions raise `M2003` for the rest. Studio reads
+the exposure recorded by the last migration and does not call a function for
+a relation it does not answer for:
+
+| Page | Relation not exposed | Family off |
+| ---- | -------------------- | ---------- |
+| Explain, Analyze | The query says the relation is not exposed and how to expose it | Explain says the explain functions are not installed |
+| Expand | The query says the relation is not exposed. In a tree, a pointer that `expand_permission` does not answer for has a `not exposed` label instead of a drill-in | Expand says the expand functions are not installed |
+| Matrix | The relation is labeled `not exposed` and not checked; the summary counts them | A relation that cannot be explained has a plain label instead of an explain chip |
+| Can access, Accessed by | The relation is not listed; the list names the relations left out | The tab says the list functions are not installed |
+| Relation page | The header lists each function family that does not answer for the relation | Same |
+
+Hover a label for the reason. `expand_permission` answers for every relation
+that an exposed relation's pointers lead to, so drilling into a relation that
+is installed but not exposed works.
+
+Under the default exposure, or a database migrated before melange recorded
+the exposure, studio behaves as before: every relation is answered. Without a
+recorded model, studio calls the functions and reports an `M2003` the same
+way.
+
 ## Database Privileges
 
 Studio only reads, so it can run as a dedicated low-privilege role. The minimum, for melange objects in the `public` schema:
