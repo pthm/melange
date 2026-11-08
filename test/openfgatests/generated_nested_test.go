@@ -17,7 +17,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pthm/melange/melange"
-	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/pkg/parser"
 	"github.com/pthm/melange/test/openfgatests"
 	"github.com/pthm/melange/test/testutil"
@@ -138,6 +137,7 @@ type document
     define a: [user]
     define b: [user, user:*]
     define c: [user, group#member]
+    define pk: a from parent or b from parent or v from parent
 `)
 	m := nestedModel{direct: []string{"a", "b", "c"}}
 	count := 3 + g.take()%3
@@ -201,15 +201,21 @@ func runNestedDifferential(t *testing.T, program []byte) bool {
 		ids[i] = fmt.Sprint(i)
 		all = append(all, g.tuples(m, ids[i])...)
 	}
-	relations := append([]string{"a", "b", "c"}, m.derived...)
-	return compareNested(t, m.dsl, relations, ids, all, fmt.Sprintf("FuzzNestedAlgebra input: %x", program))
+	// pk grants only through parent arms, so it has a parent-key accessible
+	// function, which the random relations rarely do. It stays out of the
+	// expression pool, so the generator's choices are as before.
+	relations := append([]string{"a", "b", "c", "pk"}, m.derived...)
+	return compareNested(t, m.dsl, relations, ids, all, g.exposure(relations), fmt.Sprintf("FuzzNestedAlgebra input: %x", program))
 }
 
 // compareNested loads dsl and tuples into OpenFGA and melange and compares
 // every Check, ListUsers and ListObjects answer for the document relations
-// on the sample objects named by ids (document:d<id>, group:g<id>). It
-// returns false when the model is outside the domain both accept.
-func compareNested(t *testing.T, dsl string, relations, ids []string, all []*openfgav1.TupleKey, replay string) bool {
+// on the sample objects named by ids (document:d<id>, group:g<id>), and the
+// accessible functions' sets with ListObjects. Melange is migrated with x:
+// relations it does not expose, and families it turns off, must raise M2003
+// from the public dispatchers. It returns false when the model is outside
+// the domain both accept.
+func compareNested(t *testing.T, dsl string, relations, ids []string, all []*openfgav1.TupleKey, x nestedExposure, replay string) bool {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -244,7 +250,11 @@ func compareNested(t *testing.T, dsl string, relations, ids []string, all []*ope
 		subject_type text, subject_id text, relation text, object_type text, object_id text
 	)`)
 	require.NoError(t, err)
-	require.NoError(t, migrator.NewMigrator(db, "").MigrateWithTypes(ctx, types))
+	t.Logf("exposure: %s", x)
+	x.migrate(t, ctx, db, dsl, types)
+	api := newExposedAPI(t, types, x)
+	api.requireConsistent(t, ctx, db, x)
+	fam := api.exposure.Functions
 
 	for start := 0; start < len(all); start += 40 {
 		_, err = oracle.Write(ctx, &openfgav1.WriteRequest{
@@ -256,8 +266,8 @@ func compareNested(t *testing.T, dsl string, relations, ids []string, all []*ope
 	insertAlgebraTuples(t, ctx, db, all)
 
 	mismatch := func(kind string, query, want, got any) {
-		t.Fatalf("%s mismatch\nquery=%v\nOpenFGA=%v\nMelange=%v\ntuples=%v\nreplay with %s",
-			kind, query, want, got, all, replay)
+		t.Fatalf("%s mismatch\nquery=%v\nOpenFGA=%v\nMelange=%v\nexposure=%s\ntuples=%v\nreplay with %s",
+			kind, query, want, got, x, all, replay)
 	}
 	// oracleCheck asks OpenFGA's Check.
 	oracleCheck := func(user, rel, object string) (bool, error) {
@@ -290,10 +300,16 @@ func compareNested(t *testing.T, dsl string, relations, ids []string, all []*ope
 	}
 	compared := 0
 
+	listSubjects := `SELECT * FROM list_accessible_subjects('document', $1, $2, 'user')`
 	for _, id := range ids {
 		doc := "d" + id
 		subjects := []string{"user:alice", "user:bob", "user:stranger", "group:g" + id + "#member"}
 		for _, rel := range relations {
+			if !api.exposes(rel) {
+				requireNotExposed(t, ctx, db, x, `SELECT check_permission('user', 'alice', $1, 'document', $2)`, rel, doc)
+				requireNotExposed(t, ctx, db, x, listSubjects, doc, rel)
+				continue
+			}
 			for _, subject := range subjects {
 				query := fmt.Sprintf("check %s %s document:%s", subject, rel, doc)
 				allowed, err := oracleCheck(subject, rel, "document:"+doc)
@@ -311,6 +327,10 @@ func compareNested(t *testing.T, dsl string, relations, ids []string, all []*ope
 				compared++
 			}
 
+			if !on(fam.ListSubjects) {
+				requireNotExposed(t, ctx, db, x, listSubjects, doc, rel)
+				continue
+			}
 			for _, filter := range []string{"user", "group#member"} {
 				ft, fr, _ := strings.Cut(filter, "#")
 				want, err := oracle.ListUsers(ctx, &openfgav1.ListUsersRequest{
@@ -348,7 +368,28 @@ func compareNested(t *testing.T, dsl string, relations, ids []string, all []*ope
 		}
 	}
 
+	accessibleCalls, parentKeyCalls := 0, 0
 	for _, rel := range relations {
+		// Explain answers for exposed relations; expand also for the relations
+		// they reach, so only its family switch is asserted for the others.
+		explain := `SELECT explain_permission('user', 'alice', $1, 'document', 'd0')`
+		expand := `SELECT expand_permission('document', 'd0', $1)`
+		if api.exposes(rel) && on(fam.Explain) {
+			queryStrings(t, ctx, db, explain, rel)
+		} else {
+			requireNotExposed(t, ctx, db, x, explain, rel)
+		}
+		if !on(fam.Expand) {
+			requireNotExposed(t, ctx, db, x, expand, rel)
+		} else if api.exposes(rel) {
+			queryStrings(t, ctx, db, expand, rel)
+		}
+		if !api.exposes(rel) {
+			requireNotExposed(t, ctx, db, x, `SELECT * FROM list_accessible_objects('user', 'alice', $1, 'document')`, rel)
+			requireNotExposed(t, ctx, db, x, `SELECT * FROM accessible_objects('user', 'alice', $1, 'document')`, rel)
+			continue
+		}
+		accessible := api.accessibleFor(rel)
 		for _, subject := range []string{"user:alice", "user:bob", "group:g0#member"} {
 			want, err := oracle.ListObjects(ctx, &openfgav1.ListObjectsRequest{
 				StoreId: storeID, AuthorizationModelId: modelID, Type: "document", Relation: rel, User: subject,
@@ -361,22 +402,58 @@ func compareNested(t *testing.T, dsl string, relations, ids []string, all []*ope
 			}
 			wantSet := slices.Sorted(slices.Values(want.GetObjects()))
 			st, sid, _ := strings.Cut(subject, ":")
-			gotSet := queryStrings(t, ctx, db,
-				`SELECT 'document:' || object_id FROM list_accessible_objects($1, $2, $3, 'document')`, st, sid, rel)
-			slices.Sort(gotSet)
-			if !slices.Equal(wantSet, gotSet) {
-				diff := unexplained(wantSet, gotSet, func(object string) (bool, bool) {
-					allowed, err := oracleCheck(subject, rel, object)
-					return allowed, err == nil
-				})
-				if len(diff) > 0 {
-					mismatch("listobjects", query, wantSet, gotSet)
+			// same compares a melange answer for the subject with ListObjects.
+			same := func(kind, sqlQuery string, args ...any) {
+				gotSet := queryStrings(t, ctx, db, sqlQuery, slices.Concat([]any{st, sid}, args)...)
+				slices.Sort(gotSet)
+				if !slices.Equal(wantSet, gotSet) {
+					diff := unexplained(wantSet, gotSet, func(object string) (bool, bool) {
+						allowed, err := oracleCheck(subject, rel, object)
+						return allowed, err == nil
+					})
+					if len(diff) > 0 {
+						mismatch(kind, query, wantSet, gotSet)
+					}
+				}
+				compared++
+			}
+			if on(fam.ListObjects) {
+				same("listobjects",
+					`SELECT 'document:' || object_id FROM list_accessible_objects($1, $2, $3, 'document')`, rel)
+			} else {
+				requireNotExposed(t, ctx, db, x, `SELECT * FROM list_accessible_objects($1, $2, $3, 'document')`, st, sid, rel)
+			}
+			if on(fam.Accessible) {
+				same("accessible_objects",
+					`SELECT DISTINCT 'document:' || object_id FROM accessible_objects($1, $2, $3, 'document')`, rel)
+			} else {
+				requireNotExposed(t, ctx, db, x, `SELECT * FROM accessible_objects($1, $2, $3, 'document')`, st, sid, rel)
+			}
+			// The per-relation form answers alone and with the subject's kind,
+			// and returns nothing when told the wrong kind.
+			kind, wrong := "FALSE", "TRUE"
+			if strings.Contains(sid, "#") {
+				kind, wrong = wrong, kind
+			}
+			for _, f := range accessible {
+				q, args := accessibleQuery(f, "")
+				same(f.Name, q, args...)
+				if f.Link != "" {
+					parentKeyCalls++
+					continue
+				}
+				accessibleCalls++
+				q, _ = accessibleQuery(f, kind)
+				same(f.Name+" p_userset="+kind, q)
+				q, _ = accessibleQuery(f, wrong)
+				if got := queryStrings(t, ctx, db, q, st, sid); len(got) > 0 {
+					mismatch(f.Name+" p_userset="+wrong, query, []string{}, got)
 				}
 			}
-			compared++
 		}
 	}
-	t.Logf("compared %d answers across %d tuple assignments", compared, len(ids))
+	t.Logf("compared %d answers (%d through accessible functions, %d through parent-key ones) across %d tuple assignments",
+		compared, accessibleCalls, parentKeyCalls, len(ids))
 	return true
 }
 
