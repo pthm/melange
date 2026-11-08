@@ -14,12 +14,13 @@ import (
 // page is what the shell needs to know about the current view.
 type page struct {
 	Env    string
-	Active string // top-nav section: model | tuples | history | health
+	Active string // top-nav section: model | sql | tuples | history | health
 	Title  string // document title; empty uses the section's name
 }
 
 var navItems = []struct{ ID, Label, Href string }{
 	{"model", "Model", "/"},
+	{"sql", "SQL API", "/sql"},
 	{"tuples", "Tuples", "/tuples"},
 	{"history", "History", "/history"},
 	{"health", "Health", "/health"},

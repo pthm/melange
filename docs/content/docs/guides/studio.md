@@ -107,9 +107,22 @@ Without it, Analyze still shows the plan and total timings, with a note that per
 
 #### Relation Pages
 
-Each relation has a page showing its `define` line, the relations it reads (**Depends on**) and the relations that read it (**Used by**), the code generator's feature analysis, and the SQL source of its deployed functions (check, list objects, list subjects, explain, expand), read from `pg_proc`.
+Each relation has a page showing its `define` line, the relations it reads (**Depends on**) and the relations that read it (**Used by**), the code generator's feature analysis, and the SQL source of its deployed functions, read from `pg_proc`: every function the deployed SQL API installs for it (check, list objects, list subjects, accessible and its parent-key form, explain, expand), and why a family is not installed. It links to the relation on the [SQL API](#sql-api) page.
 
 {{< studio-screenshot name="relation" alt="The relation page for repository#can_read, with its definition, feature analysis and dependencies" >}}
+
+### SQL API
+
+The SQL API page (`/sql`) is a viewer for the functions the database installs, and how they relate to the model. It describes the **deployed model** and the exposure its last migration recorded, the same report as [`melange functions --db`](../../reference/cli/#functions), so it needs no `melange.yaml`.
+
+- **Overview** lists what drifted: expected functions that are missing, installed with other arguments or another body, or with stale overloads; orphans the last migration recorded; functions only named like generated ones (unmanaged, never dropped); name collisions; and a note when another melange version generated the functions. The dispatchers follow, with the relations each answers for.
+- **A type** (sidebar) lists its exposed relations, then its internal ones (not exposed, modelling only) folded away. Each function shows its exact name (truncated names are marked), kind, public or internal, and status; opening it shows the signature, an example call and how an application uses the result, each with a **Copy** button, any note (an accessible function is inlined into the calling query, so the schema holding `melange_tuples` must be on its `search_path`), and the functions its body may call. Families that are not installed say why.
+- **A kind** (sidebar) lists that kind's functions across the model, for example every `accessible` function, which is the quickest way to find a truncated name.
+- A type and a kind combine. **all kinds** and **all types** in the sidebar drop one of them.
+
+Bodies are compared with what this melange generates for the deployed model, compiled once per model and cached, and checked through `md5(prosrc)`. The page reads only `pg_proc` and `melange_migrations`.
+
+The [Health](#health) page answers a different question: it runs `melange doctor`, whose Generated Functions checks compare the **local schema file**. While a migration is pending, Health lists what `migrate` would add and the SQL API page what the deployed model is missing; each page links to the other.
 
 ### Tuples
 
@@ -165,7 +178,7 @@ The record is the same data as [`melange history`](../../reference/cli/#history)
 
 ### Health
 
-The Health page runs the same checks as [`melange doctor`](../../reference/cli/#doctor), grouped by category. The checks that compare a local schema file with the database use `--schema`, else the `schema` of a config file or `MELANGE_SCHEMA`. With none of these, studio skips the schema file and drift checks and says so; it never needs a schema file to run.
+The Health page runs the same checks as [`melange doctor`](../../reference/cli/#doctor), grouped by category. Its Generated Functions checks compare the local schema file; the [SQL API](#sql-api) page compares the deployed model. The checks that compare a local schema file with the database use `--schema`, else the `schema` of a config file or `MELANGE_SCHEMA`. With none of these, studio skips the schema file and drift checks and says so; it never needs a schema file to run.
 
 {{< studio-screenshot name="health" alt="The Health page showing melange doctor checks grouped by category with pass and warning counts" >}}
 

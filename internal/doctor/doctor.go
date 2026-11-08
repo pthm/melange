@@ -748,10 +748,20 @@ func (d *Doctor) checkGeneratedFunctions(ctx context.Context, report *Report) er
 			}
 		}
 
-		// Find orphan functions (in DB but not expected)
+		// Find orphan functions: installed, not expected, and recorded by
+		// the last migration, which is what migrate drops. A function only
+		// named like a generated one (an application's explain_invoice) is
+		// not an orphan, and without a record nothing is, since migrate
+		// then drops nothing.
+		recorded := make(map[string]bool)
+		if d.lastMigration != nil {
+			for _, fn := range d.lastMigration.FunctionNames {
+				recorded[fn] = true
+			}
+		}
 		var orphans []string
 		for _, fn := range currentFuncs {
-			if !expectedSet[fn] {
+			if !expectedSet[fn] && recorded[fn] {
 				orphans = append(orphans, fn)
 			}
 		}

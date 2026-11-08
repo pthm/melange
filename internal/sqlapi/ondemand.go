@@ -219,28 +219,29 @@ $$ LANGUAGE sql STABLE;`
 // exposure, the data schema and the family, so studio, which explains on
 // every click, compiles a model once. Compiling a large model takes most of
 // a second.
-var ddlCache = &scriptCache{max: 8}
+var ddlCache = &cache[string]{max: 8}
 
-type scriptCache struct {
+// cache holds what is compiled from a model, keyed by the model.
+type cache[V any] struct {
 	mu      sync.Mutex
 	max     int
-	scripts map[string]string
+	entries map[string]V
 }
 
-func (c *scriptCache) get(key string) (string, bool) {
+func (c *cache[V]) get(key string) (V, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	s, ok := c.scripts[key]
-	return s, ok
+	v, ok := c.entries[key]
+	return v, ok
 }
 
-// put stores a script, starting over when the cache is full: it only ever
+// put stores an entry, starting over when the cache is full: it only ever
 // holds the few models one process talks to.
-func (c *scriptCache) put(key, script string) {
+func (c *cache[V]) put(key string, v V) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.scripts == nil || len(c.scripts) >= c.max {
-		c.scripts = make(map[string]string)
+	if c.entries == nil || len(c.entries) >= c.max {
+		c.entries = make(map[string]V)
 	}
-	c.scripts[key] = script
+	c.entries[key] = v
 }

@@ -1334,7 +1334,7 @@ func healthPage(env, schemaPath string, report *doctor.Report, errMsg string) te
 					}()
 				}
 				ctx = templ.InitializeContext(ctx)
-				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 114, "<p class=\"page-meta\">The checks <code>melange doctor</code> runs against this database. ")
+				templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 114, "<p class=\"page-meta\">The checks <code>melange doctor</code> runs against this database. Its Generated Functions checks compare the local schema file; the <a href=\"/sql\">SQL API</a> page compares the deployed model and recorded exposure, so the two differ while a migration is pending. ")
 				if templ_7745c5c3_Err != nil {
 					return templ_7745c5c3_Err
 				}
@@ -1346,7 +1346,7 @@ func healthPage(env, schemaPath string, report *doctor.Report, errMsg string) te
 					var templ_7745c5c3_Var60 string
 					templ_7745c5c3_Var60, templ_7745c5c3_Err = templ.JoinStringErrs(schemaPath)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 262, Col: 37}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 263, Col: 37}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var60))
 					if templ_7745c5c3_Err != nil {
@@ -1412,7 +1412,7 @@ func healthPage(env, schemaPath string, report *doctor.Report, errMsg string) te
 				var templ_7745c5c3_Var61 string
 				templ_7745c5c3_Var61, templ_7745c5c3_Err = templruntime.NewAttributeExpression(anchor(c.Name)).Resolve(ctx)
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 280, Col: 44}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 281, Col: 44}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var61)
 				if templ_7745c5c3_Err != nil {
@@ -1478,7 +1478,7 @@ func healthPage(env, schemaPath string, report *doctor.Report, errMsg string) te
 					var templ_7745c5c3_Var64 string
 					templ_7745c5c3_Var64, templ_7745c5c3_Err = templ.JoinStringErrs(statusLabel(chk.Status))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 286, Col: 83}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 287, Col: 83}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var64))
 					if templ_7745c5c3_Err != nil {
@@ -1491,7 +1491,7 @@ func healthPage(env, schemaPath string, report *doctor.Report, errMsg string) te
 					var templ_7745c5c3_Var65 string
 					templ_7745c5c3_Var65, templ_7745c5c3_Err = templ.JoinStringErrs(chk.Message)
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 288, Col: 23}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 289, Col: 23}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var65))
 					if templ_7745c5c3_Err != nil {
@@ -1514,7 +1514,7 @@ func healthPage(env, schemaPath string, report *doctor.Report, errMsg string) te
 							var templ_7745c5c3_Var66 string
 							templ_7745c5c3_Var66, templ_7745c5c3_Err = templ.JoinStringErrs(chk.Details)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 292, Col: 31}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 293, Col: 31}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var66))
 							if templ_7745c5c3_Err != nil {
@@ -1533,7 +1533,7 @@ func healthPage(env, schemaPath string, report *doctor.Report, errMsg string) te
 							var templ_7745c5c3_Var67 string
 							templ_7745c5c3_Var67, templ_7745c5c3_Err = templ.JoinStringErrs(chk.FixHint)
 							if templ_7745c5c3_Err != nil {
-								return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 295, Col: 56}
+								return templ.Error{Err: templ_7745c5c3_Err, FileName: `ops.templ`, Line: 296, Col: 56}
 							}
 							_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var67))
 							if templ_7745c5c3_Err != nil {

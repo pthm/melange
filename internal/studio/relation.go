@@ -9,7 +9,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/pthm/melange/internal/sqlapi"
-	"github.com/pthm/melange/internal/sqlgen/sqldsl"
+	"github.com/pthm/melange/internal/sqlgen"
 	"github.com/pthm/melange/pkg/compiler"
 	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/pkg/schema"
@@ -35,6 +35,9 @@ type relationData struct {
 	// OnDemand lists the families compiled for each call because the
 	// database was migrated without them (explain, expand).
 	OnDemand []string
+	// API is the relation in the deployed SQL API catalog; nil without a
+	// model.
+	API *sqlapi.Relation
 }
 
 // relEdge is a link between two relations; Kinds says how (computed,
@@ -75,6 +78,9 @@ func (s *Server) relation(w http.ResponseWriter, r *http.Request) {
 				d.OnDemand = append(d.OnDemand, f.Name())
 			}
 		}
+		if report, err := sqlapi.Describe(d.Model.Types, d.Model.Exposure, s.dbSchema); err == nil {
+			d.API = report.Find(d.Type, d.Relation)
+		}
 		d.DependsOn, d.UsedBy = ix.dependsOn(d.Type, d.Relation), ix.usedBy(d.Type, d.Relation)
 		o := newModelOrder(d.Model)
 		byModel := func(a, b relEdge) int {
@@ -93,25 +99,43 @@ func (s *Server) relation(w http.ResponseWriter, r *http.Request) {
 	d.Known = true
 	// The deployed source, not a regeneration: it is what actually runs, and
 	// regenerating a large model takes most of a second.
-	d.Funcs, d.FuncErr = s.relationFuncs(r, d.Type, d.Relation)
+	d.Funcs, d.FuncErr = s.relationFuncs(r, relationFunctions(d.API, d.Type, d.Relation))
 	render(w, r, relationPage(d))
 }
 
-// relationFuncs reads the relation's specialized functions from pg_proc,
-// in the order check, check_nw, list objects, list subjects, explain, expand.
-// Names go through SafeIdentifier so long names hash exactly as codegen did.
-func (s *Server) relationFuncs(r *http.Request, typ, rel string) (funcs []sqlFunc, errMsg string) {
-	names := []string{
-		sqldsl.SafeIdentifier("check_", typ, rel, ""),
-		sqldsl.SafeIdentifier("check_", typ, rel, "_nw"),
-		sqldsl.ListObjectsFunctionName(typ, rel),
-		sqldsl.ListSubjectsFunctionName(typ, rel),
-		sqldsl.SafeIdentifier("explain_", typ, rel, ""),
-		sqldsl.SafeIdentifier("expand_", typ, rel, ""),
+// relationFunctions returns the relation's functions, in catalog order:
+// the ones the deployed SQL API installs, or without a model every
+// per-relation name the relation could have (parent-key names need the
+// model).
+func relationFunctions(api *sqlapi.Relation, typ, rel string) []sqlgen.CatalogFunction {
+	if api != nil {
+		out := make([]sqlgen.CatalogFunction, len(api.Functions))
+		for i, f := range api.Functions {
+			out[i] = f.CatalogFunction
+		}
+		return out
 	}
-	// Parallel to names: the role is known from position, not guessed from
-	// the name (a relation called foo_nw would look like a check_nw).
-	labels := []string{"check", "check, no wildcard", "list objects", "list subjects", "explain", "expand"}
+	var out []sqlgen.CatalogFunction
+	for _, k := range sqlgen.FunctionKinds {
+		if name := sqlgen.RelationFunctionName(k, typ, rel); name != "" {
+			out = append(out, sqlgen.CatalogFunction{Name: name, Kind: k, Type: typ, Relation: rel})
+		}
+	}
+	return out
+}
+
+// relationFuncs reads fns from pg_proc, in their order, every overload of a
+// name included. Labels come from the catalog, never from parsing a name (a
+// relation called foo_nw would look like a check_nw).
+func (s *Server) relationFuncs(r *http.Request, fns []sqlgen.CatalogFunction) (funcs []sqlFunc, errMsg string) {
+	names := make([]string, len(fns))
+	labels := make(map[string]string, len(fns))
+	for i, f := range fns {
+		names[i] = f.Name
+		if _, ok := labels[f.Name]; !ok {
+			labels[f.Name] = kindLabel(f)
+		}
+	}
 	rows, err := s.db.QueryContext(r.Context(), `
 		SELECT p.proname, pg_get_functiondef(p.oid)
 		FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -126,7 +150,7 @@ func (s *Server) relationFuncs(r *http.Request, typ, rel string) (funcs []sqlFun
 		if err := rows.Scan(&f.Name, &f.Def); err != nil {
 			return nil, err.Error()
 		}
-		f.Label = labels[slices.Index(names, f.Name)]
+		f.Label = labels[f.Name]
 		funcs = append(funcs, f)
 	}
 	if err := rows.Err(); err != nil {

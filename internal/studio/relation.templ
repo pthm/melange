@@ -70,23 +70,21 @@ templ relationPage(d relationData) {
 				<section class="sec">
 					@secHead("Generated SQL", num(len(d.Funcs))) {
 						<p class="help">
-							The specialized functions installed in the database for this relation, read back from PostgreSQL; this is what runs.
+							The functions the deployed SQL API installs for this relation, read back from PostgreSQL; this is what runs.
 							The dispatchers route <code>check_permission</code> and the list functions here.
+							if d.Model != nil {
+								<a href={ sqlRelationURL(d.Type, d.Relation) }>SQL API</a> has their signatures, example calls and status.
+							}
 						</p>
 					}
 					<div class="sec-body stack">
 						if d.FuncErr != "" {
 							@errorBox(d.FuncErr)
 						} else if len(d.Funcs) == 0 {
-							<p class="mute">
-								No specialized functions are installed for this relation; the dispatchers fall back to the generic implementation.
-								if d.Analysis != nil && d.Analysis.Capabilities.CheckReason != "" {
-									Check: { d.Analysis.Capabilities.CheckReason }.
-								}
-								if d.Analysis != nil && d.Analysis.Capabilities.ListReason != "" {
-									List: { d.Analysis.Capabilities.ListReason }.
-								}
-							</p>
+							<p class="mute">No functions for this relation are installed in the database.</p>
+						}
+						if d.API != nil {
+							@notInstalledList(d.API.NotInstalled)
 						}
 						for _, f := range d.Funcs {
 							<details class="disclose">
@@ -136,7 +134,7 @@ templ relationAnalysis(typ string, a *compiler.RelationAnalysis) {
 					if a.Capabilities.CheckAllowed {
 						<span class="badge ok">specialized</span>
 					} else {
-						<span class="badge warn">generic</span> <span class="mute">{ a.Capabilities.CheckReason }</span>
+						<span class="badge warn">not generated</span> <span class="mute">{ a.Capabilities.CheckReason }</span>
 					}
 				</dd>
 				<dt>list</dt>
@@ -144,7 +142,7 @@ templ relationAnalysis(typ string, a *compiler.RelationAnalysis) {
 					if a.Capabilities.ListAllowed {
 						<span class="badge ok">specialized</span> <span class="mute">strategy</span> <code>{ a.ListStrategy.String() }</code>
 					} else {
-						<span class="badge warn">generic</span> <span class="mute">{ a.Capabilities.ListReason }</span>
+						<span class="badge warn">not generated</span> <span class="mute">{ a.Capabilities.ListReason }</span>
 					}
 				</dd>
 				<dt>satisfied by</dt>

@@ -189,6 +189,56 @@ drop. The error lists each dependent.
 migrate --force` to drop them with `CASCADE`. See
 [Dependent objects](../migrations/#dependent-objects).
 
+### "function accessible_... does not exist" for a long relation name
+
+Function names longer than PostgreSQL's 63 bytes are truncated and end in a
+hash of the type and relation, so a name built by hand from a long relation
+(`accessible_pull_request_can_read_security_advisories_and_vulnerability_reports`)
+does not exist. The installed one is
+`accessible_pull_re_can_read_security_advisories_and_vu_d0edb52c`.
+
+**Fix**: look the name up instead of building it.
+`melange functions show pull_request#can_read_security_advisories_and_vulnerability_reports`
+prints every function of the relation under its exact name, with an example
+call; `melange functions --kind accessible` lists every accessible function,
+and studio's [SQL API page](../studio/#sql-api) has the same with a Copy
+button. In application code, use the names the
+[generated client](../../reference/generated-code/#accessible-function-names)
+carries.
+
+### melange functions reports missing functions or drift
+
+`melange functions --db` compares the database with the model and exposure
+its last migration recorded:
+
+- **missing** or **body_changed**: a function was dropped, or replaced by
+  hand with another body. `melange migrate` skips while the schema, exposure
+  and codegen version are unchanged, so run `melange migrate --force` to
+  reinstall it (`--force` also drops orphans with `CASCADE`; check
+  `--dry-run` first).
+- **signature_differs**: a function of that name is installed with other
+  arguments. `CREATE OR REPLACE` cannot rename an argument, and for other
+  argument types it adds an overload, so drop the installed one first
+  (`DROP FUNCTION name(<arguments>)`, the arguments as listed), then run
+  `melange migrate --force`.
+- Under codegen version skew the detail says otherwise: when an older
+  melange migrated, run a plain `melange migrate` with this melange first,
+  which applies its functions and refuses to drop dependents of the old
+  ones; when a newer melange migrated, use that version, since `--force`
+  would override migrate's refusal to downgrade.
+- **codegen_differs**: this melange generates a different body than the
+  version that migrated. The next `melange migrate` with this melange
+  replaces it. A note says when the versions differ.
+- **stale overloads**: an older signature of the function is still installed.
+  Drop it (`DROP FUNCTION name(<arguments>)`, the arguments as listed).
+- **orphans**: functions the last migration recorded that the model no longer
+  generates. `melange migrate` drops them.
+
+Unmanaged functions (named like generated ones, recorded by no migration,
+such as your own `check_invoice`) are listed for information and never
+dropped. `melange doctor` compares the local schema file instead, so it can
+disagree with `functions` while a migration is pending.
+
 ### Schema out of sync after updating Melange
 
 `melange doctor` detects when the codegen version has changed since the last migration.
@@ -212,6 +262,16 @@ melange studio --db postgres://localhost/mydb
 ```
 
 Opens a local, read-only web console with Explain, Expand, a check matrix of every relation on an object for one subject, `EXPLAIN ANALYZE` timings, the tuples behind each entity, and the doctor checks. See [Studio](../studio/).
+
+### List the generated functions
+
+```bash
+melange functions                          # from the schema file and melange.yaml
+melange functions --db postgres://localhost/mydb   # what the database has installed
+melange functions show document#viewer     # signatures and example calls
+```
+
+See [`melange functions`](../../reference/cli/#functions).
 
 ### Preview Generated SQL
 

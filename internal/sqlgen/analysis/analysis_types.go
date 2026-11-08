@@ -1249,9 +1249,9 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		// A pattern is complex if ANY relation in its closure is not closure-compatible
 		// (has userset, TTU, exclusion, or intersection).
 		//
-		// For complex patterns, we call check_permission_internal which always works
-		// because it falls back to check_permission_generic_internal for non-generatable
-		// relations. So we don't need to check if the subject relation is generatable -
+		// For complex patterns, we call check_permission_internal, which answers for
+		// any relation: one with no generated function has no case and is denied.
+		// So we don't need to check if the subject relation is generatable -
 		// we just mark the pattern as complex and use the function call approach.
 		//
 		// We only reject if a relation in the closure is truly unknown (not in the schema).

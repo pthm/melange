@@ -187,17 +187,19 @@ func (e *DatabaseAheadError) Error() string {
 // pass: unstamped "dev" builds, bare commit hashes, and local `git describe`
 // builds, which semver would misread as pre-releases of their base tag.
 func downgradeGuardError(rec *MigrationRecord) error {
-	if rec == nil {
+	if rec == nil || !CodegenVersionAhead(rec.CodegenVersion) {
 		return nil
 	}
-	deployed, current := canonicalVersion(rec.CodegenVersion), canonicalVersion(CodegenVersion())
-	if !orderable(deployed) || !orderable(current) {
-		return nil
-	}
-	if semver.Compare(deployed, current) > 0 {
-		return &DatabaseAheadError{Deployed: rec.CodegenVersion, Current: CodegenVersion()}
-	}
-	return nil
+	return &DatabaseAheadError{Deployed: rec.CodegenVersion, Current: CodegenVersion()}
+}
+
+// CodegenVersionAhead reports whether deployed is a newer codegen version
+// than this melange's, so migrate refuses to replace its functions unless
+// forced (DatabaseAheadError). Versions that cannot be ordered are not
+// ahead.
+func CodegenVersionAhead(deployed string) bool {
+	d, current := canonicalVersion(deployed), canonicalVersion(CodegenVersion())
+	return orderable(d) && orderable(current) && semver.Compare(d, current) > 0
 }
 
 // gitDescribeSuffix matches what `git describe --tags --dirty` appends to a tag

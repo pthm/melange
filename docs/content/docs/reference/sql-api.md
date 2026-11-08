@@ -21,6 +21,8 @@ When you run `melange migrate`, Melange generates:
 
 These are the primary entry points. Internally, Melange generates specialized per-relation functions (e.g., `check_document_viewer`) that the dispatchers route to.
 
+To see the exact functions a database has, with their signatures and an example call for each, run [`melange functions --db`](../cli/#functions) (or `melange functions show <type#relation>` for one relation) or open studio's [SQL API page](../../guides/studio/#sql-api). Long names are truncated with a hash, so look them up there rather than building them.
+
 ## Exposure
 
 Which of these functions exist, and which relations they answer for, depends
@@ -446,7 +448,7 @@ ORDER BY d.created_at DESC
 LIMIT 50;
 ```
 
-The inlined query reads `melange_tuples` through your query's `search_path`, so the schema holding it must be on the path. Rows can repeat; `IN` does not need them distinct. Long type and relation names are shortened with a hash to fit PostgreSQL's 63-character limit; `accessible_objects` needs no names, and [generated clients](#names-in-generated-clients) carry the exact ones.
+The inlined query reads `melange_tuples` through your query's `search_path`, so the schema holding it must be on the path. Rows can repeat; `IN` does not need them distinct. Long type and relation names are shortened with a hash to fit PostgreSQL's 63-character limit; `accessible_objects` needs no names, and [generated clients](#names-in-generated-clients) and [`melange functions`](../cli/#functions) carry the exact ones.
 
 ### accessible_{type}_{relation}_by_{link}
 

@@ -144,6 +144,8 @@ func agentInstructions(a *initAnswers, configPath string) string {
 	w("")
 	w("Unexpected allow or deny: run `melange explain <subject> <relation> <object>` (e.g. `user:alice viewer document:1`) before changing the model; it shows each path tried and its tuples. `melange doctor` diagnoses setup problems.")
 	w("")
+	w("`melange functions show <type>#<relation>` prints a relation's SQL functions under their exact names (long ones are truncated), with signatures and example calls; `melange functions` lists them all.")
+	w("")
 	w("`validate` and `generate` work offline; `migrate`, `explain`, and `doctor` need the database. If the project's usual setup can't reach one, say so instead of improvising one.")
 	w("")
 	w("Docs, when needed: https://melange.sh/llms.txt")

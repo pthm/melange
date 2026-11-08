@@ -5,14 +5,15 @@ import "slices"
 
 // GenerationCapabilities represents the unified generation eligibility for a relation.
 // CheckAllowed gates specialized check SQL; ListAllowed gates specialized list SQL.
-// When false, the respective dispatcher falls back to the generic implementation.
+// When false, no function is generated and the dispatchers have no case for the
+// relation: there is no generic fallback, so check denies and the lists are empty.
 type GenerationCapabilities struct {
 	// CheckAllowed is true if specialized check SQL can be generated.
-	// When false, the check dispatcher falls back to check_permission_generic_internal.
+	// When false, check_permission denies the relation.
 	CheckAllowed bool
 
 	// ListAllowed is true if specialized list SQL can be generated.
-	// When false, the list dispatcher falls back to list_accessible_*_generic functions.
+	// When false, the list dispatchers return no rows for the relation.
 	ListAllowed bool
 
 	// CheckReason explains why CheckAllowed is false (empty if allowed).

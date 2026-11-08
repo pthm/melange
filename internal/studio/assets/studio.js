@@ -10,6 +10,7 @@
 //   details.whatif                 its textarea is disabled (not sent) while closed
 //   [data-explain]                 toggles its row's .why-out (aria-expanded)
 //   .sidebar [aria-current]        scrolled into view on load (large models)
+//   [data-copy]                    copies its value to the clipboard
 document.addEventListener("input", (e) => {
   const input = e.target.closest("[data-filter]");
   if (!input) return;
@@ -86,4 +87,14 @@ document.addEventListener("keydown", (e) => {
   if (e.key !== "Enter" || !(e.metaKey || e.ctrlKey) || !e.target.matches?.("textarea")) return;
   e.preventDefault();
   e.target.form?.requestSubmit();
+});
+
+// [data-copy] buttons copy their value (an example call on the SQL API page).
+document.addEventListener("click", (e) => {
+  const button = e.target.closest("[data-copy]");
+  if (!button || !navigator.clipboard) return;
+  navigator.clipboard.writeText(button.dataset.copy).then(() => {
+    button.textContent = "Copied";
+    setTimeout(() => { button.textContent = "Copy"; }, 1200);
+  }, () => {});
 });

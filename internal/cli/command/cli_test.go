@@ -224,6 +224,13 @@ func TestCLI_ValidationErrorsBeforeConnecting(t *testing.T) {
 		{"history limit", []string{"history", "--limit", "0"}, "--limit"},
 		{"validate format", []string{"validate", "--format", "yaml"}, "invalid --format"},
 		{"doctor format", []string{"doctor", "--format", "yaml"}, "invalid --format"},
+		{"functions format", []string{"functions", "--format", "yaml", "--db", unreachableDB}, "invalid --format"},
+		{"functions show format", []string{"functions", "show", "doc#viewer", "--format", "yaml", "--db", unreachableDB}, "invalid --format"},
+		{"functions kind", []string{"functions", "--kind", "lists", "--db", unreachableDB}, "invalid --kind"},
+		{"functions exposed and internal", []string{"functions", "--exposed", "--internal", "--db", unreachableDB}, "mutually exclusive"},
+		{"functions exposure flag with a database", []string{"functions", "--db", unreachableDB, "--no-explain"}, "applies to a schema file"},
+		{"functions show exposure flag with a database", []string{"functions", "show", "doc#viewer", "--db", unreachableDB, "--include-relation", "viewer"}, "applies to a schema file"},
+		{"functions show arguments", []string{"functions", "show"}, "accepts 1 arg"},
 	}
 
 	for _, tc := range cases {
@@ -263,6 +270,7 @@ func TestCLI_UnreachableDatabaseReportsAnError(t *testing.T) {
 		{"status json", []string{"status", "--db", unreachableDB, "--format", "json"}},
 		{"history", []string{"history", "--db", unreachableDB}},
 		{"schema pull", []string{"schema", "pull", "--db", unreachableDB}},
+		{"functions", []string{"functions", "--db", unreachableDB}},
 	}
 
 	for _, tc := range cases {

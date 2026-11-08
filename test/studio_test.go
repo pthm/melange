@@ -413,9 +413,10 @@ func TestStudio_QueriesAndPages(t *testing.T) {
 		t.Run("relation page", func(t *testing.T) {
 			c := c.on(t)
 			body := c.get("/relation?type=organization&relation=member")
-			for _, fn := range []string{"check_organization_member", "list_organization_member_obj", "list_organization_member_sub", "explain_organization_member", "expand_organization_member"} {
+			for _, fn := range []string{"check_organization_member", "list_organization_member_obj", "list_organization_member_sub", "accessible_organization_member", "explain_organization_member", "expand_organization_member"} {
 				assert.Contains(t, body, fn)
 			}
+			assert.Contains(t, body, "accessible (inlinable)", "labels come from the catalog")
 			assert.Contains(t, body, `<span class="f-kw">FUNCTION</span> <span class="f-name">`+f.schema+`.check_organization_member</span>`,
 				"the deployed definition, from the configured schema's pg_proc")
 		})
@@ -561,6 +562,13 @@ func TestStudio_LimitedRole(t *testing.T) {
 
 		assert.Contains(t, c.get("/browse/organization"), "studio-main")
 		assert.Contains(t, c.get("/"), "pull_request")
+
+		// The SQL API page reads only pg_proc and the migration record,
+		// which need no grants of their own.
+		sqlPage := c.get("/sql")
+		assert.Contains(t, sqlPage, "check_permission_bulk")
+		assert.Contains(t, sqlPage, "None: every expected function is installed")
+		assert.Contains(t, c.get("/sql?type=organization"), "accessible_organization_member")
 	})
 }
 

@@ -419,3 +419,11 @@ table.direct td:nth-child(3) .trunc { display: inline-block; max-width: 40ch; ve
 .mig-nav { display: flex; gap: var(--sp-4); }
 .mig-nav a { color: var(--accent); text-decoration: none; white-space: nowrap; }
 .mig-nav a:hover { text-decoration: underline; }
+
+/* SQL API page: one block per relation, functions folded under it. */
+.sql-rel { border-bottom: 1px solid var(--line); padding-bottom: var(--sp-3); }
+.sql-rel:last-child { border-bottom: 0; }
+.sql-rel > p { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-2); margin: 0 0 var(--sp-2); }
+.sql-rel details.disclose > summary .badge { margin-left: var(--sp-1); }
+.copyable code { overflow-wrap: anywhere; }
+button.copy { height: 22px; padding: 0 var(--sp-2); font-size: 12px; margin-left: var(--sp-2); vertical-align: middle; }

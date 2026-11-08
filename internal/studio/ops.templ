@@ -257,7 +257,8 @@ templ healthPage(env, schemaPath string, report *doctor.Report, errMsg string) {
 	@shell(page{Env: env, Active: "health"}, healthSidebar(cats)) {
 		@pageHead("Health", nil) {
 			<p class="page-meta">
-				The checks <code>melange doctor</code> runs against this database.
+				The checks <code>melange doctor</code> runs against this database. Its Generated Functions checks compare the local schema file;
+				the <a href="/sql">SQL API</a> page compares the deployed model and recorded exposure, so the two differ while a migration is pending.
 				if schemaPath != "" {
 					Local schema: <code>{ schemaPath }</code>.
 				} else {
