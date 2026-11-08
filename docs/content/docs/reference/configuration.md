@@ -246,7 +246,13 @@ every command when the configuration is loaded: ignoring it would keep the
 default for the key that was meant.
 
 With a family off, its public function raises `M2003` for every relation the
-model defines. `list_objects`, `accessible` and `parent_key` read each other,
+model defines. Explain and expand are debugging tools, so `expand: false` and
+`explain: false` cost the CLI and studio nothing but time: `melange explain`,
+`melange expand` and studio compile those functions from the recorded model
+into `pg_temp` for each call, which needs a writable primary and the `TEMP`
+privilege (see
+[Explain and Expand on Demand](../sql-api/#explain-and-expand-on-demand)).
+`list_objects`, `accessible` and `parent_key` read each other,
 so the `list_<type>_<relation>_obj` and `accessible_<type>_<relation>`
 functions stay installed while any of the three is on: turning off
 `list_objects` or `accessible` alone removes no per-relation functions, and

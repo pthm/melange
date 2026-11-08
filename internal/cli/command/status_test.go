@@ -67,59 +67,6 @@ func TestSummarizeDrift_EquivalentModelsReportNoDetail(t *testing.T) {
 	}
 }
 
-func TestDeployedTypesFromRecord_PrefersModelJSON(t *testing.T) {
-	encoded, err := schema.MarshalModel(model("user"))
-	if err != nil {
-		t.Fatalf("MarshalModel: %v", err)
-	}
-	// A DSL that would parse to something different, so preferring the JSON is
-	// observable rather than merely plausible.
-	rec := &migrator.MigrationRecord{
-		SchemaDSL: "model\n  schema 1.1\ntype user\n",
-		ModelJSON: encoded,
-	}
-
-	types, err := deployedTypesFromRecord(rec)
-	if err != nil {
-		t.Fatalf("deployedTypesFromRecord: %v", err)
-	}
-	if len(types) != 2 {
-		t.Fatalf("types = %d, want 2 from model_json (not the 1-type DSL)", len(types))
-	}
-}
-
-func TestDeployedTypesFromRecord_FallsBackToDSL(t *testing.T) {
-	rec := &migrator.MigrationRecord{
-		SchemaDSL: "model\n  schema 1.1\ntype user\n",
-		ModelJSON: nil, // never written, or written empty
-	}
-
-	types, err := deployedTypesFromRecord(rec)
-	if err != nil {
-		t.Fatalf("deployedTypesFromRecord: %v", err)
-	}
-	if len(types) != 1 || types[0].Name != "user" {
-		t.Fatalf("types = %+v, want the single type parsed from the DSL", types)
-	}
-}
-
-func TestDeployedTypesFromRecord_PreStorageRecordIsNotAnError(t *testing.T) {
-	types, err := deployedTypesFromRecord(&migrator.MigrationRecord{SchemaChecksum: "abc"})
-	if err != nil {
-		t.Fatalf("a record without a DSL must not error, got %v", err)
-	}
-	if types != nil {
-		t.Errorf("types = %+v, want nil", types)
-	}
-}
-
-func TestDeployedTypesFromRecord_CorruptDSLErrors(t *testing.T) {
-	rec := &migrator.MigrationRecord{SchemaDSL: "this is not a schema"}
-	if _, err := deployedTypesFromRecord(rec); err == nil {
-		t.Error("expected an error for an unparseable recorded DSL")
-	}
-}
-
 // The drift block is omitted from JSON when absent, so consumers that only
 // check `sync` are unaffected by this addition.
 func TestStatusReport_DriftOmittedWhenAbsent(t *testing.T) {

@@ -68,7 +68,7 @@ templ shell(p page, sidebar templ.Component) {
 						if p.Env != "" {
 							<span class="badge accent" title="Active environment">{ p.Env }</span>
 						}
-						<span class="badge" title="Every connection is read-only. What-if Explain uses a temporary view in a transaction that is always rolled back.">read-only</span>
+						<span class="badge" title="Every connection is read-only. What-if Explain uses a temporary view, and Explain or Expand on a database migrated without their functions creates them in pg_temp, in a transaction that is always rolled back.">read-only</span>
 						@topLinks()
 						<button type="button" class="theme-toggle" data-theme-toggle aria-label="Toggle dark mode" title="Toggle dark mode"></button>
 					</div>

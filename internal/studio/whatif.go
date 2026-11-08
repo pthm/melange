@@ -2,6 +2,7 @@ package studio
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -134,41 +135,30 @@ func typeExists(types []schema.TypeDefinition, typ string) bool {
 	return false
 }
 
-// explainWhatIf runs Explain with tuples added to melange_tuples, inside a
-// transaction that is always rolled back.
+// whatIfView returns the setup that adds tuples to melange_tuples for one
+// Explain, run by sqlapi.Trace inside a transaction that is always rolled
+// back.
 //
-// This is studio's one deliberate exception to the read-only connection. The
-// generated functions read melange_tuples unqualified, so a temp view shadows
-// it (as Checker.CheckWithContextualTuples does), and CREATE TEMP VIEW is
-// refused under default_transaction_read_only. lib/pq's BeginTx with nil
-// options sends BEGIN READ WRITE, which overrides that default for this
-// transaction only; SET TRANSACTION READ ONLY then closes the window right
-// after the one DDL statement. Nothing is ever committed.
+// This is studio's deliberate exception to the read-only connection, with
+// explain on demand (sqlapi.Trace) the other. The generated functions read
+// melange_tuples unqualified, so a temp view shadows it (as
+// Checker.CheckWithContextualTuples does), and CREATE TEMP VIEW is refused
+// under default_transaction_read_only. Trace begins the transaction READ
+// WRITE, which overrides that default for this transaction only, runs this
+// DDL and DISCARD PLANS, then SET TRANSACTION READ ONLY before Explain.
+// Nothing is ever committed.
 //
-// Begin and the DDL fail on a hot-standby replica or for a role without the
-// TEMP privilege; those errors say so, since a read-only console is often
-// pointed at a replica. They wrap with %v, not %w, so failedAfter, which
-// reduces a *pq.Error to its bare message, keeps the hint.
-func (s *Server) explainWhatIf(ctx context.Context, tuples []melange.ContextualTuple, subject melange.Object, relation melange.Relation, object melange.Object) (*melange.Trace, error) {
-	const needs = "what-if needs a writable primary and the TEMP privilege on the database"
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %v", needs, err)
+// The DDL fails on a hot-standby replica or for a role without the TEMP
+// privilege; the error says so, since a read-only console is often pointed
+// at a replica. It wraps with %v, not %w, so failedAfter, which reduces a
+// *pq.Error to its bare message, keeps the hint.
+func (s *Server) whatIfView(tuples []melange.ContextualTuple) func(context.Context, *sql.Tx) error {
+	return func(ctx context.Context, tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, whatIfViewSQL(s.dbSchema, tuples)); err != nil {
+			return fmt.Errorf("what-if needs a writable primary and the TEMP privilege on the database: creating the temporary view: %v", err)
+		}
+		return nil
 	}
-	defer func() { _ = tx.Rollback() }()
-
-	if _, err := tx.ExecContext(ctx, whatIfViewSQL(s.dbSchema, tuples)); err != nil {
-		return nil, fmt.Errorf("%s: creating the temporary view: %v", needs, err)
-	}
-	// As in Checker.setupContextualTuples: cached PL/pgSQL statements keep the
-	// melange_tuples they resolved, so they must resolve it again to see the view.
-	if _, err := tx.ExecContext(ctx, "DISCARD PLANS"); err != nil {
-		return nil, err
-	}
-	if _, err := tx.ExecContext(ctx, "SET TRANSACTION READ ONLY"); err != nil {
-		return nil, err
-	}
-	return melange.NewChecker(tx, melange.WithDatabaseSchema(s.dbSchema)).Explain(ctx, subject, relation, object)
 }
 
 // whatIfViewSQL builds the temp view: the base tuples plus a VALUES list.

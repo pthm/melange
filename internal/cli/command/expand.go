@@ -107,8 +107,6 @@ func runExpand(dsn, databaseSchema string, object melange.Object, relation melan
 	}
 	defer func() { _ = db.Close() }()
 
-	checker := melange.NewChecker(db, melange.WithDatabaseSchema(databaseSchema))
-
 	var opts []melange.ExpandOption
 	if subjectType != "" {
 		opts = append(opts, melange.WithSubjectTypeFilter(melange.ObjectType(subjectType)))
@@ -127,18 +125,24 @@ func runExpand(dsn, databaseSchema string, object melange.Object, relation melan
 
 	// --recursive chases pointers; --flatten just walks the tree.
 	// Recursive is the strict superset, so pass it through directly
-	// and skip the in-memory walk when set.
-	if recursive {
-		users, err := checker.ExpandRecursive(ctx, object, relation, opts...)
-		if err != nil {
-			return sqlAPICallError("expand", sqlapi.Expand, object, relation, err)
+	// and skip the in-memory walk when set. With sql.functions.expand off,
+	// Trace compiles the expand functions into pg_temp, and every call
+	// --recursive makes runs in that one transaction.
+	var users []string
+	var tree *melange.UsersetTree
+	err = api.Trace(ctx, db, databaseSchema, sqlapi.Expand, nil, func(checker *melange.Checker) (err error) {
+		if recursive {
+			users, err = checker.ExpandRecursive(ctx, object, relation, opts...)
+		} else {
+			tree, err = checker.Expand(ctx, object, relation, opts...)
 		}
-		return printLines(os.Stdout, users)
-	}
-
-	tree, err := checker.Expand(ctx, object, relation, opts...)
+		return err
+	})
 	if err != nil {
 		return sqlAPICallError("expand", sqlapi.Expand, object, relation, err)
+	}
+	if recursive {
+		return printLines(os.Stdout, users)
 	}
 
 	if flatten {

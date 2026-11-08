@@ -32,6 +32,9 @@ type relationData struct {
 	// Unavailable lists the public function families that do not answer
 	// for the relation under the recorded exposure.
 	Unavailable []*sqlapi.Unavailable
+	// OnDemand lists the families compiled for each call because the
+	// database was migrated without them (explain, expand).
+	OnDemand []string
 }
 
 // relEdge is a link between two relations; Kinds says how (computed,
@@ -68,6 +71,8 @@ func (s *Server) relation(w http.ResponseWriter, r *http.Request) {
 		for _, f := range []sqlapi.Family{sqlapi.Check, sqlapi.ListObjects, sqlapi.ListSubjects, sqlapi.Explain, sqlapi.Expand} {
 			if u := api.Unavailable(f, d.Type, d.Relation); u != nil {
 				d.Unavailable = append(d.Unavailable, u)
+			} else if api.OnDemand(f) {
+				d.OnDemand = append(d.OnDemand, f.Name())
 			}
 		}
 		d.DependsOn, d.UsedBy = ix.dependsOn(d.Type, d.Relation), ix.usedBy(d.Type, d.Relation)

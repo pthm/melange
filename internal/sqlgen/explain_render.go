@@ -50,14 +50,17 @@ func RenderExplainFunction(plan CheckPlan, blocks CheckBlocks) (string, error) {
 	body = append(body, buildExplainFinalFailure(plan)...)
 
 	fn := PlpgsqlFunction{
-		Schema:  plan.DatabaseSchema,
-		Name:    explainFunctionName(plan.ObjectType, plan.Relation),
-		Args:    explainFunctionArgs(),
-		Returns: "JSONB",
-		Decls:   explainFunctionDecls(plan, blocks),
-		Body:    body,
-		Header:  explainFunctionHeader(plan),
-		Cost:    explainFunctionCost(plan),
+		// Schema sets the search_path that resolves melange_tuples, so it
+		// stays the data schema when the function is created elsewhere.
+		Schema:           plan.DatabaseSchema,
+		DefinitionSchema: plan.FunctionSchema,
+		Name:             explainFunctionName(plan.ObjectType, plan.Relation),
+		Args:             explainFunctionArgs(),
+		Returns:          "JSONB",
+		Decls:            explainFunctionDecls(plan, blocks),
+		Body:             body,
+		Header:           explainFunctionHeader(plan),
+		Cost:             explainFunctionCost(plan),
 	}
 
 	return fn.SQL() + "\n", nil
@@ -317,7 +320,7 @@ func buildExplainImpliedAttempts(plan CheckPlan, blocks CheckBlocks) []Stmt {
 		explainFnName := explainFunctionName(plan.ObjectType, call.Relation)
 		// A computed relation is not a step (see checkDepthLimit).
 		callExpr := fmt.Sprintf("%s(p_subject_type, p_subject_id, p_object_id, p_visited, p_max_nodes)",
-			sqldsl.PrefixIdent(explainFnName, plan.DatabaseSchema))
+			sqldsl.PrefixIdent(explainFnName, plan.functionSchema()))
 
 		label := sqldsl.QuoteLiteral("implied via " + call.Relation)
 		childAsArray := "jsonb_build_array(v_child_trace->'root')"
@@ -408,7 +411,7 @@ func buildExplainParentLoopStmt(plan CheckPlan, blocks CheckBlocks, parent Paren
 
 	dispatcherCall := fmt.Sprintf(
 		"%s(p_subject_type, p_subject_id, %s, v_parent_link.parent_type, v_parent_link.parent_id, p_visited || ARRAY[v_key], p_max_nodes)",
-		sqldsl.PrefixIdent("explain_permission_internal", plan.DatabaseSchema),
+		sqldsl.PrefixIdent("explain_permission_internal", plan.functionSchema()),
 		sqldsl.QuoteLiteral(parent.ParentRelation),
 	)
 
@@ -608,7 +611,7 @@ func buildExplainUsersetLoopStmt(plan CheckPlan, blocks CheckBlocks, pattern Use
 	// the grant tuple as the parent object.
 	dispatcherCall := fmt.Sprintf(
 		"%s(p_subject_type, p_subject_id, %s, %s, v_userset_grant.group_id, p_visited || ARRAY[v_key], p_max_nodes)",
-		sqldsl.PrefixIdent("explain_permission_internal", plan.DatabaseSchema),
+		sqldsl.PrefixIdent("explain_permission_internal", plan.functionSchema()),
 		sqldsl.QuoteLiteral(pattern.SubjectRelation),
 		sqldsl.QuoteLiteral(pattern.SubjectType),
 	)
@@ -748,7 +751,7 @@ func buildExplainIntersectionPartStmts(plan CheckPlan, part IntersectionPartChec
 	// An operand on the same object is not a step (see checkDepthLimit).
 	dispatcherCall := fmt.Sprintf(
 		"%s(p_subject_type, p_subject_id, %s, %s, p_object_id, p_visited, p_max_nodes)",
-		sqldsl.PrefixIdent("explain_permission_internal", plan.DatabaseSchema),
+		sqldsl.PrefixIdent("explain_permission_internal", plan.functionSchema()),
 		sqldsl.QuoteLiteral(part.Relation),
 		sqldsl.QuoteLiteral(plan.ObjectType),
 	)

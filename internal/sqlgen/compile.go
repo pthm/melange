@@ -213,7 +213,7 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 		if !a.Capabilities.CheckAllowed {
 			continue
 		}
-		expandFn, expandOK := generateExpandFunction(a, databaseSchema)
+		expandFn, expandOK := generateExpandFunction(a, databaseSchema, "")
 		if expandOK {
 			if expandEligible[a.ObjectType] == nil {
 				expandEligible[a.ObjectType] = make(map[string]bool)
@@ -241,7 +241,7 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 		if !explainEligible[a.ObjectType][a.Relation] || !exposure.installsExplain(a.ObjectType, a.Relation) {
 			continue
 		}
-		explainFn, err := generateExplainFunction(a, inlineIx, databaseSchema, complexityByRelation)
+		explainFn, err := generateExplainFunction(a, inlineIx, databaseSchema, "", complexityByRelation)
 		if err != nil {
 			return GeneratedSQL{}, fmt.Errorf("generating explain function: %w", err)
 		}
@@ -264,11 +264,11 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 	if err != nil {
 		return GeneratedSQL{}, fmt.Errorf("generating no-wildcard dispatcher: %w", err)
 	}
-	result.ExplainDispatcher, err = generateExplainDispatcher(analyses, databaseSchema, explainEligible, exposure)
+	result.ExplainDispatcher, err = generateExplainDispatcher(analyses, databaseSchema, databaseSchema, explainEligible, exposure)
 	if err != nil {
 		return GeneratedSQL{}, fmt.Errorf("generating explain dispatcher: %w", err)
 	}
-	result.ExpandDispatcher = generateExpandDispatcher(analyses, databaseSchema, expandEligible, exposure)
+	result.ExpandDispatcher = generateExpandDispatcher(analyses, databaseSchema, databaseSchema, expandEligible, exposure)
 
 	// Generate bulk dispatcher
 	result.BulkDispatcher = generateBulkDispatcher(analyses, databaseSchema, exposure)

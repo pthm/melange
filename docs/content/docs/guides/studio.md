@@ -53,7 +53,7 @@ An explicit `--db` wins over the environment's connection. When an environment i
 
 Studio opens every connection with `default_transaction_read_only=on` and checks `SHOW default_transaction_read_only` at startup. If the setting did not take effect, studio exits instead of serving. The top bar shows a `read-only` badge.
 
-The one exception is Explain with what-if tuples (see [What-If Tuples](#what-if-tuples)). It begins a read-write transaction, creates a temporary view, switches the transaction to read-only, runs Explain, and always rolls back. Nothing is committed.
+There are two exceptions, and neither commits anything. Explain with what-if tuples (see [What-If Tuples](#what-if-tuples)) begins a read-write transaction, creates a temporary view, switches the transaction to read-only, runs Explain, and always rolls back. On a database migrated with `sql.functions.explain` or `expand` off, Explain and Expand create that family's functions in `pg_temp` the same way, for each call (see [Explain and Expand Without Their Functions](#explain-and-expand-without-their-functions)).
 
 ## Pages
 
@@ -91,7 +91,7 @@ group:eng#member editor document:1
 
 Studio runs Explain twice, without and with the tuples, and shows both answers. The tuples are added to `melange_tuples` through a temporary view, the same way [contextual tuples](../contextual-tuples/) work, inside a transaction that is always rolled back. When studio can read the deployed model, each tuple is validated against it first: an unknown relation, or a subject type the relation does not accept directly, is reported by line number.
 
-What-if needs a writable primary and the `TEMP` privilege on the database. It fails on a hot-standby replica, because a replica refuses read-write transactions. Plain Explain and the other query modes work on a replica.
+What-if needs a writable primary and the `TEMP` privilege on the database. It fails on a hot-standby replica, because a replica refuses read-write transactions. Plain Explain and the other query modes work on a replica, except that Explain needs a writable primary on a database migrated with `sql.functions.explain` off, and Expand needs one with `sql.functions.expand` off (see [Replicas](#replicas)).
 
 #### Analyze
 
@@ -179,11 +179,11 @@ a relation it does not answer for:
 
 | Page | Relation not exposed | Family off |
 | ---- | -------------------- | ---------- |
-| Explain, Analyze | The query says the relation is not exposed and how to expose it | Explain says the explain functions are not installed |
-| Expand | The query says the relation is not exposed. In a tree, a pointer that `expand_permission` does not answer for has a `not exposed` label instead of a drill-in | Expand says the expand functions are not installed |
-| Matrix | The relation is labeled `not exposed` and not checked; the summary counts them | A relation that cannot be explained has a plain label instead of an explain chip |
+| Explain, Analyze | The query says the relation is not exposed and how to expose it | Explain runs on demand (see below) |
+| Expand | The query says the relation is not exposed. In a tree, a pointer that `expand_permission` does not answer for has a `not exposed` label instead of a drill-in | Expand and the drill-in run on demand |
+| Matrix | The relation is labeled `not exposed` and not checked; the summary counts them | Explain chips explain on demand; without a model recorded by studio's codegen version they are plain labels instead |
 | Can access, Accessed by | The relation is not listed; the list names the relations left out | The tab says the list functions are not installed |
-| Relation page | The header lists each function family that does not answer for the relation | Same |
+| Relation page | The header lists each function family that does not answer for the relation | Same, and explain and expand show `on demand` |
 
 Hover a label for the reason. `expand_permission` answers for every relation
 that an exposed relation's pointers lead to, so drilling into a relation that
@@ -193,6 +193,24 @@ Under the default exposure, or a database migrated before melange recorded
 the exposure, studio behaves as before: every relation is answered. Without a
 recorded model, studio calls the functions and reports an `M2003` the same
 way.
+
+### Explain and Expand Without Their Functions
+
+With `sql.functions.explain` or `expand` off, studio compiles that family's
+functions from the recorded model and creates them in `pg_temp` for each
+Explain, what-if Explain, Expand and drill-in, in a transaction that begins
+read-write, turns read-only before the call, and is always rolled back, on a
+connection that is closed afterwards. The
+answer is the one installed functions would give, for the relations the
+recorded exposure exposes. Studio compiles a model once per process; each call
+still creates the functions, which costs tens of milliseconds on a mid-sized
+model. On demand needs a model recorded by a melange of studio's codegen
+version; without one, Explain and Expand say so and the explain chips are
+plain labels. It also needs a writable primary and the `TEMP` privilege,
+which studio cannot check ahead of a call: on a replica, or as a role
+without `TEMP`, the explain chips stay clickable and each Explain or Expand
+fails with a message asking for both. See
+[Explain and Expand on Demand](../../reference/sql-api/#explain-and-expand-on-demand).
 
 ## Database Privileges
 
@@ -208,21 +226,21 @@ This covers the Model page, Explain, Expand, Matrix, Analyze without the per-fun
 
 - `EXECUTE` on the generated functions is granted to `PUBLIC` when a function is created. If you revoked it, grant `EXECUTE` on the functions in the melange schema.
 - The system catalogs (`pg_proc`, `pg_class`, `pg_constraint`, `information_schema`) are readable by every role. Relation pages, labels, and Health read them.
-- `TEMP` on the database is granted to `PUBLIC`. What-if needs it.
+- `TEMP` on the database is granted to `PUBLIC`. What-if needs it, and so do Explain and Expand on a database migrated without their functions.
 
 Optional grants:
 
 | Feature                          | Grant                                                                 |
 | -------------------------------- | --------------------------------------------------------------------- |
 | Labels in the Tuples browser     | `SELECT` on the domain tables (or just their key and label columns)   |
-| What-if tuples                   | `TEMP` on the database, if revoked from `PUBLIC`                       |
+| What-if tuples, and Explain and Expand on demand | `TEMP` on the database, if revoked from `PUBLIC`        |
 | Per-function times in Analyze    | `GRANT SET ON PARAMETER track_functions` (PostgreSQL 15+), or superuser |
 
-Without `SELECT` on `melange_migrations`, studio cannot read the deployed model, so the schema view, Matrix, relation analysis, History, Health, and the access tabs are unavailable, and what-if tuples are not validated; Explain, Expand, and Analyze still work.
+Without `SELECT` on `melange_migrations`, studio cannot read the deployed model, so the schema view, Matrix, relation analysis, History, Health, and the access tabs are unavailable, and what-if tuples are not validated; Explain, Expand, and Analyze still work when their functions are installed (on demand needs the recorded model).
 
 ## Replicas
 
-Studio works against a hot-standby replica, with one exception: what-if tuples need a read-write transaction to create the temporary view, which a replica refuses. Point studio at the primary to use what-if. Everything studio runs on the primary outside what-if is read-only.
+Studio works against a hot-standby replica, with two exceptions, both because a replica refuses read-write transactions: what-if tuples need one to create the temporary view, and on a database migrated with `sql.functions.explain` or `expand` off, Explain and Expand need one to create their functions in `pg_temp`. Point studio at the primary to use them. Everything else studio runs on the primary is read-only.
 
 ## Security
 

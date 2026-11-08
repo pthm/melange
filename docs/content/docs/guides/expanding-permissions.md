@@ -245,6 +245,21 @@ has no `expand_permission` at all reports `ErrMissingFunction`
 recorded exposure first and say which relation is not exposed and how to
 expose it.
 
+## Expand Without the Expand Functions
+
+With `sql.functions.expand` off, `melange expand` (with `--flatten` and
+`--recursive`) and studio's Expand and drill-in still work: they compile the
+expand functions from the model the last migration recorded and create them
+in `pg_temp` for one transaction that is always rolled back. Every call of
+`--recursive` runs in that transaction, and the tree is the one the installed
+functions would return. That needs a writable primary (not a hot-standby
+replica), the `TEMP` privilege, a model recorded by `melange migrate`, and a
+melange of the codegen version that migrated the database; the tools say
+which is missing. Each command costs tens of milliseconds more than an
+installed expand, for creating the functions. The runtimes'
+`Expand` and `ExpandRecursive` do not compile on demand. See
+[Explain and Expand on Demand](../../reference/sql-api/#explain-and-expand-on-demand).
+
 ## Caching
 
 Opt-in via `ExpandCache` — see [Caching](./caching/#expandcache).

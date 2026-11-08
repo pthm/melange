@@ -168,7 +168,10 @@ back on). Precedence is flag, then `MELANGE_SQL_*` variable, then config file,
 then default.
 
 A family that is off makes its public function raise `M2003` for every
-relation the model defines. Turning off
+relation the model defines. `melange explain`, `melange expand` and studio
+still work with `explain` or `expand` off: they create those functions in
+`pg_temp` for each call ([on demand](../sql-api/#explain-and-expand-on-demand)).
+Turning off
 `list_objects` or `accessible` alone removes no per-relation functions, since
 `list_objects`, `accessible` and `parent_key` read each other; see
 [Exposure](../sql-api/#exposure) for what is installed.
@@ -182,6 +185,7 @@ warning.
 
 ```bash
 # Expose only the can_* relations, without the expand and explain functions
+# (melange explain and expand then compile them on demand)
 melange migrate --include-relation 'can_*' --no-expand --no-explain
 ```
 
@@ -791,14 +795,19 @@ melange explain user:alice viewer document:1 --db postgres://localhost/mydb
 `--format=json` returns the raw `Trace` JSONB for tooling.
 
 Explain reads the [exposure](../sql-api/#exposure) recorded by the last
-migration. When the relation is not exposed, or the database was migrated
-with `sql.functions.explain` off, it exits with an error that names
-`type#relation` and the setting to change instead of the database's
-`M2003`. For a relation that is not exposed the setting is
-`sql.relations.include` (or `--include-relation`, which replaces the list, so
-pass it with every pattern already included); with the family off it is
-`sql.functions.explain`. A relation the model does not define is still
-explained as denied, with the family on or off.
+migration. When the relation is not exposed, it exits with an error that
+names `type#relation` and the setting to change instead of the database's
+`M2003`: `sql.relations.include` (or `--include-relation`, which replaces the
+list, so pass it with every pattern already included). A relation the model
+does not define is still explained as denied.
+
+When the database was migrated with `sql.functions.explain` off, explain
+compiles the explain functions from the recorded model and creates them in
+`pg_temp` for one rolled-back transaction
+([on demand](../sql-api/#explain-and-expand-on-demand)). That needs a writable
+primary, the `TEMP` privilege and a melange of the recorded codegen version;
+otherwise explain exits with an error that says which is missing and how to
+fix it, including turning `sql.functions.explain` back on.
 
 ### expand
 
@@ -847,12 +856,14 @@ user:*
 `--flatten` chases every `Leaf.Computed` and `Leaf.TupleToUserset` pointer with follow-up Expand calls. Cost is N round-trips per N distinct pointers; suitable for admin flows, not the request path. `--format=json` returns the raw `UsersetTree` JSONB for tooling.
 
 Expand follows the recorded [exposure](../sql-api/#exposure) like
-`explain`: a relation `expand_permission` does not answer for, or a database
-migrated with `sql.functions.expand` off, fails with a message that names
-`type#relation` and the setting to change (`sql.relations.include` or
-`sql.functions.expand`). `expand_permission` answers for every
-relation an exposed relation's pointers lead to, so `--recursive` and
-pointers into relations that are installed but not exposed keep working.
+`explain`: a relation `expand_permission` does not answer for fails with a
+message that names `type#relation` and the setting to change
+(`sql.relations.include`). `expand_permission` answers for every relation an
+exposed relation's pointers lead to, so `--recursive` and pointers into
+relations that are installed but not exposed keep working. With
+`sql.functions.expand` off, expand creates the expand functions in `pg_temp`
+[on demand](../sql-api/#explain-and-expand-on-demand), as explain does, and
+`--recursive` makes all its calls in that one transaction.
 
 ### studio
 

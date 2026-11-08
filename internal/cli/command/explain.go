@@ -122,8 +122,6 @@ func runExplain(dsn, databaseSchema string, subject melange.Object, relation mel
 	}
 	defer func() { _ = db.Close() }()
 
-	checker := melange.NewChecker(db, melange.WithDatabaseSchema(databaseSchema))
-
 	ctx := context.Background()
 	var opts []melange.ExplainOption
 	if maxNodes > 0 {
@@ -134,7 +132,13 @@ func runExplain(dsn, databaseSchema string, subject melange.Object, relation mel
 	if u := api.Unavailable(sqlapi.Explain, string(object.Type), string(relation)); u != nil {
 		return cli.GeneralError("explain", u)
 	}
-	trace, err := checker.Explain(ctx, subject, relation, object, opts...)
+	// With sql.functions.explain off, Trace compiles the explain functions
+	// into pg_temp for this call.
+	var trace *melange.Trace
+	err = api.Trace(ctx, db, databaseSchema, sqlapi.Explain, nil, func(checker *melange.Checker) (err error) {
+		trace, err = checker.Explain(ctx, subject, relation, object, opts...)
+		return err
+	})
 	if err != nil {
 		return sqlAPICallError("explain", sqlapi.Explain, object, relation, err)
 	}

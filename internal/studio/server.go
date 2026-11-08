@@ -1,7 +1,10 @@
 // Package studio serves melange studio: a local, read-only web console over a
 // melange-managed database. It is a presentation layer over calls the CLI
 // already makes (GetDeployedModel, Checker.Explain, Checker.Expand); see
-// specs/proposals/STUDIO.md.
+// specs/proposals/STUDIO.md. Two calls create objects in pg_temp inside a
+// transaction that is always rolled back: what-if Explain (whatif.go), and
+// Explain and Expand on a database migrated without their functions
+// (sqlapi.Trace).
 package studio
 
 //go:generate go tool templ generate
@@ -296,7 +299,7 @@ func (s *Server) loadModel(ctx context.Context) (model *migrator.DeployedModel, 
 	case err != nil:
 		return nil, err.Error()
 	case model == nil:
-		return nil, "No model recorded. The database was never migrated, or was migrated before melange recorded deployed models; re-run `melange migrate` to record it. Explain and Expand still work."
+		return nil, "No model recorded. The database was never migrated, or was migrated before melange recorded deployed models; re-run `melange migrate` to record it. Explain and Expand still work when their functions are installed."
 	default:
 		newModelOrder(model).sortRelations(model)
 		return model, ""
@@ -336,13 +339,14 @@ func (s *Server) explain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	model, unchecked := s.loadModel(r.Context())
-	if u := apiOf(model).Unavailable(sqlapi.Explain, string(object.Type), relation); u != nil {
+	api := apiOf(model)
+	if u := api.Unavailable(sqlapi.Explain, string(object.Type), relation); u != nil {
 		render(w, r, errorBox(u.Error()))
 		return
 	}
 	if strings.TrimSpace(r.FormValue("whatif")) == "" {
 		start := time.Now()
-		trace, err := s.checker.Explain(r.Context(), subject, melange.Relation(relation), object)
+		trace, err := s.explainOnce(r.Context(), api, nil, subject, melange.Relation(relation), object)
 		took := time.Since(start)
 		if err != nil {
 			render(w, r, errorBox(callFailed(sqlapi.Explain, object, relation, err, took)))
@@ -351,12 +355,22 @@ func (s *Server) explain(w http.ResponseWriter, r *http.Request) {
 		render(w, r, traceView(trace, took))
 		return
 	}
-	s.explainWithWhatIf(w, r, model, unchecked, subject, melange.Relation(relation), object)
+	s.explainWithWhatIf(w, r, model, api, unchecked, subject, melange.Relation(relation), object)
+}
+
+// explainOnce runs one Explain, through the installed explain functions or
+// on demand (sqlapi.Trace), with setup's DDL first when it is not nil.
+func (s *Server) explainOnce(ctx context.Context, api *sqlapi.API, setup func(context.Context, *sql.Tx) error, subject melange.Object, relation melange.Relation, object melange.Object) (trace *melange.Trace, err error) {
+	err = api.Trace(ctx, s.db, s.dbSchema, sqlapi.Explain, setup, func(c *melange.Checker) error {
+		trace, err = c.Explain(ctx, subject, relation, object)
+		return err
+	})
+	return trace, err
 }
 
 // explainWithWhatIf runs the query without and with the form's what-if
 // tuples. The tuples are parsed first, so a typo costs no Explain.
-func (s *Server) explainWithWhatIf(w http.ResponseWriter, r *http.Request, model *migrator.DeployedModel, unchecked string, subject melange.Object, relation melange.Relation, object melange.Object) {
+func (s *Server) explainWithWhatIf(w http.ResponseWriter, r *http.Request, model *migrator.DeployedModel, api *sqlapi.API, unchecked string, subject melange.Object, relation melange.Relation, object melange.Object) {
 	var types []schema.TypeDefinition
 	if model != nil {
 		types = model.Types
@@ -367,14 +381,14 @@ func (s *Server) explainWithWhatIf(w http.ResponseWriter, r *http.Request, model
 		return
 	}
 	start := time.Now()
-	base, err := s.checker.Explain(r.Context(), subject, relation, object)
+	base, err := s.explainOnce(r.Context(), api, nil, subject, relation, object)
 	baseTook := time.Since(start)
 	if err != nil {
 		render(w, r, errorBox("Without what-if: "+callFailed(sqlapi.Explain, object, string(relation), err, baseTook)))
 		return
 	}
 	start = time.Now()
-	with, err := s.explainWhatIf(r.Context(), tuples, subject, relation, object)
+	with, err := s.explainOnce(r.Context(), api, s.whatIfView(tuples), subject, relation, object)
 	withTook := time.Since(start)
 	if err != nil {
 		render(w, r, errorBox("With what-if: "+callFailed(sqlapi.Explain, object, string(relation), err, withTook)))
@@ -384,13 +398,11 @@ func (s *Server) explainWithWhatIf(w http.ResponseWriter, r *http.Request, model
 }
 
 // apiOf is what the deployed SQL API answers for, from the exposure the
-// model was migrated with. Without a model it answers for everything, and
-// a call that fails says why (callFailed).
+// model was migrated with, and how to explain and expand when those
+// families are off. Without a model it answers for everything, and a call
+// that fails says why (callFailed).
 func apiOf(model *migrator.DeployedModel) *sqlapi.API {
-	if model == nil {
-		return nil
-	}
-	return sqlapi.New(model.Exposure, model.Types)
+	return sqlapi.FromModel(model)
 }
 
 // callFailed words a failed public function call: why the SQL API does not
@@ -494,7 +506,11 @@ func (s *Server) expand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	start := time.Now()
-	tree, err := s.checker.Expand(r.Context(), object, melange.Relation(relation))
+	var tree *melange.UsersetTree
+	err = api.Trace(r.Context(), s.db, s.dbSchema, sqlapi.Expand, nil, func(c *melange.Checker) (err error) {
+		tree, err = c.Expand(r.Context(), object, melange.Relation(relation))
+		return err
+	})
 	took := time.Since(start)
 	if err != nil {
 		render(w, r, errorBox(callFailed(sqlapi.Expand, object, relation, err, took)))

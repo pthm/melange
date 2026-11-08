@@ -58,7 +58,11 @@ func expandFunctionHeader(plan ExpandPlan) []string {
 // the leaf directly (no Union wrapper); multi-rewrite plans emit the
 // Union envelope around per-rewrite children.
 type ExpandPlan struct {
+	// DatabaseSchema qualifies melange_tuples. FunctionSchema, when set, is
+	// the schema the function is created in instead (pg_temp, for expand on
+	// demand).
 	DatabaseSchema string
+	FunctionSchema string
 	ObjectType     string
 	Relation       string
 	Rewrites       []ExpandRewrite
@@ -242,6 +246,15 @@ func expandLocalSupported(a RelationAnalysis) bool {
 	return f.HasDirect || f.HasImplied || f.HasRecursive || f.HasIntersection || f.HasUserset
 }
 
+// functionSchema is the schema the expand function is created in:
+// FunctionSchema, or DatabaseSchema when it is unset.
+func (p ExpandPlan) functionSchema() string {
+	if p.FunctionSchema != "" {
+		return p.FunctionSchema
+	}
+	return p.DatabaseSchema
+}
+
 // RenderExpandFunction is the entry point for expand_* function
 // generation. Returns the complete CREATE OR REPLACE FUNCTION text plus
 // a trailing newline so file-level concatenation stays clean.
@@ -281,7 +294,7 @@ func RenderExpandFunction(plan ExpandPlan) string {
 	body := BuildExpandTreeRoot(rootNode)
 
 	fn := PlpgsqlFunction{
-		Schema:  plan.DatabaseSchema,
+		Schema:  plan.functionSchema(),
 		Name:    expandFunctionName(plan.ObjectType, plan.Relation),
 		Args:    expandFunctionArgs(),
 		Returns: "JSONB",

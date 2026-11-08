@@ -215,8 +215,21 @@ raises `M2003`, which the Go and TypeScript runtimes report as a
 `ValidationError` with code 2000 (see
 [Errors](../../reference/errors/#postgresql-error-mapping)). `melange explain`
 and studio check the exposure recorded by the last migration first and say
-which relation is not exposed, or that the explain functions are not
-installed, and how to change it.
+which relation is not exposed and how to expose it.
+
+## Explain Without the Explain Functions
+
+With `sql.functions.explain` off, the database has no `explain_*` functions,
+and `Checker.Explain` gets `M2003` for every relation. `melange explain` and
+studio still explain: they compile the explain functions from the model the
+last migration recorded and create them in `pg_temp` for one transaction that
+is always rolled back, so the trace is the one the installed functions would
+return. That needs a writable primary (not a hot-standby replica), the `TEMP`
+privilege, a model recorded by `melange migrate`, and a melange of the
+codegen version that migrated the database; the tools say which is missing.
+Each call costs tens of milliseconds more than an installed explain, for
+creating the functions. See
+[Explain and Expand on Demand](../../reference/sql-api/#explain-and-expand-on-demand).
 
 ## See Also
 

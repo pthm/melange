@@ -22,6 +22,7 @@ import (
 	"github.com/pthm/melange/internal/sqlgen"
 	"github.com/pthm/melange/internal/sqlgen/sqldsl"
 	"github.com/pthm/melange/internal/version"
+	"github.com/pthm/melange/pkg/parser"
 	"github.com/pthm/melange/pkg/schema"
 )
 
@@ -856,9 +857,10 @@ func (m *Migrator) migrationColumns(ctx context.Context, db Execer) (map[string]
 type DeployedModel struct {
 	DSL            string                  // OpenFGA DSL that produced the deployment
 	Format         string                  // "single" or "modular"
-	Types          []schema.TypeDefinition // parsed model (nil if only DSL was recorded)
+	Types          []schema.TypeDefinition // parsed model (see DeployedTypes)
 	SchemaChecksum string
 	MelangeVersion string
+	CodegenVersion string // codegen version that generated the installed functions
 	MigratedAt     time.Time
 	Exposure       Exposure // normalized SQL API exposure; zero is the default
 }
@@ -867,6 +869,9 @@ type DeployedModel struct {
 // nil if none has been recorded — either because the database has never been
 // migrated or because it was migrated before model storage existed (SchemaDSL
 // empty). Callers surface a "re-run migrate to record the model" hint for nil.
+// Types comes from DeployedTypes, so a record with only the DSL has them too;
+// it is nil when neither the JSON nor the DSL yields a model, which leaves
+// the DSL available (schema pull) without failing.
 func (m *Migrator) GetDeployedModel(ctx context.Context) (*DeployedModel, error) {
 	rec, err := m.GetLastMigration(ctx)
 	if err != nil {
@@ -875,9 +880,9 @@ func (m *Migrator) GetDeployedModel(ctx context.Context) (*DeployedModel, error)
 	if rec == nil || rec.SchemaDSL == "" {
 		return nil, nil
 	}
-	types, err := schema.UnmarshalModel(rec.ModelJSON)
+	types, err := DeployedTypes(rec)
 	if err != nil {
-		return nil, fmt.Errorf("decoding deployed model: %w", err)
+		types = nil
 	}
 	return &DeployedModel{
 		DSL:            rec.SchemaDSL,
@@ -885,9 +890,31 @@ func (m *Migrator) GetDeployedModel(ctx context.Context) (*DeployedModel, error)
 		Types:          types,
 		SchemaChecksum: rec.SchemaChecksum,
 		MelangeVersion: rec.MelangeVersion,
+		CodegenVersion: rec.CodegenVersion,
 		MigratedAt:     rec.MigratedAt,
 		Exposure:       rec.Exposure,
 	}, nil
+}
+
+// DeployedTypes returns the parsed model a migration record stores,
+// preferring model_json and falling back to parsing the recorded DSL when the
+// JSON is absent, empty or unreadable, the same order doctor uses, so every
+// tool agrees on what a database has deployed.
+//
+// It returns nil types and a nil error for a record written before model
+// storage (no DSL recorded), which callers report as "not recorded".
+func DeployedTypes(rec *MigrationRecord) ([]schema.TypeDefinition, error) {
+	if rec == nil || rec.SchemaDSL == "" {
+		return nil, nil
+	}
+	if types, err := schema.UnmarshalModel(rec.ModelJSON); err == nil && len(types) > 0 {
+		return types, nil
+	}
+	types, err := parser.ParseRecordedSchemaString(rec.SchemaDSL)
+	if err != nil {
+		return nil, fmt.Errorf("parsing recorded schema DSL: %w", err)
+	}
+	return types, nil
 }
 
 // GetMigrationHistory returns up to limit migration records, most recent first.

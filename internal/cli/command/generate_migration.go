@@ -345,7 +345,7 @@ func previousStateFromDB(dsn, databaseSchema string) (*previousState, error) {
 	// A model that can't be recovered — never recorded, or a modular DSL, which
 	// won't parse as a single schema — leaves prevTypes nil, and the migration is
 	// generated without a header rather than failing.
-	prevTypes, terr := deployedTypesFromRecord(rec)
+	prevTypes, terr := migrator.DeployedTypes(rec)
 	if terr != nil {
 		prevTypes = nil
 	}

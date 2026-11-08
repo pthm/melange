@@ -279,7 +279,7 @@ func shell(p page, sidebar templ.Component) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 20, "<span class=\"badge\" title=\"Every connection is read-only. What-if Explain uses a temporary view in a transaction that is always rolled back.\">read-only</span>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 20, "<span class=\"badge\" title=\"Every connection is read-only. What-if Explain uses a temporary view, and Explain or Expand on a database migrated without their functions creates them in pg_temp, in a transaction that is always rolled back.\">read-only</span>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}

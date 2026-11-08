@@ -351,7 +351,7 @@ func isCommitHash(line string) bool {
 // A nil report alone conflates that with a comparison that could not be made,
 // and callers must not read the latter as proof of equivalence.
 func driftDetail(rec *migrator.MigrationRecord, schemaPath string, notes *[]string) (detail *driftReport, equivalent bool) {
-	deployed, derr := deployedTypesFromRecord(rec)
+	deployed, derr := migrator.DeployedTypes(rec)
 	if derr != nil {
 		*notes = append(*notes, fmt.Sprintf("could not read the deployed model for a detailed diff: %v", derr))
 		return nil, false

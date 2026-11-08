@@ -36,12 +36,14 @@ func expandDispatcherPublicArgs() []FuncArg {
 
 // generateExpandFunction wraps RenderExpandFunction with the per-relation
 // plan derivation, returning ("", false) when BuildExpandPlan reports the
-// relation ineligible.
-func generateExpandFunction(a RelationAnalysis, databaseSchema string) (string, bool) {
+// relation ineligible. The function is created in functionSchema; ""
+// means databaseSchema (see ExpandPlan.FunctionSchema).
+func generateExpandFunction(a RelationAnalysis, databaseSchema, functionSchema string) (string, bool) {
 	plan, ok := BuildExpandPlan(a, databaseSchema)
 	if !ok {
 		return "", false
 	}
+	plan.FunctionSchema = functionSchema
 	return RenderExpandFunction(plan), true
 }
 
@@ -55,26 +57,30 @@ func generateExpandFunction(a RelationAnalysis, databaseSchema string) (string, 
 // crashing. Only pairs the exposure installs get a branch, and the public
 // wrapper raises for the relations outside the exposure's Reach: clients
 // chase expand pointers through it, so it answers for every installed one.
-func generateExpandDispatcher(analyses []RelationAnalysis, databaseSchema string, eligible map[string]map[string]bool, exposure *exposureClosure) string {
-	cases := buildExpandDispatcherCases(analyses, databaseSchema, eligible, exposure)
+//
+// The dispatchers are created in, and route through, functionSchema; the
+// raising helper the public wrapper calls stays in databaseSchema.
+func generateExpandDispatcher(analyses []RelationAnalysis, databaseSchema, functionSchema string, eligible map[string]map[string]bool, exposure *exposureClosure) string {
+	cases := buildExpandDispatcherCases(analyses, functionSchema, eligible, exposure)
 	unexposed := exposure.unexposed(familyExpand)
 	if len(cases) == 0 {
-		return renderEmptyExpandDispatcher(databaseSchema, unexposed)
+		return renderEmptyExpandDispatcher(databaseSchema, functionSchema, unexposed)
 	}
-	return renderExpandDispatcherWithCases(databaseSchema, cases, unexposed)
+	return renderExpandDispatcherWithCases(databaseSchema, functionSchema, cases, unexposed)
 }
 
 // buildExpandDispatcherCases mirrors buildDispatcherCases / buildExplain*
 // but only emits cases for relations whose expand renderer can produce
-// a correct tree per the precomputed eligibility map.
-func buildExpandDispatcherCases(analyses []RelationAnalysis, databaseSchema string, eligible map[string]map[string]bool, exposure *exposureClosure) []DispatcherCase {
+// a correct tree per the precomputed eligibility map. callSchema
+// qualifies the expand_<type>_<relation> calls.
+func buildExpandDispatcherCases(analyses []RelationAnalysis, callSchema string, eligible map[string]map[string]bool, exposure *exposureClosure) []DispatcherCase {
 	var cases []DispatcherCase
 	for _, a := range analyses {
 		if !eligible[a.ObjectType][a.Relation] || !exposure.installsExpand(a.ObjectType, a.Relation) {
 			continue
 		}
 		cases = append(cases, DispatcherCase{
-			DatabaseSchema:    databaseSchema,
+			DatabaseSchema:    callSchema,
 			ObjectType:        a.ObjectType,
 			Relation:          a.Relation,
 			CheckFunctionName: expandFunctionName(a.ObjectType, a.Relation),
@@ -83,9 +89,9 @@ func buildExpandDispatcherCases(analyses []RelationAnalysis, databaseSchema stri
 	return cases
 }
 
-func renderExpandDispatcherWithCases(databaseSchema string, cases []DispatcherCase, unexposed []relationKey) string {
+func renderExpandDispatcherWithCases(databaseSchema, functionSchema string, cases []DispatcherCase, unexposed []relationKey) string {
 	internalFn := PlpgsqlFunction{
-		Schema:  databaseSchema,
+		Schema:  functionSchema,
 		Name:    "expand_permission_internal",
 		Args:    expandDispatcherInternalArgs(),
 		Returns: "JSONB",
@@ -106,11 +112,11 @@ func renderExpandDispatcherWithCases(databaseSchema string, cases []DispatcherCa
 	}
 
 	publicFn := SqlFunction{
-		Schema:  databaseSchema,
+		Schema:  functionSchema,
 		Name:    "expand_permission",
 		Args:    expandDispatcherPublicArgs(),
 		Returns: "JSONB",
-		Body: guardedPublicBody(databaseSchema, unexposed, sqldsl.PrefixIdent("expand_permission_internal", databaseSchema)+
+		Body: guardedPublicBody(databaseSchema, unexposed, sqldsl.PrefixIdent("expand_permission_internal", functionSchema)+
 			"(p_object_type, p_object_id, p_relation, p_subject_type, p_max_leaf)", true),
 		Header: []string{
 			"Generated public dispatcher for expand_permission",
@@ -128,12 +134,12 @@ func renderExpandDispatcherWithCases(databaseSchema string, cases []DispatcherCa
 // renderEmptyExpandDispatcher emits a no-op dispatcher when the schema
 // has no eligible relations. Returns a structurally valid UsersetTree
 // with an empty Users leaf so callers parsing the JSON don't choke.
-func renderEmptyExpandDispatcher(databaseSchema string, unexposed []relationKey) string {
+func renderEmptyExpandDispatcher(databaseSchema, functionSchema string, unexposed []relationKey) string {
 	sentinel := expandNoEntrySentinelSQL()
 	body := "SELECT " + sentinel
 
 	internalFn := SqlFunction{
-		Schema:  databaseSchema,
+		Schema:  functionSchema,
 		Name:    "expand_permission_internal",
 		Args:    expandDispatcherInternalArgs(),
 		Returns: "JSONB",
@@ -146,7 +152,7 @@ func renderEmptyExpandDispatcher(databaseSchema string, unexposed []relationKey)
 	}
 
 	publicFn := SqlFunction{
-		Schema:       databaseSchema,
+		Schema:       functionSchema,
 		Name:         "expand_permission",
 		Args:         expandDispatcherPublicArgs(),
 		Returns:      "JSONB",

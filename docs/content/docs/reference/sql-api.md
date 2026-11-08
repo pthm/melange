@@ -71,6 +71,59 @@ the model does not define keep the [unknown-pair](#unknown-typerelation)
 result: `0`, an empty set, or the sentinel. With the default exposure nothing
 raises, so the API behaves as it did before exposure existed.
 
+### Explain and Expand on Demand
+
+Explain and expand are debugging tools, so an application can migrate with
+`explain: false` and `expand: false` and keep their per-relation functions out
+of the database. The dispatchers stay: `explain_permission` and
+`expand_permission` then raise `M2003` for every relation the model defines.
+
+`melange explain`, `melange expand` (including `--flatten` and `--recursive`)
+and [studio](../../guides/studio/) still work against such a database. They
+compile the family's functions from the model recorded by the last migration,
+exactly as migrate installs them with the family on, and create them in
+`pg_temp` for one transaction:
+
+```sql
+BEGIN READ WRITE;
+CREATE FUNCTION pg_temp.check_permission(...) ...;         -- forwards to the installed one
+CREATE FUNCTION pg_temp.explain_document_viewer(...) ...;  -- and the rest of the family
+SET TRANSACTION READ ONLY;
+SELECT pg_temp.explain_permission(...);                     -- every call of the command
+ROLLBACK;
+```
+
+Only that family's functions are created, plus a `pg_temp.check_permission`
+that forwards to the installed one, because the Go runtime's `Checker` probes
+for `check_permission` in the schema it calls. They call the installed check
+functions and `check_permission_internal`, which every exposure installs, and
+answer for the relations the recorded exposure exposes: a relation that is not
+exposed stays not exposed. Nothing is committed. The transaction runs on a
+connection of its own, which is closed afterwards instead of returned to the
+pool: a backend keeps the compiled PL/pgSQL of every function it has called
+until it exits, even once the function is dropped. On demand needs:
+
+- **A writable primary.** `CREATE FUNCTION` is refused in a read-only
+  transaction, even in `pg_temp`, and a hot-standby replica refuses read-write
+  transactions.
+- **The `TEMP` privilege** on the database, which PostgreSQL grants to `PUBLIC`
+  by default.
+- **A recorded model.** `melange migrate` records it (and so does an applied
+  `melange migrate --dry-run` script). Databases deployed from
+  `melange generate migration` files or with `MigrateWithTypes` have no
+  record, so the tools cannot tell the family is off and report the `M2003`.
+- **The same codegen version.** The compiled bodies call functions the
+  recorded melange version generated, so a melange of another version refuses
+  and says which: run `melange migrate` with it, or use the recorded version.
+
+Each call pays for a new connection and for creating the functions. On the kitchen-sink test model (60
+explain or expand functions), one Explain took about 28 ms on demand against
+0.25 ms installed, and one Expand about 12 ms against 0.14 ms, on a local
+PostgreSQL 18 (`BenchmarkKitchenSinkOnDemand`); compiling the functions takes 3 ms for explain and 0.7 ms
+for expand and is done once per process. The cost grows with the number of the
+family's functions, not with the data. The Go and TypeScript runtimes do not
+compile on demand: `Checker.Explain` and `Checker.Expand` report the `M2003`.
+
 {{< callout type="info" >}}
 The exposure shapes the API surface; it is not an access-control boundary. The
 per-relation functions and the internal dispatchers of an installed relation
@@ -504,7 +557,7 @@ SELECT explain_permission('user', 'bob', 'can_admin', 'repository', '7');
 
 ### Use from runtime / CLI
 
-`Checker.Explain` and `melange explain` wrap this function. See the [Explaining Decisions guide](../../guides/explaining-decisions/).
+`Checker.Explain` and `melange explain` wrap this function. See the [Explaining Decisions guide](../../guides/explaining-decisions/). With `sql.functions.explain` off, `melange explain` and studio create it in `pg_temp` for each call; see [Explain and Expand on Demand](#explain-and-expand-on-demand).
 
 ## explain_permission_internal
 
@@ -599,7 +652,7 @@ SELECT expand_permission('document', '1', 'viewer');
 
 ### Use from runtime / CLI
 
-`Checker.Expand`, `Checker.ExpandRecursive`, and `melange expand` wrap this function. See the [Expanding Permissions guide](../../guides/expanding-permissions/).
+`Checker.Expand`, `Checker.ExpandRecursive`, and `melange expand` wrap this function. See the [Expanding Permissions guide](../../guides/expanding-permissions/). With `sql.functions.expand` off, `melange expand` and studio create it in `pg_temp` for each call; see [Explain and Expand on Demand](#explain-and-expand-on-demand).
 
 ## expand_permission_internal
 

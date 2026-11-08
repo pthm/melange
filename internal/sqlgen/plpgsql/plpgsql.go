@@ -216,6 +216,12 @@ type PlpgsqlFunction struct {
 	// LANGUAGE sql wrappers inline and avoids a per-call GUC save/restore.
 	NoSearchPath bool
 	Cost         int // If non-zero, appends COST <n> so the planner treats this function as costlier than the default (100)
+	// DefinitionSchema, when set, is the schema the function is created in
+	// in place of Schema, which then only supplies the default search_path.
+	// It creates a function in pg_temp that resolves unqualified names as if
+	// it were installed in Schema: the default search_path must never be
+	// pg_temp, where PostgreSQL does not look up functions.
+	DefinitionSchema string
 }
 
 // SQL renders the complete CREATE OR REPLACE FUNCTION statement.
@@ -223,7 +229,11 @@ func (f PlpgsqlFunction) SQL() string {
 	var sb strings.Builder
 
 	writeHeader(&sb, f.Header)
-	writeSignature(&sb, f.Schema, f.Name, f.Args, f.Returns)
+	definitionSchema := f.Schema
+	if f.DefinitionSchema != "" {
+		definitionSchema = f.DefinitionSchema
+	}
+	writeSignature(&sb, definitionSchema, f.Name, f.Args, f.Returns)
 
 	if len(f.Decls) > 0 {
 		sb.WriteString("DECLARE\n")

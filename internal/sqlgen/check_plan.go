@@ -8,6 +8,11 @@ type CheckPlan struct {
 	Analysis       RelationAnalysis
 	Inline         InlineSQLData
 	DatabaseSchema string
+	// FunctionSchema is the schema explain functions are created in and call
+	// each other through, when it is not DatabaseSchema (pg_temp, for
+	// explain on demand). Everything else, check functions included, stays
+	// in DatabaseSchema. Check functions ignore it.
+	FunctionSchema string
 
 	// Function identity
 	FunctionName              string
@@ -148,4 +153,13 @@ func (p CheckPlan) DetermineCheckFunctionType() string {
 	default:
 		return "recursive_intersection"
 	}
+}
+
+// functionSchema is the schema of the explain functions: FunctionSchema, or
+// DatabaseSchema when it is unset.
+func (p CheckPlan) functionSchema() string {
+	if p.FunctionSchema != "" {
+		return p.FunctionSchema
+	}
+	return p.DatabaseSchema
 }

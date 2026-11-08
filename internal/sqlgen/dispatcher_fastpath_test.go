@@ -95,11 +95,11 @@ func TestDispatchers_SimpleExpressionFastPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("generateDispatcher: %v", err)
 	}
-	explainSQL, err := generateExplainDispatcher(analyses, "", ComputeExplainEligibility(analyses), nil)
+	explainSQL, err := generateExplainDispatcher(analyses, "", "", ComputeExplainEligibility(analyses), nil)
 	if err != nil {
 		t.Fatalf("generateExplainDispatcher: %v", err)
 	}
-	expandSQL := generateExpandDispatcher(analyses, "", ComputeExpandEligibility(analyses), nil)
+	expandSQL := generateExpandDispatcher(analyses, "", "", ComputeExpandEligibility(analyses), nil)
 
 	for name, sql := range map[string]string{
 		"check":   checkSQL,

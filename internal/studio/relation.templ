@@ -32,6 +32,14 @@ templ relationPage(d relationData) {
 					}
 				</p>
 			}
+			if len(d.OnDemand) > 0 {
+				<p class="page-meta">
+					Not installed, compiled for each call into pg_temp (the database was migrated with them off):
+					for _, f := range d.OnDemand {
+						<span class="badge">{ f }: on demand</span>
+					}
+				</p>
+			}
 		}
 		<div>
 			if d.Err != "" {

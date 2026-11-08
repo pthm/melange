@@ -7,6 +7,8 @@
 //     GenerateListSQL, CollectFunctionNames, CollectNamedFunctions, and
 //     their *WithOptions variants, which take GenerateSQLOptions (including
 //     the Exposure that selects the generated SQL API).
+//   - GenerateTraceSQL, which generates only the explain and expand
+//     functions, into another schema, for running them on demand.
 //   - Migration file generation: GenerateMigrationSQL and MigrationOptions,
 //     which assemble versioned UP/DOWN SQL files from already-compiled output.
 //
@@ -104,3 +106,15 @@ var ParentKeyFunctions = sqlgen.ParentKeyFunctions
 // ParentKeyFunctionsWithOptions returns the parent-key functions generated
 // under opts.Exposure.
 var ParentKeyFunctionsWithOptions = sqlgen.ParentKeyFunctionsWithOptions
+
+// TraceSQL is a model's explain and expand functions with their
+// dispatchers, generated apart from a migration.
+type TraceSQL = sqlgen.TraceSQL
+
+// TraceSQLOptions configures GenerateTraceSQL.
+type TraceSQLOptions = sqlgen.TraceSQLOptions
+
+// GenerateTraceSQL generates the explain and/or expand functions a
+// migration with an exposure and those families on would install, created in
+// a separate function schema (pg_temp, for explain and expand on demand).
+var GenerateTraceSQL = sqlgen.GenerateTraceSQL
