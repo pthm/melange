@@ -17,6 +17,7 @@ import (
 
 	"github.com/pthm/melange/internal/doctor"
 	"github.com/pthm/melange/internal/sqlapi"
+	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/test/testutil"
 )
 
@@ -252,6 +253,21 @@ func TestFunctions_ReportsDrift(t *testing.T) {
 	}
 	assert.Contains(t, orphanDetails, "accessiblesk_old")
 	assert.NotContains(t, orphanDetails, "check_invoice")
+	// The record now names a function migrate no longer generates, so a
+	// plain migrate applies, re-creating the dropped function: doctor says
+	// so rather than --force. The CLI that migrated may be a newer build
+	// than this test binary, whose migrate then refuses.
+	want := "Run 'melange migrate' to create functions"
+	if recorded := lastRecordIn(t, db, functionsDBSchema).CodegenVersion; migrator.CodegenVersionAhead(recorded) {
+		want = "Use melange " + recorded + " or later"
+	}
+	for _, c := range report.Checks {
+		if c.Category == "Generated Functions" && c.Name == "missing" {
+			assert.Contains(t, c.Details, "check_issue_assignee")
+			assert.Contains(t, c.FixHint, want)
+			assert.NotContains(t, c.FixHint, "--force")
+		}
+	}
 
 	// Studio shows the same.
 	c := newStudio(t, openStudioDB(t, dsn), functionsDBSchema)
@@ -278,6 +294,7 @@ func TestFunctions_ReportsDrift(t *testing.T) {
 	require.NoError(t, err)
 	page = html.UnescapeString(c.get("/sql"))
 	assert.Contains(t, page, "recorded a model this melange cannot read")
+	assert.Contains(t, page, "Re-run `melange migrate` with this melange", "an older codegen version's record is replaced by a plain migrate")
 	assert.NotContains(t, page, "check_issue_assignee")
 	assert.NotContains(t, html.UnescapeString(c.get("/sql?type=issue")), "not a type in the deployed model")
 
@@ -304,6 +321,17 @@ func TestFunctions_ReportsDrift(t *testing.T) {
 	for _, c := range report.Checks {
 		assert.False(t, c.Category == "Generated Functions" && c.Name == "orphans", "orphans without a record: %s", c.Details)
 	}
+}
+
+// lastRecordIn returns the last migration record in databaseSchema.
+func lastRecordIn(t *testing.T, db *sql.DB, databaseSchema string) *migrator.MigrationRecord {
+	t.Helper()
+	m := migrator.NewMigrator(db, "")
+	m.SetDatabaseSchema(databaseSchema)
+	rec, err := m.GetLastMigration(context.Background())
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	return rec
 }
 
 // A database built from melange generate migration files has no record, so

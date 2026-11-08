@@ -44,6 +44,10 @@ type Server struct {
 	checker    *melange.Checker
 	labels     *labeler
 
+	// exposure is the configured SQL API exposure, the one migrate would
+	// apply, for the Health page; nil when none is configured.
+	exposure *migrator.Exposure
+
 	countsMu sync.Mutex // guards the cached Tuples sidebar counts
 	counts   []typeCount
 	countsAt time.Time
@@ -63,6 +67,14 @@ func New(db *sql.DB, dbSchema, env, schemaPath string) *Server {
 		checker:    melange.NewChecker(db, melange.WithDatabaseSchema(dbSchema)),
 		labels:     newLabeler(db, dbSchema),
 	}
+}
+
+// SetExposure sets the configured SQL API exposure (the sql section of
+// melange.yaml) that the Health page compares with the recorded one and
+// predicts migrate with, as melange doctor does. Nil, the default, keeps the
+// recorded one.
+func (s *Server) SetExposure(exposure *migrator.Exposure) {
+	s.exposure = exposure
 }
 
 // Handler returns the console's routes, wrapped in a Host check.

@@ -36,6 +36,17 @@ Produces a `Report` with categorized check results:
 
 Each failing check includes a `FixHint` suggesting remediation steps.
 
+A hint that suggests `melange migrate` follows what an unforced migrate
+would do, from `migrator.Migrator.Plan` (computed only when a check needs
+it): a plain migrate when it would apply, naming the dependents of any
+removed functions it would refuse to drop; `--force` with the reason when it
+would skip or only record, counting the removed functions `--force` drops
+with `CASCADE` and naming their dependents. When a newer melange migrated
+the database (`migrator.CodegenVersionAhead`), the hint names that version
+and never suggests `--force` with this melange, which would override the
+downgrade guard. The undecodable-model hint may suggest `--force` with the
+newer melange.
+
 ## Key Checks
 
 | Category | Validates |

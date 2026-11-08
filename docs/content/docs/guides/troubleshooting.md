@@ -133,8 +133,11 @@ Melange that generates different SQL is therefore applied by a plain `melange
 migrate`. The check does not inspect the database, so a function changed or
 dropped by hand since the last migration is not detected.
 
-**Fix**: run `melange doctor` to see what differs. If the functions were changed
-outside Melange, re-apply them:
+**Fix**: run `melange doctor` to see what differs. Its fix hint suggests
+`--force` when a plain `melange migrate` would skip or only record, including
+for a stored model that cannot be decoded, which the skip check does not read.
+On a database a newer Melange migrated it names that version instead. If the
+functions were changed outside Melange, re-apply them:
 
 ```bash
 melange migrate --force
@@ -243,7 +246,9 @@ disagree with `functions` while a migration is pending.
 
 `melange doctor` detects when the codegen version has changed since the last migration.
 
-**Fix**: run `melange migrate`. The codegen version is part of the skip check, so the migration regenerates the SQL functions with the current Melange version without `--force`.
+**Fix**: run `melange migrate`. The codegen version is part of the skip check, so the migration regenerates the SQL functions with the current Melange version without `--force`. When the new release generates the same SQL, the migration only records the new version: functions dropped by hand stay missing, and doctor's fix hint says to use `--force`.
+
+When the database was migrated by a newer Melange, doctor says so: this Melange's `migrate` refuses to downgrade it, so use that version or later.
 
 ## Debugging Techniques
 

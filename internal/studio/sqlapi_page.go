@@ -68,7 +68,7 @@ func (s *Server) sqlAPI(w http.ResponseWriter, r *http.Request) {
 	// recorded function would read as an orphan; melange functions --db
 	// refuses this record too.
 	if model.Types == nil {
-		d.Err = unreadableModel
+		d.Err = unreadableModel(model.CodegenVersion)
 		render(w, r, sqlAPIPage(d))
 		return
 	}
@@ -132,7 +132,7 @@ func (s *Server) sqlAPIReport(r *http.Request, model *migrator.DeployedModel) (*
 	}
 	types, err := migrator.DeployedTypes(rec)
 	if err != nil || types == nil {
-		return nil, errors.New(unreadableModel)
+		return nil, errors.New(unreadableModel(model.CodegenVersion))
 	}
 	report, err := sqlapi.Describe(types, model.Exposure, s.dbSchema)
 	if err != nil {
@@ -151,7 +151,19 @@ func (s *Server) sqlAPIReport(r *http.Request, model *migrator.DeployedModel) (*
 
 // unreadableModel is the error for a record whose model this melange cannot
 // read: model_json and the DSL both fail, as for a newer melange's record.
-const unreadableModel = "The last migration recorded a model this melange cannot read, so its SQL API cannot be described. Use the melange version that migrated the database, or re-run `melange migrate` with this one."
+// codegen is the version that recorded it. A plain migrate does not read the
+// recorded model, so under that same version it skips, and only --force
+// records the model again; a newer version's record is refused.
+func unreadableModel(codegen string) string {
+	const prefix = "The last migration recorded a model this melange cannot read, so its SQL API cannot be described. "
+	switch {
+	case migrator.CodegenVersionAhead(codegen):
+		return prefix + fmt.Sprintf("Use melange %s or later, which migrated the database.", codegen)
+	case migrator.SameCodegenVersion(codegen, migrator.CodegenVersion()):
+		return prefix + "Re-run `melange migrate --force` to record it again: a plain migrate skips while the schema, exposure and codegen version are unchanged."
+	}
+	return prefix + "Re-run `melange migrate` with this melange to record it again."
+}
 
 // validSQLAPIQuery checks the page's parameters before any query: a kind
 // must be a relation function's kind, and a type a name the schema language

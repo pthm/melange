@@ -10,6 +10,7 @@ import (
 	"github.com/lib/pq"
 
 	"github.com/pthm/melange/internal/sqlgen"
+	"github.com/pthm/melange/internal/version"
 	"github.com/pthm/melange/melange"
 	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/pkg/parser"
@@ -471,5 +472,47 @@ func TestOnDemand_Script(t *testing.T) {
 	}
 	if !strings.Contains(expand, `"pg_temp"."expand_permission"(`) || strings.Contains(expand, "explain_") {
 		t.Errorf("expand script:\n%s", expand)
+	}
+}
+
+// A plain migrate does not read the recorded model, so the remedy for one
+// with a bad name follows the codegen version that recorded it: --force
+// under this one (a plain migrate skips), this melange's plain migrate over
+// an older one, and the newer melange over a newer one.
+func TestUnavailable_BadModelRemedy(t *testing.T) {
+	prev := version.Version
+	version.Version = "v0.10.0"
+	t.Cleanup(func() { version.Version = prev })
+	allOff := sqlgen.Exposure{Functions: sqlgen.FunctionFamilies{Explain: off()}}
+	types := append(testTypes(t), schema.TypeDefinition{Name: "x$$y"})
+	for _, tc := range []struct {
+		recorded string
+		want     string
+		without  string
+	}{
+		{"v0.10.0", "run melange migrate --force to record the model again", ""},
+		{"0.10.0", "run melange migrate --force to record the model again", ""},
+		{"v0.9.0", "run melange migrate with this melange to record the model again", "--force"},
+		{"v0.11.0", "use melange v0.11.0 or later, which migrated the database, and run melange migrate with it", ""},
+	} {
+		u := recorded(t, allOff, types, tc.recorded).Unavailable(Explain, "document", "viewer")
+		if u == nil {
+			t.Fatalf("recorded %s: answered", tc.recorded)
+		}
+		if msg := u.Error(); !strings.Contains(msg, tc.want) || (tc.without != "" && strings.Contains(msg, tc.without)) {
+			t.Errorf("recorded %s: message %q, want %q", tc.recorded, msg, tc.want)
+		}
+	}
+}
+
+// A missing public function names --force as the step after a plain
+// migrate that reports the schema unchanged, never before it.
+func TestFromError_MissingRemedy(t *testing.T) {
+	u := FromError(Check, "document", "viewer", &pq.Error{Code: "42883", Message: "function check_permission(text, text, text, text, text) does not exist"})
+	if u == nil {
+		t.Fatal("not recognized")
+	}
+	if msg := u.Error(); !strings.Contains(msg, "run melange migrate (melange migrate --force if it reports the schema unchanged)") {
+		t.Errorf("message %q", msg)
 	}
 }

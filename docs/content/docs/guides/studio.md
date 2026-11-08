@@ -178,7 +178,7 @@ The record is the same data as [`melange history`](../../reference/cli/#history)
 
 ### Health
 
-The Health page runs the same checks as [`melange doctor`](../../reference/cli/#doctor), grouped by category. Its Generated Functions checks compare the local schema file; the [SQL API](#sql-api) page compares the deployed model. The checks that compare a local schema file with the database use `--schema`, else the `schema` of a config file or `MELANGE_SCHEMA`. With none of these, studio skips the schema file and drift checks and says so; it never needs a schema file to run.
+The Health page runs the same checks as [`melange doctor`](../../reference/cli/#doctor), grouped by category. Its Generated Functions checks compare the local schema file; the [SQL API](#sql-api) page compares the deployed model. The checks that compare a local schema file with the database use `--schema`, else the `schema` of a config file or `MELANGE_SCHEMA`. With none of these, studio skips the schema file and drift checks and says so; it never needs a schema file to run. With a config file, the exposure check compares its `sql:` section with the exposure the database was migrated with, as `melange doctor` does.
 
 {{< studio-screenshot name="health" alt="The Health page showing melange doctor checks grouped by category with pass and warning counts" >}}
 

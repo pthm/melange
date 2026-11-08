@@ -5,6 +5,8 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"html"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/pthm/melange/internal/doctor"
+	"github.com/pthm/melange/internal/studio"
 	"github.com/pthm/melange/pkg/compiler"
 	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/pkg/parser"
@@ -771,6 +774,53 @@ func TestMigrateExposure_Doctor(t *testing.T) {
 	fns = filterCategory(run(nil), "Generated Functions")
 	assertCheck(t, fns, "complete", doctor.StatusPass)
 	assert.Nil(t, findCheck(fns, "orphans"))
+
+	// A newer melange migrated the database: this one's migrate refuses to
+	// apply the drift, so the hint names the newer version, not migrate.
+	stampVersion(t, "v0.10.0")
+	_, err = db.ExecContext(ctx, `UPDATE melange_migrations SET codegen_version = 'v0.11.0'`)
+	require.NoError(t, err)
+	ahead := findCheck(filterCategory(run(editorOnly()), "Migration State"), "exposure_sync")
+	require.NotNil(t, ahead)
+	assert.Equal(t, doctor.StatusWarn, ahead.Status)
+	assert.Contains(t, ahead.FixHint, "Use melange v0.11.0 or later")
+	assert.NotContains(t, ahead.FixHint, "--force")
+}
+
+// Narrowing the exposure drops the functions it no longer exposes. Doctor's
+// orphan check is compiled under the recorded exposure, so it does not list
+// them; the exposure_sync hint names their dependents, since a plain migrate
+// refuses to drop them.
+func TestMigrateExposure_DoctorNamesDependentsOfNarrowing(t *testing.T) {
+	stampVersion(t, "v0.10.0")
+	db, path := exposureDB(t)
+	ctx := context.Background()
+	_, err := migrateExposure(t, db, path, nil, false)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `CREATE VIEW alice_viewer AS SELECT check_document_viewer('user', 'alice', '1') AS allowed`)
+	require.NoError(t, err)
+
+	report, err := doctor.New(db, path, doctor.Options{SkipPerformance: true, Exposure: editorOnly()}).Run(ctx)
+	require.NoError(t, err)
+	assert.Nil(t, findCheck(filterCategory(report, "Generated Functions"), "orphans"), "the premise: doctor lists no orphans")
+	c := findCheck(filterCategory(report, "Migration State"), "exposure_sync")
+	require.NotNil(t, c)
+	assert.Equal(t, doctor.StatusWarn, c.Status)
+	assert.Contains(t, c.FixHint, "Run 'melange migrate' to apply it")
+	assert.Contains(t, c.FixHint, "first change or drop view alice_viewer")
+
+	_, err = migrateExposure(t, db, path, editorOnly(), false)
+	var depErr *migrator.DependentObjectsError
+	require.ErrorAs(t, err, &depErr, "the premise: a plain migrate refuses")
+
+	// Without the dependent, the hint is the plain migrate that applies it.
+	_, err = db.ExecContext(ctx, `DROP VIEW alice_viewer`)
+	require.NoError(t, err)
+	report, err = doctor.New(db, path, doctor.Options{SkipPerformance: true, Exposure: editorOnly()}).Run(ctx)
+	require.NoError(t, err)
+	c = findCheck(filterCategory(report, "Migration State"), "exposure_sync")
+	require.NotNil(t, c)
+	assert.Equal(t, "Run 'melange migrate' to apply it", c.FixHint)
 }
 
 // `melange status` reports the recorded exposure and compares the local one
@@ -1107,4 +1157,28 @@ func TestMigrateExposure_InvalidExposure(t *testing.T) {
 		require.Error(t, err, "include %q", include)
 		assert.True(t, strings.Contains(err.Error(), "invalid exposure"), err.Error())
 	}
+}
+
+// Studio's Health page compares the configured exposure with the recorded
+// one, as melange doctor does; without one it keeps the recorded exposure.
+func TestMigrateExposure_StudioHealth(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	db, dsn := newTuplesDBWithDSN(t)
+	_, err := migrateExposure(t, db, writeSchema(t, exposureSchema), editorOnly(), false)
+	require.NoError(t, err)
+
+	health := func(exposure *migrator.Exposure) string {
+		console := studio.New(openStudioDB(t, dsn), "public", "", "")
+		console.SetExposure(exposure)
+		srv := httptest.NewServer(console.Handler())
+		t.Cleanup(srv.Close)
+		c := studioClient{t: t, base: srv.URL, c: srv.Client()}
+		return html.UnescapeString(c.get("/health"))
+	}
+	const drift = "SQL API exposure differs from the one the database was migrated with"
+	assert.NotContains(t, health(nil), drift)
+	assert.NotContains(t, health(editorOnly()), drift)
+	assert.Contains(t, health(&migrator.Exposure{}), drift)
 }

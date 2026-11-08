@@ -13,6 +13,7 @@ import (
 
 	"github.com/pthm/melange/internal/sqlapi"
 	"github.com/pthm/melange/internal/sqlgen"
+	"github.com/pthm/melange/internal/version"
 	"github.com/pthm/melange/melange"
 	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/pkg/parser"
@@ -387,5 +388,23 @@ func TestWhatIfAndMatrixHelpers(t *testing.T) {
 	}
 	if a, e, s := matrixCounts([]matrixCell{{Allowed: true}, {Allowed: false}, {Err: "timed out", Allowed: true}, {Allowed: true}, {Skip: &sqlapi.Unavailable{}}}); a != 2 || e != 1 || s != 1 {
 		t.Errorf("matrixCounts = %d allowed, %d errors, %d skipped; want 2, 1, 1 (an errored cell counts as neither)", a, e, s)
+	}
+}
+
+// A plain migrate does not read the recorded model, so the remedy for one
+// this melange cannot read follows the codegen version that recorded it.
+func TestUnreadableModelRemedy(t *testing.T) {
+	prev := version.Version
+	version.Version = "v0.10.0"
+	t.Cleanup(func() { version.Version = prev })
+	for recorded, want := range map[string]string{
+		"v0.11.0": "Use melange v0.11.0 or later",
+		"0.10.0":  "Re-run `melange migrate --force`",
+		"v0.9.0":  "Re-run `melange migrate` with this melange",
+		"dev":     "Re-run `melange migrate` with this melange",
+	} {
+		if got := unreadableModel(recorded); !strings.Contains(got, want) {
+			t.Errorf("recorded %s: %q, want %q", recorded, got, want)
+		}
 	}
 }

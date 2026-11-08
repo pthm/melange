@@ -40,7 +40,7 @@ Melange connects, generates the SQL functions, and applies them in a single tran
 
 ### Key behaviors
 
-- **Skip-if-unchanged**: Melange checksums the schema and skips the migration when neither it nor the [SQL API exposure](#sql-api-exposure) has changed. A Melange upgrade that changes the generated SQL is applied too. `--force` re-applies regardless and also drops the dependents of removed functions; see [Dependent objects](#dependent-objects).
+- **Skip-if-unchanged**: Melange checksums the schema and skips the migration when neither it nor the [SQL API exposure](#sql-api-exposure) has changed. A Melange upgrade that changes the generated SQL is applied too. `--force` re-applies regardless and also drops the dependents of removed functions; see [Dependent objects](#dependent-objects). The skip check does not inspect the installed functions; `melange doctor`'s fix hints say when a plain migrate would skip, and `migrator.PlanWithOptions` (or `Migrator.Plan`) predicts a run from Go without changing the database.
 - **Orphan cleanup**: Functions from removed relations, or outside a narrower exposure, are dropped automatically. A drop that views or policies depend on is refused unless forced; see [Dependent objects](#dependent-objects).
 - **Dry-run**: Use `--dry-run` to preview the SQL without applying it.
 

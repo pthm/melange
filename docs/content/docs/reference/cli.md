@@ -746,13 +746,22 @@ This shows:
 | Schema out of sync       | Run `melange migrate`                                 |
 | Exposure out of sync     | Run `melange migrate`, or change the `sql:` section back |
 | Pattern matches nothing  | Fix the pattern in the `sql:` section                 |
-| Missing functions        | Run `melange migrate`                                 |
-| Orphan functions         | Run `melange migrate` (cleanup is automatic)          |
+| Missing functions        | Run `melange migrate`, or `--force` when the fix hint says so |
+| Orphan functions         | Run `melange migrate` (cleanup is automatic); change their dependents first if any |
 | melange_tuples missing   | Create a view over your domain tables                 |
 | Missing columns          | Update melange_tuples to include all required columns |
 | Unknown types in tuples  | Update tuples view or schema to match                 |
 | UNION instead of UNION ALL | Replace `UNION` with `UNION ALL` in view definition |
 | Missing expression index | Run the `CREATE INDEX` command shown in the fix hint  |
+
+**Fix hints:**
+
+A fix hint that suggests `melange migrate` says what an unforced `melange migrate` of the local schema and exposure would do:
+
+- When it would apply, the hint is a plain `melange migrate`. If that migrate would drop removed functions that other objects depend on, which it refuses to do, the hint names the dependents to change or drop first. This covers functions a narrowed exposure stops installing, which the orphan check does not list.
+- When it would skip (schema, exposure and codegen version unchanged) or only record (the generated SQL is the SQL the last migration recorded), it cannot restore functions dropped or edited by hand, or a stored model that cannot be decoded. The hint is `melange migrate --force`, with the reason. It says how many removed functions `--force` drops with `CASCADE` and names their dependents.
+- When a newer melange migrated the database, this melange's migrate refuses to downgrade it, so the hint names that version. It never suggests `--force` with this melange, which would override the refusal. A stored model that cannot be decoded is rewritten by re-running migrate with the newer melange, so that hint may suggest `--force` with the newer version.
+- Orphans that views, policies or functions depend on are listed with their dependents: `melange migrate` refuses to drop them, so change or drop the dependents first, or `--force` drops them with `CASCADE`.
 
 These checks compare the database with the **local schema file**. [`melange functions --db`](#functions) and studio's [SQL API page](../../guides/studio/#sql-api) compare it with the **deployed model** and the exposure the last migration recorded, so while a migration is pending doctor reports what `migrate` would add and `functions` reports what the deployed model is missing.
 

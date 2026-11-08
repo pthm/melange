@@ -16,6 +16,7 @@ import (
 
 	"github.com/pthm/melange/internal/cli"
 	"github.com/pthm/melange/internal/studio"
+	"github.com/pthm/melange/pkg/compiler"
 )
 
 var (
@@ -48,8 +49,19 @@ back, so nothing is committed.`,
 		if err != nil {
 			return err
 		}
-		return runStudio(dsn, resolveString(studioDBSchema, cfg.Database.Schema, "public"), studioSchemaPath(), studioAddr)
+		return runStudio(dsn, resolveString(studioDBSchema, cfg.Database.Schema, "public"), studioSchemaPath(), studioExposure(), studioAddr)
 	},
+}
+
+// studioExposure is the sql section of the config file for the Health page,
+// the exposure migrate applies. Without a config file there is none, and
+// the Health page keeps the recorded exposure.
+func studioExposure() *compiler.Exposure {
+	if configPath == "" {
+		return nil
+	}
+	exposure := cfg.SQL.Exposure()
+	return &exposure
 }
 
 // studioSchemaPath is the local schema for the Health page: --schema, else
@@ -71,7 +83,7 @@ func init() {
 	f.StringVar(&studioAddr, "addr", "127.0.0.1:0", "loopback address to listen on (port 0 = pick a free port)")
 }
 
-func runStudio(dsn, databaseSchema, schemaPath, addr string) error {
+func runStudio(dsn, databaseSchema, schemaPath string, exposure *compiler.Exposure, addr string) error {
 	host, _, err := net.SplitHostPort(addr)
 	if err != nil {
 		return cli.GeneralError("listen address", err)
@@ -101,8 +113,10 @@ func runStudio(dsn, databaseSchema, schemaPath, addr string) error {
 	if err != nil {
 		return cli.GeneralError("listening", err)
 	}
+	console := studio.New(db, databaseSchema, activeEnv, schemaPath)
+	console.SetExposure(exposure)
 	srv := &http.Server{
-		Handler:           studio.New(db, databaseSchema, activeEnv, schemaPath).Handler(),
+		Handler:           console.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	fmt.Fprintf(os.Stderr, "melange studio: http://%s (ctrl-c to stop)\n", ln.Addr())

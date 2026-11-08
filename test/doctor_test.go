@@ -801,6 +801,8 @@ func TestDoctor_DeployedModelCorruptDegradesToWarning(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
+	// A release build, which the phase 1 skip applies to.
+	stampVersion(t, "v0.9.0")
 	db := testutil.EmptyDB(t)
 	ctx := context.Background()
 
@@ -833,6 +835,22 @@ type document
 
 	// Subsequent checks still ran — the run was not aborted.
 	assert.NotEmpty(t, filterCategory(report, "Generated Functions"), "later checks should still run")
+
+	// The phase 1 skip does not read model_json: only --force rewrites it,
+	// as the hint says.
+	assert.Contains(t, c.FixHint, "melange migrate --force")
+	stale := func() string {
+		d := doctor.New(db, path, doctor.Options{SkipPerformance: true})
+		report, err := d.Run(ctx)
+		require.NoError(t, err)
+		return requireHint(t, report, "Deployed Model", "recorded").Message
+	}
+	opts := migrator.InternalMigrateOptions{Version: "v0.9.0", SchemaFormat: "single"}
+	migrateSchema(t, ctx, m, doc, opts)
+	assert.Contains(t, stale(), "could not be decoded", "a plain migrate skips")
+	opts.Force = true
+	migrateSchema(t, ctx, m, doc, opts)
+	assert.NotContains(t, stale(), "could not be decoded", "--force rewrites the model")
 }
 
 // TestDoctor_DeployedModelDriftFromDSLFallback verifies the drift advisory still
@@ -1064,4 +1082,231 @@ func TestDoctor_SubjectLookupIndexes(t *testing.T) {
 	report, err = doctor.New(db, "").Run(ctx)
 	require.NoError(t, err)
 	assertCheck(t, filterCategory(report, "Performance"), "subject_lookup_indexes", doctor.StatusPass)
+}
+
+// fixHintDB is a database migrated with concurrencySchema by a release
+// build, with check_document_viewer dropped by hand, and the schema file.
+func fixHintDB(t *testing.T) (*sql.DB, string) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	stampVersion(t, "v0.10.0")
+	db := newTuplesDB(t)
+	path := writeSchema(t, concurrencySchema)
+	_, err := migrator.MigrateWithOptions(context.Background(), db, path, migrator.MigrateOptions{Version: "v0.10.0"})
+	require.NoError(t, err)
+	dropGeneratedFunction(t, db, "check_document_viewer")
+	return db, path
+}
+
+// doctorReport runs doctor against path with the local exposure.
+func doctorReport(t *testing.T, db *sql.DB, path string, exposure *migrator.Exposure) *doctor.Report {
+	t.Helper()
+	report, err := doctor.New(db, path, doctor.Options{SkipPerformance: true, Exposure: exposure}).Run(context.Background())
+	require.NoError(t, err)
+	return report
+}
+
+// requireHint returns the named check of category, which must exist.
+func requireHint(t *testing.T, report *doctor.Report, category, name string) *doctor.CheckResult {
+	t.Helper()
+	c := findCheck(filterCategory(report, category), name)
+	require.NotNil(t, c, "%s/%s not reported", category, name)
+	return c
+}
+
+// plainMigrate runs an unforced migration of path.
+func plainMigrate(t *testing.T, db *sql.DB, path string, force bool) (bool, error) {
+	t.Helper()
+	return migrator.MigrateWithOptions(context.Background(), db, path, migrator.MigrateOptions{Version: "v0.10.0", Force: force})
+}
+
+// Doctor's fix hints say what would actually fix the database: each subtest
+// checks the hint, then that a plain migrate does (or does not) fix it.
+func TestDoctor_FixHintsFollowMigrate(t *testing.T) {
+	ctx := context.Background()
+	const dropped = "check_document_viewer"
+
+	t.Run("dropped function with nothing pending needs --force", func(t *testing.T) {
+		db, path := fixHintDB(t)
+		c := requireHint(t, doctorReport(t, db, path, nil), "Generated Functions", "missing")
+		assert.Contains(t, c.FixHint, "melange migrate --force")
+		assert.Contains(t, c.FixHint, "skips")
+
+		skipped, err := plainMigrate(t, db, path, false)
+		require.NoError(t, err)
+		assert.True(t, skipped, "the premise: a plain migrate skips")
+		assert.False(t, functionExists(t, ctx, db, dropped), "the premise: a plain migrate leaves it missing")
+
+		_, err = plainMigrate(t, db, path, true)
+		require.NoError(t, err)
+		assertCheck(t, filterCategory(doctorReport(t, db, path, nil), "Generated Functions"), "complete", doctor.StatusPass)
+	})
+
+	t.Run("dropped dispatcher needs --force", func(t *testing.T) {
+		db, path := fixHintDB(t)
+		_, err := plainMigrate(t, db, path, true)
+		require.NoError(t, err)
+		dropGeneratedFunction(t, db, "check_permission")
+		c := requireHint(t, doctorReport(t, db, path, nil), "Generated Functions", "dispatchers")
+		assert.Equal(t, doctor.StatusFail, c.Status)
+		assert.Contains(t, c.FixHint, "melange migrate --force")
+
+		skipped, err := plainMigrate(t, db, path, false)
+		require.NoError(t, err)
+		assert.True(t, skipped)
+		assert.False(t, functionExists(t, ctx, db, "check_permission"))
+		_, err = plainMigrate(t, db, path, true)
+		require.NoError(t, err)
+		assertCheck(t, filterCategory(doctorReport(t, db, path, nil), "Generated Functions"), "dispatchers", doctor.StatusPass)
+	})
+
+	t.Run("comment-only edit records only", func(t *testing.T) {
+		db, _ := fixHintDB(t)
+		path := writeSchema(t, concurrencySchema+"\n# a comment changes the checksum, not the SQL\n")
+		report := doctorReport(t, db, path, nil)
+		sync := requireHint(t, report, "Migration State", "schema_sync")
+		assert.Equal(t, doctor.StatusWarn, sync.Status)
+		assert.Equal(t, "Run 'melange migrate' to apply changes", sync.FixHint)
+		c := requireHint(t, report, "Generated Functions", "missing")
+		assert.Contains(t, c.FixHint, "melange migrate --force")
+		assert.Contains(t, c.FixHint, "only records")
+
+		skipped, err := plainMigrate(t, db, path, false)
+		require.NoError(t, err)
+		assert.False(t, skipped)
+		assert.False(t, functionExists(t, ctx, db, dropped), "the premise: recording leaves it missing")
+		assertCheck(t, filterCategory(doctorReport(t, db, path, nil), "Migration State"), "schema_sync", doctor.StatusPass)
+	})
+
+	t.Run("schema change applies", func(t *testing.T) {
+		db, _ := fixHintDB(t)
+		path := writeSchema(t, concurrencySchema+"    define auditor: [user]\n")
+		c := requireHint(t, doctorReport(t, db, path, nil), "Generated Functions", "missing")
+		assert.Contains(t, c.FixHint, "Run 'melange migrate' to create functions")
+		assert.Contains(t, c.FixHint, "pending changes")
+		assert.NotContains(t, c.FixHint, "--force")
+
+		_, err := plainMigrate(t, db, path, false)
+		require.NoError(t, err)
+		report := doctorReport(t, db, path, nil)
+		assertCheck(t, filterCategory(report, "Generated Functions"), "complete", doctor.StatusPass)
+		assertCheck(t, filterCategory(report, "Migration State"), "schema_sync", doctor.StatusPass)
+	})
+
+	t.Run("database ahead", func(t *testing.T) {
+		db, path := fixHintDB(t)
+		_, err := db.ExecContext(ctx, `UPDATE melange_migrations SET codegen_version = 'v0.11.0'`)
+		require.NoError(t, err)
+		local := &migrator.Exposure{Relations: compiler.RelationPatterns{Include: []string{"document#editor"}}}
+		report := doctorReport(t, db, path, local)
+		sync := requireHint(t, report, "Migration State", "schema_sync")
+		assert.Contains(t, sync.Message, "newer melange (v0.11.0)")
+		for _, name := range []string{"exposure_sync", "schema_sync"} {
+			assert.Contains(t, requireHint(t, report, "Migration State", name).FixHint, "Use melange v0.11.0 or later")
+		}
+		missing := requireHint(t, report, "Generated Functions", "missing")
+		assert.Contains(t, missing.FixHint, "Use melange v0.11.0 or later")
+		assert.Contains(t, missing.Details, "melange v0.11.0 may generate others")
+		for _, c := range report.Checks {
+			assert.NotContains(t, c.FixHint, "--force", "%s/%s", c.Category, c.Name)
+		}
+
+		_, err = plainMigrate(t, db, path, false)
+		var ahead *migrator.DatabaseAheadError
+		require.ErrorAs(t, err, &ahead, "the premise: this melange's migrate refuses")
+	})
+
+	t.Run("older codegen with the same SQL records only", func(t *testing.T) {
+		db, path := fixHintDB(t)
+		_, err := db.ExecContext(ctx, `UPDATE melange_migrations SET codegen_version = 'v0.9.0'`)
+		require.NoError(t, err)
+		report := doctorReport(t, db, path, nil)
+		sync := requireHint(t, report, "Migration State", "schema_sync")
+		assert.Contains(t, sync.Message, "the generated SQL is unchanged")
+		assert.Equal(t, "Run 'melange migrate' to record this codegen version", sync.FixHint)
+		assert.Contains(t, requireHint(t, report, "Generated Functions", "missing").FixHint, "melange migrate --force")
+
+		skipped, err := plainMigrate(t, db, path, false)
+		require.NoError(t, err)
+		assert.False(t, skipped)
+		assert.False(t, functionExists(t, ctx, db, dropped), "the premise: recording leaves it missing")
+		assertCheck(t, filterCategory(doctorReport(t, db, path, nil), "Migration State"), "schema_sync", doctor.StatusPass)
+	})
+
+	t.Run("older codegen with other SQL applies", func(t *testing.T) {
+		db, path := fixHintDB(t)
+		_, err := db.ExecContext(ctx, `UPDATE melange_migrations SET codegen_version = 'v0.9.0',
+			function_checksums = jsonb_set(function_checksums, '{check_document_owner}', '"generated by v0.9.0"')`)
+		require.NoError(t, err)
+		report := doctorReport(t, db, path, nil)
+		assert.Equal(t, "Codegen version has changed", requireHint(t, report, "Migration State", "schema_sync").Message)
+		c := requireHint(t, report, "Generated Functions", "missing")
+		assert.Contains(t, c.FixHint, "Run 'melange migrate' to create functions")
+		assert.NotContains(t, c.FixHint, "--force")
+
+		_, err = plainMigrate(t, db, path, false)
+		require.NoError(t, err)
+		assert.True(t, functionExists(t, ctx, db, dropped), "applying re-creates it")
+	})
+}
+
+// Orphans that other objects depend on are named with their dependents,
+// since a plain migrate refuses to drop them.
+func TestDoctor_OrphanHintNamesDependents(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	stampVersion(t, "v0.10.0")
+	ctx := context.Background()
+	db := newTuplesDB(t)
+	_, err := plainMigrate(t, db, writeSchema(t, concurrencySchema), false)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `CREATE VIEW alice_viewer AS SELECT check_document_viewer('user', 'alice', '1') AS allowed`)
+	require.NoError(t, err)
+	path := writeSchema(t, planSchemaWithoutViewer)
+	dropGeneratedFunction(t, db, "check_document_owner")
+
+	report := doctorReport(t, db, path, nil)
+	c := requireHint(t, report, "Generated Functions", "orphans")
+	assert.Contains(t, c.Details, "check_document_viewer: view alice_viewer")
+	assert.Contains(t, c.FixHint, "refuses to drop them")
+	// The migrate that would re-create the dropped function is refused too.
+	assert.Contains(t, requireHint(t, report, "Generated Functions", "missing").FixHint, "first change or drop view alice_viewer")
+	assert.Contains(t, requireHint(t, report, "Migration State", "schema_sync").FixHint, "first change or drop view alice_viewer")
+
+	_, err = plainMigrate(t, db, path, false)
+	var depErr *migrator.DependentObjectsError
+	require.ErrorAs(t, err, &depErr, "the premise: a plain migrate refuses")
+}
+
+// After a melange upgrade the codegen hint goes through the plan too: the
+// applying migrate drops a recorded function an application view depends
+// on, so it is refused, and the hint names the view.
+func TestDoctor_CodegenChangeHintNamesDependents(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	stampVersion(t, "v0.10.0")
+	ctx := context.Background()
+	db := newTuplesDB(t)
+	path := writeSchema(t, concurrencySchema)
+	_, err := plainMigrate(t, db, path, false)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `CREATE FUNCTION check_document_retired(text, text, text) RETURNS integer LANGUAGE sql AS 'SELECT 0'`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `CREATE VIEW retired_access AS SELECT check_document_retired('user', 'alice', '1') AS allowed`)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `UPDATE melange_migrations SET codegen_version = 'v0.9.0', function_names = function_names || 'check_document_retired'::text`)
+	require.NoError(t, err)
+
+	c := requireHint(t, doctorReport(t, db, path, nil), "Migration State", "schema_sync")
+	assert.Equal(t, "Codegen version has changed", c.Message)
+	assert.Contains(t, c.FixHint, "Run 'melange migrate' to regenerate functions")
+	assert.Contains(t, c.FixHint, "first change or drop view retired_access")
+
+	_, err = plainMigrate(t, db, path, false)
+	var depErr *migrator.DependentObjectsError
+	require.ErrorAs(t, err, &depErr, "the premise: a plain migrate refuses")
 }
