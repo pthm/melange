@@ -71,11 +71,22 @@ records it in the `exposure` column of `melange_migrations` (a JSON object;
 - **`--if-deployed-checksum` compares only the schema checksum.** A database at
   the expected checksum but with a different recorded exposure passes the
   guard, and the migration applies the local exposure.
+- **Changing the exposure needs a recorded migration.** `Migrator.MigrateWithTypes`,
+  and `Migrator.MigrateWithTypesAndOptions` without `SchemaContent`, record
+  nothing, so they could neither drop the previous exposure's functions nor
+  record the new exposure. They generate under the recorded exposure, or the
+  default when none is recorded, and return
+  `*migrator.UnrecordedExposureChangeError` for any other, applying nothing.
+  A database deployed from restricted `melange generate migration` files has
+  no record, so these calls refuse to restate that restriction too.
 
 A Go program that migrates through `pkg/migrator` without setting
 `MigrateOptions.Exposure` keeps the recorded exposure instead, so an
 application that migrates on startup does not undo a restriction applied by
-`melange migrate`.
+`melange migrate`. To change the exposure from Go, use
+`migrator.MigrateWithOptions` with `MigrateOptions.Exposure`, or
+`Migrator.MigrateWithTypesAndOptions` with `SchemaContent` (for an embedded
+schema, `SchemaFormat: migrator.FormatSingle`) and `Exposure`.
 
 ### Dependent objects
 

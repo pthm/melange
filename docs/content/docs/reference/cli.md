@@ -1661,8 +1661,9 @@ err = migrator.Migrate(ctx, db, "schemas/schema.fga")
 `migrator.Migrate` and `migrator.MigrateFromString` record the schema they
 applied, so the database stays self-describing and `status`, `schema pull`, and
 `diff` keep working against it. `Migrator.MigrateWithTypes` (used with
-pre-parsed types) deliberately skips that bookkeeping — reach for it only when
-you don't want a migration record, such as in test fixtures.
+pre-parsed types) deliberately skips that bookkeeping. Reach for it only when
+you don't want a migration record, such as in test fixtures. For the same
+reason it cannot change the SQL API exposure.
 
 **With options (dry-run, force, skip-if-unchanged, exposure):**
 
@@ -1723,6 +1724,24 @@ if errors.As(err, &dependents) {
 Unlike the CLI, which always applies the exposure in `melange.yaml`, a library
 call without `Exposure` keeps the recorded one, so an application that
 migrates on startup does not undo a restriction applied with `melange migrate`.
+
+Changing the exposure needs a migration that records it. `Migrator.MigrateWithTypes`,
+and `Migrator.MigrateWithTypesAndOptions` without `SchemaContent`, record
+nothing: asked for an exposure other than the recorded one (or the default when
+none is recorded), they return `*migrator.UnrecordedExposureChangeError` and
+apply nothing. With pre-parsed types or an embedded schema, pass the schema
+text so the migration is recorded:
+
+```go
+e := migrator.Exposure{
+    Relations: compiler.RelationPatterns{Include: []string{"can_*"}},
+}
+err := migrator.NewMigrator(db, "").MigrateWithTypesAndOptions(ctx, types, migrator.InternalMigrateOptions{
+    SchemaContent: schemaContent,
+    SchemaFormat:  migrator.FormatSingle,
+    Exposure:      &e,
+})
+```
 
 Run health checks with the `melange doctor` command (see above). The doctor
 package is internal to the CLI and is not a supported programmatic API; for

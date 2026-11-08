@@ -186,10 +186,19 @@ func TestMigrate_RechecksGuardsUnderLock(t *testing.T) {
 	require.Zero(t, auditorFns, "a migration refused under the lock must not apply functions")
 }
 
-// migrateBehindLock holds the migration lock while migrate starts and queues
-// behind it, runs inject in the lock-holding transaction and commits it, then
-// returns migrate's result once it gets the lock.
+// migrateBehindLock runs MigrateWithOptions behind the migration lock; see
+// behindLock.
 func migrateBehindLock(t *testing.T, db *sql.DB, schemaPath string, opts migrator.MigrateOptions, inject string) (bool, error) {
+	t.Helper()
+	return behindLock(t, db, func() (bool, error) {
+		return migrator.MigrateWithOptions(context.Background(), db, schemaPath, opts)
+	}, inject)
+}
+
+// behindLock holds the migration lock while migrate starts and queues behind
+// it, runs inject in the lock-holding transaction and commits it, then
+// returns migrate's result once it gets the lock.
+func behindLock(t *testing.T, db *sql.DB, migrate func() (bool, error), inject string) (bool, error) {
 	t.Helper()
 	ctx := context.Background()
 	tx, err := db.BeginTx(ctx, nil)
@@ -204,7 +213,7 @@ func migrateBehindLock(t *testing.T, db *sql.DB, schemaPath string, opts migrato
 	}
 	done := make(chan result, 1)
 	go func() {
-		skipped, err := migrator.MigrateWithOptions(ctx, db, schemaPath, opts)
+		skipped, err := migrate()
 		done <- result{skipped, err}
 	}()
 	// Wait until migrate is blocked on melange's lock in this database.
@@ -407,4 +416,34 @@ func TestMigrateWithTypes_CallerTransactionRefusesOlderCodegen(t *testing.T) {
 	stampVersion(t, "v0.11.0")
 	require.NoError(t, migrateInTx())
 	require.NotZero(t, auditorFns())
+}
+
+// MigrateWithTypes cannot change the exposure, since it could neither drop
+// the previous exposure's functions nor record the new one. Inside a
+// transaction the caller owns, the refusal applies nothing either.
+func TestMigrateWithTypes_CallerTransactionRefusesExposureChange(t *testing.T) {
+	stampVersion(t, "v0.10.0")
+	db := newTuplesDB(t)
+	ctx := context.Background()
+	_, err := migrator.MigrateWithOptions(ctx, db, writeSchema(t, concurrencySchema), migrator.MigrateOptions{Version: version.Version})
+	require.NoError(t, err)
+	records := migrationRecordCount(t, ctx, db)
+	types, err := parser.ParseSchemaString(concurrencySchema + "    define auditor: [user]\n")
+	require.NoError(t, err)
+
+	tx, err := db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer func() { _ = tx.Rollback() }()
+	m := migrator.NewMigrator(tx, "")
+	m.SetExposure(editorOnly())
+	requireExposureChangeRefused(t, m.MigrateWithTypes(ctx, types), true)
+	var auditorFns int
+	require.NoError(t, tx.QueryRowContext(ctx,
+		`SELECT count(*) FROM pg_proc WHERE proname LIKE '%auditor%'`).Scan(&auditorFns))
+	require.Zero(t, auditorFns, "a refused migration must not apply functions, even before rollback")
+	require.NoError(t, tx.Rollback())
+
+	require.False(t, functionExists(t, ctx, db, "check_document_auditor"))
+	require.False(t, functionExists(t, ctx, db, "check_permission_unexposed"))
+	require.Equal(t, records, migrationRecordCount(t, ctx, db))
 }

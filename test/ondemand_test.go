@@ -484,10 +484,10 @@ func requireOnDemandRefusal(t *testing.T, err error) string {
 }
 
 // On demand is refused, saying why, when the record's codegen version is not
-// this melange's or the record has no model. A database migrated with the
-// families off but without a record (MigrateWithTypes, versioned migration
-// files) looks installed; its dispatcher raises M2003, which is reported
-// with how on demand would apply.
+// this melange's or the record has no model. A database deployed with the
+// families off but without a record (versioned migration files) looks
+// installed; its dispatcher raises M2003, which is reported with how on
+// demand would apply.
 func TestOnDemand_RefusedWithoutAMatchingRecord(t *testing.T) {
 	ctx := context.Background()
 	call := func(db *sql.DB) error {
@@ -559,7 +559,15 @@ func TestOnDemand_RefusedWithoutAMatchingRecord(t *testing.T) {
 		db, _ := newTuplesDBWithDSN(t)
 		types, err := parser.ParseSchema(kitchenSinkSchemaPath)
 		require.NoError(t, err)
-		require.NoError(t, migrator.NewMigrator(db, "").MigrateWithTypesAndOptions(ctx, types, migrator.InternalMigrateOptions{Exposure: traceFamilies(false)}))
+		// A migration that records nothing cannot turn the families off.
+		requireExposureChangeRefused(t, migrator.NewMigrator(db, "").MigrateWithTypesAndOptions(ctx, types,
+			migrator.InternalMigrateOptions{Exposure: traceFamilies(false)}), false)
+		// Stand in for a database deployed without a record (versioned
+		// migration files): migrate with one, then drop it.
+		_, err = migrator.MigrateWithOptions(ctx, db, kitchenSinkSchemaPath, migrator.MigrateOptions{Exposure: traceFamilies(false)})
+		require.NoError(t, err)
+		_, err = db.ExecContext(ctx, `DROP TABLE melange_migrations`)
+		require.NoError(t, err)
 		require.True(t, sqlapi.Load(ctx, db, "public").Installed(sqlapi.Explain), "no record: the default exposure")
 		msg := message(t, call(db), "not exposed")
 		assert.Contains(t, msg, "with sql.functions.explain on")

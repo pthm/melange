@@ -116,8 +116,8 @@ until it exits, even once the function is dropped. On demand needs:
   by default.
 - **A recorded model.** `melange migrate` records it (and so does an applied
   `melange migrate --dry-run` script). Databases deployed from
-  `melange generate migration` files or with `MigrateWithTypes` have no
-  record, so the tools cannot tell the family is off and report the `M2003`.
+  `melange generate migration` files have no record, so the tools cannot tell
+  the family is off and report the `M2003`.
 - **The same codegen version.** The compiled bodies call functions the
   recorded melange version generated, so a melange of another version refuses
   and says which: run `melange migrate` with it, or use the recorded version.

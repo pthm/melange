@@ -23,7 +23,7 @@ import (
 // each migration as `melange migrate` does, so the second migration has to
 // drop, keep or re-create what the first installed. (Orphan cleanup drops
 // only recorded functions, and a migration without SchemaContent records
-// nothing.)
+// nothing, so it also refuses to change the exposure.)
 type nestedExposure struct {
 	first, final *compiler.Exposure
 }

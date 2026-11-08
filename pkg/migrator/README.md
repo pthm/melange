@@ -36,9 +36,14 @@ func MigrateWithOptions(ctx context.Context, db Execer, schemaPath string, opts 
 func NewMigrator(db Execer, schemaPath string) *Migrator
 
 // MigrateWithTypes performs migration using pre-parsed type definitions.
+// It records no migration, so it generates under the recorded exposure and
+// returns *UnrecordedExposureChangeError when SetExposure asks for another.
 func (m *Migrator) MigrateWithTypes(ctx context.Context, types []TypeDefinition) error
 
 // MigrateWithTypesAndOptions performs migration with full options control.
+// It records the migration when opts.SchemaContent holds the schema text;
+// without it, it records nothing and refuses an exposure change like
+// MigrateWithTypes.
 func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeDefinition, opts InternalMigrateOptions) error
 
 // GetStatus returns the current migration status.
@@ -190,6 +195,25 @@ for _, db := range databases {
     if err := m.MigrateWithTypes(ctx, types); err != nil {
         log.Printf("Migration failed for %s: %v", db, err)
     }
+}
+```
+
+`MigrateWithTypes` records no migration, so it cannot change the SQL API
+exposure: it generates under the recorded one (the default when none is
+recorded), and an exposure set with `SetExposure` must be that same one. To
+change it, record the migration by passing the schema text:
+
+```go
+m := migrator.NewMigrator(db, "")
+err := m.MigrateWithTypesAndOptions(ctx, types, migrator.InternalMigrateOptions{
+    SchemaContent: schemaContent,
+    SchemaFormat:  migrator.FormatSingle,
+    Exposure:      &exposure,
+})
+var unrecorded *migrator.UnrecordedExposureChangeError
+if errors.As(err, &unrecorded) {
+    // Only a migration without SchemaContent returns this; nothing was applied.
+    log.Printf("exposure %v needs a recorded migration", unrecorded.Requested)
 }
 ```
 

@@ -762,24 +762,40 @@ func (c *Client) loadModel(ctx context.Context, db *sql.DB, m *model) error {
 		return fmt.Errorf("model not found")
 	}
 
-	// Use the Migrator to apply generated SQL for this model
-	// The empty string for schemasDir is fine since we're using MigrateWithTypes directly
-	// MigrateWithTypes drops no orphans, and a case's stages share one
-	// database. Under a restricted exposure, start each stage from no
-	// generated functions, so a callee missing from this stage's closure
-	// fails instead of resolving to a copy an earlier stage installed.
+	mig := migrator.NewMigrator(db, "")
+	mig.SetDatabaseSchema(c.databaseSchema)
+	if !c.restrictExposure && !c.traceOnDemand {
+		// The default exposure: MigrateWithTypes needs no schema text, and
+		// records nothing.
+		return mig.MigrateWithTypes(ctx, m.types)
+	}
+
+	// Any other exposure needs a recorded migration, which needs schema text.
+	// The record's checksum is all it is used for here: the tools read the
+	// model from the record's model_json, which the types fill. Not every
+	// model the suite writes prints as DSL (TransformJSONProtoToDSL rejects
+	// some nested rewrites), so pass the model's JSON. Each store has a
+	// database of its own, so records do not leak between clients.
+	content, err := schema.MarshalModel(m.types)
+	if err != nil {
+		return fmt.Errorf("marshaling model: %w", err)
+	}
+	opts := migrator.InternalMigrateOptions{SchemaContent: string(content), Exposure: c.exposure}
+	if c.traceOnDemand {
+		opts.Exposure = traceFamiliesOff()
+	}
+	// A case's stages share one database. Under a restricted exposure, start
+	// each stage from no generated functions, so a callee missing from this
+	// stage's closure fails instead of resolving to a copy an earlier stage
+	// installed. Force re-applies a stage that repeats the recorded schema
+	// and exposure, which would otherwise skip with its functions dropped.
 	if c.restrictExposure {
 		if err := c.dropGeneratedFunctions(ctx, db); err != nil {
 			return err
 		}
+		opts.Force = true
 	}
-	mig := migrator.NewMigrator(db, "")
-	mig.SetDatabaseSchema(c.databaseSchema)
-	mig.SetExposure(c.exposure)
-	if c.traceOnDemand {
-		mig.SetExposure(traceFamiliesOff())
-	}
-	return mig.MigrateWithTypes(ctx, m.types)
+	return mig.MigrateWithTypesAndOptions(ctx, m.types, opts)
 }
 
 // dropGeneratedFunctions drops every function in the client's schema named

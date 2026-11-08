@@ -45,7 +45,7 @@
 //	    "github.com/pthm/melange/pkg/migrator"
 //	)
 //	types, _ := parser.ParseSchema("schemas/schema.fga")
-//	err := migrator.MigrateWithTypes(ctx, db, types)
+//	err := migrator.NewMigrator(db, "").MigrateWithTypes(ctx, types)
 //
 // # Code Generation
 //

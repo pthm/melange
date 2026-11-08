@@ -162,6 +162,89 @@ func TestInheritedExposureGuard(t *testing.T) {
 	}
 }
 
+func TestUnrecordedExposureGuard(t *testing.T) {
+	restricted := restrictedExposure()
+	reordered := restrictedExposure()
+	reordered.Relations.Include = []string{"document#viewer", "owner", "owner"}
+	familiesOff := Exposure{Functions: sqlgen.FunctionFamilies{Explain: boolPtr(false)}}
+	restrictedRecord := &MigrationRecord{Exposure: restricted.Normalized()}
+	defaultRecord := &MigrationRecord{Exposure: Exposure{}}
+
+	for _, tc := range []struct {
+		name      string
+		requested *Exposure
+		rec       *MigrationRecord
+		refused   bool
+	}{
+		{"nil without a record", nil, nil, false},
+		{"nil with a record", nil, restrictedRecord, false},
+		{"default without a record", &Exposure{}, nil, false},
+		{"include everything without a record", &Exposure{Relations: sqlgen.RelationPatterns{Include: []string{"*"}}}, nil, false},
+		{"restricted without a record", &restricted, nil, true},
+		{"recorded patterns reordered and duplicated", &reordered, restrictedRecord, false},
+		{"default against a restricted record", &Exposure{}, restrictedRecord, true},
+		{"default against a pre-column record", &Exposure{}, defaultRecord, false},
+		{"families off against a default record", &familiesOff, defaultRecord, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := unrecordedExposureGuard(tc.requested, tc.rec)
+			if !tc.refused {
+				if err != nil {
+					t.Fatalf("want nil, got %v", err)
+				}
+				return
+			}
+			var refused *UnrecordedExposureChangeError
+			if !errors.As(err, &refused) {
+				t.Fatalf("want *UnrecordedExposureChangeError, got %v", err)
+			}
+			if refused.HasRecord != (tc.rec != nil) {
+				t.Errorf("HasRecord = %v, want %v", refused.HasRecord, tc.rec != nil)
+			}
+			if !SameExposure(refused.Requested, *tc.requested) {
+				t.Errorf("Requested = %s, want %s", exposureJSON(refused.Requested), exposureJSON(*tc.requested))
+			}
+			want := Exposure{}
+			if tc.rec != nil {
+				want = tc.rec.Exposure
+			}
+			if !SameExposure(refused.Recorded, want) {
+				t.Errorf("Recorded = %s, want %s", exposureJSON(refused.Recorded), exposureJSON(want))
+			}
+		})
+	}
+}
+
+func TestUnrecordedExposureChangeError_Error(t *testing.T) {
+	restricted := restrictedExposure().Normalized()
+	for _, tc := range []struct {
+		name string
+		err  *UnrecordedExposureChangeError
+		want []string
+	}{
+		{
+			"against a record",
+			&UnrecordedExposureChangeError{Requested: Exposure{}, Recorded: restricted, HasRecord: true},
+			[]string{"{}", exposureJSON(restricted), "recorded exposure"},
+		},
+		{
+			"without a record",
+			&UnrecordedExposureChangeError{Requested: restricted, Recorded: Exposure{}},
+			[]string{exposureJSON(restricted), "default exposure {}", "no migration recorded"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			msg := tc.err.Error()
+			for _, want := range append(tc.want,
+				"records nothing", "nothing was applied", "MigrateWithOptions", "SchemaContent", "`melange migrate`") {
+				if !strings.Contains(msg, want) {
+					t.Errorf("message lacks %q: %s", want, msg)
+				}
+			}
+		})
+	}
+}
+
 func TestDecodeExposure(t *testing.T) {
 	for _, v := range []string{"", "{}"} {
 		e, err := decodeExposure(nullString(v))

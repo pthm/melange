@@ -114,7 +114,9 @@ type InternalMigrateOptions struct {
 	Version string
 
 	// SchemaContent is the raw schema text used for checksum calculation to detect schema changes.
-	// If empty, skip-if-unchanged optimization is disabled.
+	// If empty, no migration is recorded: skip-if-unchanged optimization is
+	// disabled, and an Exposure other than the recorded one is refused (see
+	// UnrecordedExposureChangeError) unless DryRun is set.
 	SchemaContent string
 
 	// SchemaFormat records how the schema was authored: "single" for a .fga
@@ -127,6 +129,8 @@ type InternalMigrateOptions struct {
 
 	// Exposure selects the generated SQL API; see MigrateOptions. Nil falls
 	// back to the Migrator's exposure (SetExposure), then to the recorded one.
+	// Changing it needs a recorded migration: without SchemaContent or
+	// DryRun, a different exposure returns *UnrecordedExposureChangeError.
 	Exposure *Exposure
 }
 
@@ -191,6 +195,54 @@ func downgradeGuardError(rec *MigrationRecord) error {
 		return nil
 	}
 	return &DatabaseAheadError{Deployed: rec.CodegenVersion, Current: CodegenVersion()}
+}
+
+// UnrecordedExposureChangeError is returned by a migration that records no
+// migration (MigrateWithTypes, or MigrateWithTypesAndOptions without
+// SchemaContent or DryRun) when asked for an exposure other than the one the
+// database is known to have: the latest record's, or the default when none is
+// recorded. Such a migration can neither drop the functions the previous
+// exposure generated nor record the new one, so nothing is applied.
+type UnrecordedExposureChangeError struct {
+	Requested Exposure // the requested exposure, normalized
+	Recorded  Exposure // the recorded exposure, normalized; the default when HasRecord is false
+	HasRecord bool     // whether a migration is recorded
+}
+
+func (e *UnrecordedExposureChangeError) Error() string {
+	recorded := fmt.Sprintf("the recorded exposure %s", exposureJSON(e.Recorded))
+	if !e.HasRecord {
+		recorded = fmt.Sprintf("the default exposure %s (no migration recorded)", exposureJSON(e.Recorded))
+	}
+	return fmt.Sprintf("requested exposure %s differs from %s; this migration records nothing, "+
+		"so it could neither drop the previous exposure's functions nor record the new exposure, "+
+		"and nothing was applied (change the exposure with migrator.MigrateWithOptions and MigrateOptions.Exposure, "+
+		"Migrator.MigrateWithTypesAndOptions with SchemaContent (for an embedded schema, SchemaContent and "+
+		"SchemaFormat: migrator.FormatSingle), or `melange migrate`)",
+		exposureJSON(e.Requested), recorded)
+}
+
+// unrecordedExposureGuard returns an *UnrecordedExposureChangeError when a
+// migration that records nothing is asked for an exposure other than rec's
+// (the default when rec is nil). Nil keeps the recorded exposure and always
+// passes. requested must already be validated (effectiveExposure):
+// normalizing drops an invalid pattern next to "*".
+func unrecordedExposureGuard(requested *Exposure, rec *MigrationRecord) error {
+	if requested == nil {
+		return nil
+	}
+	var recorded Exposure
+	if rec != nil {
+		recorded = rec.Exposure
+	}
+	if SameExposure(*requested, recorded) {
+		return nil
+	}
+	return &UnrecordedExposureChangeError{
+		Requested: requested.Normalized(),
+		Recorded:  recorded.Normalized(),
+		HasRecord: rec != nil,
+	}
 }
 
 // CodegenVersionAhead reports whether deployed is a newer codegen version
@@ -282,6 +334,16 @@ type MigrationRecord struct {
 //	types, _ := parser.ParseSchema("schemas/schema.fga")
 //	m := migrator.NewMigrator(db, "schemas/schema.fga")
 //	err := m.MigrateWithTypes(ctx, types)
+//
+// MigrateWithTypes records no migration, so it cannot change the SQL API
+// exposure (see UnrecordedExposureChangeError). To record one from parsed
+// types, pass the schema text as well:
+//
+//	err := m.MigrateWithTypesAndOptions(ctx, types, migrator.InternalMigrateOptions{
+//		SchemaContent: schemaContent,
+//		SchemaFormat:  migrator.FormatSingle,
+//		Exposure:      &exposure,
+//	})
 type Migrator struct {
 	db             Execer
 	schemaPath     string
@@ -311,9 +373,13 @@ func (m *Migrator) DatabaseSchema() string {
 	return m.databaseSchema
 }
 
-// SetExposure sets the exposure MigrateWithTypes generates with, and the one
-// MigrateWithTypesAndOptions uses when its options carry none. Nil, the
-// initial value, keeps the exposure recorded by the last migration.
+// SetExposure sets the exposure MigrateWithTypesAndOptions uses when its
+// options carry none, and the one MigrateWithTypes generates with. Nil, the
+// initial value, keeps the exposure recorded by the last migration. It takes
+// effect on calls that record a migration; a call that records nothing
+// (MigrateWithTypes, or MigrateWithTypesAndOptions without SchemaContent or
+// DryRun) may only restate the current exposure, and returns
+// *UnrecordedExposureChangeError for any other.
 func (m *Migrator) SetExposure(exposure *Exposure) {
 	m.exposure = exposure
 }
@@ -534,7 +600,6 @@ func (m *Migrator) compile(types []TypeDefinition, exposure Exposure) (compiled,
 }
 
 // MigrateWithTypes performs database migration using pre-parsed type definitions.
-// This is the core migration method used by the tooling package's Migrate function.
 //
 // The method:
 //  1. Validates the schema (checks for cycles)
@@ -544,6 +609,13 @@ func (m *Migrator) compile(types []TypeDefinition, exposure Exposure) (compiled,
 //     - Generated specialized functions and dispatcher
 //
 // This is idempotent - safe to run multiple times with the same types.
+//
+// It records no migration and drops no functions: without the schema text
+// there is no checksum to record (use MigrateWithTypesAndOptions with
+// SchemaContent for that). It generates under the recorded exposure, or the
+// default when none is recorded. An exposure set with SetExposure must be
+// that same exposure, otherwise it returns *UnrecordedExposureChangeError and
+// applies nothing.
 //
 // Uses a transaction if the db supports it (*sql.DB). This ensures
 // the schema is updated atomically or not at all.
@@ -556,8 +628,8 @@ func (m *Migrator) MigrateWithTypes(ctx context.Context, types []TypeDefinition)
 	// 2. Generate and apply atomically. This entry point records no
 	// migration, but still serializes with other migrations, must not replace
 	// functions a newer melange generated, and generates under the recorded
-	// exposure unless SetExposure chose one, so it reads the record under the
-	// lock first.
+	// exposure, which SetExposure may only restate, so it reads the record
+	// under the lock first.
 	apply := func(db Execer) error {
 		if err := m.lockMigrations(ctx, db); err != nil {
 			return err
@@ -571,6 +643,9 @@ func (m *Migrator) MigrateWithTypes(ctx context.Context, types []TypeDefinition)
 		}
 		exposure, err := effectiveExposure(m.exposure, rec)
 		if err != nil {
+			return err
+		}
+		if err := unrecordedExposureGuard(m.exposure, rec); err != nil {
 			return err
 		}
 		c, err := m.compile(types, exposure)
@@ -1439,6 +1514,12 @@ func (m *Migrator) insertMigrationRecord(ctx context.Context, db Execer, w migra
 // FunctionDependent), migration fails with *DependentObjectsError and applies
 // nothing, unless opts.Force is set, which drops them with CASCADE.
 //
+// Without opts.SchemaContent there is no checksum to record: it applies on
+// every run, drops the orphans of the latest existing record, records
+// nothing, and refuses an exposure change with
+// *UnrecordedExposureChangeError. Pass the schema text (for an embedded
+// schema, with SchemaFormat FormatSingle) to record the migration.
+//
 // See MigrateWithTypes for basic usage without options.
 func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeDefinition, opts InternalMigrateOptions) error {
 	_, err := m.migrateWithTypesAndOptions(ctx, types, opts)
@@ -1488,11 +1569,14 @@ func (m *Migrator) migrateOnce(ctx context.Context, types []TypeDefinition, opts
 	}
 
 	// 3. Fetch last migration record (needed for the drift and downgrade
-	// guards, both skip phases, and the exposure when none was requested).
-	// The drift guard needs it even under --force and --dry-run.
+	// guards, both skip phases, the exposure when none was requested, and the
+	// exposure guard of a run that records nothing). The drift guard needs it
+	// even under --force and --dry-run. A dry-run script records the
+	// migration, so it counts as recording.
 	requested := m.requestedExposure(opts.Exposure)
+	records := opts.SchemaContent != "" || opts.DryRun != nil
 	var lastMigration *MigrationRecord
-	if opts.IfDeployedChecksum != nil || requested == nil || (!opts.Force && opts.DryRun == nil) {
+	if opts.IfDeployedChecksum != nil || requested == nil || !records || (!opts.Force && opts.DryRun == nil) {
 		lastMigration, err = m.getLastMigration(ctx, m.db)
 		if err != nil {
 			return false, fmt.Errorf("checking last migration: %w", err)
@@ -1520,6 +1604,14 @@ func (m *Migrator) migrateOnce(ctx context.Context, types []TypeDefinition, opts
 	exposure, err := effectiveExposure(requested, lastMigration)
 	if err != nil {
 		return false, err
+	}
+	// Without a record to write, the run can neither drop the previous
+	// exposure's functions nor record a new exposure: refuse to change it.
+	// Checked here before anything is applied, and again under the lock.
+	if !records {
+		if err := unrecordedExposureGuard(requested, lastMigration); err != nil {
+			return false, err
+		}
 	}
 	exposureKey := exposureJSON(exposure)
 
@@ -1672,9 +1764,10 @@ func (m *Migrator) apply(ctx context.Context, db Execer, ownTx bool, opts Intern
 // recheckUnderLock re-reads the latest record once the migration lock is held:
 // a migration that held the lock before this one may have changed the deployed
 // checksum or exposure, upgraded the database, or applied this exact state.
-// It re-applies the drift guard (even under Force, like the up-front check)
-// and the downgrade guard, starts the run over when the recorded exposure it
-// kept has changed, and reports skip when the state is already applied.
+// It re-applies the drift guard (even under Force, like the up-front check),
+// the downgrade guard and, for a run that records nothing, the exposure
+// guard; starts the run over when the recorded exposure it kept has changed;
+// and reports skip when the state is already applied.
 func (m *Migrator) recheckUnderLock(ctx context.Context, db Execer, opts InternalMigrateOptions,
 	requested *Exposure, write migrationWrite,
 ) (skip bool, err error) {
@@ -1687,6 +1780,14 @@ func (m *Migrator) recheckUnderLock(ctx context.Context, db Execer, opts Interna
 	}
 	if err := inheritedExposureGuard(requested, rec, write.Exposure); err != nil {
 		return false, err
+	}
+	// A run that records nothing passed the exposure guard against the record
+	// it read up front; one committed while it waited for the lock may record
+	// another exposure. (Dry-run never applies.)
+	if opts.SchemaContent == "" {
+		if err := unrecordedExposureGuard(requested, rec); err != nil {
+			return false, err
+		}
 	}
 	if opts.Force {
 		return false, nil

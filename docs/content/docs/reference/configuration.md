@@ -291,7 +291,8 @@ recorded one and report a difference as exposure drift.
 Only the CLI is declarative. A Go program that calls `migrator.Migrate` or
 `migrator.MigrateWithOptions` without an `Exposure` keeps the exposure the
 database last recorded, so an application that migrates on startup does not
-undo a restriction applied with `melange migrate`. See
+undo a restriction applied with `melange migrate`. `Migrator.MigrateWithTypes`
+records no migration, so it cannot change the exposure at all. See
 [Programmatic Alternative](../cli/#programmatic-alternative).
 {{< /callout >}}
 

@@ -86,6 +86,16 @@ func lastRecord(t *testing.T, db *sql.DB) *migrator.MigrationRecord {
 	return rec
 }
 
+// requireExposureChangeRefused asserts that err is an
+// *UnrecordedExposureChangeError with the given HasRecord, and returns it.
+func requireExposureChangeRefused(t *testing.T, err error, hasRecord bool) *migrator.UnrecordedExposureChangeError {
+	t.Helper()
+	var refused *migrator.UnrecordedExposureChangeError
+	require.ErrorAs(t, err, &refused)
+	assert.Equal(t, hasRecord, refused.HasRecord)
+	return refused
+}
+
 // requireNotExposed asserts that the public check dispatcher raises M2003 for
 // relation and answers for exposed.
 func requireNotExposed(t *testing.T, db *sql.DB, relation, exposed string) {
@@ -175,11 +185,17 @@ func TestMigrateExposure_NilKeepsRecordedExplicitDefaultWidens(t *testing.T) {
 	assert.True(t, migrator.SameExposure(*editorOnly(), lastRecord(t, db).Exposure))
 	records = migrationRecordCount(t, ctx, db)
 
-	// SetExposure applies to MigrateWithTypes, which records nothing.
+	// MigrateWithTypes records nothing, so SetExposure may only restate the
+	// recorded exposure: widening it is refused and applies nothing.
 	m := migrator.NewMigrator(db, "")
 	m.SetExposure(&migrator.Exposure{})
+	requireExposureChangeRefused(t, m.MigrateWithTypes(ctx, types), true)
+	assertFunctionsDropped(t, ctx, db, deExposed)
+	assert.True(t, functionExists(t, ctx, db, compiler.UnexposedFunctionName), "the restricted exposure's helper stays")
+	assert.Equal(t, records, migrationRecordCount(t, ctx, db))
+	m.SetExposure(editorOnly())
 	require.NoError(t, m.MigrateWithTypes(ctx, types))
-	assertFunctions(t, ctx, db, deExposed)
+	assertFunctionsDropped(t, ctx, db, deExposed)
 	assert.Equal(t, records, migrationRecordCount(t, ctx, db))
 
 	// An explicit default replaces the recorded exposure and drops the helper.
@@ -192,6 +208,120 @@ func TestMigrateExposure_NilKeepsRecordedExplicitDefaultWidens(t *testing.T) {
 	var allowed int
 	require.NoError(t, db.QueryRowContext(ctx,
 		`SELECT check_permission('user', 'alice', 'viewer', 'document', '1')`).Scan(&allowed))
+}
+
+// A migration that records nothing (MigrateWithTypes, MigrateWithTypesAndOptions
+// without SchemaContent) cannot change the exposure: it could neither drop the
+// previous exposure's functions nor record the new one. Any exposure other
+// than the recorded one, or the default when none is recorded, is refused and
+// applies nothing. Restating it, or passing none, works as before, and a
+// dry-run records its migration, so it may preview a change.
+func TestMigrateExposure_RecordlessRefusesExposureChange(t *testing.T) {
+	stampVersion(t, "v0.10.0")
+	ctx := context.Background()
+	types, err := parser.ParseSchemaString(exposureSchema)
+	require.NoError(t, err)
+	trackingTableExists := func(t *testing.T, db *sql.DB) bool {
+		t.Helper()
+		var exists bool
+		require.NoError(t, db.QueryRowContext(ctx,
+			`SELECT to_regclass('melange_migrations') IS NOT NULL`).Scan(&exists))
+		return exists
+	}
+
+	t.Run("fresh database, SetExposure", func(t *testing.T) {
+		db, _ := exposureDB(t)
+		m := migrator.NewMigrator(db, "")
+		m.SetExposure(editorOnly())
+		requireExposureChangeRefused(t, m.MigrateWithTypes(ctx, types), false)
+		assert.Empty(t, getFunctionNames(t, ctx, db), "a refusal applies nothing")
+		assert.False(t, trackingTableExists(t, db), "a refusal creates no tracking table")
+	})
+
+	t.Run("fresh database, options without content", func(t *testing.T) {
+		db, _ := exposureDB(t)
+		for _, force := range []bool{false, true} {
+			err := migrator.NewMigrator(db, "").MigrateWithTypesAndOptions(ctx, types,
+				migrator.InternalMigrateOptions{Exposure: editorOnly(), Force: force})
+			requireExposureChangeRefused(t, err, false)
+		}
+		assert.Empty(t, getFunctionNames(t, ctx, db))
+		assert.False(t, trackingTableExists(t, db))
+	})
+
+	t.Run("recorded restriction, explicit default without content", func(t *testing.T) {
+		db, path := exposureDB(t)
+		_, err := migrateExposure(t, db, path, editorOnly(), false)
+		require.NoError(t, err)
+		records := migrationRecordCount(t, ctx, db)
+		before := functionBodies(t, db)
+
+		err = migrator.NewMigrator(db, "").MigrateWithTypesAndOptions(ctx, types,
+			migrator.InternalMigrateOptions{Exposure: &migrator.Exposure{}})
+		requireExposureChangeRefused(t, err, true)
+		assert.Equal(t, before, functionBodies(t, db), "a refusal applies nothing")
+		assert.Equal(t, records, migrationRecordCount(t, ctx, db))
+		assert.True(t, migrator.SameExposure(*editorOnly(), lastRecord(t, db).Exposure))
+	})
+
+	t.Run("recorded restriction, restated or kept without content", func(t *testing.T) {
+		db, path := exposureDB(t)
+		_, err := migrateExposure(t, db, path, editorOnly(), false)
+		require.NoError(t, err)
+		records := migrationRecordCount(t, ctx, db)
+		m := migrator.NewMigrator(db, "")
+		require.NoError(t, m.MigrateWithTypesAndOptions(ctx, types, migrator.InternalMigrateOptions{Exposure: editorOnly()}))
+		require.NoError(t, m.MigrateWithTypesAndOptions(ctx, types, migrator.InternalMigrateOptions{}))
+		assertFunctionsDropped(t, ctx, db, deExposed)
+		assertFunctions(t, ctx, db, restrictedInstalls)
+		assert.Equal(t, records, migrationRecordCount(t, ctx, db))
+	})
+
+	t.Run("recorded explain, families off without content", func(t *testing.T) {
+		db, path := exposureDB(t)
+		_, err := migrateExposure(t, db, path, nil, false)
+		require.NoError(t, err)
+		require.True(t, functionExists(t, ctx, db, "explain_permission"))
+		err = migrator.NewMigrator(db, "").MigrateWithTypesAndOptions(ctx, types,
+			migrator.InternalMigrateOptions{Exposure: traceFamilies(false)})
+		requireExposureChangeRefused(t, err, true)
+		assert.True(t, functionExists(t, ctx, db, "explain_permission"), "a refusal drops nothing")
+	})
+
+	t.Run("dry-run without content may preview a change", func(t *testing.T) {
+		db, path := exposureDB(t)
+		_, err := migrateExposure(t, db, path, nil, false)
+		require.NoError(t, err)
+		var buf bytes.Buffer
+		require.NoError(t, migrator.NewMigrator(db, "").MigrateWithTypesAndOptions(ctx, types,
+			migrator.InternalMigrateOptions{DryRun: &buf, Exposure: editorOnly()}))
+		assert.Contains(t, buf.String(), `"include":["document#editor"]`, "the script records the new exposure")
+		assertFunctions(t, ctx, db, deExposed)
+	})
+}
+
+// A migration that records nothing checks the exposure again under the lock:
+// one it waited on may have recorded another exposure, which its own would
+// then silently revert without a record.
+func TestMigrateExposure_RecordlessRefusesExposureRecordedUnderLock(t *testing.T) {
+	stampVersion(t, "v0.10.0")
+	db, path := exposureDB(t)
+	ctx := context.Background()
+	_, err := migrateExposure(t, db, path, editorOnly(), false)
+	require.NoError(t, err)
+	types, err := parser.ParseSchemaString(exposureSchema)
+	require.NoError(t, err)
+
+	// The run restates the recorded restriction, so it passes the up-front
+	// check; a default-exposure record lands while it waits.
+	_, err = behindLock(t, db, func() (bool, error) {
+		return false, migrator.NewMigrator(db, "").MigrateWithTypesAndOptions(ctx, types,
+			migrator.InternalMigrateOptions{Exposure: editorOnly()})
+	}, copyLastRecord(map[string]string{"exposure": "'{}'"}))
+	refused := requireExposureChangeRefused(t, err, true)
+	assert.True(t, refused.Recorded.IsDefault(), "the refusal names the exposure recorded while waiting")
+	assertFunctionsDropped(t, ctx, db, deExposed)
+	assertFunctions(t, ctx, db, restrictedInstalls)
 }
 
 // A run that keeps the recorded exposure and waits for the lock while another
@@ -971,6 +1101,10 @@ func TestMigrateExposure_InvalidExposure(t *testing.T) {
 		m.SetExposure(&migrator.Exposure{Relations: compiler.RelationPatterns{Include: include}})
 		types, err := parser.ParseSchemaString(exposureSchema)
 		require.NoError(t, err)
-		require.Error(t, m.MigrateWithTypes(context.Background(), types), "include %q", include)
+		// Validated before the record-less exposure guard, which compares
+		// normalized exposures: ["*", "a#b#c"] normalizes to the default.
+		err = m.MigrateWithTypes(context.Background(), types)
+		require.Error(t, err, "include %q", include)
+		assert.True(t, strings.Contains(err.Error(), "invalid exposure"), err.Error())
 	}
 }
