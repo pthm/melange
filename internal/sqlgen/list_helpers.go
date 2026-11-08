@@ -1,6 +1,7 @@
 package sqlgen
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 
@@ -316,6 +317,32 @@ func generateListObjectsDispatcher(analyses []RelationAnalysis, databaseSchema s
 		NoSearchPath: true,
 	}
 	return fn.SQL(), nil
+}
+
+// accessibleObjectsDispatcherName is the accessible function that takes the
+// relation and object type as arguments.
+const accessibleObjectsDispatcherName = "accessible_objects"
+
+// generateAccessibleObjectsDispatcher generates accessible_objects: the
+// objects list_accessible_objects returns, without pages, as a set to filter
+// queries by. Unlike accessible_{type}_{relation} it is not inlined (see
+// list_objects_accessible.go).
+func generateAccessibleObjectsDispatcher(databaseSchema string) string {
+	return fmt.Sprintf(`-- Objects of p_object_type on which the subject holds p_relation, for filtering queries:
+-- WHERE id IN (SELECT * FROM %s(subject_type, subject_id, relation, object_type)).
+-- Plans in constant time; for large sets accessible_{type}_{relation}, which the
+-- planner inlines, is faster.
+CREATE OR REPLACE FUNCTION %s(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_relation TEXT,
+    p_object_type TEXT
+) RETURNS TABLE(object_id TEXT) AS $$
+    SELECT o.object_id FROM %s(p_subject_type, p_subject_id, p_relation, p_object_type) AS o
+$$ LANGUAGE sql STABLE PARALLEL RESTRICTED;`,
+		sqldsl.PrefixIdent(accessibleObjectsDispatcherName, databaseSchema),
+		sqldsl.PrefixIdent(accessibleObjectsDispatcherName, databaseSchema),
+		sqldsl.PrefixIdent("list_accessible_objects", databaseSchema))
 }
 
 // generateListSubjectsDispatcher generates the list_accessible_subjects dispatcher function.

@@ -631,18 +631,7 @@ func (d *Doctor) checkGeneratedFunctions(ctx context.Context, report *Report) er
 	d.currentFuncs = currentFuncs
 
 	// Check dispatchers exist
-	dispatchers := []string{
-		"check_permission",
-		"check_permission_internal",
-		"check_permission_nw",
-		"check_permission_nw_internal",
-		"explain_permission",
-		"explain_permission_internal",
-		"expand_permission",
-		"expand_permission_internal",
-		"list_accessible_objects",
-		"list_accessible_subjects",
-	}
+	dispatchers := sqlgen.DispatcherFunctionNames
 
 	currentSet := make(map[string]bool)
 	for _, fn := range currentFuncs {

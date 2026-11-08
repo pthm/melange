@@ -437,7 +437,7 @@ func CollectDispatcherFunctions(generatedSQL GeneratedSQL, listSQL ListGenerated
 //   - Specialized check functions: check_{type}_{relation}
 //   - No-wildcard check variants: check_{type}_{relation}_nw
 //   - Specialized list functions: list_{type}_{relation}_obj, list_{type}_{relation}_sub
-//   - Accessible objects functions: accessible_{type}_{relation}, accessiblesk_{type}_{relation}
+//   - Accessible objects functions: accessible_{type}_{relation}
 //   - Parent-key accessible functions: accessible_{type}_{relation}_by_{link}
 //   - Dispatcher functions (always included): check_permission, list_accessible_objects, etc.
 func CollectFunctionNames(analyses []RelationAnalysis) []string {
@@ -464,7 +464,6 @@ func CollectFunctionNames(analyses []RelationAnalysis) []string {
 				listObjectsFunctionName(a.ObjectType, a.Relation),
 				listSubjectsFunctionName(a.ObjectType, a.Relation),
 				AccessibleObjectsFunctionName(a.ObjectType, a.Relation),
-				accessibleSubjectKindFunctionName(a.ObjectType, a.Relation),
 			)
 		}
 	}
@@ -474,21 +473,24 @@ func CollectFunctionNames(analyses []RelationAnalysis) []string {
 	}
 
 	// Dispatchers are always generated
-	names = append(names,
-		"check_permission",
-		"check_permission_internal",
-		"check_permission_nw",
-		"check_permission_nw_internal",
-		"check_permission_bulk",
-		"explain_permission",
-		"explain_permission_internal",
-		"expand_permission",
-		"expand_permission_internal",
-		"list_accessible_objects",
-		"list_accessible_subjects",
-	)
+	return append(names, DispatcherFunctionNames...)
+}
 
-	return names
+// DispatcherFunctionNames lists the dispatcher functions, generated for every
+// model, in the order DOWN migrations drop them.
+var DispatcherFunctionNames = []string{
+	"check_permission",
+	"check_permission_internal",
+	"check_permission_nw",
+	"check_permission_nw_internal",
+	"check_permission_bulk",
+	"explain_permission",
+	"explain_permission_internal",
+	"expand_permission",
+	"expand_permission_internal",
+	accessibleObjectsDispatcherName,
+	"list_accessible_objects",
+	"list_accessible_subjects",
 }
 
 // buildClosureComplexityIndex returns, for each object type, a map from relation

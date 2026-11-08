@@ -159,8 +159,8 @@ func renderParentKeyFunction(schema string, pk parentKeyRelation) string {
 	}
 	arms := make([]string, len(pk.ParentRelations))
 	for i, rel := range pk.ParentRelations {
-		arms[i] = fmt.Sprintf("SELECT %sk.object_id FROM %s(p_subject_type, p_subject_id, %s) AS k",
-			distinct, sqldsl.PrefixIdent(accessibleSubjectKindFunctionName(pk.ParentType, rel), schema), subjectIsUserset)
+		arms[i] = fmt.Sprintf("SELECT %sk.object_id FROM %s(p_subject_type, p_subject_id) AS k",
+			distinct, sqldsl.PrefixIdent(AccessibleObjectsFunctionName(pk.ParentType, rel), schema))
 	}
 	name := pk.functionName()
 	fn := PlpgsqlFunction{

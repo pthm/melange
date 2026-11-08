@@ -22,24 +22,32 @@ import (
 // relations whose list is a breadth-first walk in PL/pgSQL; for those the
 // accessible function selects from the list function instead.
 //
-// Each accessible function has an internal form, accessiblesk_{type}_{relation},
-// which takes the subject kind as a third argument (p_userset, whether the
-// subject is a userset). Its arms that only match userset subjects test
-// p_userset, and the functions it composes are called with it; the public
-// function passes position('#' in p_subject_id) > 0. A caller passing a
-// literal kind folds those arms away at plan time, even in a generic plan
-// (one built once, for any arguments), so the list function can keep its
-// plan. With the position test instead, a generic plan kept every userset arm
-// and its per-row checks in every composed function, costed in full, so
-// PL/pgSQL planned each call; on a view over many tables that planning took
-// tens of milliseconds for a composed relation whose query ran in under one.
+// The function takes the subject kind as an optional third argument
+// (p_userset, whether the subject is a userset), which applications leave out
+// and generated callers pass as a literal. Its arms that only match one kind
+// test the argument as well as the subject, and the functions it composes are
+// called with it. A caller passing a literal kind folds the other kind's arms
+// away at plan time, even in a generic plan (one built once, for any
+// arguments), so the list function can keep its plan. With only the subject's
+// position test, a generic plan kept every userset arm and its per-row checks
+// in every composed function, costed in full, so PL/pgSQL planned each call;
+// on a view over many tables that planning took tens of milliseconds for a
+// composed relation whose query ran in under one. A kind that contradicts the
+// subject returns no rows, since a kind test can sit under a negation (an
+// exclusion) where trusting it would grant them.
 //
 // For a plain subject the list function embeds the query without its
 // userset-only arms, with the subject kind bound to FALSE; for a userset
-// subject it pages the internal accessible function called with TRUE. Leaving
-// the arms out of the text, rather than folding them, matters too: PostgreSQL
-// does not plan a parallel Append over a UNION ALL with an arm it has proven
-// empty.
+// subject it pages the accessible function called with TRUE. Leaving the arms
+// out of the text, rather than folding them, matters too: PostgreSQL does not
+// plan a parallel Append over a UNION ALL with an arm it has proven empty.
+//
+// accessible_objects(p_subject_type, p_subject_id, p_relation, p_object_type)
+// takes the relation and type as arguments. It selects from the
+// list_accessible_objects dispatcher, so it is not inlined: it plans in
+// constant time however large the model is (an inlined union over every
+// relation would be planned in full on each query), and is as fast as the
+// per-relation function for small sets, slower for large ones.
 //
 // Like every generated function body, it names melange_tuples unqualified:
 // contextual tuples shadow the table with a temporary view, which unqualified
@@ -52,15 +60,10 @@ func AccessibleObjectsFunctionName(objectType, relation string) string {
 	return SafeIdentifier("accessible_", objectType, relation, "")
 }
 
-// accessibleSubjectKindFunctionName returns the name of the internal form of
-// the accessible function, which takes the subject kind. Its prefix is its
-// own, so no relation name can make it another generated function's name.
-func accessibleSubjectKindFunctionName(objectType, relation string) string {
-	return SafeIdentifier("accessiblesk_", objectType, relation, "")
-}
-
-// subjectKindParam is the internal accessible function's subject kind
-// argument: whether the subject is a userset.
+// subjectKindParam is the accessible function's optional subject kind
+// argument: whether the subject is a userset. In a LANGUAGE sql body a column
+// of the same name in melange_tuples would win over it, as over p_subject_id;
+// the p_ prefix, shared with the other arguments, makes that unlikely.
 const subjectKindParam = "p_userset"
 
 // subjectKindToken stands for the subject kind in a composed call until the
@@ -74,45 +77,54 @@ var (
 )
 
 // bindSubjectKind returns query with the subject kind tests and tokens
-// replaced by kind: TRUE or FALSE in a list function, or subjectKindParam in
-// the internal accessible function.
+// replaced by a literal kind, TRUE or FALSE, as in a list function.
 func bindSubjectKind(query, kind string) string {
-	negated := "(NOT " + kind + ")"
-	switch kind {
-	case "TRUE":
+	negated := "TRUE"
+	if kind == "TRUE" {
 		negated = "FALSE"
-	case "FALSE":
-		negated = "TRUE"
 	}
 	return strings.NewReplacer(subjectIsUserset, kind, subjectNotUserset, negated, subjectKindToken, kind).Replace(query)
 }
 
-// renderAccessibleObjectsFunctions renders the public accessible function and
-// its internal form, both returning the object_id column of query.
-func renderAccessibleObjectsFunctions(plan ListPlan, query string) (public, internal string) {
+// bindSubjectKindParam returns query with the subject kind bound to the
+// accessible function's optional argument (subjectKindParam), or to the
+// subject when it is omitted, and only the rows of a call whose argument
+// agrees with the subject. A literal argument folds the kind tests to
+// constants at plan time, as bindSubjectKind does, so the other kind's arms
+// drop out of a generic plan. The guard is what makes the argument safe to
+// expose: a kind test can sit under a negation (an exclusion's NOT EXISTS),
+// where trusting a wrong kind would grant rows, so a contradicting call
+// returns nothing instead. Composed calls pass the argument on.
+func bindSubjectKindParam(query string) string {
+	kind := "COALESCE(" + subjectKindParam + ", " + subjectIsUserset + ")"
+	bound := strings.NewReplacer(
+		subjectIsUserset, kind,
+		subjectNotUserset, "NOT "+kind,
+		subjectKindToken, subjectKindParam,
+	).Replace(query)
+	return fmt.Sprintf("SELECT a.object_id\nFROM (\n%s\n) AS a(object_id)\nWHERE %s IS NULL OR %s = (%s)",
+		IndentLines(bound, "    "), subjectKindParam, subjectKindParam, subjectIsUserset)
+}
+
+// renderAccessibleObjectsFunction renders the accessible function, returning
+// the object_id column of query. Applications call it with the subject; list
+// functions also pass the subject kind as a literal, so a generic plan of
+// theirs drops the arms that only match the other kind.
+func renderAccessibleObjectsFunction(plan ListPlan, query string) string {
 	name := sqldsl.PrefixIdent(AccessibleObjectsFunctionName(plan.ObjectType, plan.Relation), plan.DatabaseSchema)
-	kindName := sqldsl.PrefixIdent(accessibleSubjectKindFunctionName(plan.ObjectType, plan.Relation), plan.DatabaseSchema)
-	public = fmt.Sprintf(`-- Objects of type %s on which the subject holds %s, for filtering queries:
+	return fmt.Sprintf(`-- Objects of type %s on which the subject holds %s, for filtering queries:
 -- WHERE id IN (SELECT * FROM %s(subject_type, subject_id)).
--- LANGUAGE sql without SET options, so the planner inlines it.
-CREATE OR REPLACE FUNCTION %s(
-    p_subject_type TEXT,
-    p_subject_id TEXT
-) RETURNS TABLE(object_id TEXT) AS $$
-    SELECT k.object_id FROM %s(p_subject_type, p_subject_id, %s) AS k
-$$ LANGUAGE sql STABLE PARALLEL RESTRICTED;`,
-		plan.ObjectType, plan.Relation, name, name, kindName, subjectIsUserset)
-	internal = fmt.Sprintf(`-- Internal form of %s: %s says whether the subject is a
--- userset, so callers passing a literal fold the arms for the other kind.
+-- LANGUAGE sql without SET options, so the planner inlines it. %s, which
+-- generated callers pass, says whether the subject is a userset; omitted,
+-- it is read from the subject, and a value that contradicts it returns no rows.
 CREATE OR REPLACE FUNCTION %s(
     p_subject_type TEXT,
     p_subject_id TEXT,
-    %s BOOLEAN
+    %s BOOLEAN DEFAULT NULL
 ) RETURNS TABLE(object_id TEXT) AS $$
 %s
 $$ LANGUAGE sql STABLE PARALLEL RESTRICTED;`,
-		name, subjectKindParam, kindName, subjectKindParam, bindSubjectKind(query, subjectKindParam))
-	return public, internal
+		plan.ObjectType, plan.Relation, name, subjectKindParam, name, subjectKindParam, bindSubjectKindParam(query))
 }
 
 // renderListObjectsOverAccessible renders list_{type}_{relation}_obj as a
@@ -128,10 +140,10 @@ func renderListObjectsOverAccessible(plan ListPlan, header []string, q accessibl
 		// Both kinds bind to the same query, so there is nothing to branch on.
 		body = listObjectsPage(plain, plainPaged)
 	} else {
-		internal := sqldsl.PrefixIdent(accessibleSubjectKindFunctionName(plan.ObjectType, plan.Relation), plan.DatabaseSchema)
+		accessible := sqldsl.PrefixIdent(AccessibleObjectsFunctionName(plan.ObjectType, plan.Relation), plan.DatabaseSchema)
 		byKind := If{
 			Cond: HasUserset{Source: SubjectID},
-			Then: []Stmt{listObjectsPage(fmt.Sprintf("SELECT k.object_id FROM %s(p_subject_type, p_subject_id, TRUE) AS k", internal), "")},
+			Then: []Stmt{listObjectsPage(fmt.Sprintf("SELECT k.object_id FROM %s(p_subject_type, p_subject_id, TRUE) AS k", accessible), "")},
 		}
 		if q.Plain != "" {
 			byKind.Else = []Stmt{listObjectsPage(plain, plainPaged)}
@@ -274,31 +286,30 @@ LATERAL (
 }
 
 // listObjectsWithAccessible is the SQL generated for one relation's
-// list_objects: the paginated list function, the accessible function and its
-// internal form.
+// list_objects: the paginated list function and the accessible function.
 type listObjectsWithAccessible struct {
-	List, Accessible, AccessibleKind string
+	List, Accessible string
 }
 
 // overAccessible returns the list function paging q and the accessible
-// functions returning it.
+// function returning it.
 func overAccessible(plan ListPlan, header []string, q accessibleQuery) listObjectsWithAccessible {
-	public, internal := renderAccessibleObjectsFunctions(plan, q.Full)
 	return listObjectsWithAccessible{
-		List:           renderListObjectsOverAccessible(plan, header, q),
-		Accessible:     public,
-		AccessibleKind: internal,
+		List:       renderListObjectsOverAccessible(plan, header, q),
+		Accessible: renderAccessibleObjectsFunction(plan, q.Full),
 	}
 }
 
-// overList returns a PL/pgSQL list function with accessible functions that
-// select its whole list. The list function has no subject kind argument, so
-// the internal accessible functions it composes get the kind test itself.
+// overList returns a PL/pgSQL list function with an accessible function that
+// selects its whole list. The list function has no subject kind argument, so
+// the accessible functions it composes get the kind test itself.
 func overList(plan ListPlan, list string) listObjectsWithAccessible {
 	query := fmt.Sprintf("SELECT o.object_id FROM %s(p_subject_type, p_subject_id, NULL, NULL) AS o",
 		sqldsl.PrefixIdent(plan.FunctionName, plan.DatabaseSchema))
-	public, internal := renderAccessibleObjectsFunctions(plan, query)
-	return listObjectsWithAccessible{List: strings.ReplaceAll(list, subjectKindToken, subjectIsUserset), Accessible: public, AccessibleKind: internal}
+	return listObjectsWithAccessible{
+		List:       strings.ReplaceAll(list, subjectKindToken, subjectIsUserset),
+		Accessible: renderAccessibleObjectsFunction(plan, query),
+	}
 }
 
 // accessibleObjectsQuery returns the accessible query of a standard (direct,
@@ -370,7 +381,7 @@ func hasParentLookup(blocks []TypedQueryBlock) bool {
 }
 
 // accessibleCallRef matches a call of an accessible function in a function body.
-var accessibleCallRef = regexp.MustCompile(`accessible(?:sk)?_[A-Za-z0-9_]+`)
+var accessibleCallRef = regexp.MustCompile(`accessible_[A-Za-z0-9_]+`)
 
 // orderAccessibleFunctions orders fns so each comes after the accessible
 // functions its body calls. Calls follow composition, which is acyclic
@@ -403,12 +414,12 @@ func orderAccessibleFunctions(fns []NamedFunction) []NamedFunction {
 	return ordered
 }
 
-// accessibleObjectsCall calls the internal accessible function of
-// (objectType, relation) for the query subject and its kind, as alias.
+// accessibleObjectsCall calls the accessible function of (objectType,
+// relation) for the query subject and its kind, as alias.
 func accessibleObjectsCall(schema, objectType, relation, alias string) FunctionCallExpr {
 	return FunctionCallExpr{
 		Schema: schema,
-		Name:   accessibleSubjectKindFunctionName(objectType, relation),
+		Name:   AccessibleObjectsFunctionName(objectType, relation),
 		Args:   []Expr{SubjectType, SubjectID, Raw(subjectKindToken)},
 		Alias:  alias,
 	}

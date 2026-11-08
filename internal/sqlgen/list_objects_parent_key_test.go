@@ -86,9 +86,9 @@ func TestParentKey_FunctionUnionsParentSets(t *testing.T) {
 	sql := renderParentKeyFunction("", parentKeyFor(t, parentKeyModel)["subject.can_admin"])
 	for _, want := range []string{
 		"CREATE OR REPLACE FUNCTION accessible_subject_can_admin_by_org(",
-		"SELECT k.object_id FROM accessiblesk_organization_admin(p_subject_type, p_subject_id, " + subjectIsUserset + ") AS k",
+		"SELECT k.object_id FROM accessible_organization_admin(p_subject_type, p_subject_id) AS k",
 		"\n        UNION\n",
-		"SELECT k.object_id FROM accessiblesk_organization_member(p_subject_type, p_subject_id, " + subjectIsUserset + ") AS k",
+		"SELECT k.object_id FROM accessible_organization_member(p_subject_type, p_subject_id) AS k",
 		// Planned once per session, not inlined, and estimated small.
 		"RETURNS TABLE(object_id TEXT) ROWS 10 AS $$",
 		"$$ LANGUAGE plpgsql STABLE PARALLEL RESTRICTED",
@@ -105,7 +105,7 @@ func TestParentKey_FunctionUnionsParentSets(t *testing.T) {
 
 func TestParentKey_SingleParentRelationIsDistinct(t *testing.T) {
 	sql := renderParentKeyFunction("", parentKeyFor(t, parentKeyModel)["subject.can_read"])
-	if !strings.Contains(sql, "SELECT DISTINCT k.object_id FROM accessiblesk_organization_reader(") {
+	if !strings.Contains(sql, "SELECT DISTINCT k.object_id FROM accessible_organization_reader(") {
 		t.Errorf("a single parent relation must select distinct IDs:\n%s", sql)
 	}
 }

@@ -16,7 +16,8 @@ When you run `melange migrate`, Melange generates:
 | `check_permission_bulk` | Check multiple permissions in a single call |
 | `list_accessible_objects` | List all objects a subject can access (with pagination) |
 | `list_accessible_subjects` | List all subjects with access to an object (with pagination) |
-| `accessible_{type}_{relation}` | The objects a subject can access, as a set to filter your own queries by |
+| `accessible_objects` | The objects a subject can access, as a set to filter your own queries by |
+| `accessible_{type}_{relation}` | The same set for one relation, inlined into your query: faster for large sets |
 
 These are the primary entry points. Internally, Melange generates specialized per-relation functions (e.g., `check_document_viewer`) that the dispatchers route to.
 
@@ -282,20 +283,49 @@ SELECT subject_id, next_cursor
 FROM list_accessible_subjects('document', '456', 'viewer', 'team#member', NULL, NULL);
 ```
 
+## accessible_objects
+
+Returns the IDs of the objects of `p_object_type` on which the subject holds `p_relation`, for filtering your own queries. It takes the relation and type by name, like `list_accessible_objects`, and works for every relation that has one.
+
+### Signature
+
+```sql
+accessible_objects(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_relation TEXT,
+    p_object_type TEXT
+) RETURNS TABLE(object_id TEXT)
+```
+
+```sql
+SELECT d.*
+FROM documents d
+WHERE d.id::text IN (SELECT * FROM accessible_objects('user', '123', 'viewer', 'document'))
+  AND d.archived = false
+ORDER BY d.created_at DESC
+LIMIT 50;
+```
+
+It reads the whole set through `list_accessible_objects` and then joins it, so it plans in constant time whatever the size of your model. That is as fast as `accessible_{type}_{relation}` when the subject reaches up to a few thousand objects, and slower beyond that: for a viewer of a million subjects, a page took 1.3 s through `accessible_objects` and 0.34 s through the per-relation function.
+
 ## accessible_{type}_{relation}
 
-Returns the IDs of the objects of `type` on which the subject holds `relation`, for filtering your own queries. Each listable relation gets one, for example `accessible_document_viewer`.
+The same set as `accessible_objects` for one relation, for example `accessible_document_viewer`. Each listable relation gets one.
 
 ### Signature
 
 ```sql
 accessible_{type}_{relation}(
     p_subject_type TEXT,
-    p_subject_id TEXT
+    p_subject_id TEXT,
+    p_userset BOOLEAN DEFAULT NULL
 ) RETURNS TABLE(object_id TEXT)
 ```
 
-It is a `LANGUAGE sql` function, so PostgreSQL inlines it into the calling query. Your filters, ordering and limit are planned together with the access set instead of around an opaque function call. Use it in `IN`, not as a list to page through:
+Call it with the subject only. `p_userset` says whether the subject is a userset (`team:1#member`); the generated list functions pass it so their cached plans leave out what cannot match, and without it the function reads it from the subject. A call whose value contradicts the subject returns no rows.
+
+It is a `LANGUAGE sql` function, so PostgreSQL inlines it into the calling query. Your filters, ordering and limit are planned together with the access set instead of around a function call, which is what makes it faster than `accessible_objects` for large sets. Use it in `IN`, not as a list to page through:
 
 ```sql
 SELECT d.*
@@ -306,7 +336,7 @@ ORDER BY d.created_at DESC
 LIMIT 50;
 ```
 
-The inlined query reads `melange_tuples` through your query's `search_path`, so the schema holding it must be on the path. Rows can repeat; `IN` does not need them distinct.
+The inlined query reads `melange_tuples` through your query's `search_path`, so the schema holding it must be on the path. Rows can repeat; `IN` does not need them distinct. Long type and relation names are shortened with a hash to fit PostgreSQL's 63-character limit; `accessible_objects` needs no names.
 
 ### accessible_{type}_{relation}_by_{link}
 

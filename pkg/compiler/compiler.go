@@ -42,6 +42,10 @@ var ComputeCanGenerate = sqlgen.ComputeCanGenerate
 // CollectFunctionNames returns all generated function names for tracking.
 var CollectFunctionNames = sqlgen.CollectFunctionNames
 
+// DispatcherFunctionNames lists the dispatcher functions generated for every
+// model, in the order DOWN migrations drop them.
+var DispatcherFunctionNames = sqlgen.DispatcherFunctionNames
+
 // NamedFunction pairs a function name with its generated SQL body.
 type NamedFunction = sqlgen.NamedFunction
 

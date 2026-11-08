@@ -18,11 +18,11 @@ type ListGeneratedSQL struct {
 	ListSubjectsFunctions []string
 
 	// AccessibleObjectsFunctions contains the accessible_{type}_{relation}
-	// functions and their accessiblesk_ internal forms
-	// (list_objects_accessible.go) and the parent-key functions
+	// functions (list_objects_accessible.go) and the parent-key functions
 	// (list_objects_parent_key.go), each after the accessible functions it
-	// calls: PostgreSQL resolves a LANGUAGE sql body when it is created.
-	// Applied after every list function, which they may call.
+	// calls, then the accessible_objects dispatcher: PostgreSQL resolves a
+	// LANGUAGE sql body when it is created. Applied after every list function
+	// and dispatcher, which they may call.
 	AccessibleObjectsFunctions []NamedFunction
 
 	// ListObjectsDispatcher contains the list_accessible_objects dispatcher function
@@ -79,9 +79,7 @@ func GenerateListSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLDat
 				a.ObjectType, a.Relation, err)
 		}
 		result.ListObjectsFunctions = append(result.ListObjectsFunctions, objFn.List)
-		accessible = append(accessible,
-			NamedFunction{Name: accessibleSubjectKindFunctionName(a.ObjectType, a.Relation), SQL: objFn.AccessibleKind},
-			NamedFunction{Name: AccessibleObjectsFunctionName(a.ObjectType, a.Relation), SQL: objFn.Accessible})
+		accessible = append(accessible, NamedFunction{Name: AccessibleObjectsFunctionName(a.ObjectType, a.Relation), SQL: objFn.Accessible})
 
 		// Generate list_subjects function
 		subjFn, err := generateListSubjectsFunctionWithLookup(a, relInline, databaseSchema, graph, opts)
@@ -95,7 +93,8 @@ func GenerateListSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLDat
 	for _, pk := range parentKeyRelations(analyses) {
 		accessible = append(accessible, NamedFunction{Name: pk.functionName(), SQL: renderParentKeyFunction(databaseSchema, pk)})
 	}
-	result.AccessibleObjectsFunctions = orderAccessibleFunctions(accessible)
+	result.AccessibleObjectsFunctions = append(orderAccessibleFunctions(accessible),
+		NamedFunction{Name: accessibleObjectsDispatcherName, SQL: generateAccessibleObjectsDispatcher(databaseSchema)})
 
 	// Generate dispatchers (always generated, even if no specialized functions)
 	var err error

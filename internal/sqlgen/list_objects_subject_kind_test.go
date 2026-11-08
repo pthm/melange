@@ -76,10 +76,10 @@ func TestSubjectKind_ListFunctionBindsLiterals(t *testing.T) {
 	}
 	// The plain branch composes with FALSE and the userset branch with TRUE, so
 	// generic plans fold the arms for the other kind.
-	if !strings.Contains(list, "accessiblesk_parent_aa_viewer(p_subject_type, p_subject_id, FALSE)") {
+	if !strings.Contains(list, "accessible_parent_aa_viewer(p_subject_type, p_subject_id, FALSE)") {
 		t.Errorf("plain branch must compose with FALSE:\n%s", list)
 	}
-	if !strings.Contains(list, "accessiblesk_parent_participant(p_subject_type, p_subject_id, TRUE)") {
+	if !strings.Contains(list, "accessible_parent_participant(p_subject_type, p_subject_id, TRUE)") {
 		t.Errorf("userset branch must page the internal function with TRUE:\n%s", list)
 	}
 	// A relation named after the argument keeps its name, in identifiers and
@@ -94,36 +94,53 @@ func TestSubjectKind_ListFunctionBindsLiterals(t *testing.T) {
 	}
 }
 
-func TestSubjectKind_InternalFunctionTestsArgument(t *testing.T) {
-	out := generateSubjectKindSQL(t)
-	for _, fn := range out.AccessibleObjectsFunctions {
-		if fn.Name != accessibleSubjectKindFunctionName("parent", "aa_viewer") {
-			continue
-		}
-		if strings.Contains(fn.SQL, subjectIsUserset) {
-			t.Errorf("internal function must test p_userset, not the subject id:\n%s", fn.SQL)
-		}
-		if !strings.Contains(fn.SQL, "p_userset BOOLEAN") {
-			t.Errorf("internal function must take p_userset:\n%s", fn.SQL)
-		}
-		return
-	}
-	t.Fatal("no internal accessible function for parent.aa_viewer")
-}
-
-func TestSubjectKind_PublicFunctionPassesKindTest(t *testing.T) {
+func TestSubjectKind_AccessibleFunctionTakesOptionalKind(t *testing.T) {
 	out := generateSubjectKindSQL(t)
 	for _, fn := range out.AccessibleObjectsFunctions {
 		if fn.Name != AccessibleObjectsFunctionName("parent", "participant") {
 			continue
 		}
-		want := "accessiblesk_parent_participant(p_subject_type, p_subject_id, " + subjectIsUserset + ")"
-		if !strings.Contains(fn.SQL, want) {
-			t.Errorf("public function must call the internal form with the kind test:\n%s", fn.SQL)
+		for _, want := range []string{
+			"p_userset BOOLEAN DEFAULT NULL",
+			// Composed calls pass the kind on.
+			"accessible_parent_aa_viewer(p_subject_type, p_subject_id, p_userset)",
+		} {
+			if !strings.Contains(fn.SQL, want) {
+				t.Errorf("accessible function is missing %q:\n%s", want, fn.SQL)
+			}
 		}
 		return
 	}
-	t.Fatal("no public accessible function for parent.participant")
+	t.Fatal("no accessible function for parent.participant")
+}
+
+// The kind argument binds every kind test, and a call whose argument
+// contradicts the subject returns nothing: a kind test under a negation (an
+// exclusion's NOT EXISTS) would otherwise grant rows for a wrong kind.
+func TestSubjectKind_KindArgumentGuardsTheBody(t *testing.T) {
+	q := "SELECT t.object_id FROM t WHERE " + subjectIsUserset + " AND x OR " + subjectNotUserset + " AND y"
+	got := bindSubjectKindParam(q)
+	kind := "COALESCE(p_userset, " + subjectIsUserset + ")"
+	for _, want := range []string{
+		"WHERE " + kind + " AND x OR NOT " + kind + " AND y",
+		"WHERE p_userset IS NULL OR p_userset = (" + subjectIsUserset + ")",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestSubjectKind_NoInternalForm(t *testing.T) {
+	out := generateSubjectKindSQL(t)
+	for _, fn := range out.AccessibleObjectsFunctions {
+		if strings.Contains(fn.Name, "accessiblesk_") || strings.Contains(fn.SQL, "accessiblesk_") {
+			t.Errorf("%s: the internal accessible form is folded into accessible_*", fn.Name)
+		}
+	}
+	if last := out.AccessibleObjectsFunctions[len(out.AccessibleObjectsFunctions)-1]; last.Name != "accessible_objects" {
+		t.Errorf("accessible_objects must come last, after the dispatcher it reads; got %s", last.Name)
+	}
 }
 
 func TestSubjectKind_AccessibleFunctionsCalleesFirst(t *testing.T) {

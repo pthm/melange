@@ -262,19 +262,7 @@ func collectNonEmpty(values ...string) []string {
 // dispatcherFunctionNames lists the well-known dispatcher functions in the
 // stable order used for DOWN migrations. Specialized functions are handled
 // separately in generateDownSQL.
-var dispatcherFunctionNames = []string{
-	"check_permission",
-	"check_permission_internal",
-	"check_permission_nw",
-	"check_permission_nw_internal",
-	"check_permission_bulk",
-	"explain_permission",
-	"explain_permission_internal",
-	"expand_permission",
-	"expand_permission_internal",
-	"list_accessible_objects",
-	"list_accessible_subjects",
-}
+var dispatcherFunctionNames = DispatcherFunctionNames
 
 func generateDownSQL(expectedFunctions []string, databaseSchema string) string {
 	var b strings.Builder

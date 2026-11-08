@@ -135,6 +135,21 @@ func TestKitchenSink_ListVsCheck(t *testing.T) {
 	assertListSubsetOfCheck(t, db, "userset group#member", "group",
 		`SELECT subject_id FROM kitchen_sink_tuples WHERE subject_type='group' AND subject_id LIKE '%#member' AND relation='member' AND object_type='organization' LIMIT 1`,
 		"member", "organization")
+
+	// A userset subject's kind is TRUE: with it the accessible function
+	// returns what it returns for the subject alone, and with FALSE nothing.
+	userset := distinct(t, db, `SELECT subject_id FROM kitchen_sink_tuples WHERE subject_type='group' AND subject_id LIKE '%#member' AND relation='member' AND object_type='organization' LIMIT 1`)
+	require.NotEmpty(t, userset)
+	for _, p := range kitchenSinkProbes {
+		alone, ok := accessibleObjects(t, db, "group", userset[0], p.relation, p.objType)
+		if !ok {
+			continue
+		}
+		require.ElementsMatchf(t, alone, accessibleObjectsKind(t, db, "group", userset[0], p.relation, p.objType, "TRUE"),
+			"accessible_%s_%s(group:%s, TRUE) vs the subject alone", p.objType, p.relation, userset[0])
+		require.Emptyf(t, accessibleObjectsKind(t, db, "group", userset[0], p.relation, p.objType, "FALSE"),
+			"accessible_%s_%s(group:%s, FALSE) for a userset subject must return nothing", p.objType, p.relation, userset[0])
+	}
 	assertListSubsetOfCheck(t, db, "service_account", "service_account",
 		`SELECT subject_id FROM kitchen_sink_tuples WHERE subject_type='service_account' AND subject_id <> '*' AND relation='member' AND object_type='group' LIMIT 1`,
 		"member", "group")
@@ -202,12 +217,32 @@ func pagedObjects(t *testing.T, db *sql.DB, st, sid, rel, ot string, size int) [
 }
 
 // requireAccessibleMatchesList asserts that accessible_{ot}_{rel}, when the
-// relation has one, returns the objects list_objects listed for user:sid.
+// relation has one, returns the objects list_objects listed for user:sid,
+// called with the subject alone and with its kind (FALSE); that a call with
+// the contradicting kind (TRUE) returns nothing, which an exclusion under a
+// trusted wrong kind would not; and that accessible_objects returns them too.
 func requireAccessibleMatchesList(t *testing.T, db *sql.DB, sid, rel, ot string, listed map[string]struct{}) {
 	t.Helper()
+	want := setToSlice(listed)
 	if acc, ok := accessibleObjects(t, db, "user", sid, rel, ot); ok {
-		require.ElementsMatchf(t, setToSlice(listed), acc, "accessible_%s_%s vs list_objects for user:%s", ot, rel, sid)
+		require.ElementsMatchf(t, want, acc, "accessible_%s_%s vs list_objects for user:%s", ot, rel, sid)
+		require.ElementsMatchf(t, want, accessibleObjectsKind(t, db, "user", sid, rel, ot, "FALSE"),
+			"accessible_%s_%s(..., FALSE) vs list_objects for user:%s", ot, rel, sid)
+		require.Emptyf(t, accessibleObjectsKind(t, db, "user", sid, rel, ot, "TRUE"),
+			"accessible_%s_%s(..., TRUE) for the plain subject user:%s must return nothing", ot, rel, sid)
 	}
+	rows, err := db.Query(`SELECT DISTINCT object_id FROM accessible_objects('user', $1, $2, $3)`, sid, rel, ot)
+	require.NoError(t, err)
+	require.ElementsMatchf(t, want, scanStrings(t, rows), "accessible_objects vs list_objects for user:%s %s %s", sid, rel, ot)
+}
+
+// accessibleObjectsKind returns the distinct objects accessible_{ot}_{rel}
+// returns for the subject called with the subject kind kind (TRUE or FALSE).
+func accessibleObjectsKind(t *testing.T, db *sql.DB, st, sid, rel, ot, kind string) []string {
+	t.Helper()
+	rows, err := db.Query(`SELECT DISTINCT object_id FROM `+sqldsl.QuoteIdent(sqlgen.AccessibleObjectsFunctionName(ot, rel))+`($1, $2, `+kind+`)`, st, sid)
+	require.NoError(t, err)
+	return scanStrings(t, rows)
 }
 
 // accessibleObjects returns the distinct objects accessible_{ot}_{rel}
