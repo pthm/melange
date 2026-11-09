@@ -20,15 +20,21 @@
 # Settings (environment variables):
 #   PROJECT        GCP project (default: current gcloud project)
 #   ZONE           zone for both machines (default: europe-west2-a)
-#   PG_VERSION     Cloud SQL version (default: POSTGRES_17)
-#   DB_TIER        Cloud SQL tier (default: db-custom-4-16384, 4 vCPU 16 GB)
+#   PG_VERSION     Cloud SQL version (default: POSTGRES_18)
+#   DB_CPU         Cloud SQL Enterprise vCPUs (default: 4)
+#   DB_MEMORY      Cloud SQL Enterprise memory (default: 16GiB)
 #   VM_TYPE        VM machine type (default: n2-standard-4)
-#   COUNT          runs per benchmark, for benchstat (default: 6)
+#   COUNT          runs per benchmark, for benchstat (default: 6; benchstat
+#                  needs at least 4 to call a difference significant)
+#   SUITES         which suites `run` runs: test, openfga, or both
+#                  (default: "test openfga")
 #   BENCH_TEST     -bench regex for ./test (default: every suite, scales up to 1M;
 #                  the 10M-100M scale benchmarks need hundreds of GB and days)
 #   BENCH_OPENFGA  -bench regex for ./test/openfgatests (default: BenchmarkOpenFGA_All$)
 #   BENCHTIME_OPENFGA  -benchtime for the OpenFGA suite (default: 200ms; it has
 #                  ~2,000 small benchmarks, so Go's 1s default takes ~5 hours)
+#   DB_INSTANCE    Cloud SQL instance name (default: melange-bench); a deleted
+#                  instance's name stays reserved for up to a week
 #   KEEP=1         with `all`, leave the machines running afterwards
 #   OUT            local results directory (default: .cloud-bench)
 
@@ -36,10 +42,12 @@ set -euo pipefail
 
 PROJECT="${PROJECT:-$(gcloud config get-value project 2>/dev/null || true)}"
 ZONE="${ZONE:-europe-west2-a}"
-PG_VERSION="${PG_VERSION:-POSTGRES_17}"
-DB_TIER="${DB_TIER:-db-custom-4-16384}"
+PG_VERSION="${PG_VERSION:-POSTGRES_18}"
+DB_CPU="${DB_CPU:-4}"
+DB_MEMORY="${DB_MEMORY:-16GiB}"
 VM_TYPE="${VM_TYPE:-n2-standard-4}"
 COUNT="${COUNT:-6}"
+SUITES="${SUITES:-test openfga}"
 # Scale sub-benchmarks are named 1K..100M; every other sub-benchmark starts
 # with a letter. Keep those and the scales up to 1M. Go reports a benchmark
 # without sub-benchmarks only on a full match, so those are listed by name.
@@ -48,7 +56,9 @@ BENCH_OPENFGA="${BENCH_OPENFGA:-BenchmarkOpenFGA_All\$}"
 BENCHTIME_OPENFGA="${BENCHTIME_OPENFGA:-200ms}"
 OUT="${OUT:-.cloud-bench}"
 
-DB_INSTANCE="melange-bench"
+# Cloud SQL keeps a deleted instance's name reserved for up to a week, so a
+# run soon after a teardown needs another DB_INSTANCE.
+DB_INSTANCE="${DB_INSTANCE:-melange-bench}"
 VM="melange-bench-vm"
 PSA_RANGE="google-managed-services-default"
 
@@ -65,6 +75,18 @@ REMOTE_RUNNING='pgrep -f "[c]loud-bench.sh _remote" >/dev/null'
 
 require_project() {
   [[ -n "$PROJECT" ]] || { echo "Set PROJECT or run: gcloud config set project <id>" >&2; exit 1; }
+}
+
+# source_rev names the source being uploaded. In a jj workspace the working
+# copy is itself a commit (git's HEAD is its parent), so it names that commit;
+# otherwise HEAD, noting uncommitted changes.
+source_rev() {
+  if command -v jj >/dev/null 2>&1 && (cd "$ROOT" && jj root >/dev/null 2>&1); then
+    (cd "$ROOT" && jj log --no-graph -r @ -T 'change_id.short() ++ " (" ++ commit_id.short() ++ ")"' 2>/dev/null) && return
+  fi
+  local rev; rev="$(cd "$ROOT" && git rev-parse --short HEAD)"
+  if [[ -n "$(cd "$ROOT" && git status --porcelain --untracked-files=no)" ]]; then rev+=" plus uncommitted changes"; fi
+  echo "$rev"
 }
 
 db_ip() {
@@ -97,9 +119,12 @@ cmd_setup() {
   fi
 
   if ! gc sql instances describe "$DB_INSTANCE" >/dev/null 2>&1; then
-    log "Creating Cloud SQL instance $DB_INSTANCE ($PG_VERSION, $DB_TIER); this takes several minutes"
+    # Enterprise edition sizes a dedicated-core instance with --cpu and
+    # --memory; --tier is for shared-core ones. Without --edition, PostgreSQL
+    # 16 and later default to Enterprise Plus, which costs more.
+    log "Creating Cloud SQL instance $DB_INSTANCE ($PG_VERSION, $DB_CPU vCPU, $DB_MEMORY); this takes several minutes"
     gc sql instances create "$DB_INSTANCE" \
-      --database-version="$PG_VERSION" --edition=ENTERPRISE --tier="$DB_TIER" \
+      --database-version="$PG_VERSION" --edition=enterprise --cpu="$DB_CPU" --memory="$DB_MEMORY" \
       --zone="$ZONE" --availability-type=ZONAL \
       --storage-type=SSD --storage-size=100 \
       --network=default --no-assign-ip
@@ -108,7 +133,11 @@ cmd_setup() {
 
   if ! gc compute instances describe "$VM" --zone "$ZONE" >/dev/null 2>&1; then
     local go_version startup
-    go_version="$(awk '/^go /{print $2; exit}' "$ROOT/go.mod")"
+    # The toolchain line is the Go the module builds with; the go line is only
+    # the oldest it accepts. Installing the toolchain version means the VM
+    # never downloads another Go at run time.
+    go_version="$(awk '/^toolchain go/{sub(/^go/, "", $2); print $2; exit}' "$ROOT/go.mod")"
+    [[ -n "$go_version" ]] || go_version="$(awk '/^go /{print $2; exit}' "$ROOT/go.mod")"
     startup="$(mktemp)"
     cat > "$startup" <<EOF
 #!/bin/bash
@@ -146,8 +175,12 @@ cmd_run() {
     # package compiles against. The docs site is not needed. COPYFILE_DISABLE
     # and --no-xattrs stop macOS tar adding ._* files, which the OpenFGA test
     # loader would try to parse.
+    # Files deleted but not yet committed are still listed by git, so only
+    # existing ones are passed to tar.
     (cd "$ROOT" && { git ls-files -co --exclude-standard -z -- . ':!docs'; printf 'test/authz/schema_gen.go\0'; } |
+      while IFS= read -r -d '' f; do [[ -e "$f" ]] && printf '%s\0' "$f"; done |
       COPYFILE_DISABLE=1 tar --no-xattrs --null -czf "$tarball" -T -)
+    source_rev > "$OUT/uploaded-rev"
     gc compute scp "$tarball" "$VM:~/melange-src.tgz" --zone "$ZONE"
     rm -f "$tarball"
 
@@ -158,6 +191,7 @@ COUNT='$COUNT'
 BENCH_TEST='$BENCH_TEST'
 BENCH_OPENFGA='$BENCH_OPENFGA'
 BENCHTIME_OPENFGA='$BENCHTIME_OPENFGA'
+SUITES='$SUITES'
 EOF
 )
     gc compute scp "$env" "$VM:~/bench.env" --zone "$ZONE"
@@ -195,6 +229,7 @@ EOF
     "$(gc sql instances describe "$DB_INSTANCE" --format='value(settings.tier)')" \
     "$(gc compute instances describe "$VM" --zone "$ZONE" --format='value(machineType.basename())')" \
     "$ZONE" >> "$dest/settings.env"
+  [[ -f "$OUT/uploaded-rev" ]] && cp "$OUT/uploaded-rev" "$dest/source-rev.txt"
   ln -sfn "$(basename "$dest")" "$OUT/latest"
   log "Results in $dest"
 }
@@ -212,7 +247,8 @@ cmd_remote() {
   set -a; . ~/bench.env; set +a
   # MELANGE_TEST_SERVER_URL makes the per-test databases from EmptyDB and DSN
   # live on Cloud SQL too, not only the shared one from DATABASE_URL.
-  export PATH="/usr/local/go/bin:$PATH" MELANGE_BENCH_LARGE_SCALE=1 MELANGE_TEST_SERVER_URL="$DATABASE_URL"
+  # GOTOOLCHAIN=local: run with the Go setup installed, never a download.
+  export PATH="/usr/local/go/bin:$PATH" GOTOOLCHAIN=local MELANGE_BENCH_LARGE_SCALE=1 MELANGE_TEST_SERVER_URL="$DATABASE_URL"
   local out=~/results
   mkdir -p "$out"; touch "$out/STARTED"
   grep -v '^DATABASE_URL=' ~/bench.env > "$out/settings.env"
@@ -228,10 +264,14 @@ cmd_remote() {
     return
   fi
 
-  go test -run='^$' -bench="$BENCH_TEST" -benchmem -count="$COUNT" -timeout 0 . \
-    > "$out/test.txt" 2>&1 || echo "./test exited $?" >> "$out/errors.txt"
-  go test -run='^$' -bench="$BENCH_OPENFGA" -benchtime="$BENCHTIME_OPENFGA" -benchmem -count="$COUNT" -timeout 0 ./openfgatests/ \
-    > "$out/openfga.txt" 2>&1 || echo "./test/openfgatests exited $?" >> "$out/errors.txt"
+  if [[ " $SUITES " == *" test "* ]]; then
+    go test -run='^$' -bench="$BENCH_TEST" -benchmem -count="$COUNT" -timeout 0 . \
+      > "$out/test.txt" 2>&1 || echo "./test exited $?" >> "$out/errors.txt"
+  fi
+  if [[ " $SUITES " == *" openfga "* ]]; then
+    go test -run='^$' -bench="$BENCH_OPENFGA" -benchtime="$BENCHTIME_OPENFGA" -benchmem -count="$COUNT" -timeout 0 ./openfgatests/ \
+      > "$out/openfga.txt" 2>&1 || echo "./test/openfgatests exited $?" >> "$out/errors.txt"
+  fi
 }
 
 cmd_report() {
@@ -241,13 +281,14 @@ cmd_report() {
   # shellcheck disable=SC1091
   . "$dir/settings.env"
   local report="$dir/report.md" rev
-  rev="$(cd "$ROOT" && git rev-parse --short HEAD)"
+  # The revision recorded at upload; reports of older runs fall back to now.
+  rev="$(cat "$dir/source-rev.txt" 2>/dev/null || source_rev)"
 
   {
     echo "# Cloud benchmark results"
     echo
     echo "- Date: $(date -u +%Y-%m-%d)"
-    echo "- Source: $rev plus any uncommitted changes at upload time"
+    echo "- Source: $rev"
     echo "- Database: Cloud SQL $PG_VERSION (server $(cat "$dir/server-version.txt" 2>/dev/null || echo unknown)), $DB_TIER, $ZONE, private IP, SSL"
     echo "- Client: Compute Engine $VM_TYPE, same zone"
     echo "- Runs per benchmark: $COUNT"

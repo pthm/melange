@@ -190,9 +190,9 @@ The Performance Reference was produced with:
 PROJECT=melange-bench VM_TYPE=n2d-standard-4 just bench-cloud all
 ```
 
-`n2d-standard-4` replaced the default `n2-standard-4` only because the zone had no `n2` capacity that day. Defaults are a 4 vCPU, 16 GB Cloud SQL Enterprise instance (`DB_TIER`), an `n2-standard-4` VM (`VM_TYPE`), `europe-west2-a` (`ZONE`), PostgreSQL 17 (`PG_VERSION`), and 6 runs (`COUNT`). The script header lists every setting.
+`n2d-standard-4` replaced the default `n2-standard-4` only because the zone had no `n2` capacity that day. That run used PostgreSQL 17; the script now defaults to PostgreSQL 18. Defaults are a 4 vCPU, 16 GiB Cloud SQL Enterprise instance (`DB_CPU`, `DB_MEMORY`), an `n2-standard-4` VM (`VM_TYPE`), `europe-west2-a` (`ZONE`), PostgreSQL 18 (`PG_VERSION`), and 6 runs (`COUNT`). benchstat needs at least 4 runs to call a difference significant. The VM installs the Go version on the `toolchain` line of `go.mod`. The script header lists every setting.
 
-A full run takes about 4½ hours: 2 for the Go suites, most of it loading and querying the largest datasets, and 2¼ for the 2,000 OpenFGA benchmarks. The machines cost about $1 an hour. Results stay in `.cloud-bench/results-<timestamp>/`, with `latest` pointing at the newest. The 10M to 100M scale benchmarks are left out by default; they need hundreds of gigabytes and days to run. Narrow or widen the selection with `BENCH_TEST` and `BENCH_OPENFGA`, which are passed to `-bench`.
+The October 2026 run took about 4½ hours: 2 for the Go suites, most of it loading and querying the largest datasets, and 2¼ for the 2,000 OpenFGA benchmarks. The suites have grown since (the SaaS benchmark loads 1.3M rows per run at its 1M scale, and on-demand and parent-key cases were added), so plan for longer. `SUITES=test` or `SUITES=openfga` runs one suite. The machines cost about $1 an hour. Results stay in `.cloud-bench/results-<timestamp>/`, with `latest` pointing at the newest. The 10M to 100M scale benchmarks are left out by default; they need hundreds of gigabytes and days to run. Narrow or widen the selection with `BENCH_TEST` and `BENCH_OPENFGA`, which are passed to `-bench`.
 
 To follow a run in progress, look at the result files on the VM:
 
