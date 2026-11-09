@@ -78,7 +78,7 @@ func (s *Server) analyze(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if u := apiOf(model).Unavailable(sqlapi.Check, string(object.Type), relation); u != nil {
-		render(w, r, errorBox(u.Error()))
+		render(w, r, unavailableBox(u))
 		return
 	}
 	start := time.Now()

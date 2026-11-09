@@ -1,6 +1,6 @@
 ---
 title: Studio
-description: "melange studio: a local, read-only web console and permissions debugger for OpenFGA models in PostgreSQL. Visualize the deployed model, explain why a check was allowed or denied, and browse tuples."
+description: "melange studio: a local web console and permissions debugger for OpenFGA models in PostgreSQL. Visualize the deployed model, explain why a check was allowed or denied, and browse tuples."
 weight: 12
 ---
 
@@ -51,7 +51,7 @@ An explicit `--db` wins over the environment's connection. When an environment i
 
 ## Read-Only Connections
 
-Studio opens every connection with `default_transaction_read_only=on` and checks `SHOW default_transaction_read_only` at startup. If the setting did not take effect, studio exits instead of serving. The top bar shows a `read-only` badge.
+Studio opens every connection with `default_transaction_read_only=on` and checks `SHOW default_transaction_read_only` at startup. If the setting did not take effect, studio exits instead of serving.
 
 There are two exceptions, and neither commits anything. Explain with what-if tuples (see [What-If Tuples](#what-if-tuples)) begins a read-write transaction, creates a temporary view, switches the transaction to read-only, runs Explain, and always rolls back. On a database migrated with `sql.functions.explain` or `expand` off, Explain and Expand create that family's functions in `pg_temp` the same way, for each call (see [Explain and Expand Without Their Functions](#explain-and-expand-without-their-functions)).
 
@@ -115,8 +115,8 @@ Each relation has a page showing its `define` line, the relations it reads (**De
 
 The SQL API page (`/sql`) is a viewer for the functions the database installs, and how they relate to the model. It describes the **deployed model** and the exposure its last migration recorded, the same report as [`melange functions --db`](../../reference/cli/#functions), so it needs no `melange.yaml`.
 
-- **Overview** lists what drifted: expected functions that are missing, installed with other arguments or another body, or with stale overloads; orphans the last migration recorded; functions only named like generated ones (unmanaged, never dropped); name collisions; and a note when another melange version generated the functions. The dispatchers follow, with the relations each answers for.
-- **A type** (sidebar) lists its exposed relations, then its internal ones (not exposed, modelling only) folded away. Each function shows its exact name (truncated names are marked), kind, public or internal, and status; opening it shows the signature, an example call and how an application uses the result, each with a **Copy** button, any note (an accessible function is inlined into the calling query, so the schema holding `melange_tuples` must be on its `search_path`), and the functions its body may call. Families that are not installed say why.
+- **Overview** shows the exposure the last migration recorded (which relations, and which function families are off), then the entry points an application calls, each with a one-line description and the number of relations it answers for. Opening one shows its signature and an example call. The internal dispatchers that generated functions call are folded under them. A **Drift** section comes first when something differs: expected functions that are missing, installed with other arguments or another body, or with stale overloads; orphans the last migration recorded; functions only named like generated ones (unmanaged, never dropped); and a note when another melange version generated the functions. Name collisions follow it.
+- **A type** (sidebar) lists its exposed relations, then its internal ones (not exposed) in a section of their own. Each relation starts with a ready-to-run call for each thing an application can do with it: check, list objects, list subjects, filter a query (the inlinable `accessible_{type}_{relation}` function), filter by a parent column (the parent-key functions), expand and explain, each with a **Copy** button. A call the relation does not have says why, for example when its family is off or compiled on demand. The generated functions behind the calls are listed under them. Each shows its exact name (truncated names are marked), its kind, and a status badge when it is not installed as expected. Opening one shows an example call, how an application uses the result, any note (an accessible function is inlined into the calling query, so the schema holding `melange_tuples` must be on its `search_path`), the signature, and the functions its body may call.
 - **A kind** (sidebar) lists that kind's functions across the model, for example every `accessible` function, which is the quickest way to find a truncated name.
 - A type and a kind combine. **all kinds** and **all types** in the sidebar drop one of them.
 
@@ -195,8 +195,8 @@ a relation it does not answer for:
 | Explain, Analyze | The query says the relation is not exposed and how to expose it | Explain runs on demand (see below) |
 | Expand | The query says the relation is not exposed. In a tree, a pointer that `expand_permission` does not answer for has a `not exposed` label instead of a drill-in | Expand and the drill-in run on demand |
 | Matrix | The relation is labeled `not exposed` and not checked; the summary counts them | Explain chips explain on demand; without a model recorded by studio's codegen version they are plain labels instead |
-| Can access, Accessed by | The relation is not listed; the list names the relations left out | The tab says the list functions are not installed |
-| Relation page | The header lists each function family that does not answer for the relation | Same, and explain and expand show `on demand` |
+| Can access, Accessed by | The relation is not listed; one line per reason names the relations left out, with why and how to change it folded under it | The tab says the list functions are not installed |
+| Relation page | The header has one line per reason naming the function families that do not answer for the relation, with why and how to change it folded under it | Same, and explain and expand show `on demand` |
 
 Hover a label for the reason. `expand_permission` answers for every relation
 that an exposed relation's pointers lead to, so drilling into a relation that

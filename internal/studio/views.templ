@@ -35,7 +35,7 @@ templ shell(p page, sidebar templ.Component) {
 		<head>
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
-			<meta name="description" content="melange studio: a local, read-only console for a melange authorization database."/>
+			<meta name="description" content="melange studio: a local console for a melange authorization database."/>
 			<meta name="color-scheme" content="light dark"/>
 			// No eval (CSP has no unsafe-eval) and no injected <style> (no
 			// unsafe-inline); studio.css styles the request indicator itself.
@@ -69,7 +69,6 @@ templ shell(p page, sidebar templ.Component) {
 						if p.Env != "" {
 							<span class="badge accent" title="Active environment">{ p.Env }</span>
 						}
-						<span class="badge" title="Every connection is read-only. What-if Explain uses a temporary view, and Explain or Expand on a database migrated without their functions creates them in pg_temp, in a transaction that is always rolled back.">read-only</span>
 						@topLinks()
 						<button type="button" class="theme-toggle" data-theme-toggle aria-label="Toggle dark mode" title="Toggle dark mode"></button>
 					</div>
@@ -199,18 +198,24 @@ templ modelSidebar(d indexData) {
 templ indexPage(d indexData) {
 	@shell(page{Env: d.Env, Active: "model"}, modelSidebar(d)) {
 		@pageHead("Model", nil) {
-			if d.Model == nil {
-				<p class="page-meta">{ d.ModelErr }</p>
-			} else {
-				<p class="page-meta">
-					Migrated { d.Model.MigratedAt.UTC().Format("2 Jan 2006, 15:04 MST") } by melange <code>{ d.Model.MelangeVersion }</code>
-					· checksum <code>{ short(d.Model.SchemaChecksum) }</code>
-				</p>
+			<p class="page-meta">The authorization model deployed in this database: query it, or read its schema.</p>
+			if d.Model != nil {
+				<div class="stats">
+					@stat(len(d.Model.Types), "types", "")
+					@stat(relationCount(d.Model.Types), "relations", "")
+				</div>
 			}
 			<nav class="tabs" aria-label="Model views">
 				<a href="/" { current(d.Tab == modelTabQuery)... }>Query</a>
 				<a href={ templ.URL("/?tab=" + modelTabSchema) } { current(d.Tab == modelTabSchema)... }>Deployed schema</a>
 			</nav>
+		}
+		if d.Model == nil && d.ModelErr == noModelRecorded {
+			<div class="content-note">
+				@noticeBox("No deployed model", d.ModelErr)
+			</div>
+		} else if d.Model == nil && d.ModelErr != "" {
+			@errorBox(d.ModelErr)
 		}
 		if d.Tab == modelTabSchema {
 			@schemaTab(d)
@@ -229,7 +234,15 @@ templ schemaTab(d indexData) {
 			@secHead("Deployed schema", "") {
 				<p class="help">The DSL recorded by the last migration ({ d.Model.Format } file). This is what the database runs.</p>
 			}
-			<div class="sec-body">
+			<div class="sec-body stack">
+				<dl class="kv">
+					<dt>migrated</dt>
+					<dd>{ d.Model.MigratedAt.UTC().Format("2 Jan 2006, 15:04 MST") }</dd>
+					<dt>melange</dt>
+					<dd><code>{ d.Model.MelangeVersion }</code></dd>
+					<dt>checksum</dt>
+					<dd><code>{ short(d.Model.SchemaChecksum) }</code></dd>
+				</dl>
 				@fgaSource(d.Model.DSL)
 			</div>
 		</section>
@@ -315,7 +328,14 @@ templ queryTab(d indexData) {
 }
 
 templ errorBox(msg string) {
-	<p class="error">{ msg }</p>
+	<div class="callout error" role="alert">{ msg }</div>
+}
+
+// noticeBox is a call the SQL API does not answer, by design: the relation
+// is not exposed or its family is not installed. It is information, not a
+// failure, so it is not styled as an error.
+templ noticeBox(title, msg string) {
+	<div class="callout" role="status"><span class="callout-title">{ title }</span>{ msg }</div>
 }
 
 templ note(msg string) {
@@ -341,6 +361,34 @@ templ relationChip(sub, rel, obj string, no *sqlapi.Unavailable) {
 // unavailable labels a relation a view did not query, with why on hover.
 templ unavailable(u *sqlapi.Unavailable) {
 	<span class="badge" title={ u.Error() }>{ u.Label() }</span>
+}
+
+// skippedRelations is a footnote under a list: the relations it leaves
+// out, one line per reason. It sits after the list so the list leads.
+templ skippedRelations(us []*sqlapi.Unavailable) {
+	<div class="list-foot">
+		for _, g := range groupUnavailable(us, unavailableRelation, "them") {
+			<div class="mute">
+				Not listed ({ g.Label }):
+				<ul class="inline-list">
+					for _, item := range g.Items {
+						<li><code>{ item }</code></li>
+					}
+				</ul>
+				for _, r := range g.Reasons {
+					<p>{ r }</p>
+				}
+			</div>
+		}
+	</div>
+}
+
+// unavailableReasons says why a group of items is unavailable and how to
+// change it, one line per distinct reason.
+templ unavailableReasons(reasons []string) {
+	for _, r := range reasons {
+		<p class="mute api-why">{ r }</p>
+	}
 }
 
 // matrixView lists one subject's answer for every relation on an object, in
@@ -605,8 +653,10 @@ templ pointer(userset string, check func(string) *sqlapi.Unavailable) {
 	}
 }
 
+// stat is a count in a page header. Its tone shows only when the count is
+// not zero, so "0 errors" does not read as an error.
 templ stat(n int, label, tone string) {
-	<div class={ "stat", tone }><span class="t-heading">{ num(n) }</span>{ label }</div>
+	<div class={ "stat", templ.KV(tone, n > 0 && tone != "") }><span class="t-heading">{ num(n) }</span>{ label }</div>
 }
 
 // fgaSource renders OpenFGA DSL with syntax colouring (see highlightFGA).
@@ -621,14 +671,25 @@ templ sqlSource(src string) {
 
 templ codeBlock(tokens []codeToken) {
 	<pre class="code">
-		for _, t := range tokens {
-			if t.Class == "" {
-				{ t.Text }
-			} else if t.Text != "" {
-				<span class={ "f-" + t.Class }>{ t.Text }</span>
-			}
-		}
+		@codeTokens(tokens)
 	</pre>
+}
+
+// sqlInline renders a line of SQL with syntax colouring, inline.
+templ sqlInline(src string) {
+	<code class="code">
+		@codeTokens(highlightSQL(src))
+	</code>
+}
+
+templ codeTokens(tokens []codeToken) {
+	for _, t := range tokens {
+		if t.Class == "" {
+			{ t.Text }
+		} else if t.Text != "" {
+			<span class={ "f-" + t.Class }>{ t.Text }</span>
+		}
+	}
 }
 
 // analyzeView shows one check under EXPLAIN ANALYZE: the times, the

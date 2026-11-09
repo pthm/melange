@@ -534,3 +534,27 @@ func TestFromError_MissingRemedy(t *testing.T) {
 		t.Errorf("message %q", msg)
 	}
 }
+
+// A relation left out or a family turned off is how the database was
+// migrated; a record melange cannot use is a fault, and tools show it as one.
+func TestUnavailable_ByDesign(t *testing.T) {
+	this := migrator.CodegenVersion()
+	explainOff := sqlgen.Exposure{Functions: sqlgen.FunctionFamilies{ListSubjects: off(), Explain: off()}}
+	for _, tc := range []struct {
+		name string
+		u    *Unavailable
+		want bool
+	}{
+		{"not exposed", New(editorOnly(), testTypes(t)).Unavailable(Check, "document", "owner"), true},
+		{"family off", recorded(t, explainOff, testTypes(t), this).Unavailable(ListSubjects, "document", "editor"), true},
+		{"unreadable recorded model", unreadable(explainOff, this).Unavailable(Explain, "document", "editor"), false},
+		{"recorded by another codegen version", recorded(t, explainOff, testTypes(t), "v0.0.1").Unavailable(Explain, "document", "editor"), false},
+	} {
+		if tc.u == nil {
+			t.Fatalf("%s: answered", tc.name)
+		}
+		if got := tc.u.ByDesign(); got != tc.want {
+			t.Errorf("%s: ByDesign = %v, want %v (%v)", tc.name, got, tc.want, tc.u)
+		}
+	}
+}

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/pthm/melange/internal/sqlgen/sqldsl"
 )
 
 // catalogExposures are the exposures the catalog is checked under: the
@@ -204,6 +206,17 @@ func assertCatalogMatches(t *testing.T, m exposureModel, label string, e Exposur
 		}
 		if r.Exposed != e.Exposes(r.Type, r.Relation) {
 			t.Errorf("%s [%s]: %s exposed = %v", m.name, label, key, r.Exposed)
+		}
+		// One example per answering dispatcher, in order, each a call of it
+		// for this relation.
+		if len(r.Examples) != len(r.Dispatchers) {
+			t.Errorf("%s [%s]: %s has %d examples for %d dispatchers", m.name, label, key, len(r.Examples), len(r.Dispatchers))
+		}
+		for i, ex := range r.Examples {
+			if i < len(r.Dispatchers) && ex.Dispatcher != r.Dispatchers[i] || !strings.Contains(ex.Example, ex.Dispatcher+"(") ||
+				!strings.Contains(ex.Example, sqldsl.QuoteLiteral(r.Relation)) || (ex.Usage != "") != (ex.Dispatcher == accessibleObjectsDispatcherName) {
+				t.Errorf("%s [%s]: %s example %d: %+v", m.name, label, key, i, ex)
+			}
 		}
 		assertKindsAccounted(t, m.name, label, r)
 	}

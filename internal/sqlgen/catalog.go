@@ -88,6 +88,8 @@ type CatalogRelation struct {
 	// Dispatchers are the public dispatchers that answer for the relation
 	// instead of raising.
 	Dispatchers []string `json:"dispatchers"`
+	// Examples call each of Dispatchers for the relation, in the same order.
+	Examples []DispatcherCall `json:"examples,omitempty"`
 	// DependsOn lists the relations the relation's functions may read, as
 	// type#relation, from the model analysis.
 	DependsOn []string `json:"depends_on,omitempty"`
@@ -96,6 +98,15 @@ type CatalogRelation struct {
 	// NotInstalled says why a kind has no function, for each kind the
 	// relation could have.
 	NotInstalled []NotInstalled `json:"not_installed,omitempty"`
+}
+
+// DispatcherCall is a call of a public dispatcher for one relation.
+type DispatcherCall struct {
+	Dispatcher string `json:"dispatcher"`
+	// Example runs as written; Usage, when set, shows how an application
+	// uses the result.
+	Example string `json:"example"`
+	Usage   string `json:"usage,omitempty"`
 }
 
 // NotInstalled says why a relation has no function of Kind.
@@ -367,6 +378,7 @@ func (b *catalogBuilder) relation(a *RelationAnalysis) CatalogRelation {
 	for _, name := range relationDispatcherNames {
 		if b.routes(name, a) {
 			rel.Dispatchers = append(rel.Dispatchers, name)
+			rel.Examples = append(rel.Examples, DispatcherCall{Dispatcher: name, Example: b.dispatcherExample(name, a), Usage: b.dispatcherUsage(name, a)})
 		}
 	}
 	return rel
@@ -752,9 +764,8 @@ func (b *catalogBuilder) dispatchers() []CatalogFunction {
 		case first != nil:
 			f.Example = b.dispatcherExample(name, first)
 		}
-		if name == accessibleObjectsDispatcherName && first != nil {
-			f.Usage = fmt.Sprintf("WHERE id IN (SELECT object_id FROM %s(%s))", b.qualify(name),
-				quoteArgs(b.subjectType(first), exampleSubjectID, first.Relation, first.ObjectType))
+		if first != nil {
+			f.Usage = b.dispatcherUsage(name, first)
 		}
 		out = append(out, f)
 	}
@@ -850,6 +861,15 @@ func (b *catalogBuilder) dispatcherExample(name string, a *RelationAnalysis) str
 		return fmt.Sprintf("SELECT subject_id, next_cursor FROM %s(%s, %s, NULL);", fn, quoteArgs(t, exampleObjectID, r, st), examplePageSize)
 	}
 	return ""
+}
+
+// dispatcherUsage returns how an application uses the dispatcher's result
+// for relation a, for the one dispatcher that has such a form.
+func (b *catalogBuilder) dispatcherUsage(name string, a *RelationAnalysis) string {
+	if name != accessibleObjectsDispatcherName {
+		return ""
+	}
+	return fmt.Sprintf("WHERE id IN (SELECT object_id FROM %s(%s))", b.qualify(name), quoteArgs(b.subjectType(a), exampleSubjectID, a.Relation, a.ObjectType))
 }
 
 // collisions returns the names more than one function has.

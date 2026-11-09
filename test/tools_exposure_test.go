@@ -150,7 +150,7 @@ func TestStudio_RestrictedExposure(t *testing.T) {
 		got := flat(c.on(t).query(url.Values{"mode": {"matrix"}, "subject": {"user:alice"}, "object": {"document:1"}}))
 		assert.Contains(t, got, "1 of 4 relations allowed", "only editor is checked: alice is its owner")
 		assert.Contains(t, got, "3 not exposed")
-		assert.NotContains(t, got, `class="error"`)
+		assert.NotContains(t, got, `callout error`)
 		assert.NotContains(t, got, "M2003")
 		assert.Equal(t, 1, strings.Count(got, `hx-post="/explain"`), "only editor explains")
 	})
@@ -163,7 +163,7 @@ func TestStudio_RestrictedExposure(t *testing.T) {
 	t.Run("explain an exposed relation", func(t *testing.T) {
 		got := flat(c.on(t).query(url.Values{"mode": {"explain"}, "subject": {"user:alice"}, "relation": {"editor"}, "object": {"document:1"}}))
 		assert.Contains(t, got, "allowed")
-		assert.NotContains(t, got, `class="error"`)
+		assert.NotContains(t, got, `callout error`)
 	})
 	t.Run("analyze an unexposed relation", func(t *testing.T) {
 		got := flat(c.on(t).query(url.Values{"mode": {"analyze"}, "subject": {"user:bob"}, "relation": {"viewer"}, "object": {"document:1"}}))
@@ -171,11 +171,11 @@ func TestStudio_RestrictedExposure(t *testing.T) {
 	})
 	t.Run("expand and drill into an installed but unexposed pointer", func(t *testing.T) {
 		got := flat(c.on(t).query(url.Values{"mode": {"expand"}, "relation": {"editor"}, "object": {"document:1"}}))
-		assert.NotContains(t, got, `class="error"`)
+		assert.NotContains(t, got, `callout error`)
 		assert.Contains(t, got, `/expand?userset=document%3A1%23owner`, "owner is in editor's expand closure")
 		got = flat(c.on(t).get("/expand?" + url.Values{"userset": {"document:1#owner"}}.Encode()))
 		assert.Contains(t, got, "user:alice")
-		assert.NotContains(t, got, `class="error"`)
+		assert.NotContains(t, got, `callout error`)
 	})
 	t.Run("expand an unexposed relation", func(t *testing.T) {
 		got := flat(c.on(t).get("/expand?" + url.Values{"userset": {"document:1#viewer"}}.Encode()))
@@ -184,21 +184,20 @@ func TestStudio_RestrictedExposure(t *testing.T) {
 	})
 	t.Run("entity access lists skip unexposed relations", func(t *testing.T) {
 		got := flat(c.on(t).get("/entity/group?" + url.Values{"type": {"user"}, "id": {"alice"}, "tab": {"can"}, "group": {"document"}}.Encode()))
-		assert.Contains(t, got, "Not listed:")
+		assert.Contains(t, got, "Not listed (not exposed):")
 		assert.Contains(t, got, "<code>viewer</code>")
-		assert.NotContains(t, got, `class="error"`)
+		assert.NotContains(t, got, `callout error`)
 		assert.Contains(t, got, ">editor<", "editor is listed for alice")
 		got = flat(c.on(t).get("/entity/group?" + url.Values{"type": {"document"}, "id": {"1"}, "tab": {"by"}, "group": {"user"}}.Encode()))
-		assert.Contains(t, got, "Not listed:")
-		assert.NotContains(t, got, `class="error"`)
+		assert.Contains(t, got, "Not listed (not exposed):")
+		assert.NotContains(t, got, `callout error`)
 	})
 	t.Run("relation page", func(t *testing.T) {
 		got := flat(c.on(t).get("/relation?type=document&relation=owner"))
-		assert.Contains(t, got, "Not answered by the SQL API")
-		assert.Contains(t, got, "check: not exposed")
-		assert.NotContains(t, got, "expand: not exposed", "expand answers for owner")
+		assert.Contains(t, got, `<span class="badge">not exposed</span></dt><dd>check, list objects, list subjects, explain <span class="mute">raise M2003`,
+			"expand answers for owner, so it is not among the families")
 		got = flat(c.on(t).get("/relation?type=document&relation=editor"))
-		assert.NotContains(t, got, "Not answered by the SQL API")
+		assert.NotContains(t, got, "for this relation: the exposure leaves it out")
 	})
 }
 
@@ -234,7 +233,7 @@ func TestStudio_FamiliesOff(t *testing.T) {
 		return flat(c.query(url.Values{"mode": {"explain"}, "subject": {"user:alice"}, "relation": {"editor"}, "object": {"document:1"}}))
 	})
 	assert.Contains(t, got, `badge ok">allowed</span>`, "alice owns the document")
-	assert.NotContains(t, got, `class="error"`)
+	assert.NotContains(t, got, `callout error`)
 	got = onDemand("what-if", func() string {
 		return flat(c.query(url.Values{"mode": {"explain"}, "subject": {"user:carol"}, "relation": {"editor"}, "object": {"document:1"}, "whatif": {"user:carol editor document:1"}}))
 	})
@@ -246,21 +245,20 @@ func TestStudio_FamiliesOff(t *testing.T) {
 	got = onDemand("expand", func() string {
 		return flat(c.query(url.Values{"mode": {"expand"}, "relation": {"editor"}, "object": {"document:1"}}))
 	})
-	assert.NotContains(t, got, `class="error"`)
+	assert.NotContains(t, got, `callout error`)
 	assert.Contains(t, got, `/expand?userset=document%3A1%23owner`, "owner is in editor's expand closure")
 	got = onDemand("expand drill-in", func() string {
 		return flat(c.get("/expand?" + url.Values{"userset": {"document:1#owner"}}.Encode()))
 	})
 	assert.Contains(t, got, "user:alice")
-	assert.NotContains(t, got, `class="error"`)
+	assert.NotContains(t, got, `callout error`)
 
 	got = flat(c.query(url.Values{"mode": {"matrix"}, "subject": {"user:alice"}, "object": {"document:1"}}))
 	assert.Equal(t, 1, strings.Count(got, `hx-post="/explain"`), "editor explains on demand")
 	got = flat(c.get("/entity/group?" + url.Values{"type": {"user"}, "id": {"alice"}, "tab": {"can"}, "group": {"document"}}.Encode()))
 	assert.Contains(t, got, `hx-post="/explain"`, "listed relations explain on demand")
 	got = flat(c.get("/relation?type=document&relation=editor"))
-	assert.Contains(t, got, "explain: on demand")
-	assert.Contains(t, got, "expand: on demand")
+	assert.Contains(t, got, `<span class="badge">on demand</span></dt><dd>explain, expand <span class="mute">not installed`)
 
 	// The backends that replaced the discarded ones are read-only too.
 	_, err := db.ExecContext(ctx, `INSERT INTO melange_tuples VALUES ('user', 'mallory', 'owner', 'document', '1')`)
@@ -299,7 +297,7 @@ func TestStudio_DefaultAndLegacyExposure(t *testing.T) {
 			got += flat(c.on(t).query(url.Values{"mode": {"expand"}, "relation": {"viewer"}, "object": {"document:1"}}))
 			got += flat(c.on(t).get("/entity/group?" + url.Values{"type": {"user"}, "id": {"alice"}, "tab": {"can"}, "group": {"document"}}.Encode()))
 			got += flat(c.on(t).get("/relation?type=document&relation=viewer"))
-			for _, label := range []string{"not exposed", "not installed", "Not listed", "Not answered", `class="error"`, `chip off`} {
+			for _, label := range []string{"not exposed", "not installed", "Not listed", "the exposure leaves it out", `callout error`, `chip off`} {
 				assert.NotContains(t, got, label)
 			}
 			assert.Contains(t, got, `/expand?userset=document%3A1%23editor`)

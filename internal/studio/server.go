@@ -312,12 +312,16 @@ func (s *Server) loadModel(ctx context.Context) (model *migrator.DeployedModel, 
 	case err != nil:
 		return nil, err.Error()
 	case model == nil:
-		return nil, "No model recorded. The database was never migrated, or was migrated before melange recorded deployed models; re-run `melange migrate` to record it. Explain and Expand still work when their functions are installed."
+		return nil, noModelRecorded
 	default:
 		newModelOrder(model).sortRelations(model)
 		return model, ""
 	}
 }
+
+// noModelRecorded is loadModel's reason when the database has no model
+// recorded: an expected state, unlike a failure to read melange_migrations.
+const noModelRecorded = "No model recorded. The database was never migrated, or was migrated before melange recorded deployed models; re-run `melange migrate` to record it. Explain and Expand still work when their functions are installed."
 
 // query runs the Query form's selected mode. Only Explain uses what-if
 // tuples, so the other modes never receive them.
@@ -354,7 +358,7 @@ func (s *Server) explain(w http.ResponseWriter, r *http.Request) {
 	model, unchecked := s.loadModel(r.Context())
 	api := apiOf(model)
 	if u := api.Unavailable(sqlapi.Explain, string(object.Type), relation); u != nil {
-		render(w, r, errorBox(u.Error()))
+		render(w, r, unavailableBox(u))
 		return
 	}
 	if strings.TrimSpace(r.FormValue("whatif")) == "" {
@@ -416,6 +420,22 @@ func (s *Server) explainWithWhatIf(w http.ResponseWriter, r *http.Request, model
 // that fails says why (callFailed).
 func apiOf(model *migrator.DeployedModel) *sqlapi.API {
 	return sqlapi.FromModel(model)
+}
+
+// unavailableBox says why the SQL API does not answer a call: a notice when
+// that is by design (the relation is not exposed, the family is off), an
+// error when something is wrong (the recorded model cannot be read, the
+// function is missing, compiling it on demand failed).
+func unavailableBox(u *sqlapi.Unavailable) templ.Component {
+	if u.ByDesign() {
+		return noticeBox(unavailableTitle(u), u.Error())
+	}
+	return errorBox(u.Error())
+}
+
+// unavailableTitle heads the notice for a call the SQL API does not answer.
+func unavailableTitle(u *sqlapi.Unavailable) string {
+	return "Not available: " + u.Family.Name() + " " + u.Label()
 }
 
 // callFailed words a failed public function call: why the SQL API does not
@@ -515,7 +535,7 @@ func (s *Server) expand(w http.ResponseWriter, r *http.Request) {
 	model, _ := s.loadModel(r.Context())
 	api := apiOf(model)
 	if u := api.Unavailable(sqlapi.Expand, string(object.Type), relation); u != nil {
-		render(w, r, errorBox(u.Error()))
+		render(w, r, unavailableBox(u))
 		return
 	}
 	start := time.Now()

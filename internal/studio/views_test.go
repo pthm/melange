@@ -57,6 +57,7 @@ func hostileReport() *sqlapi.Report {
 	disp.Kind, disp.Type, disp.Relation, disp.Answers = sqlgen.KindDispatcher, "", "", []string{hostile}
 	rel := sqlapi.Relation{
 		Type: hostile, Relation: hostile, Dispatchers: []string{hostile}, Functions: []sqlapi.Function{fn},
+		Examples:     []sqlgen.DispatcherCall{{Dispatcher: "check_permission", Example: hostile, Usage: hostile}},
 		NotInstalled: []sqlgen.NotInstalled{{Kind: sqlgen.KindExplain, Reason: sqlgen.ReasonNotExposed, Detail: hostile}},
 	}
 	return &sqlapi.Report{

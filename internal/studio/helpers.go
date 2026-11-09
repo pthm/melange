@@ -16,6 +16,7 @@ import (
 
 	"github.com/pthm/melange/melange"
 	"github.com/pthm/melange/pkg/migrator"
+	"github.com/pthm/melange/pkg/schema"
 )
 
 func resultClass(r *bool) string {
@@ -262,4 +263,13 @@ func msf(v float64) string {
 	whole, frac, _ := strings.Cut(fmt.Sprintf("%.1f", v), ".")
 	n, _ := strconv.Atoi(whole)
 	return num(n) + "." + frac + " ms"
+}
+
+// relationCount is the number of relations the types define.
+func relationCount(types []schema.TypeDefinition) int {
+	n := 0
+	for _, t := range types {
+		n += len(t.Relations)
+	}
+	return n
 }

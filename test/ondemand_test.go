@@ -332,7 +332,7 @@ func TestStudio_OnDemandMatchesInstalled(t *testing.T) {
 			for _, r := range requests {
 				want := installed[r.label]
 				assert.Equal(t, want, onDemand[r.label], r.label)
-				assert.NotContains(t, want, `class="error"`, r.label)
+				assert.NotContains(t, want, `callout error`, r.label)
 				if strings.HasPrefix(r.label, "what-if") && granted.MatchString(want) {
 					changed++
 				}

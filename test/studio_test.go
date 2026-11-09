@@ -567,7 +567,8 @@ func TestStudio_LimitedRole(t *testing.T) {
 		// which need no grants of their own.
 		sqlPage := c.get("/sql")
 		assert.Contains(t, sqlPage, "check_permission_bulk")
-		assert.Contains(t, sqlPage, "None: every expected function is installed")
+		assert.Contains(t, sqlPage, `id="exposure"`)
+		assert.NotContains(t, sqlPage, `id="drift"`, "every expected function is installed")
 		assert.Contains(t, c.get("/sql?type=organization"), "accessible_organization_member")
 	})
 }

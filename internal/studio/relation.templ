@@ -19,26 +19,8 @@ templ relationPage(d relationData) {
 					<button type="submit" title="Fill in the Model page query form with this relation">Query</button>
 				</form>
 			}
-			if d.Model != nil {
-				<p class="page-meta">
-					Deployed model, migrated { d.Model.MigratedAt.UTC().Format("2 Jan 2006, 15:04 MST") } by melange <code>{ d.Model.MelangeVersion }</code>
-				</p>
-			}
-			if len(d.Unavailable) > 0 {
-				<p class="page-meta">
-					Not answered by the SQL API (exposure recorded by the last migration; hover for why):
-					for _, u := range d.Unavailable {
-						<span class="badge warn" title={ u.Error() }>{ u.Family.Name() }: { u.Label() }</span>
-					}
-				</p>
-			}
-			if len(d.OnDemand) > 0 {
-				<p class="page-meta">
-					Not installed, compiled for each call into pg_temp (the database was migrated with them off):
-					for _, f := range d.OnDemand {
-						<span class="badge">{ f }: on demand</span>
-					}
-				</p>
+			if d.Known {
+				<p class="page-meta">Its definition, what it reads and what reads it, and the SQL generated for it.</p>
 			}
 		}
 		<div>
@@ -49,10 +31,37 @@ templ relationPage(d relationData) {
 					</div>
 				</section>
 			}
+			if len(d.Unavailable) > 0 || len(d.OnDemand) > 0 {
+				<section class="sec">
+					@secHead("SQL API", "") {
+						<p class="help">What the database's public functions answer for this relation, under the exposure the last migration recorded. <a href={ sqlRelationURL(d.Type, d.Relation) }>SQL API</a> has the calls that work.</p>
+					}
+					<div class="sec-body">
+						<dl class="kv api-avail">
+							for _, g := range groupUnavailable(d.Unavailable, unavailableFamily, d.Type+"#"+d.Relation) {
+								<dt><span class="badge">{ g.Label }</span></dt>
+								<dd>
+									{ strings.Join(g.Items, ", ") } <span class="mute">{ familiesSay(g) }</span>
+									@unavailableReasons(g.Reasons)
+								</dd>
+							}
+							if len(d.OnDemand) > 0 {
+								<dt><span class="badge">on demand</span></dt>
+								<dd>{ strings.Join(d.OnDemand, ", ") } <span class="mute">not installed; Studio and the CLI compile them into pg_temp for each call</span></dd>
+							}
+						</dl>
+					</div>
+				</section>
+			}
 			if d.Define != "" {
 				<section class="sec">
 					@secHead("Definition", "") {
-						<p class="help">From the deployed schema.</p>
+						<p class="help">
+							From the deployed schema.
+							if d.Model != nil {
+								Migrated { d.Model.MigratedAt.UTC().Format("2 Jan 2006, 15:04 MST") } by melange <code>{ d.Model.MelangeVersion }</code>.
+							}
+						</p>
 					}
 					<div class="sec-body">
 						@fgaSource(d.Define)

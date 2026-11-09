@@ -10,18 +10,13 @@ import (
 templ sqlAPIPage(d sqlAPIData) {
 	@shell(page{Env: d.Env, Active: "sql", Title: sqlAPITitle(d)}, sqlAPISidebar(d)) {
 		@pageHead("SQL API", nil) {
-			<p class="page-meta">
-				The functions the deployed model installs under the exposure its last migration recorded, with their exact names (long ones are truncated to 63 bytes with a hash), compared with <code>pg_proc</code> in schema <code>{ d.Schema }</code>.
-				<code>melange functions --db</code> prints the same report.
-				<a href="/health">Health</a> runs <code>melange doctor</code>, which compares the local schema file instead.
-			</p>
+			<p class="page-meta">The SQL functions the deployed model installs, how to call them, and whether PostgreSQL has each one.</p>
 			if d.Report != nil {
-				<p class="page-meta">Exposure: <code>{ exposureText(d.Report.Exposure) }</code></p>
 				<div class="stats">
+					@stat(d.Report.Summary.Exposed, "exposed relations", "")
 					@stat(d.Report.Summary.Functions, "functions", "")
 					@stat(d.Report.Summary.Installed, "installed", "ok")
 					@stat(d.driftCount(), "drifted", "warn")
-					@stat(d.Report.Summary.Exposed, "exposed relations", "")
 				</div>
 			}
 		}
@@ -56,20 +51,9 @@ templ sqlAPISidebar(d sqlAPIData) {
 			<li><a href="/sql" { current(d.Type == "" && d.Kind == "")... }>Overview</a></li>
 		</ul>
 	</div>
-	<div class="side-section">
-		<div class="side-title">Kinds</div>
-		<ul class="side-list">
-			<li><a href={ sqlAPIURL(d.Type, "") } { current(d.Type != "" && d.Kind == "")... }>all kinds</a></li>
-			for _, k := range sqlgen.FunctionKinds {
-				if k != sqlgen.KindDispatcher {
-					<li><a href={ sqlAPIURL(d.Type, string(k)) } { current(d.Kind == string(k))... }>{ string(k) }</a></li>
-				}
-			}
-		</ul>
-	</div>
 	if len(d.Types) > 0 {
 		<div class="side-section">
-			<div class="side-title">Types <span class="mute">(exposed of relations)</span></div>
+			<div class="side-title">Types <span class="mute">exposed / all relations</span></div>
 			<ul class="side-list">
 				<li><a href={ sqlAPIURL("", d.Kind) } { current(d.Type == "" && d.Kind != "")... }>all types</a></li>
 				for _, t := range d.Types {
@@ -83,69 +67,44 @@ templ sqlAPISidebar(d sqlAPIData) {
 			</ul>
 		</div>
 	}
+	<div class="side-section">
+		<div class="side-title">Function kinds</div>
+		<ul class="side-list">
+			<li><a href={ sqlAPIURL(d.Type, "") } { current(d.Type != "" && d.Kind == "")... }>all kinds</a></li>
+			for _, k := range sqlgen.FunctionKinds {
+				if k != sqlgen.KindDispatcher {
+					<li><a href={ sqlAPIURL(d.Type, string(k)) } { current(d.Kind == string(k))... }>{ kindTitle(k) }</a></li>
+				}
+			}
+		</ul>
+	</div>
 }
 
-// sqlAPIOverview is what drifted, the dispatchers, and the name collisions.
+// sqlAPIOverview is the entry points an application calls, what drifted, and
+// the name collisions.
 templ sqlAPIOverview(d sqlAPIData) {
 	{{ r := d.Report }}
+	{{ public, internal := splitDispatchers(r.Dispatchers) }}
 	<div class="stack">
-		<section class="sec" id="drift">
-			@secHead("Drift", num(d.driftCount())) {
-				<p class="help">Expected functions that are missing, installed with other arguments or another body, or that have stale overloads, and orphans the last migration recorded. Each says how to fix it.</p>
+		<section class="sec" id="exposure">
+			@secHead("Exposure", "") {
+				<p class="help">
+					What the last migration installed, from the <code>sql:</code> section of its configuration, checked against <code>pg_proc</code> in schema <code>{ d.Schema }</code>.
+					<code>melange functions --db</code> prints the same report.
+				</p>
 			}
-			<div class="sec-body stack">
-				if len(d.Drifted) == 0 && len(r.Orphans) == 0 {
-					<p class="mute">None: every expected function is installed as this melange generates it.</p>
-				} else {
-					<ul class="rows">
-						for _, f := range d.Drifted {
-							<li class="check">
-								@statusBadgeOf(f.Status)
-								<div>
-									<code>{ f.Name }</code>
-									<span class="mute">· { kindLabel(f.CatalogFunction) }</span>
-									if f.Type != "" {
-										<a href={ sqlRelationURL(f.Type, f.Relation) }><code>{ f.Type }#{ f.Relation }</code></a>
-									}
-									if f.Detail != "" {
-										<div class="detail mute">{ f.Detail }</div>
-									}
-									if len(f.StaleOverloads) > 0 {
-										<div class="detail mute">Stale overloads: <code>{ strings.Join(f.StaleOverloads, "; ") }</code></div>
-									}
-								</div>
-							</li>
-						}
-						for _, o := range r.Orphans {
-							<li class="check">
-								<span class="badge warn">orphan</span>
-								<div>
-									<code>{ o.Name }({ o.Arguments })</code>
-									if r.CodegenAhead {
-										<span class="mute">· recorded by the last migration, run by a newer melange; this melange does not generate it</span>
-									} else {
-										<span class="mute">· recorded by the last migration, no longer generated</span>
-									}
-								</div>
-							</li>
-						}
-					</ul>
-				}
-				if len(r.Unmanaged) > 0 {
-					<details class="disclose">
-						<summary>{ plural(len(r.Unmanaged), "unmanaged function") } <span class="mute">named like generated ones, recorded by no migration; migrate never drops them</span></summary>
-						<ul class="rows">
-							for _, u := range r.Unmanaged {
-								<li><code>{ u.Name }({ u.Arguments })</code></li>
-							}
-						</ul>
-					</details>
-				}
-				for _, n := range r.Notes {
-					<p class="mute">{ n }</p>
-				}
+			<div class="sec-body">
+				<dl class="kv">
+					for _, row := range exposureRows(r.Exposure) {
+						<dt>{ row.Label }</dt>
+						<dd>{ row.Value }</dd>
+					}
+				</dl>
 			</div>
 		</section>
+		if d.hasDrift() {
+			@sqlAPIDrift(d)
+		}
 		if len(r.Collisions) > 0 {
 			<section class="sec" id="collisions">
 				@secHead("Name collisions", num(len(r.Collisions))) {
@@ -161,16 +120,93 @@ templ sqlAPIOverview(d sqlAPIData) {
 			</section>
 		}
 		<section class="sec" id="dispatchers">
-			@secHead("Dispatchers", num(len(r.Dispatchers))) {
-				<p class="help">The entry points that take the type and relation as arguments, and the internal ones generated functions call. Pick a type or a kind for the per-relation functions.</p>
+			@secHead("Entry points", num(len(public))) {
+				<p class="help">
+					What an application calls. Each takes the object type and relation as arguments and routes to the relation's own function.
+					Pick a type in the sidebar for ready-to-run calls of each relation.
+				</p>
 			}
-			<div class="sec-body stack">
-				for _, f := range r.Dispatchers {
-					@sqlFunction(f, len(f.Answers))
+			<div class="sec-body">
+				<ul class="api-fns">
+					for _, f := range public {
+						@sqlFunction(f, dispatcherPurpose(f.Name), len(f.Answers))
+					}
+				</ul>
+				if len(internal) > 0 {
+					<details class="disclose api-more">
+						<summary>{ plural(len(internal), "internal dispatcher") } <span class="mute">called by the generated functions, not by applications</span></summary>
+						<ul class="api-fns">
+							for _, f := range internal {
+								@sqlFunction(f, dispatcherPurpose(f.Name), len(f.Answers))
+							}
+						</ul>
+					</details>
 				}
 			</div>
 		</section>
 	</div>
+}
+
+// sqlAPIDrift is the expected functions that are missing or differ, the
+// orphans, and the unmanaged functions.
+templ sqlAPIDrift(d sqlAPIData) {
+	{{ r := d.Report }}
+	<section class="sec" id="drift">
+		@secHead("Drift", num(d.driftCount())) {
+			<p class="help">Functions the database is missing or has in another form, and functions the last migration recorded that this melange no longer generates. Each says how to fix it.</p>
+		}
+		<div class="sec-body stack">
+			if len(d.Drifted) > 0 || len(r.Orphans) > 0 {
+				<ul class="rows">
+					for _, f := range d.Drifted {
+						<li class="check">
+							@statusBadgeOf(f.Status)
+							<div>
+								<code>{ f.Name }</code>
+								<span class="mute">· { kindLabel(f.CatalogFunction) }</span>
+								if f.Type != "" {
+									<a href={ sqlRelationURL(f.Type, f.Relation) }><code>{ f.Type }#{ f.Relation }</code></a>
+								}
+								if f.Detail != "" {
+									<div class="detail mute">{ f.Detail }</div>
+								}
+								if len(f.StaleOverloads) > 0 {
+									<div class="detail mute">Stale overloads: <code>{ strings.Join(f.StaleOverloads, "; ") }</code></div>
+								}
+							</div>
+						</li>
+					}
+					for _, o := range r.Orphans {
+						<li class="check">
+							<span class="badge warn">orphan</span>
+							<div>
+								<code>{ o.Name }({ o.Arguments })</code>
+								if r.CodegenAhead {
+									<span class="mute">· recorded by the last migration, run by a newer melange; this melange does not generate it</span>
+								} else {
+									<span class="mute">· recorded by the last migration, no longer generated</span>
+								}
+							</div>
+						</li>
+					}
+				</ul>
+			}
+			if len(r.Unmanaged) > 0 {
+				<div>
+					<h3 class="sub-title">{ plural(len(r.Unmanaged), "unmanaged function") }</h3>
+					<p class="help">Named like generated functions, but recorded by no migration. <code>melange migrate</code> never drops them.</p>
+					<ul class="rows">
+						for _, u := range r.Unmanaged {
+							<li class="row-pad"><code>{ u.Name }({ u.Arguments })</code></li>
+						}
+					</ul>
+				</div>
+			}
+			for _, n := range r.Notes {
+				<p class="mute">{ n }</p>
+			}
+		</div>
+	</section>
 }
 
 // sqlAPIRelations lists the selected relations, exposed ones first and the
@@ -178,7 +214,11 @@ templ sqlAPIOverview(d sqlAPIData) {
 templ sqlAPIRelations(d sqlAPIData) {
 	<section class="sec">
 		@secHead("Exposed relations", num(len(d.Exposed))) {
-			<p class="help">The public dispatchers answer for these.</p>
+			if d.Kind == "" {
+				<p class="help">How to call each relation from SQL, then the generated functions behind the calls.</p>
+			} else {
+				<p class="help">The { kindTitle(sqlgen.FunctionKind(d.Kind)) } function of each relation.</p>
+			}
 		}
 		@filterBar(templ.Attributes{"placeholder": "Filter relations and functions", "data-filter": "#sql-rels"})
 		<div class="sec-body stack" id="sql-rels">
@@ -186,50 +226,94 @@ templ sqlAPIRelations(d sqlAPIData) {
 				<p class="mute">None.</p>
 			}
 			for _, rel := range d.Exposed {
-				@sqlRelation(rel)
-			}
-			if len(d.Internal) > 0 {
-				<details class="disclose" data-group>
-					<summary>{ plural(len(d.Internal), "internal relation") } <span class="mute">not exposed (modelling only): installed when an exposed relation resolves through them; the public dispatchers raise M2003 for them, except expand_permission for the installed ones</span></summary>
-					<div class="stack">
-						for _, rel := range d.Internal {
-							@sqlRelation(rel)
-						}
-					</div>
-				</details>
+				@sqlRelation(rel, d.Kind != "")
 			}
 		</div>
-		<p class="mute" data-empty-filter="#sql-rels" hidden>No matches.</p>
+		<p class="mute sec-body" data-empty-filter="#sql-rels" hidden>No matches.</p>
 	</section>
+	if len(d.Internal) > 0 {
+		<section class="sec">
+			@secHead("Internal relations", num(len(d.Internal))) {
+				<p class="help">Relations the exposure leaves out. Their functions are installed only when an exposed relation reads them, and the entry points raise M2003 for them.</p>
+			}
+			@filterBar(templ.Attributes{"placeholder": "Filter internal relations", "data-filter": "#sql-internal"})
+			<div class="sec-body stack" id="sql-internal">
+				for _, rel := range d.Internal {
+					@sqlRelation(rel, d.Kind != "")
+				}
+			</div>
+			<p class="mute sec-body" data-empty-filter="#sql-internal" hidden>No matches.</p>
+		</section>
+	}
 }
 
-templ sqlRelation(rel sqlapi.Relation) {
-	<div class="sql-rel" id={ relAnchor(rel.Type, rel.Relation) } data-item data-text={ sqlRelationText(rel) }>
-		<p>
-			<a href={ relationURL(rel.Type, rel.Relation) }><code>{ rel.Type }#{ rel.Relation }</code></a>
+// sqlRelation is one relation: how to call it, then its generated
+// functions. byKind lists the functions open, as a kind's page selects them.
+templ sqlRelation(rel sqlapi.Relation, byKind bool) {
+	<article class="sql-rel" id={ relAnchor(rel.Type, rel.Relation) } data-item data-text={ sqlRelationText(rel) }>
+		<header>
+			<a class="sql-rel-name" href={ relationURL(rel.Type, rel.Relation) }><code>{ rel.Type }#{ rel.Relation }</code></a>
 			if rel.Exposed {
 				<span class="badge ok">exposed</span>
 			} else {
 				<span class="badge">internal</span>
+				<span class="mute">{ internalNote(rel) }</span>
 			}
-			if len(rel.Dispatchers) > 0 {
-				<span class="mute">answered by { strings.Join(rel.Dispatchers, ", ") }</span>
+		</header>
+		if byKind {
+			<ul class="api-fns">
+				for _, f := range rel.Functions {
+					@sqlFunction(f, "", -1)
+				}
+			</ul>
+			@notInstalledList(rel.NotInstalled)
+		} else {
+			if calls := relationCalls(rel); len(calls) > 0 {
+				<table class="api-calls">
+					<tbody>
+						for _, c := range calls {
+							<tr>
+								<th scope="row">{ c.Label }</th>
+								if c.Off != "" {
+									<td class="mute" colspan="2">{ c.Off }</td>
+								} else {
+									<td>
+										@sqlInline(c.SQL)
+										if c.Note != "" {
+											<div class="mute api-note">{ c.Note }</div>
+										}
+									</td>
+									<td class="nowrap"><button type="button" class="copy" data-copy={ c.SQL }>Copy</button></td>
+								}
+							</tr>
+						}
+					</tbody>
+				</table>
 			}
-		</p>
-		for _, f := range rel.Functions {
-			@sqlFunction(f, -1)
+			if len(rel.Functions) > 0 {
+				<div class="api-gen">
+					<h3 class="sub-title">Generated functions <span class="mute">{ num(len(rel.Functions)) } { functionsDrift(rel.Functions) }</span></h3>
+					<ul class="api-fns">
+						for _, f := range rel.Functions {
+							@sqlFunction(f, "", -1)
+						}
+					</ul>
+					@notInstalledList(skipCalled(rel.NotInstalled, rel.Exposed))
+				</div>
+			} else {
+				@notInstalledList(skipCalled(rel.NotInstalled, rel.Exposed))
+			}
 		}
-		@notInstalledList(rel.NotInstalled)
-	</div>
+	</article>
 }
 
 // notInstalledList says why each function family a relation could have is
 // not installed; nothing when every one is.
 templ notInstalledList(ns []sqlgen.NotInstalled) {
 	if len(ns) > 0 {
-		<ul class="rows mute">
+		<ul class="rows mute api-off">
 			for _, n := range ns {
-				<li><code>{ string(n.Kind) }</code> not installed, { reasonLabel(n.Reason) }: { n.Detail }</li>
+				<li>{ kindTitle(n.Kind) }: not installed, { reasonLabel(n.Reason) }. { n.Detail }</li>
 			}
 		</ul>
 	}
@@ -244,64 +328,90 @@ func sqlRelationText(rel sqlapi.Relation) string {
 	return strings.Join(parts, " ")
 }
 
-// sqlFunction is one function, folded to its name, kind and status.
-// answers is a dispatcher's relation count, or -1.
-templ sqlFunction(f sqlapi.Function, answers int) {
-	<details class="disclose">
-		<summary>
-			<code>{ f.Name }</code>
-			@statusBadgeOf(f.Status)
-			<span class="mute">· { kindLabel(f.CatalogFunction) } · { visibility(f.Public) }</span>
-			if f.Truncated {
-				<span class="badge" title="Truncated to 63 bytes with a hash of the type and relation">truncated</span>
-			}
-			if answers >= 0 {
-				<span class="mute">· answers for { plural(answers, "relation") }</span>
-			}
-		</summary>
-		<dl class="kv">
-			<dt>signature</dt>
-			<dd>
-				<code>{ f.Name }{ f.Signature.String() }</code>
-				<span class="mute">LANGUAGE { f.Signature.Language }</span>
-				if f.Signature.Paged {
-					<span class="mute">· paged</span>
+// sqlFunction is one function, folded to its name and what it is. purpose
+// is a dispatcher's one-line description, answers its relation count, or
+// -1 for a relation's function.
+templ sqlFunction(f sqlapi.Function, purpose string, answers int) {
+	<li>
+		<details class="api-fn">
+			<summary>
+				<code class="api-fn-name">{ f.Name }</code>
+				if purpose != "" {
+					<span>{ purpose }</span>
+				} else {
+					<span class="mute">{ kindLabel(f.CatalogFunction) }</span>
 				}
-			</dd>
-			if f.Link != "" {
-				<dt>link</dt>
-				<dd><code>{ f.Link }</code> → <code>{ f.ParentType }</code>, reads <code>{ strings.Join(f.ParentRelations, ", ") }</code></dd>
-			}
-			if f.Example != "" {
-				<dt>example</dt>
-				<dd class="copyable"><code>{ f.Example }</code> <button type="button" class="copy" data-copy={ f.Example }>Copy</button></dd>
-			}
-			if f.Usage != "" {
-				<dt>usage</dt>
-				<dd class="copyable"><code>{ f.Usage }</code> <button type="button" class="copy" data-copy={ f.Usage }>Copy</button></dd>
-			}
-			if len(f.Calls) > 0 {
-				<dt>may call</dt>
-				<dd><code>{ strings.Join(f.Calls, ", ") }</code></dd>
-			}
-			if f.RenderedWith != "" {
-				<dt>created with</dt>
-				<dd><code>{ f.RenderedWith }</code></dd>
-			}
-			if f.Note != "" {
-				<dt>note</dt>
-				<dd>{ f.Note }</dd>
-			}
-			if f.Detail != "" {
-				<dt>status</dt>
-				<dd>{ f.Detail }</dd>
-			}
-			if len(f.StaleOverloads) > 0 {
-				<dt>stale overloads</dt>
-				<dd><code>{ strings.Join(f.StaleOverloads, "; ") }</code></dd>
-			}
-		</dl>
-	</details>
+				<span class="api-fn-tags">
+					if answers >= 0 {
+						<span class="mute">{ plural(answers, "relation") }</span>
+					} else if f.Public {
+						<span class="badge accent">public</span>
+					}
+					if f.Truncated {
+						<span class="badge" title="Truncated to 63 bytes with a hash of the type and relation">truncated</span>
+					}
+					if drifted(f) {
+						@statusBadgeOf(f.Status)
+					}
+				</span>
+			</summary>
+			<div class="api-fn-body">
+				if f.Detail != "" {
+					<p class="api-status">{ f.Detail }</p>
+				}
+				if f.Example != "" {
+					@copyCode("Example", f.Example)
+				}
+				if f.Usage != "" {
+					@copyCode("In a query", f.Usage)
+				}
+				if f.Note != "" {
+					<p class="mute">{ f.Note }</p>
+				}
+				<div>
+					<div class="api-label">Signature <span class="mute">LANGUAGE { f.Signature.Language }{ pagedLabel(f.Signature) }</span></div>
+					@sqlSource(signatureSQL(f.Name, f.Signature))
+				</div>
+				<dl class="kv">
+					if !f.Public && answers < 0 {
+						<dt>visibility</dt>
+						<dd class="mute">internal: an entry point routes here, and its signature may change between versions</dd>
+					}
+					if f.Link != "" {
+						<dt>link</dt>
+						<dd>returns <code>{ f.ParentType }</code> ids through <code>{ f.Link }</code>, reads <code>{ strings.Join(f.ParentRelations, ", ") }</code></dd>
+					}
+					if len(f.Calls) > 0 {
+						<dt>may call</dt>
+						<dd class="inline-gap">
+							for _, c := range f.Calls {
+								<code class="chip-code">{ c }</code>
+							}
+						</dd>
+					}
+					if f.RenderedWith != "" {
+						<dt>created with</dt>
+						<dd><code>{ f.RenderedWith }</code></dd>
+					}
+					if len(f.StaleOverloads) > 0 {
+						<dt>stale overloads</dt>
+						<dd><code>{ strings.Join(f.StaleOverloads, "; ") }</code></dd>
+					}
+				</dl>
+			</div>
+		</details>
+	</li>
+}
+
+// copyCode is a labelled SQL snippet with a copy button.
+templ copyCode(label, src string) {
+	<div>
+		<div class="api-label">
+			{ label }
+			<button type="button" class="copy" data-copy={ src }>Copy</button>
+		</div>
+		@sqlSource(src)
+	</div>
 }
 
 templ statusBadgeOf(st sqlapi.Status) {

@@ -292,3 +292,81 @@ func dependsOnHelp(edges []relEdge) string {
 	}
 	return "Relations this one reads."
 }
+
+// unavailableGroup is what is unavailable for one reason (one Label): the
+// function families of a relation, or the relations of a list, and why, in
+// one line each, worded for the whole group.
+type unavailableGroup struct {
+	Label   string
+	Items   []string
+	Reasons []string
+}
+
+// exposeReason is a not-exposed group's one line, for every item in it.
+// what names the relations to expose: "them" for a list of relations, or
+// the relation itself when the items are its function families.
+func exposeReason(what string) string {
+	return "The exposure the last migration recorded leaves " + what + " out. To expose " + what +
+		", sql.relations.include in melange.yaml must match (an empty include matches every relation) and sql.relations.exclude must not; then run melange migrate."
+}
+
+// groupUnavailable groups us by label, in first-seen order, naming each by
+// item, so a page shows one line per reason instead of a badge per item.
+// A group's reasons drop the relation's name, so relations skipped for the
+// same reason share one line.
+//
+// exposeWhat names the relations a not-exposed group's line tells the user
+// to expose (see exposeReason).
+func groupUnavailable(us []*sqlapi.Unavailable, item func(*sqlapi.Unavailable) string, exposeWhat string) []unavailableGroup {
+	var out []unavailableGroup
+	for _, u := range us {
+		i := slices.IndexFunc(out, func(g unavailableGroup) bool { return g.Label == u.Label() })
+		if i < 0 {
+			out = append(out, unavailableGroup{Label: u.Label()})
+			i = len(out) - 1
+		}
+		g := &out[i]
+		g.Items = append(g.Items, item(u))
+		reason := exposeReason(exposeWhat)
+		if u.Label() != "not exposed" {
+			family := *u
+			family.ObjectType, family.Relation = "", ""
+			reason = sentence(family.Error())
+		}
+		if !slices.Contains(g.Reasons, reason) {
+			g.Reasons = append(g.Reasons, reason)
+		}
+	}
+	return out
+}
+
+// sentence capitalizes s and ends it with a period.
+func sentence(s string) string {
+	if s == "" {
+		return s
+	}
+	s = strings.ToUpper(s[:1]) + s[1:]
+	if !strings.HasSuffix(s, ".") {
+		s += "."
+	}
+	return s
+}
+
+func unavailableFamily(u *sqlapi.Unavailable) string   { return u.Family.Name() }
+func unavailableRelation(u *sqlapi.Unavailable) string { return u.Relation }
+
+// familiesSay is what the header says of a group's families.
+func familiesSay(g unavailableGroup) string {
+	one := len(g.Items) == 1
+	if g.Label == "not exposed" {
+		verb := "raise"
+		if one {
+			verb = "raises"
+		}
+		return verb + " " + sqlgen.NotExposedErrCode + " for this relation: the exposure leaves it out"
+	}
+	if one {
+		return "does not answer for this relation"
+	}
+	return "do not answer for this relation"
+}

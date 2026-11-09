@@ -301,6 +301,14 @@ func (u *Unavailable) Label() string {
 	}
 }
 
+// ByDesign reports whether the function does not answer because of how the
+// database was migrated: the relation is not exposed, or its family is off.
+// Anything else (an unreadable or invalid recorded model, a codegen skew, a
+// failed on-demand compile, a missing function) is a fault to fix.
+func (u *Unavailable) ByDesign() bool {
+	return u.kind == notExposed || u.kind == notInstalled || u.kind == raised
+}
+
 func (u *Unavailable) Error() string {
 	rel := u.ObjectType + "#" + u.Relation
 	// --include-relation replaces sql.relations.include, so on its own it

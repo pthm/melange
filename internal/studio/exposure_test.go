@@ -95,7 +95,7 @@ func TestAccessGroupSkipsUnexposedRelations(t *testing.T) {
 	}
 
 	got := renderHTML(t, accessList(g, len(g.Entities), g.Entities, nil, entityRef{Type: "user", ID: "1"}, true, listPage{First: true}))
-	for _, want := range []string{"Not listed:", "<code>viewer</code>", "not exposed", `hx-post="/explain"`} {
+	for _, want := range []string{"Not listed (not exposed):", "<code>viewer</code>", "not exposed", `hx-post="/explain"`} {
 		if !strings.Contains(got, want) {
 			t.Errorf("access list missing %q:\n%s", want, got)
 		}

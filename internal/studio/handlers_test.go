@@ -66,7 +66,7 @@ func TestRequestValidationNeedsNoDatabase(t *testing.T) {
 			if got := html.UnescapeString(w.Body.String()); w.Code != http.StatusOK || !strings.Contains(got, c.want) {
 				t.Fatalf("%d %q; want 200 containing %q", w.Code, got, c.want)
 			}
-			if !strings.Contains(w.Body.String(), `class="error"`) {
+			if !strings.Contains(w.Body.String(), `class="callout error"`) {
 				t.Errorf("validation errors render in errorBox; got %q", w.Body.String())
 			}
 		})

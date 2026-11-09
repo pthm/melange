@@ -165,15 +165,6 @@ templ accessList(g typeGroup, matched int, rows []entityGroup, ls labels, self e
 		for _, e := range g.Errs {
 			@errorBox(e)
 		}
-		if len(g.Skipped) > 0 {
-			<p class="mute">
-				Not listed:
-				for _, u := range g.Skipped {
-					<code>{ u.Relation }</code>
-					@unavailable(u)
-				}
-			</p>
-		}
 		if matched == 0 {
 			if len(g.Entities) == 0 {
 				<p class="mute">None.</p>
@@ -193,6 +184,9 @@ templ accessList(g typeGroup, matched int, rows []entityGroup, ls labels, self e
 			<ul class="access-rows">
 				@accessRows(g, rows, ls, self, selfIsSubject, p)
 			</ul>
+		}
+		if len(g.Skipped) > 0 {
+			@skippedRelations(g.Skipped)
 		}
 	} else {
 		@accessRows(g, rows, ls, self, selfIsSubject, p)

@@ -92,13 +92,14 @@ type Report struct {
 
 // Relation is a relation of the model and its functions.
 type Relation struct {
-	Type         string                `json:"type"`
-	Relation     string                `json:"relation"`
-	Exposed      bool                  `json:"exposed"`
-	Dispatchers  []string              `json:"dispatchers"`
-	DependsOn    []string              `json:"depends_on,omitempty"`
-	Functions    []Function            `json:"functions"`
-	NotInstalled []sqlgen.NotInstalled `json:"not_installed,omitempty"`
+	Type         string                  `json:"type"`
+	Relation     string                  `json:"relation"`
+	Exposed      bool                    `json:"exposed"`
+	Dispatchers  []string                `json:"dispatchers"`
+	Examples     []sqlgen.DispatcherCall `json:"examples,omitempty"`
+	DependsOn    []string                `json:"depends_on,omitempty"`
+	Functions    []Function              `json:"functions"`
+	NotInstalled []sqlgen.NotInstalled   `json:"not_installed,omitempty"`
 }
 
 // MarshalJSON writes the relations and dispatchers as arrays, [] when
@@ -180,7 +181,7 @@ func Describe(types []schema.TypeDefinition, exposure sqlgen.Exposure, databaseS
 	}
 	for _, cr := range cat.Relations {
 		rel := Relation{
-			Type: cr.Type, Relation: cr.Relation, Exposed: cr.Exposed, Dispatchers: cr.Dispatchers,
+			Type: cr.Type, Relation: cr.Relation, Exposed: cr.Exposed, Dispatchers: cr.Dispatchers, Examples: cr.Examples,
 			DependsOn: cr.DependsOn, NotInstalled: cr.NotInstalled,
 		}
 		for _, f := range cr.Functions {
