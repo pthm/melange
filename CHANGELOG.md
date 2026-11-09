@@ -1,5 +1,63 @@
 # Changelog
 
+## [0.11.0](https://github.com/pthm/melange/compare/v0.10.3...v0.11.0) (2026-11-09)
+
+
+### Features
+
+* add melange functions and a Studio SQL API page ([83be4d5](https://github.com/pthm/melange/commit/83be4d532c1485949fbfa6a32cca6f20030a6163))
+* **cli:** configure the exposed SQL API in melange.yaml and flags ([4af43e2](https://github.com/pthm/melange/commit/4af43e2aa00e7e855df8dbeed73df27349c59fc7))
+* **clientgen:** check a generated client against config and database ([b97d191](https://github.com/pthm/melange/commit/b97d191e5bd51cc83201c5cf43dab27c8d46d9b6))
+* **clientgen:** follow the exposure and emit exact accessible function names ([6ad7c01](https://github.com/pthm/melange/commit/6ad7c01d52b30c7d3951167ec34e1e549ffddc30))
+* generate explain and expand on demand when they are not installed ([babab8c](https://github.com/pthm/melange/commit/babab8c1b4968560aadf6a433589963b52a5ec65))
+* map not-exposed errors and skip unexposed relations in tools ([ed39873](https://github.com/pthm/melange/commit/ed398739097e610bb286eba76f0e4ad91e0775c5))
+* **migrator:** predict what an unforced migrate would do ([ee149be](https://github.com/pthm/melange/commit/ee149be2b635019a9be8b033bade3135a770be1f))
+* **migrator:** record the exposure, refuse unsafe drops and follow it in doctor and status ([7aa518b](https://github.com/pthm/melange/commit/7aa518bf7ecd8c06a351db06971b916a0899661d))
+* **schema:** accept parent relation cycles across types ([638df87](https://github.com/pthm/melange/commit/638df8761564ec3ed9b4d0ed7d5621bda04c9678))
+* **sqlgen:** fold accessiblesk_* into accessible_* and add accessible_objects ([83f89ed](https://github.com/pthm/melange/commit/83f89ed74642c905e9e048b43a70397ef8bb0359))
+* **sqlgen:** generate inlinable accessible_* functions for list_objects ([7d765a2](https://github.com/pthm/melange/commit/7d765a27ea41d682ec6f0dcb4e7a0d3306c820b9))
+* **sqlgen:** generate only the exposed SQL API and what it depends on ([25bfe00](https://github.com/pthm/melange/commit/25bfe006e812a1424daee75b54a62292c62428a6))
+* **sqlgen:** generate parent-key accessible functions ([cc71ac8](https://github.com/pthm/melange/commit/cc71ac85854e208f8f7c7d2ca970df2802c17be0))
+* **studio:** lead the SQL API page with calls and ease reading ([b196c77](https://github.com/pthm/melange/commit/b196c77ad8973d3b7977f685ba8c2749d8d8c9ce))
+
+
+### Bug Fixes
+
+* **checker:** see contextual tuples on a session reused after plain calls ([c0fd9db](https://github.com/pthm/melange/commit/c0fd9db4943f4f42dcd8536016c158ca15b0979a))
+* **doctor:** suggest a migrate command that fixes the database ([08f89f0](https://github.com/pthm/melange/commit/08f89f09b8cce451cea8609231f535c46d079ecd))
+* **doctor:** suggest a per-call expand leaf cap, not a session setting ([3618e69](https://github.com/pthm/melange/commit/3618e693fb8ddc892e5b0513cecf87b6d5591ae4))
+* **migrator:** refuse exposure changes on unrecorded migrations ([bae1fa5](https://github.com/pthm/melange/commit/bae1fa5cb08a92d6f06fa92605574d6221a35214))
+* **sqlapi:** tell an unreadable recorded model from a missing one ([97e0a07](https://github.com/pthm/melange/commit/97e0a07ec21b7eda362feddbf9b324f43fd17c08))
+* **sqlgen:** check userset subjects against constrained grants ([309070c](https://github.com/pthm/melange/commit/309070c9eed55a87c04c5652a259883f6ccccb4d))
+* **sqlgen:** count check resolution steps like OpenFGA and allow 25 hops ([d24b560](https://github.com/pthm/melange/commit/d24b5603b3ca44ab4efbf25346a90ed7e3dd86c0))
+* **sqlgen:** count the last userset or cross-type step in list depth ([7f210ed](https://github.com/pthm/melange/commit/7f210edfec3cc976517939cfe12b80dafd72a829))
+* **sqlgen:** raise M2002 for deep nested groups instead of truncating lists ([975569b](https://github.com/pthm/melange/commit/975569b8822850fd91d5342b96ae052b8e796469))
+* **sqlgen:** reference only the parent types of intersection TTU parts ([5666ff9](https://github.com/pthm/melange/commit/5666ff9104a09f24e98659659fde5d254ae42ccf))
+* **sqlgen:** resolve the linking types of excluded intersection parts ([ea43c40](https://github.com/pthm/melange/commit/ea43c40208e38385bba93603e2eeb35ea15e9a94))
+* **sqlgen:** stop userset-filter list_subjects recursing forever on parent cycles ([7e09fd0](https://github.com/pthm/melange/commit/7e09fd0bb663d68bc61f2b796f1d77957ea6cbc8))
+
+
+### Performance
+
+* call check functions directly and make Studio easier to read ([925e7d6](https://github.com/pthm/melange/commit/925e7d6aa6e0606de2c1f9e840cef7889fd0d863))
+* **sqlgen:** anchor intersection list_subjects without the pool ([b6457a0](https://github.com/pthm/melange/commit/b6457a0aa9b2ea136b73074e9b8c362c50c050da))
+* **sqlgen:** bound the userset-filter checked fallback to reachable grants ([da9caba](https://github.com/pthm/melange/commit/da9caba2f33843fcb10a99d18cd8e7ff6b7c91db))
+* **sqlgen:** call specialized check functions directly ([54ec6ba](https://github.com/pthm/melange/commit/54ec6ba4dd281f750f4b366421cc8905de8481ad))
+* **sqlgen:** fold userset arms of composed lists at plan time ([95b965b](https://github.com/pthm/melange/commit/95b965b1df66529277506a18d0de7630fc6cfd4c))
+* **sqlgen:** keep list_objects plans cached for plain subjects ([43f4da7](https://github.com/pthm/melange/commit/43f4da70b5c3646e3b75ca2b4ebb30f9bc7069e2))
+* **sqlgen:** look up complex userset grants by member userset ID ([86d86b4](https://github.com/pthm/melange/commit/86d86b430a9bc677aae9e25be978543912b6030a))
+* **sqlgen:** page TTU compositions a parent at a time ([e853fa4](https://github.com/pthm/melange/commit/e853fa44542f186b103831c13089d84aa60a0b8d))
+* **sqlgen:** paginate list_objects as a top-k query ([b7e8d7a](https://github.com/pthm/melange/commit/b7e8d7a5bf283e6260bfde2b7ad6df142ede15d2))
+* **sqlgen:** plan generated functions once per session, without JIT ([02ea65f](https://github.com/pthm/melange/commit/02ea65ff2f08c3ad6a3da099d25c2edf37acf7c6))
+* **sqlgen:** plan parent-key functions once and estimate them small ([5931fa8](https://github.com/pthm/melange/commit/5931fa8d04957db5bf2768d65135d94bf30dbe85))
+* **sqlgen:** walk recursive list_objects breadth first and raise M2002 ([a5e8b60](https://github.com/pthm/melange/commit/a5e8b6081637da494648973f266ac1d2bb42b432))
+* **sqlgen:** walk recursive list_subjects breadth first and raise M2002 ([337fa6e](https://github.com/pthm/melange/commit/337fa6ec730a2bce5c001f201422661cc7c83b01))
+
+
+### Miscellaneous
+
+* drop a test recipe that runs nothing and stale lib/sqlgen paths ([2c9d43a](https://github.com/pthm/melange/commit/2c9d43af4ce4036a83bf844c8c178c70cd38ba65))
+
 ## [0.10.3](https://github.com/pthm/melange/compare/v0.10.2...v0.10.3) (2026-11-06)
 
 
