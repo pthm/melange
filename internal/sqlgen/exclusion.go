@@ -36,7 +36,7 @@ type ExclusionConfig struct {
 	// SimpleExcludedRelations can use direct tuple lookups (NOT EXISTS).
 	SimpleExcludedRelations []string
 
-	// ComplexExcludedRelations need check_permission_internal calls.
+	// ComplexExcludedRelations need a call to the excluded relation's check.
 	ComplexExcludedRelations []string
 
 	// ExcludedParentRelations represent TTU exclusions (e.g., "but not viewer from parent").
@@ -46,13 +46,17 @@ type ExclusionConfig struct {
 	ExcludedIntersection []ExcludedIntersectionGroup
 
 	// Compose, when set, lets complex exclusions replace the per-candidate
-	// check_permission_internal(...) = 0 with a set-oriented anti-join against
+	// check (... = 0) with a set-oriented anti-join against
 	// the excluded relation's list_objects function. It is only valid in a
 	// list_objects context — ObjectIDExpr must be the per-row candidate column
 	// and the subject exprs query-constant params — so only the list_objects
 	// plan builder sets it; check and list_subjects contexts leave it nil and
 	// keep the per-candidate check.
 	Compose *exclusionCompose
+
+	// Graph routes the exclusion's checks to specialized functions (see
+	// CheckPermission). Nil keeps them on the internal dispatcher.
+	Graph *relationGraph
 }
 
 // exclusionCompose carries the compile-time context the anti-join needs: the
@@ -104,6 +108,7 @@ func (c ExclusionConfig) checkPermission(relation string, obj ObjectRef, expectA
 		Relation:    relation,
 		Object:      obj,
 		ExpectAllow: expectAllow,
+		Graph:       c.Graph,
 	}
 }
 
@@ -112,13 +117,15 @@ func (c ExclusionConfig) ttuLinkQuery(rel ExcludedParentRelation) *TupleQuery {
 		Type: Col{Table: "link", Column: "subject_type"},
 		ID:   Col{Table: "link", Column: "subject_id"},
 	}
+	check := c.checkPermission(rel.Relation, linkedObject, true)
+	check.FilteredType = singleType(rel.AllowedLinkingTypes)
 	q := Tuples(c.DatabaseSchema, "link").
 		ObjectType(c.ObjectType).
 		Relations(rel.LinkingRelation).
 		Select("1").
 		Where(
 			Eq{Left: Col{Table: "link", Column: "object_id"}, Right: c.ObjectIDExpr},
-			c.checkPermission(rel.Relation, linkedObject, true),
+			check,
 		)
 	if len(rel.AllowedLinkingTypes) > 0 {
 		q.WhereSubjectTypeIn(rel.AllowedLinkingTypes...)
@@ -129,7 +136,7 @@ func (c ExclusionConfig) ttuLinkQuery(rel ExcludedParentRelation) *TupleQuery {
 // BuildPredicates converts exclusion rules into SQL predicates.
 //
 // Simple exclusions become NOT EXISTS subqueries checking for direct tuples.
-// Complex exclusions become check_permission_internal(...) = 0 calls.
+// Complex exclusions become calls to the excluded relation's check (... = 0).
 // TTU exclusions check for linking tuples where the parent grants the excluded relation.
 // Intersection exclusions become NOT (part1 AND part2 AND ...) expressions.
 //

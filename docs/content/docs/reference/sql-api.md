@@ -60,10 +60,13 @@ Everything outside that set is not generated, and migrate drops it if an
 earlier exposure installed it.
 
 **Public and internal dispatchers.** The public dispatchers on this page
-answer only for exposed relations of an enabled family. Generated functions
-call each other through internal dispatchers (`check_permission_internal`,
+answer only for exposed relations of an enabled family. A generated function
+checks another relation by calling its `check_{type}_{relation}` function
+directly when the type and relation are known when the SQL is generated. It
+goes through the internal dispatchers (`check_permission_internal`,
 `check_permission_nw_internal`, `list_accessible_subjects_internal`,
-`explain_permission_internal`, `expand_permission_internal`), which route
+`explain_permission_internal`, `expand_permission_internal`) otherwise, for
+example for a tuple-to-userset whose tupleset allows several types. Both reach
 every installed function, so a relation an exposed one reaches resolves even
 though it is not exposed. `expand_permission` answers for every relation it
 installs, because clients follow the computed and tuple-to-userset pointers in
@@ -1001,6 +1004,8 @@ FROM list_document_viewer_sub('456', 'user', 100, NULL);
 {{< callout type="info" >}}
 **Note**: Specialized functions include a `p_visited` parameter used for cycle detection in recursive patterns. When calling directly, pass `ARRAY[]::TEXT[]` for this parameter.
 {{< /callout >}}
+
+Every `check_{type}_{relation}` function and `_nw` variant is declared `COST 1000`, the same cost as `check_permission_internal`, so the planner places a direct call in a `WHERE` clause or RLS policy where it would place a dispatcher call: after cheaper conditions. Each one also raises [`M2002`](#error-code-m2002) once `p_visited` holds 26 entries, as the dispatcher does.
 
 ## Performance Considerations
 

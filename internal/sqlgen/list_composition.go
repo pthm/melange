@@ -229,7 +229,7 @@ func (g *relationGraph) sameObjectGrants(objectType, relation string) []string {
 //
 // The edge set (relationReferences) over-approximates the calls generated SQL
 // can make, so a "safe" verdict is sound; an "unsafe" verdict merely keeps the
-// per-candidate check_permission_internal fallback, which is always correct.
+// per-candidate check fallback, which is always correct.
 func (g *relationGraph) listCompositionSafe(fromType, fromRelation, targetType, targetRelation string) bool {
 	if g == nil {
 		return false
@@ -265,7 +265,9 @@ func (g *relationGraph) listCompositionSafe(fromType, fromRelation, targetType, 
 // RelationAnalysis. A missed edge means listCompositionSafe can approve a
 // cyclic composition, which recurses infinitely at query time, and that a
 // restricted Exposure leaves a function the generated bodies call
-// uninstalled or unrouted, which denies silently. A companion reflection test
+// uninstalled or unrouted, which denies silently through a dispatcher and
+// fails with "function does not exist" on a direct call (checkFunction). A
+// companion reflection test
 // (TestRelationReferencesFieldCoverage) fails when RelationAnalysis gains a
 // new field that has not been reviewed for edges, and TestExposure_ClosureSound
 // fails when a generated body calls a relation that is not an edge.
@@ -374,6 +376,27 @@ func (g *relationGraph) reachesWildcard(targetType, targetRelation string) bool 
 	return ok && g.wildcardReach[n]
 }
 
+// checkFunction returns the check function the internal dispatcher's arm for
+// (objectType, relation) runs: check_<t>_<r>, or for noWildcard its _nw
+// variant when one is emitted (emitsNoWildcard) and the base function
+// otherwise. ok is false when the model generates no check function for the
+// pair, which the dispatcher answers with 0. It reads the full model, never
+// the exposure, so bodies stay exposure-independent: a caller only names a
+// relationReferences edge, which Reach installs with the caller.
+func (g *relationGraph) checkFunction(objectType, relation string, noWildcard bool) (string, bool) {
+	if g == nil {
+		return "", false
+	}
+	a := g.lookup[objectType+"."+relation]
+	if a == nil || !a.Capabilities.CheckAllowed {
+		return "", false
+	}
+	if noWildcard && emitsNoWildcard(g, *a) {
+		return functionNameNoWildcard(objectType, relation), true
+	}
+	return functionName(objectType, relation), true
+}
+
 // composableListTarget reports whether the list_objects function for
 // (fromType, fromRelation) may compose with the list_objects function for
 // (targetType, targetRelation): the target must be list-generatable and
@@ -442,7 +465,7 @@ func composedListObjectsMembership(schema, targetType, targetRel string, objectI
 // on the candidate object t.object_id, for a complex closure relation.
 //
 // When composition is safe it replaces the per-candidate
-// check_permission_internal with a semi-join against rel's list_objects set
+// check with a semi-join against rel's list_objects set
 // (the set of objects the subject holds rel on), keeping a check arm guarded to
 // userset-typed subjects for parity: the list function is complete for plain
 // subjects but a Recursive/Composed target may under-report userset subjects
@@ -457,6 +480,7 @@ func complexClosureMembership(plan ListPlan, rel string) Expr {
 		Relation:    rel,
 		Object:      LiteralObject(plan.ObjectType, Col{Table: "t", Column: "object_id"}),
 		ExpectAllow: true,
+		Graph:       plan.graph(),
 	}
 	if !composableListTarget(plan, plan.ObjectType, rel) {
 		return check
@@ -469,7 +493,7 @@ func complexClosureMembership(plan ListPlan, rel string) Expr {
 // closure relation in list_subjects.
 //
 // When composition is safe it replaces the per-candidate
-// check_permission_internal with a semi-join against rel's list_subjects set —
+// check with a semi-join against rel's list_subjects set —
 // list_{type}_{rel}_sub(p_object_id, p_subject_type) is exactly the set of
 // subjects holding rel on the object. The list_objects mirror keeps a userset-
 // guarded check arm, but list_subjects composition is gated OUT here when
@@ -489,6 +513,7 @@ func complexClosureSubjectMembership(plan ListPlan, rel string) Expr {
 		Relation:    rel,
 		Object:      LiteralObject(plan.ObjectType, ObjectID),
 		ExpectAllow: true,
+		Graph:       plan.graph(),
 	}
 	if plan.Analysis.Features.HasWildcard {
 		return check
@@ -526,7 +551,7 @@ func intersectionPartComposable(plan ListPlan, rel string) bool {
 // rel on the candidate object objectID, for one positive part of an INTERSECT
 // group in list_objects.
 //
-// When composition is safe it replaces the per-candidate check_permission_internal
+// When composition is safe it replaces the per-candidate check
 // with a semi-join against rel's list_objects set, keeping a check arm guarded to
 // userset-typed subjects for parity (a Recursive/Composed target may under-report
 // a userset subject like "group:eng#member"; an under-reported positive membership
@@ -540,6 +565,7 @@ func intersectionPartMembership(plan ListPlan, rel string, objectID Expr) Expr {
 		Relation:    rel,
 		Object:      LiteralObject(plan.ObjectType, objectID),
 		ExpectAllow: true,
+		Graph:       plan.graph(),
 	}
 	if !intersectionPartComposable(plan, rel) {
 		return check
@@ -551,7 +577,7 @@ func intersectionPartMembership(plan ListPlan, rel string, objectID Expr) Expr {
 // exclusion inside an INTERSECT part: the object is kept when the subject does
 // NOT hold rel on it. When composition is safe it is the negation of rel's
 // list_objects membership (plus a userset-guarded check arm — an under-reported
-// exclusion is over-permissive); otherwise the per-candidate check_permission_internal
+// exclusion is over-permissive); otherwise the per-candidate check
 // with ExpectAllow=false. Mirrors complexExclusionAntiJoin.
 func intersectionPartExclusion(plan ListPlan, rel string, objectID Expr) Expr {
 	check := CheckPermission{
@@ -560,6 +586,7 @@ func intersectionPartExclusion(plan ListPlan, rel string, objectID Expr) Expr {
 		Relation:    rel,
 		Object:      LiteralObject(plan.ObjectType, objectID),
 		ExpectAllow: false,
+		Graph:       plan.graph(),
 	}
 	if !intersectionPartComposable(plan, rel) {
 		return check
@@ -570,6 +597,7 @@ func intersectionPartExclusion(plan ListPlan, rel string, objectID Expr) Expr {
 		Relation:    rel,
 		Object:      LiteralObject(plan.ObjectType, objectID),
 		ExpectAllow: true,
+		Graph:       plan.graph(),
 	}
 	return Not(composedListObjectsMembership(plan.DatabaseSchema, plan.ObjectType, rel, objectID, SubjectType, SubjectID, "excl_obj", positiveCheck))
 }
@@ -579,7 +607,7 @@ func intersectionPartExclusion(plan ListPlan, rel string, objectID Expr) Expr {
 //
 // When composition is safe it semi-joins against the userset relation's list
 // function — the set-oriented replacement for a per-candidate check — but
-// keeps a check_permission_internal arm guarded to userset-typed subjects:
+// keeps a check arm guarded to userset-typed subjects:
 // check functions can prove membership for subjects like "group:eng#member"
 // through closure arms that not every list strategy enumerates. For plain
 // subjects the guard is false and the arm short-circuits before the check.
@@ -595,6 +623,7 @@ func usersetMembership(plan ListPlan, pattern listUsersetPatternInput) Expr {
 			ID:   UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}},
 		},
 		ExpectAllow: true,
+		Graph:       plan.graph(),
 	}
 	if !composableListTarget(plan, pattern.SubjectType, pattern.SubjectRelation) {
 		return check

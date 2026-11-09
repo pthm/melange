@@ -8,9 +8,10 @@ import (
 	"github.com/pthm/melange/internal/sqlgen/sqldsl"
 )
 
-func generateCheckFunction(a RelationAnalysis, inline inlineIndex, databaseSchema string, noWildcard bool, complexityByRelation map[string]map[string]int, needsNW map[string]map[string]bool) (string, error) {
+func generateCheckFunction(a RelationAnalysis, inline inlineIndex, databaseSchema string, noWildcard bool, complexityByRelation map[string]map[string]int, needsNW map[string]map[string]bool, g *relationGraph) (string, error) {
 	plan := BuildCheckPlanWithOrdering(a, filterInlineForCheck(inline, a), databaseSchema, noWildcard, complexityByRelation)
 	plan.NeedsNoWildcard = needsNW
+	plan.Graph = g
 	blocks, err := BuildCheckBlocks(plan)
 	if err != nil {
 		return "", fmt.Errorf("building check blocks for %s.%s: %w", a.ObjectType, a.Relation, err)
@@ -21,6 +22,9 @@ func generateCheckFunction(a RelationAnalysis, inline inlineIndex, databaseSchem
 // generateDispatcher renders check_permission (or check_permission_nw) and its
 // internal dispatcher. The internal one routes every check function the
 // exposure installs; the public one raises for the relations it leaves out.
+// Generated bodies call a check function directly instead when the pair is
+// known when the SQL is generated (CheckPermission), and the internal
+// dispatcher for a type only known at run time or a pair with no function.
 func generateDispatcher(analyses []RelationAnalysis, databaseSchema string, noWildcard bool, needsNW map[string]map[string]bool, exposure *exposureClosure) (string, error) {
 	fnName := "check_permission"
 	if noWildcard {

@@ -136,11 +136,7 @@ var (
 	LiteralObject                   = sqldsl.LiteralObject
 	Sqlf                            = sqldsl.Sqlf
 	Optf                            = sqldsl.Optf
-	InternalPermissionCheckCall     = sqldsl.InternalPermissionCheckCall
-	NoWildcardPermissionCheckCall   = sqldsl.NoWildcardPermissionCheckCall
-	WildcardPermissionCheckCall     = sqldsl.WildcardPermissionCheckCall
 	SpecializedCheckCall            = sqldsl.SpecializedCheckCall
-	InternalCheckCall               = sqldsl.InternalCheckCall
 	VisitedKey                      = sqldsl.VisitedKey
 	VisitedWithKey                  = sqldsl.VisitedWithKey
 	ListObjectsFunctionName         = sqldsl.ListObjectsFunctionName

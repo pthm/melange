@@ -68,7 +68,7 @@ func BuildListObjectsComposedBlocks(plan ListPlan) (ComposedObjectsBlockSet, err
 
 	// Build main composed query blocks
 	firstStep := anchor.Path[0]
-	exclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, Col{Table: "t", Column: "object_id"}, SubjectType, SubjectID)
+	exclusions := buildExclusionInput(plan.Analysis, plan.graph(), plan.DatabaseSchema, Col{Table: "t", Column: "object_id"}, SubjectType, SubjectID)
 
 	switch firstStep.Type {
 	case "ttu":
@@ -183,7 +183,7 @@ func buildComposedTTUObjectsBlock(plan ListPlan, anchor *IndirectAnchorInfo, tar
 func buildComposedRecursiveTTUObjectsBlocks(plan ListPlan, anchor *IndirectAnchorInfo, recursiveType string, exclusions ExclusionConfig) []TypedQueryBlock {
 	targetRel := anchor.Path[0].TargetRelation
 	parentID := Col{Table: "t", Column: "subject_id"}
-	check := CheckPermissionInternalExpr(plan.DatabaseSchema, SubjectParams(), targetRel, ObjectRef{Type: Lit(recursiveType), ID: parentID}, true)
+	check := CheckPermissionInternalExpr(plan.DatabaseSchema, plan.graph(), SubjectParams(), targetRel, ObjectRef{Type: Lit(recursiveType), ID: parentID}, true)
 
 	block := func(membership Expr) TypedQueryBlock {
 		excluded := exclusions.BuildPredicates()
@@ -242,7 +242,7 @@ func buildComposedUsersetObjectsBlock(plan ListPlan, firstStep AnchorPathStep, e
 
 	// split_part(t.subject_id, '#', 1) extracts the object_id from the userset
 	usersetObjectID := Raw("split_part(t.subject_id, '#', 1)")
-	check := CheckPermissionInternalExpr(plan.DatabaseSchema, SubjectParams(), firstStep.SubjectRelation, ObjectRef{Type: Lit(firstStep.SubjectType), ID: usersetObjectID}, true)
+	check := CheckPermissionInternalExpr(plan.DatabaseSchema, plan.graph(), SubjectParams(), firstStep.SubjectRelation, ObjectRef{Type: Lit(firstStep.SubjectType), ID: usersetObjectID}, true)
 
 	membership := check
 	if composableListTarget(plan, firstStep.SubjectType, firstStep.SubjectRelation) {

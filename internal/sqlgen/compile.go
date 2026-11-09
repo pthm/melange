@@ -189,7 +189,8 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 	// surface a wildcard grant to strip, so we emit _nw only for those and route
 	// every other _nw reference (dispatcher, complex-closure calls, index recs)
 	// to the base function.
-	needsNW := buildNoWildcardIndex(analyses)
+	g := newRelationGraph(buildAnalysisLookup(analyses))
+	needsNW := noWildcardIndex(g, analyses)
 	result.NoWildcardIndex = needsNW
 	// explainEligible is the schema-wide fixed point over local feature
 	// support + transitive ComplexClosureRelations dependencies. The
@@ -223,13 +224,13 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 		if !exposure.installsCheck(a.ObjectType, a.Relation) {
 			continue
 		}
-		fn, err := generateCheckFunction(a, inlineIx, databaseSchema, false, complexityByRelation, needsNW)
+		fn, err := generateCheckFunction(a, inlineIx, databaseSchema, false, complexityByRelation, needsNW, g)
 		if err != nil {
 			return GeneratedSQL{}, fmt.Errorf("generating check function: %w", err)
 		}
 		result.Functions = append(result.Functions, fn)
 		if needsNW[a.ObjectType][a.Relation] {
-			noWildcardFn, err := generateCheckFunction(a, inlineIx, databaseSchema, true, complexityByRelation, needsNW)
+			noWildcardFn, err := generateCheckFunction(a, inlineIx, databaseSchema, true, complexityByRelation, needsNW, g)
 			if err != nil {
 				return GeneratedSQL{}, fmt.Errorf("generating no-wildcard check function: %w", err)
 			}
@@ -241,7 +242,7 @@ func GenerateSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, d
 		if !explainEligible[a.ObjectType][a.Relation] || !exposure.installsExplain(a.ObjectType, a.Relation) {
 			continue
 		}
-		explainFn, err := generateExplainFunction(a, inlineIx, databaseSchema, "", complexityByRelation)
+		explainFn, err := generateExplainFunction(a, inlineIx, databaseSchema, "", complexityByRelation, g)
 		if err != nil {
 			return GeneratedSQL{}, fmt.Errorf("generating explain function: %w", err)
 		}
@@ -294,7 +295,12 @@ func emitsNoWildcard(g *relationGraph, a RelationAnalysis) bool {
 // buildNoWildcardIndex maps object_type -> relation -> whether a _nw variant is
 // emitted. Absent/false entries mean the _nw name resolves to the base function.
 func buildNoWildcardIndex(analyses []RelationAnalysis) map[string]map[string]bool {
-	g := newRelationGraph(buildAnalysisLookup(analyses))
+	return noWildcardIndex(newRelationGraph(buildAnalysisLookup(analyses)), analyses)
+}
+
+// noWildcardIndex is buildNoWildcardIndex over an already built graph of
+// analyses.
+func noWildcardIndex(g *relationGraph, analyses []RelationAnalysis) map[string]map[string]bool {
 	byType := make(map[string]map[string]bool, len(analyses))
 	for _, a := range analyses {
 		if !a.Capabilities.CheckAllowed {
@@ -624,9 +630,10 @@ func buildClosureComplexityIndex(analyses []RelationAnalysis) map[string]map[str
 }
 
 // Complexity tiers used by relationComplexityScore. The recursive tier marks
-// relations whose generated body will invoke check_permission_internal and
-// therefore sit behind the dispatcher's depth-limit raise. checkFunctionCost
-// uses the same threshold to decide when to emit a COST hint.
+// relations whose generated body will invoke another relation's check through
+// a parent or userset hop, an operand or an exclusion, and so can reach the
+// depth-limit raise. explainFunctionCost uses the same threshold to decide
+// when to emit a COST hint.
 const (
 	complexityDirect       = 0
 	complexityImplied      = 1
@@ -657,10 +664,12 @@ func relationComplexityScore(a RelationAnalysis) int {
 	}
 }
 
-// invokesInternalCheck reports whether the relation's generated body will emit
-// at least one check_permission_internal call. Such bodies sit behind the
-// dispatcher's depth-limit check, so callers should treat them as expensive
-// regardless of the relation's top-level feature flags.
+// invokesInternalCheck reports whether the relation's generated body will
+// check another relation through a parent or complex userset hop, a
+// non-simple operand or a complex exclusion, directly or through
+// check_permission_internal. Such bodies can reach the depth-limit raise, so
+// callers should treat them as expensive regardless of the relation's
+// top-level feature flags.
 func invokesInternalCheck(a RelationAnalysis) bool {
 	f := a.Features
 	if f.HasRecursive || a.HasComplexUsersetPatterns {

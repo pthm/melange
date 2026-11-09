@@ -83,6 +83,7 @@ func buildSelfRefUsersetFilterBaseBlock(plan ListPlan) TypedQueryBlock {
 				),
 				CheckPermissionInternalExpr(
 					plan.DatabaseSchema,
+					plan.graph(),
 					SubjectRef{Type: Param("v_filter_type"), ID: Col{Table: "t", Column: "subject_id"}},
 					plan.Relation,
 					ObjectRef{Type: Lit(plan.ObjectType), ID: ObjectID},
@@ -184,6 +185,7 @@ func buildSelfRefUsersetFilterRecursiveBlock(plan ListPlan) *TypedQueryBlock {
 func buildSelfRefUsersetRegularBlocks(plan ListPlan) (blocks []TypedQueryBlock, baseBlock, recursiveBlock *TypedQueryBlock) {
 	exclusions := buildExclusionInput(
 		plan.Analysis,
+		plan.graph(),
 		plan.DatabaseSchema,
 		ObjectID,
 		SubjectType,
@@ -239,6 +241,7 @@ func buildSelfRefUsersetRegularComplexClosureBlocks(plan ListPlan, exclusions Ex
 				In{Expr: SubjectType, Values: plan.AllowedSubjectTypes},
 				CheckPermissionInternalExpr(
 					plan.DatabaseSchema,
+					plan.graph(),
 					SubjectRef{Type: SubjectType, ID: Col{Table: "t", Column: "subject_id"}},
 					rel,
 					ObjectRef{Type: Lit(plan.ObjectType), ID: ObjectID},
@@ -276,6 +279,7 @@ func buildSelfRefUsersetRegularComposedClosureBlocks(plan ListPlan) []TypedQuery
 			Relation:    plan.Relation,
 			Object:      LiteralObject(plan.ObjectType, ObjectID),
 			ExpectAllow: true,
+			Graph:       plan.graph(),
 		}
 	}
 
@@ -335,6 +339,7 @@ func buildSelfRefUsersetRegularExpansionBlock(plan ListPlan) TypedQueryBlock {
 	//     but list_subjects over-reports).
 	perGroupExclusions := buildExclusionInput(
 		plan.Analysis,
+		plan.graph(),
 		plan.DatabaseSchema,
 		Col{Table: "uo", Column: "userset_object_id"},
 		SubjectType,
@@ -343,6 +348,7 @@ func buildSelfRefUsersetRegularExpansionBlock(plan ListPlan) TypedQueryBlock {
 	conditions = append(conditions, perGroupExclusions.BuildPredicates()...)
 	rootExclusions := buildExclusionInput(
 		plan.Analysis,
+		plan.graph(),
 		plan.DatabaseSchema,
 		ObjectID,
 		SubjectType,
@@ -401,6 +407,7 @@ func buildSelfRefUsersetRegularComplexPatternBlock(plan ListPlan, pattern listUs
 
 	subjectExclusions := buildExclusionInput(
 		plan.Analysis,
+		plan.graph(),
 		plan.DatabaseSchema,
 		ObjectID,
 		SubjectType,
@@ -443,6 +450,7 @@ func buildSelfRefUsersetRegularComplexPatternBlock(plan ListPlan, pattern listUs
 func buildSelfRefUsersetRegularSimplePatternBlock(plan ListPlan, pattern listUsersetPatternInput) TypedQueryBlock {
 	subjectExclusions := buildExclusionInput(
 		plan.Analysis,
+		plan.graph(),
 		plan.DatabaseSchema,
 		ObjectID,
 		SubjectType,
@@ -473,6 +481,7 @@ func buildSelfRefUsersetRegularSimplePatternBlock(plan ListPlan, pattern listUse
 	if pattern.IsClosurePattern {
 		grantConditions = append(grantConditions, CheckPermissionInternalExpr(
 			plan.DatabaseSchema,
+			plan.graph(),
 			SubjectRef{Type: SubjectType, ID: Col{Table: "s", Column: "subject_id"}},
 			pattern.SourceRelation,
 			ObjectRef{Type: Lit(plan.ObjectType), ID: ObjectID},

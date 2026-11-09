@@ -38,75 +38,6 @@ func (f FuncCallNe) SQL() string {
 	return Ne{Left: Func{Schema: f.Schema, Name: f.FuncName, Args: f.Args}, Right: f.Value}.SQL()
 }
 
-// InternalPermissionCheckCall creates a check_permission_internal function call comparison.
-// This is the most common pattern in the codebase for recursive permission checks.
-//
-// Example:
-//
-//	InternalPermissionCheckCall("viewer", "document", Col{Table: "t", Column: "object_id"}, Visited)
-//
-// Renders: check_permission_internal(p_subject_type, p_subject_id, 'viewer', 'document', t.object_id, p_visited) = 1
-func InternalPermissionCheckCall(schema, relation, objectType string, objectID, visited Expr) FuncCallEq {
-	return FuncCallEq{
-		Schema:   schema,
-		FuncName: "check_permission_internal",
-		Args: []Expr{
-			SubjectType,
-			SubjectID,
-			Lit(relation),
-			Lit(objectType),
-			objectID,
-			visited,
-		},
-		Value: Int(1),
-	}
-}
-
-// NoWildcardPermissionCheckCall creates a check_permission_nw_internal call
-// with an empty visited array. It targets the internal dispatcher directly
-// rather than the public check_permission_nw wrapper so the per-candidate-row
-// validation in list_subjects skips the extra LANGUAGE sql wrapper layer (and
-// its GUC save/restore). Semantics are identical: the nw dispatcher excludes
-// wildcard grants, and visited starts empty at a fresh check.
-func NoWildcardPermissionCheckCall(schema, relation, objectType string, subjectID, objectID Expr) FuncCallEq {
-	return FuncCallEq{
-		Schema:   schema,
-		FuncName: "check_permission_nw_internal",
-		Args: []Expr{
-			SubjectType,
-			subjectID,
-			Lit(relation),
-			Lit(objectType),
-			objectID,
-			EmptyArray{},
-		},
-		Value: Int(1),
-	}
-}
-
-// WildcardPermissionCheckCall creates a full check_permission_internal call
-// (WITH wildcard grants) for a specific subject id, with an empty visited array.
-// Unlike NoWildcardPermissionCheckCall it does not exclude wildcard grants, so it
-// is the correct verifier for the '*' subject itself in list_subjects: the
-// wildcard's access legitimately flows through wildcard ([user:*]) grants, and it
-// must still be subtracted when an exclusion denies it (e.g. `viewer but not
-// blocked` with blocked:[user:*]).
-func WildcardPermissionCheckCall(schema, relation, objectType string, subjectID, objectID Expr) FuncCallEq {
-	return FuncCallEq{
-		Schema:   schema,
-		FuncName: "check_permission_internal",
-		Args: []Expr{
-			SubjectType,
-			subjectID,
-			Lit(relation),
-			Lit(objectType),
-			objectID,
-			EmptyArray{},
-		},
-		Value: Int(1),
-	}
-}
-
 // SpecializedCheckCall creates a call to a specialized check function.
 // Used for implied relations and parent relation checks.
 //
@@ -121,30 +52,6 @@ func SpecializedCheckCall(schema, funcName string, subjectType, subjectID, objec
 		FuncName: funcName,
 		Args:     []Expr{subjectType, subjectID, objectID, visited},
 		Value:    Int(1),
-	}
-}
-
-// InternalCheckCall creates a check_permission_internal call with explicit subject/object types.
-// Used in parent relation (TTU) checks where the linking tuple provides the parent object.
-//
-// Example:
-//
-//	InternalCheckCall(SubjectType, SubjectID, "viewer", Col{Table: "link", Column: "subject_type"}, Col{Table: "link", Column: "subject_id"}, visited)
-//
-// Renders: check_permission_internal(p_subject_type, p_subject_id, 'viewer', link.subject_type, link.subject_id, <visited>) = 1
-func InternalCheckCall(schema string, subjectType, subjectID Expr, relation string, parentType, parentID, visited Expr) FuncCallEq {
-	return FuncCallEq{
-		Schema:   schema,
-		FuncName: "check_permission_internal",
-		Args: []Expr{
-			subjectType,
-			subjectID,
-			Lit(relation),
-			parentType,
-			parentID,
-			visited,
-		},
-		Value: Int(1),
 	}
 }
 

@@ -27,7 +27,7 @@ func memberExclusionPredicates(plan ListPlan, memberID Expr) []Expr {
 	if plan.UseCTEExclusion || !plan.HasExclusion {
 		return nil
 	}
-	return buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID,
+	return buildExclusionInput(plan.Analysis, plan.graph(), plan.DatabaseSchema, ObjectID,
 		Param("p_subject_type"), memberID).BuildPredicates()
 }
 
@@ -118,6 +118,7 @@ func buildListSubjectsUsersetFilterDirectBlock(plan ListPlan) TypedQueryBlock {
 				Relation:    plan.Relation,
 				Object:      LiteralObject(plan.ObjectType, ObjectID),
 				ExpectAllow: true,
+				Graph:       plan.graph(),
 			},
 		),
 	}
@@ -204,8 +205,8 @@ func buildListSubjectsNarrowedWildcardBlock(plan ListPlan) TypedQueryBlock {
 			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Param("p_subject_type")},
 			NoUserset{Source: subject},
 			Ne{Left: subject, Right: Lit("*")},
-			wildcardDenied(plan.DatabaseSchema, plan.Relation, plan.ObjectType),
-			WildcardPermissionCheckCall(plan.DatabaseSchema, plan.Relation, plan.ObjectType, subject, ObjectID),
+			wildcardDenied(plan.DatabaseSchema, plan.graph(), plan.Relation, plan.ObjectType),
+			subjectCheck(plan.DatabaseSchema, plan.graph(), plan.Relation, plan.ObjectType, subject),
 		).
 		SelectCol("subject_id").
 		Distinct()
@@ -261,6 +262,7 @@ func buildTypedListSubjectsComplexClosureBlocks(plan ListPlan) []TypedQueryBlock
 					Relation:    rel,
 					Object:      LiteralObject(plan.ObjectType, ObjectID),
 					ExpectAllow: true,
+					Graph:       plan.graph(),
 				},
 			).
 			SelectCol("subject_id").
@@ -270,7 +272,7 @@ func buildTypedListSubjectsComplexClosureBlocks(plan ListPlan) []TypedQueryBlock
 		applyExclusionPredicates(q, plan.Exclusions, plan.UseCTEExclusion)
 
 		blocks = append(blocks, TypedQueryBlock{
-			Comments: []string{"-- Complex closure: validate via check_permission_internal"},
+			Comments: []string{"-- Complex closure: validate via the relation's check function"},
 			Query:    q.Build(),
 		})
 	}
@@ -308,6 +310,7 @@ func buildListSubjectsComposedClosureBlocks(plan ListPlan, subjectTypeExpr, chec
 				Relation:    plan.Relation,
 				Object:      LiteralObject(plan.ObjectType, ObjectID),
 				ExpectAllow: true,
+				Graph:       plan.graph(),
 			}
 		}
 
@@ -431,6 +434,7 @@ func buildListSubjectsSimpleUsersetBlock(plan ListPlan, pattern listUsersetPatte
 			Relation:    pattern.SourceRelation,
 			Object:      LiteralObject(plan.ObjectType, ObjectID),
 			ExpectAllow: true,
+			Graph:       plan.graph(),
 		})
 	}
 

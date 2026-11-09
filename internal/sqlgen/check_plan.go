@@ -61,6 +61,12 @@ type CheckPlan struct {
 	// base function (identical body, no _nw emitted). Nil means "always assume a
 	// _nw variant exists" (backward-compatible for direct plan-builder callers).
 	NeedsNoWildcard map[string]map[string]bool
+
+	// Graph routes the body's checks on other relations to their specialized
+	// functions when the pair is known when the SQL is generated (see
+	// CheckPermission). Nil keeps every such check on the internal
+	// dispatcher.
+	Graph *relationGraph
 }
 
 // BuildCheckPlan creates a plan for generating a check function.
@@ -130,6 +136,7 @@ func BuildCheckPlanWithOrdering(a RelationAnalysis, inline InlineSQLData, databa
 	if a.Features.HasExclusion {
 		plan.Exclusions = buildExclusionInput(
 			a,
+			nil, // check bodies build their exclusion checks from the plan
 			databaseSchema,
 			ObjectID, // p_object_id parameter
 			SubjectType,

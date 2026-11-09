@@ -22,6 +22,7 @@ func RenderListSubjectsComposedFunction(plan ListPlan, blocks ComposedSubjectsBl
 			Relation:    plan.Relation,
 			Object:      LiteralObject(plan.ObjectType, ObjectID),
 			ExpectAllow: true,
+			Graph:       plan.graph(),
 		},
 	}).SQL()
 
@@ -116,7 +117,7 @@ func buildRegularQueryWithExclusions(plan ListPlan, blocks ComposedSubjectsBlock
 	}
 
 	if blocks.HasExclusions {
-		exclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sc", Column: "subject_id"})
+		exclusions := buildExclusionInput(plan.Analysis, plan.graph(), plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sc", Column: "subject_id"})
 		if preds := exclusions.BuildPredicates(); len(preds) > 0 {
 			query.Where = And(preds...)
 		}

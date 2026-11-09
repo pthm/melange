@@ -3,8 +3,6 @@ package sqlgen
 import (
 	"fmt"
 	"slices"
-
-	"github.com/pthm/melange/internal/sqlgen/sqldsl"
 )
 
 // SubjectsRecursiveBlockSet contains blocks for a recursive list_subjects function.
@@ -162,7 +160,7 @@ func buildListSubjectsRecursiveClosureComposeBlocks(plan ListPlan, compose []str
 			},
 		}
 		if !regularBranchTailValidated(plan) {
-			exclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sub", Column: "subject_id"})
+			exclusions := buildExclusionInput(plan.Analysis, plan.graph(), plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sub", Column: "subject_id"})
 			if preds := exclusions.BuildPredicates(); len(preds) > 0 {
 				stmt.Where = And(preds...)
 			}
@@ -279,10 +277,11 @@ func buildListSubjectsRecursiveComplexUsersetBlock(plan ListPlan, pattern listUs
 
 	const grantAlias, memberAlias = "g", "m"
 
-	memberExclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, Col{Table: memberAlias, Column: "subject_type"}, Col{Table: memberAlias, Column: "subject_id"})
+	memberExclusions := buildExclusionInput(plan.Analysis, plan.graph(), plan.DatabaseSchema, ObjectID, Col{Table: memberAlias, Column: "subject_type"}, Col{Table: memberAlias, Column: "subject_id"})
 
 	checkExpr := CheckPermissionInternalExpr(
 		plan.DatabaseSchema,
+		plan.graph(),
 		SubjectRef{Type: SubjectType, ID: Col{Table: memberAlias, Column: "subject_id"}},
 		pattern.SubjectRelation,
 		ObjectRef{Type: Lit(pattern.SubjectType), ID: UsersetObjectID{Source: Col{Table: grantAlias, Column: "subject_id"}}},
@@ -328,6 +327,7 @@ func buildListSubjectsRecursiveComplexUsersetBlock(plan ListPlan, pattern listUs
 			Relation:    pattern.SourceRelation,
 			Object:      LiteralObject(plan.ObjectType, ObjectID),
 			ExpectAllow: true,
+			Graph:       plan.graph(),
 		})
 	}
 
@@ -379,7 +379,7 @@ func composableSubjectFirstUserset(plan ListPlan, pattern listUsersetPatternInpu
 func buildListSubjectsRecursiveComplexUsersetBlockComposed(plan ListPlan, pattern listUsersetPatternInput) TypedQueryBlock {
 	const grantAlias, memberAlias = "g", "m"
 
-	memberExclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: memberAlias, Column: "subject_id"})
+	memberExclusions := buildExclusionInput(plan.Analysis, plan.graph(), plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: memberAlias, Column: "subject_id"})
 
 	whereConditions := []Expr{
 		Eq{Left: Col{Table: grantAlias, Column: "object_type"}, Right: Lit(plan.ObjectType)},
@@ -408,6 +408,7 @@ func buildListSubjectsRecursiveComplexUsersetBlockComposed(plan ListPlan, patter
 			Relation:    pattern.SourceRelation,
 			Object:      LiteralObject(plan.ObjectType, ObjectID),
 			ExpectAllow: true,
+			Graph:       plan.graph(),
 		})
 	}
 
@@ -437,7 +438,7 @@ func buildListSubjectsRecursiveComplexUsersetBlockComposed(plan ListPlan, patter
 func buildListSubjectsRecursiveSimpleUsersetBlock(plan ListPlan, pattern listUsersetPatternInput) TypedQueryBlock {
 	const grantAlias, memberAlias = "g", "s"
 
-	memberExclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, Col{Table: memberAlias, Column: "subject_type"}, Col{Table: memberAlias, Column: "subject_id"})
+	memberExclusions := buildExclusionInput(plan.Analysis, plan.graph(), plan.DatabaseSchema, ObjectID, Col{Table: memberAlias, Column: "subject_type"}, Col{Table: memberAlias, Column: "subject_id"})
 
 	joinCond := And(
 		Eq{Left: Col{Table: memberAlias, Column: "object_type"}, Right: Lit(pattern.SubjectType)},
@@ -473,6 +474,7 @@ func buildListSubjectsRecursiveSimpleUsersetBlock(plan ListPlan, pattern listUse
 			Relation:    pattern.SourceRelation,
 			Object:      LiteralObject(plan.ObjectType, ObjectID),
 			ExpectAllow: true,
+			Graph:       plan.graph(),
 		})
 	}
 
@@ -741,7 +743,7 @@ func collectParentSatisfyingRelations(plan ListPlan, parent ListParentRelationDa
 // buildListSubjectsRecursiveTTUBlockParentClosure builds a TTU block using parent closure optimization.
 // This scans for direct grants on parent ancestors - only correct for simple parent relations.
 func buildListSubjectsRecursiveTTUBlockParentClosure(plan ListPlan, parent ListParentRelationData) TypedQueryBlock {
-	exclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "t", Column: "subject_id"})
+	exclusions := buildExclusionInput(plan.Analysis, plan.graph(), plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "t", Column: "subject_id"})
 
 	// Collect satisfying relations for the parent relation across all parent types.
 	// For implied relations like "can_read: member", we need to look up tuples with
@@ -826,7 +828,7 @@ func buildListSubjectsRecursiveTTUBlockParentClosureUserset(plan ListPlan, paren
 func buildListSubjectsRecursiveTTUBlockParentClosureUsersetPattern(plan ListPlan, parent ListParentRelationData, pattern listUsersetPatternInput) TypedQueryBlock {
 	const grantAlias, memberAlias = "g", "m"
 
-	memberExclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, Col{Table: memberAlias, Column: "subject_type"}, Col{Table: memberAlias, Column: "subject_id"})
+	memberExclusions := buildExclusionInput(plan.Analysis, plan.graph(), plan.DatabaseSchema, ObjectID, Col{Table: memberAlias, Column: "subject_type"}, Col{Table: memberAlias, Column: "subject_id"})
 
 	whereConditions := []Expr{
 		In{Expr: Col{Table: grantAlias, Column: "relation"}, Values: pattern.SourceRelations},
@@ -959,7 +961,7 @@ func buildSubjectFirstTTUClosureSubjectBlocks(plan ListPlan, parent ListParentRe
 		},
 	}
 	if !regularBranchTailValidated(plan) {
-		exclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sub", Column: "subject_id"})
+		exclusions := buildExclusionInput(plan.Analysis, plan.graph(), plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sub", Column: "subject_id"})
 		if preds := exclusions.BuildPredicates(); len(preds) > 0 {
 			stmt.Where = And(preds...)
 		}
@@ -986,7 +988,7 @@ func buildSubjectFirstTTUSubjectBlock(plan ListPlan, parent ListParentRelationDa
 	// it, subjects reached via this TTU arm bypass `but not …`. The
 	// wildcard-completion tail, when present, re-validates instead.
 	if !regularBranchTailValidated(plan) {
-		exclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sub", Column: "subject_id"})
+		exclusions := buildExclusionInput(plan.Analysis, plan.graph(), plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sub", Column: "subject_id"})
 		whereConditions = append(whereConditions, exclusions.BuildPredicates()...)
 	}
 
@@ -1012,7 +1014,7 @@ func buildSubjectFirstTTUSubjectBlock(plan ListPlan, parent ListParentRelationDa
 	}
 }
 
-// buildListSubjectsRecursiveTTUBlockSubjectPool builds a TTU block using subject_pool + check_permission_internal.
+// buildListSubjectsRecursiveTTUBlockSubjectPool builds a TTU block using subject_pool + a per-row check.
 // This is used when the parent relation is complex (has intersection, exclusion, etc.) and cannot use
 // the parent closure optimization. It verifies each subject-parent combination via permission check.
 func buildListSubjectsRecursiveTTUBlockSubjectPool(plan ListPlan, parent ListParentRelationData) TypedQueryBlock {
@@ -1027,37 +1029,30 @@ func buildListSubjectsRecursiveTTUBlockSubjectPool(plan ListPlan, parent ListPar
 		linkWhere = append(linkWhere, In{Expr: Col{Table: "link", Column: "subject_type"}, Values: parent.AllowedLinkingTypesSlice})
 	}
 
-	// Build check_permission_internal call
 	// For closure patterns, verify through the SOURCE relation (e.g., "reader") not the current relation (e.g., "can_read")
 	// This ensures exclusions and other complex features from the source relation are honored
-	var checkCallSQL string
+	check := CheckPermission{
+		Schema:      plan.DatabaseSchema,
+		Subject:     SubjectRef{Type: SubjectType, ID: Col{Table: "sp", Column: "subject_id"}},
+		ExpectAllow: true,
+		Graph:       plan.graph(),
+	}
 	var comment string
 	if parent.IsClosurePattern {
 		// Closure pattern: verify through source relation on the TARGET object
 		// Example: can_read->owner->repo_admin should verify "reader" on the target object (repo)
 		// to honor "reader: repo_admin from owner but not restricted"
-		checkCallSQL = fmt.Sprintf(
-			"%s(%s, %s, %s, %s, %s) = 1",
-			sqldsl.PrefixIdent("check_permission_internal", plan.DatabaseSchema),
-			SubjectType.SQL(), // subject_type (param)
-			Col{Table: "sp", Column: "subject_id"}.SQL(), // subject_id (from subject_pool)
-			Lit(parent.SourceRelation).SQL(),             // relation to check (SOURCE relation like "reader")
-			Lit(plan.ObjectType).SQL(),                   // object_type (target object type like "repo")
-			ObjectID.SQL(),                               // object_id (target object id - param)
-		)
+		check.Relation = parent.SourceRelation
+		check.Object = LiteralObject(plan.ObjectType, ObjectID)
 		comment = fmt.Sprintf("-- TTU: subjects via %s -> %s (closure pattern from %s - verifying through source relation)", parent.LinkingRelation, parent.Relation, parent.SourceRelation)
 	} else {
 		// Direct parent pattern: verify the parent relation on the parent object
-		// check_permission_internal(subject_type, subject_id, relation, object_type, object_id)
-		checkCallSQL = fmt.Sprintf(
-			"%s(%s, %s, %s, %s, %s) = 1",
-			sqldsl.PrefixIdent("check_permission_internal", plan.DatabaseSchema),
-			SubjectType.SQL(), // subject_type (param)
-			Col{Table: "sp", Column: "subject_id"}.SQL(),     // subject_id (from subject_pool)
-			Lit(parent.Relation).SQL(),                       // relation to check on parent
-			Col{Table: "link", Column: "subject_type"}.SQL(), // object_type (parent type)
-			Col{Table: "link", Column: "subject_id"}.SQL(),   // object_id (parent id)
-		)
+		check.Relation = parent.Relation
+		check.Object = ObjectRef{
+			Type: Col{Table: "link", Column: "subject_type"},
+			ID:   Col{Table: "link", Column: "subject_id"},
+		}
+		check.FilteredType = singleType(parent.AllowedLinkingTypesSlice)
 		comment = fmt.Sprintf("-- TTU: subjects via %s -> %s (complex parent relation - using subject_pool)", parent.LinkingRelation, parent.Relation)
 	}
 
@@ -1065,9 +1060,9 @@ func buildListSubjectsRecursiveTTUBlockSubjectPool(plan ListPlan, parent ListPar
 	// the outer relation's exclusion (`but not …`). Subtract plan.Exclusions so
 	// subjects reached through this arm can't bypass it; the wildcard-completion
 	// tail, when present, re-validates instead.
-	linkWhere = append(linkWhere, Raw(checkCallSQL))
+	linkWhere = append(linkWhere, check)
 	if !regularBranchTailValidated(plan) {
-		exclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sp", Column: "subject_id"})
+		exclusions := buildExclusionInput(plan.Analysis, plan.graph(), plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sp", Column: "subject_id"})
 		linkWhere = append(linkWhere, exclusions.BuildPredicates()...)
 	}
 
@@ -1261,6 +1256,7 @@ func buildListSubjectsRecursiveUsersetFilterDirectBlock(plan ListPlan) TypedQuer
 		Relation:    plan.Relation,
 		Object:      LiteralObject(plan.ObjectType, Param("p_object_id")),
 		ExpectAllow: true,
+		Graph:       plan.graph(),
 	}
 
 	closureStmt := SelectStmt{
@@ -1318,6 +1314,7 @@ func usersetFilterFullCheck(plan ListPlan, subjectID Expr) Expr {
 		Relation:    plan.Relation,
 		Object:      LiteralObject(plan.ObjectType, Param("p_object_id")),
 		ExpectAllow: true,
+		Graph:       plan.graph(),
 	}
 }
 

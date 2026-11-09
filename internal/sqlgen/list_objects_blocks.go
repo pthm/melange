@@ -200,7 +200,7 @@ func buildTypedListObjectsComplexClosureBlocks(plan ListPlan) ([]TypedQueryBlock
 
 		blocks = append(blocks, TypedQueryBlock{
 			Comments: []string{
-				"-- Complex closure relations: find candidates via tuples, validate via list composition (or check_permission_internal fallback)",
+				"-- Complex closure relations: find candidates via tuples, validate via list composition (or per-candidate check fallback)",
 				"-- These relations have exclusions or other complex features that require full permission check",
 			},
 			Query: q.Build(),
@@ -229,6 +229,7 @@ func buildListObjectsComposedClosureBlocks(plan ListPlan) ([]TypedQueryBlock, er
 		if plan.HasExclusion {
 			exclusionConfig := buildExclusionInput(
 				plan.Analysis,
+				plan.graph(),
 				plan.DatabaseSchema,
 				Col{Table: "icr", Column: "object_id"},
 				SubjectType,
@@ -298,6 +299,7 @@ func buildIntersectionGroupBlock(plan ListPlan, idx int, group IntersectionGroup
 	if plan.HasExclusion {
 		exclusionConfig := buildExclusionInput(
 			plan.Analysis,
+			plan.graph(),
 			plan.DatabaseSchema,
 			Col{Table: "ig", Column: "object_id"}, // Use ig.object_id for intersection result
 			SubjectType,
@@ -333,7 +335,7 @@ func buildIntersectionPartQuery(plan ListPlan, part IntersectionPart) SelectStmt
 		childID := Col{Table: alias, Column: "subject_id"}
 		// The parent object (child.subject_id, of type child.subject_type) must
 		// satisfy pr.Relation. Compose against the parent's list_objects set (a
-		// set-based semi-join) instead of a per-row check_permission_internal when
+		// set-based semi-join) instead of a per-row check when
 		// composition is cycle-safe, keeping a userset-guarded check arm for
 		// parity. Per linking type, since the list function name is per-type.
 		check := CheckPermission{
@@ -342,17 +344,21 @@ func buildIntersectionPartQuery(plan ListPlan, part IntersectionPart) SelectStmt
 			Relation:    pr.Relation,
 			Object:      ObjectRef{Type: childType, ID: childID},
 			ExpectAllow: true,
+			Graph:       plan.graph(),
 		}
 		var membership Expr = check
 		if len(pr.AllowedLinkingTypes) > 0 {
 			arms := make([]Expr, 0, len(pr.AllowedLinkingTypes))
 			for _, ptype := range pr.AllowedLinkingTypes {
 				typed := Eq{Left: childType, Right: Lit(ptype)}
+				// The arm's own type test lets its check go direct.
+				typedCheck := check
+				typedCheck.FilteredType = ptype
 				if composableListTarget(plan, ptype, pr.Relation) {
 					arms = append(arms, And(typed, composedListObjectsMembership(
-						plan.DatabaseSchema, ptype, pr.Relation, childID, SubjectType, SubjectID, "parent_obj", check)))
+						plan.DatabaseSchema, ptype, pr.Relation, childID, SubjectType, SubjectID, "parent_obj", typedCheck)))
 				} else {
-					arms = append(arms, And(typed, check))
+					arms = append(arms, And(typed, typedCheck))
 				}
 			}
 			membership = Or(arms...)
@@ -406,6 +412,7 @@ func buildIntersectionComposedPartQuery(plan ListPlan, part IntersectionPart) Se
 		Relation:    part.Relation,
 		Object:      LiteralObject(plan.ObjectType, Col{Table: "t", Column: "object_id"}),
 		ExpectAllow: true,
+		Graph:       plan.graph(),
 	}
 	usersetArm := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).

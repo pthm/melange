@@ -47,13 +47,14 @@ func explainDispatcherPublicArgs() []FuncArg {
 // functionSchema is the schema the function is created in and calls the
 // other explain functions through; "" means databaseSchema (see
 // CheckPlan.FunctionSchema).
-func generateExplainFunction(a RelationAnalysis, inline inlineIndex, databaseSchema, functionSchema string, complexityByRelation map[string]map[string]int) (string, error) {
+func generateExplainFunction(a RelationAnalysis, inline inlineIndex, databaseSchema, functionSchema string, complexityByRelation map[string]map[string]int, g *relationGraph) (string, error) {
 	// Explain shares check's plan/blocks pipeline, so it must apply the same
 	// closure/userset filter check uses (generateCheckFunction). Without it the
 	// explain leaf embedded the full, unfiltered model VALUES — the last function
 	// kind still scaling with unrelated schema growth (Fix C invariant).
 	plan := BuildCheckPlanWithOrdering(a, filterInlineForCheck(inline, a), databaseSchema, false, complexityByRelation)
 	plan.FunctionSchema = functionSchema
+	plan.Graph = g
 	blocks, err := BuildCheckBlocks(plan)
 	if err != nil {
 		return "", fmt.Errorf("building check blocks for explain %s.%s: %w", a.ObjectType, a.Relation, err)

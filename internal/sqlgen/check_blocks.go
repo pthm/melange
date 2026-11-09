@@ -165,7 +165,8 @@ func buildUsersetPatternCheck(plan CheckPlan, pattern UsersetPattern, visitedWit
 	grantTuple := Col{Table: "grant_tuple", Column: "subject_id"}
 
 	if pattern.IsComplex {
-		// Complex pattern: use check_permission_internal for recursive membership verification
+		// Complex pattern: call the userset relation's check for recursive
+		// membership verification
 		return Exists{Query: usersetGrants(plan, pattern).
 			Where(CheckPermission{
 				Schema:   plan.DatabaseSchema,
@@ -177,6 +178,7 @@ func buildUsersetPatternCheck(plan CheckPlan, pattern UsersetPattern, visitedWit
 				},
 				Visited:     visitedWithKey,
 				ExpectAllow: true,
+				Graph:       plan.Graph,
 			}).
 			Select("1")}
 	}
@@ -216,9 +218,9 @@ func buildExclusionCheck(plan CheckPlan) Expr {
 		checks = append(checks, Exists{Query: q})
 	}
 
-	// Complex exclusions: check_permission_internal
+	// Complex exclusions: the excluded relation's check
 	for _, rel := range plan.Exclusions.ComplexExcludedRelations {
-		checks = append(checks, checkPermissionAllow(plan.DatabaseSchema, rel, obj))
+		checks = append(checks, checkPermissionAllow(plan, rel, obj))
 	}
 
 	// TTU exclusions
@@ -242,17 +244,7 @@ func buildTTUExclusionCheck(plan CheckPlan, rel ExcludedParentRelation) Expr {
 		Relations(rel.LinkingRelation).
 		Where(
 			Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
-			CheckPermission{
-				Schema:   plan.DatabaseSchema,
-				Subject:  SubjectParams(),
-				Relation: rel.Relation,
-				Object: ObjectRef{
-					Type: Col{Table: "link", Column: "subject_type"},
-					ID:   Col{Table: "link", Column: "subject_id"},
-				},
-				Visited:     Visited,
-				ExpectAllow: true,
-			},
+			linkedParentCheck(plan, rel.Relation, rel.AllowedLinkingTypes, Visited),
 		).
 		Select("1")
 
@@ -272,11 +264,11 @@ func buildIntersectionExclusionCheck(plan CheckPlan, group ExcludedIntersectionG
 			parts = append(parts, buildTTUExclusionCheck(plan, *part.ParentRelation))
 		case part.ExcludedRelation != "":
 			parts = append(parts, And(
-				checkPermissionAllow(plan.DatabaseSchema, part.Relation, obj),
-				checkPermissionDeny(plan.DatabaseSchema, part.ExcludedRelation, obj),
+				checkPermissionAllow(plan, part.Relation, obj),
+				checkPermissionDeny(plan, part.ExcludedRelation, obj),
 			))
 		default:
-			parts = append(parts, checkPermissionAllow(plan.DatabaseSchema, part.Relation, obj))
+			parts = append(parts, checkPermissionAllow(plan, part.Relation, obj))
 		}
 	}
 
@@ -286,25 +278,41 @@ func buildIntersectionExclusionCheck(plan CheckPlan, group ExcludedIntersectionG
 	return And(parts...)
 }
 
-func checkPermissionAllow(databaseSchema, relation string, obj ObjectRef) CheckPermission {
+func checkPermissionAllow(plan CheckPlan, relation string, obj ObjectRef) CheckPermission {
 	return CheckPermission{
-		Schema:      databaseSchema,
+		Schema:      plan.DatabaseSchema,
 		Subject:     SubjectParams(),
 		Relation:    relation,
 		Object:      obj,
 		Visited:     Visited,
 		ExpectAllow: true,
+		Graph:       plan.Graph,
 	}
 }
 
-func checkPermissionDeny(databaseSchema, relation string, obj ObjectRef) CheckPermission {
+func checkPermissionDeny(plan CheckPlan, relation string, obj ObjectRef) CheckPermission {
+	deny := checkPermissionAllow(plan, relation, obj)
+	deny.ExpectAllow = false
+	return deny
+}
+
+// linkedParentCheck checks relation on the parent object a "link" tuple
+// names (link.subject_type, link.subject_id). allowedTypes are the types the
+// query restricts link.subject_type to; with exactly one the check calls
+// that type's function directly.
+func linkedParentCheck(plan CheckPlan, relation string, allowedTypes []string, visited Expr) CheckPermission {
 	return CheckPermission{
-		Schema:      databaseSchema,
-		Subject:     SubjectParams(),
-		Relation:    relation,
-		Object:      obj,
-		Visited:     Visited,
-		ExpectAllow: false,
+		Schema:   plan.DatabaseSchema,
+		Subject:  SubjectParams(),
+		Relation: relation,
+		Object: ObjectRef{
+			Type: Col{Table: "link", Column: "subject_type"},
+			ID:   Col{Table: "link", Column: "subject_id"},
+		},
+		Visited:      visited,
+		ExpectAllow:  true,
+		Graph:        plan.Graph,
+		FilteredType: singleType(allowedTypes),
 	}
 }
 
@@ -694,7 +702,7 @@ func buildIntersectionPartCheck(plan CheckPlan, part IntersectionPart, visitedWi
 	default:
 		// An operand on the same object is not a step (see checkDepthLimit),
 		// so it passes p_visited on unchanged.
-		pc.Check = checkPermissionAllow(plan.DatabaseSchema, part.Relation, obj)
+		pc.Check = checkPermissionAllow(plan, part.Relation, obj)
 	}
 
 	if part.ExcludedRelation != "" {
@@ -704,7 +712,7 @@ func buildIntersectionPartCheck(plan CheckPlan, part IntersectionPart, visitedWi
 			// Optimization: inline simple exclusions as NOT EXISTS
 			exclusionCheck = Not(buildSimplePartCheck(plan, part.ExcludedRelation))
 		} else {
-			exclusionCheck = checkPermissionDeny(plan.DatabaseSchema, part.ExcludedRelation, obj)
+			exclusionCheck = checkPermissionDeny(plan, part.ExcludedRelation, obj)
 		}
 		pc.Check = And(pc.Check, exclusionCheck)
 	}
@@ -718,17 +726,7 @@ func buildParentCheck(plan CheckPlan, parent *ParentRelationInfo, visitedWithKey
 		Relations(parent.LinkingRelation).
 		Where(
 			Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
-			CheckPermission{
-				Schema:   plan.DatabaseSchema,
-				Subject:  SubjectParams(),
-				Relation: parent.Relation,
-				Object: ObjectRef{
-					Type: Col{Table: "link", Column: "subject_type"},
-					ID:   Col{Table: "link", Column: "subject_id"},
-				},
-				Visited:     visitedWithKey,
-				ExpectAllow: true,
-			},
+			linkedParentCheck(plan, parent.Relation, parent.AllowedLinkingTypes, visitedWithKey),
 		).
 		Select("1")
 

@@ -278,7 +278,9 @@ func TestFunctions_ReportsDrift(t *testing.T) {
 	issue := html.UnescapeString(c.get("/sql?type=issue&kind=accessible"))
 	assert.Contains(t, issue, "accessible_issue_author")
 	assert.Contains(t, issue, "stale overloads")
-	assert.NotContains(t, issue, "check_issue_author", "the kind filter keeps only accessible functions")
+	// Accessible bodies call check_issue_author (listed under "may call"),
+	// but the filter lists no check function of its own.
+	assert.NotContains(t, issue, "<summary><code>check_issue_author</code>", "the kind filter keeps only accessible functions")
 
 	// Another codegen version recorded the functions: said up front.
 	_, err = db.ExecContext(ctx, `UPDATE `+s+`.melange_migrations SET codegen_version = 'v0.0.1'`)

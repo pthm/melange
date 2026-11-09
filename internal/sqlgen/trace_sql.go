@@ -96,13 +96,14 @@ func GenerateTraceSQL(analyses []RelationAnalysis, inline InlineSQLData, databas
 	}
 	if opts.Explain {
 		complexityByRelation := buildClosureComplexityIndex(analyses)
+		g := newRelationGraph(buildAnalysisLookup(analyses))
 		eligible := ComputeExplainEligibility(analyses)
 		inlineIx := newInlineIndex(inline)
 		for _, a := range analyses {
 			if !a.Capabilities.CheckAllowed || !eligible[a.ObjectType][a.Relation] || !exposure.installsExplain(a.ObjectType, a.Relation) {
 				continue
 			}
-			fn, err := generateExplainFunction(a, inlineIx, databaseSchema, opts.FunctionSchema, complexityByRelation)
+			fn, err := generateExplainFunction(a, inlineIx, databaseSchema, opts.FunctionSchema, complexityByRelation, g)
 			if err != nil {
 				return TraceSQL{}, fmt.Errorf("generating explain function: %w", err)
 			}

@@ -85,6 +85,7 @@ func buildSelfRefUsersetComplexClosureBlocks(plan ListPlan) []TypedQueryBlock {
 					Relation:    rel,
 					Object:      LiteralObject(plan.ObjectType, Col{Table: "t", Column: "object_id"}),
 					ExpectAllow: true,
+					Graph:       plan.graph(),
 				},
 			).
 			SelectCol("object_id").
@@ -154,6 +155,7 @@ func buildSelfRefUsersetComplexPatternBlock(plan ListPlan, pattern listUsersetPa
 			Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(pattern.SubjectRelation)},
 			CheckPermissionInternalExpr(
 				plan.DatabaseSchema,
+				plan.graph(),
 				SubjectParams(),
 				pattern.SubjectRelation,
 				ObjectRef{
@@ -213,6 +215,7 @@ func buildSelfRefUsersetSimplePatternBlock(plan ListPlan, pattern listUsersetPat
 				Relation:    pattern.SourceRelation,
 				Object:      LiteralObject(plan.ObjectType, Col{Table: "t", Column: "object_id"}),
 				ExpectAllow: true,
+				Graph:       plan.graph(),
 			},
 		)
 	}

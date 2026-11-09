@@ -38,6 +38,7 @@ func RenderListObjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUserse
 func renderSelfRefUsersetListObjectsQuery(plan ListPlan, blocks SelfRefUsersetBlockSet) string {
 	exclusionConfig := buildExclusionInput(
 		plan.Analysis,
+		plan.graph(),
 		plan.DatabaseSchema,
 		Col{Table: "me", Column: "object_id"},
 		SubjectType,

@@ -88,10 +88,11 @@ func explainFunctionHeader(plan CheckPlan) []string {
 	}
 }
 
-// explainFunctionCost mirrors checkFunctionCost. Even though explain bodies
-// are not on the request hot path, the planner sees them in EXISTS branches
-// when used as evidence; matching the check tier prevents accidental
-// reordering surprises.
+// explainFunctionCost marks explain functions whose relation reaches a
+// recursive check with recursiveCheckCost. Even though explain bodies are not
+// on the request hot path, the planner sees them in EXISTS branches when used
+// as evidence; matching the check tier prevents accidental reordering
+// surprises.
 func explainFunctionCost(plan CheckPlan) int {
 	if plan.ComplexityByRelation[plan.ObjectType][plan.Relation] >= complexityRecursive {
 		return recursiveCheckCost

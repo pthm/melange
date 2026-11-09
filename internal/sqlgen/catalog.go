@@ -457,13 +457,17 @@ func (b *catalogBuilder) calls(a *RelationAnalysis, f CatalogFunction, refs []st
 	case KindListObjects:
 		each(true, AccessibleObjectsFunctionName)
 		each(false, listObjectsFunctionName)
+		each(true, functionName)
 		out = append(out, "check_permission_internal")
 	case KindAccessible:
 		each(false, AccessibleObjectsFunctionName)
 		each(true, listObjectsFunctionName)
+		each(true, functionName)
 		out = append(out, "check_permission_internal")
 	case KindListSubjects:
 		each(false, listSubjectsFunctionName)
+		each(true, functionName)
+		each(true, functionNameNoWildcard)
 		out = append(out, "check_permission_internal", "check_permission_nw_internal", listSubjectsInternalDispatcherName)
 	case KindParentKey:
 		for _, pr := range f.ParentRelations {
@@ -471,6 +475,7 @@ func (b *catalogBuilder) calls(a *RelationAnalysis, f CatalogFunction, refs []st
 		}
 	case KindExplain:
 		each(false, explainFunctionName)
+		each(true, functionName)
 		out = append(out, "explain_permission_internal", "check_permission_internal")
 	}
 	return out

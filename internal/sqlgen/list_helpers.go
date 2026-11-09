@@ -110,9 +110,11 @@ func buildListUsersetPatternInputs(a RelationAnalysis) []listUsersetPatternInput
 }
 
 // buildExclusionInput creates an ExclusionConfig from a RelationAnalysis.
-// This configures exclusion predicates for SQL query generation.
-func buildExclusionInput(a RelationAnalysis, databaseSchema string, objectIDExpr, subjectTypeExpr, subjectIDExpr Expr) ExclusionConfig {
+// This configures exclusion predicates for SQL query generation. g routes
+// the exclusion checks (see CheckPermission) and may be nil.
+func buildExclusionInput(a RelationAnalysis, g *relationGraph, databaseSchema string, objectIDExpr, subjectTypeExpr, subjectIDExpr Expr) ExclusionConfig {
 	return ExclusionConfig{
+		Graph:                    g,
 		DatabaseSchema:           databaseSchema,
 		ObjectType:               a.ObjectType,
 		ObjectIDExpr:             objectIDExpr,
@@ -185,7 +187,7 @@ func buildWhereFromPredicates(predicates []Expr) Expr {
 }
 
 // buildUsersetWildcardTailQuery builds the wildcard handling tail as a typed query for list_subjects functions.
-func buildUsersetWildcardTailQuery(a RelationAnalysis, databaseSchema string) SQLer {
+func buildUsersetWildcardTailQuery(a RelationAnalysis, g *relationGraph, databaseSchema string) SQLer {
 	if a.Features.HasWildcard {
 		return SelectStmt{
 			ColumnExprs: []Expr{Col{Table: "br", Column: "subject_id"}},
@@ -193,7 +195,7 @@ func buildUsersetWildcardTailQuery(a RelationAnalysis, databaseSchema string) SQ
 			Joins: []JoinClause{
 				{Type: "CROSS", Table: "has_wildcard", Alias: "hw"},
 			},
-			Where: wildcardSubjectsTailWhere(databaseSchema, a.Relation, a.ObjectType, a.Features.HasExclusion),
+			Where: wildcardSubjectsTailWhere(databaseSchema, g, a.Relation, a.ObjectType, a.Features.HasExclusion),
 		}
 	}
 	return SelectStmt{
@@ -206,7 +208,7 @@ func buildUsersetWildcardTailQuery(a RelationAnalysis, databaseSchema string) SQ
 // wildcard-completion tail (shared by the recursive and self-referential-userset
 // renderers). When the base set has no wildcard, keep every row. Otherwise keep
 // each subject the relation actually grants:
-//   - the '*' row is verified via the FULL check (check_permission_internal):
+//   - the '*' row is verified via the FULL check (check_<t>_<r>):
 //     '*”s access flows through wildcard ([user:*]) grants, so the no-wildcard
 //     check would wrongly drop it — but it must still be subtracted when an
 //     exclusion denies it, whether the exclusion is on this relation or reached
@@ -222,22 +224,19 @@ func buildUsersetWildcardTailQuery(a RelationAnalysis, databaseSchema string) SQ
 // relation the base-set builders can over-report banned subjects (e.g. a
 // self-ref userset where a direct or intermediate-group member is banned), so
 // re-verification must always run. Gate the short-circuit on !hasExclusion so
-// concrete subjects are always validated by check_permission_nw_internal and
-// '*' by check_permission_internal.
-func wildcardSubjectsTailWhere(schema, relation, objectType string, hasExclusion bool) Expr {
+// concrete subjects are always validated by the no-wildcard check and '*' by
+// the full one.
+func wildcardSubjectsTailWhere(schema string, g *relationGraph, relation, objectType string, hasExclusion bool) Expr {
 	subject := Col{Table: "br", Column: "subject_id"}
-	var concrete Expr = NoWildcardPermissionCheckCall(schema, relation, objectType, subject, ObjectID)
+	full := subjectCheck(schema, g, relation, objectType, subject)
+	noWildcard := full
+	noWildcard.NoWildcard = true
+	var concrete Expr = noWildcard
 	if hasExclusion {
-		concrete = Or(concrete, And(
-			wildcardDenied(schema, relation, objectType),
-			WildcardPermissionCheckCall(schema, relation, objectType, subject, ObjectID),
-		))
+		concrete = Or(concrete, And(wildcardDenied(schema, g, relation, objectType), full))
 	}
 	branches := []Expr{
-		And(
-			Eq{Left: subject, Right: Lit("*")},
-			WildcardPermissionCheckCall(schema, relation, objectType, subject, ObjectID),
-		),
+		And(Eq{Left: subject, Right: Lit("*")}, full),
 		And(Ne{Left: subject, Right: Lit("*")}, concrete),
 	}
 	if !hasExclusion {
@@ -248,9 +247,23 @@ func wildcardSubjectsTailWhere(schema, relation, objectType string, hasExclusion
 
 // wildcardDenied is true when the full check denies '*' on the object. The
 // subquery is uncorrelated, so PostgreSQL evaluates it once.
-func wildcardDenied(schema, relation, objectType string) Expr {
-	check := WildcardPermissionCheckCall(schema, relation, objectType, Lit("*"), ObjectID)
+func wildcardDenied(schema string, g *relationGraph, relation, objectType string) Expr {
+	check := subjectCheck(schema, g, relation, objectType, Lit("*"))
 	return NotExpr{Expr: Paren{Expr: Raw("SELECT " + check.SQL())}}
+}
+
+// subjectCheck is the full check (wildcard grants included) that the
+// p_subject_type subject subjectID holds relation on the object p_object_id,
+// with an empty visited array: a fresh check per candidate subject.
+func subjectCheck(schema string, g *relationGraph, relation, objectType string, subjectID Expr) CheckPermission {
+	return CheckPermission{
+		Schema:      schema,
+		Subject:     SubjectRef{Type: SubjectType, ID: subjectID},
+		Relation:    relation,
+		Object:      LiteralObject(objectType, ObjectID),
+		ExpectAllow: true,
+		Graph:       g,
+	}
 }
 
 // buildDispatcherBody builds the common routing logic for list dispatcher

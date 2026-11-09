@@ -73,7 +73,9 @@ check_<type>_<relation>(p_subject_type TEXT, p_subject_id TEXT, p_object_id TEXT
 
 Note: `p_object_type` is not a parameter. The object type is baked into the function name and body.
 
-`p_visited` tracks already-visited relations for cycle detection at runtime, and its length counts resolution steps the way OpenFGA does: a parent lookup or userset hop appends the caller's key, while computed relations and intersection or exclusion operands pass it on unchanged. If `array_length(p_visited, 1) >= 26`, the function raises `SQLSTATE 'M2002'` (resolution too complex), so a check resolves 25 steps as in OpenFGA.
+`p_visited` tracks already-visited relations for cycle detection at runtime, and its length counts resolution steps the way OpenFGA does: a parent lookup or userset hop appends the caller's key, while computed relations and intersection or exclusion operands pass it on unchanged. If `array_length(p_visited, 1) >= 26`, the function raises `SQLSTATE 'M2002'` (resolution too complex), so a check resolves 25 steps as in OpenFGA. Every check function and `_nw` variant does this as its first statement, before the cycle check in recursive functions, so the limit holds whether the function is reached through the dispatcher or called directly from another generated function.
+
+A generated function calls another relation's check function directly when its type and relation are known when the SQL is generated: a literal type, or a tupleset the query already restricts to one type. Otherwise (a tupleset with several allowed types) it calls `check_permission_internal`, which routes by the runtime type. Every check function is declared `COST 1000`, the dispatcher's cost, so a direct call in a `WHERE` clause keeps the place the planner gave the dispatcher call.
 
 Each relation pattern produces different SQL. Direct assignment queries `melange_tuples` for an exact match. Implied relations call the implied-by function. Parent relations look up the parent object and call the parent's check function. Exclusions check the base relation and then negate the excluded relation.
 

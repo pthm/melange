@@ -82,10 +82,13 @@
 // All DSL types implement either Expr (for expressions) or SQLer (for statements).
 // The SQL() method renders the final PostgreSQL syntax.
 //
-// Cycle detection for recursive patterns uses a visited array passed through
-// check_permission_internal calls. Depth limits prevent unbounded recursion.
+// Cycle detection for recursive patterns uses a visited array passed from
+// one check function to the next. Depth limits prevent unbounded recursion:
+// every check function raises M2002 once the array reaches the limit.
 //
-// For relations with complex patterns (deep TTU chains, exclusions on excluded relations),
-// the generator delegates to check_permission_internal which handles the full
-// authorization semantics including fallback to the generic implementation.
+// For relations with complex patterns (deep TTU chains, exclusions on excluded
+// relations), a body checks the other relation by calling its check function.
+// The call is direct when the object type and relation are known when the SQL
+// is generated (CheckPermission, relationGraph.checkFunction) and goes through
+// check_permission_internal otherwise, which routes by the runtime type.
 package sqlgen

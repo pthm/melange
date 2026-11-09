@@ -120,9 +120,16 @@ CREATE OR REPLACE FUNCTION check_document_viewer(
   p_object_id TEXT,
   p_visited TEXT[] DEFAULT ARRAY[]::TEXT[]
 ) RETURNS INTEGER AS $$
+DECLARE
+    v_key TEXT := 'document:' || p_object_id || ':viewer';
 BEGIN
+    -- Depth limit: 25 parent or userset hops, as in OpenFGA
+    IF array_length(p_visited, 1) >= 26 THEN
+        RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';
+    END IF;
+
     -- Cycle detection for recursive patterns
-    IF p_object_id = ANY(p_visited) THEN
+    IF v_key = ANY(p_visited) THEN
         RETURN 0;
     END IF;
 
@@ -144,26 +151,26 @@ BEGIN
         WHERE link.object_type = 'document'
           AND link.object_id = p_object_id
           AND link.relation = 'parent'
-          AND check_permission_internal(
+          AND check_folder_viewer(
               p_subject_type, p_subject_id,
-              'viewer',
-              link.subject_type,
               link.subject_id,
-              array_append(p_visited, p_object_id)
+              p_visited || ARRAY[v_key]
           ) = 1
+          AND link.subject_type IN ('folder')
     ) THEN
         RETURN 1;
     END IF;
 
     RETURN 0;
 END;
-$$ LANGUAGE plpgsql STABLE;
+$$ LANGUAGE plpgsql STABLE COST 1000;
 ```
 
 Notice how the compiler has:
 - Inlined the closure (`'viewer', 'editor', 'owner'`) rather than computing it at runtime
 - Generated pattern-specific code for tuple-to-userset traversal
-- Added cycle detection for recursive patterns
+- Called `check_folder_viewer` directly, since `parent` only allows `folder`. A tupleset with several allowed types goes through `check_permission_internal`, which routes by the parent's runtime type.
+- Added the depth limit and cycle detection for recursive patterns
 
 ## The Dispatcher
 

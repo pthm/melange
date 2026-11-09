@@ -124,7 +124,7 @@ func renderSelfRefUsersetRegularQuery(plan ListPlan, blocks SelfRefUsersetSubjec
 		}})
 	}
 
-	cteQuery := MultiCTE(ctes, buildUsersetWildcardTailQuery(plan.Analysis, plan.DatabaseSchema))
+	cteQuery := MultiCTE(ctes, buildUsersetWildcardTailQuery(plan.Analysis, plan.graph(), plan.DatabaseSchema))
 
 	return cteQuery.SQL()
 }

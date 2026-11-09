@@ -408,7 +408,7 @@ func buildRecursiveComposedClosureBlock(plan ListPlan, rel string) TypedQueryBlo
 	// object must not seed propagation from this arm any more than from the
 	// others.
 	if len(plan.Exclusions.BuildPredicates()) > 0 {
-		stmt.Where = And(buildExclusionInput(plan.Analysis, plan.DatabaseSchema, Col{Table: "icr", Column: "object_id"}, SubjectType, SubjectID).BuildPredicates()...)
+		stmt.Where = And(buildExclusionInput(plan.Analysis, plan.graph(), plan.DatabaseSchema, Col{Table: "icr", Column: "object_id"}, SubjectType, SubjectID).BuildPredicates()...)
 	}
 
 	return TypedQueryBlock{
@@ -550,6 +550,7 @@ func usersetMembershipCheck(plan ListPlan, pattern listUsersetPatternInput) Expr
 			ID:   UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}},
 		},
 		ExpectAllow: true,
+		Graph:       plan.graph(),
 	}
 }
 
@@ -635,6 +636,7 @@ func buildCrossTypeTTUBlocks(plan ListPlan, parentRelations []ListParentRelation
 		if recursive {
 			crossExclusions = buildExclusionInput(
 				plan.Analysis,
+				plan.graph(),
 				plan.DatabaseSchema,
 				Col{Table: "child", Column: "object_id"},
 				SubjectType,
@@ -766,6 +768,7 @@ func sourceRelationCheck(plan ListPlan, parent ListParentRelationData) Expr {
 		Relation:    parent.SourceRelation,
 		Object:      LiteralObject(plan.ObjectType, Col{Table: "child", Column: "object_id"}),
 		ExpectAllow: true,
+		Graph:       plan.graph(),
 	}
 	if !composableListTarget(plan, plan.ObjectType, parent.SourceRelation) {
 		return check
@@ -786,7 +789,9 @@ func buildCheckPermissionCrossTypeTTUBlock(plan ListPlan, parent ListParentRelat
 			Type: Col{Table: "child", Column: "subject_type"},
 			ID:   Col{Table: "child", Column: "subject_id"},
 		},
-		ExpectAllow: true,
+		ExpectAllow:  true,
+		Graph:        plan.graph(),
+		FilteredType: singleType(crossTypes),
 	})
 	if sourceRelationNeedsVerification(plan, parent) {
 		accessCheck = sourceRelationCheck(plan, parent)
@@ -826,6 +831,7 @@ func buildRecursiveTTUBlock(plan ListPlan, linkingRelations []string, gateWalk b
 	if gateWalk {
 		exclusions = buildExclusionInput(
 			plan.Analysis,
+			plan.graph(),
 			plan.DatabaseSchema,
 			Col{Table: "child", Column: "object_id"},
 			SubjectType,

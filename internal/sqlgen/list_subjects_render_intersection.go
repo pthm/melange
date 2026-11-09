@@ -70,6 +70,7 @@ func buildIntersectionRegularQuery(plan ListPlan, candidatesSQL string) string {
 		FromExpr:    TableAs("", "subject_candidates", "c"),
 		Where: CheckPermissionInternalExpr(
 			plan.DatabaseSchema,
+			plan.graph(),
 			SubjectRef{Type: SubjectType, ID: Col{Table: "c", Column: "subject_id"}},
 			plan.Relation,
 			LiteralObject(plan.ObjectType, ObjectID),
@@ -101,6 +102,7 @@ func buildIntersectionUsersetFilterQuery(plan ListPlan, candidatesSQL string, se
 		FromExpr:    TableAs("", "userset_candidates", "c"),
 		Where: CheckPermissionInternalExpr(
 			plan.DatabaseSchema,
+			plan.graph(),
 			SubjectRef{Type: Param("v_filter_type"), ID: Col{Table: "c", Column: "subject_id"}},
 			plan.Relation,
 			LiteralObject(plan.ObjectType, ObjectID),

@@ -83,6 +83,7 @@ func BuildListObjectsPlanWithLookup(a RelationAnalysis, inline InlineSQLData, da
 	if a.Features.HasExclusion {
 		plan.Exclusions = buildExclusionInput(
 			a,
+			g,
 			databaseSchema,
 			Col{Table: "t", Column: "object_id"},
 			SubjectType,
@@ -107,6 +108,7 @@ func BuildListSubjectsPlanWithLookup(a RelationAnalysis, inline InlineSQLData, d
 	if a.Features.HasExclusion {
 		plan.Exclusions = buildExclusionInput(
 			a,
+			g,
 			databaseSchema,
 			ObjectID,
 			Col{Table: "t", Column: "subject_type"},

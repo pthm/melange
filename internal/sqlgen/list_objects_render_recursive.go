@@ -218,6 +218,7 @@ func renderWalkTooDeep(plan ListPlan, blocks RecursiveBlockSet) []Stmt {
 			Relation:    rel,
 			Object:      frontierObject,
 			ExpectAllow: true,
+			Graph:       plan.graph(),
 		})
 	}
 	return []Stmt{
@@ -248,6 +249,7 @@ func accessibleObjectsSelect(plan ListPlan, blocks RecursiveBlockSet, from Table
 	}
 	exclusionConfig := buildExclusionInput(
 		plan.Analysis,
+		plan.graph(),
 		plan.DatabaseSchema,
 		Col{Table: "acc", Column: "object_id"},
 		SubjectType,
@@ -261,6 +263,7 @@ func accessibleObjectsSelect(plan ListPlan, blocks RecursiveBlockSet, from Table
 			Relation:    plan.Relation,
 			Object:      LiteralObject(plan.ObjectType, Col{Table: "acc", Column: "object_id"}),
 			ExpectAllow: true,
+			Graph:       plan.graph(),
 		})
 	}
 	if len(predicates) > 0 {
