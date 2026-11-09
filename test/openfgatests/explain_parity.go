@@ -27,7 +27,7 @@ import (
 //
 // Skipping (not failing):
 //   - The dispatcher's no-entry sentinel. When the relation's renderer is
-//     not yet eligible (see lib/sqlgen ComputeExplainEligibility) the
+//     not yet eligible (see internal/sqlgen ComputeExplainEligibility) the
 //     dispatcher returns a NodeUnion root labeled "explain not yet
 //     supported …" with result=false. Asserting parity here would let the
 //     sentinel falsely match every Check==false assertion as a "pass". We

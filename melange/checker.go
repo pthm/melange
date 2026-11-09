@@ -1066,7 +1066,7 @@ func quoteIdent(ident string) string {
 // escaped by doubling; backslashes are doubled and the result is prefixed
 // with E (C-style escape syntax) so the literal is unambiguous regardless of
 // the standard_conforming_strings setting. Mirrors lib/pq.QuoteLiteral and
-// lib/sqlgen/sqldsl.QuoteLiteral — duplicated here because the melange
+// internal/sqlgen/sqldsl.QuoteLiteral — duplicated here because the melange
 // runtime module is stdlib-only and cannot import sqldsl.
 func quoteLiteral(literal string) string {
 	literal = strings.ReplaceAll(literal, `'`, `''`)

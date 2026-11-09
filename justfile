@@ -12,7 +12,6 @@ GO_TEST_BENCH_MEM := "go test -bench=. -run=^$ -benchmem"
 OPENFGA_PKGS := "./openfgatests/..."
 OPENFGA_TEST_TIMEOUT := "5m"
 OPENFGA_TEST_TIMEOUT_SHORT := "2m"
-OPENFGA_TEST_TIMEOUT_LONG := "10m"
 OPENFGA_BENCH_TIMEOUT := "30m"
 OPENFGA_BENCH_TIMEOUT_SHORT := "10m"
 OPENFGA_BENCH_TIMEOUT_TINY := "5m"
@@ -808,15 +807,6 @@ test-openfga-pattern PATTERN:
 [group('OpenFGA Test')]
 test-openfga-list:
     cd {{TEST}} && {{GO_TEST}} -v -count=1 -run "TestOpenFGAListAvailableTests" {{OPENFGA_PKGS}}
-
-# Run the full OpenFGA check suite (WARNING: includes unsupported features, many will fail)
-[group('OpenFGA Test')]
-test-openfga-full-check:
-    @echo "⚠️  Running FULL OpenFGA check suite - this includes unsupported features!"
-    @echo "   Many tests will fail. Use 'just test-openfga' for supported features only."
-    @echo ""
-    cd {{TEST}} && {{GO_TEST}} -count=1 -timeout {{OPENFGA_TEST_TIMEOUT_LONG}} \
-        -run "TestOpenFGACheckSuite" {{OPENFGA_PKGS}} || true
 
 # =============================================================================
 # OpenFGA Benchmarks

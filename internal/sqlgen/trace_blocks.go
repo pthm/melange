@@ -21,7 +21,7 @@ import (
 // enough that an Expr tree adds noise without buying composition.
 
 // TraceNodeType mirrors melange.NodeType. It is duplicated here rather than
-// imported from the runtime module so lib/sqlgen continues to depend only on
+// imported from the runtime module so internal/sqlgen continues to depend only on
 // stdlib + sqldsl + analysis (the runtime module is built on top of sqlgen,
 // not the other way around).
 type TraceNodeType string

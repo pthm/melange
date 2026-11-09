@@ -18,7 +18,7 @@ import (
 // TTU (which exercises the cycle-detection path). Each scenario builds its
 // own database from an ad-hoc schema with a plain melange_tuples table,
 // then drives Explain through the dispatcher and asserts both the tree
-// shape and Check/Explain parity. The codegen tests in lib/sqlgen pin the
+// shape and Check/Explain parity. The codegen tests in internal/sqlgen pin the
 // SQL emission shape; this file is the end-to-end pin — JSONB → Trace
 // decoding against a live PG instance with real tuples.
 
@@ -384,7 +384,7 @@ type group
 
 // recursiveMultiParentSchema covers a TTU with two allowed linking types
 // (folder.parent: [folder, workspace]). The codegen handles the IN clause
-// (lib/sqlgen/explain_render.go:buildExplainParentLinkingSelect adds
+// (internal/sqlgen/explain_render.go:buildExplainParentLinkingSelect adds
 // `AllowedLinkingTypes` to the WHERE) but no integration test exercises a
 // real multi-type linking row.
 const recursiveMultiParentSchema = `model
@@ -463,7 +463,7 @@ func TestExplain_EmptyRawBytes_ReturnsError(t *testing.T) {
 
 	// Replace explain_permission with a NULL-returning stub for this test
 	// only. The signature matches explainDispatcherPublicArgs() in
-	// lib/sqlgen/explain_functions.go.
+	// internal/sqlgen/explain_functions.go.
 	_, err := db.ExecContext(ctx, `
 		CREATE OR REPLACE FUNCTION explain_permission(
 			p_subject_type TEXT,

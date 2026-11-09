@@ -431,7 +431,7 @@ func recommendForModel(t *testing.T, model string) []sqlgen.IndexRecommendation 
 	require.NoError(t, err, "generate SQL")
 
 	// Sanity: compiler.GenerateSQL must surface the recommendations through
-	// the same struct that GenerateSQL in lib/sqlgen returns.
+	// the same struct that GenerateSQL in internal/sqlgen returns.
 	_ = analysis.RelationFeatures{} // keep the import even if not directly referenced
 	return generated.IndexRecommendations
 }

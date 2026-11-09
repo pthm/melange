@@ -8,7 +8,7 @@ import (
 
 // Explain codegen. Mirrors the shape of check_render.go but emits JSONB
 // Trace nodes shaped to the contract pinned in melange/trace.go and
-// lib/sqlgen/trace_blocks.go. The body composes, in order: cycle detection,
+// internal/sqlgen/trace_blocks.go. The body composes, in order: cycle detection,
 // per-call truncation guard, userset-subject pre-check, direct-grant
 // attempt, implied function calls, parent-relation TTU loops, userset
 // reference loops, intersection groups, then the final-failure union.
