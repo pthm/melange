@@ -386,7 +386,7 @@ func (d *Doctor) subjectLookupKeys(ctx context.Context) ([]subjectLookupKey, err
 		if len(owners) > 1 {
 			m := qualifiedRef.FindStringSubmatch(strings.TrimSpace(expr))
 			owners = slices.DeleteFunc(owners, func(o subjectLookupKey) bool {
-				return m == nil || !o.Table.Names(m[1])
+				return len(m) < 2 || !o.Table.Names(m[1])
 			})
 		}
 		if len(owners) != 1 {

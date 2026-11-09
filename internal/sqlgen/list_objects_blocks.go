@@ -519,8 +519,9 @@ func buildListObjectsUsersetPatternBlocks(plan ListPlan) ([]TypedQueryBlock, err
 // buildListObjectsComplexUsersetBlocks builds the blocks for a complex userset
 // pattern, one per complexUsersetArms arm.
 func buildListObjectsComplexUsersetBlocks(plan ListPlan, pattern listUsersetPatternInput) []TypedQueryBlock {
-	var blocks []TypedQueryBlock
-	for _, arm := range complexUsersetArms(plan, pattern, nil) {
+	arms := complexUsersetArms(plan, pattern, nil)
+	blocks := make([]TypedQueryBlock, 0, len(arms))
+	for _, arm := range arms {
 		q := Tuples(plan.DatabaseSchema, "t").
 			ObjectType(plan.ObjectType).
 			Relations(pattern.SourceRelations...).

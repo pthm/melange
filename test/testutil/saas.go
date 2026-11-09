@@ -200,14 +200,18 @@ func generateSaaSData(ctx context.Context, db *sql.DB, s SaaSScale) error {
 		{`INSERT INTO partner_clients SELECT c.id, p.id
 			FROM unnest($1::int[], $2::int[]) AS pc(client, partner)
 			JOIN orgs c ON c.n = pc.client JOIN orgs p ON p.n = pc.partner`, []any{clients, partners}},
-		{fmt.Sprintf(`INSERT INTO partner_roles SELECT o.id, r.role, %s
+		{
+			fmt.Sprintf(`INSERT INTO partner_roles SELECT o.id, r.role, %s
 			FROM orgs o, generate_series(0, %d) k, unnest($1::text[]) WITH ORDINALITY r(role, j)
 			WHERE o.n BETWEEN 1 AND %d AND ((j - 1) * 7 + k * 3 + o.n) %% 10 < 4`, member("k"), upo-1, s.Partners),
-			[]any{saasPartnerRoles}},
-		{fmt.Sprintf(`INSERT INTO contacts
+			[]any{saasPartnerRoles},
+		},
+		{
+			fmt.Sprintf(`INSERT INTO contacts
 			SELECT %s, o.id, timestamptz '2024-01-01' + (g * 37 %% 1000000) * interval '1 minute'
 			FROM unnest($1::int[], $2::int[]) AS c(n, cnt) JOIN orgs o ON o.n = c.n, generate_series(1, c.cnt) g`, rid("c", "g")),
-			[]any{contactOrgs, contactCounts}},
+			[]any{contactOrgs, contactCounts},
+		},
 		{fmt.Sprintf(`INSERT INTO deals SELECT %s, o.id, CASE WHEN g %% 6 = 0 THEN NULL ELSE %s END
 			FROM orgs o, %s g`, rid("d", "g"), member("g"), perOrg(s.DealsPerOrg)), nil},
 		{fmt.Sprintf(`INSERT INTO queues SELECT %s, o.id FROM orgs o, generate_series(0, %d) q`,

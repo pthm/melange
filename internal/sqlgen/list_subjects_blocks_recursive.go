@@ -499,7 +499,7 @@ func buildListSubjectsRecursiveSimpleUsersetBlock(plan ListPlan, pattern listUse
 // buildListSubjectsRecursiveTTUBlocks builds the TTU path blocks for recursive
 // list_subjects, and the linking relations the parent_closure walk must follow
 // past the direct parent for them (sorted).
-func buildListSubjectsRecursiveTTUBlocks(plan ListPlan, parentRelations []ListParentRelationData) ([]TypedQueryBlock, []string) {
+func buildListSubjectsRecursiveTTUBlocks(plan ListPlan, parentRelations []ListParentRelationData) (typed []TypedQueryBlock, walkRelations []string) {
 	if len(parentRelations) == 0 {
 		return nil, nil
 	}

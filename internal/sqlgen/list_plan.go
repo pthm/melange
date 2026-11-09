@@ -65,11 +65,6 @@ func (p ListPlan) MaterializeCTEs() bool {
 	return p.EnableMaterializedCTEs
 }
 
-// wrapPagination applies plan-aware materialization to the cursor pagination wrapper.
-func (p ListPlan) wrapPagination(query, idColumn string) string {
-	return wrapWithPaginationOpts(query, idColumn, p.MaterializeCTEs())
-}
-
 // wrapPaginationWildcardFirst applies plan-aware materialization to the
 // wildcard-first pagination wrapper used by list_subjects.
 func (p ListPlan) wrapPaginationWildcardFirst(query string) string {

@@ -249,7 +249,7 @@ func grantEdgesTable(edges []grantEdge, alias string) TypedValuesTable {
 
 // grantEdgeTuples joins the states unnested as states(type, id, relation) to
 // their grant edges e among edges and the tuples t those edges read.
-func grantEdgeTuples(edges []grantEdge, states, alias string) (TableExpr, []JoinClause) {
+func grantEdgeTuples(edges []grantEdge, states, alias string) (from TableExpr, joins []JoinClause) {
 	state := func(column string) Expr { return Col{Table: alias, Column: column} }
 	return TableAs("", "unnest("+states+")", alias+"(type, id, relation)"), []JoinClause{
 		{Type: "INNER", TableExpr: grantEdgesTable(edges, "e"), On: And(
@@ -530,8 +530,10 @@ func renderLastHopExpansionCheck(plan ListPlan, recursing []string, crossLinks b
 		ColumnExprs: []Expr{Int(1)},
 		FromExpr:    TableAs("", "unnest("+closureArrays+", "+closureDepth+")", "p(type, id, via, depth)"),
 		Joins: []JoinClause{
-			{Type: "INNER", TableExpr: TypedValuesTable{Rows: rows, Alias: "e", Columns: []string{"via", "tuple_relation", "target_type"}},
-				On: Eq{Left: edge("via"), Right: ancestor("via")}},
+			{
+				Type: "INNER", TableExpr: TypedValuesTable{Rows: rows, Alias: "e", Columns: []string{"via", "tuple_relation", "target_type"}},
+				On: Eq{Left: edge("via"), Right: ancestor("via")},
+			},
 			{Type: "INNER", Table: "melange_tuples", Alias: "t", On: And(
 				Eq{Left: tuple("object_type"), Right: ancestor("type")},
 				Eq{Left: tuple("object_id"), Right: ancestor("id")},

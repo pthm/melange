@@ -29,7 +29,8 @@ func RenderListSubjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUsers
 	if len(plan.AllowedSubjectTypes) > 0 {
 		regularWalk = []Stmt{If{Cond: In{Expr: SubjectType, Values: plan.AllowedSubjectTypes}, Then: regularWalk}}
 	}
-	elseBranch := []Stmt{Comment{Text: "Regular subject type: find individual subjects via recursive userset expansion"}}
+	elseBranch := make([]Stmt, 0, len(regularWalk)+2)
+	elseBranch = append(elseBranch, Comment{Text: "Regular subject type: find individual subjects via recursive userset expansion"})
 	elseBranch = append(elseBranch, regularWalk...)
 	elseBranch = append(elseBranch, ReturnQuery{Query: regularPaginatedQuery})
 

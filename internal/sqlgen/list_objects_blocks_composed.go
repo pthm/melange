@@ -186,12 +186,14 @@ func buildComposedRecursiveTTUObjectsBlocks(plan ListPlan, anchor *IndirectAncho
 	check := CheckPermissionInternalExpr(plan.DatabaseSchema, SubjectParams(), targetRel, ObjectRef{Type: Lit(recursiveType), ID: parentID}, true)
 
 	block := func(membership Expr) TypedQueryBlock {
-		conditions := []Expr{
+		excluded := exclusions.BuildPredicates()
+		conditions := make([]Expr, 0, 4+len(excluded))
+		conditions = append(conditions,
 			Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 			Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(anchor.Path[0].LinkingRelation)},
 			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(recursiveType)},
 			membership,
-		}
+		)
 		return TypedQueryBlock{
 			Comments: []string{
 				fmt.Sprintf("-- Recursive TTU: %s -> %s", anchor.Path[0].LinkingRelation, recursiveType),
@@ -200,7 +202,7 @@ func buildComposedRecursiveTTUObjectsBlocks(plan ListPlan, anchor *IndirectAncho
 				Distinct:    true,
 				ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}},
 				FromExpr:    TableAs("", "melange_tuples", "t"),
-				Where:       And(append(conditions, exclusions.BuildPredicates()...)...),
+				Where:       And(append(conditions, excluded...)...),
 			},
 		}
 	}

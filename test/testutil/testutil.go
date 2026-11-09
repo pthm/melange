@@ -463,7 +463,7 @@ func EmptyDB(tb testing.TB) *sql.DB {
 
 // EmptyDBWithDSN is EmptyDB, also returning the database's DSN for opening
 // further connections to it.
-func EmptyDBWithDSN(tb testing.TB) (*sql.DB, string) {
+func EmptyDBWithDSN(tb testing.TB) (db *sql.DB, dsn string) {
 	tb.Helper()
 
 	adminDSN, err := ensureSingleton()
@@ -477,8 +477,8 @@ func EmptyDBWithDSN(tb testing.TB) (*sql.DB, string) {
 	require.NoError(tb, err, "failed to create empty database")
 
 	// Connect to the new database
-	dbDSN := replaceDBName(adminDSN, dbName)
-	db, err := sql.Open("pgx", dbDSN)
+	dsn = replaceDBName(adminDSN, dbName)
+	db, err = sql.Open("pgx", dsn)
 	require.NoError(tb, err, "failed to connect to empty database")
 
 	// Verify connection
@@ -488,7 +488,7 @@ func EmptyDBWithDSN(tb testing.TB) (*sql.DB, string) {
 	// Register cleanup
 	registerCleanup(tb, db, adminDSN, dbName)
 
-	return db, dbDSN
+	return db, dsn
 }
 
 // registerCleanup registers cleanup for the database connection and database itself.

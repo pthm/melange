@@ -12,8 +12,10 @@ func RenderListObjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUserse
 
 	// Only the seed depends on the subject kind; the walk and final query are shared.
 	seed := seedBySubjectKind(seedFrontier(plainBase), seedFrontier(blocks.BaseBlocks), hasUserset)
-	body := []Stmt{Comment{Text: "Seed: objects the subject is a direct member of"}, seed}
-	body = append(body, renderIDWalk(0, *blocks.RecursiveBlock, raiseTooDeep())...)
+	walk := renderIDWalk(0, *blocks.RecursiveBlock, raiseTooDeep())
+	body := make([]Stmt, 0, len(walk)+3)
+	body = append(body, Comment{Text: "Seed: objects the subject is a direct member of"}, seed)
+	body = append(body, walk...)
 	body = append(body, ReturnQuery{Query: renderSelfRefUsersetListObjectsQuery(plan, blocks)})
 
 	fn := PlpgsqlFunction{

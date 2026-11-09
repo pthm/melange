@@ -400,8 +400,10 @@ func tableAlias(words []string) string {
 
 var (
 	identifierRe   = regexp.MustCompile(`^\w+$`)
-	clauseKeywords = []string{"WHERE", "GROUP", "ORDER", "LIMIT", "OFFSET", "HAVING", "WINDOW", "UNION", "ON", "USING",
-		"JOIN", "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "NATURAL", "LATERAL", "TABLESAMPLE"}
+	clauseKeywords = []string{
+		"WHERE", "GROUP", "ORDER", "LIMIT", "OFFSET", "HAVING", "WINDOW", "UNION", "ON", "USING",
+		"JOIN", "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "NATURAL", "LATERAL", "TABLESAMPLE",
+	}
 )
 
 // splitOnJoins splits a FROM clause body on JOIN keywords, returning each

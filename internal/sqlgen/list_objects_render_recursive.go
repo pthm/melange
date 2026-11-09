@@ -89,7 +89,8 @@ func renderWalkSeed(blocks RecursiveBlockSet) Stmt {
 	seedIDs := func(filter string) string {
 		return "array_agg(DISTINCT seed.object_id) FILTER (WHERE " + filter + ")"
 	}
-	columns := []string{seedIDs("seed.propagatable")}
+	columns := make([]string, 0, 2)
+	columns = append(columns, seedIDs("seed.propagatable"))
 	into := []string{walkFrontier}
 	if deferred {
 		columns = []string{seedIDs("seed.propagatable AND NOT seed.indirect"), seedIDs("seed.propagatable AND seed.indirect")}
