@@ -55,8 +55,10 @@ func hostileReport() *sqlapi.Report {
 	}
 	disp := fn
 	disp.Kind, disp.Type, disp.Relation, disp.Answers = sqlgen.KindDispatcher, "", "", []string{hostile}
-	rel := sqlapi.Relation{Type: hostile, Relation: hostile, Dispatchers: []string{hostile}, Functions: []sqlapi.Function{fn},
-		NotInstalled: []sqlgen.NotInstalled{{Kind: sqlgen.KindExplain, Reason: sqlgen.ReasonNotExposed, Detail: hostile}}}
+	rel := sqlapi.Relation{
+		Type: hostile, Relation: hostile, Dispatchers: []string{hostile}, Functions: []sqlapi.Function{fn},
+		NotInstalled: []sqlgen.NotInstalled{{Kind: sqlgen.KindExplain, Reason: sqlgen.ReasonNotExposed, Detail: hostile}},
+	}
 	return &sqlapi.Report{
 		Exposure:    sqlgen.Exposure{Relations: sqlgen.RelationPatterns{Include: []string{hostile}}},
 		Relations:   []sqlapi.Relation{rel},
@@ -70,8 +72,10 @@ func hostileReport() *sqlapi.Report {
 
 func hostileSQLAPIData(typ string) sqlAPIData {
 	r := hostileReport()
-	d := sqlAPIData{Env: hostile, Schema: hostile, Type: typ, Report: r, Types: []sqlAPIType{{Name: hostile, Relations: 1}},
-		Exposed: r.Relations, Internal: r.Relations, Drifted: r.Dispatchers}
+	d := sqlAPIData{
+		Env: hostile, Schema: hostile, Type: typ, Report: r, Types: []sqlAPIType{{Name: hostile, Relations: 1}},
+		Exposed: r.Relations, Internal: r.Relations, Drifted: r.Dispatchers,
+	}
 	return d
 }
 
@@ -97,8 +101,10 @@ func TestViewsEscapeDatabaseText(t *testing.T) {
 		"sql api overview": sqlAPIPage(hostileSQLAPIData("")),
 		"sql api type":     sqlAPIPage(hostileSQLAPIData(hostile)),
 		"sql api error":    sqlAPIPage(sqlAPIData{Err: hostile, Type: hostile, Kind: hostile}),
-		"relation catalog": relationPage(relationData{Model: testModel, Type: hostile, Relation: hostile, Known: true,
-			API: &hostileReport().Relations[0], Funcs: []sqlFunc{{Name: hostile, Label: hostile, Def: hostile}}}),
+		"relation catalog": relationPage(relationData{
+			Model: testModel, Type: hostile, Relation: hostile, Known: true,
+			API: &hostileReport().Relations[0], Funcs: []sqlFunc{{Name: hostile, Label: hostile, Def: hostile}},
+		}),
 	} {
 		got := renderHTML(t, c)
 		if strings.Contains(got, "<img src=x") || strings.Contains(got, `onerror="alert`) {

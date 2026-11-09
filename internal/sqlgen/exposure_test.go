@@ -87,7 +87,7 @@ func generateExposed(t *testing.T, m exposureModel, e Exposure) exposureOutput {
 
 // sql returns every generated statement.
 func (o exposureOutput) sql() []string {
-	var out []string
+	out := make([]string, 0, len(o.named)+len(o.dispatchers))
 	for _, nf := range o.named {
 		out = append(out, nf.SQL)
 	}
@@ -99,10 +99,22 @@ func (o exposureOutput) sql() []string {
 
 var createdFunction = regexp.MustCompile(`CREATE OR REPLACE FUNCTION "` + exposureSchema + `"\."([^"]+)"\(`)
 
+// mustIndex is the index of the first substr in s, failing the test when s
+// does not contain it.
+func mustIndex(t *testing.T, s, substr string) int {
+	t.Helper()
+	i := strings.Index(s, substr)
+	if i < 0 {
+		t.Fatalf("%q not found in:\n%s", substr, s)
+	}
+	return i
+}
+
 // created returns the names of the functions sql creates, in order.
 func created(sql string) []string {
-	var names []string
-	for _, m := range createdFunction.FindAllStringSubmatch(sql, -1) {
+	matches := createdFunction.FindAllStringSubmatch(sql, -1)
+	names := make([]string, 0, len(matches))
+	for _, m := range matches {
 		names = append(names, m[1])
 	}
 	return names
@@ -142,8 +154,9 @@ type call struct {
 // their top-level arguments.
 func calls(sql string) []call {
 	sql = withoutComments(sql)
-	var out []call
-	for _, loc := range calledFunction.FindAllStringSubmatchIndex(sql, -1) {
+	locs := calledFunction.FindAllStringSubmatchIndex(sql, -1)
+	out := make([]call, 0, len(locs))
+	for _, loc := range locs {
 		name := sql[loc[2]:loc[3]]
 		out = append(out, call{name: name, args: splitArgs(sql[loc[1]:])})
 	}
@@ -462,7 +475,7 @@ func exposureProblems(m exposureModel, o exposureOutput, base exposureBaseline) 
 // under: the default and several restricted ones, chosen deterministically.
 func exposuresFor(analyses []RelationAnalysis, seed int64) map[string]Exposure {
 	rng := rand.New(rand.NewSource(seed))
-	var qualified []string
+	qualified := make([]string, 0, len(analyses))
 	for _, a := range analyses {
 		qualified = append(qualified, a.ObjectType+"#"+a.Relation)
 	}
@@ -1007,7 +1020,8 @@ func TestExposure_PublicRaise(t *testing.T) {
 	expectSQL(t, "raising helper", o.gen.Dispatcher,
 		`RAISE EXCEPTION 'relation "%" on type "%" is not exposed', p_relation, p_object_type USING ERRCODE = 'M2003';`)
 	// check_permission stays an inlinable LANGUAGE sql wrapper with a guard.
-	public := o.gen.Dispatcher[strings.Index(o.gen.Dispatcher, `FUNCTION "authz"."check_permission"(`):]
+	publicAt := mustIndex(t, o.gen.Dispatcher, `FUNCTION "authz"."check_permission"(`)
+	public := o.gen.Dispatcher[publicAt:]
 	expectSQL(t, "check_permission", public,
 		"WHEN p_object_type = 'doc' THEN p_relation IN ('owner', 'secret')",
 		"ELSE FALSE",
@@ -1016,7 +1030,7 @@ func TestExposure_PublicRaise(t *testing.T) {
 		"LANGUAGE sql STABLE",
 	)
 	rejectSQL(t, "check_permission", public, "'viewer'")
-	internal := o.gen.Dispatcher[strings.Index(o.gen.Dispatcher, `FUNCTION "authz"."check_permission_internal"(`):strings.Index(o.gen.Dispatcher, `FUNCTION "authz"."check_permission"(`)]
+	internal := o.gen.Dispatcher[mustIndex(t, o.gen.Dispatcher, `FUNCTION "authz"."check_permission_internal"(`):publicAt]
 	expectSQL(t, "check_permission_internal", internal, `"authz"."check_doc_owner"(`, `"authz"."check_doc_viewer"(`, "RETURN 0;")
 	rejectSQL(t, "check_permission_internal", internal, "check_doc_secret", "M2003", helper)
 	expectSQL(t, "check_permission_nw", o.gen.DispatcherNoWildcard, "p_relation IN ('owner', 'secret')", helper)
@@ -1034,7 +1048,7 @@ func TestExposure_PublicRaise(t *testing.T) {
 
 	for name, sql := range map[string]string{
 		"list_accessible_objects":  o.list.ListObjectsDispatcher,
-		"list_accessible_subjects": o.list.ListSubjectsDispatcher[strings.Index(o.list.ListSubjectsDispatcher, `FUNCTION "authz"."list_accessible_subjects"(`):],
+		"list_accessible_subjects": o.list.ListSubjectsDispatcher[mustIndex(t, o.list.ListSubjectsDispatcher, `FUNCTION "authz"."list_accessible_subjects"(`):],
 	} {
 		expectSQL(t, name, sql,
 			"IF p_relation IN ('owner', 'secret') THEN\n            RAISE EXCEPTION",
@@ -1049,7 +1063,7 @@ func TestExposure_PublicRaise(t *testing.T) {
 		generateAccessibleObjectsDispatcher(m.analyses, exposureSchema, nil); got != want {
 		t.Errorf("accessible_objects differs from the default wrapper:\n%s", got)
 	}
-	internalSubjects := o.list.ListSubjectsDispatcher[:strings.Index(o.list.ListSubjectsDispatcher, `FUNCTION "authz"."list_accessible_subjects"(`)]
+	internalSubjects := o.list.ListSubjectsDispatcher[:mustIndex(t, o.list.ListSubjectsDispatcher, `FUNCTION "authz"."list_accessible_subjects"(`)]
 	expectSQL(t, "list_accessible_subjects_internal", internalSubjects, `"authz"."list_doc_owner_sub"(`, `"authz"."list_doc_viewer_sub"(`)
 	rejectSQL(t, "list_accessible_subjects_internal", internalSubjects, "M2003", "secret")
 
@@ -1145,7 +1159,7 @@ func TestExposure_FamilyToggles(t *testing.T) {
 	// All three off removes every list_obj, accessible_ and parent-key function.
 	noObjects := gen(FunctionFamilies{ListObjects: off, Accessible: off, ParentKey: off})
 	equalSets("list_objects, accessible, parent_key off", noObjects, matching(full, func(n string) bool {
-		return !(strings.HasSuffix(n, "_obj") || (strings.HasPrefix(n, "accessible_") && n != accessibleObjectsDispatcherName))
+		return !strings.HasSuffix(n, "_obj") && (!strings.HasPrefix(n, "accessible_") || n == accessibleObjectsDispatcherName)
 	}))
 
 	// list_subjects off removes only list_sub functions.

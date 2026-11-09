@@ -291,7 +291,7 @@ func newExposureClosure(analyses []RelationAnalysis, e Exposure) *exposureClosur
 		expand:       enabled(e.Functions.Expand),
 		explain:      enabled(e.Functions.Explain),
 	}
-	restricted := !(c.listObjects && c.listSubjects && c.accessible && c.parentKey && c.expand && c.explain)
+	restricted := !c.listObjects || !c.listSubjects || !c.accessible || !c.parentKey || !c.expand || !c.explain
 	var queue []string
 	for _, a := range analyses {
 		c.defined = append(c.defined, relationKey{a.ObjectType, a.Relation})

@@ -40,7 +40,7 @@ var functionsCmd = &cobra.Command{
 	Use:   "functions",
 	Short: "List the SQL functions generated for each relation",
 	Long: `Functions lists the SQL API melange generates for the model: for every
-relation, whether the exposure exposes it or it is internal (modelling only),
+relation, whether the exposure exposes it or it is internal (modeling only),
 and each function a migration installs for it, under its exact name (long
 names are truncated to 63 bytes with a hash), with its kind and whether
 applications are meant to call it. The dispatchers follow.
@@ -141,7 +141,7 @@ func init() {
 	f.StringSliceVar(&functionsTypes, "type", nil, "only this type's relations (repeatable)")
 	f.StringSliceVar(&functionsKinds, "kind", nil, "only functions of this kind (repeatable): "+kindList())
 	f.BoolVar(&functionsExposed, "exposed", false, "only exposed relations")
-	f.BoolVar(&functionsInternal, "internal", false, "only internal relations (not exposed, modelling only)")
+	f.BoolVar(&functionsInternal, "internal", false, "only internal relations (not exposed, modeling only)")
 
 	functionsCmd.AddCommand(functionsShowCmd)
 }
@@ -156,7 +156,8 @@ func kindList() string {
 
 // exposureFlagNames are the flags addExposureFlags registers.
 func exposureFlagNames() []string {
-	names := []string{"include-relation", "exclude-relation"}
+	names := make([]string, 0, 2+len(exposureFamilies))
+	names = append(names, "include-relation", "exclude-relation")
 	for _, family := range exposureFamilies {
 		names = append(names, family.flag)
 	}
@@ -369,8 +370,12 @@ func summaryText(r *sqlapi.Report) string {
 		n    int
 		what string
 	}{
-		{s.Missing, "missing"}, {s.SignatureDiffers, "with other arguments"}, {s.BodyChanged, "with a changed body"},
-		{s.CodegenDiffers, "generated differently by this melange"}, {s.StaleOverloads, "stale overloads"}, {s.Orphans, "orphans"},
+		{s.Missing, "missing"},
+		{s.SignatureDiffers, "with other arguments"},
+		{s.BodyChanged, "with a changed body"},
+		{s.CodegenDiffers, "generated differently by this melange"},
+		{s.StaleOverloads, "stale overloads"},
+		{s.Orphans, "orphans"},
 	} {
 		if c.n > 0 {
 			parts = append(parts, fmt.Sprintf("%d %s", c.n, c.what))
@@ -500,7 +505,7 @@ func printRelationText(w io.Writer, r *sqlapi.Report, rel *sqlapi.Relation) {
 	st := style.StatusStyles
 	label := st.Good.Render("exposed")
 	if !rel.Exposed {
-		label = st.Muted.Render("internal (not exposed: modelling only; the public dispatchers not listed under Answered by raise M2003 for it)")
+		label = st.Muted.Render("internal (not exposed: modeling only; the public dispatchers not listed under Answered by raise M2003 for it)")
 	}
 	_, _ = fmt.Fprintf(w, "%s  %s\n", st.Bold.Render(rel.Type+"#"+rel.Relation), label)
 	printFunctionsHeader(w, r)

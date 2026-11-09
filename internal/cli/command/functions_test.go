@@ -69,8 +69,10 @@ func TestCLI_FunctionsFileModeJSON(t *testing.T) {
 	assert.Equal(t, "accessible_pull_re_can_read_security_advisories_and_vu_d0edb52c", names[sqlgen.KindAccessible])
 	assert.Equal(t, "accessible_pull_r_can_read_security_advisories_and_vul_e8c3d69b", names[sqlgen.KindParentKey])
 	assert.NotContains(t, names, sqlgen.KindExplain)
-	assert.Contains(t, pr.NotInstalled, sqlgen.NotInstalled{Kind: sqlgen.KindExplain, Reason: sqlgen.ReasonOnDemand,
-		Detail: "sql.functions.explain is off; the CLI and studio compile it on demand"})
+	assert.Contains(t, pr.NotInstalled, sqlgen.NotInstalled{
+		Kind: sqlgen.KindExplain, Reason: sqlgen.ReasonOnDemand,
+		Detail: "sql.functions.explain is off; the CLI and studio compile it on demand",
+	})
 
 	reader := r.Find("repository", "reader")
 	require.NotNil(t, reader)
@@ -142,7 +144,7 @@ func TestCLI_FunctionsShow(t *testing.T) {
 	out, err = runCLIWithFiles(t, "schema: schema.fga\n", files, "functions", "show", "repository.reader",
 		"--include-relation", "repository#can_read", "--no-list-subjects")
 	require.NoError(t, err)
-	assert.Contains(t, out, "repository#reader  internal (not exposed: modelling only; the public dispatchers not listed under Answered by raise M2003 for it)")
+	assert.Contains(t, out, "repository#reader  internal (not exposed: modeling only; the public dispatchers not listed under Answered by raise M2003 for it)")
 	assert.Contains(t, out, "Answered by: expand_permission")
 	assert.Contains(t, out, "Not installed\n  list_subjects family off: sql.functions.list_subjects is off")
 
@@ -198,8 +200,8 @@ func TestCLI_FunctionsJSONEmptyArrays(t *testing.T) {
 // A dotted argument is split where it names a relation, so a relation
 // name with a dot resolves.
 func TestCLI_FunctionsShowDotted(t *testing.T) {
-	schema := "model\n  schema 1.1\ntype user\ntype app\n  relations\n    define doc.viewer: [user]\n"
-	out, err := runCLIWithFiles(t, "schema: schema.fga\n", map[string]string{"schema.fga": schema}, "functions", "show", "app.doc.viewer")
+	dsl := "model\n  schema 1.1\ntype user\ntype app\n  relations\n    define doc.viewer: [user]\n"
+	out, err := runCLIWithFiles(t, "schema: schema.fga\n", map[string]string{"schema.fga": dsl}, "functions", "show", "app.doc.viewer")
 	require.NoError(t, err)
 	assert.Contains(t, out, "app#doc.viewer  exposed")
 	assert.Contains(t, out, "check_app_doc_viewer")

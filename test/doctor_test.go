@@ -1086,14 +1086,14 @@ func TestDoctor_SubjectLookupIndexes(t *testing.T) {
 
 // fixHintDB is a database migrated with concurrencySchema by a release
 // build, with check_document_viewer dropped by hand, and the schema file.
-func fixHintDB(t *testing.T) (*sql.DB, string) {
+func fixHintDB(t *testing.T) (db *sql.DB, path string) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
 	stampVersion(t, "v0.10.0")
-	db := newTuplesDB(t)
-	path := writeSchema(t, concurrencySchema)
+	db = newTuplesDB(t)
+	path = writeSchema(t, concurrencySchema)
 	_, err := migrator.MigrateWithOptions(context.Background(), db, path, migrator.MigrateOptions{Version: "v0.10.0"})
 	require.NoError(t, err)
 	dropGeneratedFunction(t, db, "check_document_viewer")

@@ -29,12 +29,12 @@ const notExposedViewer = `relation "viewer" on type "document" is not exposed`
 
 // exposedToolsDB migrates exposureSchema with exposure and adds tuples:
 // alice owns document 1, bob views it, carol audits it.
-func exposedToolsDB(t *testing.T, exposure *migrator.Exposure) (*sql.DB, string) {
+func exposedToolsDB(t *testing.T, exposure *migrator.Exposure) (db *sql.DB, dsn string) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	db, dsn := newTuplesDBWithDSN(t)
+	db, dsn = newTuplesDBWithDSN(t)
 	_, err := migrateExposure(t, db, writeSchema(t, exposureSchema), exposure, false)
 	require.NoError(t, err)
 	_, err = db.ExecContext(context.Background(), `INSERT INTO melange_tuples VALUES
@@ -65,14 +65,14 @@ func requireValidation(t *testing.T, err error, msg string) {
 // lib/pq and pgx alike, and answers for the exposed relation.
 func TestRuntime_NotExposedIsValidationError(t *testing.T) {
 	db, dsn := exposedToolsDB(t, editorOnly())
-	pq, err := sql.Open("postgres", dsn)
+	pqDB, err := sql.Open("postgres", dsn)
 	require.NoError(t, err)
-	t.Cleanup(func() { _ = pq.Close() })
+	t.Cleanup(func() { _ = pqDB.Close() })
 	ctx := context.Background()
 	alice, doc := melange.Object{Type: "user", ID: "alice"}, melange.Object{Type: "document", ID: "1"}
 	tuples := []melange.ContextualTuple{{Subject: melange.Object{Type: "user", ID: "dave"}, Relation: "editor", Object: doc}}
 
-	for driver, conn := range map[string]*sql.DB{"pgx": db, "lib/pq": pq} {
+	for driver, conn := range map[string]*sql.DB{"pgx": db, "lib/pq": pqDB} {
 		t.Run(driver, func(t *testing.T) {
 			c := melange.NewChecker(conn)
 			ok, err := c.Check(ctx, alice, melange.Relation("editor"), doc)
@@ -407,7 +407,7 @@ func TestCLI_ExplainExpandFamiliesOff(t *testing.T) {
 	}
 	outputs := func(t *testing.T) []string {
 		t.Helper()
-		var out []string
+		out := make([]string, 0, len(calls))
 		for _, args := range calls {
 			stdout, stderr, err := cli.exec(dir, append(args, "--db", dsn)...)
 			require.NoError(t, err, "melange %v: %s", args, stderr)

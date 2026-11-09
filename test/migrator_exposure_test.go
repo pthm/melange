@@ -64,7 +64,7 @@ var restrictedInstalls = map[string]string{
 }
 
 // exposureDB is an empty database with melange_tuples, and the schema file.
-func exposureDB(t *testing.T) (*sql.DB, string) {
+func exposureDB(t *testing.T) (db *sql.DB, path string) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -171,6 +171,7 @@ func TestMigrateExposure_NilKeepsRecordedExplicitDefaultWidens(t *testing.T) {
 	skipped, err := migrateExposure(t, db, path, nil, false)
 	require.NoError(t, err)
 	assert.True(t, skipped, "nil keeps the recorded exposure: nothing to do")
+	assert.Equal(t, records, migrationRecordCount(t, ctx, db), "a skipped migration records nothing")
 
 	require.NoError(t, migrator.Migrate(ctx, db, path))
 	require.NoError(t, migrator.MigrateFromString(ctx, db, exposureSchema))

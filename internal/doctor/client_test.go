@@ -29,8 +29,10 @@ func clientCheck(t *testing.T, report *Report, name string) CheckResult {
 }
 
 func TestEmitClientFindings(t *testing.T) {
-	notInstalled := sqlapi.ClientFinding{Code: "function_not_installed", Severity: sqlapi.SeverityError,
-		Function: "accessible_document_viewer", Message: "accessible_document_viewer is not installed", Fix: "Run 'melange migrate'"}
+	notInstalled := sqlapi.ClientFinding{
+		Code: "function_not_installed", Severity: sqlapi.SeverityError,
+		Function: "accessible_document_viewer", Message: "accessible_document_viewer is not installed", Fix: "Run 'melange migrate'",
+	}
 	internal := sqlapi.ClientFinding{Code: "function_internal", Severity: sqlapi.SeverityWarning, Function: "accessible_folder_viewer", Message: "internal"}
 	notExposed := sqlapi.ClientFinding{Code: "relation_not_exposed", Severity: sqlapi.SeverityError, Type: "document", Relation: "owner", Message: "not exposed"}
 	info := sqlapi.ClientFinding{Code: "relation_internal", Severity: sqlapi.SeverityInfo, Type: "document", Relation: "parent", Message: "constant only"}
@@ -114,7 +116,7 @@ func TestEmitClientFindings(t *testing.T) {
 // The client's migrate fixes come from doctor's hints, which know when a
 // plain migrate is refused or skips.
 func TestClientFixFollowsMigrate(t *testing.T) {
-	withVersion(t, "v0.10.0")
+	withVersion(t)
 	ctx := context.Background()
 	migrate := sqlapi.ClientFinding{Remedy: sqlapi.RemedyMigrate, Fix: "run melange migrate, which installs it"}
 	reinstall := sqlapi.ClientFinding{Remedy: sqlapi.RemedyReinstall, Fix: "melange migrate --force reinstalls it"}

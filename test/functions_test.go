@@ -27,12 +27,12 @@ const functionsDBSchema = "fn_api"
 
 // functionsDB returns an empty database with a melange_tuples table in
 // functionsDBSchema, and its DSN.
-func functionsDB(t *testing.T) (*sql.DB, string) {
+func functionsDB(t *testing.T) (db *sql.DB, dsn string) {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
 	}
-	db, dsn := testutil.EmptyDBWithDSN(t)
+	db, dsn = testutil.EmptyDBWithDSN(t)
 	s := pq.QuoteIdentifier(functionsDBSchema)
 	_, err := db.ExecContext(context.Background(), `CREATE SCHEMA `+s+`;
 		CREATE TABLE `+s+`.melange_tuples (

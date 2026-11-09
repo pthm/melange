@@ -179,8 +179,10 @@ func Describe(types []schema.TypeDefinition, exposure sqlgen.Exposure, databaseS
 		types:          types,
 	}
 	for _, cr := range cat.Relations {
-		rel := Relation{Type: cr.Type, Relation: cr.Relation, Exposed: cr.Exposed, Dispatchers: cr.Dispatchers,
-			DependsOn: cr.DependsOn, NotInstalled: cr.NotInstalled}
+		rel := Relation{
+			Type: cr.Type, Relation: cr.Relation, Exposed: cr.Exposed, Dispatchers: cr.Dispatchers,
+			DependsOn: cr.DependsOn, NotInstalled: cr.NotInstalled,
+		}
 		for _, f := range cr.Functions {
 			rel.Functions = append(rel.Functions, Function{CatalogFunction: f, Status: StatusNotChecked})
 		}
@@ -429,7 +431,7 @@ func (r *Report) classify(installed []installedRow, rec *migrator.MigrationRecor
 }
 
 // status compares one expected function with the installed rows of its name.
-func (r *Report) status(f Function, rows []installedRow, rec *migrator.MigrationRecord, gen *generated) (Status, string, []string) {
+func (r *Report) status(f Function, rows []installedRow, rec *migrator.MigrationRecord, gen *generated) (status Status, detail string, staleOverloads []string) {
 	if len(rows) == 0 {
 		return StatusMissing, "not installed; " + r.reinstall(), nil
 	}
@@ -444,9 +446,9 @@ func (r *Report) status(f Function, rows []installedRow, rec *migrator.Migration
 		others = append(others, rows[i].args)
 	}
 	if match == nil {
-		detail := fmt.Sprintf("installed as %s(%s), expected %s(%s); ", f.Name, strings.Join(others, "; "), f.Name, want)
+		prefix := fmt.Sprintf("installed as %s(%s), expected %s(%s); ", f.Name, strings.Join(others, "; "), f.Name, want)
 		if r.CodegenAhead {
-			return StatusSignatureDiffers, detail + r.reinstall(), nil
+			return StatusSignatureDiffers, prefix + r.reinstall(), nil
 		}
 		// CREATE OR REPLACE cannot rename an argument and adds an overload
 		// for other argument types, so migrate cannot replace it.
@@ -454,7 +456,7 @@ func (r *Report) status(f Function, rows []installedRow, rec *migrator.Migration
 		for i, args := range others {
 			drops[i] = "DROP FUNCTION " + r.qualify(f.Name) + "(" + args + ");"
 		}
-		return StatusSignatureDiffers, detail + "migrate cannot replace a function whose arguments differ, so drop it first (" + strings.Join(drops, " ") + "), then " + r.reinstall(), nil
+		return StatusSignatureDiffers, prefix + "migrate cannot replace a function whose arguments differ, so drop it first (" + strings.Join(drops, " ") + "), then " + r.reinstall(), nil
 	}
 	if gen == nil || match.srcMD5 == nil {
 		return StatusInstalled, "", others

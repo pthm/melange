@@ -121,8 +121,11 @@ func kitchenSinkSample(t *testing.T, db *sql.DB) traceSample {
 	require.NoError(t, db.QueryRowContext(ctx, `SELECT subject_id FROM kitchen_sink_tuples
 		WHERE subject_type = 'group' AND subject_id LIKE '%#member' ORDER BY 1 LIMIT 1`).Scan(&usersetSubject))
 	s.subjects = []melange.Object{
-		{Type: "user", ID: "u0"}, {Type: "user", ID: "u1"}, {Type: "user", ID: "u7"},
-		{Type: "service_account", ID: "sa0"}, {Type: "group", ID: usersetSubject},
+		{Type: "user", ID: "u0"},
+		{Type: "user", ID: "u1"},
+		{Type: "user", ID: "u7"},
+		{Type: "service_account", ID: "sa0"},
+		{Type: "group", ID: usersetSubject},
 	}
 	require.Greater(t, len(s.objects), 20)
 	return s
@@ -587,23 +590,30 @@ func TestCLI_OnDemandKitchenSink(t *testing.T) {
 		(SELECT min(object_id) FROM kitchen_sink_tuples WHERE object_type = 'document'),
 		(SELECT min(object_id) FROM kitchen_sink_tuples WHERE object_type = 'folder'),
 		(SELECT min(object_id) FROM kitchen_sink_tuples WHERE object_type = 'comment')`).Scan(&doc, &folder, &comment))
-	var calls [][]string
-	for _, subject := range []string{"user:u0", "user:u1", "service_account:sa0"} {
-		for _, q := range [][2]string{
-			{"can_view", "document:" + doc}, {"can_comment", "document:" + doc}, {"elevated", "document:" + doc},
-			{"visible", "document:" + doc}, {"co_owner", "folder:" + folder}, {"can_read", "comment:" + comment},
-		} {
+	subjects := []string{"user:u0", "user:u1", "service_account:sa0"}
+	explains := [][2]string{
+		{"can_view", "document:" + doc},
+		{"can_comment", "document:" + doc},
+		{"elevated", "document:" + doc},
+		{"visible", "document:" + doc},
+		{"co_owner", "folder:" + folder},
+		{"can_read", "comment:" + comment},
+	}
+	expands := [][2]string{{"document:" + doc, "can_view"}, {"folder:" + folder, "viewer"}, {"comment:" + comment, "can_edit"}}
+	calls := make([][]string, 0, len(subjects)*len(explains)+2*len(expands))
+	for _, subject := range subjects {
+		for _, q := range explains {
 			calls = append(calls, []string{"explain", subject, q[0], q[1], "--format", "json"})
 		}
 	}
-	for _, q := range [][2]string{{"document:" + doc, "can_view"}, {"folder:" + folder, "viewer"}, {"comment:" + comment, "can_edit"}} {
+	for _, q := range expands {
 		calls = append(calls,
 			[]string{"expand", q[0], q[1], "--format", "json"},
 			[]string{"expand", q[0], q[1], "--recursive"})
 	}
 	outputs := func() []string {
 		t.Helper()
-		var out []string
+		out := make([]string, 0, len(calls))
 		for _, args := range calls {
 			stdout, stderr, err := cli.exec(dir, append(args, "--db", dsn, "--db-schema", "authz")...)
 			require.NoError(t, err, "melange %v: %s", args, stderr)

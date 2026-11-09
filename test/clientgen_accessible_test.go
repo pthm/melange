@@ -182,13 +182,13 @@ func generatedAccessible(t *testing.T, types []schema.TypeDefinition, exposure *
 
 	tsFiles, err := clientgen.Generate("typescript", types, &clientgen.Config{Exposure: exposure})
 	require.NoError(t, err)
-	var tsNames []string
-	for _, m := range tsAccessibleName.FindAllStringSubmatch(string(tsFiles["sql.ts"]), -1) {
+	tsMatches := tsAccessibleName.FindAllStringSubmatch(string(tsFiles["sql.ts"]), -1)
+	tsNames := make([]string, 0, len(tsMatches))
+	for _, m := range tsMatches {
 		tsNames = append(tsNames, m[1])
 	}
 	sort.Strings(goNames)
-	sort.Strings(tsNames)
-	require.Equal(t, goNames, tsNames, "the Go and TypeScript clients name the same functions")
+	require.ElementsMatch(t, goNames, tsNames, "the Go and TypeScript clients name the same functions")
 	return goNames
 }
 

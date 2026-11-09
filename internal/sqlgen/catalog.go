@@ -80,7 +80,7 @@ type CatalogRelation struct {
 	Type     string `json:"type"`
 	Relation string `json:"relation"`
 	// Exposed reports whether the exposure selects the relation. An
-	// unexposed relation is internal (modelling only): its functions are
+	// unexposed relation is internal (modeling only): its functions are
 	// installed only when an exposed relation resolves through it, and the
 	// public dispatchers raise M2003 for it, except expand_permission, which
 	// answers for it when it is installed (Dispatchers lists it then).
@@ -323,8 +323,10 @@ func (b *catalogBuilder) functions(a *RelationAnalysis) []CatalogFunction {
 		add(KindAccessible, b.c.public(familyAccessible, t, r))
 	}
 	if pk, ok := b.parentKeys[t+"."+r]; ok && b.c.installsParentKey(t, r) {
-		f := CatalogFunction{Name: pk.functionName(), Kind: KindParentKey, Public: true, Type: t, Relation: r,
-			Link: pk.Link, ParentType: pk.ParentType, ParentRelations: slices.Clone(pk.ParentRelations)}
+		f := CatalogFunction{
+			Name: pk.functionName(), Kind: KindParentKey, Public: true, Type: t, Relation: r,
+			Link: pk.Link, ParentType: pk.ParentType, ParentRelations: slices.Clone(pk.ParentRelations),
+		}
 		out = append(out, f)
 	}
 	if in.expand {
@@ -657,8 +659,11 @@ func dispatcherSignature(name string, c *exposureClosure) Signature {
 		return Signature{Args: append(slices.Clone(check), argVisited), Returns: "integer", Language: "plpgsql"}
 	case "check_permission_bulk":
 		args := []Arg{
-			{Name: "p_subject_types", Type: "text[]"}, {Name: "p_subject_ids", Type: "text[]"}, {Name: "p_relations", Type: "text[]"},
-			{Name: "p_object_types", Type: "text[]"}, {Name: "p_object_ids", Type: "text[]"},
+			{Name: "p_subject_types", Type: "text[]"},
+			{Name: "p_subject_ids", Type: "text[]"},
+			{Name: "p_relations", Type: "text[]"},
+			{Name: "p_object_types", Type: "text[]"},
+			{Name: "p_object_ids", Type: "text[]"},
 		}
 		return Signature{Args: args, Returns: "TABLE(idx integer, allowed integer)", Language: "plpgsql"}
 	case "explain_permission":
@@ -713,7 +718,7 @@ func (b *catalogBuilder) dispatchers() []CatalogFunction {
 	if b.c != nil {
 		names = append(names, UnexposedFunctionName)
 	}
-	var out []CatalogFunction
+	out := make([]CatalogFunction, 0, len(names))
 	for _, name := range names {
 		f := CatalogFunction{
 			Name:         name,

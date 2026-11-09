@@ -78,7 +78,8 @@ func assertCatalogMatches(t *testing.T, m exposureModel, label string, e Exposur
 	if err != nil {
 		t.Fatal(err)
 	}
-	var invNames, pubNames []string
+	invNames := make([]string, 0, len(inventory))
+	var pubNames []string
 	for _, f := range inventory {
 		invNames = append(invNames, f.Name)
 	}
@@ -109,7 +110,7 @@ func assertCatalogMatches(t *testing.T, m exposureModel, label string, e Exposur
 			t.Errorf("%s [%s]: %s is rendered with unknown %s", m.name, label, d.Name, d.RenderedWith)
 		}
 	}
-	var entries []string
+	entries := make([]string, 0, len(o.dispatchers))
 	for _, nf := range o.dispatchers {
 		entries = append(entries, nf.Name)
 	}
@@ -354,7 +355,7 @@ func normalizeArgs(s string) string {
 }
 
 func normalizeSignatureArgs(s Signature) string {
-	var out []string
+	out := make([]string, 0, len(s.Args))
 	for _, a := range s.Args {
 		arg := a.Name + a.Type
 		if a.Default != "" {
@@ -671,7 +672,7 @@ func TestCatalog_JSON(t *testing.T) {
 
 func readTestdataSchema(t *testing.T, name string) string {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join("../../test/testutil/testdata", name))
+	data, err := os.ReadFile(filepath.Join("..", "..", "test", "testutil", "testdata", name))
 	if err != nil {
 		t.Fatal(err)
 	}

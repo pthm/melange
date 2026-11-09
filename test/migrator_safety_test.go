@@ -51,9 +51,9 @@ func newTuplesDB(t *testing.T) *sql.DB {
 }
 
 // newTuplesDBWithDSN is newTuplesDB, also returning the database's DSN.
-func newTuplesDBWithDSN(t *testing.T) (*sql.DB, string) {
+func newTuplesDBWithDSN(t *testing.T) (db *sql.DB, dsn string) {
 	t.Helper()
-	db, dsn := testutil.EmptyDBWithDSN(t)
+	db, dsn = testutil.EmptyDBWithDSN(t)
 	_, err := db.ExecContext(context.Background(), `CREATE TABLE melange_tuples (
 		subject_type TEXT NOT NULL, subject_id TEXT NOT NULL, relation TEXT NOT NULL,
 		object_type TEXT NOT NULL, object_id TEXT NOT NULL)`)

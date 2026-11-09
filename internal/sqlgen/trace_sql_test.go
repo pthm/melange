@@ -64,7 +64,7 @@ func requalify(sql, databaseSchema string) string {
 // requalifyTrace applies requalify to every statement of trace.
 func requalifyTrace(trace TraceSQL, databaseSchema string) TraceSQL {
 	each := func(stmts []string) []string {
-		var out []string
+		out := make([]string, 0, len(stmts))
 		for _, s := range stmts {
 			out = append(out, requalify(s, databaseSchema))
 		}

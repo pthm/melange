@@ -199,7 +199,7 @@ func requireNotExposed(t *testing.T, ctx context.Context, db *sql.DB, x nestedEx
 // objects. A parent-key form returns parents, so it is joined to the
 // documents under them, which is exact here because every generated document
 // has at most one parent per link.
-func accessibleQuery(f compiler.AccessibleFunction, kind string) (string, []any) {
+func accessibleQuery(f compiler.AccessibleFunction, kind string) (query string, args []any) {
 	if f.Link != "" {
 		return fmt.Sprintf(`SELECT DISTINCT 'document:' || t.object_id FROM melange_tuples t
 			WHERE t.object_type = 'document' AND t.relation = $3 AND t.subject_type = $4
