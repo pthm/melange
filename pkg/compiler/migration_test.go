@@ -135,17 +135,17 @@ func TestGenerateMigrationSQL_ComparisonWithOrphans(t *testing.T) {
 	if !strings.Contains(result.Up, "Drop removed functions") {
 		t.Error("UP should have orphan drops section")
 	}
-	if !strings.Contains(result.Up, "DROP FUNCTION IF EXISTS check_old_type_old_relation CASCADE") {
+	if !strings.Contains(result.Up, "DROP FUNCTION IF EXISTS check_old_type_old_relation;") {
 		t.Error("UP missing orphan drop")
 	}
-	if !strings.Contains(result.Up, "DROP FUNCTION IF EXISTS check_old_type_old_relation_nw CASCADE") {
+	if !strings.Contains(result.Up, "DROP FUNCTION IF EXISTS check_old_type_old_relation_nw;") {
 		t.Error("UP missing orphan no-wildcard drop")
 	}
 	if !strings.Contains(result.Up, "Previous state: database") {
 		t.Error("UP missing previous source in header")
 	}
 	// Should NOT drop functions that still exist
-	if strings.Contains(result.Up, "DROP FUNCTION IF EXISTS check_doc_viewer CASCADE") {
+	if strings.Contains(result.Up, "DROP FUNCTION IF EXISTS check_doc_viewer;") {
 		t.Error("UP should not drop function that still exists in current schema")
 	}
 }
@@ -456,7 +456,7 @@ func TestGenerateMigrationSQL_DatabaseSchema_OrphanDrops(t *testing.T) {
 	result := GenerateMigrationSQL(gen, ListGeneratedSQL{}, functions, opts)
 
 	// Orphan drops should be schema-qualified
-	if !strings.Contains(result.Up, `DROP FUNCTION IF EXISTS "myschema"."check_old_function" CASCADE`) {
+	if !strings.Contains(result.Up, `DROP FUNCTION IF EXISTS "myschema"."check_old_function";`) {
 		t.Errorf("UP orphan drops should be schema-qualified, got:\n%s", result.Up)
 	}
 }
@@ -478,4 +478,71 @@ func TestGenerateMigrationSQL_EmptyDatabaseSchema_NoQualification(t *testing.T) 
 	if strings.Contains(result.Down, `"."`) {
 		t.Error("DOWN without schema should not contain schema qualification")
 	}
+}
+
+// A restricted exposure needs the previous exposure for change detection: a
+// function the previous exposure did not install would otherwise look
+// unchanged against checksums compiled under a different one.
+func TestGenerateMigrationSQL_ChangeDetection_Exposure(t *testing.T) {
+	gen := GeneratedSQL{
+		Functions:  []string{"CREATE OR REPLACE FUNCTION check_doc_viewer() SAME_BODY"},
+		Dispatcher: "CREATE OR REPLACE FUNCTION check_permission() ...",
+	}
+	named := []NamedFunction{{Name: "check_doc_viewer", SQL: "CREATE OR REPLACE FUNCTION check_doc_viewer() SAME_BODY"}}
+	functions := []string{"check_doc_viewer", "check_permission"}
+	off := false
+	restricted := Exposure{
+		Relations: RelationPatterns{Include: []string{"viewer"}},
+		Functions: FunctionFamilies{Expand: &off},
+	}
+	base := MigrationOptions{
+		PreviousFunctionNames: functions,
+		PreviousSource:        "git:HEAD~1",
+		PreviousChecksums:     computeCurrentChecksums(named),
+		NamedFunctions:        named,
+	}
+
+	t.Run("unknown previous, default current keeps change detection", func(t *testing.T) {
+		up := GenerateMigrationSQL(gen, ListGeneratedSQL{}, functions, base).Up
+		if strings.Contains(up, "SAME_BODY") || !strings.Contains(up, "Changed functions: 0 of 1") {
+			t.Errorf("unchanged function should be omitted:\n%s", up)
+		}
+		if strings.Contains(up, "-- Exposure:") {
+			t.Error("the default exposure adds no header line")
+		}
+	})
+
+	t.Run("unknown previous, restricted current emits everything", func(t *testing.T) {
+		opts := base
+		opts.Exposure = restricted
+		up := GenerateMigrationSQL(gen, ListGeneratedSQL{}, functions, opts).Up
+		if !strings.Contains(up, "SAME_BODY") {
+			t.Errorf("every function should be emitted:\n%s", up)
+		}
+		if !strings.Contains(up, "Previous exposure unknown") {
+			t.Error("the header should say why change detection is off")
+		}
+		if !strings.Contains(up, `-- Exposure: {"relations":{"include":["viewer"]},"functions":{"expand":false}}`) {
+			t.Errorf("the header should record the exposure:\n%s", up)
+		}
+	})
+
+	t.Run("unknown previous marked unknown, default current emits everything", func(t *testing.T) {
+		opts := base
+		opts.PreviousExposureUnknown = true
+		up := GenerateMigrationSQL(gen, ListGeneratedSQL{}, functions, opts).Up
+		if !strings.Contains(up, "SAME_BODY") || !strings.Contains(up, "Previous exposure unknown") {
+			t.Errorf("every function should be emitted:\n%s", up)
+		}
+	})
+
+	t.Run("known previous, restricted current keeps change detection", func(t *testing.T) {
+		opts := base
+		opts.Exposure = restricted
+		opts.PreviousExposure = &Exposure{}
+		up := GenerateMigrationSQL(gen, ListGeneratedSQL{}, functions, opts).Up
+		if strings.Contains(up, "SAME_BODY") || !strings.Contains(up, "Changed functions: 0 of 1") {
+			t.Errorf("unchanged function should be omitted:\n%s", up)
+		}
+	})
 }

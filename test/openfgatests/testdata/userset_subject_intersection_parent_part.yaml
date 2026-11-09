@@ -1,0 +1,336 @@
+# A userset subject (group:eng#member) holds a relation through a direct
+# userset grant only when the grant is a standalone path. When the relation's
+# direct assignment is part of an intersection ([user, group#member] and
+# member from owner), the userset must also hold the other parts.
+tests:
+  # The userset is not a member of the owner, so it is not a viewer.
+  - name: userset_subject_intersection_parent_part
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type organization
+            relations
+              define member: [user]
+          type parent
+            relations
+              define owner: [organization]
+              define viewer: [user, group#member] and member from owner
+        tuples:
+          - user: organization:acme
+            relation: owner
+            object: parent:p
+          - user: group:eng#member
+            relation: viewer
+            object: parent:p
+        checkAssertions:
+          - tuple:
+              user: group:eng#member
+              relation: viewer
+              object: parent:p
+            expectation: false
+        listUsersAssertions:
+          - request:
+              object: parent:p
+              relation: viewer
+              filters:
+                - group#member
+            expectation: []
+
+  # The userset holds both parts, and group:eng#owner holds them through the
+  # group's closure (owner satisfies member).
+  - name: userset_subject_intersection_parent_part_held
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define owner: [user]
+              define member: [user] or owner
+          type organization
+            relations
+              define member: [user, group#member]
+          type parent
+            relations
+              define owner: [organization]
+              define viewer: [user, group#member] and member from owner
+        tuples:
+          - user: organization:acme
+            relation: owner
+            object: parent:p
+          - user: group:eng#member
+            relation: viewer
+            object: parent:p
+          - user: group:eng#member
+            relation: member
+            object: organization:acme
+          - user: group:ops#member
+            relation: viewer
+            object: parent:p
+        checkAssertions:
+          - tuple:
+              user: group:eng#member
+              relation: viewer
+              object: parent:p
+            expectation: true
+          - tuple:
+              user: group:eng#owner
+              relation: viewer
+              object: parent:p
+            expectation: true
+          - tuple:
+              user: group:ops#member
+              relation: viewer
+              object: parent:p
+            expectation: false
+
+  # Through an implied relation: approver's userset grant needs a, and
+  # editor's needs not blocked, so neither makes the userset a viewer.
+  - name: userset_subject_constrained_implied_relation
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type document
+            relations
+              define a: [user]
+              define blocked: [group#member]
+              define approver: [user, group#member] and a
+              define editor: [user, group#member] but not blocked
+              define viewer: [user, group#member] or approver
+              define reader: [user, group#member] or editor
+              define plain_viewer: [user] or approver
+        tuples:
+          - user: group:eng#member
+            relation: approver
+            object: document:d
+          - user: group:eng#member
+            relation: editor
+            object: document:d
+          - user: group:eng#member
+            relation: blocked
+            object: document:d
+          - user: group:ops#member
+            relation: editor
+            object: document:d
+        checkAssertions:
+          - tuple:
+              user: group:eng#member
+              relation: viewer
+              object: document:d
+            expectation: false
+          - tuple:
+              user: group:eng#member
+              relation: plain_viewer
+              object: document:d
+            expectation: false
+          - tuple:
+              user: group:eng#member
+              relation: reader
+              object: document:d
+            expectation: false
+          - tuple:
+              user: group:ops#member
+              relation: reader
+              object: document:d
+            expectation: true
+
+  # Wrappers over constrained relations.
+  - name: userset_subject_constrained_wrappers
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type document
+            relations
+              define active: [group#member]
+              define blocked: [group#member]
+              define flagged: [group#member]
+              define gated: [group#member] and active
+              define filtered: [group#member] but not blocked
+              define filtered_pair: [group#member] but not (blocked and flagged)
+              define view_gated: gated
+              define view_filtered: [group#member] or filtered
+              define view_pair: [group#member] or filtered_pair
+        tuples:
+          - user: group:eng#member
+            relation: gated
+            object: document:d
+          - user: group:eng#member
+            relation: filtered
+            object: document:d
+          - user: group:eng#member
+            relation: filtered_pair
+            object: document:d
+          - user: group:eng#member
+            relation: blocked
+            object: document:d
+          - user: group:eng#member
+            relation: flagged
+            object: document:d
+        checkAssertions:
+          - tuple:
+              user: group:eng#member
+              relation: view_gated
+              object: document:d
+            expectation: false
+          - tuple:
+              user: group:eng#member
+              relation: view_filtered
+              object: document:d
+            expectation: false
+          - tuple:
+              user: group:eng#member
+              relation: view_pair
+              object: document:d
+            expectation: false
+
+  # A wildcard grants every object of its type, never a userset.
+  - name: userset_subject_wildcard_operands
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type document
+            relations
+              define active: [group#member]
+              define flagged: [group#member]
+              define public_group: [group:*]
+              define open: [group#member, group:*]
+              define positive: [group#member] and public_group
+              define negative: ([group#member] but not public_group) and active
+              define negative_pair: ([group#member] and active) but not (public_group and flagged)
+        tuples:
+          - user: group:eng#member
+            relation: positive
+            object: document:d
+          - user: group:eng#member
+            relation: negative
+            object: document:d
+          - user: group:eng#member
+            relation: negative_pair
+            object: document:d
+          - user: group:eng#member
+            relation: active
+            object: document:d
+          - user: group:eng#member
+            relation: flagged
+            object: document:d
+          - user: group:*
+            relation: public_group
+            object: document:d
+          - user: group:*
+            relation: open
+            object: document:d
+        checkAssertions:
+          - tuple:
+              user: group:eng#member
+              relation: positive
+              object: document:d
+            expectation: false
+          - tuple:
+              user: group:eng#member
+              relation: negative
+              object: document:d
+            expectation: true
+          - tuple:
+              user: group:eng#member
+              relation: negative_pair
+              object: document:d
+            expectation: true
+          - tuple:
+              user: group:ops#member
+              relation: open
+              object: document:d
+            expectation: false
+          - tuple:
+              user: group:ops
+              relation: open
+              object: document:d
+            expectation: true
+
+  # A top-level exclusion's wildcard doesn't exclude a userset subject.
+  - name: userset_subject_wildcard_exclusion
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type document
+            relations
+              define public_group: [group:*]
+              define viewer: [user, group#member] but not public_group
+        tuples:
+          - user: group:eng#member
+            relation: viewer
+            object: document:d
+          - user: group:*
+            relation: public_group
+            object: document:d
+        checkAssertions:
+          - tuple:
+              user: group:eng#member
+              relation: viewer
+              object: document:d
+            expectation: true
+          - tuple:
+              user: group:eng
+              relation: viewer
+              object: document:d
+            expectation: false
+        listObjectsAssertions:
+          - request:
+              user: group:eng#member
+              type: document
+              relation: viewer
+            expectation:
+              - document:d
+
+  # A nested group's wildcard member doesn't make a userset a member.
+  - name: userset_subject_wildcard_selfref_list
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type team
+            relations
+              define member: [group:*]
+          type group
+            relations
+              define member: [user, group#member, team#member]
+        tuples:
+          - user: group:*
+            relation: member
+            object: team:all
+          - user: team:all#member
+            relation: member
+            object: group:outer
+        listObjectsAssertions:
+          - request:
+              user: group:eng#member
+              type: group
+              relation: member
+            expectation:
+              - group:eng

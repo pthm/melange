@@ -20,23 +20,23 @@ const checker = new Checker(pool);
 
 ```typescript
 class Checker {
-  check(subject: MelangeObject, relation: Relation, object: MelangeObject): Promise<boolean>
-  checkWithContextualTuples(subject: MelangeObject, relation: Relation, object: MelangeObject, tuples: ContextualTuple[]): Promise<boolean>
+  check(subject: MelangeObject, relation: Relation, object: MelangeObject, contextualTuples?: ContextualTuple[]): Promise<Decision>
+  checkWithContextualTuples(subject: MelangeObject, relation: Relation, object: MelangeObject, tuples: ContextualTuple[]): Promise<Decision>
 }
 ```
 
-`check` returns `true` if the subject has the relation on the object. `checkWithContextualTuples` mirrors the Go equivalent — temporary tuples for the call only; requires a client that supports transactions.
+`check` resolves to a `Decision`; `decision.allowed` is `true` if the subject has the relation on the object. `checkWithContextualTuples` has the Go signature, but the TypeScript client does not apply contextual tuples yet: it runs a plain `check_permission` and skips the cache. Use the Go `Checker` for contextual tuples.
 
 ### List Operations
 
 ```typescript
 class Checker {
-  listObjects(subject: MelangeObject, relation: Relation, objectType: ObjectType, page?: PageOptions): Promise<{ ids: string[]; nextCursor: string | null }>
-  listSubjects(object: MelangeObject, relation: Relation, subjectType: ObjectType, page?: PageOptions): Promise<{ ids: string[]; nextCursor: string | null }>
+  listObjects(subject: MelangeObject, relation: Relation, objectType: ObjectType, page?: PageOptions): Promise<ListResult<string>>
+  listSubjects(subjectType: ObjectType, relation: Relation, object: MelangeObject, page?: PageOptions): Promise<ListResult<string>>
 }
 ```
 
-Cursor-paginated. Pass `page.after` (the previous page's `nextCursor`) to continue.
+`ListResult` is `{ items: string[]; nextCursor?: string }`. Cursor-paginated. Pass `page.after` (the previous page's `nextCursor`) to continue.
 
 ### Explain
 
@@ -64,7 +64,7 @@ if (trace.result === true) {
 }
 ```
 
-`Trace`, `Node`, `NodeType`, `TupleRef`, and `SubjectRef` type mirrors live in `@pthm/melange` (source: `clients/typescript/src/trace.ts`). JSON tags are snake_case to match the SQL columns.
+`Trace`, `TraceNode`, `NodeType`, `TupleRef`, and `SubjectRef` type mirrors live in `@pthm/melange` (source: `clients/typescript/src/trace.ts`). JSON tags are snake_case to match the SQL columns.
 
 ### Expand
 
@@ -97,12 +97,33 @@ const users = flattenUsers(tree);
 
 `UsersetTree`, `UsersetTreeNode`, `Leaf`, `Users`, `Computed`, `TupleToUserset`, `Difference`, and `Nodes` type mirrors live in `@pthm/melange` (source: `clients/typescript/src/expand.ts`). Field names match OpenFGA's `openfgav1.UsersetTree` proto so existing OpenFGA tooling deserialises the JSON without adapters.
 
+## Errors
+
+Every `Checker` method that calls a public function maps two database errors
+(see [Errors](../errors/#typescript-client)): SQLSTATE `M2003`, a relation the
+[SQL API exposure](../sql-api/#exposure) leaves out, throws `ValidationError`
+with `code` 2000 (`ErrorCodeValidation`) and the database message, and a
+missing melange function (`42883`) throws `MissingFunctionError`. Both keep the
+driver error as `cause`. Other errors are thrown unchanged.
+
+```typescript
+import { ValidationError, ErrorCodeValidation } from '@pthm/melange';
+
+try {
+  await checker.check(user, 'viewer', doc);
+} catch (err) {
+  if (err instanceof ValidationError && err.code === ErrorCodeValidation) {
+    // e.g. relation "viewer" on type "document" is not exposed
+  }
+}
+```
+
 ## Caching
 
 ```typescript
 import { Checker, MemoryCache } from '@pthm/melange';
 
-const cache = new MemoryCache({ ttlMs: 300_000 });
+const cache = new MemoryCache(300_000); // TTL in milliseconds
 const checker = new Checker(pool, { cache });
 ```
 
@@ -110,7 +131,7 @@ const checker = new Checker(pool, { cache });
 
 ## Generated Code
 
-`melange generate client --runtime typescript` produces type-safe constants and factory functions. See [Generated Code](../generated-code/) for details.
+`melange generate client --runtime typescript` produces type-safe constants and factory functions, and the `AccessibleFunctions` and `AccessibleByParentFunctions` maps of the installed accessible function names. See [Generated Code](../generated-code/) for details.
 
 ## Calling SQL Directly
 

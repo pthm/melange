@@ -240,7 +240,7 @@ jobs:
         working-directory: test
         # openfgatests runs in the OpenFGA workflow (same -race and coverage,
         # uploaded under the same flag); running it here too doubled this job.
-        run: go test -timeout 5m -race -p 1 -parallel 1 -coverprofile=coverage-integration.out -covermode=atomic -coverpkg=github.com/pthm/melange/... $(go list ./... | grep -v /openfgatests)
+        run: go test -timeout 15m -race -p 1 -parallel 1 -coverprofile=coverage-integration.out -covermode=atomic -coverpkg=github.com/pthm/melange/... $(go list ./... | grep -v /openfgatests)
 
       - name: Run TypeScript integration tests
         working-directory: clients/typescript

@@ -14,6 +14,7 @@ import (
 	"github.com/pthm/melange/internal/cli"
 	"github.com/pthm/melange/internal/cli/render"
 	"github.com/pthm/melange/internal/cli/style"
+	"github.com/pthm/melange/internal/sqlapi"
 	"github.com/pthm/melange/melange"
 )
 
@@ -121,17 +122,25 @@ func runExplain(dsn, databaseSchema string, subject melange.Object, relation mel
 	}
 	defer func() { _ = db.Close() }()
 
-	checker := melange.NewChecker(db, melange.WithDatabaseSchema(databaseSchema))
-
 	ctx := context.Background()
 	var opts []melange.ExplainOption
 	if maxNodes > 0 {
 		opts = append(opts, melange.WithExplainMaxNodes(maxNodes))
 	}
 
-	trace, err := checker.Explain(ctx, subject, relation, object, opts...)
+	api := sqlapi.Load(ctx, db, databaseSchema)
+	if u := api.Unavailable(sqlapi.Explain, string(object.Type), string(relation)); u != nil {
+		return cli.GeneralError("explain", u)
+	}
+	// With sql.functions.explain off, Trace compiles the explain functions
+	// into pg_temp for this call.
+	var trace *melange.Trace
+	err = api.Trace(ctx, db, databaseSchema, sqlapi.Explain, nil, func(checker *melange.Checker) (err error) {
+		trace, err = checker.Explain(ctx, subject, relation, object, opts...)
+		return err
+	})
 	if err != nil {
-		return cli.GeneralError("explain", err)
+		return sqlAPICallError("explain", sqlapi.Explain, object, relation, err)
 	}
 
 	switch format {
@@ -145,4 +154,14 @@ func runExplain(dsn, databaseSchema string, subject melange.Object, relation mel
 	default:
 		return cli.GeneralError("output format", fmt.Errorf("unknown format %q (want tree|json)", format))
 	}
+}
+
+// sqlAPICallError wraps the error of a failed call to f's public function
+// for relation on object's type, worded as why the SQL API does not answer
+// for the relation when that is the cause.
+func sqlAPICallError(command string, f sqlapi.Family, object melange.Object, relation melange.Relation, err error) error {
+	if u := sqlapi.FromError(f, string(object.Type), string(relation), err); u != nil {
+		return cli.GeneralError(command, u)
+	}
+	return cli.GeneralError(command, err)
 }

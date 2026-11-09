@@ -72,10 +72,9 @@ templ migrationDetail(d historyData, e historyEntry) {
 	{{ st := e.Stats }}
 	@pageHead(fmt.Sprintf("Migration #%d", e.Rec.ID), nil) {
 		<p class="page-meta">
-			{ e.Rec.MigratedAt.UTC().Format("Mon 2 Jan 2006, 15:04:05 MST") }
-			· melange <code>{ e.Rec.MelangeVersion }</code>
+			Ran { e.Rec.MigratedAt.UTC().Format("Mon 2 Jan 2006, 15:04:05 MST") }.
 			if e.Deployed {
-				<span class="badge ok">deployed</span>
+				The database runs this migration's model.
 			}
 		</p>
 		<nav class="mig-nav" aria-label="Neighbouring migrations">
@@ -143,6 +142,14 @@ templ migrationDetail(d historyData, e historyEntry) {
 		}
 		<div class="sec-body stack">
 			<dl class="kv">
+				<dt>status</dt>
+				<dd>
+					if e.Deployed {
+						<span class="badge ok">deployed</span>
+					} else {
+						<span class="mute">superseded by a later migration</span>
+					}
+				</dd>
 				<dt>melange</dt>
 				<dd><code>{ e.Rec.MelangeVersion }</code></dd>
 				<dt>codegen</dt>
@@ -163,10 +170,8 @@ templ migrationDetail(d historyData, e historyEntry) {
 				</dd>
 			</dl>
 			if d.Cur.DSL != "" {
-				<details class="disclose">
-					<summary>Show schema</summary>
-					@fgaSource(d.Cur.DSL)
-				</details>
+				<h3 class="sub-title">Schema</h3>
+				@fgaSource(d.Cur.DSL)
 			}
 		</div>
 	</section>
@@ -256,14 +261,7 @@ templ healthPage(env, schemaPath string, report *doctor.Report, errMsg string) {
 	{{ cats := groupChecks(report) }}
 	@shell(page{Env: env, Active: "health"}, healthSidebar(cats)) {
 		@pageHead("Health", nil) {
-			<p class="page-meta">
-				The checks <code>melange doctor</code> runs against this database.
-				if schemaPath != "" {
-					Local schema: <code>{ schemaPath }</code>.
-				} else {
-					No local schema file is configured, so the file and drift checks are skipped; pass <code>--schema</code> to run them.
-				}
-			</p>
+			<p class="page-meta">The checks <code>melange doctor</code> runs against this database.</p>
 			if report != nil {
 				<div class="stats">
 					@stat(report.Passed, "passed", "ok")
@@ -275,10 +273,24 @@ templ healthPage(env, schemaPath string, report *doctor.Report, errMsg string) {
 		if errMsg != "" {
 			@errorBox(errMsg)
 		}
+		if schemaPath == "" {
+			<div class="content-note">
+				@noticeBox("No local schema file", "No local schema file is configured, so the file and drift checks are skipped. Pass --schema to run them.")
+			</div>
+		}
 		<div class="stack">
 			for _, c := range cats {
 				<section class="sec" id={ anchor(c.Name) }>
-					@secHead(c.Name, num(len(c.Checks)))
+					@secHead(c.Name, num(len(c.Checks))) {
+						if c.Name == "Generated Functions" {
+							<p class="help">
+								Compared with the local schema file. The <a href="/sql">SQL API</a> page compares the deployed model instead, so the two differ while a migration is pending.
+								if schemaPath != "" {
+									Local schema: <code>{ schemaPath }</code>.
+								}
+							</p>
+						}
+					}
 					<div class="sec-body">
 						<ul class="rows">
 							for _, chk := range c.Checks {

@@ -27,6 +27,10 @@ func MigrateFromString(ctx context.Context, db Execer, content string) error
 
 // MigrateWithOptions provides control over dry-run and skip behavior.
 func MigrateWithOptions(ctx context.Context, db Execer, schemaPath string, opts MigrateOptions) (skipped bool, err error)
+
+// PlanWithOptions predicts what MigrateWithOptions would do with opts,
+// unforced, without changing the database.
+func PlanWithOptions(ctx context.Context, db Execer, schemaPath string, opts MigrateOptions) (*MigrationPlan, error)
 ```
 
 ### Migrator Type
@@ -36,10 +40,19 @@ func MigrateWithOptions(ctx context.Context, db Execer, schemaPath string, opts 
 func NewMigrator(db Execer, schemaPath string) *Migrator
 
 // MigrateWithTypes performs migration using pre-parsed type definitions.
+// It records no migration, so it generates under the recorded exposure and
+// returns *UnrecordedExposureChangeError when SetExposure asks for another.
 func (m *Migrator) MigrateWithTypes(ctx context.Context, types []TypeDefinition) error
 
 // MigrateWithTypesAndOptions performs migration with full options control.
+// It records the migration when opts.SchemaContent holds the schema text;
+// without it, it records nothing and refuses an exposure change like
+// MigrateWithTypes.
 func (m *Migrator) MigrateWithTypesAndOptions(ctx context.Context, types []TypeDefinition, opts InternalMigrateOptions) error
+
+// Plan predicts what MigrateWithTypesAndOptions would do with opts, unforced.
+// It reads the database and takes no lock; Force and DryRun are ignored.
+func (m *Migrator) Plan(ctx context.Context, types []TypeDefinition, opts InternalMigrateOptions) (*MigrationPlan, error)
 
 // GetStatus returns the current migration status.
 func (m *Migrator) GetStatus(ctx context.Context) (*Status, error)
@@ -56,9 +69,12 @@ func (m *Migrator) HasSchema() bool
 ```go
 // MigrateOptions controls migration behavior.
 type MigrateOptions struct {
-    DryRun  io.Writer // Output SQL without applying; nil = apply normally
-    Force   bool      // Re-run even if schema unchanged
-    Version string    // Melange version for traceability
+    DryRun             io.Writer // Output SQL without applying; nil = apply normally
+    Force              bool      // Re-run even if unchanged; also drops orphans with CASCADE and overrides the downgrade guard
+    Version            string    // Melange version for traceability
+    DatabaseSchema     string    // PostgreSQL schema for melange objects
+    IfDeployedChecksum *string   // Compare-and-swap: abort with *DeployedModelChangedError unless this checksum is deployed
+    Exposure           *Exposure // SQL API to generate; nil keeps the recorded one (the default when none), a pointer to the zero value restores the default
 }
 
 // Status represents the current migration state.
@@ -73,8 +89,24 @@ type MigrationRecord struct {
     SchemaChecksum string
     CodegenVersion string
     FunctionNames  []string
+    Exposure       Exposure // normalized exposure the functions were generated with
+}
+
+// MigrationPlan is what an unforced migration would do (Plan).
+type MigrationPlan struct {
+    Action   PlanAction         // PlanApply, PlanRecordOnly, PlanSkip or PlanRefusedAhead
+    Record   *MigrationRecord   // last migration; nil when none is recorded
+    Exposure Exposure           // the exposure the migration generates with
+    Orphans  []OrphanedFunction // what an applying (or forced) run drops, with dependents
 }
 ```
+
+`PlanRecordOnly` means the generated SQL is the SQL the last migration
+recorded: the migration records the new state and applies nothing, so a
+function dropped or edited by hand stays that way. `PlanSkip` does nothing
+at all. Both are fixed by `Force: true`, which also drops `Orphans` with
+`CASCADE`, dependents included. `PlanRefusedAhead` means a newer melange
+migrated the database and migrate returns `*DatabaseAheadError`.
 
 ## Usage Examples
 
@@ -152,6 +184,23 @@ if err != nil {
 // skipped is always false when Force=true
 ```
 
+### Predict a Migration
+
+```go
+// Readiness check: the last migration recorded exactly what this schema,
+// exposure and codegen version generate. Plan reads the migration record,
+// not the installed functions, so PlanSkip does not detect a function
+// dropped or edited by hand; `melange doctor` and `melange functions` check
+// those.
+plan, err := migrator.PlanWithOptions(ctx, db, "schemas/schema.fga", migrator.MigrateOptions{})
+if err != nil {
+    log.Fatal(err)
+}
+if plan.Action != migrator.PlanSkip {
+    log.Printf("migration pending: %s", plan.Action)
+}
+```
+
 ### Check Migration Status
 
 ```go
@@ -193,6 +242,25 @@ for _, db := range databases {
 }
 ```
 
+`MigrateWithTypes` records no migration, so it cannot change the SQL API
+exposure: it generates under the recorded one (the default when none is
+recorded), and an exposure set with `SetExposure` must be that same one. To
+change it, record the migration by passing the schema text:
+
+```go
+m := migrator.NewMigrator(db, "")
+err := m.MigrateWithTypesAndOptions(ctx, types, migrator.InternalMigrateOptions{
+    SchemaContent: schemaContent,
+    SchemaFormat:  migrator.FormatSingle,
+    Exposure:      &exposure,
+})
+var unrecorded *migrator.UnrecordedExposureChangeError
+if errors.As(err, &unrecorded) {
+    // Only a migration without SchemaContent returns this; nothing was applied.
+    log.Printf("exposure %v needs a recorded migration", unrecorded.Requested)
+}
+```
+
 ## Migration Workflow
 
 When you run migration, the following steps occur:
@@ -203,28 +271,34 @@ When you run migration, the following steps occur:
 4. **Analyze** - Classify relations and determine SQL patterns
 5. **Generate** - Create specialized SQL functions per relation
 6. **Apply** - Execute SQL atomically in a transaction
-7. **Track** - Record migration in `melange_migrations` table
-8. **Cleanup** - Drop orphaned functions from previous schema
+7. **Cleanup** - Drop functions a previous migration installed that this one no longer generates. When other database objects (for example a view or RLS policy) depend on one, an unforced migration fails with `*DependentObjectsError` before applying anything; `Force: true` drops them with `CASCADE`, dependents included
+8. **Track** - Record the migration (schema, codegen version, function checksums and SQL API exposure) in `melange_migrations`
 
 ## Skip-If-Unchanged Optimization
 
-Migrations are skipped when both conditions are met:
+Migrations are skipped when all of these match the last migration:
 
-- Schema content hash matches last migration
-- Codegen version matches last migration
+- Schema content hash
+- Codegen version
+- SQL API exposure
 
-This avoids redundant function regeneration on every restart. Use `Force: true` to bypass.
+When one differs, the SQL is generated and compared with the function
+checksums the last migration recorded; identical SQL is recorded without
+being applied. Neither phase looks at the installed functions, so one
+dropped or edited by hand is restored only by `Force: true`. This avoids
+redundant function regeneration on every restart. `Plan` predicts the
+outcome without migrating.
 
 ## Transaction Support
 
-When using `*sql.DB`, migrations are applied atomically:
+When the Execer can begin a transaction (`*sql.DB`, `*sql.Conn`), migrations are applied atomically in the migrator's own transaction:
 
 ```go
 // All-or-nothing: either all functions are created or none
 err := migrator.Migrate(ctx, db, "schema.fga")
 ```
 
-For `*sql.Tx` or `*sql.Conn`, functions are applied individually (caller manages transaction).
+With a `*sql.Tx`, functions are applied on the caller's transaction, which the caller commits or rolls back.
 
 ## Error Handling
 
@@ -257,7 +331,7 @@ This package imports:
 - `github.com/lib/pq` - PostgreSQL driver for array handling
 - `github.com/pthm/melange/pkg/parser` - Schema parsing
 - `github.com/pthm/melange/pkg/schema` - Schema types
-- `github.com/pthm/melange/lib/sqlgen` - SQL generation
+- `github.com/pthm/melange/internal/sqlgen` - SQL generation
 
 ## Execer Interface
 

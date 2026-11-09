@@ -13,7 +13,7 @@ import (
 // per-arm predicates would let unvalidated (e.g. banned) subjects through when
 // the result set has no '*' row — an over-report / access leak.
 func TestWildcardSubjectsTailRevalidatesUnderExclusion(t *testing.T) {
-	withExcl := wildcardSubjectsTailWhere("", "viewer", "doc", true).SQL()
+	withExcl := wildcardSubjectsTailWhere("", nil, "viewer", "doc", true).SQL()
 	if strings.Contains(withExcl, "has_wildcard") {
 		t.Errorf("exclusion tail must not short-circuit on has_wildcard (skips re-validation): %s", withExcl)
 	}
@@ -21,7 +21,7 @@ func TestWildcardSubjectsTailRevalidatesUnderExclusion(t *testing.T) {
 		t.Errorf("exclusion tail must re-validate non-'*' subjects with the no-wildcard check: %s", withExcl)
 	}
 
-	noExcl := wildcardSubjectsTailWhere("", "viewer", "doc", false).SQL()
+	noExcl := wildcardSubjectsTailWhere("", nil, "viewer", "doc", false).SQL()
 	if !strings.Contains(noExcl, "has_wildcard") {
 		t.Errorf("non-exclusion tail should keep the has_wildcard short-circuit: %s", noExcl)
 	}

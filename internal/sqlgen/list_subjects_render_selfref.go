@@ -3,6 +3,14 @@ package sqlgen
 // =============================================================================
 // Self-Referential Userset Render Functions (List Subjects)
 // =============================================================================
+
+// RenderListSubjectsSelfRefUsersetFunction renders a list_subjects function for
+// self-referential userset patterns ([group#member] on group.member).
+//
+// Both paths walk down the nested usersets breadth first with renderIDWalk,
+// from the usersets named on the object: each is expanded once, and nesting
+// walkDepthLimit hops deep raises M2002, as OpenFGA's ListUsers does, instead
+// of returning a truncated list.
 func RenderListSubjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUsersetSubjectsBlockSet) (string, error) {
 	usersetFilterPaginatedQuery := plan.wrapPaginationWildcardFirst(
 		trimTrailingSemicolon(renderSelfRefUsersetFilterQuery(blocks)),
@@ -11,14 +19,20 @@ func RenderListSubjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUsers
 		trimTrailingSemicolon(renderSelfRefUsersetRegularQuery(plan, blocks)),
 	)
 
-	// Build the THEN branch (userset filter path)
-	thenBranch := renderUsersetFilterThenBranch(usersetFilterPaginatedQuery)
+	// Build the THEN branch (userset filter path): walk before its RETURN QUERY.
+	thenBranch := renderUsersetFilterThenBranch(usersetFilterPaginatedQuery,
+		renderUsersetWalk(blocks.UsersetFilterBlocks, *blocks.UsersetFilterRecursiveBlock)...)
 
-	// Build the ELSE branch (regular subject type path)
-	elseBranch := []Stmt{
-		Comment{Text: "Regular subject type: find individual subjects via recursive userset expansion"},
-		ReturnQuery{Query: regularPaginatedQuery},
+	// Build the ELSE branch (regular subject type path). Only subject types the
+	// relation admits can match, so others skip the walk (and its depth limit).
+	regularWalk := renderUsersetWalk([]TypedQueryBlock{*blocks.UsersetObjectsBaseBlock}, *blocks.UsersetObjectsRecursiveBlock)
+	if len(plan.AllowedSubjectTypes) > 0 {
+		regularWalk = []Stmt{If{Cond: In{Expr: SubjectType, Values: plan.AllowedSubjectTypes}, Then: regularWalk}}
 	}
+	elseBranch := make([]Stmt, 0, len(regularWalk)+2)
+	elseBranch = append(elseBranch, Comment{Text: "Regular subject type: find individual subjects via recursive userset expansion"})
+	elseBranch = append(elseBranch, regularWalk...)
+	elseBranch = append(elseBranch, ReturnQuery{Query: regularPaginatedQuery})
 
 	// Build main IF statement: check if subject_type is a userset filter
 	mainIf := If{
@@ -36,10 +50,10 @@ func RenderListSubjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUsers
 		Args:    ListSubjectsArgs(),
 		Returns: ListSubjectsReturns(),
 		Header:  ListSubjectsFunctionHeader(plan.ObjectType, plan.Relation, plan.FeaturesString()+" (self-referential userset)"),
-		Decls: []Decl{
+		Decls: append([]Decl{
 			{Name: "v_filter_type", Type: "TEXT"},
 			{Name: "v_filter_relation", Type: "TEXT"},
-		},
+		}, idWalkDecls()...),
 		Body: []Stmt{
 			Comment{Text: "Check if p_subject_type is a userset filter (contains '#')"},
 			mainIf,
@@ -49,15 +63,18 @@ func RenderListSubjectsSelfRefUsersetFunction(plan ListPlan, blocks SelfRefUsers
 	return fn.SQL(), nil
 }
 
+// renderUsersetWalk seeds the walk with the usersets base selects and walks
+// down with step.
+func renderUsersetWalk(base []TypedQueryBlock, step TypedQueryBlock) []Stmt {
+	return append([]Stmt{seedFrontier(base)}, renderIDWalk(1, step, raiseTooDeep())...)
+}
+
+// walkedUsersets is the CTE body reading the usersets the walk found.
+func walkedUsersets() SQLer {
+	return SelectStmt{ColumnExprs: []Expr{Raw("unnest(" + walkSeen + ") AS userset_object_id")}}
+}
+
 func renderSelfRefUsersetFilterQuery(blocks SelfRefUsersetSubjectsBlockSet) string {
-	baseBlocks := renderTypedQueryBlocks(blocks.UsersetFilterBlocks)
-	cteBody := RenderUnionBlocks(baseBlocks)
-
-	if blocks.UsersetFilterRecursiveBlock != nil {
-		recursiveBlock := renderTypedQueryBlock(*blocks.UsersetFilterRecursiveBlock)
-		cteBody = appendUnion(cteBody, formatQueryBlockSQL(recursiveBlock.Comments, recursiveBlock.Query.SQL()))
-	}
-
 	resultBlocks := []QueryBlock{{
 		Comments: []string{"-- Userset filter: return normalized userset references"},
 		Query: SelectStmt{
@@ -76,22 +93,17 @@ func renderSelfRefUsersetFilterQuery(blocks SelfRefUsersetSubjectsBlockSet) stri
 		resultBlocks = append(resultBlocks, renderTypedQueryBlock(*blocks.UsersetFilterSelfBlock))
 	}
 
-	cteQuery := RecursiveCTE(
-		"userset_expansion",
-		[]string{"userset_object_id", "depth"},
-		Raw(cteBody),
-		Raw(RenderUnionBlocks(resultBlocks)),
-	)
-
-	return cteQuery.SQL()
+	return WithCTE{
+		CTEs:  []CTEDef{{Name: "userset_expansion", Columns: []string{"userset_object_id"}, Query: walkedUsersets()}},
+		Query: Raw(RenderUnionBlocks(resultBlocks)),
+	}.SQL()
 }
 
 func renderSelfRefUsersetRegularQuery(plan ListPlan, blocks SelfRefUsersetSubjectsBlockSet) string {
-	usersetObjectsCTE := buildUsersetObjectsCTE(blocks)
 	baseResultsSQL := RenderUnionBlocks(renderTypedQueryBlocks(blocks.RegularBlocks))
 
 	ctes := []CTEDef{
-		{Name: "userset_objects", Columns: []string{"userset_object_id", "depth"}, Query: Raw(usersetObjectsCTE)},
+		{Name: "userset_objects", Columns: []string{"userset_object_id"}, Query: walkedUsersets()},
 		// subjects is referenced by the has_wildcard EXISTS (when emitted) and
 		// the outer tail SELECT, so materialize to compute it once. Named "subjects"
 		// (not "base_results") to avoid shadowing the outer pagination-wrapper CTE.
@@ -112,22 +124,7 @@ func renderSelfRefUsersetRegularQuery(plan ListPlan, blocks SelfRefUsersetSubjec
 		}})
 	}
 
-	cteQuery := MultiCTE(true, ctes, buildUsersetWildcardTailQuery(plan.Analysis, plan.DatabaseSchema))
+	cteQuery := MultiCTE(ctes, buildUsersetWildcardTailQuery(plan.Analysis, plan.graph(), plan.DatabaseSchema))
 
 	return cteQuery.SQL()
-}
-
-func buildUsersetObjectsCTE(blocks SelfRefUsersetSubjectsBlockSet) string {
-	if blocks.UsersetObjectsBaseBlock == nil {
-		return ""
-	}
-	baseBlock := renderTypedQueryBlock(*blocks.UsersetObjectsBaseBlock)
-	baseSQL := formatQueryBlockSQL(baseBlock.Comments, baseBlock.Query.SQL())
-
-	if blocks.UsersetObjectsRecursiveBlock == nil {
-		return baseSQL
-	}
-	recursiveBlock := renderTypedQueryBlock(*blocks.UsersetObjectsRecursiveBlock)
-	recursiveSQL := formatQueryBlockSQL(recursiveBlock.Comments, recursiveBlock.Query.SQL())
-	return baseSQL + "\n            UNION\n" + recursiveSQL
 }

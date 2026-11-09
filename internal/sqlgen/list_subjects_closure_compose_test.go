@@ -94,7 +94,7 @@ func TestClosureTTUSubjects_FallbackWhenNotComposable(t *testing.T) {
 	if !strings.Contains(sql, "subject_pool") {
 		t.Errorf("expected subject_pool fallback, got:\n%s", sql)
 	}
-	if !strings.Contains(sql, "check_permission_internal(p_subject_type, sp.subject_id, 'reader', 'doc', p_object_id)") {
+	if !strings.Contains(sql, "check_permission_internal(p_subject_type, sp.subject_id, 'reader', 'doc', p_object_id, ARRAY[]::TEXT[])") {
 		t.Errorf("expected per-candidate closure check on target object, got:\n%s", sql)
 	}
 }

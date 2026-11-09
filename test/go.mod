@@ -12,7 +12,7 @@ require (
 	github.com/openfga/language/pkg/go v0.3.2
 	github.com/openfga/openfga v1.22.1
 	github.com/pthm/melange v0.9.2
-	github.com/pthm/melange/melange v0.10.1
+	github.com/pthm/melange/melange v0.10.3
 	github.com/stretchr/testify v1.12.1
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.44.0

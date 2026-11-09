@@ -2,6 +2,7 @@ package schema
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -20,56 +21,51 @@ type relationNode struct {
 	relation   string
 }
 
-// DetectCycles checks for cycles in the relation graph.
-// It validates both implied-by cycles (within a single type) and parent relation
-// cycles (across types). Returns an error describing the cycle if one is found.
+// DetectCycles checks for implied-by cycles: relations within a type that
+// resolve through each other on the same object, as computed relations
+// (admin implies owner, owner implies admin) or intersection and exclusion
+// operands, which OpenFGA rejects too. Returns an error describing the cycle
+// if one is found.
+//
+// Parent relation cycles (viewer from parent over a folder hierarchy, or
+// folder.a -> project.b -> folder.a across types) are valid: data can form
+// loops through them, and every generated function that follows them detects
+// revisits or walks breadth first.
 //
 // This function is called by both GenerateGo and MigrateWithTypes to catch
 // invalid schemas before they cause runtime issues.
 //
-// Example cyclic schemas that would be detected:
+// Example cyclic schema that would be detected:
 //
-//	// Implied-by cycle:
 //	type resource
 //	  relations
 //	    define admin: [user] or owner
 //	    define owner: [user] or admin  // CYCLE: admin ↔ owner
-//
-//	// Parent relation cycle:
-//	type organization
-//	  relations
-//	    define repo: [repository]
-//	    define can_read: can_read from repo
-//	type repository
-//	  relations
-//	    define org: [organization]
-//	    define can_read: can_read from org  // CYCLE: crosses types
 func DetectCycles(types []TypeDefinition) error {
 	// Check implied-by cycles (per-type, simpler graph)
 	if err := detectImpliedByCycles(types); err != nil {
 		return err
 	}
 
-	// Check parent relation cycles (cross-type graph)
-	if err := detectParentCycles(types); err != nil {
-		return err
-	}
-
 	return nil
 }
 
-// detectImpliedByCycles checks for cycles in implied-by relations within each type.
-// For example: admin implies owner, owner implies admin would be a cycle.
+// detectImpliedByCycles checks for cycles among the relations of each type that
+// resolve on the same object: implied-by relations (admin implies owner, owner
+// implies admin), intersection operands and exclusion operands
+// ("a: [user] or (b and c)" with "b: [user] or a"). OpenFGA rejects all of
+// them, and check functions count only parent and userset hops as steps, so
+// such a cycle would recurse without bound.
 func detectImpliedByCycles(types []TypeDefinition) error {
 	for _, t := range types {
 		graph := make(map[relationNode][]relationNode)
 
 		// Build graph for this type
-		// An edge from A to B means "A is implied by B" (B → A)
+		// An edge from A to B means A is resolved through B on the same object
 		for _, r := range t.Relations {
 			n := relationNode{objectType: t.Name, relation: r.Name}
-			for _, impliedBy := range r.ImpliedBy {
-				target := relationNode{objectType: t.Name, relation: impliedBy}
+			for _, rel := range sameObjectOperands(r) {
+				target := relationNode{objectType: t.Name, relation: rel}
 				graph[n] = append(graph[n], target)
 			}
 		}
@@ -83,114 +79,29 @@ func detectImpliedByCycles(types []TypeDefinition) error {
 	return nil
 }
 
-// detectParentCycles checks for cycles in parent relations across types.
-// For example: repository.can_read inherits from org.can_read, and
-// org.can_read inherits from repository.can_read would be a cycle.
-//
-// IMPORTANT: Same-type recursive patterns like "viewer from parent" where
-// parent: [folder] are NOT cycles - they represent hierarchical inheritance
-// (e.g., folders inheriting permissions from parent folders). These are valid
-// patterns supported by OpenFGA/Zanzibar and handled at runtime via visited
-// tracking in the SQL functions.
-//
-// We only flag true cross-type cycles where different object types form a loop.
-func detectParentCycles(types []TypeDefinition) error {
-	graph := buildParentGraph(types)
-	if cycle := detectCycleInGraph(graph); cycle != nil {
-		// Check if this is a same-type self-reference (hierarchical recursion)
-		// These are NOT cycles - they're valid recursive patterns like "viewer from parent"
-		if len(cycle) == 2 && cycle[0] == cycle[1] {
-			// Self-edge: folder.viewer → folder.viewer - this is valid hierarchical recursion
-			return nil
-		}
-		// Check if all nodes in the cycle are the same type - also valid recursion
-		allSameType := true
-		for i := 1; i < len(cycle); i++ {
-			if cycle[i].objectType != cycle[0].objectType {
-				allSameType = false
-				break
-			}
-		}
-		if allSameType {
-			return nil
-		}
-		// Allow cross-type hierarchical recursion when relation name is consistent.
-		// Example: document.viewer -> folder.viewer -> module.viewer -> document.viewer
-		// This is a parent-chain recursion, not an invalid permission cycle.
-		allSameRelation := true
-		for i := 1; i < len(cycle); i++ {
-			if cycle[i].relation != cycle[0].relation {
-				allSameRelation = false
-				break
-			}
-		}
-		if allSameRelation {
-			return nil
-		}
-		return fmt.Errorf("%w: parent relation cycle: %s",
-			ErrCyclicSchema, formatCycle(cycle))
-	}
-	return nil
-}
-
-// buildParentGraph builds the cross-type parent relation graph.
-// Nodes are (objectType, relation) pairs.
-// Edges point from child relation to the parent relation it inherits from.
-func buildParentGraph(types []TypeDefinition) map[relationNode][]relationNode {
-	graph := make(map[relationNode][]relationNode)
-
-	// Build a lookup for resolving linking relations to parent types.
-	// linkingRelTypes[objectType][linkingRel] = []parentTypes
-	// We collect ALL subject types (not just the first) to detect cycles through
-	// any possible parent type.
-	linkingRelTypes := make(map[string]map[string][]string)
-	for _, t := range types {
-		linkingRelTypes[t.Name] = make(map[string][]string)
-		for _, r := range t.Relations {
-			// Collect all direct subject types (non-userset references).
-			var parentTypes []string
-			seen := make(map[string]bool)
-
-			for _, ref := range r.SubjectTypeRefs {
-				// Only consider direct references, not userset references like group#member
-				if ref.Relation == "" && !seen[ref.Type] {
-					seen[ref.Type] = true
-					parentTypes = append(parentTypes, ref.Type)
-				}
-			}
-
-			if len(parentTypes) > 0 {
-				linkingRelTypes[t.Name][r.Name] = parentTypes
+// sameObjectOperands returns the relations r resolves through on the same
+// object: implied-by relations, intersection operands and their exclusions,
+// and excluded relations and intersections. An intersection names r itself for
+// its direct assignment ("[user] and c"), which is not a cycle; excluded
+// intersections cannot hold a direct assignment, so r there is one.
+func sameObjectOperands(r RelationDefinition) []string {
+	rels := slices.Concat(r.ImpliedBy, r.ExcludedRelations)
+	for _, group := range r.IntersectionGroups {
+		for _, rel := range group.Relations {
+			if rel != r.Name {
+				rels = append(rels, rel)
 			}
 		}
 	}
-
-	// Build the graph
-	for _, t := range types {
-		for _, r := range t.Relations {
-			if len(r.ParentRelations) == 0 {
-				continue
-			}
-
-			n := relationNode{objectType: t.Name, relation: r.Name}
-
-			for _, parent := range r.ParentRelations {
-				// LinkingRelation is the relation that links to parent (e.g., "parent")
-				// We need to find what types that relation can point to
-				linkingRel := parent.LinkingRelation
-				if parentTypes, ok := linkingRelTypes[t.Name][linkingRel]; ok {
-					// Add edges for ALL possible parent types to catch cycles
-					// through any possible path
-					for _, parentType := range parentTypes {
-						target := relationNode{objectType: parentType, relation: parent.Relation}
-						graph[n] = append(graph[n], target)
-					}
-				}
-			}
+	for _, group := range r.ExcludedIntersectionGroups {
+		rels = append(rels, group.Relations...)
+	}
+	for _, group := range slices.Concat(r.IntersectionGroups, r.ExcludedIntersectionGroups) {
+		for _, excluded := range group.Exclusions {
+			rels = append(rels, excluded...)
 		}
 	}
-
-	return graph
+	return rels
 }
 
 // detectCycleInGraph uses DFS with three-color marking to detect cycles.

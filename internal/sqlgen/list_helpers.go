@@ -1,6 +1,7 @@
 package sqlgen
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 
@@ -109,9 +110,11 @@ func buildListUsersetPatternInputs(a RelationAnalysis) []listUsersetPatternInput
 }
 
 // buildExclusionInput creates an ExclusionConfig from a RelationAnalysis.
-// This configures exclusion predicates for SQL query generation.
-func buildExclusionInput(a RelationAnalysis, databaseSchema string, objectIDExpr, subjectTypeExpr, subjectIDExpr Expr) ExclusionConfig {
+// This configures exclusion predicates for SQL query generation. g routes
+// the exclusion checks (see CheckPermission) and may be nil.
+func buildExclusionInput(a RelationAnalysis, g *relationGraph, databaseSchema string, objectIDExpr, subjectTypeExpr, subjectIDExpr Expr) ExclusionConfig {
 	return ExclusionConfig{
+		Graph:                    g,
 		DatabaseSchema:           databaseSchema,
 		ObjectType:               a.ObjectType,
 		ObjectIDExpr:             objectIDExpr,
@@ -184,7 +187,7 @@ func buildWhereFromPredicates(predicates []Expr) Expr {
 }
 
 // buildUsersetWildcardTailQuery builds the wildcard handling tail as a typed query for list_subjects functions.
-func buildUsersetWildcardTailQuery(a RelationAnalysis, databaseSchema string) SQLer {
+func buildUsersetWildcardTailQuery(a RelationAnalysis, g *relationGraph, databaseSchema string) SQLer {
 	if a.Features.HasWildcard {
 		return SelectStmt{
 			ColumnExprs: []Expr{Col{Table: "br", Column: "subject_id"}},
@@ -192,7 +195,7 @@ func buildUsersetWildcardTailQuery(a RelationAnalysis, databaseSchema string) SQ
 			Joins: []JoinClause{
 				{Type: "CROSS", Table: "has_wildcard", Alias: "hw"},
 			},
-			Where: wildcardSubjectsTailWhere(databaseSchema, a.Relation, a.ObjectType, a.Features.HasExclusion),
+			Where: wildcardSubjectsTailWhere(databaseSchema, g, a.Relation, a.ObjectType, a.Features.HasExclusion),
 		}
 	}
 	return SelectStmt{
@@ -205,7 +208,7 @@ func buildUsersetWildcardTailQuery(a RelationAnalysis, databaseSchema string) SQ
 // wildcard-completion tail (shared by the recursive and self-referential-userset
 // renderers). When the base set has no wildcard, keep every row. Otherwise keep
 // each subject the relation actually grants:
-//   - the '*' row is verified via the FULL check (check_permission_internal):
+//   - the '*' row is verified via the FULL check (check_<t>_<r>):
 //     '*”s access flows through wildcard ([user:*]) grants, so the no-wildcard
 //     check would wrongly drop it — but it must still be subtracted when an
 //     exclusion denies it, whether the exclusion is on this relation or reached
@@ -221,22 +224,19 @@ func buildUsersetWildcardTailQuery(a RelationAnalysis, databaseSchema string) SQ
 // relation the base-set builders can over-report banned subjects (e.g. a
 // self-ref userset where a direct or intermediate-group member is banned), so
 // re-verification must always run. Gate the short-circuit on !hasExclusion so
-// concrete subjects are always validated by check_permission_nw_internal and
-// '*' by check_permission_internal.
-func wildcardSubjectsTailWhere(schema, relation, objectType string, hasExclusion bool) Expr {
+// concrete subjects are always validated by the no-wildcard check and '*' by
+// the full one.
+func wildcardSubjectsTailWhere(schema string, g *relationGraph, relation, objectType string, hasExclusion bool) Expr {
 	subject := Col{Table: "br", Column: "subject_id"}
-	var concrete Expr = NoWildcardPermissionCheckCall(schema, relation, objectType, subject, ObjectID)
+	full := subjectCheck(schema, g, relation, objectType, subject)
+	noWildcard := full
+	noWildcard.NoWildcard = true
+	var concrete Expr = noWildcard
 	if hasExclusion {
-		concrete = Or(concrete, And(
-			wildcardDenied(schema, relation, objectType),
-			WildcardPermissionCheckCall(schema, relation, objectType, subject, ObjectID),
-		))
+		concrete = Or(concrete, And(wildcardDenied(schema, g, relation, objectType), full))
 	}
 	branches := []Expr{
-		And(
-			Eq{Left: subject, Right: Lit("*")},
-			WildcardPermissionCheckCall(schema, relation, objectType, subject, ObjectID),
-		),
+		And(Eq{Left: subject, Right: Lit("*")}, full),
 		And(Ne{Left: subject, Right: Lit("*")}, concrete),
 	}
 	if !hasExclusion {
@@ -247,26 +247,50 @@ func wildcardSubjectsTailWhere(schema, relation, objectType string, hasExclusion
 
 // wildcardDenied is true when the full check denies '*' on the object. The
 // subquery is uncorrelated, so PostgreSQL evaluates it once.
-func wildcardDenied(schema, relation, objectType string) Expr {
-	check := WildcardPermissionCheckCall(schema, relation, objectType, Lit("*"), ObjectID)
+func wildcardDenied(schema string, g *relationGraph, relation, objectType string) Expr {
+	check := subjectCheck(schema, g, relation, objectType, Lit("*"))
 	return NotExpr{Expr: Paren{Expr: Raw("SELECT " + check.SQL())}}
 }
 
-// buildDispatcherBody builds the common routing logic for list dispatcher functions.
-func buildDispatcherBody(cases []ListDispatcherCase, callArgs string) []Stmt {
+// subjectCheck is the full check (wildcard grants included) that the
+// p_subject_type subject subjectID holds relation on the object p_object_id,
+// with an empty visited array: a fresh check per candidate subject.
+func subjectCheck(schema string, g *relationGraph, relation, objectType string, subjectID Expr) CheckPermission {
+	return CheckPermission{
+		Schema:      schema,
+		Subject:     SubjectRef{Type: SubjectType, ID: subjectID},
+		Relation:    relation,
+		Object:      LiteralObject(objectType, ObjectID),
+		ExpectAllow: true,
+		Graph:       g,
+	}
+}
+
+// buildDispatcherBody builds the common routing logic for list dispatcher
+// functions: an arm per case returning query(case), and a raise for each
+// relation in unexposed.
+func buildDispatcherBody(cases []ListDispatcherCase, unexposed []relationKey, query func(ListDispatcherCase) string) []Stmt {
 	var stmts []Stmt
-	if len(cases) > 0 {
+	if len(cases) > 0 || len(unexposed) > 0 {
 		stmts = append(stmts, Comment{Text: "Route to specialized functions, nested by object type then relation"})
 		// Group by object type (preserving order) and emit an outer IF per type
 		// wrapping inner per-relation IFs — mirrors the check dispatcher, so a
 		// non-matching object type skips its whole relation block in one compare.
 		var order []string
 		byType := make(map[string][]ListDispatcherCase)
+		raiseByType := make(map[string][]string)
 		for _, c := range cases {
 			if _, seen := byType[c.ObjectType]; !seen {
 				order = append(order, c.ObjectType)
 			}
 			byType[c.ObjectType] = append(byType[c.ObjectType], c)
+		}
+		for _, k := range unexposed {
+			if _, seen := byType[k.ObjectType]; !seen {
+				byType[k.ObjectType] = nil
+				order = append(order, k.ObjectType)
+			}
+			raiseByType[k.ObjectType] = append(raiseByType[k.ObjectType], k.Relation)
 		}
 		for _, ot := range order {
 			inner := make([]Stmt, 0, len(byType[ot]))
@@ -274,9 +298,15 @@ func buildDispatcherBody(cases []ListDispatcherCase, callArgs string) []Stmt {
 				inner = append(inner, If{
 					Cond: Eq{Left: Param("p_relation"), Right: Lit(c.Relation)},
 					Then: []Stmt{
-						ReturnQuery{Query: "SELECT * FROM " + sqldsl.PrefixIdent(c.FunctionName, c.DatabaseSchema) + "(" + callArgs + ")"},
+						ReturnQuery{Query: query(c)},
 						Return{},
 					},
+				})
+			}
+			if rels := raiseByType[ot]; len(rels) > 0 {
+				inner = append(inner, If{
+					Cond: In{Expr: Param("p_relation"), Values: rels},
+					Then: []Stmt{raiseNotExposed},
 				})
 			}
 			// Known type, unknown relation → return empty immediately, mirroring
@@ -297,9 +327,19 @@ func buildDispatcherBody(cases []ListDispatcherCase, callArgs string) []Stmt {
 	return stmts
 }
 
+// selectAllFrom returns the arm query of a dispatcher that returns its
+// case's function called with callArgs.
+func selectAllFrom(callArgs string) func(ListDispatcherCase) string {
+	return func(c ListDispatcherCase) string {
+		return "SELECT * FROM " + sqldsl.PrefixIdent(c.FunctionName, c.DatabaseSchema) + "(" + callArgs + ")"
+	}
+}
+
 // generateListObjectsDispatcher generates the list_accessible_objects dispatcher function.
-func generateListObjectsDispatcher(analyses []RelationAnalysis, databaseSchema string) (string, error) {
-	cases := collectListDispatcherCases(analyses, listObjectsFunctionName, databaseSchema)
+func generateListObjectsDispatcher(analyses []RelationAnalysis, databaseSchema string, exposure *exposureClosure) (string, error) {
+	cases := collectListDispatcherCases(analyses, listObjectsFunctionName, databaseSchema, func(objectType, relation string) bool {
+		return exposure.public(familyListObjects, objectType, relation)
+	})
 
 	fn := PlpgsqlFunction{
 		Schema:  databaseSchema,
@@ -310,7 +350,7 @@ func generateListObjectsDispatcher(analyses []RelationAnalysis, databaseSchema s
 			"Generated dispatcher for list_accessible_objects",
 			"Routes to specialized functions for all type/relation pairs",
 		},
-		Body: buildDispatcherBody(cases, "p_subject_type, p_subject_id, p_limit, p_after"),
+		Body: buildDispatcherBody(cases, exposure.unexposed(familyListObjects), selectAllFrom("p_subject_type, p_subject_id, p_limit, p_after")),
 		// Routes only to schema-qualified list_{type}_{rel}_obj calls, no
 		// unqualified melange_tuples.
 		NoSearchPath: true,
@@ -318,10 +358,87 @@ func generateListObjectsDispatcher(analyses []RelationAnalysis, databaseSchema s
 	return fn.SQL(), nil
 }
 
-// generateListSubjectsDispatcher generates the list_accessible_subjects dispatcher function.
-func generateListSubjectsDispatcher(analyses []RelationAnalysis, databaseSchema string) (string, error) {
-	cases := collectListDispatcherCases(analyses, listSubjectsFunctionName, databaseSchema)
+// accessibleObjectsDispatcherName is the accessible function that takes the
+// relation and object type as arguments.
+const accessibleObjectsDispatcherName = "accessible_objects"
 
+// generateAccessibleObjectsDispatcher generates accessible_objects: the
+// objects list_accessible_objects returns, without pages, as a set to filter
+// queries by. Unlike accessible_{type}_{relation} it is not inlined (see
+// list_objects_accessible.go).
+//
+// It wraps list_accessible_objects while the accessible and list_objects
+// families are both enabled or both disabled: list_accessible_objects then
+// answers and raises for exactly the relations accessible_objects exposes,
+// so the wrapper needs no guard of its own. When only one of the two is
+// enabled their exposed relations differ, and no internal list-objects
+// dispatcher exists to wrap, so it routes to the list functions itself, over
+// its own exposed relations, and raises for the others.
+func generateAccessibleObjectsDispatcher(analyses []RelationAnalysis, databaseSchema string, exposure *exposureClosure) string {
+	if exposure != nil && exposure.accessible != exposure.listObjects {
+		cases := collectListDispatcherCases(analyses, listObjectsFunctionName, databaseSchema, func(objectType, relation string) bool {
+			return exposure.public(familyAccessible, objectType, relation)
+		})
+		fn := PlpgsqlFunction{
+			Schema: databaseSchema,
+			Name:   accessibleObjectsDispatcherName,
+			Args: []FuncArg{
+				{Name: "p_subject_type", Type: "TEXT"},
+				{Name: "p_subject_id", Type: "TEXT"},
+				{Name: "p_relation", Type: "TEXT"},
+				{Name: "p_object_type", Type: "TEXT"},
+			},
+			Returns: "TABLE(object_id TEXT) ROWS 100",
+			Header: []string{
+				"Objects of p_object_type on which the subject holds p_relation, for filtering queries:",
+				"WHERE id IN (SELECT * FROM " + sqldsl.PrefixIdent(accessibleObjectsDispatcherName, databaseSchema) + "(subject_type, subject_id, relation, object_type)).",
+				"Routes to the exposed relations' list functions and raises for the relations not exposed.",
+			},
+			Body: buildDispatcherBody(cases, exposure.unexposed(familyAccessible), func(c ListDispatcherCase) string {
+				return "SELECT o.object_id FROM " + sqldsl.PrefixIdent(c.FunctionName, c.DatabaseSchema) + "(p_subject_type, p_subject_id) AS o"
+			}),
+			NoSearchPath: true,
+		}
+		return fn.SQL()
+	}
+	return fmt.Sprintf(`-- Objects of p_object_type on which the subject holds p_relation, for filtering queries:
+-- WHERE id IN (SELECT * FROM %s(subject_type, subject_id, relation, object_type)).
+-- Plans in constant time; for large sets accessible_{type}_{relation}, which the
+-- planner inlines, is faster.
+CREATE OR REPLACE FUNCTION %s(
+    p_subject_type TEXT,
+    p_subject_id TEXT,
+    p_relation TEXT,
+    p_object_type TEXT
+) RETURNS TABLE(object_id TEXT) AS $$
+    SELECT o.object_id FROM %s(p_subject_type, p_subject_id, p_relation, p_object_type) AS o
+$$ LANGUAGE sql STABLE PARALLEL RESTRICTED;`,
+		sqldsl.PrefixIdent(accessibleObjectsDispatcherName, databaseSchema),
+		sqldsl.PrefixIdent(accessibleObjectsDispatcherName, databaseSchema),
+		sqldsl.PrefixIdent("list_accessible_objects", databaseSchema))
+}
+
+// listSubjectsInternalDispatcherName routes every list_subjects function the
+// exposure installs. Generated list_subjects functions call it instead of
+// list_accessible_subjects, which answers only for exposed relations.
+const listSubjectsInternalDispatcherName = "list_accessible_subjects_internal"
+
+// generateListSubjectsDispatcher generates list_accessible_subjects_internal
+// and the public list_accessible_subjects dispatcher.
+func generateListSubjectsDispatcher(analyses []RelationAnalysis, databaseSchema string, exposure *exposureClosure) (string, error) {
+	query := selectAllFrom("p_object_id, p_subject_type, p_limit, p_after")
+	internal := PlpgsqlFunction{
+		Schema:  databaseSchema,
+		Name:    listSubjectsInternalDispatcherName,
+		Args:    ListSubjectsDispatcherArgs(),
+		Returns: "TABLE (subject_id TEXT, next_cursor TEXT) ROWS 100",
+		Header: []string{
+			"Generated internal dispatcher for list_accessible_subjects",
+			"Routes to every generated list_subjects function; generated functions call it",
+		},
+		Body:         buildDispatcherBody(collectListDispatcherCases(analyses, listSubjectsFunctionName, databaseSchema, exposure.installsListSubjects), nil, query),
+		NoSearchPath: true,
+	}
 	fn := PlpgsqlFunction{
 		Schema:  databaseSchema,
 		Name:    "list_accessible_subjects",
@@ -331,19 +448,22 @@ func generateListSubjectsDispatcher(analyses []RelationAnalysis, databaseSchema 
 			"Generated dispatcher for list_accessible_subjects",
 			"Routes to specialized functions for all type/relation pairs",
 		},
-		Body: buildDispatcherBody(cases, "p_object_id, p_subject_type, p_limit, p_after"),
+		Body: buildDispatcherBody(collectListDispatcherCases(analyses, listSubjectsFunctionName, databaseSchema, func(objectType, relation string) bool {
+			return exposure.public(familyListSubjects, objectType, relation)
+		}), exposure.unexposed(familyListSubjects), query),
 		// Routes only to schema-qualified list_{type}_{rel}_sub calls, no
 		// unqualified melange_tuples.
 		NoSearchPath: true,
 	}
-	return fn.SQL(), nil
+	return internal.SQL() + "\n\n" + fn.SQL(), nil
 }
 
-// collectListDispatcherCases gathers eligible analyses into dispatcher cases.
-func collectListDispatcherCases(analyses []RelationAnalysis, nameFunc func(string, string) string, databaseSchema string) []ListDispatcherCase {
+// collectListDispatcherCases gathers the ListAllowed analyses include
+// accepts into dispatcher cases.
+func collectListDispatcherCases(analyses []RelationAnalysis, nameFunc func(string, string) string, databaseSchema string, include func(objectType, relation string) bool) []ListDispatcherCase {
 	var cases []ListDispatcherCase
 	for _, a := range analyses {
-		if !a.Capabilities.ListAllowed {
+		if !a.Capabilities.ListAllowed || !include(a.ObjectType, a.Relation) {
 			continue
 		}
 		cases = append(cases, ListDispatcherCase{

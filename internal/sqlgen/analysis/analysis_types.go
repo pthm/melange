@@ -370,6 +370,13 @@ type RelationAnalysis struct {
 	// Computed by ComputeCanGenerate via findIndirectAnchor.
 	IndirectAnchor *IndirectAnchorInfo
 
+	// ReachesItselfThroughParents is true when following parent lookups from
+	// this relation (on any type, directly or through implied relations) can come
+	// back to it: a parent relation cycle across types, such as
+	// folder.a -> project.b -> folder.a. The IndirectAnchor path then misses the
+	// cyclic branch, so such relations are not listed by composing along it.
+	ReachesItselfThroughParents bool
+
 	// MaxUsersetDepth is the maximum userset chain depth reachable from this relation.
 	// -1 means infinite (self-referential userset cycle), 0 means no userset patterns.
 	// Values >= 25 indicate the relation will always exceed the depth limit.
@@ -1114,10 +1121,12 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		for i := range a.ExcludedParentRelations {
 			a.ExcludedParentRelations[i].AllowedLinkingTypes = getLinkingTypes(lookup, a.ObjectType, a.ExcludedParentRelations[i].LinkingRelation)
 		}
-		for gi := range a.IntersectionGroups {
-			for pi := range a.IntersectionGroups[gi].Parts {
-				if pr := a.IntersectionGroups[gi].Parts[pi].ParentRelation; pr != nil {
-					pr.AllowedLinkingTypes = getLinkingTypes(lookup, a.ObjectType, pr.LinkingRelation)
+		for _, groups := range [][]IntersectionGroupInfo{a.IntersectionGroups, a.ExcludedIntersectionGroups} {
+			for gi := range groups {
+				for pi := range groups[gi].Parts {
+					if pr := groups[gi].Parts[pi].ParentRelation; pr != nil {
+						pr.AllowedLinkingTypes = getLinkingTypes(lookup, a.ObjectType, pr.LinkingRelation)
+					}
 				}
 			}
 		}
@@ -1240,9 +1249,9 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		// A pattern is complex if ANY relation in its closure is not closure-compatible
 		// (has userset, TTU, exclusion, or intersection).
 		//
-		// For complex patterns, we call check_permission_internal which always works
-		// because it falls back to check_permission_generic_internal for non-generatable
-		// relations. So we don't need to check if the subject relation is generatable -
+		// For complex patterns, we call check_permission_internal, which answers for
+		// any relation: one with no generated function has no case and is denied.
+		// So we don't need to check if the subject relation is generatable -
 		// we just mark the pattern as complex and use the function call approach.
 		//
 		// We only reject if a relation in the closure is truly unknown (not in the schema).
@@ -1518,6 +1527,15 @@ func ComputeCanGenerate(analyses []RelationAnalysis) []RelationAnalysis {
 		}
 	}
 
+	// Parent relation cycles once every parent lookup is resolved: in a cycle
+	// no relation comes after all the others, so the passes above cannot see them.
+	for i := range sorted {
+		if a := &sorted[i]; reachesItselfThroughParents(a, lookup) {
+			a.ReachesItselfThroughParents = true
+			a.ListStrategy = DetermineListStrategy(*a)
+		}
+	}
+
 	for i := range sorted {
 		sorted[i].ImpliedCallees = impliedCallees(&sorted[i], lookup)
 	}
@@ -1691,6 +1709,32 @@ func computeCanGenerateList(a *RelationAnalysis, lookup map[string]map[string]*R
 //   - Userset chains: job.can_read: [permission#assignee] → permission.assignee: [role#assignee] → role.assignee: [user]
 //
 // The function performs depth-first search with cycle detection.
+// reachesItselfThroughParents reports whether following parent lookups (direct
+// or inherited from implied relations) from a, on any type, leads back to a.
+func reachesItselfThroughParents(a *RelationAnalysis, lookup map[string]map[string]*RelationAnalysis) bool {
+	type node struct{ objectType, relation string }
+	start := node{a.ObjectType, a.Relation}
+	seen := map[node]bool{}
+	queue := []*RelationAnalysis{a}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		for _, p := range append(slices.Clone(cur.ParentRelations), cur.ClosureParentRelations...) {
+			for _, t := range p.AllowedLinkingTypes {
+				n := node{t, p.Relation}
+				if n == start {
+					return true
+				}
+				if next := lookup[t][p.Relation]; next != nil && !seen[n] {
+					seen[n] = true
+					queue = append(queue, next)
+				}
+			}
+		}
+	}
+	return false
+}
+
 func findIndirectAnchor(
 	a *RelationAnalysis,
 	lookup map[string]map[string]*RelationAnalysis,

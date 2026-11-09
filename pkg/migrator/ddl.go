@@ -23,10 +23,12 @@ func migrationsDDL(databaseSchema string) string {
 --   "melange schema pull"; the exact content that was checksummed)
 -- - schema_format: "single" or "modular" (fga.mod)
 -- - model_json: The parsed model as JSON (machine-readable form for diffing)
+-- - exposure: The normalized SQL API exposure the functions were generated
+--   with ('{}' is the default: every relation, every function family)
 --
 -- The migrator checks the most recent record to determine if re-migration
--- is needed. If both checksum and codegen_version match, migration is skipped
--- unless --force is specified.
+-- is needed. If the checksum, codegen_version and exposure match, migration
+-- is skipped unless --force is specified.
 
 CREATE TABLE IF NOT EXISTS %[1]s (
     id SERIAL PRIMARY KEY,
@@ -37,7 +39,8 @@ CREATE TABLE IF NOT EXISTS %[1]s (
     function_names TEXT[] NOT NULL,
     schema_dsl TEXT NOT NULL DEFAULT '',
     schema_format VARCHAR(16) NOT NULL DEFAULT '',
-    model_json JSONB NOT NULL DEFAULT '{}'::jsonb
+    model_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    exposure JSONB NOT NULL DEFAULT '{}'::jsonb
 );
 
 -- Lookup by checksum for change detection
@@ -112,6 +115,7 @@ func migrationsTableDDL(databaseSchema string) []string {
 		addFunctionChecksumsColumn(databaseSchema),
 		widenVersionColumnsDDL(databaseSchema),
 		addSchemaModelColumns(databaseSchema),
+		addExposureColumn(databaseSchema),
 	}
 }
 
@@ -150,5 +154,17 @@ ALTER TABLE %[1]s
 ADD COLUMN IF NOT EXISTS schema_format VARCHAR(16) NOT NULL DEFAULT '';
 ALTER TABLE %[1]s
 ADD COLUMN IF NOT EXISTS model_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+`, table)
+}
+
+// addExposureColumn returns a query to add the exposure column to existing
+// melange_migrations tables. Rows written before it existed get '{}', the
+// default exposure, which is what their functions were generated with.
+func addExposureColumn(databaseSchema string) string {
+	table := sqldsl.PrefixIdent("melange_migrations", databaseSchema)
+
+	return fmt.Sprintf(`
+ALTER TABLE %s
+ADD COLUMN IF NOT EXISTS exposure JSONB NOT NULL DEFAULT '{}'::jsonb;
 `, table)
 }

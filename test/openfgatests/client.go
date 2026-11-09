@@ -18,6 +18,7 @@ package openfgatests
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -31,8 +32,10 @@ import (
 	"github.com/openfga/openfga/pkg/storage/memory"
 	"google.golang.org/grpc"
 
+	"github.com/pthm/melange/internal/sqlapi"
 	"github.com/pthm/melange/internal/sqlgen/sqldsl"
 	"github.com/pthm/melange/melange"
+	"github.com/pthm/melange/pkg/compiler"
 	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/pkg/parser"
 	"github.com/pthm/melange/pkg/schema"
@@ -62,6 +65,19 @@ type Client struct {
 	// "oracle". The six gRPC methods delegate to it verbatim, so the same test
 	// runner validates a YAML case's expected values against real OpenFGA.
 	openfgaBackend *openfgaserver.Server
+
+	// restrictExposure makes each stage migrate with an exposure that
+	// includes only the relations its assertions name (see StageExposure),
+	// so the assertions check the closure of a restricted exposure.
+	restrictExposure bool
+	// exposure is the exposure the next model is migrated with; nil is the
+	// default.
+	exposure *migrator.Exposure
+	// traceOnDemand migrates every model with the explain and expand
+	// families off and runs Explain, Expand and ExpandRecursive through
+	// sqlapi.Trace, which compiles them into pg_temp for each call, as the
+	// CLI and studio do.
+	traceOnDemand bool
 }
 
 // NewOpenFGAClient returns a Client backed by a real in-process OpenFGA server
@@ -123,7 +139,54 @@ func (c *Client) forSubtest(tb testing.TB) *Client {
 			openfgaBackend: c.openfgaBackend,
 		}
 	}
-	return NewClientWithSchema(tb, c.databaseSchema)
+	sub := NewClientWithSchema(tb, c.databaseSchema)
+	sub.restrictExposure = c.restrictExposure
+	sub.traceOnDemand = c.traceOnDemand
+	return sub
+}
+
+// NewOnDemandTraceClient is NewClientWithSchema, except that models are
+// migrated with the explain and expand families off, and Explain, Expand and
+// ExpandRecursive compile those functions into pg_temp for each call (see
+// traceOnDemand). The parity sweeps then check the on-demand functions.
+func NewOnDemandTraceClient(tb testing.TB, databaseSchema string) *Client {
+	c := NewClientWithSchema(tb, databaseSchema)
+	c.traceOnDemand = true
+	return c
+}
+
+// traceFamiliesOff is the exposure on-demand clients migrate with.
+func traceFamiliesOff() *migrator.Exposure {
+	return &migrator.Exposure{Functions: compiler.FunctionFamilies{Explain: new(bool), Expand: new(bool)}}
+}
+
+// onDemand runs fn with a Checker whose family f answers through functions
+// compiled from the store's model into pg_temp, for one transaction.
+func (c *Client) onDemand(ctx context.Context, s *store, modelID string, f sqlapi.Family, fn func(*melange.Checker) error) error {
+	m, ok := s.models[modelID]
+	if !ok {
+		return fmt.Errorf("model not found: %s", modelID)
+	}
+	api := sqlapi.FromModel(&migrator.DeployedModel{
+		Types:          m.types,
+		Exposure:       *traceFamiliesOff(),
+		CodegenVersion: migrator.CodegenVersion(),
+	})
+	if !api.OnDemand(f) {
+		return fmt.Errorf("%s is not compiled on demand", f.Name())
+	}
+	return api.Trace(ctx, s.db, c.databaseSchema, f, nil, fn)
+}
+
+// NewRestrictedExposureClient is NewClientWithSchema, except that each stage's
+// model is migrated with an exposure that includes only the relations the
+// stage's assertions name. Every assertion still goes through the public
+// dispatchers, so it passes only when the closure installs everything an
+// exposed relation's functions call.
+func NewRestrictedExposureClient(tb testing.TB, databaseSchema string) *Client {
+	c := NewClientWithSchema(tb, databaseSchema)
+	c.restrictExposure = true
+	return c
 }
 
 // NewClientWithSchema creates a test client that installs melange objects
@@ -442,6 +505,15 @@ func (c *Client) Explain(ctx context.Context, req *openfgav1.CheckRequest, opts 
 	if err != nil {
 		return nil, err
 	}
+	if c.traceOnDemand {
+		// Without the validator: the parity sweep asserts success paths only.
+		var trace *melange.Trace
+		err := c.onDemand(ctx, store, req.GetAuthorizationModelId(), sqlapi.Explain, func(checker *melange.Checker) (err error) {
+			trace, err = checker.Explain(ctx, subject, melange.Relation(relation), object)
+			return err
+		})
+		return trace, err
+	}
 	checker := melange.NewChecker(
 		store.db,
 		melange.WithUsersetValidation(),
@@ -477,7 +549,14 @@ func (c *Client) ExpandRecursive(ctx context.Context, storeID, modelID, object, 
 	// OpenFGA suite already validates the model + tuples through the
 	// typesystem before any check runs, and the SQL dispatcher rejects
 	// unknown (object_type, relation) pairs via its sentinel.
-	_ = modelID
+	if c.traceOnDemand {
+		var users []string
+		err := c.onDemand(ctx, store, modelID, sqlapi.Expand, func(checker *melange.Checker) (err error) {
+			users, err = checker.ExpandRecursive(ctx, obj, melange.Relation(relation))
+			return err
+		})
+		return users, err
+	}
 	checker := melange.NewChecker(
 		store.db,
 		melange.WithDatabaseSchema(c.databaseSchema),
@@ -499,9 +578,15 @@ func (c *Client) Expand(ctx context.Context, storeID, modelID, object, relation 
 	if err != nil {
 		return nil, fmt.Errorf("parsing object: %w", err)
 	}
-	// See the ExpandRecursive comment for why we skip the validator —
-	// modelID is kept in the signature for caller symmetry only.
-	_ = modelID
+	// See the ExpandRecursive comment for why we skip the validator.
+	if c.traceOnDemand {
+		var tree *melange.UsersetTree
+		err := c.onDemand(ctx, store, modelID, sqlapi.Expand, func(checker *melange.Checker) (err error) {
+			tree, err = checker.Expand(ctx, obj, melange.Relation(relation))
+			return err
+		})
+		return tree, err
+	}
 	checker := melange.NewChecker(
 		store.db,
 		melange.WithDatabaseSchema(c.databaseSchema),
@@ -677,11 +762,73 @@ func (c *Client) loadModel(ctx context.Context, db *sql.DB, m *model) error {
 		return fmt.Errorf("model not found")
 	}
 
-	// Use the Migrator to apply generated SQL for this model
-	// The empty string for schemasDir is fine since we're using MigrateWithTypes directly
 	mig := migrator.NewMigrator(db, "")
 	mig.SetDatabaseSchema(c.databaseSchema)
-	return mig.MigrateWithTypes(ctx, m.types)
+	if !c.restrictExposure && !c.traceOnDemand {
+		// The default exposure: MigrateWithTypes needs no schema text, and
+		// records nothing.
+		return mig.MigrateWithTypes(ctx, m.types)
+	}
+
+	// Any other exposure needs a recorded migration, which needs schema text.
+	// The record's checksum is all it is used for here: the tools read the
+	// model from the record's model_json, which the types fill. Not every
+	// model the suite writes prints as DSL (TransformJSONProtoToDSL rejects
+	// some nested rewrites), so pass the model's JSON. Each store has a
+	// database of its own, so records do not leak between clients.
+	content, err := schema.MarshalModel(m.types)
+	if err != nil {
+		return fmt.Errorf("marshaling model: %w", err)
+	}
+	opts := migrator.InternalMigrateOptions{SchemaContent: string(content), Exposure: c.exposure}
+	if c.traceOnDemand {
+		opts.Exposure = traceFamiliesOff()
+	}
+	// A case's stages share one database. Under a restricted exposure, start
+	// each stage from no generated functions, so a callee missing from this
+	// stage's closure fails instead of resolving to a copy an earlier stage
+	// installed. Force re-applies a stage that repeats the recorded schema
+	// and exposure, which would otherwise skip with its functions dropped.
+	if c.restrictExposure {
+		if err := c.dropGeneratedFunctions(ctx, db); err != nil {
+			return err
+		}
+		opts.Force = true
+	}
+	return mig.MigrateWithTypesAndOptions(ctx, m.types, opts)
+}
+
+// dropGeneratedFunctions drops every function in the client's schema named
+// like a generated one (migrator.GeneratedFunctionFilter).
+func (c *Client) dropGeneratedFunctions(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, fmt.Sprintf(`
+		SELECT p.oid::regprocedure::text
+		FROM pg_proc p
+		JOIN pg_namespace n ON p.pronamespace = n.oid
+		WHERE n.nspname = COALESCE(NULLIF($1, ''), current_schema())
+		AND %s
+	`, migrator.GeneratedFunctionFilter), c.databaseSchema)
+	if err != nil {
+		return fmt.Errorf("listing generated functions: %w", err)
+	}
+	var functions []string
+	for rows.Next() {
+		var fn string
+		if err := rows.Scan(&fn); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("scanning generated function: %w", err)
+		}
+		functions = append(functions, fn)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return fmt.Errorf("listing generated functions: %w", err)
+	}
+	for _, fn := range functions {
+		if _, err := db.ExecContext(ctx, "DROP FUNCTION "+fn); err != nil {
+			return fmt.Errorf("dropping %s: %w", fn, err)
+		}
+	}
+	return nil
 }
 
 // refreshTuples updates the melange_tuples view with the current store tuples.

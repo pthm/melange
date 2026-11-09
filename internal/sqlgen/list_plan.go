@@ -65,11 +65,6 @@ func (p ListPlan) MaterializeCTEs() bool {
 	return p.EnableMaterializedCTEs
 }
 
-// wrapPagination applies plan-aware materialization to the cursor pagination wrapper.
-func (p ListPlan) wrapPagination(query, idColumn string) string {
-	return wrapWithPaginationOpts(query, idColumn, p.MaterializeCTEs())
-}
-
 // wrapPaginationWildcardFirst applies plan-aware materialization to the
 // wildcard-first pagination wrapper used by list_subjects.
 func (p ListPlan) wrapPaginationWildcardFirst(query string) string {
@@ -88,6 +83,7 @@ func BuildListObjectsPlanWithLookup(a RelationAnalysis, inline InlineSQLData, da
 	if a.Features.HasExclusion {
 		plan.Exclusions = buildExclusionInput(
 			a,
+			g,
 			databaseSchema,
 			Col{Table: "t", Column: "object_id"},
 			SubjectType,
@@ -112,6 +108,7 @@ func BuildListSubjectsPlanWithLookup(a RelationAnalysis, inline InlineSQLData, d
 	if a.Features.HasExclusion {
 		plan.Exclusions = buildExclusionInput(
 			a,
+			g,
 			databaseSchema,
 			ObjectID,
 			Col{Table: "t", Column: "subject_type"},

@@ -8,7 +8,8 @@ import (
 
 	"github.com/lib/pq"
 
-	"github.com/pthm/melange/internal/sqlgen/sqldsl"
+	"github.com/pthm/melange/internal/sqlapi"
+	"github.com/pthm/melange/internal/sqlgen"
 	"github.com/pthm/melange/pkg/compiler"
 	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/pkg/schema"
@@ -28,6 +29,15 @@ type relationData struct {
 	UsedBy         []relEdge
 	Funcs          []sqlFunc
 	FuncErr        string
+	// Unavailable lists the public function families that do not answer
+	// for the relation under the recorded exposure.
+	Unavailable []*sqlapi.Unavailable
+	// OnDemand lists the families compiled for each call because the
+	// database was migrated without them (explain, expand).
+	OnDemand []string
+	// API is the relation in the deployed SQL API catalog; nil without a
+	// model.
+	API *sqlapi.Relation
 }
 
 // relEdge is a link between two relations; Kinds says how (computed,
@@ -60,6 +70,17 @@ func (s *Server) relation(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		d.Define = defineText(d.Model.DSL, d.Type, d.Relation)
+		api := apiOf(d.Model)
+		for _, f := range []sqlapi.Family{sqlapi.Check, sqlapi.ListObjects, sqlapi.ListSubjects, sqlapi.Explain, sqlapi.Expand} {
+			if u := api.Unavailable(f, d.Type, d.Relation); u != nil {
+				d.Unavailable = append(d.Unavailable, u)
+			} else if api.OnDemand(f) {
+				d.OnDemand = append(d.OnDemand, f.Name())
+			}
+		}
+		if report, err := sqlapi.Describe(d.Model.Types, d.Model.Exposure, s.dbSchema); err == nil {
+			d.API = report.Find(d.Type, d.Relation)
+		}
 		d.DependsOn, d.UsedBy = ix.dependsOn(d.Type, d.Relation), ix.usedBy(d.Type, d.Relation)
 		o := newModelOrder(d.Model)
 		byModel := func(a, b relEdge) int {
@@ -78,25 +99,43 @@ func (s *Server) relation(w http.ResponseWriter, r *http.Request) {
 	d.Known = true
 	// The deployed source, not a regeneration: it is what actually runs, and
 	// regenerating a large model takes most of a second.
-	d.Funcs, d.FuncErr = s.relationFuncs(r, d.Type, d.Relation)
+	d.Funcs, d.FuncErr = s.relationFuncs(r, relationFunctions(d.API, d.Type, d.Relation))
 	render(w, r, relationPage(d))
 }
 
-// relationFuncs reads the relation's specialized functions from pg_proc,
-// in the order check, check_nw, list objects, list subjects, explain, expand.
-// Names go through SafeIdentifier so long names hash exactly as codegen did.
-func (s *Server) relationFuncs(r *http.Request, typ, rel string) (funcs []sqlFunc, errMsg string) {
-	names := []string{
-		sqldsl.SafeIdentifier("check_", typ, rel, ""),
-		sqldsl.SafeIdentifier("check_", typ, rel, "_nw"),
-		sqldsl.ListObjectsFunctionName(typ, rel),
-		sqldsl.ListSubjectsFunctionName(typ, rel),
-		sqldsl.SafeIdentifier("explain_", typ, rel, ""),
-		sqldsl.SafeIdentifier("expand_", typ, rel, ""),
+// relationFunctions returns the relation's functions, in catalog order:
+// the ones the deployed SQL API installs, or without a model every
+// per-relation name the relation could have (parent-key names need the
+// model).
+func relationFunctions(api *sqlapi.Relation, typ, rel string) []sqlgen.CatalogFunction {
+	if api != nil {
+		out := make([]sqlgen.CatalogFunction, len(api.Functions))
+		for i, f := range api.Functions {
+			out[i] = f.CatalogFunction
+		}
+		return out
 	}
-	// Parallel to names: the role is known from position, not guessed from
-	// the name (a relation called foo_nw would look like a check_nw).
-	labels := []string{"check", "check, no wildcard", "list objects", "list subjects", "explain", "expand"}
+	var out []sqlgen.CatalogFunction
+	for _, k := range sqlgen.FunctionKinds {
+		if name := sqlgen.RelationFunctionName(k, typ, rel); name != "" {
+			out = append(out, sqlgen.CatalogFunction{Name: name, Kind: k, Type: typ, Relation: rel})
+		}
+	}
+	return out
+}
+
+// relationFuncs reads fns from pg_proc, in their order, every overload of a
+// name included. Labels come from the catalog, never from parsing a name (a
+// relation called foo_nw would look like a check_nw).
+func (s *Server) relationFuncs(r *http.Request, fns []sqlgen.CatalogFunction) (funcs []sqlFunc, errMsg string) {
+	names := make([]string, len(fns))
+	labels := make(map[string]string, len(fns))
+	for i, f := range fns {
+		names[i] = f.Name
+		if _, ok := labels[f.Name]; !ok {
+			labels[f.Name] = kindLabel(f)
+		}
+	}
 	rows, err := s.db.QueryContext(r.Context(), `
 		SELECT p.proname, pg_get_functiondef(p.oid)
 		FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
@@ -111,7 +150,7 @@ func (s *Server) relationFuncs(r *http.Request, typ, rel string) (funcs []sqlFun
 		if err := rows.Scan(&f.Name, &f.Def); err != nil {
 			return nil, err.Error()
 		}
-		f.Label = labels[slices.Index(names, f.Name)]
+		f.Label = labels[f.Name]
 		funcs = append(funcs, f)
 	}
 	if err := rows.Err(); err != nil {
@@ -252,4 +291,82 @@ func dependsOnHelp(edges []relEdge) string {
 		return "Relations this one reads. A tupleset is the relation that links to the parent object."
 	}
 	return "Relations this one reads."
+}
+
+// unavailableGroup is what is unavailable for one reason (one Label): the
+// function families of a relation, or the relations of a list, and why, in
+// one line each, worded for the whole group.
+type unavailableGroup struct {
+	Label   string
+	Items   []string
+	Reasons []string
+}
+
+// exposeReason is a not-exposed group's one line, for every item in it.
+// what names the relations to expose: "them" for a list of relations, or
+// the relation itself when the items are its function families.
+func exposeReason(what string) string {
+	return "The exposure the last migration recorded leaves " + what + " out. To expose " + what +
+		", sql.relations.include in melange.yaml must match (an empty include matches every relation) and sql.relations.exclude must not; then run melange migrate."
+}
+
+// groupUnavailable groups us by label, in first-seen order, naming each by
+// item, so a page shows one line per reason instead of a badge per item.
+// A group's reasons drop the relation's name, so relations skipped for the
+// same reason share one line.
+//
+// exposeWhat names the relations a not-exposed group's line tells the user
+// to expose (see exposeReason).
+func groupUnavailable(us []*sqlapi.Unavailable, item func(*sqlapi.Unavailable) string, exposeWhat string) []unavailableGroup {
+	var out []unavailableGroup
+	for _, u := range us {
+		i := slices.IndexFunc(out, func(g unavailableGroup) bool { return g.Label == u.Label() })
+		if i < 0 {
+			out = append(out, unavailableGroup{Label: u.Label()})
+			i = len(out) - 1
+		}
+		g := &out[i]
+		g.Items = append(g.Items, item(u))
+		reason := exposeReason(exposeWhat)
+		if u.Label() != "not exposed" {
+			family := *u
+			family.ObjectType, family.Relation = "", ""
+			reason = sentence(family.Error())
+		}
+		if !slices.Contains(g.Reasons, reason) {
+			g.Reasons = append(g.Reasons, reason)
+		}
+	}
+	return out
+}
+
+// sentence capitalizes s and ends it with a period.
+func sentence(s string) string {
+	if s == "" {
+		return s
+	}
+	s = strings.ToUpper(s[:1]) + s[1:]
+	if !strings.HasSuffix(s, ".") {
+		s += "."
+	}
+	return s
+}
+
+func unavailableFamily(u *sqlapi.Unavailable) string   { return u.Family.Name() }
+func unavailableRelation(u *sqlapi.Unavailable) string { return u.Relation }
+
+// familiesSay is what the header says of a group's families.
+func familiesSay(g unavailableGroup) string {
+	one := len(g.Items) == 1
+	if g.Label == "not exposed" {
+		verb := "raise"
+		if one {
+			verb = "raises"
+		}
+		return verb + " " + sqlgen.NotExposedErrCode + " for this relation: the exposure leaves it out"
+	}
+	if one {
+		return "does not answer for this relation"
+	}
+	return "do not answer for this relation"
 }

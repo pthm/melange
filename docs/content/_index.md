@@ -389,8 +389,8 @@ BEGIN
         WHERE link.object_type = 'repository'
           AND link.object_id = p_object_id
           AND link.relation = 'org'
-          AND check_permission_internal(p_subject_type, p_subject_id,
-                'member', link.subject_type, link.subject_id, ...) = 1
+          AND check_organization_member(p_subject_type, p_subject_id,
+                link.subject_id, ...) = 1
     ) THEN RETURN 1; END IF;
 
     RETURN 0;

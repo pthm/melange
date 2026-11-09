@@ -243,11 +243,17 @@ type repository
 Each `from` hop adds latency. Keep inheritance shallow:
 
 ```fga
-# Good: 1 hop
-define can_read: can_read from org
+# Good: 1 hop (repository -> organization)
+type repository
+  relations
+    define org: [organization]
+    define can_read: can_read from org
 
-# Avoid: Multiple hops
-define can_read: can_read from parent from grandparent
+# Avoid: a chain of hops (repository -> project -> team -> organization)
+type repository
+  relations
+    define project: [project]
+    define can_read: can_read from project   # project.can_read is itself can_read from team, and so on
 ```
 
 ### 4. Use Exclusion Sparingly

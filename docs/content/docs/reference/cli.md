@@ -42,7 +42,8 @@ By default, Melange automatically checks for new versions in the background and 
 
 ```
 $ melange migrate
-Migration completed successfully
+Applying authz infrastructure...
+Authz schema applied successfully.
 
 * A new version of melange is available: v1.2.3 (current: v1.2.0)
   brew upgrade pthm/tap/melange
@@ -68,7 +69,7 @@ The `XDG_CACHE_HOME` environment variable, if set, overrides the cache directory
 
 Commands are organized into logical groups:
 
-**Schema Commands:** `validate`, `migrate`, `status`, `schema pull`, `diff`, `history`, `doctor`, `explain`, `expand`, `studio`
+**Schema Commands:** `validate`, `migrate`, `status`, `schema pull`, `diff`, `history`, `doctor`, `functions`, `explain`, `expand`, `studio`
 **Client Commands:** `generate client`, `generate migration`
 **Utility Commands:** `init`, `init agent`, `config show`, `env list`, `version`, `license`
 
@@ -138,17 +139,62 @@ melange migrate \
 | `--db-schema`            | (config, else `public`) | PostgreSQL schema for melange objects                      |
 | `--schema`               | `schemas/schema.fga` | Path to schema.fga file                                       |
 | `--dry-run`              | `false`              | Output SQL to stdout without applying changes                 |
-| `--force`                | `false`              | Force migration even if schema is unchanged                   |
+| `--force`                | `false`              | Re-apply even if unchanged, and drop removed functions with `CASCADE`, together with their dependents (see below) |
 | `--if-deployed-checksum` | (unset)              | Apply only if the deployed schema checksum matches (see below) |
+| `--include-relation`     | (config `sql.relations.include`) | Expose only relations matching this pattern; repeatable, replaces the config list |
+| `--exclude-relation`     | (config `sql.relations.exclude`) | Do not expose relations matching this pattern; repeatable, replaces the config list |
+| `--no-list-objects`      | `false`              | Turn off the `list_objects` family (sets `sql.functions.list_objects` to `false`) |
+| `--no-list-subjects`     | `false`              | Turn off the `list_subjects` family (sets `sql.functions.list_subjects` to `false`) |
+| `--no-accessible`        | `false`              | Turn off the `accessible` family (sets `sql.functions.accessible` to `false`) |
+| `--no-parent-key`        | `false`              | Turn off the `parent_key` family (sets `sql.functions.parent_key` to `false`) |
+| `--no-expand`            | `false`              | Turn off the `expand` family (sets `sql.functions.expand` to `false`) |
+| `--no-explain`           | `false`              | Turn off the `explain` family (sets `sql.functions.explain` to `false`) |
 
 This command:
 
-1. Checks if the schema has changed since the last migration
+1. Checks if the schema or the SQL API exposure has changed since the last migration
 2. Installs generated SQL functions (`check_permission`, `list_accessible_objects`, etc.)
-3. Cleans up orphaned functions from removed relations
+3. Cleans up orphaned functions from removed relations or a narrower exposure
 4. Records the migration in `melange_migrations` table — including the schema
-   DSL and parsed model, so the database is self-describing. This is what
+   DSL, parsed model and exposure, so the database is self-describing. This is what
    `melange status` and `melange schema pull` read back.
+
+**SQL API exposure flags:**
+
+The exposure flags override the [`sql:` section](../configuration/#sql-api-settings)
+of the configuration for this run: a list flag replaces its key (repeat it for
+several patterns, or separate them with commas) and a `--no-<family>` flag sets
+that family to `false` (`--no-expand=false` turns a family the config disables
+back on). Precedence is flag, then `MELANGE_SQL_*` variable, then config file,
+then default.
+
+A family that is off makes its public function raise `M2003` for every
+relation the model defines. `melange explain`, `melange expand` and studio
+still work with `explain` or `expand` off: they create those functions in
+`pg_temp` for each call ([on demand](../sql-api/#explain-and-expand-on-demand)).
+Turning off
+`list_objects` or `accessible` alone removes no per-relation functions, since
+`list_objects`, `accessible` and `parent_key` read each other; see
+[Exposure](../sql-api/#exposure) for what is installed.
+
+`migrate` always applies the exposure it resolves to. Without an `sql:`
+section and without flags that is the default exposure, so a database
+restricted earlier is widened back. Flags are not remembered: the next
+`migrate` without them applies the config again. Keep a lasting restriction in
+`melange.yaml`. A pattern that matches no relation of the schema prints a
+warning.
+
+`melange generate client` follows the `sql:` section, never these flags. When
+`generate.client.runtime` is configured and the flags make the exposure differ
+from the section, `migrate` warns that the generated client may name functions
+or relations this migration does not install. It still migrates; check the
+client afterwards with `melange generate client --check --db`.
+
+```bash
+# Expose only the can_* relations, without the expand and explain functions
+# (melange explain and expand then compile them on demand)
+melange migrate --include-relation 'can_*' --no-expand --no-explain
+```
 
 **Skip-if-unchanged behavior:**
 
@@ -159,7 +205,15 @@ Schema unchanged, migration skipped.
 Use --force to re-apply.
 ```
 
-Use `--force` to re-apply the migration anyway (useful after updating Melange itself).
+The codegen version is part of this check, so a plain `migrate` re-applies
+after a Melange upgrade that changes the generated SQL; no `--force` is needed.
+Use `--force` only when the functions in the database were changed or dropped
+outside Melange. It also drops functions the new SQL no longer generates with
+`CASCADE`, together with any views or policies that call them, instead of
+refusing (see **Dependent objects and `--force`** below).
+
+A change to the exposure alone is not skipped: it re-applies even when the
+schema checksum is unchanged.
 
 **Drift-safe apply (`--if-deployed-checksum`):**
 
@@ -185,7 +239,9 @@ Error: migration aborted: deployed model changed: expected checksum abc… but d
 ```
 
 An empty value (`--if-deployed-checksum ""`) matches a database with no migration
-recorded (a fresh database). The guard is enforced in `--dry-run` too, so a
+recorded (a fresh database). The guard compares only the schema checksum: an
+exposure the database was migrated with that differs from the local one does
+not abort it. The guard is enforced in `--dry-run` too, so a
 drift-gated preview aborts rather than printing SQL against a drifted database.
 
 {{< callout type="info" >}}
@@ -234,7 +290,17 @@ This outputs the complete SQL that would be executed, including:
 - All generated check functions
 - All generated list functions
 - Dispatcher functions
+- Drops of orphaned functions
 - The migration record insert
+
+Unless `--force` is given, the script starts with a guard block that fails
+when an orphaned function has dependents at the time the script runs, and
+drops orphans without `CASCADE`. The script has no `BEGIN`/`COMMIT` of its
+own, so apply it in one transaction that stops at the first error:
+
+```bash
+psql -v ON_ERROR_STOP=1 --single-transaction -f migration.sql
+```
 
 Dry-run output goes to stdout, so you can redirect it:
 
@@ -244,7 +310,24 @@ melange migrate --db postgres://localhost/mydb --dry-run > migration.sql
 
 **Orphan cleanup:**
 
-When you remove a relation from your schema, Melange automatically drops the orphaned SQL functions during migration. For example, if you remove the `editor` relation from `document`, the next migration will drop `check_document_editor`, `list_document_editor_objects`, etc.
+When you remove a relation from your schema, or narrow the exposure, Melange automatically drops the orphaned SQL functions during migration. For example, if you remove the `editor` relation from `document`, the next migration will drop `check_document_editor`, `list_document_editor_obj`, etc.
+
+**Dependent objects and `--force`:**
+
+A view, materialized view, row-level security policy, rule or `BEGIN ATOMIC`
+function that calls an orphaned function blocks its drop. `migrate` checks for
+such dependents before applying anything and refuses, listing them:
+
+```
+Error: migration refused (rerun with --force to drop the dependents): migration would drop functions that other database objects depend on; nothing was applied (remove or change the dependents, or force the migration to drop them with CASCADE):
+  policy docs_read on table docs depends on accessible_document_viewer
+```
+
+Change or remove the dependents, then migrate again. `--force` (or
+`migrate.force: true`) overrides the refusal and drops the orphans with
+`CASCADE`, which drops the dependents too. Dropping an RLS policy widens access
+to its table, so review the list before forcing. See
+[Dependent objects](../../guides/migrations/#dependent-objects).
 
 **melange_tuples warning:**
 
@@ -276,6 +359,10 @@ melange status \
 | `--db-schema` | (config, else `public`) | PostgreSQL schema for melange objects                       |
 | `--schema`    | `schemas/schema.fga` | Path to schema.fga file                                        |
 | `--format`    | `text`               | Output format: `text` or `json`                                |
+
+`status` also takes the [SQL API exposure flags](#migrate) (`--include-relation`,
+`--exclude-relation`, `--no-<family>`), which override the `sql:` section of the
+configuration for the comparison below.
 
 **Output:**
 
@@ -313,6 +400,7 @@ schema file's checksum against the deployed one:
 | ---------------- | ------------------------------------------------------------------------- |
 | `in_sync`        | The local schema matches what's deployed                                     |
 | `drift`          | The local schema differs — run `melange migrate` to apply                    |
+| `exposure_drift` | The schema matches, but the local SQL API exposure differs from the recorded one; `melange migrate` would re-apply |
 | `database_ahead` | Drift where the deployed model is in no recent commit of your schema file    |
 | `unknown`        | No local schema file to compare against                                      |
 | `not_recorded`   | The database has no migration record                                         |
@@ -344,6 +432,12 @@ every version:
 
 Treat it as a prompt to look, not a verdict: it reports what git could see, and
 git cannot see every place a model may have come from.
+
+The local exposure is the one `melange migrate` would apply: the `sql:` section
+of the configuration with any exposure flags given to `status`. Without either
+it is the default exposure, so a database restricted with flags only reports
+`exposure_drift`. When the recorded exposure is not the default, text output
+shows it on an `Exposure:` line and JSON output as `deployed.exposure`.
 
 Databases migrated before model storage existed (or by `MigrateWithTypes`) have no recorded model
 DSL; status notes this and `melange schema pull` cannot recover them. Reading the
@@ -535,7 +629,14 @@ melange doctor \
 | `--schema`           | `schemas/schema.fga` | Path to schema.fga file                      |
 | `--verbose`          | `false`              | Show detailed output with additional context |
 | `--skip-performance` | `false`              | Skip performance checks (view analysis)      |
+| `--skip-client`      | `false`              | Skip the Generated Client checks             |
+| `--strict-client`    | `false`              | Fail, rather than warn, when the generated client names something the database does not answer for |
 | `--format`           | `text`               | Output format: `text` or `json`              |
+
+`doctor` also takes the [SQL API exposure flags](#migrate) (`--include-relation`,
+`--exclude-relation`, `--no-<family>`), which override the `sql:` section of the
+configuration for the exposure checks. They do not reach the Generated Client
+checks, which read `melange.yaml` only.
 
 With `--format json`, the report is a list of `checks` (each with `category`, `name`, `status` of `pass`, `warn`, or `fail`, `message`, and optional `details` and `fix`) plus `passed`, `warnings`, and `errors` counts. The command exits non-zero when any check fails.
 
@@ -589,12 +690,24 @@ The doctor command performs the following checks:
 - Verifies a migration has been applied
 - Compares schema checksum to detect if schema has changed since last migration
 - Checks if codegen version has changed (indicating Melange was updated)
+- Compares the local SQL API exposure (the `sql:` section and exposure flags) with the one the database was migrated with, and warns when they differ (`exposure_sync`)
 
 **Generated Functions:**
 
 - Verifies all dispatcher functions exist (`check_permission`, `list_accessible_objects`, etc.)
-- Compares expected functions from schema against actual functions in database
-- Identifies orphan functions from previous schema versions
+- Compares expected functions from schema against actual functions in database. The expected set follows the exposure the database was migrated with, so a restricted database reports no missing functions
+- Identifies orphan functions: installed functions the last migration recorded that the schema no longer generates. A function only named like a generated one (your own `explain_invoice`) is not an orphan, since no migration recorded it. Without a migration record nothing is an orphan, since `melange migrate` drops only recorded functions
+- Warns about exposure patterns that match no relation in the schema (`exposure_patterns`), usually a typo or a renamed relation
+
+**Generated Client** (when `generate.client.runtime` is configured):
+
+The same check as [`melange generate client --check --db`](#checking-a-generated-client), from `generate.client.*` and the `sql:` section of `melange.yaml` (or their `MELANGE_*` variables) alone. A client generated with relation flags can only be compared with what the configuration generates, so keep the selection in `generate.client.relations`.
+
+- `client_file`: the files under `generate.client.output` against a fresh generation. Skipped when the directory does not exist (a production image without sources; `--verbose` says so). A difference is a warning; a file that cannot be read, or a configuration that does not generate, is a failure
+- `client_functions`: every accessible function name the client uses against the functions installed by the last migration
+- `client_relations`: every relation the client has a constant for against the relations the database exposes
+
+A client name the database does not answer for is a warning by default, since the working tree may be ahead of the database: run doctor after `migrate`. `--strict-client` or `doctor.strict_client: true` makes it a failure. The details list the first 10 findings, and the fix hint follows what a plain `migrate` would do, as below. `--skip-client` or `doctor.skip_client: true` skips the category.
 
 **Tuples Source:**
 
@@ -619,6 +732,7 @@ Performance checks run automatically when `melange_tuples` is a view (not a tabl
   - Provides exact `CREATE INDEX` statements as fix hints
   - A `varchar` or `text` column needs no expression index: casting it to `text` is a relabel, so an ordinary index on the column serves the lookup. `char(n)`, `uuid` and numeric columns need the `::text` expression index.
 - Checks each single-table branch for a composite index covering object lookups: the columns behind `object_id`, then `relation` (when it comes from a column), then `subject_id`. Without one, a check on a membership-style table reads every row for the object. Branches whose object or subject column is unique, that join tables, or whose ids are computed are skipped. Warns with the exact `CREATE INDEX` for the source table.
+- Checks each branch whose subject id is a column, joined branches included, for an index leading with that column (its `::text` expression when the cast converts the value). List functions look tuples up by a set of subject ids, and without the index each row of the branch is compared with the whole set. Severity follows the table's size, as for expression indexes. A cast column with no index at all is reported once, by the expression index check.
 
 **Expand Fan-Out Advisory:**
 
@@ -627,7 +741,7 @@ Runs whenever `melange_tuples` exists (both view and table backends). Flags rela
 - **Wildcard grants** (`[user:*]`): every Expand response surfaces the wildcard entry (`user:*`). Downstream consumers that enumerate the wildcard client-side hit unbounded fan-out.
 - **Recursive TTU** (`viewer from parent` on a self-referential type): `ExpandRecursive` walks the parent pointer chain, so a deep hierarchy multiplies round-trip cost.
 
-The advisory is `StatusPass` — a hint, not a diagnosed problem — and suggests setting `melange.max_expand_leaf` as a session-level guardrail. See [Expanding Permissions](../../guides/expanding-permissions/#per-leaf-cap).
+The advisory is `StatusPass`, a hint rather than a diagnosed problem. It suggests capping each leaf per call with `WithExpandMaxLeaf`, `--max-leaf` or `expand_permission`'s `p_max_leaf`. See [Expanding Permissions](../../guides/expanding-permissions/#per-leaf-cap).
 
 **Verbose mode:**
 
@@ -650,13 +764,162 @@ This shows:
 | Schema file not found    | Create `schemas/schema.fga`                           |
 | Schema is invalid        | Run `melange validate` for the specific errors        |
 | Schema out of sync       | Run `melange migrate`                                 |
-| Missing functions        | Run `melange migrate`                                 |
-| Orphan functions         | Run `melange migrate` (cleanup is automatic)          |
+| Exposure out of sync     | Run `melange migrate`, or change the `sql:` section back |
+| Pattern matches nothing  | Fix the pattern in the `sql:` section                 |
+| Missing functions        | Run `melange migrate`, or `--force` when the fix hint says so |
+| Generated client differs | Run `melange generate client`; keep the relation selection in `melange.yaml` |
+| Client names what the database lacks | Run `melange migrate` with `melange.yaml`'s `sql:` section, or regenerate the client |
+| Orphan functions         | Run `melange migrate` (cleanup is automatic); change their dependents first if any |
 | melange_tuples missing   | Create a view over your domain tables                 |
 | Missing columns          | Update melange_tuples to include all required columns |
 | Unknown types in tuples  | Update tuples view or schema to match                 |
 | UNION instead of UNION ALL | Replace `UNION` with `UNION ALL` in view definition |
 | Missing expression index | Run the `CREATE INDEX` command shown in the fix hint  |
+
+**Fix hints:**
+
+A fix hint that suggests `melange migrate` says what an unforced `melange migrate` of the local schema and exposure would do:
+
+- When it would apply, the hint is a plain `melange migrate`. If that migrate would drop removed functions that other objects depend on, which it refuses to do, the hint names the dependents to change or drop first. This covers functions a narrowed exposure stops installing, which the orphan check does not list.
+- When it would skip (schema, exposure and codegen version unchanged) or only record (the generated SQL is the SQL the last migration recorded), it cannot restore functions dropped or edited by hand, or a stored model that cannot be decoded. The hint is `melange migrate --force`, with the reason. It says how many removed functions `--force` drops with `CASCADE` and names their dependents.
+- When a newer melange migrated the database, this melange's migrate refuses to downgrade it, so the hint names that version. It never suggests `--force` with this melange, which would override the refusal. A stored model that cannot be decoded is rewritten by re-running migrate with the newer melange, so that hint may suggest `--force` with the newer version.
+- Orphans that views, policies or functions depend on are listed with their dependents: `melange migrate` refuses to drop them, so change or drop the dependents first, or `--force` drops them with `CASCADE`.
+
+These checks compare the database with the **local schema file**. [`melange functions --db`](#functions) and studio's [SQL API page](../../guides/studio/#sql-api) compare it with the **deployed model** and the exposure the last migration recorded, so while a migration is pending doctor reports what `migrate` would add and `functions` reports what the deployed model is missing.
+
+### functions
+
+List the SQL functions melange generates for each relation: whether the
+exposure exposes the relation or it is internal (modelling only), and every
+function a migration installs for it under its exact name. Names longer than
+PostgreSQL's 63 bytes are truncated with a hash, so this is where to look
+them up rather than building them by hand.
+
+```bash
+# The SQL API of the local schema and the sql: section of melange.yaml
+melange functions
+
+# What the database has installed, compared with its deployed model
+melange functions --db postgres://localhost/mydb
+
+# One relation: signatures, example calls, dependencies, and why a family is missing
+melange functions show document#viewer
+```
+
+**Source.** As for [`diff`](#diff), an explicit database (`--db`, `--env` or
+`MELANGE_ENV`) means database mode; otherwise the command reads files only:
+
+- **Database mode** reads the model and exposure the last migration recorded
+  (as `schema pull` and studio do) and checks each expected function in
+  `pg_proc` of `--db-schema`: installed, missing, installed with other
+  arguments (`signature_differs`), or with another body. A body is compared
+  with the one this melange generates for the deployed model; it is
+  `body_changed` when the migration recorded the same one (someone edited it
+  in the database) and `codegen_differs` when this melange generates another
+  (the next `migrate` replaces it). Other functions of the same name are
+  stale overloads. Installed functions the last migration recorded that the
+  model no longer generates are orphans; functions only named like generated
+  ones (`check_invoice`) are listed as unmanaged and never counted as drift.
+  When the functions were generated by another melange version, a note above
+  the list says so. When that version is newer than this melange, its
+  `migrate` refuses to replace or drop anything, so the orphans and
+  `codegen_differs` bodies are the newer melange's: use that version. A
+  database whose last migration recorded no model is compared with
+  `--schema` (or `schema` in the config) under the recorded exposure; one
+  with no migration record at all, such as a database built from
+  `melange generate migration` files, under the local `sql:` section, which
+  those files were generated with.
+- **File mode** reads the schema file and the [`sql:` section](../configuration/#sql-api-settings)
+  of the configuration, with the exposure flags on top, as `migrate` would
+  apply them. Statuses are `not_checked`.
+
+`functions` only reads. The exposure flags are refused in database mode,
+which reports the recorded exposure.
+
+**Flags:**
+
+| Flag | Default | Description |
+| ---- | ------- | ----------- |
+| `--db` | | PostgreSQL connection string: database mode |
+| `--db-schema` | (config, else `public`) | PostgreSQL schema the functions are in; qualifies the example calls |
+| `--schema` | (config) | Schema file (file mode, or a database that records no model) |
+| `--format` | `text` | `text` or `json` |
+| `--type` | | Only this type's relations (repeatable; list only) |
+| `--kind` | | Only functions of this kind (repeatable; list only): `check`, `check_nw`, `list_objects`, `list_subjects`, `accessible`, `parent_key`, `expand`, `explain`, `dispatcher` |
+| `--exposed` / `--internal` | | Only exposed, or only internal, relations (list only) |
+| `--include-relation`, `--exclude-relation`, `--no-<family>` | | [Exposure flags](#migrate), file mode only |
+
+**List output** groups by type, then relation, with each function's name,
+kind, whether applications call it (`public`: the dispatchers, the
+accessible functions of exposed relations and their parent-key forms) or a
+dispatcher routes to it (`internal`), and its status. Notes (codegen
+version skew, a missing record) follow the header, above the list.
+Dispatchers follow the relations, then orphans, unmanaged functions and name
+collisions:
+
+```
+Source:    database schema app (deployed model)
+Exposure:  {"relations":{"include":["can_*"]},"functions":{}}
+Functions: 251 for 45 relations (23 exposed), dispatchers included
+Status:    all 251 installed
+
+pull_request
+  can_read_security_advisories_and_vulnerability_reports  exposed
+    check_pull_req_can_read_security_advisories_and_vulner_d0edb52c  check          internal  installed (truncated)
+    list_pull_req_can_read_security_advisories_and_vul_d0edb52c_obj  list_objects   internal  installed (truncated)
+    list_pull_req_can_read_security_advisories_and_vul_d0edb52c_sub  list_subjects  internal  installed (truncated)
+    accessible_pull_re_can_read_security_advisories_and_vu_d0edb52c  accessible     public    installed (truncated)
+    accessible_pull_r_can_read_security_advisories_and_vul_e8c3d69b  parent_key     public    installed (truncated)
+    expand_pull_req_can_read_security_advisories_and_vulne_d0edb52c  expand         internal  installed (truncated)
+    explain_pull_req_can_read_security_advisories_and_vuln_d0edb52c  explain        internal  installed (truncated)
+  ...
+```
+
+**`show <type#relation>`** adds, for each function, its signature and
+language, an example call that runs as written (argument order differs by
+kind: check, explain, list objects and accessible take the subject first;
+list subjects and expand take the object; an accessible function is inlined
+into the calling query, so its note says the schema holding
+`melange_tuples` must be on the `search_path`), how an application uses the
+result, and the installed functions its body may call, from the model
+analysis. A parent-key function returns ids of the parent type, so its usage
+filters on the link column. `type.relation` also works. Families that are not
+installed say why: the relation is not exposed, the family is off (explain and
+expand are then compiled on demand by the CLI and studio), the relation's
+rewrite is not eligible for explain or expand, or it has no access path (no
+function is generated, and the dispatchers deny it, or raise `M2003` when
+the exposure leaves it out). Not exposed wins over a
+family that is off when no exposed relation resolves through the relation,
+since turning the family on, or compiling on demand, installs nothing for it:
+
+```
+accessible_pull_r_can_read_security_advisories_and_vul_e8c3d69b
+  kind:       parent_key, public · installed
+  name:       truncated to 63 bytes with a hash of the type and relation; copy it from here or the generated client
+  signature:  accessible_pull_r_can_read_security_advisories_and_vul_e8c3d69b(p_subject_type text, p_subject_id text) RETURNS TABLE(object_id text) · LANGUAGE plpgsql
+  link:       repo → repository (reads can_admin)
+  example:    SELECT object_id FROM accessible_pull_r_can_read_security_advisories_and_vul_e8c3d69b('user', 'alice');
+  usage:      WHERE <repo column> IN (SELECT object_id FROM accessible_pull_r_can_read_security_advisories_and_vul_e8c3d69b('user', 'alice'))
+  calls:      accessible_repository_can_admin
+  note:       Returns repository ids, not pull_request ids: filter pull_request rows on their repo column. ...
+```
+
+**JSON output** (`--format json`, for both forms) is one report:
+
+| Field | Description |
+| ----- | ----------- |
+| `source` | `database` or `file` |
+| `schema_file`, `database_schema` | Where the model came from, and the schema the functions are in |
+| `melange_version`, `deployed_codegen_version`, `codegen_skew`, `codegen_ahead` | This melange's codegen version, the deployed one, whether they differ, and whether the deployed one is newer |
+| `checked`, `bodies_checked` | Whether statuses (and bodies) come from the database |
+| `exposure` | The normalized exposure (`{}` parts are the default) |
+| `summary` | Counts over the whole model, whatever the filters: `relations`, `exposed`, `functions`, `installed`, `missing`, `signature_differs`, `body_changed`, `codegen_differs`, `stale_overloads`, `orphans`, `unmanaged` |
+| `relations[]` | `type`, `relation` (as the model spells them), `exposed`, `dispatchers` (the public ones that answer for it), `examples[]` (`dispatcher`, `example`, and `usage` for `accessible_objects`: a call of each of `dispatchers` for this relation), `depends_on` (`type#relation`), `functions[]`, `not_installed[]` (`kind`, `reason`: `not_exposed`, `family_off`, `on_demand`, `not_eligible` or `no_access_path`, `detail`) |
+| `relations[].functions[]` | `name` (the SQL name), `kind`, `public`, `type`, `relation`, `link`, `parent_type`, `parent_relations`, `truncated`, `signature` (`args[]` of `name`, `type`, `default`; `returns`, `language`, `paged`), `example`, `usage`, `calls`, `note`, `status` (`not_checked`, `installed`, `missing`, `signature_differs`, `body_changed`, `codegen_differs`), `detail`, `stale_overloads` |
+| `dispatchers[]` | The same fields, with `answers` (the relations it routes, `type#relation`) and `rendered_with` (the public dispatcher created in the same SQL) |
+| `orphans[]`, `unmanaged[]` | `name` and `arguments` of installed functions the model does not generate |
+| `collisions[]` | `name` and `owners`: a name generated for more than one relation (for example `a_b#c` and `a#b_c`). `CREATE OR REPLACE` keeps the last; rename one of them |
+| `notes[]` | Codegen version skew, a missing record, collisions |
 
 ### explain
 
@@ -698,6 +961,21 @@ melange explain user:alice viewer document:1 --db postgres://localhost/mydb
 
 `--format=json` returns the raw `Trace` JSONB for tooling.
 
+Explain reads the [exposure](../sql-api/#exposure) recorded by the last
+migration. When the relation is not exposed, it exits with an error that
+names `type#relation` and the setting to change instead of the database's
+`M2003`: `sql.relations.include` (or `--include-relation`, which replaces the
+list, so pass it with every pattern already included). A relation the model
+does not define is still explained as denied.
+
+When the database was migrated with `sql.functions.explain` off, explain
+compiles the explain functions from the recorded model and creates them in
+`pg_temp` for one rolled-back transaction
+([on demand](../sql-api/#explain-and-expand-on-demand)). That needs a writable
+primary, the `TEMP` privilege and a melange of the recorded codegen version;
+otherwise explain exits with an error that says which is missing and how to
+fix it, including turning `sql.functions.explain` back on.
+
 ### expand
 
 Return the OpenFGA-shaped `UsersetTree` for a `(object, relation)` pair — the structured "who has access?" answer. See the [Expanding Permissions guide](../../guides/expanding-permissions/) for the tree structure and the shallow-by-default resolution model.
@@ -716,7 +994,7 @@ melange expand document:1 viewer --db postgres://localhost/mydb
 | `--flatten`      | `false`       | Print the flat, deduplicated user list instead of the tree. `Leaf.Users` only — computed and TTU pointers are not chased |
 | `--recursive`    | `false`       | Print the flat list *and* chase `Leaf.Computed` / TTU pointers with follow-up Expand calls (implies `--flatten`) |
 | `--subject-type` | (unset)       | Melange extension. Narrow `Leaf.Users` to a single subject type                                                  |
-| `--max-leaf`     | `0`           | Melange extension. Cap each `Leaf.Users` list. `0` defers to session GUC `melange.max_expand_leaf`, then unbounded |
+| `--max-leaf`     | `0`           | Melange extension. Cap each `Leaf.Users` list. `0` means no cap |
 | `--color`        | `auto`        | `auto` (TTY + `NO_COLOR` unset), `always`, or `never`. See [Colour Output](#colour-output) below.                |
 
 **Tree output:**
@@ -735,14 +1013,22 @@ document:1#viewer • union of 2
 
 ```
 $ melange expand document:1 viewer --flatten
+group:eng#member
 user:alice
 user:bob
-user:carol
-group:eng#member
-user:*
 ```
 
-`--flatten` chases every `Leaf.Computed` and `Leaf.TupleToUserset` pointer with follow-up Expand calls. Cost is N round-trips per N distinct pointers; suitable for admin flows, not the request path. `--format=json` returns the raw `UsersetTree` JSONB for tooling.
+`--flatten` lists the users in the tree's `Leaf.Users`, sorted, and does not chase pointers. `--recursive` chases every `Leaf.Computed` and `Leaf.TupleToUserset` pointer with follow-up Expand calls. Cost is N round-trips per N distinct pointers; suitable for admin flows, not the request path. `--format=json` returns the raw `UsersetTree` JSONB for tooling.
+
+Expand follows the recorded [exposure](../sql-api/#exposure) like
+`explain`: a relation `expand_permission` does not answer for fails with a
+message that names `type#relation` and the setting to change
+(`sql.relations.include`). `expand_permission` answers for every relation an
+exposed relation's pointers lead to, so `--recursive` and pointers into
+relations that are installed but not exposed keep working. With
+`sql.functions.expand` off, expand creates the expand functions in `pg_temp`
+[on demand](../sql-api/#explain-and-expand-on-demand), as explain does, and
+`--recursive` makes all its calls in that one transaction.
 
 ### studio
 
@@ -762,7 +1048,7 @@ melange studio --db postgres://localhost/mydb --addr 127.0.0.1:7070
 | `--schema`    | (config, else `schemas/schema.fga`) | Local schema file for the Health page's file and drift checks          |
 | `--addr`      | `127.0.0.1:0`           | Loopback address to listen on. Port `0` picks a free port. Non-loopback addresses are refused |
 
-Studio prints its URL on stderr and runs until Ctrl-C. Every connection is opened with `default_transaction_read_only=on`; the one exception is Explain with what-if tuples, which creates a temporary view in a transaction that is always rolled back. The global `--no-update-check` flag also hides the top bar's update badge.
+Studio prints its URL on stderr and runs until Ctrl-C. Every connection is opened with `default_transaction_read_only=on`. Two features open a read-write transaction that is always rolled back: Explain with what-if tuples, which creates a temporary view, and Explain or Expand against a database migrated with `sql.functions.explain` or `sql.functions.expand` off, which creates those functions in `pg_temp` ([on demand](../sql-api/#explain-and-expand-on-demand)). Both need a writable primary and the `TEMP` privilege. The global `--no-update-check` flag also hides the top bar's update badge.
 
 ### Colour output
 
@@ -778,7 +1064,7 @@ Colours are emitted as 24-bit ANSI true colour so the mapping matches the VS Cod
 
 ### generate client
 
-Generate type-safe client code from your schema.
+Generate type-safe client code from your schema: type and relation constants, constructors, and the exact names of the accessible functions migrate installs. See [Generated Code](../generated-code/) for the output.
 
 ```bash
 melange generate client \
@@ -787,6 +1073,8 @@ melange generate client \
   --output internal/authz \
   --package authz
 ```
+
+The client follows the `sql:` section of `melange.yaml`: relation constants for the relations `sql.relations` exposes (or `generate.client.relations` when set), and function names for what a migration with `sql.relations` and `sql.functions` installs for them. The `--no-<family>` flags of `migrate` are not seen here, so keep the families in `melange.yaml`. See [Which Relations](../generated-code/#which-relations).
 
 **Flags:**
 
@@ -797,7 +1085,20 @@ melange generate client \
 | `--output`  | stdout               | Output directory for generated code                       |
 | `--package` | `authz`              | Package name for generated code                           |
 | `--id-type` | `string`             | ID type for constructors (`string`, `int64`, `uuid.UUID`) |
-| `--filter`  | `""`                 | Only generate relations with this prefix (e.g., `can_`)   |
+| `--include-relation` | `generate.client.relations.include`, see below | Generate constants only for relations matching this pattern, `relation` or `type#relation` (repeatable) |
+| `--exclude-relation` | `generate.client.relations.exclude`, see below | Generate no constants for relations matching this pattern (repeatable). With no client include pattern, it narrows the inherited `sql.relations` |
+| `--filter`  | `""`                 | Deprecated: a relation name prefix applied after the patterns. Use `--include-relation 'can_*'` |
+| `--check`   | `false`              | Write nothing: compare the output directory with a fresh generation, and with a database the client's names with it (see below) |
+| `--db`      |                      | With `--check`: the database to check the client's names against. The database check runs only with `--db`, `--env` or `MELANGE_ENV` (with `--env`, the configured database with that environment applied); `database.url` alone does not start it |
+| `--db-schema` | (config, else `public`) | With `--check`: the PostgreSQL schema melange was migrated into |
+| `--format`  | `text`               | With `--check`: output format, `text` or `json` |
+| `--strict`  | `false`              | With `--check`: exit 1 on warnings too |
+
+`--db`, `--db-schema`, `--format` and `--strict` without `--check` are a configuration error (exit 2).
+
+The relation patterns resolve with the precedence flag, `MELANGE_GENERATE_CLIENT_RELATIONS_*` variable, `generate.client.relations` in the config file, then `sql.relations`, then every relation. Each list follows that precedence on its own. Without a client include pattern the client starts from `sql.relations`, include and exclude, and client exclude patterns only narrow it: `--exclude-relation can_edit` gives constants for the exposed relations except `can_edit`. A client include pattern replaces `sql.relations`, so the client can also name relations migrate does not expose (such as roles used when writing tuples).
+
+When `generate.client.runtime` is configured and `--include-relation`, `--exclude-relation` or `--filter` is given, the command prints a hint to stderr: doctor and `--check` without the flags read `generate.client.relations` from `melange.yaml`, so the patterns belong there.
 
 **Example with all options:**
 
@@ -808,7 +1109,7 @@ melange generate client \
   --output internal/authz \
   --package authz \
   --id-type int64 \
-  --filter can_
+  --include-relation 'can_*'
 ```
 
 **Output to stdout:**
@@ -832,11 +1133,16 @@ const (
     TypeRepository   melange.ObjectType = "repository"
 )
 
-// Relation constants (filtered by prefix "can_")
+// Relation constants (the relations matching "can_*")
 const (
     RelCanRead   melange.Relation = "can_read"
     RelCanWrite  melange.Relation = "can_write"
     RelCanDelete melange.Relation = "can_delete"
+)
+
+// Accessible function names, as installed
+const (
+    SQLAccessibleRepositoryCanRead = "accessible_repository_can_read"
 )
 
 // Type-safe constructors
@@ -856,10 +1162,65 @@ func AnyUser() melange.Object {
 
 **Supported runtimes:**
 
-| Runtime      | Status      | Description                                       |
-| ------------ | ----------- | ------------------------------------------------- |
-| `go`         | Implemented | Type-safe Go code with constants and constructors |
-| `typescript` | Planned     | TypeScript types and factory functions            |
+| Runtime      | Description                                                                         |
+| ------------ | ----------------------------------------------------------------------------------- |
+| `go`         | `schema_gen.go`: constants, constructors and accessible function name constants    |
+| `typescript` | `types.ts`, `schema.ts`, `sql.ts`, `index.ts`: constants, factories and name maps   |
+
+#### Checking a generated client
+
+`--check` checks the two links between a generated client and the database:
+
+1. **Files against the configuration.** It regenerates the client in memory and compares it with the files in the output directory (`--output` or `generate.client.output`, which `--check` requires; without one it exits 2). No database is needed. Only the generated file names are compared; other files in the directory are ignored. Before comparing, CRLF line endings become LF, the header's `melange version:` and `source:` lines are dropped (they change with the release and with the directory generation ran from), and trailing whitespace at the end of the file is removed. Any other difference is drift, so a formatter that rewrites the generated files (prettier, for one) makes them differ: exclude them from formatting.
+2. **Configuration against the database.** With `--db`, `--env` or `MELANGE_ENV`, it checks every name the configured client uses against the database's last migration (`melange_migrations`), the model and exposure it recorded, and `pg_proc` in `--db-schema`. When the files match, this covers the files too. When they differ, the output says that the database check covers the names the configuration generates.
+
+Pass the same relation flags to `--check` that the client was generated with; without them it compares with what `melange.yaml` generates.
+
+```bash
+# Before merge: is the committed client what melange.yaml generates?
+melange generate client --check
+
+# After migrate: does production install everything the client names?
+melange generate client --check --env production
+```
+
+Run the database check after `migrate`: before it, every pending exposure change is reported as an error. Use [`diff`](#diff) and [`status`](#status) before migrating.
+
+The database check reports names the client uses that the database does not answer for as expected. A client narrower than the database (or than `sql.relations`) is never reported.
+
+| Code | Severity | Meaning |
+| ---- | -------- | ------- |
+| `function_not_installed` | error | An accessible function the client names is not installed: its family was off, its relation not exposed, the deployed model generates none for it, or it is missing from `pg_proc` |
+| `function_signature` | error | Installed with other arguments than this melange generates |
+| `function_collision` | error | The model generates the name for more than one relation; the database keeps one definition, so a call may answer for another relation. Rename one of the relations |
+| `function_owner` | error | The name belongs to another relation in the database's SQL API (a collision, or a name another codegen version computes differently); info when a newer melange migrated the database |
+| `relation_not_exposed` | error | `melange.yaml` exposes the relation and the database was migrated without it, so `check_permission` raises `M2003` |
+| `function_internal` | warning | Installed only as an internal function (the relation is not exposed, or `sql.functions.accessible` was off), so a later migration may drop it or change its signature |
+| `function_orphan` | warning | Installed and recorded, but this melange does not generate it for the deployed model, so the next `migrate` drops it; info when a newer melange migrated the database |
+| `function_unmanaged` | warning | A function no migration recorded has the name, such as the application's own |
+| `relation_undefined` | warning | The deployed model does not define the relation, so `check_permission` denies it |
+| `relation_internal` | info | The client has a constant for a relation neither `melange.yaml` nor the database exposes (constants used for writing tuples) |
+| `family_off` | info | `melange.yaml` turns `list_objects`, `list_subjects`, `explain` or `expand` on and the database has it off; the client names none of their functions |
+
+Each error and warning has a fix. A fix that runs `migrate` follows what a plain `melange migrate` would do, as doctor's [fix hints](#doctor) do. A database built from `generate migration` files records nothing, so the check compares under the local exposure; a database migrated by an older melange without a recorded model is compared with the local schema under the recorded exposure. Both add a note.
+
+`--check` exits 1 on any file drift or database error, and on a warning only with `--strict`; info findings never fail it. Text output lists each drifted file as `<output>/<file>: missing` or `differs (first difference at line N)`, with the version that generated it when it differs from this melange, then the findings. With `--format json`:
+
+```json
+{
+  "files": [{"file": "schema_gen.go", "status": "differs", "line": 42, "on_disk_version": "v0.9.0"}],
+  "database": {
+    "findings": [
+      {"code": "function_not_installed", "severity": "error", "type": "document", "relation": "can_view",
+       "link": "parent", "function": "accessible_document_can_view_by_parent",
+       "message": "...", "fix": "Run 'melange migrate' to apply the local schema and melange.yaml's sql section"}
+    ],
+    "errors": 1, "warnings": 0, "functions_checked": 7, "relations_checked": 6
+  }
+}
+```
+
+`database` is `null` without a database. Doctor runs the same check as its [Generated Client](#doctor) category.
 
 ### generate migration
 
@@ -887,6 +1248,12 @@ melange generate migration \
 | `--db`                | -                    | Database URL. Compare against most recent migration record     |
 | `--git-ref`           | -                    | Git ref. Compare against schema at that commit/branch/tag      |
 | `--previous-schema`   | -                    | File path. Compare against a previous `.fga` file              |
+
+`generate migration` also takes the [SQL API exposure flags](#migrate)
+(`--include-relation`, `--exclude-relation`, `--no-<family>`). The SQL is
+generated under the local exposure: the `sql:` section of the configuration
+with those flags on top. A restricted exposure is recorded in the UP header
+(`-- Exposure: {...}`).
 
 {{< callout type="info" >}}
 The three comparison flags (`--db`, `--git-ref`, `--previous-schema`) are mutually exclusive. When none is specified, a full migration is generated containing all functions.
@@ -925,8 +1292,40 @@ By default, the UP migration includes every generated function (full mode). To e
 When a comparison mode is active:
 
 - Only functions with changed SQL bodies (or newly added) are included in UP
-- Orphaned functions (removed from schema) get `DROP FUNCTION IF EXISTS` statements
+- Orphaned functions (removed from schema, or outside a narrower exposure) get `DROP FUNCTION IF EXISTS ...` statements without `CASCADE`, so the migration fails if a view, policy or function depends on one
 - Dispatcher functions are always included regardless of changes
+
+**Previous exposure:**
+
+Emitting only the changed functions needs the exposure the previous functions
+were generated with: a function the previous exposure did not install has no
+previous body to compare, and leaving it out would leave the database without
+it. Each comparison mode finds the previous exposure differently:
+
+| Mode                | Previous exposure                                                       |
+| ------------------- | ----------------------------------------------------------------------- |
+| `--db`              | The exposure recorded with the most recent migration                    |
+| `--git-ref`         | The `sql:` section of the config file at that ref (with the current `MELANGE_SQL_*` variables applied, but not this run's flags) |
+| `--previous-schema` | Unknown                                                                  |
+
+For `--git-ref`, the config file is the one config discovery finds at the ref
+from the current directory, so deleting a restricted `melange.yaml` widens
+back to the default like removing its `sql:` section does. With `--config`, it
+is that file at its path relative to the repository root. When the ref has no
+config file and none is in use now, the previous exposure is the defaults with
+the current variables. The previous exposure is unknown, and a note is
+printed, when the file cannot be read at the ref (not tracked, or invalid) or
+when discovery finds a different file at the ref from the one in use now: the
+file in use may be untracked, or a file that took priority at the ref may have
+been deleted since. `MELANGE_SQL_*` variables are not versioned: the current
+ones apply to both sides, so after changing them compare with `--db` instead.
+
+When the previous exposure is unknown, UP includes every function (with
+`-- Previous exposure unknown: every function is included` in the header),
+whatever the current exposure. Orphans are still dropped: the previous schema
+is compiled under the default exposure, which installs every function any
+other exposure does except the `check_permission_unexposed` helper, and the
+helper is added to the drops when the current exposure does not install it.
 
 **Examples:**
 
@@ -1092,14 +1491,26 @@ melange config show --env production --source
 Config file: /path/to/project/melange.yaml
 Environment: production
 
-schema: schemas/schema.fga
-database:
-  url: postgres://prod-user:****@prod-db:5432/app
-  ...
+Database:
+  Host: ""
+  Name: ""
+  Password: ""
+  Port: 5432
+  SSLMode: prefer
+  Schema: ""
+  URL: postgres://prod-user:****@prod-db:5432/app
+  User: ""
+...
+Schema: schemas/schema.fga
 ```
 
+The keys are the Go field names, sorted alphabetically, not the `melange.yaml`
+keys.
+
 This is useful for debugging configuration issues and understanding which values
-are in effect for a given environment.
+are in effect for a given environment. The `SQL` block shows the resolved
+[`sql:` section](../configuration/#sql-api-settings), defaults included; the
+exposure flags of other commands are not applied.
 
 ### env list
 
@@ -1156,7 +1567,7 @@ This displays the Melange license and attribution for all embedded third-party d
 | Code | Meaning                                                              |
 | ---- | -------------------------------------------------------------------- |
 | 0    | Success                                                              |
-| 1    | General error (validation, runtime, IO)                              |
+| 1    | General error (validation, runtime, IO), or `generate client --check` found drift or an error |
 | 2    | Configuration error (invalid config file, missing required settings) |
 | 3    | Schema parse error                                                   |
 | 4    | Database connection error                                            |
@@ -1228,13 +1639,18 @@ melange migrate
 
 # Run health checks
 melange doctor
+
+# Check the generated client against production
+melange generate client --check --env production
 ```
 
-For pipelines where you want to ensure migrations are always applied (e.g., after a Melange version update):
+Before merge, `melange generate client --check` (no database) fails the build when the committed client is not what `melange.yaml` generates.
 
-```bash
-melange migrate --force
-```
+Keep `--force` out of routine pipelines. A plain `migrate` already re-applies
+after a Melange upgrade, and `--force` turns the dependent-object refusal into a
+`DROP ... CASCADE`: a schema change, a narrower exposure or a codegen change
+that removes a function an RLS policy calls would drop the policy and widen
+access to its table instead of failing the deploy.
 
 **Gated deploy against a live environment.** Fail the build on a breaking change,
 then apply only if the environment hasn't drifted since you inspected it:
@@ -1353,14 +1769,16 @@ err = migrator.Migrate(ctx, db, "schemas/schema.fga")
 `migrator.Migrate` and `migrator.MigrateFromString` record the schema they
 applied, so the database stays self-describing and `status`, `schema pull`, and
 `diff` keep working against it. `Migrator.MigrateWithTypes` (used with
-pre-parsed types) deliberately skips that bookkeeping — reach for it only when
-you don't want a migration record, such as in test fixtures.
+pre-parsed types) deliberately skips that bookkeeping. Reach for it only when
+you don't want a migration record, such as in test fixtures. For the same
+reason it cannot change the SQL API exposure.
 
-**With options (dry-run, force, skip-if-unchanged):**
+**With options (dry-run, force, skip-if-unchanged, exposure):**
 
 ```go
 import (
     "os"
+    "github.com/pthm/melange/pkg/compiler"
     "github.com/pthm/melange/pkg/migrator"
 )
 
@@ -1393,6 +1811,44 @@ var changed *migrator.DeployedModelChangedError
 if errors.As(err, &changed) {
     log.Printf("database drifted: expected %s, found %s", changed.Expected, changed.Actual)
 }
+
+// Restrict the SQL API. Exposure nil (the default) keeps the exposure the
+// database recorded; a pointer to the zero value restores the default.
+opts := migrator.MigrateOptions{
+    Exposure: &migrator.Exposure{
+        Relations: compiler.RelationPatterns{Include: []string{"can_*"}},
+    },
+}
+skipped, err := migrator.MigrateWithOptions(ctx, db, "schemas/schema.fga", opts)
+var dependents *migrator.DependentObjectsError
+if errors.As(err, &dependents) {
+    // Views or policies call functions this migration would drop.
+    for _, d := range dependents.Dependents {
+        log.Printf("%s depends on %s", d.Object, d.Function)
+    }
+}
+```
+
+Unlike the CLI, which always applies the exposure in `melange.yaml`, a library
+call without `Exposure` keeps the recorded one, so an application that
+migrates on startup does not undo a restriction applied with `melange migrate`.
+
+Changing the exposure needs a migration that records it. `Migrator.MigrateWithTypes`,
+and `Migrator.MigrateWithTypesAndOptions` without `SchemaContent` (outside a
+dry run), record nothing: asked for an exposure other than the recorded one (or the default when
+none is recorded), they return `*migrator.UnrecordedExposureChangeError` and
+apply nothing. With pre-parsed types or an embedded schema, pass the schema
+text so the migration is recorded:
+
+```go
+e := migrator.Exposure{
+    Relations: compiler.RelationPatterns{Include: []string{"can_*"}},
+}
+err := migrator.NewMigrator(db, "").MigrateWithTypesAndOptions(ctx, types, migrator.InternalMigrateOptions{
+    SchemaContent: schemaContent,
+    SchemaFormat:  migrator.FormatSingle,
+    Exposure:      &e,
+})
 ```
 
 Run health checks with the `melange doctor` command (see above). The doctor

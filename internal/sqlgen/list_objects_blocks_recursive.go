@@ -15,11 +15,15 @@ type RecursiveBlockSet struct {
 	// when the walk follows more than one linking relation: every propagating
 	// row follows every linking relation, so the walk is a superset there.
 	VerifyWithCheck bool
+	// WalkRelations are the relations that recurse through the linking
+	// relations ("v" for "v from parent"), set with VerifyWithCheck. An object
+	// passes the walk on only if the subject holds one of them on it.
+	WalkRelations []string
 	// HoistedCTEs are shared list_*_obj computations lifted out of the base
 	// blocks. The same list_<parent>_obj(p_subject_type, p_subject_id, NULL,
 	// NULL) call was previously inlined in both the userset-subject arm and the
 	// cross-type-TTU subject-first arm; these CTEs compute each distinct call
-	// once and the arms reference them. Rendered before the accessible CTE.
+	// once and the arms reference them. Rendered ahead of the base blocks.
 	HoistedCTEs []CTEDef
 }
 
@@ -99,8 +103,8 @@ func collectHoistedListObjTargets(plan ListPlan, parentRelations []ListParentRel
 	return targets, ctes
 }
 
-// BuildListObjectsRecursiveBlocks builds blocks for a recursive list_objects function.
-// This handles TTU patterns with depth tracking and recursive CTEs.
+// BuildListObjectsRecursiveBlocks builds blocks for a recursive list_objects function:
+// the seed blocks and, for self-referential TTU, the step of the breadth-first walk.
 func BuildListObjectsRecursiveBlocks(plan ListPlan) (RecursiveBlockSet, error) {
 	parentRelations := buildListParentRelations(plan.Analysis)
 
@@ -185,6 +189,13 @@ func BuildListObjectsRecursiveBlocks(plan ListPlan) (RecursiveBlockSet, error) {
 	// one check per candidate. Upgrade path if this shape gets hot: tag each
 	// accessible row with the linking relations it may continue through.
 	result.VerifyWithCheck = len(selfRefLinkingRelations) > 1
+	if result.VerifyWithCheck {
+		for _, p := range parentRelations {
+			if p.IsSelfReferential && !slices.Contains(result.WalkRelations, p.Relation) {
+				result.WalkRelations = append(result.WalkRelations, p.Relation)
+			}
+		}
+	}
 
 	return result, nil
 }
@@ -245,20 +256,28 @@ func buildRecursiveBaseBlocks(plan ListPlan, parentRelations []ListParentRelatio
 
 	patterns := buildListUsersetPatternInputs(plan.Analysis)
 	for _, pattern := range patterns {
-		blocks = append(blocks, buildRecursiveUsersetBlocks(plan, pattern, propagatable, hoisted)...)
+		blocks = append(blocks, indirect(buildRecursiveUsersetBlocks(plan, pattern, propagatable, hoisted))...)
 	}
 
 	// Cross-type TTU blocks are a one-hop grant of the outer relation. They must
 	// propagate when that relation is itself self-referential (e.g. "local_admin:
 	// admin from org or local_admin from parent"): the object granted via the
 	// cross-type "admin from org" arm has to seed the recursive parent walk.
-	blocks = append(blocks, buildCrossTypeTTUBlocks(plan, parentRelations, propagatable, hoisted, recursive)...)
+	blocks = append(blocks, indirect(buildCrossTypeTTUBlocks(plan, parentRelations, propagatable, hoisted, recursive))...)
 
 	if seed := buildRecursiveSelfCandidateSeedBlock(plan, propagatable); seed != nil {
 		blocks = append(blocks, *seed)
 	}
 
 	return blocks, nil
+}
+
+// indirect marks blocks as Indirect.
+func indirect(blocks []TypedQueryBlock) []TypedQueryBlock {
+	for i := range blocks {
+		blocks[i].Indirect = true
+	}
+	return blocks
 }
 
 // buildRecursiveSelfCandidateSeedBlock seeds the recursive walk with the
@@ -381,21 +400,15 @@ func buildRecursiveComplexClosureBlock(plan ListPlan, rel string) TypedQueryBloc
 
 // buildRecursiveComposedClosureBlock builds a block for a single composed closure relation.
 func buildRecursiveComposedClosureBlock(plan ListPlan, rel string) TypedQueryBlock {
-	funcName := listObjectsFunctionName(plan.ObjectType, rel)
 	stmt := SelectStmt{
 		ColumnExprs: []Expr{Col{Table: "icr", Column: "object_id"}},
-		FromExpr: FunctionCallExpr{
-			Schema: plan.DatabaseSchema,
-			Name:   funcName,
-			Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
-			Alias:  "icr",
-		},
+		FromExpr:    accessibleObjectsCall(plan.DatabaseSchema, plan.ObjectType, rel, "icr"),
 	}
 	// plan.Exclusions is non-empty only when the walk is gated: an excluded
 	// object must not seed propagation from this arm any more than from the
 	// others.
 	if len(plan.Exclusions.BuildPredicates()) > 0 {
-		stmt.Where = And(buildExclusionInput(plan.Analysis, plan.DatabaseSchema, Col{Table: "icr", Column: "object_id"}, SubjectType, SubjectID).BuildPredicates()...)
+		stmt.Where = And(buildExclusionInput(plan.Analysis, plan.graph(), plan.DatabaseSchema, Col{Table: "icr", Column: "object_id"}, SubjectType, SubjectID).BuildPredicates()...)
 	}
 
 	return TypedQueryBlock{
@@ -404,23 +417,15 @@ func buildRecursiveComposedClosureBlock(plan ListPlan, rel string) TypedQueryBlo
 	}
 }
 
-// buildRecursiveComplexUsersetBlock builds a block for complex userset patterns.
-// Membership comes from usersetMembership: a semi-join against the userset
-// relation's list function when composition is safe, or a per-candidate
-// check_permission_internal call otherwise.
-func buildRecursiveComplexUsersetBlock(plan ListPlan, pattern listUsersetPatternInput, hoisted hoistedListObjTargets) TypedQueryBlock {
+// buildRecursiveComplexUsersetBlock builds a block for complex userset patterns,
+// with membership the predicate that the tuple's userset subject holds the
+// pattern relation for the query subject.
+func buildRecursiveComplexUsersetBlock(plan ListPlan, pattern listUsersetPatternInput, membership ...Expr) TypedQueryBlock {
 	q := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
 		Relations(pattern.SourceRelations...).
-		Where(
-			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(pattern.SubjectType)},
-			HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
-			Eq{
-				Left:  UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}},
-				Right: Lit(pattern.SubjectRelation),
-			},
-			recursiveUsersetMembership(plan, pattern, hoisted),
-		).
+		Where(Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(pattern.SubjectType)}).
+		Where(membership...).
 		SelectCol("object_id").
 		Distinct()
 
@@ -473,27 +478,70 @@ func buildRecursiveSimpleUsersetBlock(plan ListPlan, pattern listUsersetPatternI
 // buildRecursiveUsersetBlocks builds userset pattern blocks, splitting by propagatability
 // when source relations contain a mix of propagatable and non-propagatable relations.
 func buildRecursiveUsersetBlocks(plan ListPlan, pattern listUsersetPatternInput, propagatable map[string]bool, hoisted hoistedListObjTargets) []TypedQueryBlock {
-	return splitBlocksByPropagation(pattern.SourceRelations, propagatable, func(rels []string) TypedQueryBlock {
-		p := pattern
-		p.SourceRelations = rels
-		if p.IsComplex {
-			return buildRecursiveComplexUsersetBlock(plan, p, hoisted)
-		}
-		return buildRecursiveSimpleUsersetBlock(plan, p)
-	})
+	split := func(build func(listUsersetPatternInput) TypedQueryBlock) []TypedQueryBlock {
+		return splitBlocksByPropagation(pattern.SourceRelations, propagatable, func(rels []string) TypedQueryBlock {
+			p := pattern
+			p.SourceRelations = rels
+			return build(p)
+		})
+	}
+	if !pattern.IsComplex {
+		return split(func(p listUsersetPatternInput) TypedQueryBlock { return buildRecursiveSimpleUsersetBlock(plan, p) })
+	}
+	var blocks []TypedQueryBlock
+	for _, arm := range complexUsersetArms(plan, pattern, hoisted) {
+		blocks = append(blocks, split(func(p listUsersetPatternInput) TypedQueryBlock {
+			b := buildRecursiveComplexUsersetBlock(plan, p, arm.membership...)
+			b.UsersetSubjectOnly = arm.usersetSubjectOnly
+			return b
+		})...)
+	}
+	return blocks
 }
 
-// recursiveUsersetMembership is usersetMembership with the composed list_*_obj
-// semi-join swapped for a reference to the hoisted CTE when the target has been
-// hoisted. Behavior is identical -- the CTE computes the same list_*_obj set
-// once instead of inlining the call in this arm (and again in the subject-first
-// arm). Falls back to usersetMembership when the target is not hoisted.
-func recursiveUsersetMembership(plan ListPlan, pattern listUsersetPatternInput, hoisted hoistedListObjTargets) Expr {
-	cteName := hoisted.name(pattern.SubjectType, pattern.SubjectRelation)
-	if cteName == "" {
-		return usersetMembership(plan, pattern)
+// complexUsersetArm is the membership predicate of one arm of a complex
+// userset pattern over tuple t.
+type complexUsersetArm struct {
+	membership         []Expr
+	usersetSubjectOnly bool
+}
+
+// complexUsersetArms returns the arms proving that tuple t's userset subject
+// (group:g#member) holds the pattern relation for the query subject. When the
+// usersets the subject is a member of can be listed (usersetMemberSource),
+// they are matched as an array of tuple subject IDs (see InFunctionSelect), so
+// the lookup is an index probe per userset rather than a scan of every userset
+// tuple; the list function can under-report userset query subjects
+// (group:eng#member), so those also check each candidate, in an arm plain
+// subjects skip. Otherwise one arm checks each candidate.
+func complexUsersetArms(plan ListPlan, pattern listUsersetPatternInput, hoisted hoistedListObjTargets) []complexUsersetArm {
+	check := usersetMembershipCheck(plan, pattern)
+	members := usersetMemberSource(plan, pattern, hoisted)
+	if members == nil {
+		return []complexUsersetArm{{membership: append(usersetSubjectOfRelation(pattern), check)}}
 	}
-	check := CheckPermission{
+	return []complexUsersetArm{
+		// An object ID holding '#' would name another userset (g#member||'#member'
+		// matches the subject g#member#member, whose object is g), so skip it.
+		{membership: []Expr{Raw(fmt.Sprintf("t.subject_id = ANY(ARRAY(SELECT m.object_id || %s FROM %s WHERE position('#' in m.object_id) = 0))",
+			Lit("#"+pattern.SubjectRelation).SQL(), members.TableSQL()))}},
+		{membership: append(usersetSubjectOfRelation(pattern), HasUserset{Source: SubjectID}, check), usersetSubjectOnly: true},
+	}
+}
+
+// usersetSubjectOfRelation restricts tuple t to userset subjects of the
+// pattern relation (group:g#member).
+func usersetSubjectOfRelation(pattern listUsersetPatternInput) []Expr {
+	return []Expr{
+		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
+		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(pattern.SubjectRelation)},
+	}
+}
+
+// usersetMembershipCheck checks that the query subject holds the pattern
+// relation on tuple t's userset object.
+func usersetMembershipCheck(plan ListPlan, pattern listUsersetPatternInput) Expr {
+	return CheckPermission{
 		Schema:   plan.DatabaseSchema,
 		Subject:  SubjectParams(),
 		Relation: pattern.SubjectRelation,
@@ -502,15 +550,26 @@ func recursiveUsersetMembership(plan ListPlan, pattern listUsersetPatternInput, 
 			ID:   UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}},
 		},
 		ExpectAllow: true,
+		Graph:       plan.graph(),
 	}
-	return Or(
-		InCTESelect{
-			Expr:      UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}},
-			CTEName:   cteName,
-			SelectCol: "object_id",
-		},
-		And(HasUserset{Source: SubjectID}, check),
-	)
+}
+
+// usersetMemberSource returns the objects (as m.object_id) on which the query
+// subject holds the pattern relation: the hoisted CTE, or the relation's list
+// function when composition is safe; nil when neither applies.
+func usersetMemberSource(plan ListPlan, pattern listUsersetPatternInput, hoisted hoistedListObjTargets) TableExpr {
+	if cteName := hoisted.name(pattern.SubjectType, pattern.SubjectRelation); cteName != "" {
+		return TableAs("", cteName, "m")
+	}
+	if !composableListTarget(plan, pattern.SubjectType, pattern.SubjectRelation) {
+		return nil
+	}
+	return FunctionCallExpr{
+		Schema: plan.DatabaseSchema,
+		Name:   ListObjectsFunctionName(pattern.SubjectType, pattern.SubjectRelation),
+		Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
+		Alias:  "m",
+	}
 }
 
 // splitBlocksByPropagation partitions relations into propagatable and non-propagatable
@@ -577,6 +636,7 @@ func buildCrossTypeTTUBlocks(plan ListPlan, parentRelations []ListParentRelation
 		if recursive {
 			crossExclusions = buildExclusionInput(
 				plan.Analysis,
+				plan.graph(),
 				plan.DatabaseSchema,
 				Col{Table: "child", Column: "object_id"},
 				SubjectType,
@@ -630,42 +690,48 @@ func buildSubjectFirstCrossTypeTTUBlock(plan ListPlan, parent ListParentRelation
 	}
 
 	// Reference the hoisted CTE for the parent's list_*_obj set when available,
-	// so the same call in the userset-subject arm is not evaluated twice.
-	var parentSource TableExpr
+	// so the same call in the userset-subject arm is not evaluated twice. The
+	// parents are matched as an array (see InFunctionSelect), so the lookup by
+	// subject_id reaches the index of each tuples-view branch.
+	childSubject := Col{Table: "child", Column: "subject_id"}
+	var parents Expr
+	var parentsFrom string
 	if cteName := hoisted.name(parentType, parent.Relation); cteName != "" {
-		parentSource = TableAs("", cteName, "parent_obj")
+		parents = InCTESelect{Expr: childSubject, CTEName: cteName, SelectCol: "object_id", Array: true}
+		parentsFrom = cteName
 	} else {
-		parentSource = FunctionCallExpr{
-			Schema: plan.DatabaseSchema,
-			Name:   ListObjectsFunctionName(parentType, parent.Relation),
-			Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
-			Alias:  "parent_obj",
+		call := InFunctionSelect{
+			Expr:      childSubject,
+			Schema:    plan.DatabaseSchema,
+			FuncName:  ListObjectsFunctionName(parentType, parent.Relation),
+			Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
+			Alias:     "parent_obj",
+			SelectCol: "object_id",
+			Array:     true,
 		}
+		parents = call
+		parentsFrom = Func{Schema: call.Schema, Name: call.FuncName, Args: call.Args}.SQL()
 	}
 
+	link := []Expr{
+		Eq{Left: Col{Table: "child", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+		Eq{Left: Col{Table: "child", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
+		Eq{Left: Col{Table: "child", Column: "subject_type"}, Right: Lit(parentType)},
+	}
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "child", Column: "object_id"}},
-		FromExpr:    parentSource,
-		Joins: []JoinClause{
-			{
-				Type:  "INNER",
-				Table: "melange_tuples",
-				Alias: "child",
-				On: And(
-					Eq{Left: Col{Table: "child", Column: "object_type"}, Right: Lit(plan.ObjectType)},
-					Eq{Left: Col{Table: "child", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
-					Eq{Left: Col{Table: "child", Column: "subject_type"}, Right: Lit(parentType)},
-					Eq{Left: Col{Table: "child", Column: "subject_id"}, Right: Col{Table: "parent_obj", Column: "object_id"}},
-				),
-			},
-		},
-		Where: buildWhereFromPredicates(conditions),
+		FromExpr:    TableAs("", "melange_tuples", "child"),
+		Where:       And(slices.Concat(link, []Expr{parents}, conditions)...),
 	}
+	// The same lookup for one parent, par.object_id (see ParentLookup).
+	lookup := stmt
+	lookup.Where = And(slices.Concat(link, []Expr{Eq{Left: childSubject, Right: Col{Table: "par", Column: "object_id"}}}, conditions)...)
 
 	return TypedQueryBlock{
 		Comments: []string{fmt.Sprintf("-- Cross-type TTU subject-first: %s -> %s.%s", parent.LinkingRelation, parentType, parent.Relation)},
 		Query:    stmt,
+		ByParent: &ParentLookup{Parents: parentsFrom, Lookup: lookup, Object: Col{Table: "child", Column: "object_id"}},
 	}
 }
 
@@ -702,6 +768,7 @@ func sourceRelationCheck(plan ListPlan, parent ListParentRelationData) Expr {
 		Relation:    parent.SourceRelation,
 		Object:      LiteralObject(plan.ObjectType, Col{Table: "child", Column: "object_id"}),
 		ExpectAllow: true,
+		Graph:       plan.graph(),
 	}
 	if !composableListTarget(plan, plan.ObjectType, parent.SourceRelation) {
 		return check
@@ -722,7 +789,9 @@ func buildCheckPermissionCrossTypeTTUBlock(plan ListPlan, parent ListParentRelat
 			Type: Col{Table: "child", Column: "subject_type"},
 			ID:   Col{Table: "child", Column: "subject_id"},
 		},
-		ExpectAllow: true,
+		ExpectAllow:  true,
+		Graph:        plan.graph(),
+		FilteredType: singleType(crossTypes),
 	})
 	if sourceRelationNeedsVerification(plan, parent) {
 		accessCheck = sourceRelationCheck(plan, parent)
@@ -747,19 +816,22 @@ func buildCheckPermissionCrossTypeTTUBlock(plan ListPlan, parent ListParentRelat
 	}
 
 	return TypedQueryBlock{
-		Comments: []string{comment},
-		Query:    q.Build(),
+		Comments:           []string{comment},
+		Query:              q.Build(),
+		UsersetSubjectOnly: usersetSubjectsOnly,
 	}
 }
 
-// buildRecursiveTTUBlock builds the recursive term block for self-referential TTU.
-// Filters on a.propagatable to ensure only results from TTU-bearing relations
-// seed the recursive step (e.g., folder_viewer results do NOT propagate).
+// buildRecursiveTTUBlock builds one step of the breadth-first walk: the objects
+// linked by a self-referential relation to an object in the frontier. Only
+// propagating objects enter the frontier (e.g., folder_viewer results do NOT
+// propagate), so the step itself needs no propagation filter.
 func buildRecursiveTTUBlock(plan ListPlan, linkingRelations []string, gateWalk bool) *TypedQueryBlock {
 	exclusions := ExclusionConfig{}
 	if gateWalk {
 		exclusions = buildExclusionInput(
 			plan.Analysis,
+			plan.graph(),
 			plan.DatabaseSchema,
 			Col{Table: "child", Column: "object_id"},
 			SubjectType,
@@ -768,10 +840,8 @@ func buildRecursiveTTUBlock(plan ListPlan, linkingRelations []string, gateWalk b
 	}
 
 	stmt := SelectStmt{
-		Distinct: true,
-		Columns:  []string{"child.object_id", "a.depth + 1 AS depth", "TRUE AS propagatable"},
-		From:     "accessible",
-		Alias:    "a",
+		ColumnExprs: []Expr{Col{Table: "child", Column: "object_id"}},
+		FromExpr:    unnestObjectIDs(walkFrontier, "a"),
 		Joins: []JoinClause{
 			{
 				Type:   "INNER",
@@ -786,18 +856,14 @@ func buildRecursiveTTUBlock(plan ListPlan, linkingRelations []string, gateWalk b
 				),
 			},
 		},
-		Where: And(
-			Col{Table: "a", Column: "propagatable"},
-			Lt{Left: Col{Table: "a", Column: "depth"}, Right: Int(25)},
-		),
 	}
 
 	if predicates := exclusions.BuildPredicates(); len(predicates) > 0 {
-		stmt.Where = And(append([]Expr{stmt.Where}, predicates...)...)
+		stmt.Where = And(predicates...)
 	}
 
 	return &TypedQueryBlock{
-		Comments: []string{"-- Self-referential TTU: follow linking relations to accessible parents"},
+		Comments: []string{"-- Self-referential TTU: follow linking relations from the frontier"},
 		Query:    stmt,
 	}
 }

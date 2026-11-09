@@ -12,6 +12,8 @@ import (
 	"github.com/a-h/templ"
 
 	"github.com/pthm/melange/internal/doctor"
+	"github.com/pthm/melange/internal/sqlapi"
+	"github.com/pthm/melange/internal/sqlgen"
 	"github.com/pthm/melange/internal/version"
 	"github.com/pthm/melange/melange"
 	"github.com/pthm/melange/pkg/migrator"
@@ -39,6 +41,45 @@ var testModel = &migrator.DeployedModel{
 	},
 }
 
+// hostileReport is a SQL API report with hostile text in every field a
+// recorded model or pg_proc can supply.
+func hostileReport() *sqlapi.Report {
+	fn := sqlapi.Function{
+		CatalogFunction: sqlgen.CatalogFunction{
+			Name: hostile, Kind: sqlgen.KindParentKey, Public: true, Type: hostile, Relation: hostile, Truncated: true,
+			Link: hostile, ParentType: hostile, ParentRelations: []string{hostile},
+			Signature: sqlgen.Signature{Args: []sqlgen.Arg{{Name: hostile, Type: hostile, Default: hostile}}, Returns: hostile, Language: hostile, Paged: true},
+			Example:   hostile, Usage: hostile, Calls: []string{hostile}, Note: hostile, RenderedWith: hostile,
+		},
+		Status: sqlapi.StatusSignatureDiffers, Detail: hostile, StaleOverloads: []string{hostile},
+	}
+	disp := fn
+	disp.Kind, disp.Type, disp.Relation, disp.Answers = sqlgen.KindDispatcher, "", "", []string{hostile}
+	rel := sqlapi.Relation{
+		Type: hostile, Relation: hostile, Dispatchers: []string{hostile}, Functions: []sqlapi.Function{fn},
+		Examples:     []sqlgen.DispatcherCall{{Dispatcher: "check_permission", Example: hostile, Usage: hostile}},
+		NotInstalled: []sqlgen.NotInstalled{{Kind: sqlgen.KindExplain, Reason: sqlgen.ReasonNotExposed, Detail: hostile}},
+	}
+	return &sqlapi.Report{
+		Exposure:    sqlgen.Exposure{Relations: sqlgen.RelationPatterns{Include: []string{hostile}}},
+		Relations:   []sqlapi.Relation{rel},
+		Dispatchers: []sqlapi.Function{disp},
+		Orphans:     []sqlapi.InstalledFunction{{Name: hostile, Arguments: hostile}},
+		Unmanaged:   []sqlapi.InstalledFunction{{Name: hostile, Arguments: hostile}},
+		Collisions:  []sqlgen.NameCollision{{Name: hostile, Owners: []string{hostile}}},
+		Notes:       []string{hostile},
+	}
+}
+
+func hostileSQLAPIData(typ string) sqlAPIData {
+	r := hostileReport()
+	d := sqlAPIData{
+		Env: hostile, Schema: hostile, Type: typ, Report: r, Types: []sqlAPIType{{Name: hostile, Relations: 1}},
+		Exposed: r.Relations, Internal: r.Relations, Drifted: r.Dispatchers,
+	}
+	return d
+}
+
 func TestViewsEscapeDatabaseText(t *testing.T) {
 	yes := true
 	ls := labels{"doc:1": hostile, "user:" + hostile: hostile}
@@ -50,14 +91,21 @@ func TestViewsEscapeDatabaseText(t *testing.T) {
 		"direct rows": directRows(directPage{Side: sideObject, More: true, Next: "/x?" + hostile, Tuples: []melange.TupleRef{
 			{SubjectType: "user", SubjectID: hostile + "#" + hostile, Relation: hostile, ObjectType: "doc", ObjectID: "1"},
 		}}, ls),
-		"trace":   traceView(&melange.Trace{Result: &yes, Subject: hostile, Relation: hostile, Object: hostile, Root: &melange.Node{Type: "direct", Label: hostile}}, time.Millisecond),
-		"fga":     fgaSource("type " + hostile + "\n  relations\n    define " + hostile + ": [user] # " + hostile),
-		"sql":     sqlSource("SELECT '" + hostile + "' -- " + hostile),
-		"error":   errorBox(hostile),
-		"matrix":  matrixView(hostile, hostile, []matrixCell{{Relation: hostile, Err: hostile}}, []string{hostile}, time.Millisecond),
-		"shell":   shell(page{Env: hostile, Active: "model", Title: hostile}, errorBox(hostile)),
-		"filter":  filterBar(templ.Attributes{"placeholder": hostile, "value": hostile}),
-		"section": secHead(hostile, hostile),
+		"trace":            traceView(&melange.Trace{Result: &yes, Subject: hostile, Relation: hostile, Object: hostile, Root: &melange.Node{Type: "direct", Label: hostile}}, time.Millisecond),
+		"fga":              fgaSource("type " + hostile + "\n  relations\n    define " + hostile + ": [user] # " + hostile),
+		"sql":              sqlSource("SELECT '" + hostile + "' -- " + hostile),
+		"error":            errorBox(hostile),
+		"matrix":           matrixView(hostile, hostile, []matrixCell{{Relation: hostile, Err: hostile}}, []string{hostile}, time.Millisecond),
+		"shell":            shell(page{Env: hostile, Active: "model", Title: hostile}, errorBox(hostile)),
+		"filter":           filterBar(templ.Attributes{"placeholder": hostile, "value": hostile}),
+		"section":          secHead(hostile, hostile),
+		"sql api overview": sqlAPIPage(hostileSQLAPIData("")),
+		"sql api type":     sqlAPIPage(hostileSQLAPIData(hostile)),
+		"sql api error":    sqlAPIPage(sqlAPIData{Err: hostile, Type: hostile, Kind: hostile}),
+		"relation catalog": relationPage(relationData{
+			Model: testModel, Type: hostile, Relation: hostile, Known: true,
+			API: &hostileReport().Relations[0], Funcs: []sqlFunc{{Name: hostile, Label: hostile, Def: hostile}},
+		}),
 	} {
 		got := renderHTML(t, c)
 		if strings.Contains(got, "<img src=x") || strings.Contains(got, `onerror="alert`) {
@@ -92,9 +140,15 @@ func TestRenderedPagesSuitTheCSP(t *testing.T) {
 			Entity: ent, Tab: tabDirect, SubjectTotal: 1, SubjectMatch: 1,
 			AsSubject: directPage{Side: sideSubject, Tuples: []melange.TupleRef{{SubjectType: "user", SubjectID: "1", Relation: "owner", ObjectType: "doc", ObjectID: "1"}}},
 		}),
-		"health":   healthPage("", "schemas/schema.fga", report, ""),
-		"history":  historyPage(historyData{Sel: -1, Err: "none"}),
-		"relation": relationPage(relationData{Model: testModel, Type: "doc", Relation: "viewer", Known: true, Funcs: []sqlFunc{{Name: "check_doc_viewer", Label: "check", Def: "SELECT 1"}}}),
+		"health":  healthPage("", "schemas/schema.fga", report, ""),
+		"history": historyPage(historyData{Sel: -1, Err: "none"}),
+		"relation": relationPage(relationData{Model: testModel, Type: "doc", Relation: "viewer", Known: true, Funcs: []sqlFunc{
+			{Name: "check_doc_viewer", Label: "check", Def: "SELECT 1"},
+			{Name: "accessible_doc_viewer", Label: "accessible (inlinable)", Def: "SELECT 1"},
+		}}),
+		"sql api overview": sqlAPIPage(hostileSQLAPIData("")),
+		"sql api type":     sqlAPIPage(hostileSQLAPIData("doc")),
+		"sql api no model": sqlAPIPage(sqlAPIData{Err: "No model recorded."}),
 	} {
 		got := renderHTML(t, c)
 		for _, tag := range scriptTag.FindAllString(got, -1) {
@@ -263,7 +317,7 @@ func TestAccessEntityCollapsesChips(t *testing.T) {
 	for i := range rels {
 		rels[i] = fmt.Sprintf("r%d", i)
 	}
-	got := renderHTML(t, accessEntity("user", entityGroup{ID: "1", Relations: rels}, nil, entityRef{Type: "doc", ID: "1"}, false))
+	got := renderHTML(t, accessEntity("user", entityGroup{ID: "1", Relations: rels}, nil, entityRef{Type: "doc", ID: "1"}, false, nil))
 	more := strings.Index(got, "data-more-chips")
 	if more < 0 || !strings.Contains(got, "+3 more") {
 		t.Fatalf("no +3 more button:\n%s", got)
@@ -271,8 +325,29 @@ func TestAccessEntityCollapsesChips(t *testing.T) {
 	if i, j := strings.Index(got, fmt.Sprintf(">r%d<", chipLimit-1)), strings.Index(got, fmt.Sprintf(">r%d<", chipLimit)); i > more || j < more {
 		t.Errorf("button should sit between chip %d and %d:\n%s", chipLimit-1, chipLimit, got)
 	}
-	short := renderHTML(t, accessEntity("user", entityGroup{ID: "1", Relations: rels[:chipLimit]}, nil, entityRef{Type: "doc", ID: "1"}, false))
+	short := renderHTML(t, accessEntity("user", entityGroup{ID: "1", Relations: rels[:chipLimit]}, nil, entityRef{Type: "doc", ID: "1"}, false, nil))
 	if strings.Contains(short, "data-more-chips") {
 		t.Errorf("no button at exactly chipLimit relations:\n%s", short)
+	}
+}
+
+// The drift stat counts what the Drift section lists, orphans included, and
+// the sidebar can drop either filter.
+func TestSQLAPIPageCountsAndFilters(t *testing.T) {
+	r := &sqlapi.Report{
+		Dispatchers: []sqlapi.Function{{CatalogFunction: sqlgen.CatalogFunction{Name: "check_permission", Kind: sqlgen.KindDispatcher}, Status: sqlapi.StatusMissing}},
+		Orphans:     []sqlapi.InstalledFunction{{Name: "check_doc_old", Arguments: "p_subject_type text"}},
+	}
+	overview := strings.Join(strings.Fields(renderHTML(t, sqlAPIPage(sqlAPIData{Report: r, Drifted: r.Dispatchers}))), " ")
+	if !strings.Contains(overview, `<span class="t-heading">2</span>drifted`) {
+		t.Errorf("drift stat does not count the orphan:\n%s", overview)
+	}
+
+	d := sqlAPIData{Type: "doc", Kind: "check", Report: r, Types: []sqlAPIType{{Name: "doc", Relations: 1}}}
+	page := renderHTML(t, sqlAPIPage(d))
+	for _, href := range []string{`href="/sql?type=doc"`, `href="/sql?kind=check"`} {
+		if !strings.Contains(page, href) {
+			t.Errorf("sidebar has no %s link", href)
+		}
 	}
 }

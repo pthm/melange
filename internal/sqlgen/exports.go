@@ -60,6 +60,7 @@ type (
 	TableExpr        = sqldsl.TableExpr
 	TableRef         = sqldsl.TableRef
 	FunctionCallExpr = sqldsl.FunctionCallExpr
+	UnnestAs         = sqldsl.UnnestAs
 
 	// Statements and structures
 	JoinClause        = sqldsl.JoinClause
@@ -135,16 +136,11 @@ var (
 	LiteralObject                   = sqldsl.LiteralObject
 	Sqlf                            = sqldsl.Sqlf
 	Optf                            = sqldsl.Optf
-	InternalPermissionCheckCall     = sqldsl.InternalPermissionCheckCall
-	NoWildcardPermissionCheckCall   = sqldsl.NoWildcardPermissionCheckCall
-	WildcardPermissionCheckCall     = sqldsl.WildcardPermissionCheckCall
 	SpecializedCheckCall            = sqldsl.SpecializedCheckCall
-	InternalCheckCall               = sqldsl.InternalCheckCall
 	VisitedKey                      = sqldsl.VisitedKey
 	VisitedWithKey                  = sqldsl.VisitedWithKey
 	ListObjectsFunctionName         = sqldsl.ListObjectsFunctionName
 	ListSubjectsFunctionName        = sqldsl.ListSubjectsFunctionName
-	RecursiveCTE                    = sqldsl.RecursiveCTE
 	SimpleCTE                       = sqldsl.SimpleCTE
 	MultiCTE                        = sqldsl.MultiCTE
 	MultiLineComment                = sqldsl.MultiLineComment
@@ -211,6 +207,7 @@ type (
 	PlpgsqlFunction = plpgsql.PlpgsqlFunction
 	SqlFunction     = plpgsql.SqlFunction
 	ForLoop         = plpgsql.ForLoop
+	While           = plpgsql.While
 )
 
 var (
@@ -237,10 +234,6 @@ var (
 // callers pass plan.MaterializeCTEs() which reflects the
 // GenerateSQLOptions.EnableMaterializedCTEs opt-in (default false: PG decides
 // inlining vs materialization on its own).
-func wrapWithPaginationOpts(query, idColumn string, materialize bool) string {
-	return sqldsl.WrapWithPaginationOpts(query, idColumn, materialize)
-}
-
 func wrapWithPaginationWildcardFirstOpts(query string, materialize bool) string {
 	return sqldsl.WrapWithPaginationWildcardFirstOpts(query, materialize)
 }

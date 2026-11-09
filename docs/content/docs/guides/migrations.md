@@ -40,11 +40,100 @@ Melange connects, generates the SQL functions, and applies them in a single tran
 
 ### Key behaviors
 
-- **Skip-if-unchanged**: Melange checksums the schema and skips the migration when nothing has changed. Use `--force` to override.
-- **Orphan cleanup**: Functions from removed relations are dropped automatically.
+- **Skip-if-unchanged**: Melange checksums the schema and skips the migration when neither it nor the [SQL API exposure](#sql-api-exposure) has changed. A Melange upgrade that changes the generated SQL is applied too. `--force` re-applies regardless and also drops the dependents of removed functions; see [Dependent objects](#dependent-objects). The skip check does not inspect the installed functions; `melange doctor`'s fix hints say when a plain migrate would skip, and `migrator.PlanWithOptions` (or `Migrator.Plan`) predicts a run from Go without changing the database.
+- **Orphan cleanup**: Functions from removed relations, or outside a narrower exposure, are dropped automatically. A drop that views or policies depend on is refused unless forced; see [Dependent objects](#dependent-objects).
 - **Dry-run**: Use `--dry-run` to preview the SQL without applying it.
 
-See the [CLI Reference](../reference/cli/#migrate) for the full flag list.
+See the [CLI Reference](../../reference/cli/#migrate) for the full flag list.
+
+### SQL API exposure
+
+The [`sql:` section](../../reference/configuration/#sql-api-settings) of
+`melange.yaml` selects which relations the public SQL functions answer for and
+which function families are generated. `melange migrate` applies it and
+records it in the `exposure` column of `melange_migrations` (a JSON object;
+`{}` is the default exposure).
+
+- **Exposure-only changes re-apply.** The recorded exposure is part of the
+  skip check, so editing the `sql:` section and migrating applies it even when
+  the schema is unchanged. When the change produces identical SQL (excluding a
+  relation the model does not define, say), nothing is re-applied but the new
+  exposure is recorded.
+- **The config is declarative.** Each `melange migrate` applies the exposure the
+  config resolves to. Removing the section widens the database back to the
+  default. Exposure flags such as `--include-relation` apply to one run and
+  are not remembered, so the next migrate without them applies the config
+  again.
+- **The generated client follows the config, not the flags.** `melange
+  generate client` names the accessible functions and relations of the `sql:`
+  section. A migrate with exposure flags that narrow it installs less than the
+  client names; when `generate.client.runtime` is set, migrate warns.
+  `melange generate client --check --db` and doctor's Generated Client checks
+  report each name the database does not answer for.
+- **Status and doctor follow it.** `melange status` reports `exposure_drift`
+  and `melange doctor` warns (`exposure_sync`) when the local exposure differs
+  from the recorded one. Doctor expects the functions of the recorded
+  exposure, so a restricted database does not report missing functions.
+- **`--if-deployed-checksum` compares only the schema checksum.** A database at
+  the expected checksum but with a different recorded exposure passes the
+  guard, and the migration applies the local exposure.
+- **Changing the exposure needs a recorded migration.** `Migrator.MigrateWithTypes`,
+  and `Migrator.MigrateWithTypesAndOptions` without `SchemaContent`, record
+  nothing, so they could neither drop the previous exposure's functions nor
+  record the new exposure. They generate under the recorded exposure, or the
+  default when none is recorded, and return
+  `*migrator.UnrecordedExposureChangeError` for any other, applying nothing.
+  A database deployed from restricted `melange generate migration` files has
+  no record, so these calls refuse to restate that restriction too.
+
+A Go program that migrates through `pkg/migrator` without setting
+`MigrateOptions.Exposure` keeps the recorded exposure instead, so an
+application that migrates on startup does not undo a restriction applied by
+`melange migrate`. To change the exposure from Go, use
+`migrator.MigrateWithOptions` with `MigrateOptions.Exposure`, or
+`Migrator.MigrateWithTypesAndOptions` with `SchemaContent` (for an embedded
+schema, `SchemaFormat: migrator.FormatSingle`) and `Exposure`.
+
+### Dependent objects
+
+Views, materialized views, row-level security policies, rules and
+`BEGIN ATOMIC` SQL functions that call a generated function depend on it.
+When a migration would drop such a function (a removed relation or a narrower
+exposure), `melange migrate` refuses before applying anything and lists the
+dependents:
+
+```
+Error: migration refused (rerun with --force to drop the dependents): migration would drop functions that other database objects depend on; nothing was applied (remove or change the dependents, or force the migration to drop them with CASCADE):
+  policy docs_read on table docs depends on accessible_document_viewer
+```
+
+Change the dependents to use a function the new schema still generates (an
+exposed relation, or a public dispatcher), or drop them, then migrate again.
+`--force` drops the functions with `CASCADE`, which drops the dependents with
+them. Dropping a policy widens access to its table, so read the list before
+forcing.
+
+Without `--force` the drop has no `CASCADE`, so a dependent created by another
+session after the check makes PostgreSQL refuse the drop (SQLSTATE `2BP01`).
+The migration is then rolled back and not recorded, and the error lists the
+dependent.
+
+### Applying a dry-run script
+
+`melange migrate --dry-run` prints the SQL the migration would run, orphan
+drops included. Unless `--force` is given, the script starts with a guard block
+that re-checks for dependents when the script runs and fails if there are any,
+and it drops orphans without `CASCADE`. The script has no `BEGIN`/`COMMIT`, so
+it can be wrapped by a migration tool. To apply it by hand, run it in one
+transaction that stops at the first error, so a failed guard or drop leaves
+the database unchanged:
+
+```bash
+melange migrate --dry-run > migration.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 --single-transaction -f migration.sql
+```
+
+The migration record is inserted last, once every orphan is gone.
 
 ## External Migration Frameworks
 
@@ -98,11 +187,15 @@ melange generate migration \
   --db postgres://localhost/mydb
 ```
 
-Reads the most recent `melange_migrations` record from the database to determine which functions existed before and what their checksums were. The UP migration includes only:
+Reads the most recent `melange_migrations` record from the database to determine which functions existed before, what their checksums were, and which SQL API exposure they were generated with. The UP migration includes only:
 - Functions whose SQL body has changed
 - Newly added functions
-- `DROP` statements for orphaned functions (relations removed from the schema)
+- `DROP` statements for orphaned functions (relations removed from the schema, or outside a narrower exposure)
 - Dispatchers (always included since they reference all relations)
+
+The SQL is generated under the local exposure (the `sql:` section and any
+exposure flags), so a database migrated with a restricted exposure is widened
+when the config no longer restricts it, as `melange migrate` would.
 
 This is the most precise mode but requires database access at generation time.
 
@@ -116,6 +209,14 @@ melange generate migration \
 ```
 
 Compiles the schema from a git ref (branch, tag, or commit) through the full pipeline and compares the result against the current schema. No database access required, making it suitable for CI pipelines.
+
+The previous exposure is read from the config file discovery finds at the
+same ref (or the `--config` file, read at that ref): its `sql:` section, with
+the current `MELANGE_SQL_*` variables applied. Deleting a restricted
+`melange.yaml` is detected as a widening. Commit the config change together
+with the schema change so the two stay in step. When the config file cannot
+be read at the ref, or discovery finds a different file there from the one in
+use now, see [Unknown previous exposure](#unknown-previous-exposure).
 
 Common patterns:
 - `--git-ref main` - compare against the main branch
@@ -133,6 +234,9 @@ melange generate migration \
 
 Compiles a previous schema from a local file and compares. Useful when you keep a copy of the last-deployed schema alongside your current one.
 
+A file holds no record of the exposure, so this mode always emits every
+function; see [Unknown previous exposure](#unknown-previous-exposure).
+
 {{< callout type="info" >}}
 The three comparison flags (`--db`, `--git-ref`, `--previous-schema`) are mutually exclusive. Specify at most one.
 {{< /callout >}}
@@ -141,7 +245,28 @@ The three comparison flags (`--db`, `--git-ref`, `--previous-schema`) are mutual
 
 When a comparison mode is active, Melange computes a SHA-256 checksum of each function's SQL body for both the current schema and the previous state. Only functions with a different (or missing) checksum appear in the UP migration. Dispatcher functions (`check_permission`, `list_accessible_objects`, etc.) are always included because they reference every relation and must be regenerated whenever any relation changes.
 
-Functions that existed in the previous state but are absent from the current schema are treated as **orphans** and receive `DROP FUNCTION IF EXISTS` statements in the UP migration.
+Functions that existed in the previous state but are absent from the current schema are treated as **orphans** and receive `DROP FUNCTION IF EXISTS ...` statements in the UP migration. The drops have no `CASCADE`, so applying the migration fails (SQLSTATE `2BP01`) when a view, RLS policy or function calls one of them, as an unforced `melange migrate` refuses. Change or drop those [dependent objects](#dependent-objects) first. The DOWN migration still drops every function with `CASCADE`.
+
+### Unknown previous exposure
+
+Change detection compares each function with its previous body, which needs
+the exposure the previous functions were generated with: a function the
+previous exposure did not install has no previous body, and skipping it would
+leave the database without it. When the previous exposure is unknown
+(`--previous-schema`, or `--git-ref` when the config file is untracked or
+invalid at that ref, or is not the one discovery finds there), the UP
+migration includes every function, whatever the current exposure, and its
+header says so:
+
+```sql
+-- Previous exposure unknown: every function is included
+```
+
+Orphans are still dropped: the previous schema is compiled under the default
+exposure, which installs every function any other exposure does except the
+`check_permission_unexposed` helper, and the helper is added to the drops
+when the current exposure does not install it. The drops cover whatever the
+previous deployment may have installed (`DROP FUNCTION IF EXISTS`).
 
 ## Migration Metadata
 
@@ -152,11 +277,12 @@ Each generated UP migration includes a comment header with metadata:
 -- Melange version: v0.7.3
 -- Schema checksum: a1b2c3d4...
 -- Codegen version: 1
+-- Exposure: {"relations":{"include":["document#can_*"]},"functions":{"expand":false}}
 -- Previous state: git:main
 -- Changed functions: 3 of 12
 ```
 
-This helps you understand at a glance what changed and why the migration was generated.
+The `Exposure` line appears only for a restricted exposure. This helps you understand at a glance what changed and why the migration was generated.
 
 ## Example Output
 
@@ -193,6 +319,9 @@ CREATE OR REPLACE FUNCTION check_document_viewer(
     p_visited TEXT [] DEFAULT ARRAY[]::TEXT[]
 ) RETURNS INTEGER AS $$
 BEGIN
+    IF array_length(p_visited, 1) >= 26 THEN
+        RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';
+    END IF;
     -- ... userset subject handling omitted for brevity ...
 
     IF EXISTS (
@@ -211,16 +340,12 @@ BEGIN
         RETURN 0;
     END IF;
 END;
-$$ LANGUAGE plpgsql STABLE;
+$$ LANGUAGE plpgsql STABLE PARALLEL RESTRICTED COST 1000;  -- SET search_path and planner settings omitted
 
--- ============================================================
--- No-Wildcard Check Functions (1 functions)
--- ============================================================
-
--- Same as above but excludes wildcard (type:*) matches
-CREATE OR REPLACE FUNCTION check_document_viewer_no_wildcard(
-    -- ... same signature and body, omitted for brevity ...
-) RETURNS INTEGER AS $$ /* ... */ $$ LANGUAGE plpgsql STABLE;
+-- Explain, Expand, List Objects and List Subjects sections follow
+-- (explain_document_viewer, expand_document_viewer, list_document_viewer_obj,
+-- list_document_viewer_sub), omitted. A relation that can match a wildcard
+-- also gets a check_<type>_<relation>_nw variant.
 
 -- ============================================================
 -- Check Dispatchers
@@ -235,15 +360,17 @@ CREATE OR REPLACE FUNCTION check_permission_internal(
     p_visited TEXT [] DEFAULT ARRAY[]::TEXT[]
 ) RETURNS INTEGER AS $$
 BEGIN
-    IF array_length(p_visited, 1) >= 25 THEN
+    IF array_length(p_visited, 1) >= 26 THEN
         RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';
     END IF;
-    IF (p_object_type = 'document' AND p_relation = 'viewer') THEN
-        RETURN check_document_viewer(p_subject_type, p_subject_id, p_object_id, p_visited);
+    IF (p_object_type = 'document') THEN
+        IF (p_relation = 'viewer') THEN
+            RETURN check_document_viewer(p_subject_type, p_subject_id, p_object_id, p_visited);
+        END IF;
     END IF;
     RETURN 0;
 END;
-$$ LANGUAGE plpgsql STABLE;
+$$ LANGUAGE plpgsql STABLE PARALLEL RESTRICTED COST 1000;
 
 -- Public entry point - this is what your application calls
 CREATE OR REPLACE FUNCTION check_permission(
@@ -258,12 +385,13 @@ CREATE OR REPLACE FUNCTION check_permission(
         p_object_type, p_object_id, ARRAY[]::TEXT[]);
 $$ LANGUAGE sql STABLE;
 
--- ... check_permission_no_wildcard, check_permission_bulk,
---     list_accessible_objects, list_accessible_subjects omitted ...
+-- ... check_permission_nw, check_permission_bulk, explain_permission,
+--     expand_permission, list_accessible_objects, list_accessible_subjects,
+--     and the accessible functions (accessible_document_viewer, accessible_objects) omitted ...
 ```
 
 {{< callout type="info" >}}
-Each relation in your schema produces a specialized function (e.g., `check_document_viewer`). The dispatchers (`check_permission`, `list_accessible_objects`, etc.) are always regenerated because they contain a `CASE` branch for every relation.
+Each relation in your schema produces specialized functions (e.g., `check_document_viewer`). The dispatchers (`check_permission`, `list_accessible_objects`, etc.) are always regenerated because they route every relation.
 {{< /callout >}}
 
 ### DOWN migration
@@ -275,19 +403,27 @@ The DOWN migration drops all functions installed by the UP migration. To restore
 -- To restore a previous version, apply that version's UP migration.
 
 -- Drop specialized functions
+DROP FUNCTION IF EXISTS accessible_document_viewer CASCADE;
 DROP FUNCTION IF EXISTS check_document_viewer CASCADE;
-DROP FUNCTION IF EXISTS check_document_viewer_no_wildcard CASCADE;
-DROP FUNCTION IF EXISTS list_document_viewer_objects CASCADE;
-DROP FUNCTION IF EXISTS list_document_viewer_subjects CASCADE;
+DROP FUNCTION IF EXISTS expand_document_viewer CASCADE;
+DROP FUNCTION IF EXISTS explain_document_viewer CASCADE;
+DROP FUNCTION IF EXISTS list_document_viewer_obj CASCADE;
+DROP FUNCTION IF EXISTS list_document_viewer_sub CASCADE;
 
 -- Drop dispatchers
 DROP FUNCTION IF EXISTS check_permission CASCADE;
 DROP FUNCTION IF EXISTS check_permission_internal CASCADE;
-DROP FUNCTION IF EXISTS check_permission_no_wildcard CASCADE;
-DROP FUNCTION IF EXISTS check_permission_no_wildcard_internal CASCADE;
+DROP FUNCTION IF EXISTS check_permission_nw CASCADE;
+DROP FUNCTION IF EXISTS check_permission_nw_internal CASCADE;
 DROP FUNCTION IF EXISTS check_permission_bulk CASCADE;
+DROP FUNCTION IF EXISTS explain_permission CASCADE;
+DROP FUNCTION IF EXISTS explain_permission_internal CASCADE;
+DROP FUNCTION IF EXISTS expand_permission CASCADE;
+DROP FUNCTION IF EXISTS expand_permission_internal CASCADE;
+DROP FUNCTION IF EXISTS accessible_objects CASCADE;
 DROP FUNCTION IF EXISTS list_accessible_objects CASCADE;
 DROP FUNCTION IF EXISTS list_accessible_subjects CASCADE;
+DROP FUNCTION IF EXISTS list_accessible_subjects_internal CASCADE;
 ```
 
 ### Comparison mode example
@@ -300,19 +436,18 @@ When using `--git-ref` or `--db`, only changed functions appear. For example, if
 -- Schema checksum: b7e4...
 -- Codegen version: 1
 -- Previous state: git:main
--- Changed functions: 2 of 4
+-- Changed functions: 6 of 13
 
 -- ============================================================
--- Changed Functions (2 functions)
+-- Changed Functions (6 functions)
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION check_document_editor(
     -- ... new function for the added relation ...
-) RETURNS INTEGER AS $$ /* ... */ $$ LANGUAGE plpgsql STABLE;
+) RETURNS INTEGER AS $$ /* ... */ $$ LANGUAGE plpgsql STABLE PARALLEL RESTRICTED COST 1000;
 
-CREATE OR REPLACE FUNCTION check_document_editor_no_wildcard(
-    -- ... no-wildcard variant ...
-) RETURNS INTEGER AS $$ /* ... */ $$ LANGUAGE plpgsql STABLE;
+-- ... expand_document_editor, explain_document_editor, list_document_editor_obj,
+--     list_document_editor_sub and accessible_document_editor omitted ...
 
 -- ============================================================
 -- Check Dispatchers
@@ -324,29 +459,38 @@ CREATE OR REPLACE FUNCTION check_permission_internal(
 ) RETURNS INTEGER AS $$
 BEGIN
     /* ... */
-    IF (p_object_type = 'document' AND p_relation = 'editor') THEN
-        RETURN check_document_editor(p_subject_type, p_subject_id, p_object_id, p_visited);
-    END IF;
-    IF (p_object_type = 'document' AND p_relation = 'viewer') THEN
-        RETURN check_document_viewer(p_subject_type, p_subject_id, p_object_id, p_visited);
+    IF (p_object_type = 'document') THEN
+        IF (p_relation = 'editor') THEN
+            RETURN check_document_editor(p_subject_type, p_subject_id, p_object_id, p_visited);
+        END IF;
+        IF (p_relation = 'viewer') THEN
+            RETURN check_document_viewer(p_subject_type, p_subject_id, p_object_id, p_visited);
+        END IF;
     END IF;
     RETURN 0;
 END;
-$$ LANGUAGE plpgsql STABLE;
+$$ LANGUAGE plpgsql STABLE PARALLEL RESTRICTED COST 1000;
 
 -- ... remaining dispatchers omitted ...
 ```
 
-If you **remove** a relation, the comparison mode also emits `DROP` statements for the orphaned functions:
+If you **remove** a relation, the comparison mode also emits `DROP` statements for the orphaned functions, right after the header and without `CASCADE`:
 
 ```sql
 -- ============================================================
 -- Drop removed functions
 -- ============================================================
 
-DROP FUNCTION IF EXISTS check_document_editor CASCADE;
-DROP FUNCTION IF EXISTS check_document_editor_no_wildcard CASCADE;
+-- These fail if other database objects depend on them; change or drop those first.
+DROP FUNCTION IF EXISTS accessible_document_editor;
+DROP FUNCTION IF EXISTS check_document_editor;
+DROP FUNCTION IF EXISTS expand_document_editor;
+DROP FUNCTION IF EXISTS explain_document_editor;
+DROP FUNCTION IF EXISTS list_document_editor_obj;
+DROP FUNCTION IF EXISTS list_document_editor_sub;
 ```
+
+The list holds the functions the previous exposure installed, sorted by name.
 
 ## Typical Workflows
 

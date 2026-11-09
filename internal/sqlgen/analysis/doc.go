@@ -62,8 +62,8 @@
 //
 //   - ListStrategyDirect: Direct tuple lookup, possibly with exclusions
 //   - ListStrategyUserset: Expands usersets via JOINs
-//   - ListStrategyRecursive: Uses recursive CTEs for parent-child traversal
-//   - ListStrategySelfRefUserset: Recursive CTEs for self-referential usersets
+//   - ListStrategyRecursive: Breadth-first walk over the parent links (PL/pgSQL loop); raises M2002 at 25 levels
+//   - ListStrategySelfRefUserset: Breadth-first walk over nested usersets; raises M2002 at 25 levels
 //   - ListStrategyComposed: Composes through TTU/userset paths to reach anchor
 //   - ListStrategyIntersection: Uses INTERSECT for AND patterns
 //   - ListStrategyDepthExceeded: Immediately raises depth limit error

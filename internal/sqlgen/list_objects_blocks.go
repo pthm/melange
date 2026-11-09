@@ -169,7 +169,8 @@ func buildListObjectsUsersetSubjectBlock(plan ListPlan) TypedQueryBlock {
 			"-- Userset subject matching: subject IS a userset (e.g., group:fga#member)",
 			"-- matches tuples where subject_id has equivalent or satisfying relation via closure",
 		},
-		Query: q.Build(),
+		Query:              q.Build(),
+		UsersetSubjectOnly: true,
 	}
 }
 
@@ -199,7 +200,7 @@ func buildTypedListObjectsComplexClosureBlocks(plan ListPlan) ([]TypedQueryBlock
 
 		blocks = append(blocks, TypedQueryBlock{
 			Comments: []string{
-				"-- Complex closure relations: find candidates via tuples, validate via list composition (or check_permission_internal fallback)",
+				"-- Complex closure relations: find candidates via tuples, validate via list composition (or per-candidate check fallback)",
 				"-- These relations have exclusions or other complex features that require full permission check",
 			},
 			Query: q.Build(),
@@ -217,15 +218,9 @@ func buildListObjectsComposedClosureBlocks(plan ListPlan) ([]TypedQueryBlock, er
 
 	var blocks []TypedQueryBlock
 	for _, rel := range composedClosureRelations(plan.Analysis) {
-		funcName := listObjectsFunctionName(plan.ObjectType, rel)
 		stmt := SelectStmt{
 			ColumnExprs: []Expr{Col{Table: "icr", Column: "object_id"}},
-			FromExpr: FunctionCallExpr{
-				Schema: plan.DatabaseSchema,
-				Name:   funcName,
-				Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
-				Alias:  "icr",
-			},
+			FromExpr:    accessibleObjectsCall(plan.DatabaseSchema, plan.ObjectType, rel, "icr"),
 		}
 
 		// Apply exclusion predicates to the composed results
@@ -234,6 +229,7 @@ func buildListObjectsComposedClosureBlocks(plan ListPlan) ([]TypedQueryBlock, er
 		if plan.HasExclusion {
 			exclusionConfig := buildExclusionInput(
 				plan.Analysis,
+				plan.graph(),
 				plan.DatabaseSchema,
 				Col{Table: "icr", Column: "object_id"},
 				SubjectType,
@@ -303,6 +299,7 @@ func buildIntersectionGroupBlock(plan ListPlan, idx int, group IntersectionGroup
 	if plan.HasExclusion {
 		exclusionConfig := buildExclusionInput(
 			plan.Analysis,
+			plan.graph(),
 			plan.DatabaseSchema,
 			Col{Table: "ig", Column: "object_id"}, // Use ig.object_id for intersection result
 			SubjectType,
@@ -338,7 +335,7 @@ func buildIntersectionPartQuery(plan ListPlan, part IntersectionPart) SelectStmt
 		childID := Col{Table: alias, Column: "subject_id"}
 		// The parent object (child.subject_id, of type child.subject_type) must
 		// satisfy pr.Relation. Compose against the parent's list_objects set (a
-		// set-based semi-join) instead of a per-row check_permission_internal when
+		// set-based semi-join) instead of a per-row check when
 		// composition is cycle-safe, keeping a userset-guarded check arm for
 		// parity. Per linking type, since the list function name is per-type.
 		check := CheckPermission{
@@ -347,17 +344,21 @@ func buildIntersectionPartQuery(plan ListPlan, part IntersectionPart) SelectStmt
 			Relation:    pr.Relation,
 			Object:      ObjectRef{Type: childType, ID: childID},
 			ExpectAllow: true,
+			Graph:       plan.graph(),
 		}
 		var membership Expr = check
 		if len(pr.AllowedLinkingTypes) > 0 {
 			arms := make([]Expr, 0, len(pr.AllowedLinkingTypes))
 			for _, ptype := range pr.AllowedLinkingTypes {
 				typed := Eq{Left: childType, Right: Lit(ptype)}
+				// The arm's own type test lets its check go direct.
+				typedCheck := check
+				typedCheck.FilteredType = ptype
 				if composableListTarget(plan, ptype, pr.Relation) {
 					arms = append(arms, And(typed, composedListObjectsMembership(
-						plan.DatabaseSchema, ptype, pr.Relation, childID, SubjectType, SubjectID, "parent_obj", check)))
+						plan.DatabaseSchema, ptype, pr.Relation, childID, SubjectType, SubjectID, "parent_obj", typedCheck)))
 				} else {
-					arms = append(arms, And(typed, check))
+					arms = append(arms, And(typed, typedCheck))
 				}
 			}
 			membership = Or(arms...)
@@ -402,12 +403,7 @@ func buildIntersectionPartQuery(plan ListPlan, part IntersectionPart) SelectStmt
 func buildIntersectionComposedPartQuery(plan ListPlan, part IntersectionPart) SelectStmt {
 	setArm := SelectStmt{
 		ColumnExprs: []Expr{Col{Table: "obj", Column: "object_id"}},
-		FromExpr: FunctionCallExpr{
-			Schema: plan.DatabaseSchema,
-			Name:   ListObjectsFunctionName(plan.ObjectType, part.Relation),
-			Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
-			Alias:  "obj",
-		},
+		FromExpr:    accessibleObjectsCall(plan.DatabaseSchema, plan.ObjectType, part.Relation, "obj"),
 	}
 
 	usersetCheck := CheckPermission{
@@ -416,6 +412,7 @@ func buildIntersectionComposedPartQuery(plan ListPlan, part IntersectionPart) Se
 		Relation:    part.Relation,
 		Object:      LiteralObject(plan.ObjectType, Col{Table: "t", Column: "object_id"}),
 		ExpectAllow: true,
+		Graph:       plan.graph(),
 	}
 	usersetArm := Tuples(plan.DatabaseSchema, "t").
 		ObjectType(plan.ObjectType).
@@ -512,12 +509,7 @@ func buildListObjectsUsersetPatternBlocks(plan ListPlan) ([]TypedQueryBlock, err
 	var blocks []TypedQueryBlock
 	for _, pattern := range patterns {
 		if pattern.IsComplex {
-			// Complex userset: use check_permission_internal for membership verification
-			block, err := buildListObjectsComplexUsersetBlock(plan, pattern)
-			if err != nil {
-				return nil, err
-			}
-			blocks = append(blocks, block)
+			blocks = append(blocks, buildListObjectsComplexUsersetBlocks(plan, pattern)...)
 		} else {
 			// Simple userset: JOIN with membership tuples
 			block, err := buildListObjectsSimpleUsersetBlock(plan, pattern)
@@ -531,36 +523,29 @@ func buildListObjectsUsersetPatternBlocks(plan ListPlan) ([]TypedQueryBlock, err
 	return blocks, nil
 }
 
-// buildListObjectsComplexUsersetBlock builds a block for complex userset patterns.
-// Membership comes from usersetMembership: a semi-join against the userset
-// relation's list function when composition is safe, or a per-candidate
-// check_permission_internal call otherwise.
-func buildListObjectsComplexUsersetBlock(plan ListPlan, pattern listUsersetPatternInput) (TypedQueryBlock, error) {
-	q := Tuples(plan.DatabaseSchema, "t").
-		ObjectType(plan.ObjectType).
-		Relations(pattern.SourceRelations...).
-		Where(
-			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(pattern.SubjectType)},
-			HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
-			Eq{
-				Left:  UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}},
-				Right: Lit(pattern.SubjectRelation),
-			},
-			usersetMembership(plan, pattern),
-		).
-		SelectCol("object_id").
-		Distinct()
-
-	for _, pred := range plan.Exclusions.BuildPredicates() {
-		q.Where(pred)
+// buildListObjectsComplexUsersetBlocks builds the blocks for a complex userset
+// pattern, one per complexUsersetArms arm.
+func buildListObjectsComplexUsersetBlocks(plan ListPlan, pattern listUsersetPatternInput) []TypedQueryBlock {
+	arms := complexUsersetArms(plan, pattern, nil)
+	blocks := make([]TypedQueryBlock, 0, len(arms))
+	for _, arm := range arms {
+		q := Tuples(plan.DatabaseSchema, "t").
+			ObjectType(plan.ObjectType).
+			Relations(pattern.SourceRelations...).
+			Where(Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(pattern.SubjectType)}).
+			Where(arm.membership...).
+			SelectCol("object_id").
+			Distinct()
+		for _, pred := range plan.Exclusions.BuildPredicates() {
+			q.Where(pred)
+		}
+		blocks = append(blocks, TypedQueryBlock{
+			Comments:           []string{"-- Via " + pattern.SubjectType + "#" + pattern.SubjectRelation + " (complex userset)"},
+			Query:              q.Build(),
+			UsersetSubjectOnly: arm.usersetSubjectOnly,
+		})
 	}
-
-	return TypedQueryBlock{
-		Comments: []string{
-			"-- Via " + pattern.SubjectType + "#" + pattern.SubjectRelation + " (complex userset, validated by check_permission)",
-		},
-		Query: q.Build(),
-	}, nil
+	return blocks
 }
 
 // buildListObjectsSimpleUsersetBlock builds a block for simple userset patterns.
@@ -614,7 +599,8 @@ func buildListObjectsSelfCandidateBlock(plan ListPlan) *TypedQueryBlock {
 	}
 
 	return &TypedQueryBlock{
-		Comments: []string{"-- Self-candidate: subject is userset on same object type"},
-		Query:    stmt,
+		Comments:           []string{"-- Self-candidate: subject is userset on same object type"},
+		Query:              stmt,
+		UsersetSubjectOnly: true,
 	}
 }

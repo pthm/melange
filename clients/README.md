@@ -52,8 +52,9 @@ melange generate client --runtime typescript --schema schema.fga --output ./src/
 
 Generated code includes:
 - Object type constants
-- Relation constants
+- Relation constants for the relations the `sql:` section of `melange.yaml` exposes (or `generate.client.relations`)
 - Factory functions for creating objects
+- The exact names of the installed accessible functions (`accessible_<type>_<relation>` and the parent-key `_by_<link>` forms), truncated names included
 
 ## Contributing
 

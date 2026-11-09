@@ -75,101 +75,231 @@ func BuildListSubjectsIntersectionBlocks(plan ListPlan) SubjectsIntersectionBloc
 	}
 }
 
+// buildListSubjectsIntersectionRegularCandidates returns the candidate blocks
+// for a plain subject type. When every group has an anchor, the anchors and
+// the base block (which lists This anchors) cover every subject the groups
+// grant, so the per-part and TTU blocks are left out: they add no subjects,
+// and the check filter over their tuples can be pushed into scans of every
+// tuples-view branch they join. The userset-pattern blocks stay: a direct
+// userset grant outside the groups ([user, group#member] or (a and b)) is
+// listed by nothing else.
 func buildListSubjectsIntersectionRegularCandidates(plan ListPlan) []TypedQueryBlock {
 	excludeWildcard := plan.ExcludeWildcard()
 
 	blocks := make([]TypedQueryBlock, 0, 8)
 	blocks = append(blocks, buildListSubjectsIntersectionBaseBlock(plan, excludeWildcard))
+	if _, ok := intersectionAnchors(plan); ok {
+		blocks = append(blocks, buildListSubjectsIntersectionUsersetPatternBlocks(plan, excludeWildcard)...)
+		return append(blocks, buildListSubjectsIntersectionPoolBlocks(plan, excludeWildcard)...)
+	}
 	blocks = append(blocks, buildListSubjectsIntersectionPartBlocks(plan, excludeWildcard)...)
 	blocks = append(blocks, buildListSubjectsIntersectionUsersetPatternBlocks(plan, excludeWildcard)...)
 	blocks = append(blocks, buildListSubjectsIntersectionTTUBlocks(plan, excludeWildcard)...)
 	return append(blocks, buildListSubjectsIntersectionPoolBlocks(plan, excludeWildcard)...)
 }
 
-// intersectionAnchors picks, for each intersection group, one part whose own
-// list_subjects function enumerates its subjects: every subject a group
-// grants holds every part of that group, so the anchors' subjects are a
-// superset of the group-granted subjects, and the candidates' check filter
-// keeps the result exact. It prefers parts that cannot grant through a
-// wildcard, then simple relations. ok is false when some group has no
-// listable part (only direct-assignment or parent parts), or when the
-// relation has implied or parent paths outside its groups, which the
-// candidate blocks would then have to enumerate as well.
-func intersectionAnchors(plan ListPlan) (rels []string, wildcard, ok bool) {
+// intersectionAnchor is one intersection part whose subjects can be
+// enumerated: a relation on the same object (Relation, listed by its own
+// list_subjects function), the relation's direct tuples (This), or a parent
+// relation (Parent, listed by the parent type's list_subjects function for
+// each linked object).
+type intersectionAnchor struct {
+	Relation string
+	This     bool
+	Parent   *ParentRelationInfo
+}
+
+// intersectionAnchors picks, for each intersection group, one part whose
+// subjects can be enumerated: every subject a group grants holds every part
+// of that group, so the anchors' subjects are a superset of the
+// group-granted subjects, and the candidates' check filter keeps the result
+// exact. It prefers the relation's own direct tuples, which the base block
+// already lists, then parts that cannot grant through a wildcard, then simple
+// relations, then parent relations. ok is false when some group has no
+// enumerable part, or when the relation has implied or parent paths outside
+// its groups, which the candidate blocks would then have to enumerate as
+// well.
+func intersectionAnchors(plan ListPlan) (anchors []intersectionAnchor, ok bool) {
 	a := plan.Analysis
 	if len(a.IntersectionGroups) == 0 || a.Features.HasImplied || len(a.ParentRelations) > 0 {
-		return nil, false, false
+		return nil, false
 	}
 	for _, group := range a.IntersectionGroups {
-		best, bestScore := "", 0
+		var best intersectionAnchor
+		bestScore := -1
 		for _, part := range group.Parts {
-			if part.IsThis || part.ParentRelation != nil || part.Relation == "" ||
-				!composableListSubjectsTarget(plan, plan.ObjectType, part.Relation) {
-				continue
-			}
-			score := 0
-			if plan.AnalysisLookup[plan.ObjectType+"."+part.Relation].Features.HasWildcard {
-				score += 2
-			}
-			if !part.IsSimple {
-				score++
-			}
-			if best == "" || score < bestScore {
-				best, bestScore = part.Relation, score
+			anchor, score, eligible := intersectionAnchorFor(plan, part)
+			if eligible && (bestScore < 0 || score < bestScore) {
+				best, bestScore = anchor, score
 			}
 		}
-		if best == "" {
-			return nil, false, false
+		if bestScore < 0 {
+			return nil, false
 		}
-		if !slices.Contains(rels, best) {
-			rels = append(rels, best)
+		if !slices.ContainsFunc(anchors, func(x intersectionAnchor) bool { return sameAnchor(x, best) }) {
+			anchors = append(anchors, best)
 		}
 	}
-	for _, rel := range rels {
-		wildcard = wildcard || plan.AnalysisLookup[plan.ObjectType+"."+rel].Features.HasWildcard
+	return anchors, true
+}
+
+// listsWildcard reports whether the list_subjects function of
+// (objectType, relation) can return '*': the relation grants a wildcard
+// directly or reaches one through its references (reachesWildcard), which
+// Features.HasWildcard does not cover.
+func listsWildcard(plan ListPlan, objectType, relation string) bool {
+	a := plan.AnalysisLookup[objectType+"."+relation]
+	return a == nil || a.Features.HasWildcard || plan.graph().reachesWildcard(objectType, relation)
+}
+
+// intersectionAnchorFor reports whether part can anchor its group, and its
+// cost score (lower is cheaper).
+//
+//   - This: the direct tuples are exactly the part's subjects when the
+//     relation grants no userset or wildcard subjects directly.
+//   - A parent relation: every linking type's relation needs a composable
+//     list_subjects function that cannot return '*' (listsWildcard), so each
+//     linked object's subjects are listed exactly.
+//   - A relation on the object: its composable list_subjects function.
+func intersectionAnchorFor(plan ListPlan, part IntersectionPart) (intersectionAnchor, int, bool) {
+	switch {
+	case part.IsThis:
+		if part.HasWildcard || plan.Analysis.Features.HasUserset {
+			return intersectionAnchor{}, 0, false
+		}
+		return intersectionAnchor{This: true}, 0, true
+	case part.ParentRelation != nil:
+		pr := part.ParentRelation
+		if len(pr.AllowedLinkingTypes) == 0 {
+			return intersectionAnchor{}, 0, false
+		}
+		score := 4
+		for _, ptype := range pr.AllowedLinkingTypes {
+			target := plan.AnalysisLookup[ptype+"."+pr.Relation]
+			if target == nil || listsWildcard(plan, ptype, pr.Relation) || !composableListSubjectsTarget(plan, ptype, pr.Relation) {
+				return intersectionAnchor{}, 0, false
+			}
+			if target.ListStrategy != ListStrategyDirect {
+				score = 5
+			}
+		}
+		return intersectionAnchor{Parent: pr}, score, true
+	case part.Relation != "" && composableListSubjectsTarget(plan, plan.ObjectType, part.Relation):
+		score := 1
+		if listsWildcard(plan, plan.ObjectType, part.Relation) {
+			score += 2
+		}
+		if !part.IsSimple {
+			score++
+		}
+		return intersectionAnchor{Relation: part.Relation}, score, true
 	}
-	return rels, wildcard, true
+	return intersectionAnchor{}, 0, false
+}
+
+// sameAnchor reports whether x and y name the same part, comparing parent
+// relations by value.
+func sameAnchor(x, y intersectionAnchor) bool {
+	if x.Parent != nil || y.Parent != nil {
+		return x.Parent != nil && y.Parent != nil && x.Parent.LinkingRelation == y.Parent.LinkingRelation &&
+			x.Parent.Relation == y.Parent.Relation && slices.Equal(x.Parent.AllowedLinkingTypes, y.Parent.AllowedLinkingTypes)
+	}
+	return x == y
+}
+
+// relationAnchors returns the anchors' relations when every anchor is a
+// relation on the object, for the userset filter, which lists only those.
+func relationAnchors(anchors []intersectionAnchor) ([]string, bool) {
+	rels := make([]string, 0, len(anchors))
+	for _, anchor := range anchors {
+		if anchor.Relation == "" {
+			return nil, false
+		}
+		rels = append(rels, anchor.Relation)
+	}
+	return rels, true
 }
 
 // buildListSubjectsIntersectionPoolBlocks returns the candidates that cover
-// the intersection groups: the anchors' list functions when every group has
-// one, else the subject pool. An anchor that can grant through a wildcard
-// may return '*' (every subject holds it); the pool is then still offered,
-// gated on that anchor actually returning '*' for this object.
+// the intersection groups: the anchors' subjects when every group has an
+// anchor, else the subject pool. A This anchor needs no block of its own:
+// the base block lists the relation's direct tuples. A relation anchor that
+// can grant through a wildcard may return '*' (every subject holds it); the
+// pool is then still offered, gated on that anchor actually returning '*'
+// for this object.
 func buildListSubjectsIntersectionPoolBlocks(plan ListPlan, excludeWildcard bool) []TypedQueryBlock {
-	rels, wildcard, ok := intersectionAnchors(plan)
+	anchors, ok := intersectionAnchors(plan)
 	if !ok {
 		return []TypedQueryBlock{buildListSubjectsIntersectionPoolBlock(plan, excludeWildcard)}
 	}
-	blocks := make([]TypedQueryBlock, 0, len(rels)+1)
+	blocks := make([]TypedQueryBlock, 0, len(anchors)+1)
 	var wildcardGates []Expr
-	for _, rel := range rels {
-		fn := listSubjectsFunctionName(plan.ObjectType, rel)
-		stmt := SelectStmt{
-			ColumnExprs: []Expr{Col{Table: "a", Column: "subject_id"}},
-			FromExpr: FunctionCallExpr{
-				Schema: plan.DatabaseSchema, Name: fn, Args: []Expr{ObjectID, SubjectType}, Alias: "a",
-			},
-		}
-		if excludeWildcard {
-			stmt.Where = Ne{Left: Col{Table: "a", Column: "subject_id"}, Right: Lit("*")}
-		}
-		blocks = append(blocks, TypedQueryBlock{
-			Comments: []string{"-- Intersection anchor: subjects of " + rel},
-			Query:    stmt,
-		})
-		if plan.AnalysisLookup[plan.ObjectType+"."+rel].Features.HasWildcard {
-			wildcardGates = append(wildcardGates, InFunctionSelect{
-				Expr: Lit("*"), Schema: plan.DatabaseSchema, FuncName: fn,
-				Args: []Expr{ObjectID, SubjectType}, Alias: "w", SelectCol: "subject_id",
+	for _, anchor := range anchors {
+		switch {
+		case anchor.Parent != nil:
+			blocks = append(blocks, intersectionParentAnchorBlocks(plan, *anchor.Parent)...)
+		case anchor.Relation != "":
+			rel := anchor.Relation
+			fn := listSubjectsFunctionName(plan.ObjectType, rel)
+			stmt := SelectStmt{
+				ColumnExprs: []Expr{Col{Table: "a", Column: "subject_id"}},
+				FromExpr: FunctionCallExpr{
+					Schema: plan.DatabaseSchema, Name: fn, Args: []Expr{ObjectID, SubjectType}, Alias: "a",
+				},
+			}
+			if excludeWildcard {
+				stmt.Where = Ne{Left: Col{Table: "a", Column: "subject_id"}, Right: Lit("*")}
+			}
+			blocks = append(blocks, TypedQueryBlock{
+				Comments: []string{"-- Intersection anchor: subjects of " + rel},
+				Query:    stmt,
 			})
+			if listsWildcard(plan, plan.ObjectType, rel) {
+				wildcardGates = append(wildcardGates, InFunctionSelect{
+					Expr: Lit("*"), Schema: plan.DatabaseSchema, FuncName: fn,
+					Args: []Expr{ObjectID, SubjectType}, Alias: "w", SelectCol: "subject_id",
+				})
+			}
 		}
 	}
-	if wildcard {
+	if len(wildcardGates) > 0 {
 		pool := buildListSubjectsIntersectionPoolBlock(plan, excludeWildcard)
 		pool.Comments = []string{"-- Subject pool, only when an anchor grants every subject ('*')"}
 		pool.Query.Where = And(pool.Query.Where, Or(wildcardGates...))
 		blocks = append(blocks, pool)
+	}
+	return blocks
+}
+
+// intersectionParentAnchorBlocks lists a parent-relation anchor's subjects:
+// for each linking tuple to a parent object of an allowed type, the subjects
+// of the parent relation on it, from the parent type's list_subjects
+// function.
+func intersectionParentAnchorBlocks(plan ListPlan, pr ParentRelationInfo) []TypedQueryBlock {
+	blocks := make([]TypedQueryBlock, 0, len(pr.AllowedLinkingTypes))
+	for _, ptype := range pr.AllowedLinkingTypes {
+		blocks = append(blocks, TypedQueryBlock{
+			Comments: []string{fmt.Sprintf("-- Intersection anchor: subjects of %s on the %s via %s", pr.Relation, ptype, pr.LinkingRelation)},
+			Query: SelectStmt{
+				ColumnExprs: []Expr{Col{Table: "a", Column: "subject_id"}},
+				FromExpr:    TableAs("", "melange_tuples", "link"),
+				Joins: []JoinClause{{
+					Type: "CROSS",
+					TableExpr: LateralFunction{
+						Schema: plan.DatabaseSchema,
+						Name:   listSubjectsFunctionName(ptype, pr.Relation),
+						Args:   []Expr{Col{Table: "link", Column: "subject_id"}, SubjectType},
+						Alias:  "a",
+					},
+				}},
+				Where: And(
+					Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+					Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
+					Eq{Left: Col{Table: "link", Column: "relation"}, Right: Lit(pr.LinkingRelation)},
+					Eq{Left: Col{Table: "link", Column: "subject_type"}, Right: Lit(ptype)},
+				),
+			},
+		})
 	}
 	return blocks
 }
@@ -365,8 +495,9 @@ func buildListSubjectsIntersectionUsersetCandidates(plan ListPlan) []TypedQueryB
 // functions under the filter (a userset is never granted by a wildcard), or
 // the userset pool when some group has no anchor.
 func buildListSubjectsIntersectionUsersetAnchorOrPool(plan ListPlan) TypedQueryBlock {
-	rels, _, ok := intersectionAnchors(plan)
-	if !ok {
+	anchors, ok := intersectionAnchors(plan)
+	rels, onlyRelations := relationAnchors(anchors)
+	if !ok || !onlyRelations {
 		return buildListSubjectsIntersectionUsersetPoolBlock()
 	}
 	filter := Concat{Parts: []Expr{Param("v_filter_type"), Lit("#"), Param("v_filter_relation")}}

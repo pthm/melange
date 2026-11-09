@@ -1,0 +1,185 @@
+model
+  schema 1.1
+
+# A multi-tenant SaaS: the model behind the SaaS scale benchmark. Its shape is
+# the one production tenants have and the other benchmark schemas lack:
+#
+#   - Roles per product area (crm, helpdesk, billing, people, docs) in tiers,
+#     each counting only for a member of the org it is held on.
+#   - Partner orgs (agencies, resellers) reaching their client orgs through
+#     roles held on a partner object, one level deep.
+#   - Platform support staff reading every production tenant.
+#   - Area readers as intersections over those routes, and resources granting
+#     through their org, so most checks are TTUs into intersections.
+#   - One userset (team#member), so both subject-kind branches run.
+#
+# The view over the domain tables is in saas_tables.sql.
+
+type user
+
+type organization
+  relations
+    # --- assigned ---
+    define member: [user]
+    define support_staff: [user]
+    # Orgs that are nobody's client.
+    define is_root: [user:*]
+    # The partners this org is a client of.
+    define partner: [partner]
+    define admin: [user]
+    define org_user: [user] or admin
+    define sso_admin: [user]
+    define suspended: [user]
+
+    define crm_manager: [user]
+    define crm_agent: [user] or crm_manager
+    define crm_viewer: [user] or crm_agent
+    define helpdesk_manager: [user]
+    define helpdesk_agent: [user] or helpdesk_manager
+    define helpdesk_viewer: [user] or helpdesk_agent
+    define billing_manager: [user]
+    define billing_clerk: [user] or billing_manager
+    define billing_viewer: [user] or billing_clerk
+    define people_manager: [user]
+    define people_viewer: [user] or people_manager
+    define docs_manager: [user]
+    define docs_editor: [user] or docs_manager
+    define docs_viewer: [user] or docs_editor
+
+    # --- access ---
+    define org_reader: (org_user and member) or participant from partner or support_staff
+    define org_editor: admin and member
+    define partner_member: owner_member from partner
+
+    define crm_reader: (crm_viewer and member) or crm_viewer from partner or support_staff
+    define crm_writer: (crm_agent and member) or crm_agent from partner
+    define crm_admin: (crm_manager and member) or crm_manager from partner
+    define helpdesk_reader: (helpdesk_viewer and member) or helpdesk_viewer from partner or support_staff
+    define helpdesk_writer: (helpdesk_agent and member) or helpdesk_agent from partner
+    define helpdesk_admin: (helpdesk_manager and member) or helpdesk_manager from partner
+    define billing_reader: (billing_viewer and member) or billing_viewer from partner or support_staff
+    define billing_writer: (billing_clerk and member) or billing_clerk from partner
+    define billing_admin: (billing_manager and member) or billing_manager from partner
+    define people_reader: (people_viewer and member) or people_viewer from partner
+    define people_admin: (people_manager and member) or people_manager from partner
+    define docs_reader: (docs_viewer and member) or docs_viewer from partner or support_staff
+    define docs_writer: (docs_editor and member) or docs_editor from partner
+
+    define contact_reader: crm_reader or helpdesk_reader or billing_reader
+
+    # --- capabilities ---
+    define can_read: org_reader
+    define can_switch_to: member or support_staff
+    define can_read_users: org_reader
+    define can_update_sso: sso_admin and member
+    define can_read_settings: org_reader or crm_writer or helpdesk_writer or can_update_sso
+    define can_edit: org_editor
+    define can_edit_branding: org_editor or owner_can_manage_clients from partner
+    define can_invite: org_editor
+    define can_manage_clients: org_editor and is_root
+    define can_export: (crm_admin or billing_admin) but not suspended
+    define can_read_contact_pii: ((crm_viewer or helpdesk_viewer) and member) or crm_viewer from partner or helpdesk_viewer from partner or support_staff
+
+# What a partner org holds over its clients, one per org under the org's id.
+# Its roles count only for a member of the partner org.
+type partner
+  relations
+    define owner: [organization]
+    define owner_member: member from owner
+    define owner_can_manage_clients: can_manage_clients from owner
+
+    define crm_manager: [user] and member from owner
+    define crm_agent: ([user] and member from owner) or crm_manager
+    define crm_viewer: ([user] and member from owner) or crm_agent
+    define helpdesk_manager: [user] and member from owner
+    define helpdesk_agent: ([user] and member from owner) or helpdesk_manager
+    define helpdesk_viewer: ([user] and member from owner) or helpdesk_agent
+    define billing_manager: [user] and member from owner
+    define billing_clerk: ([user] and member from owner) or billing_manager
+    define billing_viewer: ([user] and member from owner) or billing_clerk
+    define people_manager: [user] and member from owner
+    define people_viewer: ([user] and member from owner) or people_manager
+    define docs_manager: [user] and member from owner
+    define docs_editor: ([user] and member from owner) or docs_manager
+    define docs_viewer: ([user] and member from owner) or docs_editor
+
+    # Holds any role here.
+    define participant: crm_viewer or helpdesk_viewer or billing_viewer or people_viewer or docs_viewer
+
+# The bulk of the data: a tenant's customers, most of them in a few large orgs.
+type contact
+  relations
+    define org: [organization]
+    define can_read: contact_reader from org
+    define can_read_pii: can_read_contact_pii from org
+
+type deal
+  relations
+    define org: [organization]
+    define owner: [user]
+    define can_read: crm_reader from org
+    define can_edit: (crm_writer from org or owner) and can_read
+    define can_close: crm_admin from org and can_read
+
+type queue
+  relations
+    define org: [organization]
+    define can_read: helpdesk_reader from org
+    define can_manage: helpdesk_admin from org
+
+# Tickets come from one table, typed by kind, and are readable through their
+# queue.
+type incident
+  relations
+    define org: [organization]
+    define queue: [queue]
+    define assignee: [user]
+    define can_read: can_read from queue
+    define can_comment: (helpdesk_writer from org or assignee) and can_read
+    define can_resolve: helpdesk_admin from org and can_read
+    define can_be_mentioned: can_read and (member from org or partner_member from org)
+
+type service_request
+  relations
+    define org: [organization]
+    define queue: [queue]
+    define assignee: [user]
+    define can_read: can_read from queue
+    define can_comment: (helpdesk_writer from org or assignee) and can_read
+    define can_resolve: helpdesk_admin from org and can_read
+    define can_be_mentioned: can_read and (member from org or partner_member from org)
+
+type invoice
+  relations
+    define org: [organization]
+    define author: [user]
+    define can_read: billing_reader from org
+    define can_approve: billing_admin from org but not author
+
+type employee
+  relations
+    define org: [organization]
+    define manager: [user]
+    define can_read: people_reader from org or manager
+    define can_edit: people_admin from org
+
+type team
+  relations
+    define org: [organization]
+    define member: [user]
+
+type folder
+  relations
+    define org: [organization]
+    define parent: [folder]
+    define viewer: [user, team#member]
+    define can_read: viewer or docs_reader from org or can_read from parent
+    define can_edit: docs_writer from org or can_edit from parent
+
+type document
+  relations
+    define org: [organization]
+    define folder: [folder]
+    define owner: [user]
+    define can_read: owner or can_read from folder
+    define can_edit: (owner or can_edit from folder) and can_read

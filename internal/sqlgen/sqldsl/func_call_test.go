@@ -66,64 +66,12 @@ func TestFuncCallNe_SQL(t *testing.T) {
 	}
 }
 
-func TestInternalPermissionCheckCall(t *testing.T) {
-	fc := InternalPermissionCheckCall("", "viewer", "document", Col{Table: "t", Column: "object_id"}, Visited)
-	got := fc.SQL()
-
-	expected := []string{
-		"check_permission_internal(",
-		"p_subject_type",
-		"p_subject_id",
-		"'viewer'",
-		"'document'",
-		"t.object_id",
-		"p_visited",
-		") = 1",
-	}
-
-	for _, want := range expected {
-		if !strings.Contains(got, want) {
-			t.Errorf("CheckPermissionCall().SQL() = %q, want to contain %q", got, want)
-		}
-	}
-}
-
 func TestSpecializedCheckCall(t *testing.T) {
 	fc := SpecializedCheckCall("", "check_doc_owner", SubjectType, SubjectID, ObjectID, Visited)
 	got := fc.SQL()
 
 	if got != "check_doc_owner(p_subject_type, p_subject_id, p_object_id, p_visited) = 1" {
 		t.Errorf("SpecializedCheckCall().SQL() = %q", got)
-	}
-}
-
-func TestInternalCheckCall(t *testing.T) {
-	fc := InternalCheckCall(
-		"",
-		SubjectType,
-		SubjectID,
-		"viewer",
-		Col{Table: "link", Column: "subject_type"},
-		Col{Table: "link", Column: "subject_id"},
-		Visited,
-	)
-	got := fc.SQL()
-
-	expected := []string{
-		"check_permission_internal(",
-		"p_subject_type",
-		"p_subject_id",
-		"'viewer'",
-		"link.subject_type",
-		"link.subject_id",
-		"p_visited",
-		") = 1",
-	}
-
-	for _, want := range expected {
-		if !strings.Contains(got, want) {
-			t.Errorf("InternalCheckCall().SQL() = %q, want to contain %q", got, want)
-		}
 	}
 }
 

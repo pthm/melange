@@ -7,11 +7,21 @@
 //
 // # Supported Runtimes
 //
-// Currently supported:
-//   - "go" - Type-safe Go code with constants and constructors
+//   - "go" - Type-safe Go code with constants, constructors and the names of
+//     the installed accessible functions (one schema_gen.go file)
+//   - "typescript" - TypeScript constants, union types, factory functions and
+//     the accessible function name maps (types.ts, schema.ts, sql.ts, index.ts)
 //
-// Registered but not yet implemented:
-//   - "typescript" - TypeScript types and factory functions (stub)
+// # Relations and accessible function names
+//
+// Config.Exposure is the SQL API exposure the database is migrated with (the
+// sql section of melange.yaml, or migrator.MigrateOptions.Exposure). Relation
+// constants are generated for the relations it exposes, or for the ones
+// Config.Relations selects when set, and the accessible function names for
+// the functions a migration with that exposure installs for them: the exact,
+// unqualified names, including names truncated to PostgreSQL's 63 bytes. A
+// nil Exposure is the default exposure, so a Config that sets neither field
+// generates every relation and every accessible function.
 //
 // # Example Usage
 //
@@ -31,7 +41,7 @@ import (
 
 	"github.com/pthm/melange/internal/clientgen"
 	_ "github.com/pthm/melange/internal/clientgen/go"         // Register Go generator
-	_ "github.com/pthm/melange/internal/clientgen/typescript" // Register TypeScript generator (stub)
+	_ "github.com/pthm/melange/internal/clientgen/typescript" // Register TypeScript generator
 	"github.com/pthm/melange/pkg/schema"
 )
 
@@ -43,7 +53,8 @@ type Config = clientgen.Config
 type TypeDefinition = schema.TypeDefinition
 
 // DefaultConfig returns sensible defaults for code generation.
-// Package: "authz", no relation filter (all relations), string IDs.
+// Package: "authz", the default exposure (all relations and accessible
+// functions), no relation filter, string IDs.
 func DefaultConfig() *Config {
 	return &Config{
 		Package:        "authz",
@@ -55,7 +66,7 @@ func DefaultConfig() *Config {
 
 // Generate produces client code for the specified runtime.
 //
-// Supported runtimes: "go"
+// Supported runtimes: "go", "typescript"
 //
 // Returns a map of filename -> content. For single-file outputs (like Go),
 // the map contains one entry. Multi-file outputs (like TypeScript) will
@@ -89,8 +100,8 @@ type GenerateConfig struct {
 	Package string
 
 	// RelationPrefixFilter is a prefix filter for relation names.
-	// Only relations with this prefix will have constants generated.
-	// If empty, all relations will be generated.
+	// Only relations with this prefix will have constants and accessible
+	// function names generated. If empty, all relations will be generated.
 	RelationPrefixFilter string
 
 	// IDType specifies the type to use for object IDs.

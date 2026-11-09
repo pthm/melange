@@ -48,8 +48,12 @@ The second argument to `current_setting` (`missing_ok = true`) makes it return `
 A policy that calls `check_permission` cannot be created until the function exists. Run `melange migrate` first, then create your policies. Later migrations replace function bodies in place, so existing policies keep working when the model changes.
 
 {{< callout type="warning" >}}
-**Call the dispatchers, not the specialized functions.** Reference `check_permission` and `list_accessible_objects` in policies, not generated functions such as `check_document_viewer`. Migrations drop functions that the model no longer needs with `CASCADE`, which silently drops any policy that depends on them.
+**Call the dispatchers or the accessible functions by their generated names.** Reference `check_permission` and `list_accessible_objects`, or an accessible function such as `accessible_document_viewer` under the exact name from the [generated client](../../reference/generated-code/#accessible-function-names) (long names are truncated and hashed), not other generated functions such as `check_document_viewer`, which the client does not name. Migrations drop functions that the model or the [SQL API exposure](../../reference/sql-api/#exposure) no longer needs: an accessible function goes away when its relation is renamed, stops being listable or is no longer reached from an exposed relation, or when `list_objects`, `accessible` and `parent_key` are all off, and a parent-key form when the relation is no longer exposed, `parent_key` is off, or its grants change shape. The client stops naming an accessible function as soon as its relation is no longer exposed, even while the function stays installed for the relations that resolve through it, so do not keep calling a function the client no longer names. `melange migrate` refuses a drop that a policy depends on and lists the policy; `melange migrate --force` drops the function with `CASCADE`, which drops the policy too and widens access to its table. A migration written by `melange generate migration` drops without `CASCADE`, so applying it fails on such a drop; its DOWN migration drops with `CASCADE`. See [Dependent objects](../migrations/#dependent-objects). Regenerate the client when the model changes, so a name that went away shows up in your code before a migration refuses.
 {{< /callout >}}
+
+With a restricted exposure, the relations a policy checks must be exposed: a
+public dispatcher raises `M2003` for a relation the model defines but the
+exposure leaves out, which fails the query the policy applies to.
 
 ### Use a role that does not bypass RLS
 

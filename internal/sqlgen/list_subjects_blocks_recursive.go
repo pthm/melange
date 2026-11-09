@@ -3,8 +3,6 @@ package sqlgen
 import (
 	"fmt"
 	"slices"
-
-	"github.com/pthm/melange/internal/sqlgen/sqldsl"
 )
 
 // SubjectsRecursiveBlockSet contains blocks for a recursive list_subjects function.
@@ -14,6 +12,20 @@ type SubjectsRecursiveBlockSet struct {
 	UsersetFilterBlocks    []TypedQueryBlock
 	UsersetFilterSelfBlock *TypedQueryBlock
 	ParentRelations        []ListParentRelationData
+	// ParentClosureWalks are the linking relations the parent_closure walk
+	// must follow past the direct parent: those of parent relations whose
+	// blocks read parent_closure and whose grants flow down the chain.
+	ParentClosureWalks []string
+	// UsersetFilterSelfWalks are the linking relations through which the
+	// relation recurses on itself ("r from parent" in r). When set, the
+	// userset-filter branch walks them once into v_uf_sources and evaluates
+	// its one-hop blocks from every source, instead of calling itself per
+	// parent (which never ends on a parent cycle).
+	UsersetFilterSelfWalks []string
+	// UsersetFilterChecked is set when the userset-filter blocks check
+	// candidates (buildListSubjectsRecursiveUsersetFilterCheckedBlock), which
+	// read the objects renderGrantReachWalk collects.
+	UsersetFilterChecked bool
 }
 
 // regularBranchTailValidated reports whether the recursive list_subjects regular
@@ -49,7 +61,16 @@ func BuildListSubjectsRecursiveBlocks(plan ListPlan) (SubjectsRecursiveBlockSet,
 		return SubjectsRecursiveBlockSet{}, err
 	}
 
-	usersetBlocks, err := buildSubjectsRecursiveUsersetFilterTypedBlocks(plan, parentRelations)
+	var selfWalks []string
+	for _, p := range parentRelations {
+		if recursesVia(&plan.Analysis, p.LinkingRelation) {
+			selfWalks = append(selfWalks, p.LinkingRelation)
+		}
+	}
+	slices.Sort(selfWalks)
+	selfWalks = slices.Compact(selfWalks)
+
+	usersetBlocks, checked, err := buildSubjectsRecursiveUsersetFilterTypedBlocks(plan, parentRelations, selfWalks)
 	if err != nil {
 		return SubjectsRecursiveBlockSet{}, err
 	}
@@ -59,12 +80,16 @@ func BuildListSubjectsRecursiveBlocks(plan ListPlan) (SubjectsRecursiveBlockSet,
 		return p.IsClosurePattern && covered[p.SourceRelation]
 	})
 
+	ttuBlocks, walks := buildListSubjectsRecursiveTTUBlocks(plan, regularParents)
 	return SubjectsRecursiveBlockSet{
 		RegularBlocks:          regularBlocks,
-		RegularTTUBlocks:       buildListSubjectsRecursiveTTUBlocks(plan, regularParents),
+		RegularTTUBlocks:       ttuBlocks,
 		UsersetFilterBlocks:    usersetBlocks,
 		UsersetFilterSelfBlock: buildListSubjectsUsersetFilterSelfBlock(plan),
 		ParentRelations:        parentRelations,
+		ParentClosureWalks:     walks,
+		UsersetFilterSelfWalks: selfWalks,
+		UsersetFilterChecked:   checked,
 	}, nil
 }
 
@@ -135,7 +160,7 @@ func buildListSubjectsRecursiveClosureComposeBlocks(plan ListPlan, compose []str
 			},
 		}
 		if !regularBranchTailValidated(plan) {
-			exclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sub", Column: "subject_id"})
+			exclusions := buildExclusionInput(plan.Analysis, plan.graph(), plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sub", Column: "subject_id"})
 			if preds := exclusions.BuildPredicates(); len(preds) > 0 {
 				stmt.Where = And(preds...)
 			}
@@ -252,10 +277,11 @@ func buildListSubjectsRecursiveComplexUsersetBlock(plan ListPlan, pattern listUs
 
 	const grantAlias, memberAlias = "g", "m"
 
-	memberExclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, Col{Table: memberAlias, Column: "subject_type"}, Col{Table: memberAlias, Column: "subject_id"})
+	memberExclusions := buildExclusionInput(plan.Analysis, plan.graph(), plan.DatabaseSchema, ObjectID, Col{Table: memberAlias, Column: "subject_type"}, Col{Table: memberAlias, Column: "subject_id"})
 
 	checkExpr := CheckPermissionInternalExpr(
 		plan.DatabaseSchema,
+		plan.graph(),
 		SubjectRef{Type: SubjectType, ID: Col{Table: memberAlias, Column: "subject_id"}},
 		pattern.SubjectRelation,
 		ObjectRef{Type: Lit(pattern.SubjectType), ID: UsersetObjectID{Source: Col{Table: grantAlias, Column: "subject_id"}}},
@@ -301,6 +327,7 @@ func buildListSubjectsRecursiveComplexUsersetBlock(plan ListPlan, pattern listUs
 			Relation:    pattern.SourceRelation,
 			Object:      LiteralObject(plan.ObjectType, ObjectID),
 			ExpectAllow: true,
+			Graph:       plan.graph(),
 		})
 	}
 
@@ -352,7 +379,7 @@ func composableSubjectFirstUserset(plan ListPlan, pattern listUsersetPatternInpu
 func buildListSubjectsRecursiveComplexUsersetBlockComposed(plan ListPlan, pattern listUsersetPatternInput) TypedQueryBlock {
 	const grantAlias, memberAlias = "g", "m"
 
-	memberExclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: memberAlias, Column: "subject_id"})
+	memberExclusions := buildExclusionInput(plan.Analysis, plan.graph(), plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: memberAlias, Column: "subject_id"})
 
 	whereConditions := []Expr{
 		Eq{Left: Col{Table: grantAlias, Column: "object_type"}, Right: Lit(plan.ObjectType)},
@@ -381,6 +408,7 @@ func buildListSubjectsRecursiveComplexUsersetBlockComposed(plan ListPlan, patter
 			Relation:    pattern.SourceRelation,
 			Object:      LiteralObject(plan.ObjectType, ObjectID),
 			ExpectAllow: true,
+			Graph:       plan.graph(),
 		})
 	}
 
@@ -410,7 +438,7 @@ func buildListSubjectsRecursiveComplexUsersetBlockComposed(plan ListPlan, patter
 func buildListSubjectsRecursiveSimpleUsersetBlock(plan ListPlan, pattern listUsersetPatternInput) TypedQueryBlock {
 	const grantAlias, memberAlias = "g", "s"
 
-	memberExclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, Col{Table: memberAlias, Column: "subject_type"}, Col{Table: memberAlias, Column: "subject_id"})
+	memberExclusions := buildExclusionInput(plan.Analysis, plan.graph(), plan.DatabaseSchema, ObjectID, Col{Table: memberAlias, Column: "subject_type"}, Col{Table: memberAlias, Column: "subject_id"})
 
 	joinCond := And(
 		Eq{Left: Col{Table: memberAlias, Column: "object_type"}, Right: Lit(pattern.SubjectType)},
@@ -446,6 +474,7 @@ func buildListSubjectsRecursiveSimpleUsersetBlock(plan ListPlan, pattern listUse
 			Relation:    pattern.SourceRelation,
 			Object:      LiteralObject(plan.ObjectType, ObjectID),
 			ExpectAllow: true,
+			Graph:       plan.graph(),
 		})
 	}
 
@@ -469,17 +498,26 @@ func buildListSubjectsRecursiveSimpleUsersetBlock(plan ListPlan, pattern listUse
 	}
 }
 
-// buildListSubjectsRecursiveTTUBlocks builds the TTU path blocks for recursive list_subjects.
-func buildListSubjectsRecursiveTTUBlocks(plan ListPlan, parentRelations []ListParentRelationData) []TypedQueryBlock {
+// buildListSubjectsRecursiveTTUBlocks builds the TTU path blocks for recursive
+// list_subjects, and the linking relations the parent_closure walk must follow
+// past the direct parent for them (sorted).
+func buildListSubjectsRecursiveTTUBlocks(plan ListPlan, parentRelations []ListParentRelationData) (typed []TypedQueryBlock, walkRelations []string) {
 	if len(parentRelations) == 0 {
-		return nil
+		return nil, nil
 	}
 
+	readsParentClosure := func(b TypedQueryBlock) bool { return containsParentClosure(b.Query.SQL()) }
 	blocks := make([]TypedQueryBlock, 0, len(parentRelations))
+	var walks []string
 	for _, parent := range parentRelations {
-		blocks = append(blocks, buildListSubjectsRecursiveTTUBlock(plan, parent)...)
+		parentBlocks := buildListSubjectsRecursiveTTUBlock(plan, parent)
+		blocks = append(blocks, parentBlocks...)
+		if parentGrantsFlowDown(plan, parent) && slices.ContainsFunc(parentBlocks, readsParentClosure) {
+			walks = append(walks, parent.LinkingRelation)
+		}
 	}
-	return blocks
+	slices.Sort(walks)
+	return blocks, slices.Compact(walks)
 }
 
 // parentRelationStrategy describes how a parent relation should be resolved
@@ -543,7 +581,7 @@ func parentTargetNeedsSubjectPool(target *RelationAnalysis, currentParent ListPa
 		return true
 	}
 	// parent_closure only recurses out of nodes of the listed object's own
-	// type (see buildParentClosureCTESQL), so a target that recurses on a
+	// type (see renderParentClosureWalk), so a target that recurses on a
 	// different type (document -> folder, folder.v: v from parent) would stop
 	// after one hop and miss grants on further ancestors.
 	if target.ObjectType != objectType && len(target.ParentRelations)+len(target.ClosureParentRelations) > 0 {
@@ -589,10 +627,25 @@ func parentClosureVia(parent ListParentRelationData) Expr {
 // parent) or the listed relation does ("x from parent", so x on the parent
 // gives x here). "x: [user] or y from parent" with y non-recursive is one hop.
 func parentClosureDepthGuard(plan ListPlan, parent ListParentRelationData) []Expr {
-	if recursesVia(&plan.Analysis, parent.LinkingRelation) || recursesVia(parentRelationAnalysis(plan, parent), parent.LinkingRelation) {
+	if parentGrantsFlowDown(plan, parent) {
 		return nil
 	}
 	return []Expr{Eq{Left: Col{Table: "p", Column: "depth"}, Right: Int(0)}}
+}
+
+// parentGrantsFlowDown reports whether grants on ancestors beyond the direct
+// parent reach the listed object through parent's linking relation, so the
+// parent_closure walk must follow that relation past the first hop. The walk
+// recurses only out of nodes of the listed type, so what flows down a chain is
+// the target relation on that type, not on another allowed parent type.
+func parentGrantsFlowDown(plan ListPlan, parent ListParentRelationData) bool {
+	if recursesVia(&plan.Analysis, parent.LinkingRelation) {
+		return true
+	}
+	if plan.AnalysisLookup == nil || !slices.Contains(parent.AllowedLinkingTypesSlice, plan.ObjectType) {
+		return false
+	}
+	return recursesVia(plan.AnalysisLookup[plan.ObjectType+"."+parent.Relation], parent.LinkingRelation)
 }
 
 // nestedParentForcesSubjectPool returns true when a nested parent relation
@@ -690,7 +743,7 @@ func collectParentSatisfyingRelations(plan ListPlan, parent ListParentRelationDa
 // buildListSubjectsRecursiveTTUBlockParentClosure builds a TTU block using parent closure optimization.
 // This scans for direct grants on parent ancestors - only correct for simple parent relations.
 func buildListSubjectsRecursiveTTUBlockParentClosure(plan ListPlan, parent ListParentRelationData) TypedQueryBlock {
-	exclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "t", Column: "subject_id"})
+	exclusions := buildExclusionInput(plan.Analysis, plan.graph(), plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "t", Column: "subject_id"})
 
 	// Collect satisfying relations for the parent relation across all parent types.
 	// For implied relations like "can_read: member", we need to look up tuples with
@@ -698,7 +751,7 @@ func buildListSubjectsRecursiveTTUBlockParentClosure(plan ListPlan, parent ListP
 	satisfyingRelations := collectParentSatisfyingRelations(plan, parent)
 
 	// Build query that scans for grants on parent ancestors
-	// parent_closure CTE returns (subject_type, subject_id, depth) where subject is the parent object
+	// parent_closure rows are (subject_type, subject_id, depth, via), the subject being an ancestor
 	whereConditions := []Expr{
 		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: SubjectType},
 		In{Expr: Col{Table: "t", Column: "relation"}, Values: satisfyingRelations},
@@ -775,7 +828,7 @@ func buildListSubjectsRecursiveTTUBlockParentClosureUserset(plan ListPlan, paren
 func buildListSubjectsRecursiveTTUBlockParentClosureUsersetPattern(plan ListPlan, parent ListParentRelationData, pattern listUsersetPatternInput) TypedQueryBlock {
 	const grantAlias, memberAlias = "g", "m"
 
-	memberExclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, Col{Table: memberAlias, Column: "subject_type"}, Col{Table: memberAlias, Column: "subject_id"})
+	memberExclusions := buildExclusionInput(plan.Analysis, plan.graph(), plan.DatabaseSchema, ObjectID, Col{Table: memberAlias, Column: "subject_type"}, Col{Table: memberAlias, Column: "subject_id"})
 
 	whereConditions := []Expr{
 		In{Expr: Col{Table: grantAlias, Column: "relation"}, Values: pattern.SourceRelations},
@@ -908,7 +961,7 @@ func buildSubjectFirstTTUClosureSubjectBlocks(plan ListPlan, parent ListParentRe
 		},
 	}
 	if !regularBranchTailValidated(plan) {
-		exclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sub", Column: "subject_id"})
+		exclusions := buildExclusionInput(plan.Analysis, plan.graph(), plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sub", Column: "subject_id"})
 		if preds := exclusions.BuildPredicates(); len(preds) > 0 {
 			stmt.Where = And(preds...)
 		}
@@ -935,7 +988,7 @@ func buildSubjectFirstTTUSubjectBlock(plan ListPlan, parent ListParentRelationDa
 	// it, subjects reached via this TTU arm bypass `but not …`. The
 	// wildcard-completion tail, when present, re-validates instead.
 	if !regularBranchTailValidated(plan) {
-		exclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sub", Column: "subject_id"})
+		exclusions := buildExclusionInput(plan.Analysis, plan.graph(), plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sub", Column: "subject_id"})
 		whereConditions = append(whereConditions, exclusions.BuildPredicates()...)
 	}
 
@@ -961,7 +1014,7 @@ func buildSubjectFirstTTUSubjectBlock(plan ListPlan, parent ListParentRelationDa
 	}
 }
 
-// buildListSubjectsRecursiveTTUBlockSubjectPool builds a TTU block using subject_pool + check_permission_internal.
+// buildListSubjectsRecursiveTTUBlockSubjectPool builds a TTU block using subject_pool + a per-row check.
 // This is used when the parent relation is complex (has intersection, exclusion, etc.) and cannot use
 // the parent closure optimization. It verifies each subject-parent combination via permission check.
 func buildListSubjectsRecursiveTTUBlockSubjectPool(plan ListPlan, parent ListParentRelationData) TypedQueryBlock {
@@ -976,37 +1029,30 @@ func buildListSubjectsRecursiveTTUBlockSubjectPool(plan ListPlan, parent ListPar
 		linkWhere = append(linkWhere, In{Expr: Col{Table: "link", Column: "subject_type"}, Values: parent.AllowedLinkingTypesSlice})
 	}
 
-	// Build check_permission_internal call
 	// For closure patterns, verify through the SOURCE relation (e.g., "reader") not the current relation (e.g., "can_read")
 	// This ensures exclusions and other complex features from the source relation are honored
-	var checkCallSQL string
+	check := CheckPermission{
+		Schema:      plan.DatabaseSchema,
+		Subject:     SubjectRef{Type: SubjectType, ID: Col{Table: "sp", Column: "subject_id"}},
+		ExpectAllow: true,
+		Graph:       plan.graph(),
+	}
 	var comment string
 	if parent.IsClosurePattern {
 		// Closure pattern: verify through source relation on the TARGET object
 		// Example: can_read->owner->repo_admin should verify "reader" on the target object (repo)
 		// to honor "reader: repo_admin from owner but not restricted"
-		checkCallSQL = fmt.Sprintf(
-			"%s(%s, %s, %s, %s, %s) = 1",
-			sqldsl.PrefixIdent("check_permission_internal", plan.DatabaseSchema),
-			SubjectType.SQL(), // subject_type (param)
-			Col{Table: "sp", Column: "subject_id"}.SQL(), // subject_id (from subject_pool)
-			Lit(parent.SourceRelation).SQL(),             // relation to check (SOURCE relation like "reader")
-			Lit(plan.ObjectType).SQL(),                   // object_type (target object type like "repo")
-			ObjectID.SQL(),                               // object_id (target object id - param)
-		)
+		check.Relation = parent.SourceRelation
+		check.Object = LiteralObject(plan.ObjectType, ObjectID)
 		comment = fmt.Sprintf("-- TTU: subjects via %s -> %s (closure pattern from %s - verifying through source relation)", parent.LinkingRelation, parent.Relation, parent.SourceRelation)
 	} else {
 		// Direct parent pattern: verify the parent relation on the parent object
-		// check_permission_internal(subject_type, subject_id, relation, object_type, object_id)
-		checkCallSQL = fmt.Sprintf(
-			"%s(%s, %s, %s, %s, %s) = 1",
-			sqldsl.PrefixIdent("check_permission_internal", plan.DatabaseSchema),
-			SubjectType.SQL(), // subject_type (param)
-			Col{Table: "sp", Column: "subject_id"}.SQL(),     // subject_id (from subject_pool)
-			Lit(parent.Relation).SQL(),                       // relation to check on parent
-			Col{Table: "link", Column: "subject_type"}.SQL(), // object_type (parent type)
-			Col{Table: "link", Column: "subject_id"}.SQL(),   // object_id (parent id)
-		)
+		check.Relation = parent.Relation
+		check.Object = ObjectRef{
+			Type: Col{Table: "link", Column: "subject_type"},
+			ID:   Col{Table: "link", Column: "subject_id"},
+		}
+		check.FilteredType = singleType(parent.AllowedLinkingTypesSlice)
 		comment = fmt.Sprintf("-- TTU: subjects via %s -> %s (complex parent relation - using subject_pool)", parent.LinkingRelation, parent.Relation)
 	}
 
@@ -1014,9 +1060,9 @@ func buildListSubjectsRecursiveTTUBlockSubjectPool(plan ListPlan, parent ListPar
 	// the outer relation's exclusion (`but not …`). Subtract plan.Exclusions so
 	// subjects reached through this arm can't bypass it; the wildcard-completion
 	// tail, when present, re-validates instead.
-	linkWhere = append(linkWhere, Raw(checkCallSQL))
+	linkWhere = append(linkWhere, check)
 	if !regularBranchTailValidated(plan) {
-		exclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sp", Column: "subject_id"})
+		exclusions := buildExclusionInput(plan.Analysis, plan.graph(), plan.DatabaseSchema, ObjectID, SubjectType, Col{Table: "sp", Column: "subject_id"})
 		linkWhere = append(linkWhere, exclusions.BuildPredicates()...)
 	}
 
@@ -1041,16 +1087,53 @@ func buildListSubjectsRecursiveTTUBlockSubjectPool(plan ListPlan, parent ListPar
 }
 
 // buildSubjectsRecursiveUsersetFilterTypedBlocks builds the userset filter path blocks.
-func buildSubjectsRecursiveUsersetFilterTypedBlocks(plan ListPlan, parentRelations []ListParentRelationData) ([]TypedQueryBlock, error) {
+//
+// With selfWalks (the linking relations through which the relation recurses
+// on itself), the one-hop blocks start from every object in v_uf_sources (the
+// object and its ancestors along those links) rather than from p_object_id
+// alone: what list_subjects would return for a parent is what these blocks
+// return from it. The nested call is then needed only for parents of another
+// type or relation, which their own functions resolve. Exclusions stay exact
+// because each block checks candidates against the relation on p_object_id.
+func buildSubjectsRecursiveUsersetFilterTypedBlocks(plan ListPlan, parentRelations []ListParentRelationData, selfWalks []string) ([]TypedQueryBlock, bool, error) {
+	fromSources := len(selfWalks) > 0
+	source := Expr(Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID})
+	if fromSources {
+		source = Raw("link.object_id = ANY(" + usersetFilterSources + ")")
+	}
+
 	blocks := make([]TypedQueryBlock, 0, 8)
 	blocks = append(blocks, buildListSubjectsRecursiveUsersetFilterDirectBlock(plan))
 
+	needChecked := false
 	for _, parent := range parentRelations {
 		blocks = append(blocks,
-			buildListSubjectsRecursiveUsersetFilterTTUBlock(plan, parent),
-			buildListSubjectsRecursiveUsersetFilterTTUIntermediateBlock(plan, parent),
-			buildListSubjectsRecursiveUsersetFilterTTUNestedBlock(plan, parent),
+			buildListSubjectsRecursiveUsersetFilterTTUBlock(plan, parent, source),
+			buildListSubjectsRecursiveUsersetFilterTTUIntermediateBlock(plan, parent, source),
 		)
+		// Each allowed parent type's own list function lists the rest, except
+		// where the walk covers it (same-type self-recursion) or where that
+		// function could lead back here and recurse forever on a parent
+		// cycle; those are checked instead (one block covers them all).
+		selfWalked := parent.Relation == plan.Relation && slices.Contains(selfWalks, parent.LinkingRelation)
+		var nestedTypes []string
+		for _, t := range parent.AllowedLinkingTypesSlice {
+			switch {
+			case selfWalked && t == plan.ObjectType:
+				// Covered by starting the blocks from v_uf_sources.
+			case listTargetReachesBack(plan, t, parent.Relation):
+				needChecked = true
+			default:
+				nestedTypes = append(nestedTypes, t)
+			}
+		}
+		// A parent without allowed types keeps its unfiltered nested block.
+		if len(nestedTypes) > 0 || len(parent.AllowedLinkingTypesSlice) == 0 {
+			blocks = append(blocks, buildListSubjectsRecursiveUsersetFilterTTUNestedBlock(plan, parent, source, nestedTypes))
+		}
+	}
+	if needChecked {
+		blocks = append(blocks, buildListSubjectsRecursiveUsersetFilterCheckedBlock(plan))
 	}
 
 	// Usersets granted through an implied relation must still pass this
@@ -1062,9 +1145,107 @@ func buildSubjectsRecursiveUsersetFilterTypedBlocks(plan ListPlan, parentRelatio
 		plan.HasExclusion,
 	)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return append(blocks, composed...), nil
+	if fromSources {
+		for i := range composed {
+			composed[i] = composedClosureFromSources(composed[i])
+		}
+	}
+	return append(blocks, composed...), needChecked, nil
+}
+
+// listTargetReachesBack reports whether listing relation on objectType can
+// call back into the listed relation's function: following parent lookups
+// (direct or inherited through an implied relation) to any type, and composed
+// closure relations on the same type, from (objectType, relation) back to
+// (plan.ObjectType, plan.Relation). Such calls carry no visited set, so on a
+// parent cycle they would recurse until the stack runs out.
+func listTargetReachesBack(plan ListPlan, objectType, relation string) bool {
+	if plan.AnalysisLookup == nil {
+		return false
+	}
+	type node struct{ objectType, relation string }
+	seen := map[node]bool{}
+	queue := []node{{objectType, relation}}
+	for len(queue) > 0 {
+		n := queue[0]
+		queue = queue[1:]
+		if n.objectType == plan.ObjectType && n.relation == plan.Relation {
+			return true
+		}
+		a := plan.AnalysisLookup[n.objectType+"."+n.relation]
+		if seen[n] || a == nil {
+			continue
+		}
+		seen[n] = true
+		for _, pr := range slices.Concat(a.ParentRelations, a.ClosureParentRelations) {
+			for _, t := range pr.AllowedLinkingTypes {
+				queue = append(queue, node{t, pr.Relation})
+			}
+		}
+		for _, rel := range composedClosureRelations(*a) {
+			queue = append(queue, node{n.objectType, rel})
+		}
+	}
+	return false
+}
+
+// buildListSubjectsRecursiveUsersetFilterCheckedBlock lists the usersets of the
+// filter type that hold the relation on p_object_id, by checking every
+// candidate: each subject of that type granted directly on a state
+// renderGrantReachWalk reached, and each reached object of that type, as a
+// userset of the filter relation. It stands in for parent functions that would
+// recurse back into this one; check_permission detects cycles and enforces
+// the depth limit.
+func buildListSubjectsRecursiveUsersetFilterCheckedBlock(plan ListPlan) TypedQueryBlock {
+	from, joins := grantEdgeTuples(planGrantEdges(plan), reachArrays, "r")
+	granted := SelectStmt{
+		ColumnExprs: []Expr{Alias{Expr: NormalizedUsersetSubject(Col{Table: "t", Column: "subject_id"}, Param("v_filter_relation")), Name: "id"}},
+		FromExpr:    from,
+		Joins:       joins,
+		Where: And(
+			IsNull{Expr: Col{Table: "e", Column: "target_type"}},
+			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Param("v_filter_type")},
+			Ne{Left: Col{Table: "t", Column: "subject_id"}, Right: Lit("*")},
+		),
+	}
+	reachedOfFilterType := SelectStmt{
+		ColumnExprs: []Expr{Raw("r.id || '#' || v_filter_relation AS id")},
+		FromExpr:    TableAs("", "unnest("+reachType+", "+reachID+")", "r(type, id)"),
+		Where:       Eq{Left: Col{Table: "r", Column: "type"}, Right: Param("v_filter_type")},
+	}
+	stmt := SelectStmt{
+		Distinct:    true,
+		ColumnExprs: []Expr{Alias{Expr: Col{Table: "cand", Column: "id"}, Name: "subject_id"}},
+		FromExpr:    UnionSubquery{Queries: []SelectStmt{granted, reachedOfFilterType}, Alias: "cand"},
+		Where:       usersetFilterFullCheck(plan, Col{Table: "cand", Column: "id"}),
+	}
+	return TypedQueryBlock{
+		Comments: []string{"-- Parent lookups that recurse back into this function: check each candidate"},
+		Query:    stmt,
+	}
+}
+
+// usersetFilterSources is the PL/pgSQL array of objects the userset-filter
+// blocks start from when the relation recurses on itself.
+const usersetFilterSources = "v_uf_sources"
+
+// composedClosureFromSources evaluates a composed-closure block (a call to the
+// closure relation's list function on p_object_id) on every userset-filter
+// source instead.
+func composedClosureFromSources(block TypedQueryBlock) TypedQueryBlock {
+	stmt := block.Query
+	call := stmt.FromExpr.(FunctionCallExpr)
+	stmt.FromExpr = unnestObjectIDs(usersetFilterSources, "src")
+	stmt.Joins = []JoinClause{{Type: "CROSS", TableExpr: LateralFunction{
+		Schema: call.Schema,
+		Name:   call.Name,
+		Args:   append([]Expr{Col{Table: "src", Column: "object_id"}}, call.Args[1:]...),
+		Alias:  call.Alias,
+	}}}
+	block.Query = stmt
+	return block
 }
 
 // buildListSubjectsRecursiveUsersetFilterDirectBlock builds the direct userset tuples block.
@@ -1075,6 +1256,7 @@ func buildListSubjectsRecursiveUsersetFilterDirectBlock(plan ListPlan) TypedQuer
 		Relation:    plan.Relation,
 		Object:      LiteralObject(plan.ObjectType, Param("p_object_id")),
 		ExpectAllow: true,
+		Graph:       plan.graph(),
 	}
 
 	closureStmt := SelectStmt{
@@ -1132,11 +1314,12 @@ func usersetFilterFullCheck(plan ListPlan, subjectID Expr) Expr {
 		Relation:    plan.Relation,
 		Object:      LiteralObject(plan.ObjectType, Param("p_object_id")),
 		ExpectAllow: true,
+		Graph:       plan.graph(),
 	}
 }
 
 // buildListSubjectsRecursiveUsersetFilterTTUBlock builds the TTU path block for userset filter.
-func buildListSubjectsRecursiveUsersetFilterTTUBlock(plan ListPlan, parent ListParentRelationData) TypedQueryBlock {
+func buildListSubjectsRecursiveUsersetFilterTTUBlock(plan ListPlan, parent ListParentRelationData, source Expr) TypedQueryBlock {
 	closureRelStmt := SelectStmt{
 		Columns:  []string{"c.satisfying_relation"},
 		FromExpr: closureCTERef("c"),
@@ -1158,7 +1341,7 @@ func buildListSubjectsRecursiveUsersetFilterTTUBlock(plan ListPlan, parent ListP
 
 	whereConditions := []Expr{
 		Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(plan.ObjectType)},
-		Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
+		source,
 		Eq{Left: Col{Table: "link", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
 		Eq{Left: Col{Table: "pt", Column: "subject_type"}, Right: Param("v_filter_type")},
 		Gt{Left: Raw("position('#' in pt.subject_id)"), Right: Int(0)},
@@ -1170,6 +1353,29 @@ func buildListSubjectsRecursiveUsersetFilterTTUBlock(plan ListPlan, parent ListP
 
 	if len(parent.AllowedLinkingTypesSlice) > 0 {
 		whereConditions = append(whereConditions, In{Expr: Col{Table: "link", Column: "subject_type"}, Values: parent.AllowedLinkingTypesSlice})
+	}
+
+	// A composed closure relation (one with an exclusion or intersection) is
+	// listed through its own function, by the nested or composed blocks; its
+	// raw tuples would skip that boundary. Likewise the target relation itself
+	// when it has an exclusion or intersection, unless every candidate is
+	// checked on p_object_id anyway.
+	for _, t := range parent.AllowedLinkingTypesSlice {
+		target := plan.AnalysisLookup[t+"."+parent.Relation]
+		if target == nil {
+			continue
+		}
+		skip := composedClosureRelations(*target) // a fresh slice
+		if !plan.HasExclusion && (target.Features.HasExclusion || target.Features.HasIntersection) {
+			skip = append(skip, parent.Relation)
+		}
+		if len(skip) == 0 {
+			continue
+		}
+		whereConditions = append(whereConditions, Not(And(
+			Eq{Left: Col{Table: "link", Column: "subject_type"}, Right: Lit(t)},
+			In{Expr: Col{Table: "pt", Column: "relation"}, Values: skip},
+		)))
 	}
 
 	if plan.HasExclusion {
@@ -1204,7 +1410,7 @@ func buildListSubjectsRecursiveUsersetFilterTTUBlock(plan ListPlan, parent ListP
 }
 
 // buildListSubjectsRecursiveUsersetFilterTTUIntermediateBlock builds the intermediate TTU block.
-func buildListSubjectsRecursiveUsersetFilterTTUIntermediateBlock(plan ListPlan, parent ListParentRelationData) TypedQueryBlock {
+func buildListSubjectsRecursiveUsersetFilterTTUIntermediateBlock(plan ListPlan, parent ListParentRelationData, source Expr) TypedQueryBlock {
 	closureExistsStmt := SelectStmt{
 		Columns:  []string{"1"},
 		FromExpr: closureCTERef("c"),
@@ -1217,7 +1423,7 @@ func buildListSubjectsRecursiveUsersetFilterTTUIntermediateBlock(plan ListPlan, 
 
 	whereConditions := []Expr{
 		Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(plan.ObjectType)},
-		Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
+		source,
 		Eq{Left: Col{Table: "link", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
 		Eq{Left: Col{Table: "link", Column: "subject_type"}, Right: Param("v_filter_type")},
 		Exists{Query: closureExistsStmt},
@@ -1247,11 +1453,12 @@ func buildListSubjectsRecursiveUsersetFilterTTUIntermediateBlock(plan ListPlan, 
 	}
 }
 
-// buildListSubjectsRecursiveUsersetFilterTTUNestedBlock builds the nested TTU block.
-func buildListSubjectsRecursiveUsersetFilterTTUNestedBlock(plan ListPlan, parent ListParentRelationData) TypedQueryBlock {
+// buildListSubjectsRecursiveUsersetFilterTTUNestedBlock builds the nested TTU
+// block: the parent's own list function, for parents of parentTypes.
+func buildListSubjectsRecursiveUsersetFilterTTUNestedBlock(plan ListPlan, parent ListParentRelationData, source Expr, parentTypes []string) TypedQueryBlock {
 	lateralCall := LateralFunction{
 		Schema: plan.DatabaseSchema,
-		Name:   "list_accessible_subjects",
+		Name:   listSubjectsInternalDispatcherName,
 		Args: []Expr{
 			Col{Table: "link", Column: "subject_type"},
 			Col{Table: "link", Column: "subject_id"},
@@ -1263,12 +1470,12 @@ func buildListSubjectsRecursiveUsersetFilterTTUNestedBlock(plan ListPlan, parent
 
 	whereConditions := []Expr{
 		Eq{Left: Col{Table: "link", Column: "object_type"}, Right: Lit(plan.ObjectType)},
-		Eq{Left: Col{Table: "link", Column: "object_id"}, Right: ObjectID},
+		source,
 		Eq{Left: Col{Table: "link", Column: "relation"}, Right: Lit(parent.LinkingRelation)},
 	}
 
-	if len(parent.AllowedLinkingTypesSlice) > 0 {
-		whereConditions = append(whereConditions, In{Expr: Col{Table: "link", Column: "subject_type"}, Values: parent.AllowedLinkingTypesSlice})
+	if len(parentTypes) > 0 {
+		whereConditions = append(whereConditions, In{Expr: Col{Table: "link", Column: "subject_type"}, Values: parentTypes})
 	}
 
 	if plan.HasExclusion {

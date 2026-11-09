@@ -167,6 +167,36 @@ func TestOpenFGA_Validation(t *testing.T) {
 	})
 }
 
+// TestOpenFGA_RestrictedExposure migrates each stage with an exposure that
+// includes only the relations its assertions name, and replays them through
+// the public dispatchers. The cases cover the compositions whose functions
+// call other relations' functions (TTU, usersets, exclusion, intersection,
+// recursion, wildcards), so a relation missing from the installed closure,
+// or a dispatcher arm routing to one, fails here. Assertions on exposed
+// relations must answer as they do under the default exposure.
+func TestOpenFGA_RestrictedExposure(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	client := openfgatests.NewRestrictedExposureClient(t, "melange")
+	openfgatests.RunTestsByPattern(t, client,
+		"tuple_to_userset|ttu_|userset|exclusion|but_not|butnot|intersection|cycle|recursive|wildcard|computed_userset")
+}
+
+// TestOpenFGA_ExplainExpandOnDemand migrates every stage with the explain and
+// expand families off, so the explain and expand parity sweeps run through
+// the functions sqlapi.Trace compiles into pg_temp for each call, in a
+// non-default schema, over the same compositions as the restricted exposure
+// run.
+func TestOpenFGA_ExplainExpandOnDemand(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+	client := openfgatests.NewOnDemandTraceClient(t, "melange")
+	openfgatests.RunTestsByPattern(t, client,
+		"tuple_to_userset|ttu_|userset|exclusion|but_not|butnot|intersection|cycle|recursive|wildcard|computed_userset")
+}
+
 // =============================================================================
 // Helper Tests
 // =============================================================================

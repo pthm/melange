@@ -10,20 +10,33 @@ import (
 // Applied atomically during migration alongside check functions.
 type ListGeneratedSQL struct {
 	// ListObjectsFunctions contains CREATE OR REPLACE FUNCTION statements
-	// for each specialized list_objects function (list_{type}_{relation}_objects).
+	// for each specialized list_objects function (list_{type}_{relation}_obj).
 	ListObjectsFunctions []string
 
 	// ListSubjectsFunctions contains CREATE OR REPLACE FUNCTION statements
-	// for each specialized list_subjects function (list_{type}_{relation}_subjects).
+	// for each specialized list_subjects function (list_{type}_{relation}_sub).
 	ListSubjectsFunctions []string
+
+	// AccessibleObjectsFunctions contains the accessible_{type}_{relation}
+	// functions (list_objects_accessible.go) and the parent-key functions
+	// (list_objects_parent_key.go), each after the accessible functions it
+	// calls, then the accessible_objects dispatcher: PostgreSQL resolves a
+	// LANGUAGE sql body when it is created. Applied after every list function
+	// and dispatcher, which they may call.
+	AccessibleObjectsFunctions []NamedFunction
 
 	// ListObjectsDispatcher contains the list_accessible_objects dispatcher function
 	// that routes to specialized functions or falls back to generic.
 	ListObjectsDispatcher string
 
-	// ListSubjectsDispatcher contains the list_accessible_subjects dispatcher function
-	// that routes to specialized functions or falls back to generic.
+	// ListSubjectsDispatcher contains the list_accessible_subjects_internal
+	// dispatcher, which generated list_subjects functions call, and the public
+	// list_accessible_subjects dispatcher.
 	ListSubjectsDispatcher string
+
+	// exposure is the exposure this output was generated with; see
+	// GeneratedSQL.exposure.
+	exposure generatedExposure
 }
 
 // GenerateListSQL generates specialized SQL functions for list operations using
@@ -44,8 +57,16 @@ func GenerateListSQL(analyses []RelationAnalysis, inline InlineSQLData, database
 // GenerateListSQLWithOptions is the option-aware variant of GenerateListSQL.
 // The opts.EnableMaterializedCTEs flag is threaded into each ListPlan so render
 // functions can decide whether to emit "AS MATERIALIZED" on paged/returned.
+// opts.Exposure selects which list, accessible and parent-key functions are
+// emitted and which relations the public dispatchers answer for; the shared
+// reference graph and every composition decision stay over the whole model.
 func GenerateListSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLData, databaseSchema string, opts GenerateSQLOptions) (ListGeneratedSQL, error) {
+	if err := opts.Exposure.Validate(); err != nil {
+		return ListGeneratedSQL{}, err
+	}
 	var result ListGeneratedSQL
+	exposure := newExposureClosure(analyses, opts.Exposure)
+	result.exposure = generatedExposure{set: true, closure: exposure}
 
 	// One reference graph (over the analysis lookup) shared by every plan.
 	graph := newRelationGraph(buildAnalysisLookup(analyses))
@@ -53,8 +74,14 @@ func GenerateListSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLDat
 	inlineIx := newInlineIndex(inline)
 
 	// Generate specialized functions for each relation that can be generated
+	var accessible []NamedFunction
 	for _, a := range analyses {
 		if !a.Capabilities.ListAllowed {
+			continue
+		}
+		listObjects := exposure.installsListObjects(a.ObjectType, a.Relation)
+		listSubjects := exposure.installsListSubjects(a.ObjectType, a.Relation)
+		if !listObjects && !listSubjects {
 			continue
 		}
 
@@ -64,30 +91,41 @@ func GenerateListSQLWithOptions(analyses []RelationAnalysis, inline InlineSQLDat
 		relInline := filterInlineForList(inlineIx, a)
 
 		// Generate list_objects function
-		objFn, err := generateListObjectsFunctionWithLookup(a, relInline, databaseSchema, graph, opts)
-		if err != nil {
-			return ListGeneratedSQL{}, fmt.Errorf("generating list_objects function for %s.%s: %w",
-				a.ObjectType, a.Relation, err)
+		if listObjects {
+			objFn, err := generateListObjectsFunctionWithLookup(a, relInline, databaseSchema, graph, opts)
+			if err != nil {
+				return ListGeneratedSQL{}, fmt.Errorf("generating list_objects function for %s.%s: %w",
+					a.ObjectType, a.Relation, err)
+			}
+			result.ListObjectsFunctions = append(result.ListObjectsFunctions, objFn.List)
+			accessible = append(accessible, NamedFunction{Name: AccessibleObjectsFunctionName(a.ObjectType, a.Relation), SQL: objFn.Accessible})
 		}
-		result.ListObjectsFunctions = append(result.ListObjectsFunctions, objFn)
 
 		// Generate list_subjects function
-		subjFn, err := generateListSubjectsFunctionWithLookup(a, relInline, databaseSchema, graph, opts)
-		if err != nil {
-			return ListGeneratedSQL{}, fmt.Errorf("generating list_subjects function for %s.%s: %w",
-				a.ObjectType, a.Relation, err)
+		if listSubjects {
+			subjFn, err := generateListSubjectsFunctionWithLookup(a, relInline, databaseSchema, graph, opts)
+			if err != nil {
+				return ListGeneratedSQL{}, fmt.Errorf("generating list_subjects function for %s.%s: %w",
+					a.ObjectType, a.Relation, err)
+			}
+			result.ListSubjectsFunctions = append(result.ListSubjectsFunctions, subjFn)
 		}
-		result.ListSubjectsFunctions = append(result.ListSubjectsFunctions, subjFn)
 	}
+
+	for _, pk := range parentKeyRelations(analyses, exposure) {
+		accessible = append(accessible, NamedFunction{Name: pk.functionName(), SQL: renderParentKeyFunction(databaseSchema, pk)})
+	}
+	result.AccessibleObjectsFunctions = append(orderAccessibleFunctions(accessible),
+		NamedFunction{Name: accessibleObjectsDispatcherName, SQL: generateAccessibleObjectsDispatcher(analyses, databaseSchema, exposure)})
 
 	// Generate dispatchers (always generated, even if no specialized functions)
 	var err error
-	result.ListObjectsDispatcher, err = generateListObjectsDispatcher(analyses, databaseSchema)
+	result.ListObjectsDispatcher, err = generateListObjectsDispatcher(analyses, databaseSchema, exposure)
 	if err != nil {
 		return ListGeneratedSQL{}, fmt.Errorf("generating list_objects dispatcher: %w", err)
 	}
 
-	result.ListSubjectsDispatcher, err = generateListSubjectsDispatcher(analyses, databaseSchema)
+	result.ListSubjectsDispatcher, err = generateListSubjectsDispatcher(analyses, databaseSchema, exposure)
 	if err != nil {
 		return ListGeneratedSQL{}, fmt.Errorf("generating list_subjects dispatcher: %w", err)
 	}
@@ -114,47 +152,51 @@ func listSubjectsFunctionName(objectType, relation string) string {
 }
 
 // generateListObjectsFunctionWithLookup generates a list_objects function using the shared reference graph.
-func generateListObjectsFunctionWithLookup(a RelationAnalysis, inline InlineSQLData, databaseSchema string, g *relationGraph, opts GenerateSQLOptions) (string, error) {
+func generateListObjectsFunctionWithLookup(a RelationAnalysis, inline InlineSQLData, databaseSchema string, g *relationGraph, opts GenerateSQLOptions) (listObjectsWithAccessible, error) {
 	// inline is pre-filtered by the caller (filterInlineForList) so the embedded
 	// closure/userset tables stop growing with unrelated schema.
 	// Route to appropriate generator based on ListStrategy
 	plan := BuildListObjectsPlanWithLookup(a, inline, databaseSchema, g)
 	plan.EnableMaterializedCTEs = opts.EnableMaterializedCTEs
+	header := ListObjectsFunctionHeader(plan.ObjectType, plan.Relation, plan.FeaturesString())
 
 	switch a.ListStrategy {
 	case ListStrategyDirect, ListStrategyUserset, ListStrategyIntersection:
-		// Use unified Plan → Blocks → Render architecture
 		blocks, err := BuildListObjectsBlocks(plan)
 		if err != nil {
-			return "", err
+			return listObjectsWithAccessible{}, err
 		}
-		return RenderListObjectsFunction(plan, blocks)
+		return overAccessible(plan, header, accessibleObjectsQuery(blocks)), nil
 	case ListStrategyRecursive:
-		// Use Plan → Blocks → Render for TTU patterns
 		blocks, err := BuildListObjectsRecursiveBlocks(plan)
 		if err != nil {
-			return "", err
+			return listObjectsWithAccessible{}, err
 		}
-		return RenderListObjectsRecursiveFunction(plan, blocks)
+		if blocks.RecursiveBlock == nil {
+			return overAccessible(plan, header, recursiveAccessibleObjectsQuery(plan, blocks)), nil
+		}
+		// A self-referential relation is listed by a PL/pgSQL walk.
+		list, err := RenderListObjectsRecursiveFunction(plan, blocks)
+		return overList(plan, list), err
 	case ListStrategyDepthExceeded:
-		// Use Plan → Render (no blocks needed - just raises error)
-		return RenderListObjectsDepthExceededFunction(plan), nil
+		// Raises M2002; the accessible function selects from it so it raises too.
+		return overList(plan, RenderListObjectsDepthExceededFunction(plan)), nil
 	case ListStrategySelfRefUserset:
-		// Use Plan → Blocks → Render for self-referential userset patterns
 		blocks, err := BuildListObjectsSelfRefUsersetBlocks(plan)
 		if err != nil {
-			return "", err
+			return listObjectsWithAccessible{}, err
 		}
-		return RenderListObjectsSelfRefUsersetFunction(plan, blocks)
+		list, err := RenderListObjectsSelfRefUsersetFunction(plan, blocks)
+		return overList(plan, list), err
 	case ListStrategyComposed:
-		// Use Plan → Blocks → Render for indirect anchor composition
 		blocks, err := BuildListObjectsComposedBlocks(plan)
 		if err != nil {
-			return "", err
+			return listObjectsWithAccessible{}, err
 		}
-		return RenderListObjectsComposedFunction(plan, blocks)
+		header = append(header, fmt.Sprintf("Indirect anchor: %s.%s via %s", blocks.AnchorType, blocks.AnchorRelation, blocks.FirstStepType))
+		return overAccessible(plan, header, composedAccessibleObjectsQuery(blocks)), nil
 	default:
-		return "", fmt.Errorf("unknown list strategy %v for %s.%s", a.ListStrategy, a.ObjectType, a.Relation)
+		return listObjectsWithAccessible{}, fmt.Errorf("unknown list strategy %v for %s.%s", a.ListStrategy, a.ObjectType, a.Relation)
 	}
 }
 
@@ -271,7 +313,7 @@ type ListUsersetPatternData struct {
 	IsComplex bool
 
 	// IsSelfReferential is true if SubjectType == ObjectType and SubjectRelation == Relation.
-	// Self-referential usersets (e.g., group.member: [group#member]) require recursive CTEs.
+	// Self-referential usersets (e.g., group.member: [group#member]) are listed by a breadth-first walk.
 	// Non-self-referential usersets use JOIN-based expansion.
 	IsSelfReferential bool
 }
@@ -334,7 +376,7 @@ type ListDispatcherCase struct {
 }
 
 // buildListParentRelations builds template data for TTU pattern expansion in list templates.
-// For each "viewer from parent" pattern, this creates data for recursive CTE traversal or
+// For each "viewer from parent" pattern, this creates data for a breadth-first walk or
 // cross-type lookup using check_permission_internal.
 //
 // Includes both direct parent relations (a.ParentRelations) and inherited parent relations

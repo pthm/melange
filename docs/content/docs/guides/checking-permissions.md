@@ -450,10 +450,11 @@ END;
 $$;
 ```
 
-The M2002 error occurs when permission resolution exceeds the depth limit (25 levels), which can happen with:
+The M2002 error occurs when permission resolution takes more steps than OpenFGA allows (a check resolves 25 parent or userset hops and fails at 26), which can happen with:
 - Deeply nested parent relationships
-- Complex userset chains
-- Cyclic permission structures
+- Deeply nested userset chains
+
+Cycles in the data do not cause it: a check skips objects it has already visited.
 {{< /tab >}}
 
 {{< /tabs >}}
@@ -662,7 +663,7 @@ for _, repo := range repos {
 }
 
 // Efficient: 1 database query
-accessibleIDs, _ := checker.ListObjects(ctx, user, "can_read", "repository")
+accessibleIDs, _ := checker.ListObjectsAll(ctx, user, "can_read", "repository")
 idSet := make(map[string]bool)
 for _, id := range accessibleIDs {
     idSet[id] = true
@@ -711,6 +712,13 @@ JOIN list_accessible_objects('user', '123', 'viewer', 'document') a
 {{< /tab >}}
 
 {{< /tabs >}}
+
+To filter a query of your own, call the relation's [accessible function](../../reference/sql-api/#accessible_type_relation), which PostgreSQL inlines into the query. Take its name from the [generated client](../../reference/generated-code/#accessible-function-names) rather than building it, since long names are truncated and hashed:
+
+```go
+rows, err := db.QueryContext(ctx, `SELECT d.* FROM documents d
+    WHERE d.id::text IN (SELECT * FROM `+authz.SQLAccessibleDocumentViewer+`('user', $1))`, userID)
+```
 
 See [Listing Objects](../listing-objects/) for details.
 

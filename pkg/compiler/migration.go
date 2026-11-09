@@ -3,7 +3,9 @@ package compiler
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -45,6 +47,25 @@ type MigrationOptions struct {
 	// checksum comparison. Required alongside PreviousChecksums for change detection;
 	// if either is absent, change detection is skipped and all functions are emitted.
 	NamedFunctions []NamedFunction
+	// Exposure is the exposure the SQL was generated with (GenerateSQLOptions),
+	// recorded in the UP header when it is not the default.
+	Exposure Exposure
+	// PreviousExposure is the exposure the previous state was generated with,
+	// nil when unknown (a previous schema read from git or a file). Change
+	// detection needs it once Exposure is restricted: a function the previous
+	// exposure did not install has no previous checksum to compare, so with an
+	// unknown previous exposure every function is emitted (full output) while
+	// orphans are still dropped. With the default Exposure, nil is taken to
+	// be the default too, as the previous schema is taken to be the deployed
+	// one: a previous state generated under a restricted exposure must say so
+	// here, or the functions it left out are not emitted.
+	PreviousExposure *Exposure
+	// PreviousExposureUnknown says the previous exposure is unknown even with
+	// the default Exposure, overriding the assumption above: every function is
+	// emitted (full output) while orphans are still dropped. A caller sets it
+	// when the previous state may have been generated under a restricted
+	// exposure it cannot recover.
+	PreviousExposureUnknown bool
 }
 
 // GenerateMigrationSQL is the terminal step of the generate migration pipeline.
@@ -101,7 +122,8 @@ func generateUpSQL(
 
 	// Determine which specialized functions changed (nil = include all)
 	var changed map[string]bool
-	if opts.PreviousChecksums != nil && len(opts.NamedFunctions) > 0 {
+	unknownExposure := opts.PreviousExposureUnknown || (opts.PreviousExposure == nil && !opts.Exposure.IsDefault())
+	if opts.PreviousChecksums != nil && len(opts.NamedFunctions) > 0 && !unknownExposure {
 		currentChecksums := computeCurrentChecksums(opts.NamedFunctions)
 		changed = changedFunctionNames(currentChecksums, opts.PreviousChecksums)
 	}
@@ -117,11 +139,19 @@ func generateUpSQL(
 	if opts.CodegenVersion != "" {
 		fmt.Fprintf(&b, "-- Codegen version: %s\n", opts.CodegenVersion)
 	}
+	if !opts.Exposure.IsDefault() {
+		exposure, err := json.Marshal(opts.Exposure.Normalized())
+		if err == nil {
+			fmt.Fprintf(&b, "-- Exposure: %s\n", exposure)
+		}
+	}
 	if opts.PreviousFunctionNames != nil && opts.PreviousSource != "" {
 		fmt.Fprintf(&b, "-- Previous state: %s\n", opts.PreviousSource)
 	}
 	if changed != nil {
 		fmt.Fprintf(&b, "-- Changed functions: %d of %d\n", len(changed), len(opts.NamedFunctions))
+	} else if opts.PreviousChecksums != nil && unknownExposure {
+		b.WriteString("-- Previous exposure unknown: every function is included\n")
 	}
 	b.WriteString("\n")
 
@@ -129,9 +159,15 @@ func generateUpSQL(
 	if opts.PreviousFunctionNames != nil {
 		orphans := computeOrphans(opts.PreviousFunctionNames, expectedFunctions)
 		if len(orphans) > 0 {
+			// Without CASCADE, as melange migrate does unless forced: a
+			// view, RLS policy or function that calls one of them makes the
+			// drop fail instead of being dropped with it, which for a policy
+			// would widen access. Generated functions never block each
+			// other: their string bodies record no pg_depend edges.
 			writeSectionHeader(&b, "Drop removed functions")
+			b.WriteString("-- These fail if other database objects depend on them; change or drop those first.\n")
 			for _, fn := range orphans {
-				fmt.Fprintf(&b, "DROP FUNCTION IF EXISTS %s CASCADE;\n", sqldsl.PrefixIdent(fn, opts.DatabaseSchema))
+				fmt.Fprintf(&b, "DROP FUNCTION IF EXISTS %s;\n", sqldsl.PrefixIdent(fn, opts.DatabaseSchema))
 			}
 			b.WriteString("\n")
 		}
@@ -185,8 +221,19 @@ func writeChangedFunctions(b *strings.Builder, namedFunctions []NamedFunction, c
 	}
 
 	writeSectionHeader(b, fmt.Sprintf("Changed Functions (%d functions)", len(changedFns)))
+	// Accessible functions' bodies name melange_tuples unqualified, resolved
+	// when called (see writeDispatchers).
+	accessible := slices.ContainsFunc(changedFns, func(nf NamedFunction) bool {
+		return strings.HasPrefix(nf.Name, "accessible")
+	})
+	if accessible {
+		fmt.Fprintf(b, "SET check_function_bodies = off;\n\n")
+	}
 	for _, nf := range changedFns {
 		fmt.Fprintf(b, "%s\n\n", nf.SQL)
+	}
+	if accessible {
+		fmt.Fprintf(b, "RESET check_function_bodies;\n\n")
 	}
 }
 
@@ -224,6 +271,16 @@ func writeDispatchers(b *strings.Builder, generatedSQL GeneratedSQL, listSQL Lis
 			fmt.Fprintf(b, "%s\n\n", d)
 		}
 	}
+
+	if len(listSQL.AccessibleObjectsFunctions) > 0 {
+		writeSectionHeader(b, "Accessible Objects Functions")
+		// Their bodies name melange_tuples unqualified, resolved when called.
+		fmt.Fprintf(b, "SET check_function_bodies = off;\n\n")
+		for _, fn := range listSQL.AccessibleObjectsFunctions {
+			fmt.Fprintf(b, "%s\n\n", fn.SQL)
+		}
+		fmt.Fprintf(b, "RESET check_function_bodies;\n\n")
+	}
 }
 
 // collectNonEmpty returns only the non-empty strings from the input.
@@ -240,19 +297,7 @@ func collectNonEmpty(values ...string) []string {
 // dispatcherFunctionNames lists the well-known dispatcher functions in the
 // stable order used for DOWN migrations. Specialized functions are handled
 // separately in generateDownSQL.
-var dispatcherFunctionNames = []string{
-	"check_permission",
-	"check_permission_internal",
-	"check_permission_nw",
-	"check_permission_nw_internal",
-	"check_permission_bulk",
-	"explain_permission",
-	"explain_permission_internal",
-	"expand_permission",
-	"expand_permission_internal",
-	"list_accessible_objects",
-	"list_accessible_subjects",
-}
+var dispatcherFunctionNames = DispatcherFunctionNames
 
 func generateDownSQL(expectedFunctions []string, databaseSchema string) string {
 	var b strings.Builder

@@ -2,16 +2,17 @@ package sqlgen
 
 import "fmt"
 
-// SelfRefUsersetBlockSet contains blocks for a self-referential userset list function.
-// These blocks are wrapped in a recursive CTE for member expansion.
+// SelfRefUsersetBlockSet contains blocks for a self-referential userset list function,
+// walked breadth first by renderIDWalk.
 type SelfRefUsersetBlockSet struct {
-	// BaseBlocks are the base case blocks (depth=0) in the CTE
+	// BaseBlocks seed the walk: the objects the subject holds the relation on directly.
 	BaseBlocks []TypedQueryBlock
 
-	// RecursiveBlock is the recursive term block that expands self-referential usersets
+	// RecursiveBlock is one step of the walk: the objects naming an object of
+	// the frontier as a userset of the relation.
 	RecursiveBlock *TypedQueryBlock
 
-	// SelfCandidateBlock is added outside the CTE (UNION with CTE result)
+	// SelfCandidateBlock is added outside the walk (UNION with its result)
 	SelfCandidateBlock *TypedQueryBlock
 }
 
@@ -29,18 +30,13 @@ func BuildListObjectsSelfRefUsersetBlocks(plan ListPlan) (SelfRefUsersetBlockSet
 	}, nil
 }
 
-// buildSelfRefUsersetBaseBlocks builds the base case blocks for self-referential userset CTE.
+// buildSelfRefUsersetBaseBlocks builds the blocks seeding the self-referential userset walk.
 func buildSelfRefUsersetBaseBlocks(plan ListPlan) ([]TypedQueryBlock, error) {
 	// A userset query subject (group:inner#member) is a member of objects naming
-	// it directly and of its own object; both must seed the recursion so the
+	// it directly and of its own object; both must seed the walk so the
 	// groups nesting those objects are expanded too.
-	usersetSubject := buildListObjectsUsersetSubjectBlock(plan)
-	usersetSubject.UsersetSubjectOnly = true
-	selfCandidate := *buildListObjectsSelfCandidateBlock(plan)
-	selfCandidate.UsersetSubjectOnly = true
-
 	blocks := make([]TypedQueryBlock, 0, 10)
-	blocks = append(blocks, buildSelfRefUsersetDirectBlock(plan), usersetSubject, selfCandidate)
+	blocks = append(blocks, buildSelfRefUsersetDirectBlock(plan), buildListObjectsUsersetSubjectBlock(plan), *buildListObjectsSelfCandidateBlock(plan))
 	blocks = append(blocks, buildSelfRefUsersetComplexClosureBlocks(plan)...)
 	blocks = append(blocks, buildSelfRefUsersetComposedClosureBlocks(plan)...)
 	blocks = append(blocks, buildSelfRefUsersetPatternBlocks(plan)...)
@@ -89,6 +85,7 @@ func buildSelfRefUsersetComplexClosureBlocks(plan ListPlan) []TypedQueryBlock {
 					Relation:    rel,
 					Object:      LiteralObject(plan.ObjectType, Col{Table: "t", Column: "object_id"}),
 					ExpectAllow: true,
+					Graph:       plan.graph(),
 				},
 			).
 			SelectCol("object_id").
@@ -119,12 +116,7 @@ func buildSelfRefUsersetComposedClosureBlocks(plan ListPlan) []TypedQueryBlock {
 			Comments: []string{fmt.Sprintf("-- Compose with closure relation: %s", rel)},
 			Query: SelectStmt{
 				ColumnExprs: []Expr{Col{Table: "icr", Column: "object_id"}},
-				FromExpr: FunctionCallExpr{
-					Schema: plan.DatabaseSchema,
-					Name:   listObjectsFunctionName(plan.ObjectType, rel),
-					Args:   []Expr{SubjectType, SubjectID, Null{}, Null{}},
-					Alias:  "icr",
-				},
+				FromExpr:    accessibleObjectsCall(plan.DatabaseSchema, plan.ObjectType, rel, "icr"),
 			},
 		})
 	}
@@ -163,6 +155,7 @@ func buildSelfRefUsersetComplexPatternBlock(plan ListPlan, pattern listUsersetPa
 			Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(pattern.SubjectRelation)},
 			CheckPermissionInternalExpr(
 				plan.DatabaseSchema,
+				plan.graph(),
 				SubjectParams(),
 				pattern.SubjectRelation,
 				ObjectRef{
@@ -196,10 +189,7 @@ func buildSelfRefUsersetSimplePatternBlock(plan ListPlan, pattern listUsersetPat
 
 	if plan.AllowWildcard {
 		membershipConditions = append(membershipConditions,
-			Or(
-				Eq{Left: Col{Table: "m", Column: "subject_id"}, Right: SubjectID},
-				IsWildcard{Source: Col{Table: "m", Column: "subject_id"}},
-			),
+			SubjectIDMatch(Col{Table: "m", Column: "subject_id"}, SubjectID, true),
 		)
 	} else {
 		membershipConditions = append(membershipConditions,
@@ -225,6 +215,7 @@ func buildSelfRefUsersetSimplePatternBlock(plan ListPlan, pattern listUsersetPat
 				Relation:    pattern.SourceRelation,
 				Object:      LiteralObject(plan.ObjectType, Col{Table: "t", Column: "object_id"}),
 				ExpectAllow: true,
+				Graph:       plan.graph(),
 			},
 		)
 	}
@@ -256,7 +247,6 @@ func buildSelfRefUsersetRecursiveBlock(plan ListPlan) *TypedQueryBlock {
 		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(plan.ObjectType)},
 		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
 		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(plan.Relation)},
-		Raw("me.depth < 25"),
 	)
 	conditions = append(conditions, exclusionPreds...)
 
@@ -266,9 +256,8 @@ func buildSelfRefUsersetRecursiveBlock(plan ListPlan) *TypedQueryBlock {
 			fmt.Sprintf("-- Patterns like [%s#%s] on %s.%s", plan.ObjectType, plan.Relation, plan.ObjectType, plan.Relation),
 		},
 		Query: SelectStmt{
-			Distinct:    true,
-			ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}, Raw("me.depth + 1 AS depth")},
-			FromExpr:    TableAs("", "member_expansion", "me"),
+			ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}},
+			FromExpr:    unnestObjectIDs(walkFrontier, "me"),
 			Joins: []JoinClause{{
 				Type:   "INNER",
 				Schema: "",

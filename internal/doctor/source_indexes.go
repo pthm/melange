@@ -99,7 +99,7 @@ func (d *Doctor) checkSourceTableIndexes(ctx context.Context, report *Report) er
 	}
 	missing := 0
 	for _, rec := range recs {
-		indexDefs, err := d.getTableIndexDefs(ctx, rec.Table)
+		indexDefs, err := d.getTableIndexDefs(ctx, rec.Schema, rec.Table)
 		if err != nil {
 			return fmt.Errorf("getting indexes for %s: %w", rec.Table, err)
 		}
@@ -270,4 +270,153 @@ func normalizedIndexKeys(indexdef string) []string {
 
 func normalizeIndexKey(k string) string {
 	return strings.ToLower(strings.NewReplacer("(", "", ")", "", `"`, "", " ", "").Replace(k))
+}
+
+// qualifiedRef reads the table qualifier of a column reference, as in
+// "t.subject_id" or "(oc.id)::text"; "" when there is none.
+var qualifiedRef = regexp.MustCompile(`^\(?"?(\w+)"?\.`)
+
+// subjectLookupKey is the index key one view branch's subject lookups need:
+// the column its subject id comes from, on the table that has it.
+type subjectLookupKey struct {
+	Table   TableRef
+	Key     sourceKey
+	Relabel bool // the cast to text is a relabel, so a plain index serves it
+	// ExprChecked: checkExpressionIndexes sees the cast and reports it when
+	// the column has no index at all.
+	ExprChecked bool
+	Branch      string
+}
+
+// checkSubjectLookupIndexes reports view branches whose subject column has no
+// index leading with it. list_accessible_objects and the accessible_*
+// functions look tuples up by a set of subject ids, as subject_id =
+// ANY(ARRAY(...)), which every branch filters on its own; with an index on
+// the subject column that is one probe per id, without one each row is
+// compared with the whole set, which is far slower than the scan an IN
+// semi-join would do. Joined branches count too: the filter reaches the table
+// the subject column comes from.
+//
+// A cast column with no usable index at all is left to checkExpressionIndexes,
+// which recommends the same index; this check adds the branches it cannot
+// see, whose subject column is not cast or is indexed only behind other keys.
+func (d *Doctor) checkSubjectLookupIndexes(ctx context.Context, report *Report) error {
+	if d.viewDef == nil {
+		return nil
+	}
+	keys, err := d.subjectLookupKeys(ctx)
+	if err != nil {
+		return err
+	}
+	missing := 0
+	for _, k := range keys {
+		indexDefs, err := d.getTableIndexDefs(ctx, k.Table.Schema, k.Table.Name)
+		if err != nil {
+			return fmt.Errorf("getting indexes for %s: %w", k.Table.Name, err)
+		}
+		if leadsWithSubject(k, indexDefs) {
+			continue
+		}
+		// A cast column checkExpressionIndexes already reports.
+		if k.ExprChecked && !castIndexed(k.Key.Column, k.Relabel, indexDefs) {
+			continue
+		}
+		missing++
+		rowCount, _ := d.getTableRowCount(ctx, k.Table.Schema, k.Table.Name) // non-fatal: 0 on error
+		severity, sizeNote := rowCountSeverity(rowCount)
+		suffix := ""
+		if k.Key.Expr {
+			suffix = "_text"
+		}
+		report.AddCheck(CheckResult{
+			Category: "Performance",
+			Name:     "subject_lookup_indexes",
+			Status:   severity,
+			Message:  fmt.Sprintf("Missing index on %s (%s) for subject lookups (%s)", k.Table, k.Key.ddl(), sizeNote),
+			Details: fmt.Sprintf("The %s branch of melange_tuples reads its subject id from %s.%s. list_accessible_objects and the "+
+				"accessible_* functions look tuples up by a set of subject ids; without an index leading with this column, "+
+				"each row of the branch is compared with the whole set.", k.Branch, k.Table, k.Key.Column),
+			FixHint: fmt.Sprintf("CREATE INDEX idx_%s_%s%s ON %s (%s);", k.Table.Name, k.Key.Column, suffix, k.Table, k.Key.ddl()),
+		})
+	}
+	if missing == 0 && len(keys) > 0 {
+		report.AddCheck(CheckResult{
+			Category: "Performance",
+			Name:     "subject_lookup_indexes",
+			Status:   StatusPass,
+			Message:  fmt.Sprintf("Subject columns are indexed for subject lookups (%d checked)", len(keys)),
+		})
+	}
+	return nil
+}
+
+// subjectLookupKeys finds, for each branch whose subject id is a column
+// (optionally cast to text), the table that column belongs to, deduplicated.
+// In a join the owner is the one source table with the column, or the one the
+// reference's qualifier (alias or table name) names when several have it; a
+// branch whose owner can't be told is skipped.
+func (d *Doctor) subjectLookupKeys(ctx context.Context) ([]subjectLookupKey, error) {
+	var out []subjectLookupKey
+	seen := map[string]bool{}
+	for _, b := range d.viewDef.Branches {
+		expr := b.ColumnMapping["subject_id"]
+		literal, name, cast, ok := classifyRef(expr)
+		if !ok || literal {
+			continue
+		}
+		var owners []subjectLookupKey
+		for _, t := range b.SourceTables {
+			colType, relabel, err := d.castToText(ctx, t.Schema, t.Name, name)
+			if err != nil {
+				return nil, fmt.Errorf("reading the type of %s.%s: %w", t.Name, name, err)
+			}
+			if colType == "" {
+				continue
+			}
+			owners = append(owners, subjectLookupKey{
+				Table:   t,
+				Key:     sourceKey{TupleColumn: "subject_id", Column: name, Expr: cast && !relabel},
+				Relabel: cast && relabel,
+				ExprChecked: slices.ContainsFunc(b.CastColumns, func(c CastColumn) bool {
+					return c.ViewColumn == "subject_id" && strings.EqualFold(c.SourceColumn, name)
+				}),
+				Branch: branchLabel(b),
+			})
+		}
+		if len(owners) > 1 {
+			m := qualifiedRef.FindStringSubmatch(strings.TrimSpace(expr))
+			owners = slices.DeleteFunc(owners, func(o subjectLookupKey) bool {
+				return len(m) < 2 || !o.Table.Names(m[1])
+			})
+		}
+		if len(owners) != 1 {
+			continue
+		}
+		k := owners[0]
+		if id := k.Table.String() + "(" + k.Key.ddl() + ")"; !seen[id] {
+			seen[id] = true
+			out = append(out, k)
+		}
+	}
+	return out, nil
+}
+
+// leadsWithSubject reports whether a full index's first key serves a lookup
+// by the subject column: the ::text expression for a converting cast, else
+// the plain column (or its relabelled ::text form).
+func leadsWithSubject(k subjectLookupKey, indexDefs []string) bool {
+	col := strings.ToLower(k.Key.Column)
+	for _, def := range indexDefs {
+		if _, pred := splitIndexKeysAndPredicate(def); pred != "" {
+			continue
+		}
+		ix := normalizedIndexKeys(def)
+		if len(ix) == 0 {
+			continue
+		}
+		if ix[0] == k.Key.normalized() || (!k.Key.Expr && ix[0] == col+"::text") {
+			return true
+		}
+	}
+	return false
 }

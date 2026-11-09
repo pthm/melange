@@ -12,14 +12,16 @@ Diagnose and fix common Melange issues.
 melange doctor --db "$DATABASE_URL"
 ```
 
-Doctor runs six categories of checks against your database:
+Doctor runs these categories of checks against your database:
 
 1. **Schema File**: exists, parses correctly, no cyclic dependencies.
-2. **Migration State**: `melange_migrations` table exists, schema is in sync, codegen version matches.
-3. **Generated Functions**: dispatcher and per-relation functions are present, no orphans from previous schemas.
-4. **Tuples Source**: `melange_tuples` view exists with the correct columns.
-5. **Data Health**: tuple count, types and relations validate against the schema.
-6. **Performance**: UNION ALL usage, missing expression indexes on `::text` cast columns.
+2. **Migration State**: `melange_migrations` table exists, schema is in sync, codegen version matches, local exposure matches the recorded one (`exposure_sync`).
+3. **Deployed Model**: the last migration recorded the model, it can be read, and the deployed melange version has no security advisories.
+4. **Generated Functions**: dispatcher and per-relation functions are present, no orphans from previous schemas.
+5. **Generated Client** (when `generate.client.runtime` is set): the client files match what `melange.yaml` generates, and every accessible function and relation the client names is installed. A name the database does not answer for is a warning; `--strict-client` makes it a failure, and `--skip-client` skips these checks.
+6. **Tuples Source**: `melange_tuples` view exists with the correct columns.
+7. **Data Health**: tuple count, types and relations validate against the schema.
+8. **Performance**: UNION ALL usage, missing expression indexes on `::text` cast columns.
 
 Use `--verbose` for detailed output (exact checksums, function lists, specific invalid tuples):
 
@@ -127,19 +129,152 @@ Common causes:
 
 ### Migration "schema unchanged" when it shouldn't be
 
-Melange tracks schema changes via SHA256 checksum. If you've updated Melange itself but not the schema, the new codegen may produce different SQL.
+The skip check compares the schema checksum, the codegen version and the SQL
+API exposure, and then the checksums of the generated functions. An upgraded
+Melange that generates different SQL is therefore applied by a plain `melange
+migrate`. The check does not inspect the database, so a function changed or
+dropped by hand since the last migration is not detected.
 
-**Fix**: force re-migration:
+**Fix**: run `melange doctor` to see what differs. Its fix hint suggests
+`--force` when a plain `melange migrate` would skip or only record, including
+for a stored model that cannot be decoded, which the skip check does not read.
+On a database a newer Melange migrated it names that version instead. If the
+functions were changed outside Melange, re-apply them:
 
 ```bash
 melange migrate --force
 ```
 
+`--force` also drops functions the new SQL no longer generates with `CASCADE`,
+together with any views or policies that call them. Run `melange migrate
+--dry-run` first and check its drops; see
+[Dependent objects](../migrations/#dependent-objects).
+
+### "relation ... is not exposed" (SQLSTATE M2003)
+
+The database was migrated with a restricted SQL API exposure (the `sql:`
+section of `melange.yaml`), and the relation, or its function family, is not
+part of it. The Go and TypeScript runtimes report it as a `ValidationError`
+with code 2000; `melange explain`, `melange expand` and studio name the
+relation and the setting to change.
+
+**Fix**: add the relation to `sql.relations.include` (or remove it from
+`exclude`, or turn its family back on) and run `melange migrate`. `melange
+status` shows the recorded exposure. See [SQL API: Exposure](../../reference/sql-api/#exposure).
+
+When the relation comes from a generated client constant, the client and the
+database disagree on the exposure: `melange generate client --check --db`
+reports every such relation (`relation_not_exposed`) and accessible function
+name, with the fix. A migration run with `--include-relation` or
+`--no-<family>` that `melange.yaml` does not have is the usual cause. See
+[Checking a generated client](../../reference/cli/#checking-a-generated-client).
+
+### "explain on demand failed" or "cannot compile them on demand"
+
+The database was migrated with `sql.functions.explain` (or `expand`) off, so
+`melange explain`, `melange expand` and studio create those functions in
+`pg_temp` for each call, and could not:
+
+- **on demand failed**: the connection cannot create them. It is a hot-standby
+  replica or forces read-only transactions, or the role lacks the `TEMP`
+  privilege. Connect to the primary, or `GRANT TEMPORARY ON DATABASE`.
+- **no model recorded**: the last migration did not record a model melange
+  can read to compile them from. Run `melange migrate`, which records it.
+  When the record has a model melange cannot read, a plain migrate skips
+  while the schema, exposure and codegen version are unchanged, so run
+  `melange migrate --force`.
+- **a name the schema language does not allow**: the recorded model has a
+  type or relation name the DSL would reject, so `melange_migrations` was
+  edited after the migration. Melange never compiles SQL from such a model.
+  Run `melange migrate --force`, which records the model again (a plain
+  migrate skips while the schema, exposure and codegen version are
+  unchanged).
+- **generated by melange X and this is melange Y**: the installed functions
+  come from another codegen version, which the compiled ones might not match.
+  Run `melange migrate` with this melange, or use melange X.
+
+Turning the family back on and running `melange migrate` installs the
+functions instead. See
+[Explain and Expand on Demand](../../reference/sql-api/#explain-and-expand-on-demand).
+
+### Migration refused: functions that other database objects depend on
+
+A view, policy or function calls a generated function the migration would
+drop. The error lists each dependent.
+
+**Fix**: change or drop the dependents and migrate again, or run `melange
+migrate --force` to drop them with `CASCADE`. See
+[Dependent objects](../migrations/#dependent-objects).
+
+### "function accessible_... does not exist" for a long relation name
+
+Function names longer than PostgreSQL's 63 bytes are truncated and end in a
+hash of the type and relation, so a name built by hand from a long relation
+(`accessible_pull_request_can_read_security_advisories_and_vulnerability_reports`)
+does not exist. The installed one is
+`accessible_pull_re_can_read_security_advisories_and_vu_d0edb52c`.
+
+**Fix**: look the name up instead of building it.
+`melange functions show pull_request#can_read_security_advisories_and_vulnerability_reports`
+prints every function of the relation under its exact name, with an example
+call; `melange functions --kind accessible` lists every accessible function,
+and studio's [SQL API page](../studio/#sql-api) has the same with a Copy
+button. In application code, use the names the
+[generated client](../../reference/generated-code/#accessible-function-names)
+carries.
+
+### "function accessible_... does not exist" with a name from the generated client
+
+The client names an accessible function the database did not install: it was
+generated under a wider `sql:` section than the database was migrated with,
+or from an older schema.
+
+**Fix**: run `melange generate client --check --db` (or `--env`). It compares
+the files with what `melange.yaml` generates, then every accessible function
+name with what the last migration installed, and says for each whether
+`melange migrate` installs it or the client should be regenerated. `melange
+doctor` reports the same under Generated Client.
+
+### melange functions reports missing functions or drift
+
+`melange functions --db` compares the database with the model and exposure
+its last migration recorded:
+
+- **missing** or **body_changed**: a function was dropped, or replaced by
+  hand with another body. `melange migrate` skips while the schema, exposure
+  and codegen version are unchanged, so run `melange migrate --force` to
+  reinstall it (`--force` also drops orphans with `CASCADE`; check
+  `--dry-run` first).
+- **signature_differs**: a function of that name is installed with other
+  arguments. `CREATE OR REPLACE` cannot rename an argument, and for other
+  argument types it adds an overload, so drop the installed one first
+  (`DROP FUNCTION name(<arguments>)`, the arguments as listed), then run
+  `melange migrate --force`.
+- Under codegen version skew the detail says otherwise: when an older
+  melange migrated, run a plain `melange migrate` with this melange first,
+  which applies its functions and refuses to drop dependents of the old
+  ones; when a newer melange migrated, use that version, since `--force`
+  would override migrate's refusal to downgrade.
+- **codegen_differs**: this melange generates a different body than the
+  version that migrated. The next `melange migrate` with this melange
+  replaces it. A note says when the versions differ.
+- **stale overloads**: an older signature of the function is still installed.
+  Drop it (`DROP FUNCTION name(<arguments>)`, the arguments as listed).
+- **orphans**: functions the last migration recorded that the model no longer
+  generates. `melange migrate` drops them.
+
+Unmanaged functions (named like generated ones, recorded by no migration,
+such as your own `check_invoice`) are listed for information and never
+dropped. `melange doctor` compares the local schema file instead, so it can
+disagree with `functions` while a migration is pending.
+
 ### Schema out of sync after updating Melange
 
 `melange doctor` detects when the codegen version has changed since the last migration.
 
-**Fix**: run `melange migrate --force` to regenerate all SQL functions with the current Melange version.
+**Fix**: run `melange migrate`. The codegen version is part of the skip check, so the migration regenerates the SQL functions with the current Melange version without `--force`. When the new release generates the same SQL, the migration only records the new version: functions dropped by hand stay missing, and doctor's fix hint says to use `--force`.
+
+When the database was migrated by a newer Melange, doctor says so: this Melange's `migrate` refuses to downgrade it, so use that version or later.
 
 ## Debugging Techniques
 
@@ -158,6 +293,16 @@ melange studio --db postgres://localhost/mydb
 ```
 
 Opens a local, read-only web console with Explain, Expand, a check matrix of every relation on an object for one subject, `EXPLAIN ANALYZE` timings, the tuples behind each entity, and the doctor checks. See [Studio](../studio/).
+
+### List the generated functions
+
+```bash
+melange functions                          # from the schema file and melange.yaml
+melange functions --db postgres://localhost/mydb   # what the database has installed
+melange functions show document#viewer     # signatures and example calls
+```
+
+See [`melange functions`](../../reference/cli/#functions).
 
 ### Preview Generated SQL
 

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pthm/melange/internal/sqlapi"
 	"github.com/pthm/melange/melange"
 	"github.com/pthm/melange/pkg/migrator"
 )
@@ -13,12 +14,13 @@ import (
 // page is what the shell needs to know about the current view.
 type page struct {
 	Env    string
-	Active string // top-nav section: model | tuples | history | health
+	Active string // top-nav section: model | sql | tuples | history | health
 	Title  string // document title; empty uses the section's name
 }
 
 var navItems = []struct{ ID, Label, Href string }{
 	{"model", "Model", "/"},
+	{"sql", "SQL API", "/sql"},
 	{"tuples", "Tuples", "/tuples"},
 	{"history", "History", "/history"},
 	{"health", "Health", "/health"},
@@ -33,7 +35,7 @@ templ shell(p page, sidebar templ.Component) {
 		<head>
 			<meta charset="utf-8"/>
 			<meta name="viewport" content="width=device-width, initial-scale=1"/>
-			<meta name="description" content="melange studio: a local, read-only console for a melange authorization database."/>
+			<meta name="description" content="melange studio: a local console for a melange authorization database."/>
 			<meta name="color-scheme" content="light dark"/>
 			// No eval (CSP has no unsafe-eval) and no injected <style> (no
 			// unsafe-inline); studio.css styles the request indicator itself.
@@ -67,7 +69,6 @@ templ shell(p page, sidebar templ.Component) {
 						if p.Env != "" {
 							<span class="badge accent" title="Active environment">{ p.Env }</span>
 						}
-						<span class="badge" title="Every connection is read-only. What-if Explain uses a temporary view in a transaction that is always rolled back.">read-only</span>
 						@topLinks()
 						<button type="button" class="theme-toggle" data-theme-toggle aria-label="Toggle dark mode" title="Toggle dark mode"></button>
 					</div>
@@ -197,18 +198,24 @@ templ modelSidebar(d indexData) {
 templ indexPage(d indexData) {
 	@shell(page{Env: d.Env, Active: "model"}, modelSidebar(d)) {
 		@pageHead("Model", nil) {
-			if d.Model == nil {
-				<p class="page-meta">{ d.ModelErr }</p>
-			} else {
-				<p class="page-meta">
-					Migrated { d.Model.MigratedAt.UTC().Format("2 Jan 2006, 15:04 MST") } by melange <code>{ d.Model.MelangeVersion }</code>
-					· checksum <code>{ short(d.Model.SchemaChecksum) }</code>
-				</p>
+			<p class="page-meta">The authorization model deployed in this database: query it, or read its schema.</p>
+			if d.Model != nil {
+				<div class="stats">
+					@stat(len(d.Model.Types), "types", "")
+					@stat(relationCount(d.Model.Types), "relations", "")
+				</div>
 			}
 			<nav class="tabs" aria-label="Model views">
 				<a href="/" { current(d.Tab == modelTabQuery)... }>Query</a>
 				<a href={ templ.URL("/?tab=" + modelTabSchema) } { current(d.Tab == modelTabSchema)... }>Deployed schema</a>
 			</nav>
+		}
+		if d.Model == nil && d.ModelErr == noModelRecorded {
+			<div class="content-note">
+				@noticeBox("No deployed model", d.ModelErr)
+			</div>
+		} else if d.Model == nil && d.ModelErr != "" {
+			@errorBox(d.ModelErr)
 		}
 		if d.Tab == modelTabSchema {
 			@schemaTab(d)
@@ -227,7 +234,15 @@ templ schemaTab(d indexData) {
 			@secHead("Deployed schema", "") {
 				<p class="help">The DSL recorded by the last migration ({ d.Model.Format } file). This is what the database runs.</p>
 			}
-			<div class="sec-body">
+			<div class="sec-body stack">
+				<dl class="kv">
+					<dt>migrated</dt>
+					<dd>{ d.Model.MigratedAt.UTC().Format("2 Jan 2006, 15:04 MST") }</dd>
+					<dt>melange</dt>
+					<dd><code>{ d.Model.MelangeVersion }</code></dd>
+					<dt>checksum</dt>
+					<dd><code>{ short(d.Model.SchemaChecksum) }</code></dd>
+				</dl>
 				@fgaSource(d.Model.DSL)
 			</div>
 		</section>
@@ -313,7 +328,14 @@ templ queryTab(d indexData) {
 }
 
 templ errorBox(msg string) {
-	<p class="error">{ msg }</p>
+	<div class="callout error" role="alert">{ msg }</div>
+}
+
+// noticeBox is a call the SQL API does not answer, by design: the relation
+// is not exposed or its family is not installed. It is information, not a
+// failure, so it is not styled as an error.
+templ noticeBox(title, msg string) {
+	<div class="callout" role="status"><span class="callout-title">{ title }</span>{ msg }</div>
 }
 
 templ note(msg string) {
@@ -326,10 +348,53 @@ templ explainChip(sub, rel, obj string) {
 	<button class="chip" data-explain aria-expanded="false" title={ "Explain " + sub + " " + rel + " " + obj } hx-post="/explain" hx-vals={ explainVals(sub, rel, obj) } hx-target="next .why-out">{ rel }</button>
 }
 
+// relationChip is explainChip, or, when the relation cannot be explained
+// (no is why), the relation's name with the reason on hover.
+templ relationChip(sub, rel, obj string, no *sqlapi.Unavailable) {
+	if no == nil {
+		@explainChip(sub, rel, obj)
+	} else {
+		<span class="chip off" title={ no.Error() }>{ rel }</span>
+	}
+}
+
+// unavailable labels a relation a view did not query, with why on hover.
+templ unavailable(u *sqlapi.Unavailable) {
+	<span class="badge" title={ u.Error() }>{ u.Label() }</span>
+}
+
+// skippedRelations is a footnote under a list: the relations it leaves
+// out, one line per reason. It sits after the list so the list leads.
+templ skippedRelations(us []*sqlapi.Unavailable) {
+	<div class="list-foot">
+		for _, g := range groupUnavailable(us, unavailableRelation, "them") {
+			<div class="mute">
+				Not listed ({ g.Label }):
+				<ul class="inline-list">
+					for _, item := range g.Items {
+						<li><code>{ item }</code></li>
+					}
+				</ul>
+				for _, r := range g.Reasons {
+					<p>{ r }</p>
+				}
+			</div>
+		}
+	</div>
+}
+
+// unavailableReasons says why a group of items is unavailable and how to
+// change it, one line per distinct reason.
+templ unavailableReasons(reasons []string) {
+	for _, r := range reasons {
+		<p class="mute api-why">{ r }</p>
+	}
+}
+
 // matrixView lists one subject's answer for every relation on an object, in
 // model order; each relation explains itself inline.
 templ matrixView(sub, obj string, cells []matrixCell, notes []string, took time.Duration) {
-	{{ allowedN, errN := matrixCounts(cells) }}
+	{{ allowedN, errN, skipN := matrixCounts(cells) }}
 	<p class="verdict">
 		<span class="badge accent">matrix</span>
 		What <code>{ sub }</code> can do on <code>{ obj }</code>
@@ -337,6 +402,9 @@ templ matrixView(sub, obj string, cells []matrixCell, notes []string, took time.
 			· { num(allowedN) } of { plural(len(cells), "relation") } allowed
 			if errN > 0 {
 				· { plural(errN, "error") }
+			}
+			if skipN > 0 {
+				· { num(skipN) } not exposed
 			}
 			· { ms(took) } in parallel
 			· click a relation to explain
@@ -349,10 +417,12 @@ templ matrixView(sub, obj string, cells []matrixCell, notes []string, took time.
 		for _, c := range cells {
 			<li>
 				<div class="who">
-					@explainChip(sub, c.Relation, obj)
+					@relationChip(sub, c.Relation, obj, c.NoExplain)
 				</div>
 				<div>
-					if c.Err != "" {
+					if c.Skip != nil {
+						@unavailable(c.Skip)
+					} else if c.Err != "" {
 						<span class="badge warn">error</span> <span class="mute">{ c.Err }</span>
 					} else if c.Allowed {
 						<span class="badge ok">allowed</span>
@@ -467,13 +537,13 @@ templ traceNode(n *melange.Node, added []melange.ContextualTuple) {
 
 // expandView renders an Expand tree. top marks a form query (not a pointer
 // drill-in), which gets a heading naming the userset.
-templ expandView(t *melange.UsersetTree, top bool, took time.Duration) {
+templ expandView(t *melange.UsersetTree, top bool, took time.Duration, check func(string) *sqlapi.Unavailable) {
 	if t.Root != nil {
 		if top {
 			<p class="verdict"><span class="badge accent">expand</span> Who has <code>{ t.Root.Name }</code> <span class="mute">· { ms(took) }</span></p>
 		}
 		<ul class="tree">
-			@expandNode(t.Root, t.Root.Name)
+			@expandNode(t.Root, t.Root.Name, check)
 		</ul>
 	}
 }
@@ -481,33 +551,33 @@ templ expandView(t *melange.UsersetTree, top bool, took time.Duration) {
 // expandNode prints a node's userset name only where it adds something (see
 // showNodeName). The root's name is the query, already in the heading or the
 // pointer that was drilled.
-templ expandNode(n *melange.UsersetTreeNode, parent string) {
+templ expandNode(n *melange.UsersetTreeNode, parent string, check func(string) *sqlapi.Unavailable) {
 	<li>
 		if showNodeName(n, parent) {
 			<code class="strong">{ n.Name }</code>
 		}
 		switch  {
 			case n.Leaf != nil:
-				@expandLeaf(n.Leaf)
+				@expandLeaf(n.Leaf, check)
 			case n.Union != nil:
 				<span class="kind">any of</span>
-				@expandNodes(n.Union.Nodes, n.Name)
+				@expandNodes(n.Union.Nodes, n.Name, check)
 			case n.Intersection != nil:
 				<span class="kind">all of</span>
-				@expandNodes(n.Intersection.Nodes, n.Name)
+				@expandNodes(n.Intersection.Nodes, n.Name, check)
 			case n.Difference != nil:
 				<span class="kind">but not</span>
 				<ul>
 					<li>
 						<span class="mute">base</span>
 						<ul>
-							@expandNode(n.Difference.Base, n.Name)
+							@expandNode(n.Difference.Base, n.Name, check)
 						</ul>
 					</li>
 					<li>
 						<span class="mute">minus</span>
 						<ul>
-							@expandNode(n.Difference.Subtract, n.Name)
+							@expandNode(n.Difference.Subtract, n.Name, check)
 						</ul>
 					</li>
 				</ul>
@@ -515,15 +585,15 @@ templ expandNode(n *melange.UsersetTreeNode, parent string) {
 	</li>
 }
 
-templ expandNodes(nodes []*melange.UsersetTreeNode, parent string) {
+templ expandNodes(nodes []*melange.UsersetTreeNode, parent string, check func(string) *sqlapi.Unavailable) {
 	<ul>
 		for _, c := range nodes {
-			@expandNode(c, parent)
+			@expandNode(c, parent, check)
 		}
 	</ul>
 }
 
-templ expandLeaf(l *melange.Leaf) {
+templ expandLeaf(l *melange.Leaf, check func(string) *sqlapi.Unavailable) {
 	if l.Users != nil {
 		<span class="kind">direct</span>
 		<span class="inline-gap">
@@ -540,7 +610,7 @@ templ expandLeaf(l *melange.Leaf) {
 	}
 	if l.Computed != nil {
 		<span class="kind">same as</span>
-		@pointer(l.Computed.Userset)
+		@pointer(l.Computed.Userset, check)
 	}
 	if l.TupleToUserset != nil {
 		<span class="kind">from</span>
@@ -548,7 +618,7 @@ templ expandLeaf(l *melange.Leaf) {
 		<ul>
 			for _, c := range l.TupleToUserset.Computed {
 				<li>
-					@pointer(c.Userset)
+					@pointer(c.Userset, check)
 				</li>
 			}
 		</ul>
@@ -572,15 +642,21 @@ templ modelDatalists(m *migrator.DeployedModel) {
 
 // pointer renders an unresolved userset with an inline drill-in: htmx fetches
 // the next Expand level into the sibling div, so a tree is chased one click at
-// a time instead of all at once.
-templ pointer(userset string) {
+// a time instead of all at once. check says why a pointer has no drill-in.
+templ pointer(userset string, check func(string) *sqlapi.Unavailable) {
 	<code>{ userset }</code>
-	<button class="chip" hx-get={ "/expand?" + url.Values{"userset": {userset}}.Encode() } hx-target="next .sub">expand</button>
-	<div class="sub"></div>
+	if u := check(userset); u != nil {
+		@unavailable(u)
+	} else {
+		<button class="chip" hx-get={ "/expand?" + url.Values{"userset": {userset}}.Encode() } hx-target="next .sub">expand</button>
+		<div class="sub"></div>
+	}
 }
 
+// stat is a count in a page header. Its tone shows only when the count is
+// not zero, so "0 errors" does not read as an error.
 templ stat(n int, label, tone string) {
-	<div class={ "stat", tone }><span class="t-heading">{ num(n) }</span>{ label }</div>
+	<div class={ "stat", templ.KV(tone, n > 0 && tone != "") }><span class="t-heading">{ num(n) }</span>{ label }</div>
 }
 
 // fgaSource renders OpenFGA DSL with syntax colouring (see highlightFGA).
@@ -595,14 +671,25 @@ templ sqlSource(src string) {
 
 templ codeBlock(tokens []codeToken) {
 	<pre class="code">
-		for _, t := range tokens {
-			if t.Class == "" {
-				{ t.Text }
-			} else if t.Text != "" {
-				<span class={ "f-" + t.Class }>{ t.Text }</span>
-			}
-		}
+		@codeTokens(tokens)
 	</pre>
+}
+
+// sqlInline renders a line of SQL with syntax colouring, inline.
+templ sqlInline(src string) {
+	<code class="code">
+		@codeTokens(highlightSQL(src))
+	</code>
+}
+
+templ codeTokens(tokens []codeToken) {
+	for _, t := range tokens {
+		if t.Class == "" {
+			{ t.Text }
+		} else if t.Text != "" {
+			<span class={ "f-" + t.Class }>{ t.Text }</span>
+		}
+	}
 }
 
 // analyzeView shows one check under EXPLAIN ANALYZE: the times, the

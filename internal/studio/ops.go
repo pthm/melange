@@ -82,7 +82,7 @@ func (s *Server) history(w http.ResponseWriter, r *http.Request) {
 // health runs the same checks as `melange doctor`. Doctor only reads, and the
 // connection is read-only regardless.
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
-	d := doctor.New(s.db, s.schemaPath)
+	d := doctor.New(s.db, s.schemaPath, doctor.Options{Exposure: s.exposure})
 	d.SetDatabaseSchema(s.dbSchema)
 	report, err := d.Run(r.Context())
 	render(w, r, healthPage(s.env, s.schemaPath, report, errString(err)))

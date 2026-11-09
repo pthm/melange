@@ -17,6 +17,8 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 	"sigs.k8s.io/yaml"
 
+	"github.com/pthm/melange/pkg/compiler"
+	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/test/testutil"
 )
 
@@ -172,6 +174,34 @@ func ListTestNames() ([]string, error) {
 		names[i] = tc.Name
 	}
 	return names, nil
+}
+
+// StageExposure is the exposure that includes exactly the relations the
+// stage's check, list objects and list users assertions name, as
+// "type#relation" patterns.
+func StageExposure(stage *Stage) *migrator.Exposure {
+	seen := map[string]bool{}
+	var include []string
+	add := func(objectType, relation string) {
+		p := objectType + "#" + relation
+		if seen[p] || compiler.ValidateRelationPattern(p) != nil {
+			return // error-coded assertions may name malformed objects
+		}
+		seen[p] = true
+		include = append(include, p)
+	}
+	for _, a := range stage.CheckAssertions {
+		objectType, _, _ := strings.Cut(a.Tuple.GetObject(), ":")
+		add(objectType, a.Tuple.GetRelation())
+	}
+	for _, a := range stage.ListObjectsAssertions {
+		add(a.Request.Type, a.Request.Relation)
+	}
+	for _, a := range stage.ListUsersAssertions {
+		objectType, _, _ := strings.Cut(a.Request.Object, ":")
+		add(objectType, a.Request.Relation)
+	}
+	return &migrator.Exposure{Relations: compiler.RelationPatterns{Include: include}}
 }
 
 // RunAll runs all available tests.
@@ -523,6 +553,10 @@ func RunTest(t *testing.T, parent *Client, tc TestCase) {
 			}
 
 			t.Run(stageName, func(t *testing.T) {
+				if client.restrictExposure {
+					client.exposure = StageExposure(stage)
+				}
+
 				// Write model
 				model := testutils.MustTransformDSLToProtoWithID(stage.Model)
 				writeModelResp, err := client.WriteAuthorizationModel(ctx, &openfgav1.WriteAuthorizationModelRequest{
@@ -721,6 +755,16 @@ func RunTest(t *testing.T, parent *Client, tc TestCase) {
 				// the derived-assertion sweep (check -> list), over a tuple-derived
 				// candidate universe. See list_check_parity.go.
 				runListCheckParityAssertions(t, ctx, client, storeID, modelID, stage)
+
+				// Cross-reference the accessible functions applications join
+				// against, and their parent-key forms, against the list and
+				// check assertions. See accessible_parity.go.
+				runAccessibleParityAssertions(t, ctx, client, storeID, modelID, stage)
+
+				// Page every list assertion with small page sizes: the paged
+				// statement differs from the unlimited one the other sweeps run.
+				// See list_paging_parity.go.
+				runListPagingParityAssertions(t, ctx, client, storeID, stage)
 			})
 		}
 	})

@@ -15,7 +15,7 @@ import (
 // patterns so these run against ad-hoc schemas via installAdHocSchema
 // (declared in test/explain_intersection_test.go). The renderer's
 // per-rewrite plan derivation is pinned in
-// lib/sqlgen/expand_render_test.go; here we exercise the end-to-end
+// internal/sqlgen/expand_render_test.go; here we exercise the end-to-end
 // JSONB → UsersetTree decoding against a live PG instance with real
 // tuples.
 

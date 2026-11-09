@@ -5,14 +5,15 @@ import "slices"
 
 // GenerationCapabilities represents the unified generation eligibility for a relation.
 // CheckAllowed gates specialized check SQL; ListAllowed gates specialized list SQL.
-// When false, the respective dispatcher falls back to the generic implementation.
+// When false, no function is generated and the dispatchers have no case for the
+// relation: there is no generic fallback, so check denies and the lists are empty.
 type GenerationCapabilities struct {
 	// CheckAllowed is true if specialized check SQL can be generated.
-	// When false, the check dispatcher falls back to check_permission_generic_internal.
+	// When false, check_permission denies the relation.
 	CheckAllowed bool
 
 	// ListAllowed is true if specialized list SQL can be generated.
-	// When false, the list dispatcher falls back to list_accessible_*_generic functions.
+	// When false, the list dispatchers return no rows for the relation.
 	ListAllowed bool
 
 	// CheckReason explains why CheckAllowed is false (empty if allowed).
@@ -38,7 +39,7 @@ const (
 	// Used for relations like "viewer: [group#member]".
 	ListStrategyUserset
 
-	// ListStrategyRecursive handles TTU patterns with recursive CTEs or cross-type calls.
+	// ListStrategyRecursive handles TTU patterns with a breadth-first walk or cross-type calls.
 	// Used for relations like "viewer: viewer from parent".
 	ListStrategyRecursive
 
@@ -52,7 +53,7 @@ const (
 
 	// ListStrategySelfRefUserset handles self-referential userset patterns.
 	// Used for relations like "member: [group#member]" where the userset
-	// references the same type and relation, requiring recursive CTEs.
+	// references the same type and relation, walked breadth first.
 	ListStrategySelfRefUserset
 
 	// ListStrategyComposed handles indirect anchor patterns via function composition.
@@ -131,8 +132,10 @@ func DetermineListStrategy(a RelationAnalysis) ListStrategy {
 	// Composed also models only the anchor path: not intersection groups
 	// ("v from parent or (a but not c)" would lose its group), and not a
 	// second parent lookup ("v from parent or b from parent" would lose b).
+	// Nor a parent relation cycle across types (folder.a -> project.b ->
+	// folder.a): the anchor path leaves out the cyclic branch.
 	if a.IndirectAnchor != nil && !hasSelfReferentialParent(a) && !a.Features.HasIntersection &&
-		len(a.ParentRelations) <= 1 {
+		len(a.ParentRelations) <= 1 && !a.ReachesItselfThroughParents {
 		return ListStrategyComposed
 	}
 	if a.Features.HasIntersection {

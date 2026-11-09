@@ -1,5 +1,7 @@
 package sqlgen
 
+import "slices"
+
 // TypedQueryBlock represents a query with optional comments.
 // Uses SelectStmt for type-safe DSL construction.
 type TypedQueryBlock struct {
@@ -19,32 +21,49 @@ type TypedQueryBlock struct {
 	// for plain subjects, so that hot path is not slowed by blocks that
 	// cannot match.
 	UsersetSubjectOnly bool
+
+	// Indirect marks a block whose objects the subject reaches through one
+	// resolution step (a userset expansion or a cross-type parent lookup), so
+	// a breadth-first walk seeds them one level later, as OpenFGA counts the
+	// step toward its depth limit.
+	Indirect bool
+
+	// ByParent, when set, reads the block's objects one parent at a time, so
+	// a list page takes each parent's first objects after the cursor instead
+	// of every object under every parent (pagedAccessibleArms).
+	ByParent *ParentLookup
 }
 
-// withoutUsersetSubjectBlocks drops UsersetSubjectOnly blocks, reporting
-// whether any were present.
+// ParentLookup is a block's query split for reading parent by parent: Parents
+// is a FROM item returning the parents' IDs as object_id, and Lookup the
+// block's query for the objects under the parent par.object_id, selecting
+// Object. Lookup stays DISTINCT: a page limits each parent's objects, so a
+// repeated linking tuple (overlapping view branches, a contextual tuple
+// repeating a stored one) must not use up a place in it.
+type ParentLookup struct {
+	Parents string
+	Lookup  SelectStmt
+	Object  Col
+}
+
+// withoutUsersetSubjectBlocks drops the blocks that only match userset
+// subjects, UsersetSubjectOnly or guarded on one, reporting whether any were
+// present.
 func withoutUsersetSubjectBlocks(blocks []TypedQueryBlock) ([]TypedQueryBlock, bool) {
 	plain := make([]TypedQueryBlock, 0, len(blocks))
 	for _, b := range blocks {
-		if !b.UsersetSubjectOnly {
+		if !b.UsersetSubjectOnly && !requiresUsersetSubject(b.Query.Where) {
 			plain = append(plain, b)
 		}
 	}
 	return plain, len(plain) != len(blocks)
 }
 
-// listObjectsBodyBySubjectKind returns the function body: the plain-subject
-// query, or, when usersetQuery is non-empty, a branch that runs it only for
-// userset query subjects.
-func listObjectsBodyBySubjectKind(plainQuery, usersetQuery string) []Stmt {
-	if usersetQuery == "" {
-		return []Stmt{ReturnQuery{Query: plainQuery}}
-	}
-	return []Stmt{If{
-		Cond: HasUserset{Source: SubjectID},
-		Then: []Stmt{ReturnQuery{Query: usersetQuery}},
-		Else: []Stmt{ReturnQuery{Query: plainQuery}},
-	}}
+// requiresUsersetSubject reports whether where is a conjunction that already
+// requires a userset query subject, as the self-candidate blocks' do.
+func requiresUsersetSubject(where Expr) bool {
+	and, ok := where.(AndExpr)
+	return ok && slices.Contains(and.Exprs, Expr(HasUserset{Source: SubjectID}))
 }
 
 // BlockSet contains query blocks for a list function.

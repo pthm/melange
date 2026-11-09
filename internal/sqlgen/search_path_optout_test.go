@@ -108,7 +108,14 @@ func TestListSubjects_CallsInternalDirectly(t *testing.T) {
 
 	// No-wildcard per-row check: check_permission_nw_internal (nw routing
 	// preserved), not the regular internal and not the bare nw wrapper.
-	nw := sqldsl.NoWildcardPermissionCheckCall("authz", "viewer", "document", Col{Table: "br", Column: "subject_id"}, ObjectID).SQL()
+	nw := CheckPermission{
+		Schema:      "authz",
+		Subject:     SubjectRef{Type: SubjectType, ID: Col{Table: "br", Column: "subject_id"}},
+		Relation:    "viewer",
+		Object:      LiteralObject("document", ObjectID),
+		ExpectAllow: true,
+		NoWildcard:  true,
+	}.SQL()
 	if !strings.Contains(nw, "check_permission_nw_internal") {
 		t.Errorf("no-wildcard list_subjects check must call check_permission_nw_internal:\n%s", nw)
 	}
@@ -124,7 +131,7 @@ func TestDispatchers_DepthGuardPreserved(t *testing.T) {
 		mkAnalysis("document", "viewer", RelationFeatures{HasDirect: true}, true),
 	}
 	analyses[0].DirectSubjectTypes = []string{"user"}
-	checkSQL, err := generateDispatcher(analyses, "authz", false, nil)
+	checkSQL, err := generateDispatcher(analyses, "authz", false, nil, nil)
 	if err != nil {
 		t.Fatalf("generateDispatcher: %v", err)
 	}

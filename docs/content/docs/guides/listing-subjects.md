@@ -68,7 +68,7 @@ FROM list_accessible_subjects('document', '456', 'viewer', 'user', 100, NULL);
 
 ## Return Value
 
-Returns a table with `subject_id` and `next_cursor` columns. The `next_cursor` value is repeated on every row for convenience - use the last row's cursor to fetch the next page. Returns an empty result set if no subjects found (not an error).
+Returns a table with `subject_id` and `next_cursor` columns. The `next_cursor` value is repeated on every row for convenience - use the last row's cursor to fetch the next page. Returns an empty result set if no subjects found (not an error). When resolving the list takes more parent or userset steps than OpenFGA allows (24; the 25th raises), the function raises `M2002` (resolution too complex) instead of returning a partial list. The Go runtime returns it as a `ValidationError` with code 2002; the TypeScript client throws the driver's error with `code` `M2002`. Cycles in the data do not raise: each object is expanded once. See [Error Code: M2002](../../reference/sql-api/#error-code-m2002).
 
 {{< callout type="info" >}}
 **Ordering**: Results are ordered with wildcard subjects (`'*'`) first, then alphabetically by `subject_id`. This ensures stable pagination while keeping wildcard entries grouped at the top.

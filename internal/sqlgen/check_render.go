@@ -15,7 +15,7 @@ func RenderCheckFunction(plan CheckPlan, blocks CheckBlocks) (string, error) {
 
 func renderCheckDirectFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) (string, error) {
 	decls := []Decl{{Name: "v_userset_check", Type: "INTEGER := 0"}}
-	accessExpr := buildAccessCheckExpr(blocks, Visited, plan.DatabaseSchema)
+	accessExpr := buildAccessCheckExpr(blocks, plan.DatabaseSchema)
 
 	if plan.HasExclusion {
 		// Finding 9: converge the Case-2 userset match onto the shared exclusion
@@ -23,7 +23,7 @@ func renderCheckDirectFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) (st
 		// inside the userset branch. A match sets v_has_access and falls through to
 		// the single guard below (access includes the userset path via OR).
 		decls = append(decls, Decl{Name: "v_has_access", Type: "BOOLEAN := FALSE"})
-		body := buildUsersetSubjectStmts(plan, blocks, true)
+		body := append(checkDepthGuards(blocks), buildUsersetSubjectStmts(plan, blocks, true)...)
 		exclusionExpr := blocks.ExclusionCheck
 		if exclusionExpr == nil {
 			exclusionExpr = Bool(false)
@@ -42,7 +42,7 @@ func renderCheckDirectFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) (st
 		return renderDirectFn(plan, decls, body)
 	}
 
-	body := buildUsersetSubjectStmts(plan, blocks, false)
+	body := append(checkDepthGuards(blocks), buildUsersetSubjectStmts(plan, blocks, false)...)
 	body = append(body, If{
 		Cond: accessExpr,
 		Then: []Stmt{ReturnInt{Value: 1}},
@@ -60,28 +60,16 @@ func renderDirectFn(plan CheckPlan, decls []Decl, body []Stmt) (string, error) {
 		Decls:   decls,
 		Body:    body,
 		Header:  checkFunctionHeader(plan),
-		Cost:    checkFunctionCost(plan),
+		Cost:    recursiveCheckCost,
 	}
 	return fn.SQL() + "\n", nil
 }
 
-// checkFunctionCost returns recursiveCheckCost when the generated function
-// body will embed a check_permission_internal call — directly, or transitively
-// through a complex closure relation. The propagated score in
-// ComplexityByRelation already lifts wrappers (e.g. `a: b` where b recurses)
-// to the recursive tier, so a single score lookup captures both cases.
-func checkFunctionCost(plan CheckPlan) int {
-	if plan.ComplexityByRelation[plan.ObjectType][plan.Relation] >= complexityRecursive {
-		return recursiveCheckCost
-	}
-	return 0
-}
-
 func renderCheckIntersectionFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) (string, error) {
-	body := buildUsersetSubjectStmts(plan, blocks, true)
+	body := append(checkDepthGuards(blocks), buildUsersetSubjectStmts(plan, blocks, true)...)
 
 	if blocks.HasStandaloneAccess {
-		accessExpr := buildAccessCheckExpr(blocks, Visited, plan.DatabaseSchema)
+		accessExpr := buildAccessCheckExpr(blocks, plan.DatabaseSchema)
 		body = append(body,
 			Comment{Text: "Non-intersection access paths"},
 			If{
@@ -91,7 +79,7 @@ func renderCheckIntersectionFunctionFromBlocks(plan CheckPlan, blocks CheckBlock
 		)
 	}
 
-	body = append(body, buildIntersectionGroupStmts(plan, blocks, Visited)...)
+	body = append(body, buildIntersectionGroupStmts(plan, blocks)...)
 	body = append(body, buildExclusionWithAccessStmts(plan, blocks)...)
 	body = append(body, ReturnInt{Value: 0})
 
@@ -106,7 +94,7 @@ func renderCheckIntersectionFunctionFromBlocks(plan CheckPlan, blocks CheckBlock
 		},
 		Body:   body,
 		Header: checkFunctionHeader(plan),
-		Cost:   checkFunctionCost(plan),
+		Cost:   recursiveCheckCost,
 	}
 
 	return fn.SQL() + "\n", nil
@@ -115,7 +103,7 @@ func renderCheckIntersectionFunctionFromBlocks(plan CheckPlan, blocks CheckBlock
 func renderCheckRecursiveFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) (string, error) {
 	visitedWithKey := Raw("p_visited || ARRAY[v_key]")
 
-	body := buildCycleDetectionStmts()
+	body := append(buildCycleDetectionStmts(), inlineUsersetDepthGuard(blocks)...)
 	body = append(body, buildUsersetSubjectStmts(plan, blocks, true)...)
 	body = append(body, buildStandaloneAccessPathStmts(plan, blocks, visitedWithKey)...)
 	body = append(body, buildExclusionWithAccessStmts(plan, blocks)...)
@@ -129,7 +117,7 @@ func renderCheckRecursiveFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) 
 		Decls:   recursiveCheckDecls(plan),
 		Body:    body,
 		Header:  checkFunctionHeader(plan),
-		Cost:    checkFunctionCost(plan),
+		Cost:    recursiveCheckCost,
 	}
 
 	return fn.SQL() + "\n", nil
@@ -138,7 +126,7 @@ func renderCheckRecursiveFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) 
 func renderCheckRecursiveIntersectionFunctionFromBlocks(plan CheckPlan, blocks CheckBlocks) (string, error) {
 	visitedWithKey := Raw("p_visited || ARRAY[v_key]")
 
-	body := buildCycleDetectionStmts()
+	body := append(buildCycleDetectionStmts(), inlineUsersetDepthGuard(blocks)...)
 	body = append(body, buildUsersetSubjectStmts(plan, blocks, true)...)
 	body = append(body, Comment{Text: "Relation has intersection; only render standalone paths if HasStandaloneAccess is true"})
 
@@ -146,7 +134,7 @@ func renderCheckRecursiveIntersectionFunctionFromBlocks(plan CheckPlan, blocks C
 		body = append(body, buildStandaloneAccessPathStmts(plan, blocks, visitedWithKey)...)
 	}
 
-	body = append(body, buildIntersectionGroupStmts(plan, blocks, visitedWithKey)...)
+	body = append(body, buildIntersectionGroupStmts(plan, blocks)...)
 	body = append(body, buildExclusionWithAccessStmts(plan, blocks)...)
 	body = append(body, ReturnInt{Value: 0})
 
@@ -158,18 +146,70 @@ func renderCheckRecursiveIntersectionFunctionFromBlocks(plan CheckPlan, blocks C
 		Decls:   recursiveCheckDecls(plan),
 		Body:    body,
 		Header:  checkFunctionHeader(plan),
-		Cost:    checkFunctionCost(plan),
+		Cost:    recursiveCheckCost,
 	}
 
 	return fn.SQL() + "\n", nil
 }
 
-// recursiveCheckCost is the planner COST hint we attach to generated check
-// functions that can recurse via check_permission_internal. PostgreSQL's
-// default function cost is 100; bumping these to 1000 marks them as 10x
-// more expensive than a typical predicate, encouraging the planner to
+// recursiveCheckCost is the planner COST hint we attach to every generated
+// check function and _nw variant and to the internal dispatchers.
+// PostgreSQL's default function cost is 100; bumping these to 1000 marks them
+// as 10x more expensive than a typical predicate, encouraging the planner to
 // evaluate cheaper EXISTS/Direct branches first in OR chains.
+//
+// Leaf check functions get it too. Bodies call check functions directly where
+// the pair is known when the SQL is generated, instead of through
+// check_permission_internal, so a check in a WHERE clause keeps the
+// dispatcher's cost. At the default 100 the planner would move it ahead of
+// cheaper conditions (a subject match, a list function semi-join) and run it
+// for rows they reject.
 const recursiveCheckCost = 1000
+
+// checkDepthLimit is the p_visited length at which check (and explain) raise
+// M2002, matching OpenFGA's Check: it resolves a parent or nested userset
+// chain of 25 hops and fails at 26. As in OpenFGA, only parent lookups and
+// userset hops are steps: those calls extend p_visited with the caller's key,
+// while computed relations and intersection or exclusion operands pass it on
+// unchanged, and a userset resolved inline counts through
+// inlineUsersetDepthGuard. The keys also detect cycles: any loop goes through
+// such a hop, whose function then finds its own key.
+//
+// Every check function raises at the limit as its first statement, as the
+// internal dispatcher does before routing, so a call made directly to a check
+// function counts the same as one through the dispatcher. In recursive
+// functions the raise comes before the cycle check, so a cycle 26 hops long
+// raises as it does through the dispatcher instead of returning 0.
+const checkDepthLimit = 26
+
+// inlineUsersetDepthGuard counts a userset hop resolved inline as the step
+// OpenFGA takes for it: with checkDepthLimit-1 steps already taken, a userset
+// grant to follow raises M2002. OpenFGA fails the whole check then, even when
+// another branch (a direct grant) would succeed.
+func inlineUsersetDepthGuard(blocks CheckBlocks) []Stmt {
+	if blocks.InlineUsersetGrants == nil {
+		return nil
+	}
+	return []Stmt{If{
+		Cond: Gte{Left: ArrayLength{Array: Visited}, Right: Int(checkDepthLimit - 1)},
+		Then: []Stmt{If{Cond: blocks.InlineUsersetGrants, Then: raiseTooDeep()}},
+	}}
+}
+
+// checkDepthGuards opens a non-recursive check body: checkDepthGuard, then
+// inlineUsersetDepthGuard. Recursive bodies use buildCycleDetectionStmts,
+// which puts checkDepthGuard ahead of the cycle check, in its place.
+func checkDepthGuards(blocks CheckBlocks) []Stmt {
+	return append([]Stmt{checkDepthGuard()}, inlineUsersetDepthGuard(blocks)...)
+}
+
+// checkDepthGuard raises M2002 once p_visited reaches checkDepthLimit.
+func checkDepthGuard() Stmt {
+	return If{
+		Cond: Gte{Left: ArrayLength{Array: Visited}, Right: Int(checkDepthLimit)},
+		Then: raiseTooDeep(),
+	}
+}
 
 func checkFunctionArgs() []FuncArg {
 	return []FuncArg{
@@ -214,8 +254,9 @@ func buildUsersetSubjectStmts(plan CheckPlan, blocks CheckBlocks, converge bool)
 	// dead block (their satisfying set is disjoint from stored-userset relations).
 	// Check needs BOTH: closure-only relations (e.g. document.can_view) have empty
 	// own UsersetPatterns but a live Case 2 via ClosureUsersetPatterns.
-	hasUsersetPatterns := len(plan.Analysis.UsersetPatterns) > 0 ||
-		len(plan.Analysis.ClosureUsersetPatterns) > 0
+	hasUsersetPatterns := (len(plan.Analysis.UsersetPatterns) > 0 ||
+		len(plan.Analysis.ClosureUsersetPatterns) > 0) &&
+		len(standaloneUsersetSubjectRelations(plan.Analysis)) > 0
 
 	// case2Success is what a Case-2 userset match runs. When converging, hand off
 	// to the shared exclusion/return path via v_has_access; otherwise return
@@ -275,7 +316,7 @@ func buildUsersetSubjectStmts(plan CheckPlan, blocks CheckBlocks, converge bool)
 	}
 }
 
-func buildAccessCheckExpr(blocks CheckBlocks, visitedExpr Expr, databaseSchema string) Expr {
+func buildAccessCheckExpr(blocks CheckBlocks, databaseSchema string) Expr {
 	var parts []Expr
 	if blocks.DirectCheck != nil {
 		parts = append(parts, blocks.DirectCheck)
@@ -284,7 +325,8 @@ func buildAccessCheckExpr(blocks CheckBlocks, visitedExpr Expr, databaseSchema s
 		parts = append(parts, blocks.UsersetCheck)
 	}
 	for _, call := range blocks.ImpliedFunctionCalls {
-		checkCall := SpecializedCheckCall(databaseSchema, call.FunctionName, SubjectType, SubjectID, ObjectID, visitedExpr)
+		// A computed relation is not a step (see checkDepthLimit).
+		checkCall := SpecializedCheckCall(databaseSchema, call.FunctionName, SubjectType, SubjectID, ObjectID, Visited)
 		parts = append(parts, Raw(checkCall.SQL()))
 	}
 
@@ -300,14 +342,11 @@ func buildAccessCheckExpr(blocks CheckBlocks, visitedExpr Expr, databaseSchema s
 
 func buildCycleDetectionStmts() []Stmt {
 	return []Stmt{
+		checkDepthGuard(),
 		Comment{Text: "Cycle detection"},
 		If{
 			Cond: ArrayContains{Value: Raw("v_key"), Array: Visited},
 			Then: []Stmt{ReturnInt{Value: 0}},
-		},
-		If{
-			Cond: Gte{Left: ArrayLength{Array: Visited}, Right: Int(25)},
-			Then: []Stmt{Raise{Message: "resolution too complex", ErrCode: "M2002"}},
 		},
 	}
 }
@@ -330,7 +369,8 @@ func buildStandaloneAccessPathStmts(plan CheckPlan, blocks CheckBlocks, visitedE
 	}
 
 	for _, call := range blocks.ImpliedFunctionCalls {
-		checkCall := SpecializedCheckCall(plan.DatabaseSchema, call.FunctionName, SubjectType, SubjectID, ObjectID, visitedExpr)
+		// A computed relation is not a step (see checkDepthLimit).
+		checkCall := SpecializedCheckCall(plan.DatabaseSchema, call.FunctionName, SubjectType, SubjectID, ObjectID, Visited)
 		stmts = append(stmts, accessPathCheck("Implied access path via "+call.FunctionName, Raw(checkCall.SQL())))
 	}
 
@@ -357,20 +397,12 @@ func accessPathCheck(comment string, cond Expr) If {
 }
 
 func renderParentRelationExistsFromBlocks(plan CheckPlan, parent ParentRelationBlock, visitedExpr string) string {
-	checkCall := InternalCheckCall(
-		plan.DatabaseSchema,
-		SubjectType, SubjectID, parent.ParentRelation,
-		Col{Table: "link", Column: "subject_type"},
-		Col{Table: "link", Column: "subject_id"},
-		Raw(visitedExpr),
-	)
-
 	q := Tuples(plan.DatabaseSchema, "link").
 		ObjectType(plan.ObjectType).
 		Relations(parent.LinkingRelation).
 		Where(
 			Eq{Left: Col{Table: "link", Column: "object_id"}, Right: Raw("p_object_id")},
-			Raw(checkCall.SQL()),
+			linkedParentCheck(plan, parent.ParentRelation, parent.AllowedLinkingTypes, Raw(visitedExpr)),
 		)
 
 	if len(parent.AllowedLinkingTypes) > 0 {
@@ -380,7 +412,7 @@ func renderParentRelationExistsFromBlocks(plan CheckPlan, parent ParentRelationB
 	return q.ExistsSQL()
 }
 
-func buildIntersectionGroupStmts(plan CheckPlan, blocks CheckBlocks, visitedExpr Expr) []Stmt {
+func buildIntersectionGroupStmts(plan CheckPlan, blocks CheckBlocks) []Stmt {
 	if len(blocks.IntersectionGroups) == 0 {
 		return nil
 	}
@@ -394,7 +426,7 @@ func buildIntersectionGroupStmts(plan CheckPlan, blocks CheckBlocks, visitedExpr
 		}
 
 		groupCond := andExprs(partExprs)
-		innerStmts := buildIntersectionInnerStmts(plan, group.Parts, visitedExpr)
+		innerStmts := buildIntersectionInnerStmts(plan, group.Parts)
 
 		stmts = append(stmts, If{
 			Cond: NotExpr{Expr: Raw("v_has_access")},
@@ -412,9 +444,9 @@ func andExprs(exprs []Expr) Expr {
 	return AndExpr{Exprs: exprs}
 }
 
-func buildIntersectionInnerStmts(plan CheckPlan, parts []IntersectionPartCheck, visitedExpr Expr) []Stmt {
+func buildIntersectionInnerStmts(plan CheckPlan, parts []IntersectionPartCheck) []Stmt {
 	// Parts whose exclusion Check already decided inline need no second
-	// look; complex exclusions are re-checked through the dispatcher.
+	// look; complex exclusions are re-checked by calling their check.
 	hasExclusions := false
 	for _, part := range parts {
 		if part.ExcludedRelation != "" && !part.ExcludedInline {
@@ -433,15 +465,11 @@ func buildIntersectionInnerStmts(plan CheckPlan, parts []IntersectionPartCheck, 
 		if part.ExcludedRelation == "" || part.ExcludedInline {
 			continue
 		}
-		checkCall := InternalCheckCall(
-			plan.DatabaseSchema,
-			SubjectType, SubjectID, part.ExcludedRelation,
-			Lit(plan.ObjectType), ObjectID, visitedExpr,
-		)
+		checkCall := checkPermissionAllow(plan, part.ExcludedRelation, LiteralObject(plan.ObjectType, ObjectID))
 		innermost = []Stmt{
 			Comment{Text: "Check exclusion for part " + part.ExcludedRelation},
 			If{
-				Cond: Raw(checkCall.SQL()),
+				Cond: checkCall,
 				Then: []Stmt{Comment{Text: "Excluded, this group fails"}},
 				Else: innermost,
 			},

@@ -1,6 +1,9 @@
 package sqlgen
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // ComposedObjectsBlockSet contains blocks for a composed list_objects function.
 // Composed functions handle indirect anchor patterns (TTU and userset composition).
@@ -65,7 +68,7 @@ func BuildListObjectsComposedBlocks(plan ListPlan) (ComposedObjectsBlockSet, err
 
 	// Build main composed query blocks
 	firstStep := anchor.Path[0]
-	exclusions := buildExclusionInput(plan.Analysis, plan.DatabaseSchema, Col{Table: "t", Column: "object_id"}, SubjectType, SubjectID)
+	exclusions := buildExclusionInput(plan.Analysis, plan.graph(), plan.DatabaseSchema, Col{Table: "t", Column: "object_id"}, SubjectType, SubjectID)
 
 	switch firstStep.Type {
 	case "ttu":
@@ -80,11 +83,7 @@ func BuildListObjectsComposedBlocks(plan ListPlan) (ComposedObjectsBlockSet, err
 
 		// Build recursive TTU blocks
 		for _, recursiveType := range firstStep.RecursiveTypes {
-			block, err := buildComposedRecursiveTTUObjectsBlock(plan, anchor, recursiveType, exclusions)
-			if err != nil {
-				return ComposedObjectsBlockSet{}, err
-			}
-			result.MainBlocks = append(result.MainBlocks, *block)
+			result.MainBlocks = append(result.MainBlocks, buildComposedRecursiveTTUObjectsBlocks(plan, anchor, recursiveType, exclusions)...)
 		}
 
 	case "userset":
@@ -113,7 +112,8 @@ func buildComposedObjectsSelfBlock(plan ListPlan) (*TypedQueryBlock, error) {
 		Comments: []string{
 			"-- Self-candidate: when subject is a userset on the same object type",
 		},
-		Query: stmt,
+		Query:              stmt,
+		UsersetSubjectOnly: true,
 	}, nil
 }
 
@@ -129,33 +129,39 @@ func buildComposedTTUObjectsBlock(plan ListPlan, anchor *IndirectAnchorInfo, tar
 		Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
 		Alias:     "obj",
 		SelectCol: "object_id",
+		Array:     true,
 	}
 
-	conditions := make([]Expr, 0, 4+len(exclusionPreds))
-	conditions = append(conditions,
+	link := []Expr{
 		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 		Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(anchor.Path[0].LinkingRelation)},
 		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(targetType)},
-		inSubquery,
-	)
-	conditions = append(conditions, exclusionPreds...)
-
+	}
 	stmt := SelectStmt{
 		Distinct:    true,
 		ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}},
 		FromExpr:    TableAs("", "melange_tuples", "t"),
-		Where:       And(conditions...),
+		Where:       And(slices.Concat(link, []Expr{inSubquery}, exclusionPreds)...),
 	}
+	// The same lookup for one parent, par.object_id (see ParentLookup).
+	lookup := stmt
+	lookup.Where = And(slices.Concat(link, []Expr{Eq{Left: Col{Table: "t", Column: "subject_id"}, Right: Col{Table: "par", Column: "object_id"}}}, exclusionPreds)...)
 
 	return &TypedQueryBlock{
 		Comments: []string{
 			fmt.Sprintf("-- TTU composition: %s -> %s", anchor.Path[0].LinkingRelation, targetType),
 		},
 		Query: stmt,
+		ByParent: &ParentLookup{
+			Parents: Func{Schema: inSubquery.Schema, Name: inSubquery.FuncName, Args: inSubquery.Args}.SQL(),
+			Lookup:  lookup,
+			Object:  Col{Table: "t", Column: "object_id"},
+		},
 	}, nil
 }
 
-// buildComposedRecursiveTTUObjectsBlock builds a recursive TTU composition block.
+// buildComposedRecursiveTTUObjectsBlocks builds the recursive TTU composition
+// blocks.
 //
 // The linking tuples are scanned and each parent object t.subject_id validated
 // against anchor's target relation. When composition is safe
@@ -168,39 +174,54 @@ func buildComposedTTUObjectsBlock(plan ListPlan, anchor *IndirectAnchorInfo, tar
 // ("group:eng#member"), and an under-reported positive membership drops objects.
 // When composition is unsafe (the recursive parent chain is self-referential/
 // cyclic, so the gate refuses) it keeps the per-candidate check alone.
-func buildComposedRecursiveTTUObjectsBlock(plan ListPlan, anchor *IndirectAnchorInfo, recursiveType string, exclusions ExclusionConfig) (*TypedQueryBlock, error) {
-	exclusionPreds := exclusions.BuildPredicates()
-
+//
+// The semi-join and the check are separate arms, the check arm marked
+// UsersetSubjectOnly, so the semi-join is a lone array filter
+// (InFunctionSelect.Array) that reaches the index on subject_id: OR'd with the
+// check, it could only be applied to each scanned tuple, searching the array
+// linearly whenever the userset guard does not fold away.
+func buildComposedRecursiveTTUObjectsBlocks(plan ListPlan, anchor *IndirectAnchorInfo, recursiveType string, exclusions ExclusionConfig) []TypedQueryBlock {
 	targetRel := anchor.Path[0].TargetRelation
-	check := CheckPermissionInternalExpr(plan.DatabaseSchema, SubjectParams(), targetRel, ObjectRef{Type: Lit(recursiveType), ID: Col{Table: "t", Column: "subject_id"}}, true)
+	parentID := Col{Table: "t", Column: "subject_id"}
+	check := CheckPermissionInternalExpr(plan.DatabaseSchema, plan.graph(), SubjectParams(), targetRel, ObjectRef{Type: Lit(recursiveType), ID: parentID}, true)
 
-	membership := check
-	if composableListTarget(plan, recursiveType, targetRel) {
-		membership = composedListObjectsMembership(plan.DatabaseSchema, recursiveType, targetRel, Col{Table: "t", Column: "subject_id"}, SubjectType, SubjectID, "obj", check)
+	block := func(membership Expr) TypedQueryBlock {
+		excluded := exclusions.BuildPredicates()
+		conditions := make([]Expr, 0, 4+len(excluded))
+		conditions = append(conditions,
+			Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
+			Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(anchor.Path[0].LinkingRelation)},
+			Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(recursiveType)},
+			membership,
+		)
+		return TypedQueryBlock{
+			Comments: []string{
+				fmt.Sprintf("-- Recursive TTU: %s -> %s", anchor.Path[0].LinkingRelation, recursiveType),
+			},
+			Query: SelectStmt{
+				Distinct:    true,
+				ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}},
+				FromExpr:    TableAs("", "melange_tuples", "t"),
+				Where:       And(append(conditions, excluded...)...),
+			},
+		}
 	}
 
-	conditions := make([]Expr, 0, 4+len(exclusionPreds))
-	conditions = append(conditions,
-		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
-		Eq{Left: Col{Table: "t", Column: "relation"}, Right: Lit(anchor.Path[0].LinkingRelation)},
-		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(recursiveType)},
-		membership,
-	)
-	conditions = append(conditions, exclusionPreds...)
-
-	stmt := SelectStmt{
-		Distinct:    true,
-		ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}},
-		FromExpr:    TableAs("", "melange_tuples", "t"),
-		Where:       And(conditions...),
+	if !composableListTarget(plan, recursiveType, targetRel) {
+		return []TypedQueryBlock{block(check)}
 	}
-
-	return &TypedQueryBlock{
-		Comments: []string{
-			fmt.Sprintf("-- Recursive TTU: %s -> %s", anchor.Path[0].LinkingRelation, recursiveType),
-		},
-		Query: stmt,
-	}, nil
+	parents := block(InFunctionSelect{
+		Expr:      parentID,
+		Schema:    plan.DatabaseSchema,
+		FuncName:  ListObjectsFunctionName(recursiveType, targetRel),
+		Args:      []Expr{SubjectType, SubjectID, Null{}, Null{}},
+		Alias:     "obj",
+		SelectCol: "object_id",
+		Array:     true,
+	})
+	checked := block(And(HasUserset{Source: SubjectID}, check))
+	checked.UsersetSubjectOnly = true
+	return []TypedQueryBlock{parents, checked}
 }
 
 // buildComposedUsersetObjectsBlock builds a userset composition block.
@@ -221,7 +242,7 @@ func buildComposedUsersetObjectsBlock(plan ListPlan, firstStep AnchorPathStep, e
 
 	// split_part(t.subject_id, '#', 1) extracts the object_id from the userset
 	usersetObjectID := Raw("split_part(t.subject_id, '#', 1)")
-	check := CheckPermissionInternalExpr(plan.DatabaseSchema, SubjectParams(), firstStep.SubjectRelation, ObjectRef{Type: Lit(firstStep.SubjectType), ID: usersetObjectID}, true)
+	check := CheckPermissionInternalExpr(plan.DatabaseSchema, plan.graph(), SubjectParams(), firstStep.SubjectRelation, ObjectRef{Type: Lit(firstStep.SubjectType), ID: usersetObjectID}, true)
 
 	membership := check
 	if composableListTarget(plan, firstStep.SubjectType, firstStep.SubjectRelation) {

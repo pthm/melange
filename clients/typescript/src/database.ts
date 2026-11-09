@@ -5,6 +5,8 @@
  * allowing the Checker to work with any PostgreSQL client library.
  */
 
+import { mapDatabaseError } from './errors.js';
+
 /**
  * QueryResult represents the result of a database query.
  */
@@ -43,4 +45,16 @@ export interface Queryable {
    * @returns Promise resolving to query results
    */
   query<T = any>(text: string, params?: any[]): Promise<QueryResult<T>>;
+}
+
+/**
+ * queryMelange runs a call to a melange SQL function and rethrows driver
+ * errors mapped to melange errors (see mapDatabaseError).
+ */
+export async function queryMelange<T = any>(db: Queryable, text: string, params: any[]): Promise<QueryResult<T>> {
+  try {
+    return await db.query<T>(text, params);
+  } catch (err) {
+    throw mapDatabaseError(err);
+  }
 }

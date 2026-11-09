@@ -82,7 +82,7 @@ List operations (ListObjects, ListSubjects) cost what it takes to walk the permi
 - Use relation-specific measurements rather than a universal per-object budget: first-page PR listing took 2.8 ms at the smallest hierarchy scale and 262 to 269 ms at the largest.
 - Intersections and exclusions follow the size of their base relation, and recursive relations and nested-group usersets follow the size of the reachable graph. Either can take hundreds of milliseconds on a million-tuple dataset while returning a handful of results.
 
-At large kitchen-sink sizes nearly all of the expensive list time is spent in Postgres. The measured first-page PR query took 262 to 269 ms for limits of 10 through 500; smaller limits bounded the payload without materially reducing the work. Later-page costs were not measured by that benchmark. Inspect your plan before assuming the same behavior for every relation. See [Performance](../../reference/performance/#list-operations) for measurements by query shape.
+At large kitchen-sink sizes nearly all of the expensive list time is spent in Postgres. The measured first-page PR query took 262 to 269 ms for limits of 10 through 500, measured before list_objects paging became a top-k query; object-list pages now keep only the IDs after the cursor, up to the limit, so a smaller page also reduces the work. Inspect your plan before assuming the same for subject lists. See [Performance](../../reference/performance/#list-operations) for measurements by query shape.
 
 For paths where you only need a boolean answer, use `Check` or `BulkCheck` instead of `ListObjects`.
 

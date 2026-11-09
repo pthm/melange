@@ -16,9 +16,8 @@ import (
 	"github.com/a-h/templ"
 	"github.com/lib/pq"
 
-	"github.com/pthm/melange/internal/sqlgen/sqldsl"
+	"github.com/pthm/melange/internal/sqlapi"
 	"github.com/pthm/melange/melange"
-	"github.com/pthm/melange/pkg/schema"
 )
 
 // analyzeTimeout bounds one Analyze, both as the statement_timeout and as
@@ -35,7 +34,7 @@ type analysis struct {
 	// Allowed is the check's answer from a second, plain run (EXPLAIN
 	// discards the result); nil when that run failed or timed out.
 	Allowed *bool
-	// Links maps a generated check function's name to its relation page.
+	// Links maps a generated function's name to its relation page (funcLinks).
 	Links map[string]templ.SafeURL
 }
 
@@ -78,6 +77,10 @@ func (s *Server) analyze(w http.ResponseWriter, r *http.Request) {
 		render(w, r, errorBox(fmt.Sprintf("%s#%s is not a relation in the deployed model", object.Type, relation)))
 		return
 	}
+	if u := apiOf(model).Unavailable(sqlapi.Check, string(object.Type), relation); u != nil {
+		render(w, r, unavailableBox(u))
+		return
+	}
 	start := time.Now()
 	a, err := s.analyzeCheck(r.Context(), subject, relation, object)
 	took := time.Since(start)
@@ -86,25 +89,34 @@ func (s *Server) analyze(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &pqErr) && pqErr.Code == "57014":
 		render(w, r, errorBox(fmt.Sprintf("Timed out after %s; this check is very slow.", analyzeTimeout)))
 	case err != nil:
-		render(w, r, errorBox(failedAfter(err, took)))
+		render(w, r, errorBox(callFailed(sqlapi.Check, object, relation, err, took)))
 	default:
 		if model != nil {
-			a.Links = checkFuncLinks(model.Types)
+			if report, err := sqlapi.Describe(model.Types, model.Exposure, s.dbSchema); err == nil {
+				a.Links = funcLinks(report)
+			}
 		}
 		render(w, r, analyzeView(a))
 	}
 }
 
-// checkFuncLinks maps every generated check function name to its relation
-// page. Names go through SafeIdentifier so long names hash as codegen did.
-func checkFuncLinks(types []schema.TypeDefinition) map[string]templ.SafeURL {
+// funcLinks maps every function name in the SQL API catalog to its
+// relation page, a dispatcher's to the SQL API dispatchers, and a name
+// several functions share (relations, or a relation and a dispatcher) to
+// the collisions, since the installed function is only one of them.
+func funcLinks(r *sqlapi.Report) map[string]templ.SafeURL {
 	out := map[string]templ.SafeURL{}
-	for _, t := range types {
-		for _, rel := range t.Relations {
-			u := relationURL(t.Name, rel.Name)
-			out[sqldsl.SafeIdentifier("check_", t.Name, rel.Name, "")] = u
-			out[sqldsl.SafeIdentifier("check_", t.Name, rel.Name, "_nw")] = u
+	for name, owners := range r.Owners() {
+		switch len(owners) {
+		case 0:
+			out[name] = "/sql#dispatchers"
+		case 1:
+			typ, rel, _ := strings.Cut(owners[0], "#")
+			out[name] = relationURL(typ, rel)
 		}
+	}
+	for _, c := range r.Collisions {
+		out[c.Name] = "/sql#collisions"
 	}
 	return out
 }

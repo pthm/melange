@@ -12,7 +12,6 @@ GO_TEST_BENCH_MEM := "go test -bench=. -run=^$ -benchmem"
 OPENFGA_PKGS := "./openfgatests/..."
 OPENFGA_TEST_TIMEOUT := "5m"
 OPENFGA_TEST_TIMEOUT_SHORT := "2m"
-OPENFGA_TEST_TIMEOUT_LONG := "10m"
 OPENFGA_BENCH_TIMEOUT := "30m"
 OPENFGA_BENCH_TIMEOUT_SHORT := "10m"
 OPENFGA_BENCH_TIMEOUT_TINY := "5m"
@@ -522,6 +521,11 @@ test-integration-all:
 test-kitchensink:
     cd {{TEST}} && {{GO_TEST}} -count=1 -timeout 10m -run 'TestKitchenSink' ./...
 
+# SaaS schema: differential list-vs-check correctness over the SaaS benchmark's model and view
+[group('Test')]
+test-saas:
+    cd {{TEST}} && {{GO_TEST}} -count=1 -timeout 10m -run 'TestSaaS' .
+
 # Kitchen-sink schema: dump the full rendered SQL for manual inspection
 [group('Test')]
 dump-kitchensink-sql:
@@ -589,6 +593,12 @@ bench-cloud *ARGS:
 [group('Test')]
 bench-kitchensink SCALE="":
     cd {{TEST}} && {{GO_TEST_BENCH_MEM}} -run=^$ -timeout 30m -bench='BenchmarkKitchenSink{{ if SCALE != "" { "/" + SCALE } else { "" } }}'
+
+# SaaS benchmarks: a multi-tenant model over a 27-branch view, warm and on fresh sessions
+# Use SCALE to limit: just bench-saas 1M   (5M needs MELANGE_BENCH_LARGE_SCALE=1)
+[group('Test')]
+bench-saas SCALE="":
+    cd {{TEST}} && {{GO_TEST_BENCH_MEM}} -run=^$ -timeout 60m -bench='BenchmarkSaaS{{ if SCALE != "" { "/" + SCALE } else { "" } }}'
 
 # Run tests with race detection
 [group('Test')]
@@ -718,6 +728,19 @@ tidy:
 generate: build-dev
     ./bin/melange generate client --runtime go --schema {{TEST}}/testutil/testdata/schema.fga --output {{TEST}}/authz/ --package authz --id-type int64
 
+# Re-vendor the upstream OpenFGA suite's models for internal/sqlgen's exposure tests
+[group('Generate')]
+update-upstream-models:
+    cd {{TEST}} && {{GO_TEST}} -count=1 -run '^TestOpenFGA_UpstreamModelsVendored$' ./openfgatests -update-upstream-models
+
+# Re-record golden test output after an intended codegen or testdata change:
+# internal/sqlgen's default-exposure digests and the generated TypeScript
+# fixtures the TypeScript unit tests type-check
+[group('Generate')]
+update-golden:
+    {{GO_TEST}} -count=1 -run '^TestExposure_DefaultGolden$' ./internal/sqlgen -update-exposure-golden
+    {{GO_TEST}} -count=1 -run '^TestGenerator_Fixtures$' ./internal/clientgen/typescript -update-fixtures
+
 # Validate the test schema
 [group('Generate')]
 validate:
@@ -784,15 +807,6 @@ test-openfga-pattern PATTERN:
 [group('OpenFGA Test')]
 test-openfga-list:
     cd {{TEST}} && {{GO_TEST}} -v -count=1 -run "TestOpenFGAListAvailableTests" {{OPENFGA_PKGS}}
-
-# Run the full OpenFGA check suite (WARNING: includes unsupported features, many will fail)
-[group('OpenFGA Test')]
-test-openfga-full-check:
-    @echo "⚠️  Running FULL OpenFGA check suite - this includes unsupported features!"
-    @echo "   Many tests will fail. Use 'just test-openfga' for supported features only."
-    @echo ""
-    cd {{TEST}} && {{GO_TEST}} -count=1 -timeout {{OPENFGA_TEST_TIMEOUT_LONG}} \
-        -run "TestOpenFGACheckSuite" {{OPENFGA_PKGS}} || true
 
 # =============================================================================
 # OpenFGA Benchmarks

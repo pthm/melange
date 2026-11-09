@@ -8,9 +8,15 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/a-h/templ"
 	"github.com/pthm/melange/internal/doctor"
+
+	"github.com/pthm/melange/internal/sqlapi"
+	"github.com/pthm/melange/internal/sqlgen"
+	"github.com/pthm/melange/internal/version"
 	"github.com/pthm/melange/melange"
 	"github.com/pthm/melange/pkg/migrator"
+	"github.com/pthm/melange/pkg/parser"
 	"github.com/pthm/melange/pkg/schema"
 )
 
@@ -60,10 +66,29 @@ func TestRequestValidationNeedsNoDatabase(t *testing.T) {
 			if got := html.UnescapeString(w.Body.String()); w.Code != http.StatusOK || !strings.Contains(got, c.want) {
 				t.Fatalf("%d %q; want 200 containing %q", w.Code, got, c.want)
 			}
-			if !strings.Contains(w.Body.String(), `class="error"`) {
+			if !strings.Contains(w.Body.String(), `class="callout error"`) {
 				t.Errorf("validation errors render in errorBox; got %q", w.Body.String())
 			}
 		})
+	}
+}
+
+// The SQL API page checks its parameters before reading the model.
+func TestSQLAPIValidationNeedsNoDatabase(t *testing.T) {
+	for target, want := range map[string]string{
+		"/sql?kind=lists":               `kind "lists" is not a function kind`,
+		"/sql?type=doc%23viewer":        `type "doc#viewer" is not a type name`,
+		"/sql?type=a+b&kind=check":      `type "a b" is not a type name`,
+		"/sql?kind=%3Cscript%3E&type=x": `kind "<script>" is not a function kind`,
+		"/sql?kind=dispatcher":          "the dispatchers belong to no relation; the overview lists them",
+	} {
+		w := serve(t, "GET", target, nil)
+		if got := html.UnescapeString(w.Body.String()); w.Code != http.StatusBadRequest || !strings.Contains(got, want) {
+			t.Errorf("GET %s = %d %q; want 400 containing %q", target, w.Code, got, want)
+		}
+		if strings.Contains(w.Body.String(), "<script>") {
+			t.Errorf("GET %s echoes markup unescaped", target)
+		}
 	}
 }
 
@@ -82,6 +107,7 @@ func TestRoutingMethodsAndUnknownPaths(t *testing.T) {
 		{"GET", "/query", http.StatusMethodNotAllowed},
 		{"GET", "/explain", http.StatusMethodNotAllowed},
 		{"POST", "/entity", http.StatusMethodNotAllowed},
+		{"POST", "/sql", http.StatusMethodNotAllowed},
 		{"DELETE", "/assets/" + assetVersion + "/studio.css", http.StatusMethodNotAllowed},
 		{"GET", "/nope", http.StatusNotFound},
 		{"GET", "/assets/" + assetVersion + "/no-such-file.js", http.StatusNotFound},
@@ -102,7 +128,7 @@ func TestRoutingMethodsAndUnknownPaths(t *testing.T) {
 func TestEveryRouteRejectsForeignHosts(t *testing.T) {
 	// The Host check wraps the whole mux, so no route, valid or not, can be
 	// reached through a DNS-rebinding name.
-	for _, target := range []string{"/", "/tuples", "/browse/user", "/entity?type=user&id=1", "/relation?type=a&relation=b", "/history", "/health", "/assets/" + assetVersion + "/studio.css", "/nope"} {
+	for _, target := range []string{"/", "/tuples", "/browse/user", "/entity?type=user&id=1", "/relation?type=a&relation=b", "/sql", "/sql?type=a&kind=check", "/history", "/health", "/assets/" + assetVersion + "/studio.css", "/nope"} {
 		r := httptest.NewRequest("GET", target, http.NoBody)
 		r.Host = "attacker.example:7070"
 		w := httptest.NewRecorder()
@@ -245,9 +271,82 @@ func TestModelHelpers(t *testing.T) {
 	if got := relationsOf(types, "nope"); got != nil {
 		t.Errorf("relationsOf(nope) = %v, want nil", got)
 	}
-	links := checkFuncLinks(types)
-	if links["check_doc_viewer"] != relationURL("doc", "viewer") || links["check_doc_viewer_nw"] != relationURL("doc", "viewer") {
-		t.Errorf("checkFuncLinks = %v", links)
+}
+
+// Analyze links every catalog name: per-relation functions of every kind to
+// their relation, dispatchers to the SQL API page, and a name two functions
+// share to the collisions.
+func TestFuncLinks(t *testing.T) {
+	types, err := parser.ParseSchemaString(`model
+  schema 1.1
+type user
+type folder
+  relations
+    define viewer: [user]
+type doc
+  relations
+    define parent: [folder]
+    define viewer: [user] or viewer from parent
+    define can_read_security_advisories_and_vulnerability_reports: viewer from parent
+    define x_y: [user]
+type doc_x
+  relations
+    define y: [user]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := sqlapi.Describe(types, sqlgen.Exposure{}, "public")
+	if err != nil {
+		t.Fatal(err)
+	}
+	links := funcLinks(r)
+	long := r.Find("doc", "can_read_security_advisories_and_vulnerability_reports")
+	for _, f := range long.Functions {
+		if links[f.Name] != relationURL("doc", "can_read_security_advisories_and_vulnerability_reports") {
+			t.Errorf("%s (%s) links to %q", f.Name, f.Kind, links[f.Name])
+		}
+	}
+	for name, want := range map[string]templ.SafeURL{
+		"list_doc_viewer_obj":       relationURL("doc", "viewer"),
+		"accessible_doc_viewer":     relationURL("doc", "viewer"),
+		"explain_doc_viewer":        relationURL("doc", "viewer"),
+		"check_permission_internal": "/sql#dispatchers",
+		"list_accessible_subjects":  "/sql#dispatchers",
+	} {
+		if links[name] != want {
+			t.Errorf("%s links to %q, want %q", name, links[name], want)
+		}
+	}
+	if len(r.Collisions) == 0 {
+		t.Fatal("the model has no colliding names")
+	}
+	for _, c := range r.Collisions {
+		if links[c.Name] != "/sql#collisions" {
+			t.Errorf("colliding %s links to %q", c.Name, links[c.Name])
+		}
+	}
+
+	// A relation function named like a dispatcher collides with it.
+	types, err = parser.ParseSchemaString(`model
+  schema 1.1
+type user
+type permission
+  relations
+    define internal: [user]
+    define nw: [user]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r, err = sqlapi.Describe(types, sqlgen.Exposure{}, "public"); err != nil {
+		t.Fatal(err)
+	}
+	links = funcLinks(r)
+	for _, name := range []string{"check_permission_internal", "check_permission_nw"} {
+		if links[name] != "/sql#collisions" {
+			t.Errorf("%s, a relation's and a dispatcher's, links to %q", name, links[name])
+		}
 	}
 }
 
@@ -287,7 +386,25 @@ func TestWhatIfAndMatrixHelpers(t *testing.T) {
 	if isAdded(melange.TupleRef{SubjectType: "user", SubjectID: "bob", Relation: "editor", ObjectType: "doc", ObjectID: "1"}, added) {
 		t.Error("isAdded should not match another relation")
 	}
-	if a, e := matrixCounts([]matrixCell{{Allowed: true}, {Allowed: false}, {Err: "timed out", Allowed: true}, {Allowed: true}}); a != 2 || e != 1 {
-		t.Errorf("matrixCounts = %d allowed, %d errors; want 2, 1 (an errored cell counts as neither)", a, e)
+	if a, e, s := matrixCounts([]matrixCell{{Allowed: true}, {Allowed: false}, {Err: "timed out", Allowed: true}, {Allowed: true}, {Skip: &sqlapi.Unavailable{}}}); a != 2 || e != 1 || s != 1 {
+		t.Errorf("matrixCounts = %d allowed, %d errors, %d skipped; want 2, 1, 1 (an errored cell counts as neither)", a, e, s)
+	}
+}
+
+// A plain migrate does not read the recorded model, so the remedy for one
+// this melange cannot read follows the codegen version that recorded it.
+func TestUnreadableModelRemedy(t *testing.T) {
+	prev := version.Version
+	version.Version = "v0.10.0"
+	t.Cleanup(func() { version.Version = prev })
+	for recorded, want := range map[string]string{
+		"v0.11.0": "Use melange v0.11.0 or later",
+		"0.10.0":  "Re-run `melange migrate --force`",
+		"v0.9.0":  "Re-run `melange migrate` with this melange",
+		"dev":     "Re-run `melange migrate` with this melange",
+	} {
+		if got := unreadableModel(recorded); !strings.Contains(got, want) {
+			t.Errorf("recorded %s: %q, want %q", recorded, got, want)
+		}
 	}
 }

@@ -75,6 +75,7 @@ const (
 	// Custom Melange error codes (must not conflict with PostgreSQL codes)
 	// These are prefixed with 'M' to distinguish them from PG error codes.
 	pgResolutionTooComplex = "M2002" // resolution depth exceeded
+	pgNotExposed           = "M2003" // relation not exposed by the SQL API
 )
 
 // OpenFGA error codes for compatibility with the OpenFGA API.

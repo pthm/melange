@@ -1,7 +1,10 @@
 // Package studio serves melange studio: a local, read-only web console over a
 // melange-managed database. It is a presentation layer over calls the CLI
 // already makes (GetDeployedModel, Checker.Explain, Checker.Expand); see
-// specs/proposals/STUDIO.md.
+// specs/proposals/STUDIO.md. Two calls create objects in pg_temp inside a
+// transaction that is always rolled back: what-if Explain (whatif.go), and
+// Explain and Expand on a database migrated without their functions
+// (sqlapi.Trace).
 package studio
 
 //go:generate go tool templ generate
@@ -23,6 +26,7 @@ import (
 
 	"github.com/a-h/templ"
 
+	"github.com/pthm/melange/internal/sqlapi"
 	"github.com/pthm/melange/melange"
 	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/pkg/schema"
@@ -39,6 +43,10 @@ type Server struct {
 	schemaPath string // optional local .fga, for the Health page's file and drift checks
 	checker    *melange.Checker
 	labels     *labeler
+
+	// exposure is the configured SQL API exposure, the one migrate would
+	// apply, for the Health page; nil when none is configured.
+	exposure *migrator.Exposure
 
 	countsMu sync.Mutex // guards the cached Tuples sidebar counts
 	counts   []typeCount
@@ -61,6 +69,14 @@ func New(db *sql.DB, dbSchema, env, schemaPath string) *Server {
 	}
 }
 
+// SetExposure sets the configured SQL API exposure (the sql section of
+// melange.yaml) that the Health page compares with the recorded one and
+// predicts migrate with, as melange doctor does. Nil, the default, keeps the
+// recorded one.
+func (s *Server) SetExposure(exposure *migrator.Exposure) {
+	s.exposure = exposure
+}
+
 // Handler returns the console's routes, wrapped in a Host check.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -70,6 +86,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /explain", s.explain)
 	mux.HandleFunc("GET /expand", s.expand)
 	mux.HandleFunc("GET /relation", s.relation)
+	mux.HandleFunc("GET /sql", s.sqlAPI)
 	mux.HandleFunc("GET /tuples", s.tuplesIndex)
 	mux.HandleFunc("GET /history", s.history)
 	mux.HandleFunc("GET /health", s.health)
@@ -295,12 +312,16 @@ func (s *Server) loadModel(ctx context.Context) (model *migrator.DeployedModel, 
 	case err != nil:
 		return nil, err.Error()
 	case model == nil:
-		return nil, "No model recorded. The database was never migrated, or was migrated before melange recorded deployed models; re-run `melange migrate` to record it. Explain and Expand still work."
+		return nil, noModelRecorded
 	default:
 		newModelOrder(model).sortRelations(model)
 		return model, ""
 	}
 }
+
+// noModelRecorded is loadModel's reason when the database has no model
+// recorded: an expected state, unlike a failure to read melange_migrations.
+const noModelRecorded = "No model recorded. The database was never migrated, or was migrated before melange recorded deployed models; re-run `melange migrate` to record it. Explain and Expand still work when their functions are installed."
 
 // query runs the Query form's selected mode. Only Explain uses what-if
 // tuples, so the other modes never receive them.
@@ -334,24 +355,39 @@ func (s *Server) explain(w http.ResponseWriter, r *http.Request) {
 		render(w, r, errorBox(err.Error()))
 		return
 	}
+	model, unchecked := s.loadModel(r.Context())
+	api := apiOf(model)
+	if u := api.Unavailable(sqlapi.Explain, string(object.Type), relation); u != nil {
+		render(w, r, unavailableBox(u))
+		return
+	}
 	if strings.TrimSpace(r.FormValue("whatif")) == "" {
 		start := time.Now()
-		trace, err := s.checker.Explain(r.Context(), subject, melange.Relation(relation), object)
+		trace, err := s.explainOnce(r.Context(), api, nil, subject, melange.Relation(relation), object)
 		took := time.Since(start)
 		if err != nil {
-			render(w, r, errorBox(failedAfter(err, took)))
+			render(w, r, errorBox(callFailed(sqlapi.Explain, object, relation, err, took)))
 			return
 		}
 		render(w, r, traceView(trace, took))
 		return
 	}
-	s.explainWithWhatIf(w, r, subject, melange.Relation(relation), object)
+	s.explainWithWhatIf(w, r, model, api, unchecked, subject, melange.Relation(relation), object)
+}
+
+// explainOnce runs one Explain, through the installed explain functions or
+// on demand (sqlapi.Trace), with setup's DDL first when it is not nil.
+func (s *Server) explainOnce(ctx context.Context, api *sqlapi.API, setup func(context.Context, *sql.Tx) error, subject melange.Object, relation melange.Relation, object melange.Object) (trace *melange.Trace, err error) {
+	err = api.Trace(ctx, s.db, s.dbSchema, sqlapi.Explain, setup, func(c *melange.Checker) error {
+		trace, err = c.Explain(ctx, subject, relation, object)
+		return err
+	})
+	return trace, err
 }
 
 // explainWithWhatIf runs the query without and with the form's what-if
 // tuples. The tuples are parsed first, so a typo costs no Explain.
-func (s *Server) explainWithWhatIf(w http.ResponseWriter, r *http.Request, subject melange.Object, relation melange.Relation, object melange.Object) {
-	model, unchecked := s.loadModel(r.Context())
+func (s *Server) explainWithWhatIf(w http.ResponseWriter, r *http.Request, model *migrator.DeployedModel, api *sqlapi.API, unchecked string, subject melange.Object, relation melange.Relation, object melange.Object) {
 	var types []schema.TypeDefinition
 	if model != nil {
 		types = model.Types
@@ -362,32 +398,68 @@ func (s *Server) explainWithWhatIf(w http.ResponseWriter, r *http.Request, subje
 		return
 	}
 	start := time.Now()
-	base, err := s.checker.Explain(r.Context(), subject, relation, object)
+	base, err := s.explainOnce(r.Context(), api, nil, subject, relation, object)
 	baseTook := time.Since(start)
 	if err != nil {
-		render(w, r, errorBox("Without what-if: "+failedAfter(err, baseTook)))
+		render(w, r, errorBox("Without what-if: "+callFailed(sqlapi.Explain, object, string(relation), err, baseTook)))
 		return
 	}
 	start = time.Now()
-	with, err := s.explainWhatIf(r.Context(), tuples, subject, relation, object)
+	with, err := s.explainOnce(r.Context(), api, s.whatIfView(tuples), subject, relation, object)
 	withTook := time.Since(start)
 	if err != nil {
-		render(w, r, errorBox("With what-if: "+failedAfter(err, withTook)))
+		render(w, r, errorBox("With what-if: "+callFailed(sqlapi.Explain, object, string(relation), err, withTook)))
 		return
 	}
 	render(w, r, whatIfView(base, with, tuples, unchecked, baseTook, withTook))
 }
 
-// matrixCell is one relation's answer in the check matrix.
+// apiOf is what the deployed SQL API answers for, from the exposure the
+// model was migrated with, and how to explain and expand when those
+// families are off. Without a model it answers for everything, and a call
+// that fails says why (callFailed).
+func apiOf(model *migrator.DeployedModel) *sqlapi.API {
+	return sqlapi.FromModel(model)
+}
+
+// unavailableBox says why the SQL API does not answer a call: a notice when
+// that is by design (the relation is not exposed, the family is off), an
+// error when something is wrong (the recorded model cannot be read, the
+// function is missing, compiling it on demand failed).
+func unavailableBox(u *sqlapi.Unavailable) templ.Component {
+	if u.ByDesign() {
+		return noticeBox(unavailableTitle(u), u.Error())
+	}
+	return errorBox(u.Error())
+}
+
+// unavailableTitle heads the notice for a call the SQL API does not answer.
+func unavailableTitle(u *sqlapi.Unavailable) string {
+	return "Not available: " + u.Family.Name() + " " + u.Label()
+}
+
+// callFailed words a failed public function call: why the SQL API does not
+// answer for the relation, when that is the cause, else failedAfter.
+func callFailed(f sqlapi.Family, object melange.Object, relation string, err error, took time.Duration) string {
+	if u := sqlapi.FromError(f, string(object.Type), relation, err); u != nil {
+		return u.Error()
+	}
+	return failedAfter(err, took)
+}
+
+// matrixCell is one relation's answer in the check matrix. Skip says why
+// the relation was not checked; NoExplain why it cannot be explained.
 type matrixCell struct {
-	Relation string
-	Allowed  bool
-	Err      string
+	Relation        string
+	Allowed         bool
+	Err             string
+	Skip, NoExplain *sqlapi.Unavailable
 }
 
 // matrix checks every relation on the object's type for the subject. The
 // relations come from the deployed model, since check_permission answers
-// false (not an error) for a relation that doesn't exist.
+// false (not an error) for a relation that doesn't exist. Relations the
+// SQL API does not expose are labeled, not checked.
 func (s *Server) matrix(w http.ResponseWriter, r *http.Request) {
 	subject, err1 := parseIdent("subject", r.FormValue("subject"))
 	object, err2 := parseIdent("object", r.FormValue("object"))
@@ -413,21 +485,39 @@ func (s *Server) matrix(w http.ResponseWriter, r *http.Request) {
 		render(w, r, errorBox(fmt.Sprintf("%s has no relations in the deployed model", object.Type)))
 		return
 	}
+	api := apiOf(model)
 	cells := make([]matrixCell, len(rels))
+	var checked []string
+	var at []int // checked[j] is cells[at[j]]
+	for i, rel := range rels {
+		cells[i] = matrixCell{
+			Relation:  rel,
+			Skip:      api.Unavailable(sqlapi.Check, string(object.Type), rel),
+			NoExplain: api.Unavailable(sqlapi.Explain, string(object.Type), rel),
+		}
+		if cells[i].Skip == nil {
+			checked, at = append(checked, rel), append(at, i)
+		}
+	}
 	start := time.Now()
-	errs := eachRelation(r.Context(), rels, func(ctx context.Context, i int, rel string) (err error) {
-		cells[i].Allowed, err = s.checker.Check(ctx, subject, melange.Relation(rel), object)
+	errs := eachRelation(r.Context(), checked, func(ctx context.Context, j int, rel string) (err error) {
+		cells[at[j]].Allowed, err = s.checker.Check(ctx, subject, melange.Relation(rel), object)
 		return err
 	})
 	took := time.Since(start)
-	for i, rel := range rels {
-		cells[i].Relation, cells[i].Err = rel, errString(errs[i])
+	for j, err := range errs {
+		cell := &cells[at[j]]
+		cell.Err = errString(err)
+		if u := sqlapi.FromError(sqlapi.Check, string(object.Type), cell.Relation, err); u != nil {
+			cell.Err = u.Error()
+		}
 	}
 	render(w, r, matrixView(string(subject.Type)+":"+subject.ID, string(object.Type)+":"+object.ID, cells, notes, took))
 }
 
 // expand serves both the form (object + relation) and pointer drill-in
-// (userset = "type:id#relation", as Leaf.Computed carries it).
+// (userset = "type:id#relation", as Leaf.Computed carries it). The tree's
+// pointers offer a drill-in only where expand_permission answers.
 func (s *Server) expand(w http.ResponseWriter, r *http.Request) {
 	rawObject, relation := r.FormValue("object"), strings.TrimSpace(r.FormValue("relation"))
 	if us := r.FormValue("userset"); us != "" {
@@ -442,14 +532,34 @@ func (s *Server) expand(w http.ResponseWriter, r *http.Request) {
 		render(w, r, errorBox(err.Error()))
 		return
 	}
-	start := time.Now()
-	tree, err := s.checker.Expand(r.Context(), object, melange.Relation(relation))
-	took := time.Since(start)
-	if err != nil {
-		render(w, r, errorBox(failedAfter(err, took)))
+	model, _ := s.loadModel(r.Context())
+	api := apiOf(model)
+	if u := api.Unavailable(sqlapi.Expand, string(object.Type), relation); u != nil {
+		render(w, r, unavailableBox(u))
 		return
 	}
-	render(w, r, expandView(tree, r.FormValue("userset") == "", took))
+	start := time.Now()
+	var tree *melange.UsersetTree
+	err = api.Trace(r.Context(), s.db, s.dbSchema, sqlapi.Expand, nil, func(c *melange.Checker) (err error) {
+		tree, err = c.Expand(r.Context(), object, melange.Relation(relation))
+		return err
+	})
+	took := time.Since(start)
+	if err != nil {
+		render(w, r, errorBox(callFailed(sqlapi.Expand, object, relation, err, took)))
+		return
+	}
+	render(w, r, expandView(tree, r.FormValue("userset") == "", took, pointerCheck(api)))
+}
+
+// pointerCheck returns why a pointer ("type:id#relation") cannot be expanded
+// in place, or nil when it can.
+func pointerCheck(api *sqlapi.API) func(userset string) *sqlapi.Unavailable {
+	return func(userset string) *sqlapi.Unavailable {
+		obj, rel, _ := strings.Cut(userset, "#")
+		typ, _, _ := strings.Cut(obj, ":")
+		return api.Unavailable(sqlapi.Expand, typ, rel)
+	}
 }
 
 func render(w http.ResponseWriter, r *http.Request, c templ.Component) {

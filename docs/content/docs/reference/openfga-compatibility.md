@@ -176,6 +176,7 @@ dropped condition would silently widen access:
 $ melange validate --schema schema.fga
 Error: parsing schema: melange: invalid schema: conditions are not supported
 and would be silently dropped: document#viewer allows [user with ip_allowed].
+Remove them or see https://melange.sh/docs/reference/openfga-compatibility/
 ```
 
 Most conditions can be expressed another way: a `WHERE` clause in the tuples
@@ -214,7 +215,7 @@ If you run OpenFGA today, most of your model carries over unchanged.
 
 2. **Replace tuple writes with a view.** Instead of writing tuples to a store, define a `melange_tuples` view over the tables that already hold the relationships (memberships, ownership, parent links). See [Creating Your Tuples View](../../getting-started/tuples-view/). If some relationships only exist in OpenFGA, export them with `fga tuple read` into a table and include it in the view.
 
-3. **Swap the client.** Replace OpenFGA SDK calls with the [Go Checker](../../guides/checking-permissions/), the [TypeScript client](../typescript-api/), or plain SQL (`check_permission`). Contextual tuples, `ListObjects`, and `ListUsers` equivalents are supported.
+3. **Swap the client.** Replace OpenFGA SDK calls with the [Go Checker](../../guides/checking-permissions/), the [TypeScript client](../typescript-api/), or plain SQL (`check_permission`). Contextual tuples (Go runtime), `ListObjects`, and `ListUsers` equivalents are supported.
 
 What you gain: checks run in your database transaction, see uncommitted writes, and need no separate service or tuple sync. What you give up: CEL conditions (most can be [replaced with SQL](../../guides/conditions/)), and the option to scale authorization separately from PostgreSQL.
 

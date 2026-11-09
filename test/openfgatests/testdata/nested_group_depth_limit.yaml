@@ -1,0 +1,760 @@
+# Self-referential usersets (group#member on group.member): the depth limit and
+# deduplication. OpenFGA fails ListObjects and ListUsers with "resolution too
+# complex" (2002) once nesting reaches 25 levels and succeeds at 24; melange's
+# breadth-first walks raise M2002 at the same point instead of returning a
+# truncated list, and expand each group once, so cycles terminate.
+tests:
+  # 24 levels of nesting list fully.
+  - name: nested_group_depth_limit_24_levels
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user, group#member]
+        tuples:
+          - user: user:alice
+            relation: member
+            object: group:g0
+          - user: group:g0#member
+            relation: member
+            object: group:g1
+          - user: group:g1#member
+            relation: member
+            object: group:g2
+          - user: group:g2#member
+            relation: member
+            object: group:g3
+          - user: group:g3#member
+            relation: member
+            object: group:g4
+          - user: group:g4#member
+            relation: member
+            object: group:g5
+          - user: group:g5#member
+            relation: member
+            object: group:g6
+          - user: group:g6#member
+            relation: member
+            object: group:g7
+          - user: group:g7#member
+            relation: member
+            object: group:g8
+          - user: group:g8#member
+            relation: member
+            object: group:g9
+          - user: group:g9#member
+            relation: member
+            object: group:g10
+          - user: group:g10#member
+            relation: member
+            object: group:g11
+          - user: group:g11#member
+            relation: member
+            object: group:g12
+          - user: group:g12#member
+            relation: member
+            object: group:g13
+          - user: group:g13#member
+            relation: member
+            object: group:g14
+          - user: group:g14#member
+            relation: member
+            object: group:g15
+          - user: group:g15#member
+            relation: member
+            object: group:g16
+          - user: group:g16#member
+            relation: member
+            object: group:g17
+          - user: group:g17#member
+            relation: member
+            object: group:g18
+          - user: group:g18#member
+            relation: member
+            object: group:g19
+          - user: group:g19#member
+            relation: member
+            object: group:g20
+          - user: group:g20#member
+            relation: member
+            object: group:g21
+          - user: group:g21#member
+            relation: member
+            object: group:g22
+          - user: group:g22#member
+            relation: member
+            object: group:g23
+          - user: group:g23#member
+            relation: member
+            object: group:g24
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: group
+              relation: member
+            expectation:
+              - group:g0
+              - group:g1
+              - group:g2
+              - group:g3
+              - group:g4
+              - group:g5
+              - group:g6
+              - group:g7
+              - group:g8
+              - group:g9
+              - group:g10
+              - group:g11
+              - group:g12
+              - group:g13
+              - group:g14
+              - group:g15
+              - group:g16
+              - group:g17
+              - group:g18
+              - group:g19
+              - group:g20
+              - group:g21
+              - group:g22
+              - group:g23
+              - group:g24
+        listUsersAssertions:
+          - request:
+              filters:
+                - user
+              object: group:g24
+              relation: member
+            expectation:
+              - user:alice
+  # 25 levels fail with 2002, as in OpenFGA, rather than returning a truncated list.
+  - name: nested_group_depth_limit_25_levels
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user, group#member]
+        tuples:
+          - user: user:alice
+            relation: member
+            object: group:g0
+          - user: group:g0#member
+            relation: member
+            object: group:g1
+          - user: group:g1#member
+            relation: member
+            object: group:g2
+          - user: group:g2#member
+            relation: member
+            object: group:g3
+          - user: group:g3#member
+            relation: member
+            object: group:g4
+          - user: group:g4#member
+            relation: member
+            object: group:g5
+          - user: group:g5#member
+            relation: member
+            object: group:g6
+          - user: group:g6#member
+            relation: member
+            object: group:g7
+          - user: group:g7#member
+            relation: member
+            object: group:g8
+          - user: group:g8#member
+            relation: member
+            object: group:g9
+          - user: group:g9#member
+            relation: member
+            object: group:g10
+          - user: group:g10#member
+            relation: member
+            object: group:g11
+          - user: group:g11#member
+            relation: member
+            object: group:g12
+          - user: group:g12#member
+            relation: member
+            object: group:g13
+          - user: group:g13#member
+            relation: member
+            object: group:g14
+          - user: group:g14#member
+            relation: member
+            object: group:g15
+          - user: group:g15#member
+            relation: member
+            object: group:g16
+          - user: group:g16#member
+            relation: member
+            object: group:g17
+          - user: group:g17#member
+            relation: member
+            object: group:g18
+          - user: group:g18#member
+            relation: member
+            object: group:g19
+          - user: group:g19#member
+            relation: member
+            object: group:g20
+          - user: group:g20#member
+            relation: member
+            object: group:g21
+          - user: group:g21#member
+            relation: member
+            object: group:g22
+          - user: group:g22#member
+            relation: member
+            object: group:g23
+          - user: group:g23#member
+            relation: member
+            object: group:g24
+          - user: group:g24#member
+            relation: member
+            object: group:g25
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: group
+              relation: member
+            errorCode: 2002
+        listUsersAssertions:
+          - request:
+              filters:
+                - user
+              object: group:g25
+              relation: member
+            errorCode: 2002
+  # Listing usersets past the limit fails too.
+  - name: nested_group_userset_filter_too_deep
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user, group#member]
+        tuples:
+          - user: user:alice
+            relation: member
+            object: group:g0
+          - user: group:g0#member
+            relation: member
+            object: group:g1
+          - user: group:g1#member
+            relation: member
+            object: group:g2
+          - user: group:g2#member
+            relation: member
+            object: group:g3
+          - user: group:g3#member
+            relation: member
+            object: group:g4
+          - user: group:g4#member
+            relation: member
+            object: group:g5
+          - user: group:g5#member
+            relation: member
+            object: group:g6
+          - user: group:g6#member
+            relation: member
+            object: group:g7
+          - user: group:g7#member
+            relation: member
+            object: group:g8
+          - user: group:g8#member
+            relation: member
+            object: group:g9
+          - user: group:g9#member
+            relation: member
+            object: group:g10
+          - user: group:g10#member
+            relation: member
+            object: group:g11
+          - user: group:g11#member
+            relation: member
+            object: group:g12
+          - user: group:g12#member
+            relation: member
+            object: group:g13
+          - user: group:g13#member
+            relation: member
+            object: group:g14
+          - user: group:g14#member
+            relation: member
+            object: group:g15
+          - user: group:g15#member
+            relation: member
+            object: group:g16
+          - user: group:g16#member
+            relation: member
+            object: group:g17
+          - user: group:g17#member
+            relation: member
+            object: group:g18
+          - user: group:g18#member
+            relation: member
+            object: group:g19
+          - user: group:g19#member
+            relation: member
+            object: group:g20
+          - user: group:g20#member
+            relation: member
+            object: group:g21
+          - user: group:g21#member
+            relation: member
+            object: group:g22
+          - user: group:g22#member
+            relation: member
+            object: group:g23
+          - user: group:g23#member
+            relation: member
+            object: group:g24
+          - user: group:g24#member
+            relation: member
+            object: group:g25
+          - user: group:g25#member
+            relation: member
+            object: group:g26
+          - user: group:g26#member
+            relation: member
+            object: group:g27
+          - user: group:g27#member
+            relation: member
+            object: group:g28
+          - user: group:g28#member
+            relation: member
+            object: group:g29
+          - user: group:g29#member
+            relation: member
+            object: group:g30
+        listUsersAssertions:
+          - request:
+              filters:
+                - group#member
+              object: group:g30
+              relation: member
+            errorCode: 2002
+  # A nesting cycle lists each group and member once and terminates.
+  - name: nested_group_cycle
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user, group#member]
+        tuples:
+          - user: user:alice
+            relation: member
+            object: group:a
+          - user: group:a#member
+            relation: member
+            object: group:b
+          - user: group:b#member
+            relation: member
+            object: group:c
+          - user: group:c#member
+            relation: member
+            object: group:a
+        listObjectsAssertions:
+          - request:
+              user: user:alice
+              type: group
+              relation: member
+            expectation:
+              - group:a
+              - group:b
+              - group:c
+        listUsersAssertions:
+          - request:
+              filters:
+                - user
+              object: group:b
+              relation: member
+            expectation:
+              - user:alice
+          - request:
+              filters:
+                - group#member
+              object: group:b
+              relation: member
+            expectation:
+              - group:a#member
+              - group:b#member
+              - group:c#member
+  # A userset subject (group:g0#member) starts one level in: 25 levels still list.
+  - name: nested_group_userset_subject_25_levels
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user, group#member]
+        tuples:
+          - user: user:alice
+            relation: member
+            object: group:g0
+          - user: group:g0#member
+            relation: member
+            object: group:g1
+          - user: group:g1#member
+            relation: member
+            object: group:g2
+          - user: group:g2#member
+            relation: member
+            object: group:g3
+          - user: group:g3#member
+            relation: member
+            object: group:g4
+          - user: group:g4#member
+            relation: member
+            object: group:g5
+          - user: group:g5#member
+            relation: member
+            object: group:g6
+          - user: group:g6#member
+            relation: member
+            object: group:g7
+          - user: group:g7#member
+            relation: member
+            object: group:g8
+          - user: group:g8#member
+            relation: member
+            object: group:g9
+          - user: group:g9#member
+            relation: member
+            object: group:g10
+          - user: group:g10#member
+            relation: member
+            object: group:g11
+          - user: group:g11#member
+            relation: member
+            object: group:g12
+          - user: group:g12#member
+            relation: member
+            object: group:g13
+          - user: group:g13#member
+            relation: member
+            object: group:g14
+          - user: group:g14#member
+            relation: member
+            object: group:g15
+          - user: group:g15#member
+            relation: member
+            object: group:g16
+          - user: group:g16#member
+            relation: member
+            object: group:g17
+          - user: group:g17#member
+            relation: member
+            object: group:g18
+          - user: group:g18#member
+            relation: member
+            object: group:g19
+          - user: group:g19#member
+            relation: member
+            object: group:g20
+          - user: group:g20#member
+            relation: member
+            object: group:g21
+          - user: group:g21#member
+            relation: member
+            object: group:g22
+          - user: group:g22#member
+            relation: member
+            object: group:g23
+          - user: group:g23#member
+            relation: member
+            object: group:g24
+          - user: group:g24#member
+            relation: member
+            object: group:g25
+        listObjectsAssertions:
+          - request:
+              user: group:g0#member
+              type: group
+              relation: member
+            expectation:
+              - group:g0
+              - group:g1
+              - group:g2
+              - group:g3
+              - group:g4
+              - group:g5
+              - group:g6
+              - group:g7
+              - group:g8
+              - group:g9
+              - group:g10
+              - group:g11
+              - group:g12
+              - group:g13
+              - group:g14
+              - group:g15
+              - group:g16
+              - group:g17
+              - group:g18
+              - group:g19
+              - group:g20
+              - group:g21
+              - group:g22
+              - group:g23
+              - group:g24
+              - group:g25
+  # Listing usersets at the boundary: 24 levels list, 25 fail.
+  - name: nested_group_userset_filter_24_levels
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user, group#member]
+        tuples:
+          - user: user:alice
+            relation: member
+            object: group:g0
+          - user: group:g0#member
+            relation: member
+            object: group:g1
+          - user: group:g1#member
+            relation: member
+            object: group:g2
+          - user: group:g2#member
+            relation: member
+            object: group:g3
+          - user: group:g3#member
+            relation: member
+            object: group:g4
+          - user: group:g4#member
+            relation: member
+            object: group:g5
+          - user: group:g5#member
+            relation: member
+            object: group:g6
+          - user: group:g6#member
+            relation: member
+            object: group:g7
+          - user: group:g7#member
+            relation: member
+            object: group:g8
+          - user: group:g8#member
+            relation: member
+            object: group:g9
+          - user: group:g9#member
+            relation: member
+            object: group:g10
+          - user: group:g10#member
+            relation: member
+            object: group:g11
+          - user: group:g11#member
+            relation: member
+            object: group:g12
+          - user: group:g12#member
+            relation: member
+            object: group:g13
+          - user: group:g13#member
+            relation: member
+            object: group:g14
+          - user: group:g14#member
+            relation: member
+            object: group:g15
+          - user: group:g15#member
+            relation: member
+            object: group:g16
+          - user: group:g16#member
+            relation: member
+            object: group:g17
+          - user: group:g17#member
+            relation: member
+            object: group:g18
+          - user: group:g18#member
+            relation: member
+            object: group:g19
+          - user: group:g19#member
+            relation: member
+            object: group:g20
+          - user: group:g20#member
+            relation: member
+            object: group:g21
+          - user: group:g21#member
+            relation: member
+            object: group:g22
+          - user: group:g22#member
+            relation: member
+            object: group:g23
+          - user: group:g23#member
+            relation: member
+            object: group:g24
+        listUsersAssertions:
+          - request:
+              filters:
+                - group#member
+              object: group:g24
+              relation: member
+            expectation:
+              - group:g0#member
+              - group:g1#member
+              - group:g2#member
+              - group:g3#member
+              - group:g4#member
+              - group:g5#member
+              - group:g6#member
+              - group:g7#member
+              - group:g8#member
+              - group:g9#member
+              - group:g10#member
+              - group:g11#member
+              - group:g12#member
+              - group:g13#member
+              - group:g14#member
+              - group:g15#member
+              - group:g16#member
+              - group:g17#member
+              - group:g18#member
+              - group:g19#member
+              - group:g20#member
+              - group:g21#member
+              - group:g22#member
+              - group:g23#member
+              - group:g24#member
+  - name: nested_group_userset_filter_25_levels
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user, group#member]
+        tuples:
+          - user: user:alice
+            relation: member
+            object: group:g0
+          - user: group:g0#member
+            relation: member
+            object: group:g1
+          - user: group:g1#member
+            relation: member
+            object: group:g2
+          - user: group:g2#member
+            relation: member
+            object: group:g3
+          - user: group:g3#member
+            relation: member
+            object: group:g4
+          - user: group:g4#member
+            relation: member
+            object: group:g5
+          - user: group:g5#member
+            relation: member
+            object: group:g6
+          - user: group:g6#member
+            relation: member
+            object: group:g7
+          - user: group:g7#member
+            relation: member
+            object: group:g8
+          - user: group:g8#member
+            relation: member
+            object: group:g9
+          - user: group:g9#member
+            relation: member
+            object: group:g10
+          - user: group:g10#member
+            relation: member
+            object: group:g11
+          - user: group:g11#member
+            relation: member
+            object: group:g12
+          - user: group:g12#member
+            relation: member
+            object: group:g13
+          - user: group:g13#member
+            relation: member
+            object: group:g14
+          - user: group:g14#member
+            relation: member
+            object: group:g15
+          - user: group:g15#member
+            relation: member
+            object: group:g16
+          - user: group:g16#member
+            relation: member
+            object: group:g17
+          - user: group:g17#member
+            relation: member
+            object: group:g18
+          - user: group:g18#member
+            relation: member
+            object: group:g19
+          - user: group:g19#member
+            relation: member
+            object: group:g20
+          - user: group:g20#member
+            relation: member
+            object: group:g21
+          - user: group:g21#member
+            relation: member
+            object: group:g22
+          - user: group:g22#member
+            relation: member
+            object: group:g23
+          - user: group:g23#member
+            relation: member
+            object: group:g24
+          - user: group:g24#member
+            relation: member
+            object: group:g25
+        listUsersAssertions:
+          - request:
+              filters:
+                - group#member
+              object: group:g25
+              relation: member
+            errorCode: 2002
+  # A userset is a member of its own object even when excluded there: OpenFGA
+  # lists group:g0 for group:g0#member although g0#member is blocked on g0.
+  - name: nested_group_self_userset_not_excluded
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define blocked: [user, group#member]
+              define member: [user, group#member] but not blocked
+        tuples:
+          - user: group:g0#member
+            relation: blocked
+            object: group:g0
+          - user: group:g0#member
+            relation: member
+            object: group:g1
+        checkAssertions:
+          - tuple:
+              user: group:g0#member
+              relation: member
+              object: group:g0
+            expectation: true
+        listObjectsAssertions:
+          - request:
+              user: group:g0#member
+              type: group
+              relation: member
+            expectation:
+              - group:g0
+              - group:g1

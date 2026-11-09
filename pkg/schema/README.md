@@ -99,8 +99,10 @@ func RelationSubjects(types []TypeDefinition, objectType, relation string) []str
 ### Schema Validation
 
 ```go
-// DetectCycles checks for cycles in the relation graph.
-// Returns ErrCyclicSchema if a cycle is found.
+// DetectCycles checks for implied-by cycles: relations of one type that
+// resolve through each other on the same object (computed relations,
+// intersection and exclusion operands). Parent relation cycles, within or
+// across types, are valid. Returns ErrCyclicSchema if a cycle is found.
 func DetectCycles(types []TypeDefinition) error
 
 // IsCyclicSchemaErr returns true if err is or wraps ErrCyclicSchema.

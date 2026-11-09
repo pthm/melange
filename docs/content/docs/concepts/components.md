@@ -17,7 +17,7 @@ flowchart TD
 
 ## CLI (Compiler)
 
-The `melange` CLI is the compiler. It reads your `.fga` schema, analyzes each relation, and generates specialized PostgreSQL functions. Each type+relation pair gets its own check function, plus dispatchers (`check_permission`, `list_accessible_objects`, `list_accessible_subjects`) that route calls to the correct function.
+The `melange` CLI is the compiler. It reads your `.fga` schema, analyzes each relation, and generates specialized PostgreSQL functions: a check function per type+relation pair, plus list, `accessible_*`, expand and explain functions, and dispatchers (`check_permission`, `check_permission_bulk`, `list_accessible_objects`, `accessible_objects`, `list_accessible_subjects`, `expand_permission`, `explain_permission`) that route calls to the correct function. By default every relation gets every family; the `sql` section of `melange.yaml` narrows this to the relations you expose and the relations they resolve through.
 
 The CLI also handles validation, health checks, and code generation:
 
@@ -58,7 +58,7 @@ type repository
     define can_write: owner
 ```
 
-This schema is the input to the compiler. Each `define` statement produces a specialized SQL function. Role hierarchies (`admin: [user] or owner`) are resolved at compile time through transitive closure computation, so runtime checks avoid graph traversal.
+This schema is the input to the compiler. Each `define` statement produces specialized SQL functions (under a restricted `sql` exposure, only for the exposed relations and the relations they resolve through). Role hierarchies (`admin: [user] or owner`) are resolved at compile time through transitive closure computation, so runtime checks avoid graph traversal.
 
 The schema file is typically stored at `melange/schema.fga` in your project.
 

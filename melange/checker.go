@@ -3,10 +3,14 @@ package melange
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
+	"errors"
 	"fmt"
 	"log"
+	"reflect"
 	"strings"
 	"sync"
+	"time"
 )
 
 // schemaValidation tracks which database schemas have been validated.
@@ -357,15 +361,23 @@ func (c *Checker) mapError(operation string, err error) error {
 			return fmt.Errorf("%w: %v", ErrNoTuplesTable, err)
 		}
 	case pgUndefinedFunction:
-		if strings.Contains(err.Error(), "check_permission") ||
-			strings.Contains(err.Error(), "list_accessible") ||
-			strings.Contains(err.Error(), "explain_permission") {
+		errStr := err.Error()
+		if strings.Contains(errStr, "check_permission") ||
+			strings.Contains(errStr, "list_accessible") ||
+			strings.Contains(errStr, "explain_permission") ||
+			strings.Contains(errStr, "expand_permission") {
 			return fmt.Errorf("%w: %v", ErrMissingFunction, err)
 		}
 	case pgResolutionTooComplex:
 		return &ValidationError{
 			Code:    ErrorCodeResolutionTooComplex,
 			Message: "resolution too complex: depth limit exceeded",
+		}
+	case pgNotExposed:
+		// The database message names the relation and the type.
+		return &ValidationError{
+			Code:    ErrorCodeValidation,
+			Message: pgMessage(err),
 		}
 	}
 
@@ -411,22 +423,22 @@ func (c *Checker) validateListUsersRequest(_ context.Context, _ Querier, relatio
 }
 
 // sqlState extracts the SQLSTATE code from a PostgreSQL error.
-// Works with multiple drivers via interface detection:
-//   - pgx/pgconn: SQLState() string
-//   - lib/pq: Code field (via error interface)
+// Works with multiple drivers via interface detection, also through wrapping:
+//   - pgx/pgconn, lib/pq: SQLState() string
+//   - some error wrappers: Code() string
 //
 // Returns empty string if the error doesn't contain a SQLSTATE.
 func sqlState(err error) string {
 	// Try SQLState() method (pgx/pgconn, and some pq versions)
-	type sqlStateErr interface{ SQLState() string }
-	if e, ok := err.(sqlStateErr); ok {
-		return e.SQLState()
+	var se interface{ SQLState() string }
+	if errors.As(err, &se) {
+		return se.SQLState()
 	}
 
 	// Try Code() method (some error wrappers)
-	type codeErr interface{ Code() string }
-	if e, ok := err.(codeErr); ok {
-		return e.Code()
+	var ce interface{ Code() string }
+	if errors.As(err, &ce) {
+		return ce.Code()
 	}
 
 	// Fallback: string matching for known patterns (last resort)
@@ -447,6 +459,27 @@ func sqlState(err error) string {
 	return ""
 }
 
+// pgMessage returns the primary message of a PostgreSQL error, without the
+// driver's decoration ("pq: ", "ERROR: ", the SQLSTATE suffix): the Message
+// field that lib/pq's *pq.Error and pgx's *pgconn.PgError both carry, read
+// by reflection since the runtime imports no driver. Falls back to
+// err.Error().
+func pgMessage(err error) string {
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		v := reflect.ValueOf(e)
+		if v.Kind() == reflect.Pointer {
+			v = v.Elem()
+		}
+		if v.Kind() != reflect.Struct {
+			continue
+		}
+		if f := v.FieldByName("Message"); f.IsValid() && f.Kind() == reflect.String && f.String() != "" {
+			return f.String()
+		}
+	}
+	return err.Error()
+}
+
 // ListObjects returns object IDs of the given type that subject has relation on,
 // with cursor-based pagination support.
 //
@@ -463,8 +496,12 @@ func sqlState(err error) string {
 //   - DecisionDeny: returns empty list (no access)
 //   - DecisionAllow: falls through to normal check (can't enumerate "all" objects)
 //
-// Uses a recursive CTE to walk the permission graph in a single query,
-// providing 10-50x improvement over N+1 patterns on large datasets.
+// Resolves the list in a single query, avoiding N+1 checks. Recursive
+// relations are listed by a breadth-first walk in the generated function. A
+// walk that reaches 25 levels returns a *ValidationError with
+// ErrorCodeResolutionTooComplex rather than a truncated list, and a relation
+// the database's SQL API does not expose returns a *ValidationError with
+// ErrorCodeValidation.
 func (c *Checker) ListObjects(ctx context.Context, subject SubjectLike, relation RelationLike, objectType ObjectType, page PageOptions) (ids []string, nextCursor *string, err error) {
 	if c.validateUserset {
 		if err := c.validateUsersetSubject(ctx, c.q, subject.FGASubject()); err != nil {
@@ -518,7 +555,10 @@ func (c *Checker) ListObjects(ctx context.Context, subject SubjectLike, relation
 		nextCursor = cursor // All rows have the same cursor, keep the last one
 	}
 
-	return ids, nextCursor, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, c.mapError("list_accessible_objects", err)
+	}
+	return ids, nextCursor, nil
 }
 
 // ListObjectsAll returns all object IDs by automatically paginating through
@@ -622,7 +662,10 @@ func (c *Checker) ListObjectsWithContextualTuples(
 		nextCursor = cursor
 	}
 
-	return ids, nextCursor, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, c.mapError("list_accessible_objects", err)
+	}
+	return ids, nextCursor, nil
 }
 
 // ListSubjects returns subject IDs of the given type that have relation on object,
@@ -641,8 +684,12 @@ func (c *Checker) ListObjectsWithContextualTuples(
 //   - DecisionDeny: returns empty list (no subjects have access)
 //   - DecisionAllow: falls through to normal check (can't enumerate "all" subjects)
 //
-// Uses a recursive CTE to walk the permission graph in a single query,
-// providing 10-50x improvement over N+1 patterns on large datasets.
+// Resolves the list in a single query, avoiding N+1 checks. Recursive
+// relations are listed by a breadth-first walk in the generated function. A
+// walk that reaches 25 levels returns a *ValidationError with
+// ErrorCodeResolutionTooComplex rather than a truncated list, and a relation
+// the database's SQL API does not expose returns a *ValidationError with
+// ErrorCodeValidation.
 func (c *Checker) ListSubjects(ctx context.Context, object ObjectLike, relation RelationLike, subjectType ObjectType, page PageOptions) (ids []string, nextCursor *string, err error) {
 	if c.validateRequest {
 		if err := c.validateListUsersRequest(ctx, c.q, relation.FGARelation(), object.FGAObject(), subjectType); err != nil {
@@ -690,7 +737,10 @@ func (c *Checker) ListSubjects(ctx context.Context, object ObjectLike, relation 
 		nextCursor = cursor
 	}
 
-	return ids, nextCursor, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, c.mapError("list_accessible_subjects", err)
+	}
+	return ids, nextCursor, nil
 }
 
 // ListSubjectsAll returns all subject IDs by automatically paginating through
@@ -788,7 +838,10 @@ func (c *Checker) ListSubjectsWithContextualTuples(
 		nextCursor = cursor
 	}
 
-	return ids, nextCursor, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, c.mapError("list_accessible_subjects", err)
+	}
+	return ids, nextCursor, nil
 }
 
 // validateContextualTuples validates all contextual tuples for basic shape errors.
@@ -845,7 +898,11 @@ func (c *Checker) prepareContextualTuples(ctx context.Context, tuples []Contextu
 			return nil, nil, err
 		}
 		cleanup := func() {
-			c.cleanupContextualTuples(ctx, conn)
+			if err := c.cleanupContextualTuples(ctx, conn); err != nil {
+				// The view may still be in place: close the session rather
+				// than pool it, or later requests would see the tuples.
+				_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+			}
 			_ = conn.Close()
 		}
 		if err := c.setupContextualTuples(ctx, conn, tuples); err != nil {
@@ -854,14 +911,14 @@ func (c *Checker) prepareContextualTuples(ctx context.Context, tuples []Contextu
 		}
 		return conn, cleanup, nil
 	case *sql.Tx:
-		cleanup := func() { c.cleanupContextualTuples(ctx, q) }
+		cleanup := func() { _ = c.cleanupContextualTuples(ctx, q) }
 		if err := c.setupContextualTuples(ctx, q, tuples); err != nil {
 			cleanup()
 			return nil, nil, err
 		}
 		return q, cleanup, nil
 	case *sql.Conn:
-		cleanup := func() { c.cleanupContextualTuples(ctx, q) }
+		cleanup := func() { _ = c.cleanupContextualTuples(ctx, q) }
 		if err := c.setupContextualTuples(ctx, q, tuples); err != nil {
 			cleanup()
 			return nil, nil, err
@@ -921,15 +978,32 @@ SELECT subject_type, subject_id, relation, object_type, object_id FROM (VALUES `
 	if _, err := q.ExecContext(ctx, sb.String()); err != nil {
 		return err
 	}
+	// PL/pgSQL keeps each statement's parse tree, with melange_tuples resolved,
+	// across calls on a session. Creating the temp view does not invalidate a
+	// tree that resolved the base relation during an earlier plain request on
+	// this pooled session, so the generated functions would ignore the
+	// contextual tuples. Discarding the session's plans makes them resolve the
+	// name again. Dropping the view invalidates the plans that resolved it.
+	if _, err := q.ExecContext(ctx, "DISCARD PLANS"); err != nil {
+		return err
+	}
 	return nil
 }
 
+// contextualCleanupTimeout bounds the DROP VIEW of contextual tuple cleanup,
+// which runs even when the request's context is done.
+const contextualCleanupTimeout = 5 * time.Second
+
 // cleanupContextualTuples drops the temporary view created by setupContextualTuples.
-// This must be called after permission checks complete to prevent temp object leakage.
-// The cleanup is best-effort (ignores errors) since temp objects are automatically
-// cleaned up when the session ends anyway.
-func (c *Checker) cleanupContextualTuples(ctx context.Context, q Execer) {
-	_, _ = q.ExecContext(ctx, "DROP VIEW IF EXISTS pg_temp.melange_tuples")
+// This must be called after permission checks complete: a view left on a
+// pooled session would show its tuples to every later request on it. It runs
+// without the request's cancellation, which would otherwise stop the drop
+// from being sent after a canceled or timed-out request.
+func (c *Checker) cleanupContextualTuples(ctx context.Context, q Execer) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), contextualCleanupTimeout)
+	defer cancel()
+	_, err := q.ExecContext(ctx, "DROP VIEW IF EXISTS pg_temp.melange_tuples")
+	return err
 }
 
 // baseTuplesSchema returns the schema containing the melange_tuples relation,
@@ -992,7 +1066,7 @@ func quoteIdent(ident string) string {
 // escaped by doubling; backslashes are doubled and the result is prefixed
 // with E (C-style escape syntax) so the literal is unambiguous regardless of
 // the standard_conforming_strings setting. Mirrors lib/pq.QuoteLiteral and
-// lib/sqlgen/sqldsl.QuoteLiteral — duplicated here because the melange
+// internal/sqlgen/sqldsl.QuoteLiteral — duplicated here because the melange
 // runtime module is stdlib-only and cannot import sqldsl.
 func quoteLiteral(literal string) string {
 	literal = strings.ReplaceAll(literal, `'`, `''`)

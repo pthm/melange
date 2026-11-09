@@ -144,16 +144,6 @@ func TestTuples_WhereUsersetRelation(t *testing.T) {
 	assertContains(t, sql, "split_part(t.subject_id, '#', 2) = 'member'")
 }
 
-func TestTuples_WhereUsersetRelationLike(t *testing.T) {
-	sql := Tuples("", "t").
-		ObjectType("doc").
-		WhereUsersetRelationLike("member").
-		SelectCol("subject_id").
-		SQL()
-
-	assertContains(t, sql, "t.subject_id LIKE '%#member'")
-}
-
 func TestTuples_WhereNilSkipped(t *testing.T) {
 	q := Tuples("", "t").ObjectType("doc").SelectCol("object_id")
 	q.Where(nil, sqldsl.Lit("true"), nil)

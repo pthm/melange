@@ -6,6 +6,7 @@ import (
 
 	"github.com/pthm/melange/internal/clientgen"
 	"github.com/pthm/melange/internal/clientgen/typescript"
+	"github.com/pthm/melange/pkg/compiler"
 	"github.com/pthm/melange/pkg/schema"
 )
 
@@ -57,7 +58,7 @@ func TestGenerator_Generate(t *testing.T) {
 			t.Fatalf("Generate error: %v", err)
 		}
 
-		expectedFiles := []string{"types.ts", "schema.ts", "index.ts"}
+		expectedFiles := []string{"types.ts", "schema.ts", "sql.ts", "index.ts"}
 		if len(files) != len(expectedFiles) {
 			t.Errorf("Generate returned %d files, want %d", len(files), len(expectedFiles))
 		}
@@ -231,6 +232,10 @@ func TestGenerator_Generate(t *testing.T) {
 		if !strings.Contains(code, "export * from './schema.js';") {
 			t.Error("index.ts should re-export all from schema.ts")
 		}
+
+		if !strings.Contains(code, "export { AccessibleFunctions, AccessibleByParentFunctions } from './sql.js';") {
+			t.Error("index.ts should re-export the accessible function maps")
+		}
 	})
 
 	t.Run("generates all relations by default", func(t *testing.T) {
@@ -276,6 +281,14 @@ func TestGenerator_Generate(t *testing.T) {
 		}
 		if strings.Contains(code, "Self: \"self\"") {
 			t.Error("should NOT generate Self with can_ prefix filter")
+		}
+
+		sql := string(files["sql.ts"])
+		if !strings.Contains(sql, "can_read: \"accessible_repository_can_read\"") {
+			t.Error("the prefix filter should keep can_read's accessible function")
+		}
+		if strings.Contains(sql, "owner:") || strings.Contains(sql, "self:") {
+			t.Errorf("the prefix filter should drop the other accessible functions:\n%s", sql)
 		}
 	})
 }
@@ -386,8 +399,15 @@ func TestGenerator_EmptySchema(t *testing.T) {
 			t.Fatalf("Generate error: %v", err)
 		}
 
-		if len(files) != 3 {
-			t.Errorf("should generate 3 files even for empty schema, got %d", len(files))
+		if len(files) != 4 {
+			t.Errorf("should generate 4 files even for empty schema, got %d", len(files))
+		}
+
+		sqlCode := string(files["sql.ts"])
+		for _, want := range []string{"export const AccessibleFunctions = {} as const;", "export const AccessibleByParentFunctions = {} as const;"} {
+			if !strings.Contains(sqlCode, want) {
+				t.Errorf("sql.ts should contain %q:\n%s", want, sqlCode)
+			}
 		}
 
 		typesCode := string(files["types.ts"])
@@ -400,6 +420,51 @@ func TestGenerator_EmptySchema(t *testing.T) {
 			t.Error("should generate valid schema.ts even with no types")
 		}
 	})
+}
+
+// sql.ts keys are the schema's names: quoted when they are not identifiers,
+// and computed for __proto__, which as a plain or quoted key would set the
+// object's prototype.
+func TestGenerator_SQLKeys(t *testing.T) {
+	types := []schema.TypeDefinition{
+		{Name: "user"},
+		{Name: "doc.v2", Relations: []schema.RelationDefinition{
+			{Name: "__proto__", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
+			{Name: "viewer", SubjectTypeRefs: []schema.SubjectTypeRef{{Type: "user"}}},
+		}},
+	}
+	cfg := &clientgen.Config{Relations: &compiler.RelationPatterns{Include: []string{"viewer"}}}
+	_, err := (&typescript.Generator{}).Generate(types, cfg)
+	if err == nil || !strings.Contains(err.Error(), "not a valid identifier") {
+		t.Fatalf("the ObjectTypes key for doc.v2 is not an identifier, want an error, got %v", err)
+	}
+
+	types[1].Name = "doc"
+	files, err := (&typescript.Generator{}).Generate(types, &clientgen.Config{RelationFilter: "__"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := string(files["sql.ts"])
+	if !strings.Contains(sql, `["__proto__"]: "accessible_doc___proto__",`) {
+		t.Errorf("__proto__ should be a computed key:\n%s", sql)
+	}
+}
+
+// A factory cannot be named eval or arguments, which strict mode rejects as
+// binding names, nor like an import of schema.ts (a conflicting
+// declaration) or an explicit export of index.ts (which hides it there).
+func TestGenerator_FactoryNameConflicts(t *testing.T) {
+	for _, name := range []string{"eval", "arguments", "delete", "ObjectTypes", "MelangeObject", "Relations", "ObjectType", "Relation", "AccessibleFunctions", "AccessibleByParentFunctions"} {
+		t.Run(name, func(t *testing.T) {
+			types := []schema.TypeDefinition{{Name: name}}
+			if _, err := (&typescript.Generator{}).Generate(types, nil); err == nil {
+				t.Fatalf("type %q gives the factory %s, want an error", name, name)
+			}
+		})
+	}
+	if _, err := (&typescript.Generator{}).Generate([]schema.TypeDefinition{{Name: "evaluation"}, {Name: "relation_set"}}, nil); err != nil {
+		t.Fatalf("names that only start like a conflicting one are fine, got %v", err)
+	}
 }
 
 func TestRegistry_TypeScriptGeneratorRegistered(t *testing.T) {

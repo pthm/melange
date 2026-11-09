@@ -131,7 +131,7 @@ The wizard asks you to choose how schema changes are applied to your database:
 
 **Built-in** connects directly to PostgreSQL and applies SQL functions. It tracks changes via a `melange_migrations` table and skips unchanged schemas automatically.
 
-**Versioned** produces timestamped `.sql` files (e.g., `20240315_melange.up.sql`) that you apply with your existing migration tool (golang-migrate, Atlas, Flyway, etc.). This means schema changes go through code review in PRs like any other migration.
+**Versioned** produces timestamped `.sql` files (e.g., `20240315120000_melange.up.sql`) that you apply with your existing migration tool (golang-migrate, Atlas, Flyway, etc.). This means schema changes go through code review in PRs like any other migration.
 
 You can change strategies later by updating your config file. See [Running Migrations](../../guides/migrations/) for details on comparison modes and CI workflows.
 
@@ -247,7 +247,7 @@ allowed, err := checker.Check(ctx,
 )
 ```
 
-The `--filter` option (configurable in `generate.client.filter`) lets you limit which relations are generated. For example, `--filter can_` generates only relations starting with `can_`.
+Relation constants follow the relations `sql.relations` exposes, so the client names what migrate installs. To choose them separately, set `generate.client.relations` (or pass `--include-relation` / `--exclude-relation`) with the same `include` / `exclude` patterns; for example, `--include-relation 'can_*'` generates only relations starting with `can_`. The older `--filter` option and `generate.client.filter` key still work but are deprecated. See [Which Relations](../../reference/generated-code/#which-relations).
 
 ## Coding Agent Instructions
 

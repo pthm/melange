@@ -8,7 +8,7 @@ import (
 
 // Explain codegen. Mirrors the shape of check_render.go but emits JSONB
 // Trace nodes shaped to the contract pinned in melange/trace.go and
-// lib/sqlgen/trace_blocks.go. The body composes, in order: cycle detection,
+// internal/sqlgen/trace_blocks.go. The body composes, in order: cycle detection,
 // per-call truncation guard, userset-subject pre-check, direct-grant
 // attempt, implied function calls, parent-relation TTU loops, userset
 // reference loops, intersection groups, then the final-failure union.
@@ -23,7 +23,7 @@ import (
 
 // RenderExplainFunction is the entry point for explain_* function generation.
 func RenderExplainFunction(plan CheckPlan, blocks CheckBlocks) (string, error) {
-	body := buildExplainCycleDetection(plan)
+	body := append(buildExplainCycleDetection(plan), inlineUsersetDepthGuard(blocks)...)
 	body = append(body, explainTruncationBailout(plan))
 	body = append(body, buildExplainUsersetSubjectStmts(plan, blocks)...)
 	// Standalone attempts (Direct, Implied, TTU, Userset) only emit when
@@ -50,14 +50,17 @@ func RenderExplainFunction(plan CheckPlan, blocks CheckBlocks) (string, error) {
 	body = append(body, buildExplainFinalFailure(plan)...)
 
 	fn := PlpgsqlFunction{
-		Schema:  plan.DatabaseSchema,
-		Name:    explainFunctionName(plan.ObjectType, plan.Relation),
-		Args:    explainFunctionArgs(),
-		Returns: "JSONB",
-		Decls:   explainFunctionDecls(plan, blocks),
-		Body:    body,
-		Header:  explainFunctionHeader(plan),
-		Cost:    explainFunctionCost(plan),
+		// Schema sets the search_path that resolves melange_tuples, so it
+		// stays the data schema when the function is created elsewhere.
+		Schema:           plan.DatabaseSchema,
+		DefinitionSchema: plan.FunctionSchema,
+		Name:             explainFunctionName(plan.ObjectType, plan.Relation),
+		Args:             explainFunctionArgs(),
+		Returns:          "JSONB",
+		Decls:            explainFunctionDecls(plan, blocks),
+		Body:             body,
+		Header:           explainFunctionHeader(plan),
+		Cost:             explainFunctionCost(plan),
 	}
 
 	return fn.SQL() + "\n", nil
@@ -85,10 +88,11 @@ func explainFunctionHeader(plan CheckPlan) []string {
 	}
 }
 
-// explainFunctionCost mirrors checkFunctionCost. Even though explain bodies
-// are not on the request hot path, the planner sees them in EXISTS branches
-// when used as evidence; matching the check tier prevents accidental
-// reordering surprises.
+// explainFunctionCost marks explain functions whose relation reaches a
+// recursive check with recursiveCheckCost. Even though explain bodies are not
+// on the request hot path, the planner sees them in EXISTS branches when used
+// as evidence; matching the check tier prevents accidental reordering
+// surprises.
 func explainFunctionCost(plan CheckPlan) int {
 	if plan.ComplexityByRelation[plan.ObjectType][plan.Relation] >= complexityRecursive {
 		return recursiveCheckCost
@@ -173,10 +177,7 @@ func buildExplainCycleDetection(plan CheckPlan) []Stmt {
 				ReturnValue{Value: Raw(buildExplainTraceRoot(plan, "false", "v_root"))},
 			},
 		},
-		If{
-			Cond: Gte{Left: ArrayLength{Array: Visited}, Right: Int(25)},
-			Then: []Stmt{Raise{Message: "resolution too complex", ErrCode: "M2002"}},
-		},
+		checkDepthGuard(),
 	}
 }
 
@@ -297,7 +298,7 @@ func buildExplainDirectSelect(plan CheckPlan) SelectStmt {
 // "call the sibling explain_*, return on success, record failure on miss"
 // block.
 //
-//	v_child_trace := explain_{type}_{rel}(p_subject_type, p_subject_id, p_object_id, p_visited || ARRAY[v_key]);
+//	v_child_trace := explain_{type}_{rel}(p_subject_type, p_subject_id, p_object_id, p_visited, p_max_nodes);
 //	v_node_count := v_node_count + COALESCE((v_child_trace->>'node_count')::INTEGER, 0);
 //	IF (v_child_trace->>'result')::boolean THEN
 //	    v_root := <NodeImplied wrapping child trace's root, result=true>;
@@ -318,8 +319,9 @@ func buildExplainImpliedAttempts(plan CheckPlan, blocks CheckBlocks) []Stmt {
 
 	for _, call := range blocks.ImpliedFunctionCalls {
 		explainFnName := explainFunctionName(plan.ObjectType, call.Relation)
-		callExpr := fmt.Sprintf("%s(p_subject_type, p_subject_id, p_object_id, p_visited || ARRAY[v_key], p_max_nodes)",
-			sqldsl.PrefixIdent(explainFnName, plan.DatabaseSchema))
+		// A computed relation is not a step (see checkDepthLimit).
+		callExpr := fmt.Sprintf("%s(p_subject_type, p_subject_id, p_object_id, p_visited, p_max_nodes)",
+			sqldsl.PrefixIdent(explainFnName, plan.functionSchema()))
 
 		label := sqldsl.QuoteLiteral("implied via " + call.Relation)
 		childAsArray := "jsonb_build_array(v_child_trace->'root')"
@@ -410,7 +412,7 @@ func buildExplainParentLoopStmt(plan CheckPlan, blocks CheckBlocks, parent Paren
 
 	dispatcherCall := fmt.Sprintf(
 		"%s(p_subject_type, p_subject_id, %s, v_parent_link.parent_type, v_parent_link.parent_id, p_visited || ARRAY[v_key], p_max_nodes)",
-		sqldsl.PrefixIdent("explain_permission_internal", plan.DatabaseSchema),
+		sqldsl.PrefixIdent("explain_permission_internal", plan.functionSchema()),
 		sqldsl.QuoteLiteral(parent.ParentRelation),
 	)
 
@@ -536,7 +538,7 @@ func buildExplainUsersetSubjectStmts(plan CheckPlan, blocks CheckBlocks) []Stmt 
 		},
 	}
 
-	if len(plan.Analysis.UsersetPatterns) > 0 {
+	if len(plan.Analysis.UsersetPatterns) > 0 && len(standaloneUsersetSubjectRelations(plan.Analysis)) > 0 {
 		// Case 2 honors exclusion the way Check's Case 2 does, so route
 		// through the helper.
 		innerThen = append(innerThen,
@@ -610,7 +612,7 @@ func buildExplainUsersetLoopStmt(plan CheckPlan, blocks CheckBlocks, pattern Use
 	// the grant tuple as the parent object.
 	dispatcherCall := fmt.Sprintf(
 		"%s(p_subject_type, p_subject_id, %s, %s, v_userset_grant.group_id, p_visited || ARRAY[v_key], p_max_nodes)",
-		sqldsl.PrefixIdent("explain_permission_internal", plan.DatabaseSchema),
+		sqldsl.PrefixIdent("explain_permission_internal", plan.functionSchema()),
 		sqldsl.QuoteLiteral(pattern.SubjectRelation),
 		sqldsl.QuoteLiteral(pattern.SubjectType),
 	)
@@ -747,9 +749,10 @@ func buildExplainIntersectionPartStmts(plan CheckPlan, part IntersectionPartChec
 		return buildExplainComplexIntersectionPartStmts(plan, part)
 	}
 
+	// An operand on the same object is not a step (see checkDepthLimit).
 	dispatcherCall := fmt.Sprintf(
-		"%s(p_subject_type, p_subject_id, %s, %s, p_object_id, p_visited || ARRAY[v_key], p_max_nodes)",
-		sqldsl.PrefixIdent("explain_permission_internal", plan.DatabaseSchema),
+		"%s(p_subject_type, p_subject_id, %s, %s, p_object_id, p_visited, p_max_nodes)",
+		sqldsl.PrefixIdent("explain_permission_internal", plan.functionSchema()),
 		sqldsl.QuoteLiteral(part.Relation),
 		sqldsl.QuoteLiteral(plan.ObjectType),
 	)

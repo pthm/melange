@@ -15,7 +15,7 @@ git clone https://github.com/pthm/melange.git
 cd melange
 
 # Install development tools
-go install github.com/gotesttools/gotestfmt/v2/cmd/gotestfmt@latest
+just install-tools
 ```
 
 ## Building

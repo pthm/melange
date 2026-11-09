@@ -1,18 +1,21 @@
 // Package typescript implements the TypeScript client code generator for melange.
 //
 // This generator produces type-safe TypeScript code from authorization schemas,
-// including object type constants, relation constants, and factory functions.
+// including object type constants, relation constants, factory functions, and
+// the names of the installed accessible functions.
 //
 // Generated code uses the @pthm/melange runtime package for type definitions.
 package typescript
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
-	"sort"
+	"regexp"
 	"strings"
 
 	"github.com/pthm/melange/internal/clientgen"
+	"github.com/pthm/melange/pkg/compiler"
 	"github.com/pthm/melange/pkg/schema"
 )
 
@@ -38,59 +41,53 @@ func (g *Generator) DefaultConfig() *clientgen.Config {
 
 // Generate produces TypeScript client code from the given type definitions.
 //
-// Returns a multi-file map with keys: "types.ts", "schema.ts", "index.ts".
+// Returns a multi-file map with keys: "types.ts", "schema.ts", "sql.ts",
+// "index.ts".
 //
 // Generated code includes:
-//   - types.ts: ObjectType/Relation constants and union types
+//   - types.ts: ObjectType constants for every type, Relation constants for
+//     the relations the config selects (see clientgen.Config), and union types
 //   - schema.ts: Factory functions and wildcard constructors
+//   - sql.ts: AccessibleFunctions and AccessibleByParentFunctions, the names
+//     of the installed accessible functions of the selected relations, keyed
+//     by type, relation and link
 //   - index.ts: Re-exports for clean imports
+//
+// It fails when two schema names map to one key or function name, or a
+// function name is not a valid identifier or is a name the files import or
+// export by name.
 func (g *Generator) Generate(types []schema.TypeDefinition, cfg *clientgen.Config) (map[string][]byte, error) {
-	// Validate schema before generating code
-	if err := schema.DetectCycles(types); err != nil {
-		return nil, err
-	}
-
 	if cfg == nil {
 		cfg = g.DefaultConfig()
 	}
-
-	// Collect unique object types
-	objectTypes := make([]string, 0, len(types))
-	for _, t := range types {
-		objectTypes = append(objectTypes, t.Name)
+	m, err := clientgen.Resolve(types, cfg)
+	if err != nil {
+		return nil, err
 	}
-	sort.Strings(objectTypes)
-
-	// Collect unique relations (with optional prefix filter)
-	relSet := make(map[string]bool)
-	for _, t := range types {
-		for _, r := range t.Relations {
-			if cfg.RelationFilter == "" || strings.HasPrefix(r.Name, cfg.RelationFilter) {
-				relSet[r.Name] = true
-			}
-		}
+	if err := declareIdentifiers(m); err != nil {
+		return nil, err
 	}
-
-	relations := make([]string, 0, len(relSet))
-	for r := range relSet {
-		relations = append(relations, r)
-	}
-	sort.Strings(relations)
 
 	// Generate each file
 	files := make(map[string][]byte)
 
-	typesContent, err := g.generateTypes(objectTypes, relations, cfg)
+	typesContent, err := g.generateTypes(m.ObjectTypes, m.Relations, cfg)
 	if err != nil {
 		return nil, err
 	}
 	files["types.ts"] = typesContent
 
-	schemaContent, err := g.generateSchema(objectTypes, cfg)
+	schemaContent, err := g.generateSchema(m.ObjectTypes, cfg)
 	if err != nil {
 		return nil, err
 	}
 	files["schema.ts"] = schemaContent
+
+	sqlContent, err := g.generateSQL(m)
+	if err != nil {
+		return nil, err
+	}
+	files["sql.ts"] = sqlContent
 
 	indexContent, err := g.generateIndex(cfg)
 	if err != nil {
@@ -99,6 +96,73 @@ func (g *Generator) Generate(types []schema.TypeDefinition, cfg *clientgen.Confi
 	files["index.ts"] = indexContent
 
 	return files, nil
+}
+
+// declareIdentifiers checks the keys of ObjectTypes and Relations and the
+// exported function names: each must be an identifier that names one thing,
+// and a function name must not be a reserved word or eval or arguments, nor
+// one of the names schema.ts imports or index.ts exports by name. sql.ts keys
+// are the schema names themselves, quoted when needed, so they cannot
+// collide.
+func declareIdentifiers(m *clientgen.Model) error {
+	keys := func(what string, names []string) error {
+		ids := clientgen.NewIdentifiers(identifierPattern.MatchString)
+		for _, n := range names {
+			if err := ids.Declare(pascalCase(n), fmt.Sprintf("the %s key for %q", what, n)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	if err := keys("ObjectTypes", m.ObjectTypes); err != nil {
+		return err
+	}
+	if err := keys("Relations", m.Relations); err != nil {
+		return err
+	}
+	funcs := clientgen.NewIdentifiers(func(s string) bool { return identifierPattern.MatchString(s) && !reservedWords[s] })
+	// A factory named like an import of schema.ts conflicts with it, and one
+	// named like an explicit export of index.ts is shadowed by it there.
+	for _, d := range [][2]string{
+		{"MelangeObject", "the MelangeObject import in schema.ts"},
+		{"ObjectTypes", "the ObjectTypes import in schema.ts"},
+		{"Relations", "the Relations export in index.ts"},
+		{"ObjectType", "the ObjectType export in index.ts"},
+		{"Relation", "the Relation export in index.ts"},
+		{"AccessibleFunctions", "the AccessibleFunctions export in index.ts"},
+		{"AccessibleByParentFunctions", "the AccessibleByParentFunctions export in index.ts"},
+	} {
+		if err := funcs.Declare(d[0], d[1]); err != nil {
+			return err
+		}
+	}
+	for _, t := range m.ObjectTypes {
+		if err := funcs.Declare(camelCase(t), fmt.Sprintf("the factory for type %q", t)); err != nil {
+			return err
+		}
+		if err := funcs.Declare("any"+pascalCase(t), fmt.Sprintf("the wildcard factory for type %q", t)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// identifierPattern matches the identifiers the generator emits, and the
+// object keys sql.ts writes without quotes.
+var identifierPattern = regexp.MustCompile(`^[A-Za-z_$][A-Za-z0-9_$]*$`)
+
+// reservedWords cannot name a function declaration in a module: the
+// reserved words of strict mode, and eval and arguments, which strict mode
+// does not allow as binding names.
+var reservedWords = map[string]bool{
+	"await": true, "break": true, "case": true, "catch": true, "class": true, "const": true, "continue": true,
+	"debugger": true, "default": true, "delete": true, "do": true, "else": true, "enum": true, "export": true,
+	"extends": true, "false": true, "finally": true, "for": true, "function": true, "if": true, "implements": true,
+	"import": true, "in": true, "instanceof": true, "interface": true, "let": true, "new": true, "null": true,
+	"package": true, "private": true, "protected": true, "public": true, "return": true, "static": true,
+	"super": true, "switch": true, "this": true, "throw": true, "true": true, "try": true, "typeof": true,
+	"var": true, "void": true, "while": true, "with": true, "yield": true,
+	"eval": true, "arguments": true,
 }
 
 // generateTypes creates the types.ts file with ObjectTypes and Relations constants.
@@ -211,6 +275,103 @@ func (g *Generator) generateSchema(objectTypes []string, _ *clientgen.Config) ([
 	return buf.Bytes(), nil
 }
 
+// generateSQL creates the sql.ts file with the accessible function names.
+// Keys are the schema's type, relation and link names; a map is empty when
+// its function family is off.
+func (g *Generator) generateSQL(m *clientgen.Model) ([]byte, error) {
+	var buf bytes.Buffer
+	ew := &errWriter{w: &buf}
+
+	ew.writeln("/**")
+	ew.writeln(" * Generated by melange. DO NOT EDIT.")
+	ew.writeln(" */")
+	ew.writeln("")
+	ew.writeln("/**")
+	ew.writeln(" * AccessibleFunctions maps a type and relation to the accessible function")
+	ew.writeln(" * installed for it, as migrate names it: names longer than 63 bytes are")
+	ew.writeln(" * truncated and hashed, so use these instead of building them.")
+	ew.writeln(" * accessible_<type>_<relation>(subject_type, subject_id) returns the IDs of")
+	ew.writeln(" * the objects on which the subject holds the relation. Names are")
+	ew.writeln(" * unqualified: qualify them with the database schema when it is not on")
+	ew.writeln(" * search_path.")
+	ew.writeln(" */")
+	writeNested(ew, "AccessibleFunctions", m.Accessible, false)
+	ew.writeln("")
+	ew.writeln("/**")
+	ew.writeln(" * AccessibleByParentFunctions maps a type, relation and link to the")
+	ew.writeln(" * parent-key accessible function installed for it, named like")
+	ew.writeln(" * AccessibleFunctions. It returns the IDs of the parent objects through")
+	ew.writeln(" * whose link the subject holds the relation, to filter on the column that")
+	ew.writeln(" * holds the link.")
+	ew.writeln(" */")
+	writeNested(ew, "AccessibleByParentFunctions", m.AccessibleByParent, true)
+
+	if ew.err != nil {
+		return nil, ew.err
+	}
+	return buf.Bytes(), nil
+}
+
+// writeNested writes fns, sorted by type, relation and link, as a const
+// object nested by type and relation, and by link when byLink is set.
+func writeNested(ew *errWriter, name string, fns []compiler.AccessibleFunction, byLink bool) {
+	if len(fns) == 0 {
+		ew.writef("export const %s = {} as const;\n", name)
+		return
+	}
+	ew.writef("export const %s = {\n", name)
+	for i, f := range fns {
+		newType := i == 0 || fns[i-1].ObjectType != f.ObjectType
+		newRelation := newType || fns[i-1].Relation != f.Relation
+		if byLink && newRelation && i > 0 {
+			ew.writeln("    },")
+		}
+		if newType {
+			if i > 0 {
+				ew.writeln("  },")
+			}
+			ew.writef("  %s: {\n", objectKey(f.ObjectType))
+		}
+		if !byLink {
+			ew.writef("    %s: %s,\n", objectKey(f.Relation), jsString(f.Name))
+			continue
+		}
+		if newRelation {
+			ew.writef("    %s: {\n", objectKey(f.Relation))
+		}
+		ew.writef("      %s: %s,\n", objectKey(f.Link), jsString(f.Name))
+	}
+	if byLink {
+		ew.writeln("    },")
+	}
+	ew.writeln("  },")
+	ew.writeln("} as const;")
+}
+
+// objectKey returns name as an object literal key, quoted unless it is an
+// identifier. __proto__ is computed: written plainly or quoted it sets the
+// object's prototype instead of a property.
+func objectKey(name string) string {
+	switch {
+	case name == "__proto__":
+		return "[" + jsString(name) + "]"
+	case identifierPattern.MatchString(name):
+		return name
+	default:
+		return jsString(name)
+	}
+}
+
+// jsString returns s as a double-quoted JavaScript string literal.
+func jsString(s string) string {
+	b, err := json.Marshal(s)
+	if err != nil {
+		// A string always marshals.
+		panic(err)
+	}
+	return string(b)
+}
+
 // generateIndex creates the index.ts file with re-exports.
 func (g *Generator) generateIndex(_ *clientgen.Config) ([]byte, error) {
 	var buf bytes.Buffer
@@ -224,6 +385,7 @@ func (g *Generator) generateIndex(_ *clientgen.Config) ([]byte, error) {
 	ew.writeln("export { ObjectTypes, Relations } from './types.js';")
 	ew.writeln("export type { ObjectType, Relation } from './types.js';")
 	ew.writeln("export * from './schema.js';")
+	ew.writeln("export { AccessibleFunctions, AccessibleByParentFunctions } from './sql.js';")
 	ew.writeln("")
 
 	if ew.err != nil {

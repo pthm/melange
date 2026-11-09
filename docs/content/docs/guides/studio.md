@@ -1,6 +1,6 @@
 ---
 title: Studio
-description: "melange studio: a local, read-only web console and permissions debugger for OpenFGA models in PostgreSQL. Visualize the deployed model, explain why a check was allowed or denied, and browse tuples."
+description: "melange studio: a local web console and permissions debugger for OpenFGA models in PostgreSQL. Visualize the deployed model, explain why a check was allowed or denied, and browse tuples."
 weight: 12
 ---
 
@@ -51,9 +51,9 @@ An explicit `--db` wins over the environment's connection. When an environment i
 
 ## Read-Only Connections
 
-Studio opens every connection with `default_transaction_read_only=on` and checks `SHOW default_transaction_read_only` at startup. If the setting did not take effect, studio exits instead of serving. The top bar shows a `read-only` badge.
+Studio opens every connection with `default_transaction_read_only=on` and checks `SHOW default_transaction_read_only` at startup. If the setting did not take effect, studio exits instead of serving.
 
-The one exception is Explain with what-if tuples (see [What-If Tuples](#what-if-tuples)). It begins a read-write transaction, creates a temporary view, switches the transaction to read-only, runs Explain, and always rolls back. Nothing is committed.
+There are two exceptions, and neither commits anything. Explain with what-if tuples (see [What-If Tuples](#what-if-tuples)) begins a read-write transaction, creates a temporary view, switches the transaction to read-only, runs Explain, and always rolls back. On a database migrated with `sql.functions.explain` or `expand` off, Explain and Expand create that family's functions in `pg_temp` the same way, for each call (see [Explain and Expand Without Their Functions](#explain-and-expand-without-their-functions)).
 
 ## Pages
 
@@ -91,7 +91,7 @@ group:eng#member editor document:1
 
 Studio runs Explain twice, without and with the tuples, and shows both answers. The tuples are added to `melange_tuples` through a temporary view, the same way [contextual tuples](../contextual-tuples/) work, inside a transaction that is always rolled back. When studio can read the deployed model, each tuple is validated against it first: an unknown relation, or a subject type the relation does not accept directly, is reported by line number.
 
-What-if needs a writable primary and the `TEMP` privilege on the database. It fails on a hot-standby replica, because a replica refuses read-write transactions. Plain Explain and the other query modes work on a replica.
+What-if needs a writable primary and the `TEMP` privilege on the database. It fails on a hot-standby replica, because a replica refuses read-write transactions. Plain Explain and the other query modes work on a replica, except that Explain needs a writable primary on a database migrated with `sql.functions.explain` off, and Expand needs one with `sql.functions.expand` off (see [Replicas](#replicas)).
 
 #### Analyze
 
@@ -107,9 +107,22 @@ Without it, Analyze still shows the plan and total timings, with a note that per
 
 #### Relation Pages
 
-Each relation has a page showing its `define` line, the relations it reads (**Depends on**) and the relations that read it (**Used by**), the code generator's feature analysis, and the SQL source of its deployed functions (check, list objects, list subjects, explain, expand), read from `pg_proc`.
+Each relation has a page showing its `define` line, the relations it reads (**Depends on**) and the relations that read it (**Used by**), the code generator's feature analysis, and the SQL source of its deployed functions, read from `pg_proc`: every function the deployed SQL API installs for it (check, list objects, list subjects, accessible and its parent-key form, explain, expand), and why a family is not installed. It links to the relation on the [SQL API](#sql-api) page.
 
 {{< studio-screenshot name="relation" alt="The relation page for repository#can_read, with its definition, feature analysis and dependencies" >}}
+
+### SQL API
+
+The SQL API page (`/sql`) is a viewer for the functions the database installs, and how they relate to the model. It describes the **deployed model** and the exposure its last migration recorded, the same report as [`melange functions --db`](../../reference/cli/#functions), so it needs no `melange.yaml`.
+
+- **Overview** shows the exposure the last migration recorded (which relations, and which function families are off), then the entry points an application calls, each with a one-line description and the number of relations it answers for. Opening one shows its signature and an example call. The internal dispatchers that generated functions call are folded under them. A **Drift** section comes first when something differs: expected functions that are missing, installed with other arguments or another body, or with stale overloads; orphans the last migration recorded; functions only named like generated ones (unmanaged, never dropped); and a note when another melange version generated the functions. Name collisions follow it.
+- **A type** (sidebar) lists its exposed relations, then its internal ones (not exposed) in a section of their own. Each relation starts with a ready-to-run call for each thing an application can do with it: check, list objects, list subjects, filter a query (the inlinable `accessible_{type}_{relation}` function), filter by a parent column (the parent-key functions), expand and explain, each with a **Copy** button. A call the relation does not have says why, for example when its family is off or compiled on demand. The generated functions behind the calls are listed under them. Each shows its exact name (truncated names are marked), its kind, and a status badge when it is not installed as expected. Opening one shows an example call, how an application uses the result, any note (an accessible function is inlined into the calling query, so the schema holding `melange_tuples` must be on its `search_path`), the signature, and the functions its body may call.
+- **A kind** (sidebar) lists that kind's functions across the model, for example every `accessible` function, which is the quickest way to find a truncated name.
+- A type and a kind combine. **all kinds** and **all types** in the sidebar drop one of them.
+
+Bodies are compared with what this melange generates for the deployed model, compiled once per model and cached, and checked through `md5(prosrc)`. The page reads only `pg_proc` and `melange_migrations`.
+
+The [Health](#health) page answers a different question: it runs `melange doctor`, whose Generated Functions checks compare the **local schema file**. While a migration is pending, Health lists what `migrate` would add and the SQL API page what the deployed model is missing; each page links to the other.
 
 ### Tuples
 
@@ -165,9 +178,52 @@ The record is the same data as [`melange history`](../../reference/cli/#history)
 
 ### Health
 
-The Health page runs the same checks as [`melange doctor`](../../reference/cli/#doctor), grouped by category. The checks that compare a local schema file with the database use `--schema`, else the `schema` of a config file or `MELANGE_SCHEMA`. With none of these, studio skips the schema file and drift checks and says so; it never needs a schema file to run.
+The Health page runs the same checks as [`melange doctor`](../../reference/cli/#doctor), grouped by category. Its Generated Functions checks compare the local schema file; the [SQL API](#sql-api) page compares the deployed model. The checks that compare a local schema file with the database use `--schema`, else the `schema` of a config file or `MELANGE_SCHEMA`. With none of these, studio skips the schema file and drift checks and says so; it never needs a schema file to run. With a config file, the exposure check compares its `sql:` section with the exposure the database was migrated with, as `melange doctor` does.
 
 {{< studio-screenshot name="health" alt="The Health page showing melange doctor checks grouped by category with pass and warning counts" >}}
+
+## Restricted SQL API Exposure
+
+A database migrated with a restricted [exposure](../../reference/sql-api/#exposure)
+(the `sql:` section of `melange.yaml`) answers for fewer relations or function
+families, and its public functions raise `M2003` for the rest. Studio reads
+the exposure recorded by the last migration and does not call a function for
+a relation it does not answer for:
+
+| Page | Relation not exposed | Family off |
+| ---- | -------------------- | ---------- |
+| Explain, Analyze | The query says the relation is not exposed and how to expose it | Explain runs on demand (see below) |
+| Expand | The query says the relation is not exposed. In a tree, a pointer that `expand_permission` does not answer for has a `not exposed` label instead of a drill-in | Expand and the drill-in run on demand |
+| Matrix | The relation is labeled `not exposed` and not checked; the summary counts them | Explain chips explain on demand; without a model recorded by studio's codegen version they are plain labels instead |
+| Can access, Accessed by | The relation is not listed; one line per reason names the relations left out, with why and how to change it folded under it | The tab says the list functions are not installed |
+| Relation page | The header has one line per reason naming the function families that do not answer for the relation, with why and how to change it folded under it | Same, and explain and expand show `on demand` |
+
+Hover a label for the reason. `expand_permission` answers for every relation
+that an exposed relation's pointers lead to, so drilling into a relation that
+is installed but not exposed works.
+
+Under the default exposure, or a database migrated before melange recorded
+the exposure, studio behaves as before: every relation is answered. Without a
+recorded model, studio calls the functions and reports an `M2003` the same
+way.
+
+### Explain and Expand Without Their Functions
+
+With `sql.functions.explain` or `expand` off, studio compiles that family's
+functions from the recorded model and creates them in `pg_temp` for each
+Explain, what-if Explain, Expand and drill-in, in a transaction that begins
+read-write, turns read-only before the call, and is always rolled back, on a
+connection that is closed afterwards. The
+answer is the one installed functions would give, for the relations the
+recorded exposure exposes. Studio compiles a model once per process; each call
+still creates the functions, which costs tens of milliseconds on a mid-sized
+model. On demand needs a model recorded by a melange of studio's codegen
+version; without one, Explain and Expand say so and the explain chips are
+plain labels. It also needs a writable primary and the `TEMP` privilege,
+which studio cannot check ahead of a call: on a replica, or as a role
+without `TEMP`, the explain chips stay clickable and each Explain or Expand
+fails with a message asking for both. See
+[Explain and Expand on Demand](../../reference/sql-api/#explain-and-expand-on-demand).
 
 ## Database Privileges
 
@@ -183,21 +239,21 @@ This covers the Model page, Explain, Expand, Matrix, Analyze without the per-fun
 
 - `EXECUTE` on the generated functions is granted to `PUBLIC` when a function is created. If you revoked it, grant `EXECUTE` on the functions in the melange schema.
 - The system catalogs (`pg_proc`, `pg_class`, `pg_constraint`, `information_schema`) are readable by every role. Relation pages, labels, and Health read them.
-- `TEMP` on the database is granted to `PUBLIC`. What-if needs it.
+- `TEMP` on the database is granted to `PUBLIC`. What-if needs it, and so do Explain and Expand on a database migrated without their functions.
 
 Optional grants:
 
 | Feature                          | Grant                                                                 |
 | -------------------------------- | --------------------------------------------------------------------- |
 | Labels in the Tuples browser     | `SELECT` on the domain tables (or just their key and label columns)   |
-| What-if tuples                   | `TEMP` on the database, if revoked from `PUBLIC`                       |
+| What-if tuples, and Explain and Expand on demand | `TEMP` on the database, if revoked from `PUBLIC`        |
 | Per-function times in Analyze    | `GRANT SET ON PARAMETER track_functions` (PostgreSQL 15+), or superuser |
 
-Without `SELECT` on `melange_migrations`, studio cannot read the deployed model, so the schema view, Matrix, relation analysis, History, Health, and the access tabs are unavailable, and what-if tuples are not validated; Explain, Expand, and Analyze still work.
+Without `SELECT` on `melange_migrations`, studio cannot read the deployed model, so the schema view, Matrix, relation analysis, History, Health, and the access tabs are unavailable, and what-if tuples are not validated; Explain, Expand, and Analyze still work when their functions are installed (on demand needs the recorded model).
 
 ## Replicas
 
-Studio works against a hot-standby replica, with one exception: what-if tuples need a read-write transaction to create the temporary view, which a replica refuses. Point studio at the primary to use what-if. Everything studio runs on the primary outside what-if is read-only.
+Studio works against a hot-standby replica, with two exceptions, both because a replica refuses read-write transactions: what-if tuples need one to create the temporary view, and on a database migrated with `sql.functions.explain` or `expand` off, Explain and Expand need one to create their functions in `pg_temp`. Point studio at the primary to use them. Everything else studio runs on the primary is read-only.
 
 ## Security
 

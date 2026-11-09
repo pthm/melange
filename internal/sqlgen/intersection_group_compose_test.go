@@ -61,7 +61,7 @@ func TestIntersectionGroup_ComposesWhenComposable(t *testing.T) {
 
 	// Positive part "editor" → emit the specialized list set directly as the
 	// FROM source, no object-type-wide melange_tuples scan.
-	if !strings.Contains(sql, "FROM list_doc_editor_obj(p_subject_type, p_subject_id, NULL, NULL) AS obj") {
+	if !strings.Contains(sql, "FROM accessible_doc_editor(p_subject_type, p_subject_id, #subject_kind#) AS obj") {
 		t.Errorf("expected direct list set for positive part editor, got:\n%s", sql)
 	}
 	// Positive part keeps a userset-guarded per-candidate check arm for parity.
@@ -86,7 +86,7 @@ func TestIntersectionGroup_FallsBackWhenNotComposable(t *testing.T) {
 	}
 	sql := groupBlockSQL(t, planWithIntersectionGroup(lookup))
 
-	if strings.Contains(sql, "list_doc_editor_obj") || strings.Contains(sql, "list_doc_banned_obj") {
+	if strings.Contains(sql, "accessible_doc_editor") || strings.Contains(sql, "list_doc_banned_obj") {
 		t.Errorf("non-generatable targets must fall back to per-candidate check, got composition:\n%s", sql)
 	}
 	if !strings.Contains(sql, "check_permission_internal(p_subject_type, p_subject_id, 'editor', 'doc', t.object_id") {
@@ -105,7 +105,7 @@ func TestIntersectionGroup_ComposesWhenTargetHasWildcard(t *testing.T) {
 	lookup["doc.editor"].Features.HasWildcard = true
 	sql := groupBlockSQL(t, planWithIntersectionGroup(lookup))
 
-	if !strings.Contains(sql, "list_doc_editor_obj") {
+	if !strings.Contains(sql, "accessible_doc_editor") {
 		t.Errorf("wildcard target must compose, got:\n%s", sql)
 	}
 	if !strings.Contains(sql, "list_doc_banned_obj") {
@@ -123,7 +123,7 @@ func TestIntersectionGroup_ComposesWhenTargetIsRecursive(t *testing.T) {
 	lookup["doc.editor"].Features = RelationFeatures{HasDirect: true, HasUserset: true, HasRecursive: true}
 	sql := groupBlockSQL(t, planWithIntersectionGroup(lookup))
 
-	if !strings.Contains(sql, "list_doc_editor_obj") {
+	if !strings.Contains(sql, "accessible_doc_editor") {
 		t.Errorf("recursive target must compose (list_objects is complete), got:\n%s", sql)
 	}
 	if !strings.Contains(sql, "list_doc_banned_obj") {
@@ -137,7 +137,7 @@ func TestIntersectionGroup_ComposesWhenTargetIsUserset(t *testing.T) {
 	lookup["doc.editor"].Features = RelationFeatures{HasDirect: true, HasUserset: true}
 	sql := groupBlockSQL(t, planWithIntersectionGroup(lookup))
 
-	if !strings.Contains(sql, "list_doc_editor_obj") {
+	if !strings.Contains(sql, "accessible_doc_editor") {
 		t.Errorf("userset target must compose, got:\n%s", sql)
 	}
 	if !strings.Contains(sql, "list_doc_banned_obj") {
@@ -158,7 +158,7 @@ func TestIntersectionGroup_FallsBackWhenCyclic(t *testing.T) {
 	}
 	sql := groupBlockSQL(t, planWithIntersectionGroup(lookup))
 
-	if strings.Contains(sql, "list_doc_editor_obj") {
+	if strings.Contains(sql, "accessible_doc_editor") {
 		t.Errorf("cyclic positive part must fall back to per-candidate check, got composition:\n%s", sql)
 	}
 	if !strings.Contains(sql, "check_permission_internal(p_subject_type, p_subject_id, 'editor', 'doc', t.object_id") {

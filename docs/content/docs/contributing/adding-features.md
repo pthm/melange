@@ -35,11 +35,11 @@ If the new feature requires new data in `RelationDefinition`, add fields to the 
 
 This is the core of the work. Add a new code path in the SQL generation that produces the correct SQL for your pattern. Key files:
 
-- `internal/sqlgen/check_queries.go` for check functions.
-- `internal/sqlgen/list_queries.go` for list functions.
-- `internal/sqlgen/sql.go` and `internal/sqlgen/expr.go` for the SQL DSL.
+- `internal/sqlgen/check_queries.go` and `check_render.go` for check functions.
+- `internal/sqlgen/list_objects_*.go` and `list_subjects_*.go` for list functions.
+- `internal/sqlgen/sqldsl/` for the SQL DSL.
 
-Use `PlpgsqlFunction` (not `SqlFunction`) for any function that references `melange_tuples`.
+Use `PlpgsqlFunction` (not `SqlFunction`) for any function that references `melange_tuples`. The inlinable `accessible_<type>_<relation>` functions are the exception: they are `LANGUAGE sql` and are created with `check_function_bodies = off`.
 
 ### 4. Add Tests
 
@@ -49,7 +49,7 @@ For custom test scenarios:
 
 ```go
 func TestNewFeature(t *testing.T) {
-    db := testutil.SetupDB(t)
+    db := testutil.EmptyDB(t)
     ctx := context.Background()
 
     err := migrator.MigrateFromString(ctx, db, `
@@ -104,7 +104,7 @@ Ensure no existing tests regress. Performance regressions >20% in ns/op should b
 
 - Start by reading existing patterns that are similar to what you're adding. Exclusion and Intersection are the most complex examples.
 - Use `Lit(value).SQL()` for SQL string escaping (doubles single quotes).
-- The `p_visited` array parameter is for cycle detection. Pass it through when calling other check functions.
+- The `p_visited` array parameter detects cycles and counts resolution steps. Append the caller's key when following a parent lookup or userset hop; pass it through unchanged for computed relations and intersection or exclusion operands (see `checkDepthLimit`).
 - Dispatchers are always regenerated. You don't need to manually update them.
 
 ## Next Steps

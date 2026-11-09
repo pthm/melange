@@ -6,7 +6,7 @@ import (
 )
 
 // TestComposedListObjects_SelfCandidateFoldedIntoUnion verifies that the
-// composed list_objects renderer folds the same-type userset self-candidate
+// composed accessible query folds the same-type userset self-candidate
 // (OpenFGA userset-defines-itself reflexivity) into the main UNION instead of a
 // separate IF EXISTS early-return that re-evaluated the identical predicate
 // twice. A pure cross-type TTU (report.inherited_view: can_view from document)
@@ -40,10 +40,7 @@ func TestComposedListObjects_SelfCandidateFoldedIntoUnion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildListObjectsComposedBlocks: %v", err)
 	}
-	sql, err := RenderListObjectsComposedFunction(plan, blocks)
-	if err != nil {
-		t.Fatalf("RenderListObjectsComposedFunction: %v", err)
-	}
+	sql := composedAccessibleObjectsQuery(blocks).Full
 
 	if strings.Contains(sql, "IF EXISTS") {
 		t.Errorf("composed self-candidate must be a UNION arm, not an IF EXISTS gate:\n%s", sql)

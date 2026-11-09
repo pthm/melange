@@ -1,15 +1,21 @@
 package doctor
 
 import (
+	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/pthm/melange/internal/sqlgen"
 	"github.com/pthm/melange/internal/update"
+	"github.com/pthm/melange/internal/version"
 	"github.com/pthm/melange/pkg/migrator"
+	"github.com/pthm/melange/pkg/parser"
+	"github.com/pthm/melange/pkg/schema"
 )
 
 // TestGetAnalyses_CachesAndHandlesNilParsedTypes covers both the nil-input
@@ -275,4 +281,219 @@ func TestReportPrint_PlainWhenNotTerminal(t *testing.T) {
 	// The tab in Details must survive: lipgloss expands tabs unless told not to.
 	want := "\nSchema\n  ✓ ok\n  ⚠ drift\n      col\tval\n      Fix: migrate\n\nSummary: 1 passed, 1 warnings, 0 errors\n"
 	assert.Equal(t, want, b.String())
+}
+
+// withVersion sets the build version to v0.10.0 for the test, restoring it
+// afterwards; the test binary reports "dev", which nothing orders against.
+func withVersion(t *testing.T) {
+	t.Helper()
+	prev := version.Version
+	version.Version = "v0.10.0"
+	t.Cleanup(func() { version.Version = prev })
+}
+
+// planned is a Doctor whose plain migrate would take action; nil plan means
+// it cannot be predicted.
+func planned(rec *migrator.MigrationRecord, plan *migrator.MigrationPlan) *Doctor {
+	return &Doctor{lastMigration: rec, plan: plan, planDone: true}
+}
+
+// The missing-functions hint follows what a plain migrate would do: it
+// re-creates them only when it applies.
+func TestReinstallHint(t *testing.T) {
+	withVersion(t)
+	rec := &migrator.MigrationRecord{CodegenVersion: "v0.10.0"}
+	withOrphan := func(a migrator.PlanAction, dependents ...string) *migrator.MigrationPlan {
+		return &migrator.MigrationPlan{Action: a, Orphans: []migrator.OrphanedFunction{{Name: "check_doc_old", Dependents: dependents}}}
+	}
+	for _, tc := range []struct {
+		name    string
+		d       *Doctor
+		want    []string
+		without []string
+	}{
+		{
+			"apply", planned(rec, &migrator.MigrationPlan{Action: migrator.PlanApply}),
+			[]string{"Run 'melange migrate' to create functions"},
+			[]string{"--force", "pending"},
+		},
+		{"apply with a pending schema change", func() *Doctor {
+			d := planned(rec, &migrator.MigrationPlan{Action: migrator.PlanApply})
+			d.schemaPending = true
+			return d
+		}(), []string{"Run 'melange migrate'", "pending changes"}, []string{"--force"}},
+		{
+			"skip", planned(rec, &migrator.MigrationPlan{Action: migrator.PlanSkip}),
+			[]string{"melange migrate --force", "skips"},
+			[]string{"CASCADE"},
+		},
+		{
+			"record only", planned(rec, &migrator.MigrationPlan{Action: migrator.PlanRecordOnly}),
+			[]string{"melange migrate --force", "only records"},
+			nil,
+		},
+		{
+			"skip with an orphan", planned(rec, withOrphan(migrator.PlanSkip)),
+			[]string{"--force also drops 1 removed function with CASCADE", "melange migrate --force --dry-run"},
+			[]string{"together with"},
+		},
+		{
+			"skip with an orphan's dependents", planned(rec, withOrphan(migrator.PlanSkip, "view doc_access", "policy docs_read on table docs")),
+			[]string{"CASCADE, together with view doc_access, policy docs_read on table docs"},
+			nil,
+		},
+		{
+			"apply refused by an orphan's dependents", planned(rec, withOrphan(migrator.PlanApply, "view doc_access")),
+			[]string{"Run 'melange migrate' to create functions", "first change or drop view doc_access"},
+			[]string{"--force"},
+		},
+		{
+			"unpredictable", planned(rec, nil),
+			[]string{"Run 'melange migrate'", "if it reports the schema unchanged, run 'melange migrate --force'"},
+			nil,
+		},
+		{"no record", planned(nil, nil), []string{"Run 'melange migrate' to create functions"}, []string{"--force"}},
+		{
+			"database ahead", planned(&migrator.MigrationRecord{CodegenVersion: "v0.11.0"}, &migrator.MigrationPlan{Action: migrator.PlanSkip}),
+			[]string{"Use melange v0.11.0 or later"},
+			[]string{"--force"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			hint := tc.d.reinstallHint(context.Background())
+			for _, w := range tc.want {
+				assert.Contains(t, hint, w)
+			}
+			for _, w := range tc.without {
+				assert.NotContains(t, hint, w)
+			}
+		})
+	}
+}
+
+// --force overrides the downgrade guard, so no hint suggests running it
+// with this melange on a database a newer melange migrated, whatever migrate
+// would otherwise do. The stored-model hint may suggest it to the newer
+// melange, whose plain migrate skips.
+func TestHintsNeverForceWhenAhead(t *testing.T) {
+	withVersion(t)
+	ctx := context.Background()
+	for _, action := range []migrator.PlanAction{migrator.PlanSkip, migrator.PlanRecordOnly, migrator.PlanApply} {
+		d := planned(&migrator.MigrationRecord{CodegenVersion: "0.11.0", SchemaDSL: "model", ModelJSON: []byte(`{"corrupt": true}`)},
+			&migrator.MigrationPlan{Action: action, Orphans: []migrator.OrphanedFunction{{Name: "check_doc_old", Dependents: []string{"view v"}}}})
+		d.opts.Exposure = &sqlgen.Exposure{Relations: sqlgen.RelationPatterns{Include: []string{"doc#owner"}}}
+		hints := []string{d.reinstallHint(ctx), d.rewriteModelHint(ctx), d.upgradeHint(), d.orphansCheck(ctx, []string{"check_doc_old"}).FixHint}
+		report := &Report{}
+		d.checkExposureSync(ctx, report)
+		d.checkDeployedModel(ctx, report)
+		hints = slices.Grow(hints, len(report.Checks))
+		for _, c := range report.Checks {
+			hints = append(hints, c.FixHint)
+		}
+		for _, h := range hints {
+			if strings.Contains(h, "--force") {
+				assert.Contains(t, h, "Use melange 0.11.0 or later and re-run 'melange migrate' with it", "plan %s", action)
+			}
+			assert.Contains(t, h, "0.11.0", "plan %s", action)
+		}
+	}
+}
+
+// A narrowed exposure drops functions doctor's orphan check does not list
+// (it is compiled under the recorded exposure), so the exposure_sync hint
+// names their dependents, which a plain migrate refuses to drop.
+func TestExposureSyncHintNamesDependents(t *testing.T) {
+	withVersion(t)
+	rec := &migrator.MigrationRecord{CodegenVersion: "v0.10.0"}
+	hint := func(plan *migrator.MigrationPlan) string {
+		d := planned(rec, plan)
+		d.opts.Exposure = &sqlgen.Exposure{Relations: sqlgen.RelationPatterns{Include: []string{"doc#owner"}}}
+		report := &Report{}
+		d.checkExposureSync(context.Background(), report)
+		require.Len(t, report.Checks, 1)
+		return report.Checks[0].FixHint
+	}
+	h := hint(&migrator.MigrationPlan{Action: migrator.PlanApply, Orphans: []migrator.OrphanedFunction{{Name: "check_doc_viewer", Dependents: []string{"view doc_access"}}}})
+	assert.Contains(t, h, "Run 'melange migrate' to apply it")
+	assert.Contains(t, h, "first change or drop view doc_access")
+	assert.Equal(t, "Run 'melange migrate' to apply it", hint(&migrator.MigrationPlan{Action: migrator.PlanApply, Orphans: []migrator.OrphanedFunction{{Name: "check_doc_viewer"}}}))
+	assert.Equal(t, "Run 'melange migrate' to apply it", hint(nil))
+}
+
+// A breaking local change on a database a newer melange migrated: this
+// melange's migrate refuses to apply it, so the drift hint names the newer
+// version instead of migrating.
+func TestDriftSafetyHintWhenAhead(t *testing.T) {
+	withVersion(t)
+	parse := func(dsl string) []schema.TypeDefinition {
+		types, err := parser.ParseSchemaString(dsl)
+		require.NoError(t, err)
+		return types
+	}
+	const deployed = "model\n  schema 1.1\n\ntype user\n\ntype doc\n  relations\n    define owner: [user]\n    define viewer: [user]\n"
+	const local = "model\n  schema 1.1\n\ntype user\n\ntype doc\n  relations\n    define owner: [user]\n"
+	model, err := schema.MarshalModel(parse(deployed))
+	require.NoError(t, err)
+	hint := func(codegen string) string {
+		d := planned(&migrator.MigrationRecord{CodegenVersion: codegen, SchemaDSL: deployed, ModelJSON: model}, nil)
+		d.parsedTypes = parse(local)
+		report := &Report{}
+		d.checkDeployedModel(context.Background(), report)
+		for _, c := range report.Checks {
+			if c.Name == "drift_safety" {
+				require.Equal(t, StatusWarn, c.Status)
+				return c.FixHint
+			}
+		}
+		require.Fail(t, "no drift_safety check", "codegen %s", codegen)
+		return ""
+	}
+	assert.Contains(t, hint("v0.10.0"), "migrating will apply these changes")
+	ahead := hint("v0.11.0")
+	assert.Contains(t, ahead, "refuses to apply them to a database a newer melange (v0.11.0) migrated")
+	assert.NotContains(t, ahead, "migrating will apply")
+	assert.NotContains(t, ahead, "--force")
+}
+
+// A stored model that cannot be decoded is rewritten by a plain migrate
+// only when one would record; when it would skip, by --force.
+func TestCheckDeployedModelDecodeHint(t *testing.T) {
+	withVersion(t)
+	rec := &migrator.MigrationRecord{CodegenVersion: "v0.10.0", SchemaDSL: "model", ModelJSON: []byte(`{"corrupt": true}`)}
+	hint := func(plan *migrator.MigrationPlan) string {
+		report := &Report{}
+		planned(rec, plan).checkDeployedModel(context.Background(), report)
+		require.Len(t, report.Checks, 1)
+		require.Equal(t, "could not be decoded", strings.TrimPrefix(report.Checks[0].Message, "Deployed model "))
+		return report.Checks[0].FixHint
+	}
+	assert.Contains(t, hint(&migrator.MigrationPlan{Action: migrator.PlanSkip}), "melange migrate --force")
+	assert.NotContains(t, hint(&migrator.MigrationPlan{Action: migrator.PlanRecordOnly}), "--force")
+	assert.NotContains(t, hint(&migrator.MigrationPlan{Action: migrator.PlanApply}), "--force")
+	assert.Contains(t, hint(nil), "if it reports the schema unchanged")
+}
+
+// Orphans with dependents name them, since a plain migrate refuses to drop
+// them; orphans the plan does not list are left as they are.
+func TestOrphansCheckNamesDependents(t *testing.T) {
+	withVersion(t)
+	rec := &migrator.MigrationRecord{CodegenVersion: "v0.10.0"}
+	plan := &migrator.MigrationPlan{Action: migrator.PlanApply, Orphans: []migrator.OrphanedFunction{
+		{Name: "check_doc_old", Dependents: []string{"view doc_access"}},
+		{Name: "check_other_old", Dependents: []string{"view unlisted"}},
+	}}
+	c := planned(rec, plan).orphansCheck(context.Background(), []string{"check_doc_old"})
+	assert.Contains(t, c.Details, "check_doc_old: view doc_access")
+	assert.NotContains(t, c.Details, "unlisted")
+	assert.Contains(t, c.FixHint, "refuses to drop them")
+
+	c = planned(rec, &migrator.MigrationPlan{Action: migrator.PlanApply}).orphansCheck(context.Background(), []string{"check_doc_old"})
+	assert.Equal(t, "Run 'melange migrate' to clean up orphans", c.FixHint)
+
+	// A record edited to name them, with nothing else changed: a plain
+	// migrate skips and drops nothing.
+	c = planned(rec, &migrator.MigrationPlan{Action: migrator.PlanSkip, Orphans: []migrator.OrphanedFunction{{Name: "check_doc_old"}}}).
+		orphansCheck(context.Background(), []string{"check_doc_old"})
+	assert.Contains(t, c.FixHint, "melange migrate --force")
+	assert.Contains(t, c.FixHint, "skips")
 }

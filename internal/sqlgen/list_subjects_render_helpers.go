@@ -13,13 +13,13 @@ func renderUsersetFilterPaginatedQuery(plan ListPlan, secondaryBlocks []QueryBlo
 }
 
 // renderUsersetFilterThenBranch builds the THEN branch statements for userset filter path.
-func renderUsersetFilterThenBranch(usersetFilterPaginatedQuery string) []Stmt {
+func renderUsersetFilterThenBranch(usersetFilterPaginatedQuery string, beforeReturn ...Stmt) []Stmt {
 	if usersetFilterPaginatedQuery == "" {
 		return []Stmt{Return{}}
 	}
 
 	hashPos := Position{Needle: Lit("#"), Haystack: SubjectType}
-	return []Stmt{
+	stmts := []Stmt{
 		Assign{
 			Name: "v_filter_type",
 			Value: Substring{
@@ -35,8 +35,9 @@ func renderUsersetFilterThenBranch(usersetFilterPaginatedQuery string) []Stmt {
 				From:   Add{Left: hashPos, Right: Int(1)},
 			},
 		},
-		ReturnQuery{Query: usersetFilterPaginatedQuery},
 	}
+	stmts = append(stmts, beforeReturn...)
+	return append(stmts, ReturnQuery{Query: usersetFilterPaginatedQuery})
 }
 
 // renderRegularPaginatedQuery wraps the regular query with pagination.

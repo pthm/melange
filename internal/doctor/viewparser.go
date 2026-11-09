@@ -2,6 +2,8 @@ package doctor
 
 import (
 	"fmt"
+	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -9,6 +11,16 @@ import (
 type TableRef struct {
 	Schema string // e.g., "public"
 	Name   string // e.g., "organization_members"
+	Alias  string // e.g., "m" in "FROM organization_members m"; "" when none
+}
+
+// Names reports whether qualifier names this table in a column reference:
+// its alias, or its name when it has none.
+func (t TableRef) Names(qualifier string) bool {
+	if t.Alias != "" {
+		return strings.EqualFold(qualifier, t.Alias)
+	}
+	return strings.EqualFold(qualifier, t.Name)
 }
 
 // String returns the optionally schema-qualified table name.
@@ -345,32 +357,54 @@ func parseFromTables(line string) []TableRef {
 			if part == "" {
 				continue
 			}
-			// First word is the table name; ignore aliases.
+			// First word is the table name, then an optional alias.
 			words := strings.Fields(part)
 			if len(words) == 0 {
 				continue
 			}
-			name := strings.TrimRight(words[0], ";")
-
 			// Skip PostgreSQL's ONLY keyword (table inheritance).
-			if strings.EqualFold(name, "ONLY") {
-				if len(words) > 1 {
-					name = strings.TrimRight(words[1], ";")
-				} else {
+			if strings.EqualFold(words[0], "ONLY") {
+				words = words[1:]
+				if len(words) == 0 {
 					continue
 				}
 			}
-
+			name := strings.TrimRight(words[0], ";")
 			if name == "" {
 				continue
 			}
 
 			ref := parseTableRef(name)
+			ref.Alias = tableAlias(words[1:])
 			tables = append(tables, ref)
 		}
 	}
 	return tables
 }
+
+// tableAlias reads the alias after a FROM item's table name ("t" or "AS t"),
+// or "" when the next word is a keyword or there is none.
+func tableAlias(words []string) string {
+	if len(words) > 0 && strings.EqualFold(words[0], "AS") {
+		words = words[1:]
+	}
+	if len(words) == 0 {
+		return ""
+	}
+	alias := strings.Trim(strings.TrimRight(words[0], ";"), `"`)
+	if !identifierRe.MatchString(alias) || slices.Contains(clauseKeywords, strings.ToUpper(alias)) {
+		return ""
+	}
+	return alias
+}
+
+var (
+	identifierRe   = regexp.MustCompile(`^\w+$`)
+	clauseKeywords = []string{
+		"WHERE", "GROUP", "ORDER", "LIMIT", "OFFSET", "HAVING", "WINDOW", "UNION", "ON", "USING",
+		"JOIN", "INNER", "LEFT", "RIGHT", "FULL", "CROSS", "NATURAL", "LATERAL", "TABLESAMPLE",
+	}
+)
 
 // splitOnJoins splits a FROM clause body on JOIN keywords, returning each
 // segment (the text before/between/after JOINs). The JOIN keyword itself

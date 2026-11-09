@@ -30,6 +30,14 @@ func runCLI(t *testing.T, config string, args ...string) (string, error) {
 // for commands that read the local schema before doing anything else.
 func runCLIWithFiles(t *testing.T, config string, files map[string]string, args ...string) (string, error) {
 	t.Helper()
+	seedDir(t, config, files)
+	return executeCLI(t, args...)
+}
+
+// seedDir chdirs into a scratch directory holding config as melange.yaml
+// (none when empty) and files.
+func seedDir(t *testing.T, config string, files map[string]string) {
+	t.Helper()
 
 	dir := t.TempDir()
 	if config != "" {
@@ -44,6 +52,12 @@ func runCLIWithFiles(t *testing.T, config string, files map[string]string, args 
 		writeFile(t, filepath.Join(dir, name), content)
 	}
 	t.Chdir(dir)
+}
+
+// executeCLI runs the root command in the current directory and returns
+// everything written to stdout.
+func executeCLI(t *testing.T, args ...string) (string, error) {
+	t.Helper()
 
 	// Flag values are bound to package globals, so a value set by one run would
 	// otherwise leak into the next. Reset the whole command tree, then the
@@ -64,6 +78,15 @@ func runCLIWithFiles(t *testing.T, config string, files map[string]string, args 
 	}
 	os.Stdout = w
 
+	// Read while the command runs: output larger than the pipe buffer (a
+	// generated migration) would otherwise block the write.
+	var buf bytes.Buffer
+	done := make(chan struct{})
+	go func() {
+		_, _ = buf.ReadFrom(r)
+		close(done)
+	}()
+
 	rootCmd.SetArgs(args)
 	rootCmd.SetOut(&bytes.Buffer{})
 	rootCmd.SetErr(&bytes.Buffer{})
@@ -71,15 +94,19 @@ func runCLIWithFiles(t *testing.T, config string, files map[string]string, args 
 
 	_ = w.Close()
 	os.Stdout = stdout
-	var buf bytes.Buffer
-	_, _ = buf.ReadFrom(r)
+	<-done
 	return buf.String(), runErr
 }
 
 // resetFlags restores every flag in the command tree to its declared default.
 func resetFlags(cmd *cobra.Command) {
 	reset := func(f *pflag.Flag) {
-		_ = f.Value.Set(f.DefValue)
+		// A slice flag's Set appends once it has been set, so replace it.
+		if slice, ok := f.Value.(pflag.SliceValue); ok {
+			_ = slice.Replace(nil)
+		} else {
+			_ = f.Value.Set(f.DefValue)
+		}
 		f.Changed = false
 	}
 	cmd.Flags().VisitAll(reset)
@@ -197,6 +224,13 @@ func TestCLI_ValidationErrorsBeforeConnecting(t *testing.T) {
 		{"history limit", []string{"history", "--limit", "0"}, "--limit"},
 		{"validate format", []string{"validate", "--format", "yaml"}, "invalid --format"},
 		{"doctor format", []string{"doctor", "--format", "yaml"}, "invalid --format"},
+		{"functions format", []string{"functions", "--format", "yaml", "--db", unreachableDB}, "invalid --format"},
+		{"functions show format", []string{"functions", "show", "doc#viewer", "--format", "yaml", "--db", unreachableDB}, "invalid --format"},
+		{"functions kind", []string{"functions", "--kind", "lists", "--db", unreachableDB}, "invalid --kind"},
+		{"functions exposed and internal", []string{"functions", "--exposed", "--internal", "--db", unreachableDB}, "mutually exclusive"},
+		{"functions exposure flag with a database", []string{"functions", "--db", unreachableDB, "--no-explain"}, "applies to a schema file"},
+		{"functions show exposure flag with a database", []string{"functions", "show", "doc#viewer", "--db", unreachableDB, "--include-relation", "viewer"}, "applies to a schema file"},
+		{"functions show arguments", []string{"functions", "show"}, "accepts 1 arg"},
 	}
 
 	for _, tc := range cases {
@@ -236,6 +270,7 @@ func TestCLI_UnreachableDatabaseReportsAnError(t *testing.T) {
 		{"status json", []string{"status", "--db", unreachableDB, "--format", "json"}},
 		{"history", []string{"history", "--db", unreachableDB}},
 		{"schema pull", []string{"schema", "pull", "--db", unreachableDB}},
+		{"functions", []string{"functions", "--db", unreachableDB}},
 	}
 
 	for _, tc := range cases {

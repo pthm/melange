@@ -16,8 +16,10 @@ package doctor
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 
@@ -176,6 +178,16 @@ type Options struct {
 	// melange version that generated the deployed functions. Nil skips the
 	// check (update checks disabled, or the fetch failed).
 	Advisories []update.Advisory
+
+	// Exposure is the SQL API exposure configured locally, the one migrate
+	// would apply. Nil means none is configured: migrate keeps the recorded
+	// exposure, so there is nothing to drift from. The expected functions
+	// always follow the recorded exposure, which is what is installed.
+	Exposure *sqlgen.Exposure
+
+	// Client is the generated client to check (the Generated Client
+	// category), nil for none.
+	Client *ClientCheck
 }
 
 // Doctor performs health checks on the melange authorization infrastructure.
@@ -197,6 +209,156 @@ type Doctor struct {
 	// Lazily computed on first call to getAnalyses(); shared by checks that
 	// need RelationAnalysis (generated-functions check, index recommendations).
 	analyses []sqlgen.RelationAnalysis
+
+	// schemaContent is the local schema text migrate would checksum, ""
+	// when it could not be read. schemaPending and exposurePending record
+	// that schema_sync and exposure_sync found changes a migrate applies.
+	schemaContent                  string
+	schemaPending, exposurePending bool
+
+	// plan is what a plain migrate would do, from migratePlan; computed on
+	// first use, only by a check that needs it for its fix hint.
+	plan     *migrator.MigrationPlan
+	planDone bool
+
+	// stateRead reports that the local schema and the migration record
+	// above were read, by Run's checks or by CompareClient.
+	stateRead bool
+}
+
+// migratePlan returns what an unforced `melange migrate` of the local schema
+// and exposure would do, or nil when it cannot be predicted: no readable or
+// valid local schema, or the prediction failed. A nil local exposure keeps
+// the recorded one, as library migrate does. It compiles the model, so it
+// runs only for a check that needs it, once.
+func (d *Doctor) migratePlan(ctx context.Context) *migrator.MigrationPlan {
+	if d.planDone {
+		return d.plan
+	}
+	d.planDone = true
+	if d.parsedTypes == nil || d.schemaContent == "" {
+		return nil
+	}
+	m := migrator.NewMigrator(d.db, d.schemaPath)
+	m.SetDatabaseSchema(d.databaseSchema)
+	plan, err := m.Plan(ctx, d.parsedTypes, migrator.InternalMigrateOptions{
+		SchemaContent: d.schemaContent,
+		Exposure:      d.opts.Exposure,
+	})
+	if err == nil {
+		d.plan = plan
+	}
+	return d.plan
+}
+
+// ahead reports whether a newer melange migrated the database, so this
+// melange's migrate refuses to apply anything to it (DatabaseAheadError).
+func (d *Doctor) ahead() bool {
+	return d.lastMigration != nil && migrator.CodegenVersionAhead(d.lastMigration.CodegenVersion)
+}
+
+// recordedCodegen names the codegen version of the last migration.
+func (d *Doctor) recordedCodegen() string {
+	if d.lastMigration == nil || d.lastMigration.CodegenVersion == "" {
+		return "(unrecorded)"
+	}
+	return d.lastMigration.CodegenVersion
+}
+
+// plainMigrateSkips is why a plain migrate fixes nothing on a database
+// already migrated with this schema, exposure and codegen version, and only
+// --force does.
+const plainMigrateSkips = "a plain migrate skips while the schema, exposure and codegen version are unchanged"
+
+// upgradeHint is the fix for a database a newer melange migrated: use that
+// version. --force would override the downgrade guard, so it is never
+// suggested.
+func (d *Doctor) upgradeHint() string {
+	v := d.recordedCodegen()
+	return fmt.Sprintf("Use melange %s or later: a newer melange (%s) migrated the database, and this melange's migrate refuses to downgrade it", v, v)
+}
+
+// reinstallHint is the fix for generated functions missing from the
+// database. A plain migrate re-creates them only when it applies; when it
+// would skip or only record, --force is what reinstalls them.
+func (d *Doctor) reinstallHint(ctx context.Context) string {
+	const plain = "Run 'melange migrate' to create functions"
+	switch {
+	case d.ahead():
+		return d.upgradeHint()
+	case d.lastMigration == nil:
+		return plain
+	}
+	plan := d.migratePlan(ctx)
+	if plan == nil {
+		return plain + "; if it reports the schema unchanged, run 'melange migrate --force'"
+	}
+	switch plan.Action {
+	case migrator.PlanSkip:
+		return "Run 'melange migrate --force' to reinstall them: " + plainMigrateSkips + forceCaveat(plan)
+	case migrator.PlanRecordOnly:
+		return "Run 'melange migrate --force' to reinstall them: a plain migrate generates the same SQL as the last migration, so it only records the new state" + forceCaveat(plan)
+	case migrator.PlanRefusedAhead:
+		return d.upgradeHint()
+	}
+	hint := plain
+	if d.schemaPending || d.exposurePending {
+		hint += "; it also applies the pending changes reported under Migration State"
+	}
+	return hint + refusedDependents(plan)
+}
+
+// applyHint is the fix for a pending change a plain migrate applies. It
+// names the dependents of the functions that migrate drops, since it
+// refuses to drop those; the plan is computed only here, on the warn path.
+// On a database a newer melange migrated, migrate applies nothing, so the
+// fix is upgradeHint.
+func (d *Doctor) applyHint(ctx context.Context, hint string) string {
+	if d.ahead() {
+		return d.upgradeHint()
+	}
+	if plan := d.migratePlan(ctx); plan != nil && plan.Action == migrator.PlanApply {
+		hint += refusedDependents(plan)
+	}
+	return hint
+}
+
+// refusedDependents is the clause naming the dependents an applying
+// migration refuses to drop, or "" when it drops none with dependents.
+func refusedDependents(plan *migrator.MigrationPlan) string {
+	deps := dependents(plan)
+	if len(deps) == 0 {
+		return ""
+	}
+	return "; it refuses to drop removed functions that other objects depend on, so first change or drop " + strings.Join(deps, ", ")
+}
+
+// dependents lists the objects that depend on the plan's orphans.
+func dependents(plan *migrator.MigrationPlan) []string {
+	var deps []string
+	for _, o := range plan.Orphans {
+		deps = append(deps, o.Dependents...)
+	}
+	return deps
+}
+
+// forceCaveat says what --force drops besides reinstalling: the orphans an
+// applying migration drops, with CASCADE, and their dependents by name,
+// since losing an RLS policy widens access.
+func forceCaveat(plan *migrator.MigrationPlan) string {
+	if len(plan.Orphans) == 0 {
+		return ""
+	}
+	noun := "functions"
+	if len(plan.Orphans) == 1 {
+		noun = "function"
+	}
+	together := ""
+	if deps := dependents(plan); len(deps) > 0 {
+		together = ", together with " + strings.Join(deps, ", ")
+	}
+	return fmt.Sprintf(" (--force also drops %d removed %s with CASCADE%s; preview with 'melange migrate --force --dry-run')",
+		len(plan.Orphans), noun, together)
 }
 
 // getAnalyses returns the cached schema analyses or computes them on demand.
@@ -251,17 +413,19 @@ func (d *Doctor) DatabaseSchema() string {
 // Run executes all health checks and returns a report.
 func (d *Doctor) Run(ctx context.Context) (*Report, error) {
 	report := &Report{}
+	d.stateRead = true
 
 	// Run checks in order, building up cached data
 	d.checkSchemaFile(report)
 	if err := d.checkMigrationState(ctx, report); err != nil {
 		return nil, fmt.Errorf("checking migration state: %w", err)
 	}
-	d.checkDeployedModel(report)
+	d.checkDeployedModel(ctx, report)
 	d.checkAdvisories(report)
 	if err := d.checkGeneratedFunctions(ctx, report); err != nil {
 		return nil, fmt.Errorf("checking generated functions: %w", err)
 	}
+	d.checkGeneratedClient(ctx, report)
 	if err := d.checkTuplesSource(ctx, report); err != nil {
 		return nil, fmt.Errorf("checking tuples source: %w", err)
 	}
@@ -281,6 +445,9 @@ func (d *Doctor) Run(ctx context.Context) (*Report, error) {
 			}
 			if err := d.checkSourceTableIndexes(ctx, report); err != nil {
 				return nil, fmt.Errorf("checking source-table indexes: %w", err)
+			}
+			if err := d.checkSubjectLookupIndexes(ctx, report); err != nil {
+				return nil, fmt.Errorf("checking subject-lookup indexes: %w", err)
 			}
 		case "r":
 			if err := d.checkTableIndexes(ctx, report); err != nil {
@@ -447,27 +614,55 @@ func (d *Doctor) checkMigrationState(ctx context.Context, report *Report) error 
 		// every module, not the fga.mod bytes alone.
 		content, err := parser.ReadSchemaContent(m.SchemaPath())
 		if err == nil {
+			d.schemaContent = string(content)
 			currentChecksum := migrator.ComputeSchemaChecksum(string(content))
+			checksumDetails := func() string {
+				return fmt.Sprintf("File checksum: %s...\nDB checksum:   %s...", currentChecksum[:16], lastMigration.SchemaChecksum[:16])
+			}
 
 			switch {
+			case d.ahead():
+				details := fmt.Sprintf("Current: %s, DB: %s", migrator.CodegenVersion(), lastMigration.CodegenVersion)
+				if currentChecksum != lastMigration.SchemaChecksum {
+					details += "\n" + checksumDetails()
+				}
+				report.AddCheck(CheckResult{
+					Category: "Migration State",
+					Name:     "schema_sync",
+					Status:   StatusWarn,
+					Message:  fmt.Sprintf("Database was migrated by a newer melange (%s)", lastMigration.CodegenVersion),
+					Details:  details,
+					FixHint:  d.upgradeHint(),
+				})
 			case currentChecksum != lastMigration.SchemaChecksum:
+				d.schemaPending = true
 				report.AddCheck(CheckResult{
 					Category: "Migration State",
 					Name:     "schema_sync",
 					Status:   StatusWarn,
 					Message:  "Schema file has changed since last migration",
-					Details:  fmt.Sprintf("File checksum: %s...\nDB checksum:   %s...", currentChecksum[:16], lastMigration.SchemaChecksum[:16]),
-					FixHint:  "Run 'melange migrate' to apply changes",
+					Details:  checksumDetails(),
+					FixHint:  d.applyHint(ctx, "Run 'melange migrate' to apply changes"),
 				})
 			case !migrator.SameCodegenVersion(lastMigration.CodegenVersion, migrator.CodegenVersion()):
-				report.AddCheck(CheckResult{
+				d.schemaPending = true
+				check := CheckResult{
 					Category: "Migration State",
 					Name:     "schema_sync",
 					Status:   StatusWarn,
 					Message:  "Codegen version has changed",
 					Details:  fmt.Sprintf("Current: %s, DB: %s", migrator.CodegenVersion(), lastMigration.CodegenVersion),
-					FixHint:  "Run 'melange migrate' to regenerate functions",
-				})
+				}
+				// The new codegen version may generate the same SQL: migrate
+				// then records the version and regenerates nothing. When it
+				// applies, it may refuse to drop functions with dependents.
+				if plan := d.migratePlan(ctx); plan != nil && plan.Action == migrator.PlanRecordOnly {
+					check.Message = "Codegen version has changed (the generated SQL is unchanged)"
+					check.FixHint = "Run 'melange migrate' to record this codegen version"
+				} else {
+					check.FixHint = d.applyHint(ctx, "Run 'melange migrate' to regenerate functions")
+				}
+				report.AddCheck(check)
 			default:
 				report.AddCheck(CheckResult{
 					Category: "Migration State",
@@ -479,14 +674,71 @@ func (d *Doctor) checkMigrationState(ctx context.Context, report *Report) error 
 		}
 	}
 
+	d.checkExposureSync(ctx, report)
 	return nil
+}
+
+// checkExposureSync compares the local exposure with the one the database
+// was migrated with. An exposure-only change re-applies on the next migrate,
+// so a difference is pending work, like a changed schema file.
+func (d *Doctor) checkExposureSync(ctx context.Context, report *Report) {
+	if d.opts.Exposure == nil || d.lastMigration == nil {
+		return
+	}
+	if migrator.SameExposure(*d.opts.Exposure, d.lastMigration.Exposure) {
+		report.AddCheck(CheckResult{
+			Category: "Migration State",
+			Name:     "exposure_sync",
+			Status:   StatusPass,
+			Message:  "SQL API exposure is in sync with database",
+		})
+		return
+	}
+	d.exposurePending = true
+	// Narrowing drops the functions it no longer exposes, which doctor's
+	// orphan check (compiled under the recorded exposure) does not list.
+	report.AddCheck(CheckResult{
+		Category: "Migration State",
+		Name:     "exposure_sync",
+		Status:   StatusWarn,
+		Message:  "SQL API exposure differs from the one the database was migrated with",
+		Details:  fmt.Sprintf("Local: %s\nDB:    %s", describeExposure(*d.opts.Exposure), describeExposure(d.lastMigration.Exposure)),
+		FixHint:  d.applyHint(ctx, "Run 'melange migrate' to apply it"),
+	})
+}
+
+// installedExposure is the exposure the installed functions were generated
+// with: the recorded one, else the local one (nothing migrated yet), else
+// the default.
+func (d *Doctor) installedExposure() sqlgen.Exposure {
+	switch {
+	case d.lastMigration != nil:
+		return d.lastMigration.Exposure
+	case d.opts.Exposure != nil:
+		return *d.opts.Exposure
+	default:
+		return sqlgen.Exposure{}
+	}
+}
+
+// describeExposure renders an exposure for check details.
+func describeExposure(e sqlgen.Exposure) string {
+	if e.IsDefault() {
+		return "default (every relation, every function family)"
+	}
+	b, err := json.Marshal(e.Normalized())
+	if err != nil {
+		return fmt.Sprintf("%+v", e)
+	}
+	return string(b)
 }
 
 // checkDeployedModel reports whether the database has recorded its authorization
 // model, and — when the local schema differs — whether the pending change is
 // breaking. It reuses the record checkMigrationState already fetched into
-// d.lastMigration, so it issues no further queries.
-func (d *Doctor) checkDeployedModel(report *Report) {
+// d.lastMigration; it queries the database only to predict migrate for a
+// fix hint (migratePlan).
+func (d *Doctor) checkDeployedModel(ctx context.Context, report *Report) {
 	// Only meaningful once a migration has been recorded.
 	rec := d.lastMigration
 	if rec == nil {
@@ -494,13 +746,19 @@ func (d *Doctor) checkDeployedModel(report *Report) {
 	}
 
 	if rec.SchemaDSL == "" {
+		// A record without the model never matches, so a plain migrate
+		// records it (phase 2) without re-applying.
+		fixHint := "Re-run 'melange migrate' to record it (enables 'schema pull' and 'diff')"
+		if d.ahead() {
+			fixHint = d.upgradeHint()
+		}
 		report.AddCheck(CheckResult{
 			Category: "Deployed Model",
 			Name:     "recorded",
 			Status:   StatusWarn,
 			Message:  "Deployed model not recorded",
 			Details:  "This database was migrated before model storage existed.",
-			FixHint:  "Re-run 'melange migrate' to record it (enables 'schema pull' and 'diff')",
+			FixHint:  fixHint,
 		})
 		return
 	}
@@ -515,7 +773,7 @@ func (d *Doctor) checkDeployedModel(report *Report) {
 			Status:   StatusWarn,
 			Message:  "Deployed model could not be decoded",
 			Details:  err.Error(),
-			FixHint:  "Re-run 'melange migrate' to rewrite the stored model",
+			FixHint:  d.rewriteModelHint(ctx),
 		})
 		return
 	}
@@ -563,14 +821,37 @@ func (d *Doctor) checkDeployedModel(report *Report) {
 		})
 		return
 	}
+	fixHint := "Review with 'melange diff'; migrating will apply these changes"
+	if d.ahead() {
+		fixHint = fmt.Sprintf("Review with 'melange diff'; this melange's migrate refuses to apply them to a database a newer melange (%s) migrated", d.recordedCodegen())
+	}
 	report.AddCheck(CheckResult{
 		Category: "Deployed Model",
 		Name:     "drift_safety",
 		Status:   StatusWarn,
 		Message:  fmt.Sprintf("Local schema has %d breaking change(s) vs deployed", breaking),
 		Details:  breakingDetails(diff),
-		FixHint:  "Review with 'melange diff'; migrating will apply these changes",
+		FixHint:  fixHint,
 	})
+}
+
+// rewriteModelHint is the fix for a stored model that cannot be decoded.
+// The phase 1 skip does not read model_json, so a plain migrate rewrites it
+// only when the schema, exposure or codegen version changed.
+func (d *Doctor) rewriteModelHint(ctx context.Context) string {
+	if d.ahead() {
+		return fmt.Sprintf("Use melange %s or later and re-run 'melange migrate' with it (with --force if it reports the schema unchanged)", d.recordedCodegen())
+	}
+	plan := d.migratePlan(ctx)
+	switch {
+	case plan == nil:
+		return "Re-run 'melange migrate' to rewrite the stored model; if it reports the schema unchanged, run 'melange migrate --force'"
+	case plan.Action == migrator.PlanSkip:
+		return "Run 'melange migrate --force' to rewrite the stored model: " + plainMigrateSkips + forceCaveat(plan)
+	case plan.Action == migrator.PlanRefusedAhead:
+		return d.upgradeHint()
+	}
+	return "Re-run 'melange migrate' to rewrite the stored model"
 }
 
 // checkAdvisories warns when the deployed functions were generated by a melange
@@ -627,18 +908,18 @@ func (d *Doctor) checkGeneratedFunctions(ctx context.Context, report *Report) er
 	}
 	d.currentFuncs = currentFuncs
 
-	// Check dispatchers exist
-	dispatchers := []string{
-		"check_permission",
-		"check_permission_internal",
-		"check_permission_nw",
-		"check_permission_nw_internal",
-		"explain_permission",
-		"explain_permission_internal",
-		"expand_permission",
-		"expand_permission_internal",
-		"list_accessible_objects",
-		"list_accessible_subjects",
+	// The expected functions follow the closure of the installed exposure;
+	// under a restricted one that includes the raising helper the public
+	// dispatchers call, so it is checked with them.
+	analyses := d.getAnalyses()
+	dispatchers := sqlgen.DispatcherFunctionNames
+	if analyses != nil {
+		exposure := d.installedExposure()
+		d.expectedFuncs = sqlgen.CollectFunctionNamesWithOptions(analyses, sqlgen.GenerateSQLOptions{Exposure: exposure})
+		if slices.Contains(d.expectedFuncs, sqlgen.UnexposedFunctionName) {
+			dispatchers = append(slices.Clone(dispatchers), sqlgen.UnexposedFunctionName)
+		}
+		d.checkExposurePatterns(report, analyses)
 	}
 
 	currentSet := make(map[string]bool)
@@ -653,13 +934,21 @@ func (d *Doctor) checkGeneratedFunctions(ctx context.Context, report *Report) er
 		}
 	}
 
+	// The expected functions are this melange's; a newer one that migrated
+	// the database may generate others.
+	aheadNote := ""
+	if d.ahead() {
+		aheadNote = fmt.Sprintf("The expected functions are the ones this melange generates; melange %s may generate others.", d.recordedCodegen())
+	}
+
 	if len(missingDispatchers) > 0 {
 		report.AddCheck(CheckResult{
 			Category: "Generated Functions",
 			Name:     "dispatchers",
 			Status:   StatusFail,
 			Message:  fmt.Sprintf("Missing dispatcher functions: %s", strings.Join(missingDispatchers, ", ")),
-			FixHint:  "Run 'melange migrate' to create functions",
+			Details:  aheadNote,
+			FixHint:  d.reinstallHint(ctx),
 		})
 	} else {
 		report.AddCheck(CheckResult{
@@ -671,9 +960,8 @@ func (d *Doctor) checkGeneratedFunctions(ctx context.Context, report *Report) er
 	}
 
 	// If we have parsed types, check for expected functions
-	if analyses := d.getAnalyses(); analyses != nil {
-		expectedFuncs := sqlgen.CollectFunctionNames(analyses)
-		d.expectedFuncs = expectedFuncs
+	if analyses != nil {
+		expectedFuncs := d.expectedFuncs
 
 		// Build expected set and find missing functions in a single pass.
 		expectedSet := make(map[string]bool, len(expectedFuncs))
@@ -685,23 +973,37 @@ func (d *Doctor) checkGeneratedFunctions(ctx context.Context, report *Report) er
 			}
 		}
 
-		// Find orphan functions (in DB but not expected)
+		// Find orphan functions: installed, not expected, and recorded by
+		// the last migration, which is what migrate drops. A function only
+		// named like a generated one (an application's explain_invoice) is
+		// not an orphan, and without a record nothing is, since migrate
+		// then drops nothing.
+		recorded := make(map[string]bool)
+		if d.lastMigration != nil {
+			for _, fn := range d.lastMigration.FunctionNames {
+				recorded[fn] = true
+			}
+		}
 		var orphans []string
 		for _, fn := range currentFuncs {
-			if !expectedSet[fn] {
+			if !expectedSet[fn] && recorded[fn] {
 				orphans = append(orphans, fn)
 			}
 		}
 
 		if len(missing) > 0 {
 			sort.Strings(missing)
+			details := truncatedJoin(missing, 10)
+			if aheadNote != "" {
+				details += "\n" + aheadNote
+			}
 			report.AddCheck(CheckResult{
 				Category: "Generated Functions",
 				Name:     "missing",
 				Status:   StatusFail,
 				Message:  fmt.Sprintf("%d expected functions missing from database", len(missing)),
-				Details:  truncatedJoin(missing, 10),
-				FixHint:  "Run 'melange migrate' to create functions",
+				Details:  details,
+				FixHint:  d.reinstallHint(ctx),
 			})
 		} else {
 			report.AddCheck(CheckResult{
@@ -714,14 +1016,7 @@ func (d *Doctor) checkGeneratedFunctions(ctx context.Context, report *Report) er
 
 		if len(orphans) > 0 {
 			sort.Strings(orphans)
-			report.AddCheck(CheckResult{
-				Category: "Generated Functions",
-				Name:     "orphans",
-				Status:   StatusWarn,
-				Message:  fmt.Sprintf("%d orphan functions from previous schema", len(orphans)),
-				Details:  truncatedJoin(orphans, 10),
-				FixHint:  "Run 'melange migrate' to clean up orphans",
-			})
+			report.AddCheck(d.orphansCheck(ctx, orphans))
 		}
 	} else {
 		// No schema to compare against, just report function count
@@ -743,6 +1038,76 @@ func (d *Doctor) checkGeneratedFunctions(ctx context.Context, report *Report) er
 	}
 
 	return nil
+}
+
+// orphansCheck reports the orphans doctor found, with the fix migrate
+// allows: it drops them, but refuses while other objects depend on them,
+// and refuses everything when a newer melange migrated the database (whose
+// functions they then are).
+func (d *Doctor) orphansCheck(ctx context.Context, orphans []string) CheckResult {
+	check := CheckResult{
+		Category: "Generated Functions",
+		Name:     "orphans",
+		Status:   StatusWarn,
+		Message:  fmt.Sprintf("%d orphan functions from previous schema", len(orphans)),
+		Details:  truncatedJoin(orphans, 10),
+		FixHint:  "Run 'melange migrate' to clean up orphans",
+	}
+	if d.ahead() {
+		check.Message = fmt.Sprintf("%d functions recorded by a newer melange's migration that this melange does not generate", len(orphans))
+		check.FixHint = d.upgradeHint()
+		return check
+	}
+	plan := d.migratePlan(ctx)
+	if plan == nil {
+		return check
+	}
+	if plan.Action == migrator.PlanSkip {
+		// The record names them although the schema, exposure and codegen
+		// version are unchanged (edited by hand): only --force drops them.
+		check.FixHint = "Run 'melange migrate --force' to drop them: " + plainMigrateSkips + forceCaveat(plan)
+		return check
+	}
+	listed := make(map[string]bool, len(orphans))
+	for _, fn := range orphans {
+		listed[fn] = true
+	}
+	var lines []string
+	for _, o := range plan.Orphans {
+		if !listed[o.Name] {
+			continue
+		}
+		for _, dep := range o.Dependents {
+			lines = append(lines, o.Name+": "+dep)
+		}
+	}
+	if len(lines) > 0 {
+		check.Details += "\nDepended on by:\n" + strings.Join(lines, "\n")
+		check.FixHint = "'melange migrate' refuses to drop them while other objects depend on them: change or drop the dependents, then run 'melange migrate' ('melange migrate --force' drops them with CASCADE, dependents included)"
+	}
+	return check
+}
+
+// checkExposurePatterns warns about relation patterns that match no relation
+// of the local schema: usually a typo, or a relation since renamed. It checks
+// the local exposure, else the recorded one.
+func (d *Doctor) checkExposurePatterns(report *Report, analyses []sqlgen.RelationAnalysis) {
+	exposure := d.installedExposure()
+	if d.opts.Exposure != nil {
+		exposure = *d.opts.Exposure
+	}
+	unmatched := exposure.UnmatchedPatterns(analyses)
+	if len(unmatched) == 0 {
+		return
+	}
+	report.AddCheck(CheckResult{
+		Category: "Generated Functions",
+		Name:     "exposure_patterns",
+		Status:   StatusWarn,
+		Message:  fmt.Sprintf("%d SQL API exposure pattern(s) match no relation in the schema", len(unmatched)),
+		Details:  truncatedJoin(unmatched, 10),
+		FixHint:  "Check the exposure's relation include/exclude patterns for typos or renamed relations",
+	})
 }
 
 // checkTuplesSource validates the melange_tuples view/table.

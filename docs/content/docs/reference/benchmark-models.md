@@ -254,7 +254,10 @@ type pull_request
     define can_review: can_read from repo but not author
     define can_review_strict: can_read from repo but not banned
     define can_delete: can_admin from repo
+    define can_read_security_advisories_and_vulnerability_reports: can_admin from repo
 ```
+
+`can_read_security_advisories_and_vulnerability_reports` was added after the October run to test truncated accessible-function names and is not benchmarked.
 
 The scale loader populates organization memberships, repositories linked to those organizations, and PRs linked to repositories with authors. Other schema types and relation definitions support integration tests but are not all populated by this scale loader. `melange_tuples` is a `UNION ALL` view over domain tables, including `organization_members`, `repositories`, and `pull_requests`, with IDs cast to text. See `test/testutil/testdata/tuples_view.sql.tmpl` and `domain_tables.sql` for the view and indexes; these timings include that view's work.
 

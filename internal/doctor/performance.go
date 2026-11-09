@@ -97,19 +97,19 @@ func (d *Doctor) checkExpressionIndexes(ctx context.Context, report *Report) err
 
 	// Collect all cast columns grouped by table.
 	type tableInfo struct {
-		schema string
-		casts  []CastColumn
+		schema, name string
+		casts        []CastColumn
 	}
-	tableCasts := make(map[string]*tableInfo)
+	tableCasts := make(map[string]*tableInfo) // by qualified name
 	for _, b := range d.viewDef.Branches {
 		if len(b.CastColumns) == 0 {
 			continue
 		}
 		for _, t := range b.SourceTables {
-			info, ok := tableCasts[t.Name]
+			info, ok := tableCasts[t.String()]
 			if !ok {
-				info = &tableInfo{schema: t.Schema}
-				tableCasts[t.Name] = info
+				info = &tableInfo{schema: t.Schema, name: t.Name}
+				tableCasts[t.String()] = info
 			}
 			info.casts = append(info.casts, b.CastColumns...)
 		}
@@ -127,15 +127,16 @@ func (d *Doctor) checkExpressionIndexes(ctx context.Context, report *Report) err
 
 	allCovered := true
 
-	for table, info := range tableCasts {
+	for _, info := range tableCasts {
+		table := info.name
 		// Get all index definitions for this table
-		indexDefs, err := d.getTableIndexDefs(ctx, table)
+		indexDefs, err := d.getTableIndexDefs(ctx, info.schema, table)
 		if err != nil {
 			return fmt.Errorf("getting indexes for %s: %w", table, err)
 		}
 
 		// Get row count for severity
-		rowCount, err := d.getTableRowCount(ctx, table)
+		rowCount, err := d.getTableRowCount(ctx, info.schema, table)
 		if err != nil {
 			// Non-fatal: default to warning severity
 			rowCount = 0
@@ -162,7 +163,7 @@ func (d *Doctor) checkExpressionIndexes(ctx context.Context, report *Report) err
 			if colType == "" {
 				continue
 			}
-			if isExpressionIndexed(cc.SourceColumn, indexDefs) || (relabel && hasLeadingColumn(cc.SourceColumn, indexDefs)) {
+			if castIndexed(cc.SourceColumn, relabel, indexDefs) {
 				continue
 			}
 			allCovered = false
@@ -210,14 +211,15 @@ func (d *Doctor) checkExpressionIndexes(ctx context.Context, report *Report) err
 	return nil
 }
 
-// getTableIndexDefs returns all index definitions for a table.
-func (d *Doctor) getTableIndexDefs(ctx context.Context, table string) ([]string, error) {
+// getTableIndexDefs returns all index definitions for a table. schema is the
+// view's qualifier for the table, if any; otherwise the database schema.
+func (d *Doctor) getTableIndexDefs(ctx context.Context, schema, table string) ([]string, error) {
 	rows, err := d.db.QueryContext(ctx, fmt.Sprintf(`
 		SELECT indexdef
 		FROM pg_indexes
 		WHERE schemaname = %s
 		  AND tablename = $1
-	`, d.postgresSchema()), table)
+	`, d.schemaLiteral(schema)), table)
 	if err != nil {
 		return nil, err
 	}
@@ -235,14 +237,15 @@ func (d *Doctor) getTableIndexDefs(ctx context.Context, table string) ([]string,
 }
 
 // getTableRowCount returns the approximate row count from pg_class.reltuples.
-func (d *Doctor) getTableRowCount(ctx context.Context, table string) (int64, error) {
+// schema is as for getTableIndexDefs.
+func (d *Doctor) getTableRowCount(ctx context.Context, schema, table string) (int64, error) {
 	var count float64
 	err := d.db.QueryRowContext(ctx, fmt.Sprintf(`
 		SELECT COALESCE(reltuples, 0)::float8
 		FROM pg_class
 		WHERE relname = $1
 		  AND relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = %s)
-	`, d.postgresSchema()), table).Scan(&count)
+	`, d.schemaLiteral(schema)), table).Scan(&count)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return 0, nil
@@ -263,10 +266,6 @@ func (d *Doctor) getTableRowCount(ctx context.Context, table string) (int64, err
 // A column the table doesn't have gives "", false. schema is the view's
 // qualifier for the table, if any; otherwise the database schema.
 func (d *Doctor) castToText(ctx context.Context, schema, table, column string) (colType string, relabel bool, err error) {
-	nsp := d.postgresSchema()
-	if schema != "" {
-		nsp = pq.QuoteLiteral(schema)
-	}
 	err = d.db.QueryRowContext(ctx, fmt.Sprintf(`
 		SELECT format_type(a.atttypid, a.atttypmod),
 		       a.atttypid = 'text'::regtype OR EXISTS (
@@ -277,11 +276,27 @@ func (d *Doctor) castToText(ctx context.Context, schema, table, column string) (
 		JOIN pg_namespace n ON n.oid = rel.relnamespace
 		WHERE n.nspname = %s AND rel.relname = $1 AND lower(a.attname) = lower($2::text)
 		  AND a.attnum > 0 AND NOT a.attisdropped
-		LIMIT 1`, nsp), table, column).Scan(&colType, &relabel)
+		LIMIT 1`, d.schemaLiteral(schema)), table, column).Scan(&colType, &relabel)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
 	return colType, relabel, err
+}
+
+// schemaLiteral quotes schema for a query, or gives the database schema when
+// it is "".
+func (d *Doctor) schemaLiteral(schema string) string {
+	if schema != "" {
+		return pq.QuoteLiteral(schema)
+	}
+	return d.postgresSchema()
+}
+
+// castIndexed reports whether an index serves a lookup by column::text: an
+// expression index on the cast, or for a relabel a plain index leading with
+// the column.
+func castIndexed(column string, relabel bool, indexDefs []string) bool {
+	return isExpressionIndexed(column, indexDefs) || (relabel && hasLeadingColumn(column, indexDefs))
 }
 
 // hasLeadingColumn reports whether a full (non-partial) index's first key is
@@ -337,12 +352,12 @@ func (d *Doctor) checkTableIndexes(ctx context.Context, report *Report) error { 
 		// file check has already reported the underlying problem.
 		return nil
 	}
-	recs := sqlgen.RecommendIndexes(analyses)
+	recs := d.installedIndexRecommendations(analyses)
 	if len(recs) == 0 {
 		return nil
 	}
 
-	indexDefs, err := d.getTableIndexDefs(ctx, "melange_tuples")
+	indexDefs, err := d.getTableIndexDefs(ctx, "", "melange_tuples")
 	if err != nil {
 		report.AddCheck(CheckResult{
 			Category: "Performance",
@@ -355,7 +370,7 @@ func (d *Doctor) checkTableIndexes(ctx context.Context, report *Report) error { 
 	}
 
 	existing := parseExistingIndexes(indexDefs)
-	rowCount, _ := d.getTableRowCount(ctx, "melange_tuples")
+	rowCount, _ := d.getTableRowCount(ctx, "", "melange_tuples")
 
 	allCovered := true
 	for _, rec := range recs {
@@ -387,6 +402,36 @@ func (d *Doctor) checkTableIndexes(ctx context.Context, report *Report) error { 
 	return nil
 }
 
+// installedIndexRecommendations returns sqlgen.RecommendIndexes for the
+// functions the installed exposure generates: a recommendation lists only
+// its installed beneficiaries and is left out when it has none, so a
+// restricted exposure gets no advice for functions it never installed.
+func (d *Doctor) installedIndexRecommendations(analyses []sqlgen.RelationAnalysis) []sqlgen.IndexRecommendation {
+	recs := sqlgen.RecommendIndexes(analyses)
+	exposure := d.installedExposure()
+	if exposure.IsDefault() {
+		return recs
+	}
+	installed := make(map[string]bool)
+	for _, fn := range sqlgen.CollectFunctionNamesWithOptions(analyses, sqlgen.GenerateSQLOptions{Exposure: exposure}) {
+		installed[fn] = true
+	}
+	out := recs[:0]
+	for _, rec := range recs {
+		var benefits []string
+		for _, fn := range rec.BenefitsFunctions {
+			if installed[fn] {
+				benefits = append(benefits, fn)
+			}
+		}
+		if len(benefits) > 0 {
+			rec.BenefitsFunctions = benefits
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
 // checkExpandFanoutAdvisory emits a schema-derived advisory when the
 // schema has relations that can produce large Expand responses. The
 // heuristic is intentionally coarse — Expand's response size is
@@ -401,7 +446,8 @@ func (d *Doctor) checkTableIndexes(ctx context.Context, report *Report) error { 
 //     hierarchy multiplies the round-trip cost.
 //
 // When any relation matches either signal, we surface one advisory
-// that recommends `melange.max_expand_leaf` as a session guardrail.
+// that recommends a per-call leaf cap (WithExpandMaxLeaf, --max-leaf,
+// p_max_leaf). There is no session setting for it.
 // StatusPass — never escalates — because the schema signal is a hint,
 // not a diagnosed problem.
 func (d *Doctor) checkExpandFanoutAdvisory(_ context.Context, report *Report) error { //nolint:unparam // error return kept for consistent checker interface
@@ -410,8 +456,13 @@ func (d *Doctor) checkExpandFanoutAdvisory(_ context.Context, report *Report) er
 		return nil
 	}
 
+	// Only relations the installed expand dispatcher answers for.
+	expandable := sqlgen.ExpandPublic(analyses, d.installedExposure())
 	var wildcardRels, recursiveRels []string
 	for _, a := range analyses {
+		if !expandable(a.ObjectType, a.Relation) {
+			continue
+		}
 		if a.Features.HasWildcard {
 			wildcardRels = append(wildcardRels, a.ObjectType+"#"+a.Relation)
 		}
@@ -425,10 +476,11 @@ func (d *Doctor) checkExpandFanoutAdvisory(_ context.Context, report *Report) er
 
 	var details strings.Builder
 	details.WriteString("Expand responses on these relations can grow large depending on tuple counts. ")
-	details.WriteString("Consider setting a per-leaf cap so admin flows don't blow past a reasonable ")
+	details.WriteString("Consider capping each leaf per call so admin flows don't blow past a reasonable ")
 	details.WriteString("response size:\n\n")
-	details.WriteString("    SET melange.max_expand_leaf = 1000;\n")
-	details.WriteString("    -- or per-call: Checker.Expand(..., WithExpandMaxLeaf(1000))\n\n")
+	details.WriteString("    Checker.Expand(..., melange.WithExpandMaxLeaf(1000))\n")
+	details.WriteString("    melange expand ... --max-leaf 1000\n")
+	details.WriteString("    -- in SQL, pass p_max_leaf to expand_permission\n\n")
 	if len(wildcardRels) > 0 {
 		fmt.Fprintf(&details, "Wildcard grants (%d relation(s)) — every Expand surfaces the wildcard entry (`user:*`):\n", len(wildcardRels))
 		for _, r := range wildcardRels {

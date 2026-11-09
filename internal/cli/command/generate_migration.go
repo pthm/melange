@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -46,7 +47,15 @@ Three comparison modes determine orphaned functions to drop:
   - (default) Full mode: no comparison, outputs all functions
   - --db: reads previous state from the database (most reliable)
   - --git-ref: reads previous schema from git history
-  - --previous-schema: reads previous schema from a file`,
+  - --previous-schema: reads previous schema from a file
+
+The SQL is generated under the local SQL API exposure: the sql section of the
+configuration with the exposure flags on top. A comparison mode emits only
+the functions that changed, which needs the previous exposure: --db reads the
+recorded one and --git-ref the sql section of the config file at that ref.
+When the previous exposure is unknown (--previous-schema, or a config file
+that cannot be read at the ref), every function is emitted and orphans are
+still dropped.`,
 	Example: `  # Generate UP and DOWN files
   melange generate migration --schema schema.fga --output migrations/
 
@@ -90,6 +99,11 @@ Three comparison modes determine orphaned functions to drop:
 			return cli.ConfigError("stdout mode requires --up or --down flag", nil)
 		}
 
+		exposure, err := resolveExposure(cmd, cfg.SQL)
+		if err != nil {
+			return err
+		}
+
 		// Parse current schema (supports both .fga files and fga.mod manifests)
 		if _, err := os.Stat(schemaPath); err != nil {
 			return cli.SchemaParseError(fmt.Sprintf("schema not found: %s", schemaPath), nil)
@@ -110,31 +124,13 @@ Three comparison modes determine orphaned functions to drop:
 			return cli.SchemaParseError("schema has cycles", err)
 		}
 
-		closureRows := schema.ComputeRelationClosure(types)
-		analyses := compiler.AnalyzeRelations(types, closureRows)
-		analyses = compiler.ComputeCanGenerate(analyses)
-		inlineData := compiler.BuildInlineSQLData(closureRows, analyses)
-
-		generatedSQL, err := compiler.GenerateSQL(analyses, inlineData, databaseSchema)
-		if err != nil {
-			return cli.GeneralError("generating check SQL", err)
-		}
-
-		listSQL, err := compiler.GenerateListSQL(analyses, inlineData, databaseSchema)
-		if err != nil {
-			return cli.GeneralError("generating list SQL", err)
-		}
-
-		expectedFunctions := compiler.CollectFunctionNames(analyses)
-		namedFunctions := compiler.CollectNamedFunctions(generatedSQL, listSQL, analyses)
-
 		// Resolve previous state
 		opts := compiler.MigrationOptions{
 			DatabaseSchema: databaseSchema,
 			Version:        version.Version,
 			SchemaChecksum: migrator.ComputeSchemaChecksum(string(schemaContent)),
 			CodegenVersion: migrator.CodegenVersion(),
-			NamedFunctions: namedFunctions,
+			Exposure:       exposure,
 		}
 
 		// previousTypes drives the semantic-diff header, when a previous model can
@@ -150,33 +146,44 @@ Three comparison modes determine orphaned functions to drop:
 				opts.PreviousFunctionNames = prevState.FunctionNames
 				opts.PreviousChecksums = prevState.FunctionChecksums
 				opts.PreviousSource = "database"
+				opts.PreviousExposure = prevState.Exposure
 				previousTypes = prevState.Types
 			}
 		} else if genMigrationGitRef != "" {
-			prevState, err := previousStateFromSchema(genMigrationGitRef, schemaPath, databaseSchema, true)
+			prevExposure, known := previousExposureAtRef(genMigrationGitRef)
+			prevState, err := previousStateFromSchema(genMigrationGitRef, schemaPath, databaseSchema, true, prevExposure)
 			if err != nil {
 				return err
 			}
 			opts.PreviousFunctionNames = prevState.FunctionNames
 			opts.PreviousChecksums = prevState.FunctionChecksums
 			opts.PreviousSource = fmt.Sprintf("git:%s", genMigrationGitRef)
+			opts.PreviousExposure = prevState.Exposure
+			opts.PreviousExposureUnknown = !known
 			previousTypes = prevState.Types
 		} else if genMigrationPreviousSchema != "" {
 			if parser.IsModularSchema(genMigrationPreviousSchema) {
 				return cli.ConfigError("--previous-schema does not support modular schemas (fga.mod); use --db or --git-ref instead", nil)
 			}
-			prevState, err := previousStateFromSchema(genMigrationPreviousSchema, "", databaseSchema, false)
+			prevState, err := previousStateFromSchema(genMigrationPreviousSchema, "", databaseSchema, false, nil)
 			if err != nil {
 				return err
 			}
 			opts.PreviousFunctionNames = prevState.FunctionNames
 			opts.PreviousChecksums = prevState.FunctionChecksums
 			opts.PreviousSource = fmt.Sprintf("file:%s", genMigrationPreviousSchema)
+			opts.PreviousExposureUnknown = true
 			previousTypes = prevState.Types
 		}
 
+		current, err := compileSchema(types, databaseSchema, opts.Exposure)
+		if err != nil {
+			return cli.GeneralError("compiling schema", err)
+		}
+		opts.NamedFunctions = current.named
+
 		// Generate migration SQL
-		result := compiler.GenerateMigrationSQL(generatedSQL, listSQL, expectedFunctions, opts)
+		result := compiler.GenerateMigrationSQL(current.check, current.list, current.names, opts)
 
 		// Document what the migration changes, when a previous model is known.
 		if previousTypes != nil {
@@ -203,6 +210,7 @@ func init() {
 	f.StringVar(&genMigrationDBSchema, "db-schema", "", "database schema (default: config database.schema, else public)")
 	f.StringVar(&genMigrationGitRef, "git-ref", "", "git ref for comparison (reads previous schema)")
 	f.StringVar(&genMigrationPreviousSchema, "previous-schema", "", "path to previous .fga file for comparison (modular schemas not supported)")
+	addExposureFlags(f)
 }
 
 func writeStdout(result compiler.MigrationSQL) error {
@@ -296,6 +304,12 @@ type previousState struct {
 	// the semantic-diff header. Nil when unavailable (e.g. a database migrated
 	// before model storage existed), in which case no header is emitted.
 	Types []schema.TypeDefinition
+
+	// Exposure is the exposure the previous functions were generated with: the
+	// recorded one for --db, the one read at the ref for --git-ref, nil
+	// (unknown) otherwise, when the previous schema is compiled under the
+	// default exposure.
+	Exposure *compiler.Exposure
 }
 
 // previousStateFromDB reads function names and checksums from the most recent
@@ -331,7 +345,7 @@ func previousStateFromDB(dsn, databaseSchema string) (*previousState, error) {
 	// A model that can't be recovered — never recorded, or a modular DSL, which
 	// won't parse as a single schema — leaves prevTypes nil, and the migration is
 	// generated without a header rather than failing.
-	prevTypes, terr := deployedTypesFromRecord(rec)
+	prevTypes, terr := migrator.DeployedTypes(rec)
 	if terr != nil {
 		prevTypes = nil
 	}
@@ -340,6 +354,7 @@ func previousStateFromDB(dsn, databaseSchema string) (*previousState, error) {
 		FunctionNames:     rec.FunctionNames,
 		FunctionChecksums: rec.FunctionChecksums,
 		Types:             prevTypes,
+		Exposure:          &rec.Exposure,
 	}, nil
 }
 
@@ -351,34 +366,151 @@ func previousStateFromDB(dsn, databaseSchema string) (*previousState, error) {
 // When isGitRef is true, pathOrRef is a git ref and schemaPath is the repo-relative
 // path to the schema file. When false, pathOrRef is a local file path and
 // schemaPath is unused.
-func previousStateFromSchema(pathOrRef, schemaPath, databaseSchema string, isGitRef bool) (*previousState, error) {
+//
+// exposure is the exposure the previous schema was deployed with, nil when
+// unknown. An unknown one compiles under the default exposure, which installs
+// every function any other does apart from the UnexposedFunctionName helper.
+// The helper is added to the names, so every function the deployment may
+// have left behind is dropped as an orphan (DROP IF EXISTS).
+func previousStateFromSchema(pathOrRef, schemaPath, databaseSchema string, isGitRef bool, exposure *compiler.Exposure) (*previousState, error) {
 	types, err := parsePreviousSchema(pathOrRef, schemaPath, isGitRef)
 	if err != nil {
 		return nil, err
 	}
 
+	var compileExposure compiler.Exposure
+	if exposure != nil {
+		compileExposure = *exposure
+	}
+	prev, err := compileSchema(types, databaseSchema, compileExposure)
+	if err != nil {
+		return nil, cli.GeneralError("compiling previous schema", err)
+	}
+
+	names := prev.names
+	if exposure == nil && !slices.Contains(names, compiler.UnexposedFunctionName) {
+		names = append(names, compiler.UnexposedFunctionName)
+	}
+	return &previousState{
+		FunctionNames:     names,
+		FunctionChecksums: migrator.ComputeFunctionChecksums(prev.named),
+		Types:             types,
+		Exposure:          exposure,
+	}, nil
+}
+
+// previousExposureAtRef returns the exposure the config file had at a git
+// ref: its sql section, under the same defaults and MELANGE_SQL_* variables
+// as now, but not this run's exposure flags, which do not persist. With
+// --config the file is that one, at its path relative to the repository
+// root. Otherwise it is the file config discovery finds at the ref, so
+// deleting a restricted config file still widens; when there is none there
+// either, the previous exposure is the defaults and variables alone. known
+// is false when the file cannot be read at the ref (untracked or invalid),
+// or when discovery at the ref finds a different file from the one in use
+// now: the one in use may be untracked, and a file that shadowed it at the
+// ref may have been deleted since. The reason is printed, and the caller
+// must then emit every function.
+func previousExposureAtRef(ref string) (exposure *compiler.Exposure, known bool) {
+	unknown := func(reason string, err error) (*compiler.Exposure, bool) {
+		if !quiet {
+			fmt.Fprintf(os.Stderr, "note: %s at %s (%v); the previous SQL API exposure is unknown, so every function is included\n", reason, ref, err)
+		}
+		return nil, false
+	}
+	var rel string
+	if configPath != "" {
+		r, err := gitRelativePath(configPath)
+		if err != nil {
+			return unknown("cannot locate "+configPath+" in the repository", err)
+		}
+		rel = filepath.ToSlash(r)
+	}
+	if cfgFile == "" {
+		found, err := configPathAtRef(ref)
+		if err != nil {
+			return unknown("cannot look for a config file", err)
+		}
+		if configPath != "" && found != rel {
+			if found == "" {
+				found = "none"
+			}
+			return unknown("config discovery does not find "+rel, fmt.Errorf("it finds %s", found))
+		}
+		rel = found
+	}
+	var content []byte
+	if rel != "" {
+		c, err := gitShowFile(ref, rel)
+		if err != nil {
+			return unknown("cannot read "+rel, err)
+		}
+		content = []byte(c)
+	}
+	prev, err := cli.ParseConfig(content)
+	if err != nil {
+		return unknown("cannot load the config file", err)
+	}
+	e := prev.SQL.Exposure()
+	return &e, true
+}
+
+// configPathAtRef returns the config file discovery finds at a git ref from
+// the current directory, as a path relative to the repository root, or ""
+// when the ref has none.
+func configPathAtRef(ref string) (string, error) {
+	prefix, err := exec.Command("git", "rev-parse", "--show-prefix").Output() //nolint:gosec // no user input
+	if err != nil {
+		return "", err
+	}
+	candidates := cli.ConfigSearchPaths(strings.TrimSpace(string(prefix)))
+	args := append([]string{"ls-tree", "--full-tree", "--name-only", ref, "--"}, candidates...)
+	out, err := exec.Command("git", args...).Output() //nolint:gosec // ref is from a trusted CLI flag
+	if err != nil {
+		return "", err
+	}
+	found := map[string]bool{}
+	for _, line := range strings.Split(string(out), "\n") {
+		found[line] = true
+	}
+	for _, c := range candidates {
+		if found[c] {
+			return c, nil
+		}
+	}
+	return "", nil
+}
+
+// compiledSchema is a schema's generated SQL under one exposure, with the
+// function names and name/SQL pairs a migration tracks.
+type compiledSchema struct {
+	check compiler.GeneratedSQL
+	list  compiler.ListGeneratedSQL
+	names []string
+	named []compiler.NamedFunction
+}
+
+// compileSchema runs the compilation pipeline for types under exposure.
+func compileSchema(types []schema.TypeDefinition, databaseSchema string, exposure compiler.Exposure) (compiledSchema, error) {
 	closureRows := schema.ComputeRelationClosure(types)
 	analyses := compiler.AnalyzeRelations(types, closureRows)
 	analyses = compiler.ComputeCanGenerate(analyses)
 	inlineData := compiler.BuildInlineSQLData(closureRows, analyses)
+	opts := compiler.GenerateSQLOptions{Exposure: exposure}
 
-	genSQL, err := compiler.GenerateSQL(analyses, inlineData, databaseSchema)
+	check, err := compiler.GenerateSQLWithOptions(analyses, inlineData, databaseSchema, opts)
 	if err != nil {
-		return nil, cli.GeneralError("generating check SQL for previous schema", err)
+		return compiledSchema{}, fmt.Errorf("generating check SQL: %w", err)
 	}
-	listSQL, err := compiler.GenerateListSQL(analyses, inlineData, databaseSchema)
+	list, err := compiler.GenerateListSQLWithOptions(analyses, inlineData, databaseSchema, opts)
 	if err != nil {
-		return nil, cli.GeneralError("generating list SQL for previous schema", err)
+		return compiledSchema{}, fmt.Errorf("generating list SQL: %w", err)
 	}
-
-	names := compiler.CollectFunctionNames(analyses)
-	namedFns := compiler.CollectNamedFunctions(genSQL, listSQL, analyses)
-	checksums := migrator.ComputeFunctionChecksums(namedFns)
-
-	return &previousState{
-		FunctionNames:     names,
-		FunctionChecksums: checksums,
-		Types:             types,
+	return compiledSchema{
+		check: check,
+		list:  list,
+		names: compiler.CollectFunctionNamesWithOptions(analyses, opts),
+		named: compiler.CollectNamedFunctionsWithOptions(check, list, analyses, opts),
 	}, nil
 }
 
@@ -470,6 +602,11 @@ func gitRelativePath(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return "", cli.GeneralError("resolving schema path", err)
+	}
+	// git reports the root with symlinks resolved (macOS /var is
+	// /private/var), so resolve the path too when it exists.
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
 	}
 	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output() //nolint:gosec // no user input
 	if err != nil {

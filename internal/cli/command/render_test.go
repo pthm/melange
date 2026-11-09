@@ -10,6 +10,7 @@ import (
 
 	"github.com/pthm/melange/internal/cli"
 	"github.com/pthm/melange/internal/update"
+	"github.com/pthm/melange/pkg/compiler"
 	"github.com/pthm/melange/pkg/migrator"
 	"github.com/pthm/melange/pkg/schema"
 )
@@ -54,6 +55,32 @@ func TestPrintStatusText_InSync(t *testing.T) {
 	}
 	if strings.Contains(out, "breaking") {
 		t.Errorf("an in-sync status must not print drift detail:\n%s", out)
+	}
+}
+
+// A restricted recorded exposure is shown under the Deployed line; the
+// default one is not.
+func TestPrintStatusText_ExposureDrift(t *testing.T) {
+	exposure := migrator.Exposure{Relations: compiler.RelationPatterns{Include: []string{"document#editor"}}}
+	report := statusReport{
+		SchemaFile: "present",
+		TuplesView: "present",
+		Sync:       syncExposureDrift,
+		Deployed:   &deployedReport{Checksum: "d0c1746f7e26", ModelRecorded: true, Exposure: &exposure},
+	}
+	out := renderStatus(t, report, &migrator.Status{SchemaExists: true, TuplesExists: true})
+	for _, want := range []string{
+		`Exposure:     {"relations":{"include":["document#editor"]},"functions":{}}`,
+		"Sync:         exposure drift: local SQL API exposure differs from deployed (`melange migrate` to apply)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+
+	report.Deployed.Exposure = nil
+	if out := renderStatus(t, report, &migrator.Status{SchemaExists: true, TuplesExists: true}); strings.Contains(out, "Exposure:") {
+		t.Errorf("the default exposure is not shown:\n%s", out)
 	}
 }
 

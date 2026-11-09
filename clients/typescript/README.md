@@ -111,6 +111,8 @@ await denyChecker.check(user, 'can_read', repo); // always returns { allowed: fa
 
 ### Contextual Tuples
 
+`checkWithContextualTuples` has the Go signature, but the TypeScript client does not apply contextual tuples yet: it runs a plain `check_permission` and skips the cache. Use the Go `Checker` for contextual tuples.
+
 ```typescript
 // Check with temporary permissions
 const decision = await checker.checkWithContextualTuples(
@@ -169,7 +171,7 @@ Generate type-safe constants and factory functions from your schema:
 melange generate client --runtime typescript --schema schema.fga --output ./src/authz/
 ```
 
-This generates three files:
+This generates four files (`types.ts`, `schema.ts`, `sql.ts` and `index.ts`). The relations follow the `sql:` section of `melange.yaml`, or `generate.client.relations`; see [Generated Code](https://melange.sh/docs/reference/generated-code/).
 
 ### types.ts
 
@@ -208,16 +210,38 @@ export function anyUser(): MelangeObject {
 }
 ```
 
+### sql.ts
+
+The exact names of the installed accessible functions, truncated names included:
+
+```typescript
+export const AccessibleFunctions = {
+  repository: {
+    can_read: "accessible_repository_can_read",
+    owner: "accessible_repository_owner",
+  },
+} as const;
+
+export const AccessibleByParentFunctions = {} as const;
+```
+
 ### Usage
 
 ```typescript
 import { Checker } from '@pthm/melange';
-import { user, repository, Relations } from './authz/index.js';
+import { user, repository, Relations, AccessibleFunctions } from './authz/index.js';
 
 const decision = await checker.check(
   user('123'),
   Relations.CanRead,
   repository('456')
+);
+
+// Filter your own query by the access set
+const { rows } = await pool.query(
+  `SELECT * FROM repositories
+   WHERE id::text IN (SELECT * FROM ${AccessibleFunctions.repository.can_read}('user', $1))`,
+  ['123'],
 );
 ```
 
@@ -256,6 +280,11 @@ class Checker {
     object: MelangeObject,
     contextualTuples: ContextualTuple[]
   ): Promise<Decision>;
+
+  explain(subject: MelangeObject, relation: Relation, object: MelangeObject, options?: ExplainOptions): Promise<Trace>;
+  expand(object: MelangeObject, relation: Relation, options?: ExpandOptions): Promise<UsersetTree>;
+  expandRecursive(object: MelangeObject, relation: Relation, options?: ExpandOptions): Promise<string[]>;
+  newBulkCheck(): BulkCheckBuilder;
 }
 ```
 
@@ -267,6 +296,7 @@ interface CheckerOptions {
   decision?: Decision;          // For testing only
   validateRequest?: boolean;    // Default: true
   validateUserset?: boolean;    // Default: true
+  databaseSchema?: string;      // Schema where melange functions live (default: search_path)
 }
 ```
 
@@ -287,8 +317,10 @@ class MemoryCache implements Cache {  // In-memory with TTL
 
 ## Error Handling
 
+Calls that reach the database map two errors. SQLSTATE `M2003`, a relation the SQL API exposure leaves out, throws `ValidationError` with `code` 2000 (`ErrorCodeValidation`) and the database message, such as `relation "viewer" on type "document" is not exposed`. A missing melange function (`42883`) throws `MissingFunctionError` with a message starting `melange: authorization function missing: `. Both keep the driver error as `cause`.
+
 ```typescript
-import { MelangeError, ValidationError, NotFoundError } from '@pthm/melange';
+import { MelangeError, ValidationError, NotFoundError, MissingFunctionError } from '@pthm/melange';
 
 try {
   await checker.check(user, 'can_read', repo);
@@ -297,6 +329,8 @@ try {
     console.error('Invalid input:', err.message);
   } else if (err instanceof NotFoundError) {
     console.error('Resource not found:', err.message);
+  } else if (err instanceof MissingFunctionError) {
+    console.error('Run melange migrate:', err.message);
   } else if (err instanceof MelangeError) {
     console.error('Melange error:', err.message);
   } else {

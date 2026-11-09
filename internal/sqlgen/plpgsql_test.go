@@ -84,7 +84,7 @@ func TestIfStmt(t *testing.T) {
 			},
 		}
 		got := stmt.StmtSQL()
-		expect := "IF p_value > 0 THEN\n    RETURN QUERY\n    SELECT 1;\nELSE\n    RETURN;\nEND IF;"
+		expect := "IF p_value > 0 THEN\n    RETURN QUERY\n        SELECT 1;\nELSE\n    RETURN;\nEND IF;"
 		if got != expect {
 			t.Errorf("StmtSQL() =\n%q\nwant:\n%q", got, expect)
 		}
@@ -123,8 +123,8 @@ func TestPlpgsqlFunction(t *testing.T) {
 		if !strings.Contains(got, "END;") {
 			t.Error("missing END")
 		}
-		if !strings.Contains(got, "$$ LANGUAGE plpgsql STABLE PARALLEL RESTRICTED;") {
-			t.Error("missing language spec")
+		if !strings.Contains(got, "$$ LANGUAGE plpgsql STABLE PARALLEL RESTRICTED\nSET plan_cache_mode = 'force_generic_plan'\nSET jit = 'off';") {
+			t.Errorf("missing language spec and plan settings:\n%s", got)
 		}
 	})
 

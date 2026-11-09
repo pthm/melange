@@ -7,10 +7,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/pthm/melange/internal/version"
+	"github.com/pthm/melange/pkg/parser"
 )
 
 // withVersion temporarily overrides the build version so tests can exercise
@@ -103,7 +105,7 @@ func TestShouldSkipMigration(t *testing.T) {
 	checksum := ComputeSchemaChecksum("test schema")
 
 	t.Run("nil record does not skip", func(t *testing.T) {
-		if shouldSkipMigration(nil, checksum) {
+		if shouldSkipMigration(nil, checksum, "{}") {
 			t.Error("should not skip when no previous migration exists")
 		}
 	})
@@ -115,7 +117,7 @@ func TestShouldSkipMigration(t *testing.T) {
 			CodegenVersion: CodegenVersion(),
 			SchemaDSL:      "model", // model already recorded
 		}
-		if !shouldSkipMigration(rec, checksum) {
+		if !shouldSkipMigration(rec, checksum, "{}") {
 			t.Error("should skip when checksum and codegen version match")
 		}
 	})
@@ -127,7 +129,7 @@ func TestShouldSkipMigration(t *testing.T) {
 			CodegenVersion: CodegenVersion(),
 			SchemaDSL:      "model",
 		}
-		if shouldSkipMigration(rec, checksum) {
+		if shouldSkipMigration(rec, checksum, "{}") {
 			t.Error("dev builds must fall through to phase 2: codegen can change without a version bump")
 		}
 	})
@@ -139,7 +141,7 @@ func TestShouldSkipMigration(t *testing.T) {
 			CodegenVersion: CodegenVersion(),
 			// SchemaDSL empty: an older record with no deployed model.
 		}
-		if shouldSkipMigration(rec, checksum) {
+		if shouldSkipMigration(rec, checksum, "{}") {
 			t.Error("should not skip when the deployed model has not been recorded")
 		}
 	})
@@ -149,7 +151,7 @@ func TestShouldSkipMigration(t *testing.T) {
 			SchemaChecksum: "different-checksum",
 			CodegenVersion: CodegenVersion(),
 		}
-		if shouldSkipMigration(rec, checksum) {
+		if shouldSkipMigration(rec, checksum, "{}") {
 			t.Error("should not skip when checksum differs")
 		}
 	})
@@ -159,7 +161,7 @@ func TestShouldSkipMigration(t *testing.T) {
 			SchemaChecksum: checksum,
 			CodegenVersion: "99",
 		}
-		if shouldSkipMigration(rec, checksum) {
+		if shouldSkipMigration(rec, checksum, "{}") {
 			t.Error("should not skip when codegen version differs")
 		}
 	})
@@ -169,7 +171,7 @@ func TestShouldSkipMigration(t *testing.T) {
 			SchemaChecksum: "other",
 			CodegenVersion: "99",
 		}
-		if shouldSkipMigration(rec, checksum) {
+		if shouldSkipMigration(rec, checksum, "{}") {
 			t.Error("should not skip when both differ")
 		}
 	})
@@ -297,7 +299,7 @@ func TestOutputDryRun(t *testing.T) {
 			SchemaDSL:      "model\n  schema 1.1\n-- it's fine", // embedded quote exercises escaping
 			SchemaFormat:   "single",
 			ModelJSON:      []byte(`[{"Name":"user"}]`),
-		}, gen, listSQL)
+		}, gen, listSQL, nil)
 		output := buf.String()
 
 		// Deployed-model columns are emitted so an applied dry-run script is
@@ -358,7 +360,7 @@ func TestOutputDryRun(t *testing.T) {
 	})
 
 	t.Run("reports write errors", func(t *testing.T) {
-		err := m.outputDryRun(failWriter{}, migrationWrite{SchemaChecksum: "abc"}, GeneratedSQL{}, ListGeneratedSQL{})
+		err := m.outputDryRun(failWriter{}, migrationWrite{SchemaChecksum: "abc"}, GeneratedSQL{}, ListGeneratedSQL{}, nil)
 		if !errors.Is(err, io.ErrClosedPipe) {
 			t.Fatalf("got %v, want io.ErrClosedPipe", err)
 		}
@@ -366,7 +368,7 @@ func TestOutputDryRun(t *testing.T) {
 
 	t.Run("omits version when empty", func(t *testing.T) {
 		var buf bytes.Buffer
-		m.outputDryRun(&buf, migrationWrite{SchemaChecksum: "abc"}, GeneratedSQL{}, ListGeneratedSQL{})
+		m.outputDryRun(&buf, migrationWrite{SchemaChecksum: "abc"}, GeneratedSQL{}, ListGeneratedSQL{}, nil)
 		output := buf.String()
 
 		if strings.Contains(output, "-- Melange version:") {
@@ -377,7 +379,7 @@ func TestOutputDryRun(t *testing.T) {
 	t.Run("sorts function names in migration record", func(t *testing.T) {
 		var buf bytes.Buffer
 		expected := []string{"check_z_viewer", "check_a_owner", "check_m_editor"}
-		m.outputDryRun(&buf, migrationWrite{SchemaChecksum: "abc", FunctionNames: expected}, GeneratedSQL{}, ListGeneratedSQL{})
+		m.outputDryRun(&buf, migrationWrite{SchemaChecksum: "abc", FunctionNames: expected}, GeneratedSQL{}, ListGeneratedSQL{}, nil)
 		output := buf.String()
 
 		// Should appear sorted in the INSERT
@@ -514,7 +516,7 @@ func TestOutputDryRun_DatabaseSchema(t *testing.T) {
 		m.SetDatabaseSchema("authz")
 
 		var buf bytes.Buffer
-		m.outputDryRun(&buf, migrationWrite{SchemaChecksum: "abc"}, GeneratedSQL{}, ListGeneratedSQL{})
+		m.outputDryRun(&buf, migrationWrite{SchemaChecksum: "abc"}, GeneratedSQL{}, ListGeneratedSQL{}, nil)
 		output := buf.String()
 
 		if !strings.Contains(output, "Database schema: authz") {
@@ -532,7 +534,7 @@ func TestOutputDryRun_DatabaseSchema(t *testing.T) {
 		m := NewMigrator(nil, "")
 
 		var buf bytes.Buffer
-		m.outputDryRun(&buf, migrationWrite{SchemaChecksum: "abc"}, GeneratedSQL{}, ListGeneratedSQL{})
+		m.outputDryRun(&buf, migrationWrite{SchemaChecksum: "abc"}, GeneratedSQL{}, ListGeneratedSQL{}, nil)
 		output := buf.String()
 
 		if !strings.Contains(output, "public") {
@@ -596,6 +598,108 @@ func TestSameCodegenVersion(t *testing.T) {
 	} {
 		if got := SameCodegenVersion(tc.a, tc.b); got != tc.want {
 			t.Errorf("SameCodegenVersion(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+}
+
+// planAction is the decision migrateOnce and Plan share; each case names the
+// phase that decides it.
+func TestPlanAction(t *testing.T) {
+	types, err := parser.ParseSchemaString("model\n  schema 1.1\ntype user\ntype doc\n  relations\n    define owner: [user]\n    define viewer: [user] or owner\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := NewMigrator(nil, "").compile(types, Exposure{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checksum := ComputeSchemaChecksum("schema")
+	// matching is the record a migration of this schema and SQL writes.
+	matching := func() *MigrationRecord {
+		checksums := make(map[string]string, len(c.checksums))
+		for name, sum := range c.checksums {
+			checksums[name] = sum
+		}
+		return &MigrationRecord{
+			SchemaChecksum:    checksum,
+			CodegenVersion:    CodegenVersion(),
+			FunctionNames:     slices.Clone(c.names),
+			FunctionChecksums: checksums,
+			SchemaDSL:         "model",
+		}
+	}
+	for _, tc := range []struct {
+		name     string
+		version  string
+		rec      func() *MigrationRecord
+		checksum string
+		key      string
+		want     PlanAction
+	}{
+		{"no record", "v0.10.0", func() *MigrationRecord { return nil }, checksum, "{}", PlanApply},
+		{"matching record (phase 1)", "v0.10.0", matching, checksum, "{}", PlanSkip},
+		{"matching record on a dev build (phase 2)", "dev", matching, checksum, "{}", PlanSkip},
+		{"schema changed, same SQL", "v0.10.0", func() *MigrationRecord {
+			r := matching()
+			r.SchemaChecksum = "other"
+			return r
+		}, checksum, "{}", PlanRecordOnly},
+		{"older codegen, same SQL", "v0.10.0", func() *MigrationRecord {
+			r := matching()
+			r.CodegenVersion = "v0.9.0"
+			return r
+		}, checksum, "{}", PlanRecordOnly},
+		{"model not recorded, same SQL", "v0.10.0", func() *MigrationRecord {
+			r := matching()
+			r.SchemaDSL = ""
+			return r
+		}, checksum, "{}", PlanRecordOnly},
+		{"exposure changed, same SQL", "v0.10.0", matching, checksum, `{"relations":{"include":["doc#owner"]}}`, PlanRecordOnly},
+		{"one function changed", "v0.10.0", func() *MigrationRecord {
+			r := matching()
+			r.SchemaChecksum = "other"
+			r.FunctionChecksums["check_doc_viewer"] = "edited"
+			return r
+		}, checksum, "{}", PlanApply},
+		{"recorded function no longer generated", "v0.10.0", func() *MigrationRecord {
+			r := matching()
+			r.SchemaChecksum = "other"
+			r.FunctionNames = append(r.FunctionNames, "check_doc_removed")
+			return r
+		}, checksum, "{}", PlanApply},
+		{"record without function checksums", "v0.10.0", func() *MigrationRecord {
+			r := matching()
+			r.SchemaChecksum = "other"
+			r.FunctionChecksums = nil
+			return r
+		}, checksum, "{}", PlanApply},
+		{"no schema content", "v0.10.0", matching, "", "{}", PlanApply},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withVersion(t, tc.version)
+			if got := planAction(tc.rec(), tc.checksum, tc.key, c); got != tc.want {
+				t.Errorf("planAction = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// A database a newer melange migrated is refused before anything else, even
+// when the SQL matches; a version that cannot be ordered is not ahead.
+func TestPlanActionRefusesAhead(t *testing.T) {
+	withVersion(t, "v0.10.0")
+	for _, tc := range []struct {
+		recorded string
+		want     PlanAction
+	}{
+		{"v0.11.0", PlanRefusedAhead},
+		{"0.11.0", PlanRefusedAhead},
+		{"v0.10.0-3-gabc1234", PlanApply},
+		{"dev", PlanApply},
+	} {
+		rec := &MigrationRecord{CodegenVersion: tc.recorded}
+		if got := planAction(rec, "checksum", "{}", compiled{}); got != tc.want {
+			t.Errorf("recorded %q: planAction = %s, want %s", tc.recorded, got, tc.want)
 		}
 	}
 }

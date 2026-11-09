@@ -54,12 +54,15 @@ func hashPosition(expr Expr) string {
 }
 
 // SubjectIDMatch creates a condition for matching subject IDs.
-// When allowWildcard is true, matches exact ID or wildcard tuples.
+// When allowWildcard is true, matches exact ID or, for an object subject,
+// wildcard tuples.
 // When allowWildcard is false, matches exact ID and excludes wildcard tuples.
 func SubjectIDMatch(column, subjectID Expr, allowWildcard bool) Expr {
 	exactMatch := Eq{Left: column, Right: subjectID}
 	if allowWildcard {
-		return Or(exactMatch, IsWildcard{Source: column})
+		// A wildcard grants every object of the subject type, never a
+		// userset (OpenFGA matches type:* only for an object subject).
+		return Or(exactMatch, And(IsWildcard{Source: column}, NoUserset{Source: subjectID}))
 	}
 	return And(exactMatch, Not(IsWildcard{Source: column}))
 }

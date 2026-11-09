@@ -8,6 +8,7 @@ This package wraps the internal generator registry, providing a stable public in
 
 - Generate type-safe constants for object types and relations
 - Create constructor functions for `melange.Object` values
+- Emit the exact names of the accessible functions a migration installs, so application code never builds them (long names are truncated and hashed)
 - Support multiple language runtimes (Go, TypeScript)
 - Provide configurable code generation options
 
@@ -35,19 +36,25 @@ func DefaultConfig() *Config
 ```go
 // Config controls code generation behavior.
 type Config struct {
-    Package        string         // Package name for generated code
-    RelationFilter string         // Prefix filter for relations
-    IDType         string         // Type for object IDs (default: "string")
-    Options        map[string]any // Runtime-specific options
+    Package        string                     // Package name for generated code
+    Exposure       *compiler.Exposure         // SQL API exposure the database is migrated with (nil: default)
+    Relations      *compiler.RelationPatterns // Relations that get constants (nil: follow Exposure)
+    RelationFilter string                     // Legacy prefix filter applied after them
+    IDType         string                     // Type for object IDs (default: "string")
+    Version        string                     // melange version for the header
+    SourcePath     string                     // Schema path for the header
+    Options        map[string]any             // Runtime-specific options
 }
 ```
 
+`Exposure` is the `sql:` section of `melange.yaml` (or `migrator.MigrateOptions.Exposure`). The accessible names are those a migration with it installs for the selected relations, so pass the exposure the database is migrated with. A `Config` that sets neither field generates every relation and every accessible function.
+
 ## Supported Runtimes
 
-| Runtime      | Status    | Output                                            |
-| ------------ | --------- | ------------------------------------------------- |
-| `go`         | Supported | Type-safe Go code with constants and constructors |
-| `typescript` | Stub      | TypeScript types and factory functions (planned)  |
+| Runtime      | Output                                                                                   |
+| ------------ | ---------------------------------------------------------------------------------------- |
+| `go`         | `schema_gen.go`: constants, constructors and accessible function name constants          |
+| `typescript` | `types.ts`, `schema.ts`, `sql.ts`, `index.ts`: constants, factories and the name maps    |
 
 ## Usage Examples
 
@@ -83,9 +90,10 @@ for filename, content := range files {
 
 ```go
 cfg := &clientgen.Config{
-    Package:        "authz",      // Package name
-    RelationFilter: "can_",       // Only generate can_* relations
-    IDType:         "string",     // ID type
+    Package:  "authz",  // Package name
+    IDType:   "string", // ID type
+    // The exposure migrate applies: only can_* relations
+    Exposure: &compiler.Exposure{Relations: compiler.RelationPatterns{Include: []string{"can_*"}}},
 }
 
 files, err := clientgen.Generate("go", types, cfg)
@@ -125,10 +133,10 @@ package authz
 
 import "github.com/pthm/melange/melange"
 
-// Object types
+// ObjectType constants from schema.
 const (
-    TypeUser       = "user"
-    TypeRepository = "repository"
+    TypeRepository melange.ObjectType = "repository"
+    TypeUser       melange.ObjectType = "user"
 )
 
 // Relations
@@ -145,6 +153,18 @@ func User(id string) melange.Object {
 func Repository(id string) melange.Object {
     return melange.Object{Type: TypeRepository, ID: id}
 }
+
+// Wildcard constructors for public access patterns.
+func AnyRepository() melange.Object { return melange.Object{Type: TypeRepository, ID: "*"} }
+func AnyUser() melange.Object       { return melange.Object{Type: TypeUser, ID: "*"} }
+
+// Accessible functions, as installed
+const (
+    SQLAccessibleRepositoryOwner  = "accessible_repository_owner"
+    SQLAccessibleRepositoryViewer = "accessible_repository_viewer"
+)
+
+func SQLAccessibleFunction(objectType melange.ObjectType, relation melange.Relation) (string, bool) { ... }
 ```
 
 ### Using Generated Code
@@ -170,14 +190,14 @@ allowed, err := checker.Check(ctx,
 Generate code via the melange CLI:
 
 ```bash
-# Generate Go client code
-melange generate client --runtime go --output internal/authz/authz.go
+# Generate Go client code (writes internal/authz/schema_gen.go)
+melange generate client --runtime go --output internal/authz/
 
 # Generate with custom package
-melange generate client --runtime go --package authz --output authz.go
+melange generate client --runtime go --package authz --output .
 
-# Generate TypeScript (when implemented)
-melange generate client --runtime typescript --output src/authz.ts
+# Generate TypeScript (a directory: types.ts, schema.ts, sql.ts, index.ts)
+melange generate client --runtime typescript --output src/authz/
 ```
 
 ## Integration with Build
@@ -185,14 +205,14 @@ melange generate client --runtime typescript --output src/authz.ts
 Add to your `go:generate` directives:
 
 ```go
-//go:generate melange generate client --runtime go --output authz_gen.go
+//go:generate melange generate client --runtime go --output .
 ```
 
 Or in a Makefile:
 
 ```makefile
 generate:
-	melange generate client --runtime go --output internal/authz/authz.go
+	melange generate client --runtime go --output internal/authz/
 ```
 
 ## Deprecated API
@@ -214,7 +234,7 @@ func DefaultGenerateConfig() *GenerateConfig
 
 This package imports:
 
-- `github.com/pthm/melange/lib/clientgen` - Generator registry
-- `github.com/pthm/melange/lib/clientgen/go` - Go generator (via init)
-- `github.com/pthm/melange/lib/clientgen/typescript` - TypeScript generator (via init)
+- `github.com/pthm/melange/internal/clientgen` - Generator registry
+- `github.com/pthm/melange/internal/clientgen/go` - Go generator (via init)
+- `github.com/pthm/melange/internal/clientgen/typescript` - TypeScript generator (via init)
 - `github.com/pthm/melange/pkg/schema` - Schema types

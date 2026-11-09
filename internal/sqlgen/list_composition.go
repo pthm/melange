@@ -1,5 +1,11 @@
 package sqlgen
 
+import (
+	"cmp"
+	"slices"
+	"strings"
+)
+
 // relationGraph is the relationReferences edge set over an analysis lookup,
 // built once per generate call so composition/wildcard queries reuse it
 // instead of re-deriving every visited node's edges.
@@ -96,6 +102,110 @@ func (g *relationGraph) reaches(start, target int) bool {
 	return false
 }
 
+// grantEdge is one step permission resolution takes from an object holding
+// (Type, Relation): through a tuple on it with relation TupleRelation, either
+// to the parent the tuple names, of TargetType and holding TargetRelation (a
+// parent lookup), or, when TargetType is empty, to the tuple's userset
+// subject, holding the userset's relation (a plain subject ends the path).
+type grantEdge struct {
+	Type, Relation, TupleRelation, TargetType, TargetRelation string
+}
+
+// grantEdgesFrom returns the grant edges out of every (type, relation)
+// resolution of (objectType, relation) reaches, sorted. It follows what
+// grants a relation (computed relations, intersection operands, parent
+// lookups and usersets), never what an exclusion subtracts. nil without
+// analysis.
+func (g *relationGraph) grantEdgesFrom(objectType, relation string) []grantEdge {
+	if g == nil || g.lookup[objectType+"."+relation] == nil {
+		return nil
+	}
+	var edges []grantEdge
+	type node struct{ objectType, relation string }
+	seen := map[node]bool{{objectType, relation}: true}
+	queue := []node{{objectType, relation}}
+	visit := func(n node) {
+		if !seen[n] && g.lookup[n.objectType+"."+n.relation] != nil {
+			seen[n] = true
+			queue = append(queue, n)
+		}
+	}
+	for len(queue) > 0 {
+		n := queue[0]
+		queue = queue[1:]
+		for _, rel := range g.sameObjectGrants(n.objectType, n.relation) {
+			edges = append(edges, grantEdge{Type: n.objectType, Relation: n.relation, TupleRelation: rel})
+			a := g.lookup[n.objectType+"."+rel]
+			if a == nil {
+				continue
+			}
+			for _, u := range slices.Concat(a.UsersetPatterns, a.SelfReferentialUsersets) {
+				visit(node{u.SubjectType, u.SubjectRelation})
+			}
+			parents := slices.Clone(a.ParentRelations)
+			for _, group := range a.IntersectionGroups {
+				for _, part := range group.Parts {
+					if part.ParentRelation != nil {
+						parents = append(parents, *part.ParentRelation)
+					}
+				}
+			}
+			for _, p := range parents {
+				for _, t := range p.AllowedLinkingTypes {
+					if g.lookup[t+"."+p.Relation] != nil {
+						edges = append(edges, grantEdge{
+							Type: n.objectType, Relation: n.relation, TupleRelation: p.LinkingRelation,
+							TargetType: t, TargetRelation: p.Relation,
+						})
+						visit(node{t, p.Relation})
+					}
+				}
+			}
+		}
+	}
+	slices.SortFunc(edges, func(a, b grantEdge) int {
+		return cmp.Or(
+			strings.Compare(a.Type, b.Type),
+			strings.Compare(a.Relation, b.Relation),
+			strings.Compare(a.TupleRelation, b.TupleRelation),
+			strings.Compare(a.TargetType, b.TargetType),
+			strings.Compare(a.TargetRelation, b.TargetRelation),
+		)
+	})
+	return slices.Compact(edges)
+}
+
+// sameObjectGrants returns relation and the relations of objectType that
+// grant it on the same object without a resolution step: computed relations
+// and intersection operands, transitively, excluding subtracted relations.
+func (g *relationGraph) sameObjectGrants(objectType, relation string) []string {
+	seen := map[string]bool{relation: true}
+	out := []string{relation}
+	for i := 0; i < len(out); i++ {
+		a := g.lookup[objectType+"."+out[i]]
+		if a == nil {
+			continue
+		}
+		next := slices.Concat(a.SatisfyingRelations, a.DirectImpliedBy, a.SimpleClosureRelations,
+			a.ComplexClosureRelations, composedClosureRelations(*a))
+		for _, group := range a.IntersectionGroups {
+			for _, part := range group.Parts {
+				if part.ParentRelation == nil {
+					next = append(next, part.Relation)
+				}
+			}
+		}
+		for _, rel := range next {
+			if rel != "" && !seen[rel] {
+				seen[rel] = true
+				out = append(out, rel)
+			}
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
 // listCompositionSafe reports whether the list function for
 // (fromType, fromRelation) may compose with — i.e. call — the list function
 // for (targetType, targetRelation) without risking infinite recursion or an
@@ -119,7 +229,7 @@ func (g *relationGraph) reaches(start, target int) bool {
 //
 // The edge set (relationReferences) over-approximates the calls generated SQL
 // can make, so a "safe" verdict is sound; an "unsafe" verdict merely keeps the
-// per-candidate check_permission_internal fallback, which is always correct.
+// per-candidate check fallback, which is always correct.
 func (g *relationGraph) listCompositionSafe(fromType, fromRelation, targetType, targetRelation string) bool {
 	if g == nil {
 		return false
@@ -143,14 +253,24 @@ func (g *relationGraph) listCompositionSafe(fromType, fromRelation, targetType, 
 // relationReferences returns every "type.relation" key the generated functions
 // for a may reference — same-type closure/implied/excluded relations, TTU
 // parents, and userset targets, both direct and inherited through closure.
-// Deliberately over-inclusive: extra edges can only make listCompositionSafe
-// more conservative, never incorrect.
+// A tuple-to-userset intersection part contributes parent edges for its
+// relation and no same-type edge: it reads the relation on the linking types,
+// never on a.ObjectType, which may define an unrelated relation of the same
+// name. An IsThis part contributes a harmless self edge. Otherwise the set
+// errs on the side of inclusion: extra edges can only make
+// listCompositionSafe more conservative, never incorrect, and only install
+// more functions under a restricted Exposure.
 //
 // MAINTENANCE: this must cover every reference-carrying field of
-// RelationAnalysis; a missed edge means listCompositionSafe can approve a
-// cyclic composition, which recurses infinitely at query time. A companion
-// reflection test (TestRelationReferencesFieldCoverage) fails when
-// RelationAnalysis gains a new field that has not been reviewed for edges.
+// RelationAnalysis. A missed edge means listCompositionSafe can approve a
+// cyclic composition, which recurses infinitely at query time, and that a
+// restricted Exposure leaves a function the generated bodies call
+// uninstalled or unrouted, which denies silently through a dispatcher and
+// fails with "function does not exist" on a direct call (checkFunction). A
+// companion reflection test
+// (TestRelationReferencesFieldCoverage) fails when RelationAnalysis gains a
+// new field that has not been reviewed for edges, and TestExposure_ClosureSound
+// fails when a generated body calls a relation that is not an edge.
 // analysis/analysis_types.go's sortByDependency walks a related (narrower)
 // edge set for ordering; keep both in mind when adding reference kinds.
 func relationReferences(a *RelationAnalysis) []string {
@@ -197,10 +317,16 @@ func relationReferences(a *RelationAnalysis) []string {
 	groups := func(gs ...IntersectionGroupInfo) {
 		for _, g := range gs {
 			for _, p := range g.Parts {
-				sameType(p.Relation, p.ExcludedRelation)
 				if p.ParentRelation != nil {
+					// A TTU part reads p.Relation on the parent types,
+					// never on a.ObjectType.
 					parents(*p.ParentRelation)
+				} else {
+					sameType(p.Relation)
 				}
+				// Never set on a TTU part today, but check and list_objects
+				// would apply it on a.ObjectType if it were.
+				sameType(p.ExcludedRelation)
 			}
 		}
 	}
@@ -248,6 +374,27 @@ func (g *relationGraph) reachesWildcard(targetType, targetRelation string) bool 
 	}
 	n, ok := g.ids[targetType+"."+targetRelation]
 	return ok && g.wildcardReach[n]
+}
+
+// checkFunction returns the check function the internal dispatcher's arm for
+// (objectType, relation) runs: check_<t>_<r>, or for noWildcard its _nw
+// variant when one is emitted (emitsNoWildcard) and the base function
+// otherwise. ok is false when the model generates no check function for the
+// pair, which the dispatcher answers with 0. It reads the full model, never
+// the exposure, so bodies stay exposure-independent: a caller only names a
+// relationReferences edge, which Reach installs with the caller.
+func (g *relationGraph) checkFunction(objectType, relation string, noWildcard bool) (string, bool) {
+	if g == nil {
+		return "", false
+	}
+	a := g.lookup[objectType+"."+relation]
+	if a == nil || !a.Capabilities.CheckAllowed {
+		return "", false
+	}
+	if noWildcard && emitsNoWildcard(g, *a) {
+		return functionNameNoWildcard(objectType, relation), true
+	}
+	return functionName(objectType, relation), true
 }
 
 // composableListTarget reports whether the list_objects function for
@@ -318,7 +465,7 @@ func composedListObjectsMembership(schema, targetType, targetRel string, objectI
 // on the candidate object t.object_id, for a complex closure relation.
 //
 // When composition is safe it replaces the per-candidate
-// check_permission_internal with a semi-join against rel's list_objects set
+// check with a semi-join against rel's list_objects set
 // (the set of objects the subject holds rel on), keeping a check arm guarded to
 // userset-typed subjects for parity: the list function is complete for plain
 // subjects but a Recursive/Composed target may under-report userset subjects
@@ -333,6 +480,7 @@ func complexClosureMembership(plan ListPlan, rel string) Expr {
 		Relation:    rel,
 		Object:      LiteralObject(plan.ObjectType, Col{Table: "t", Column: "object_id"}),
 		ExpectAllow: true,
+		Graph:       plan.graph(),
 	}
 	if !composableListTarget(plan, plan.ObjectType, rel) {
 		return check
@@ -345,7 +493,7 @@ func complexClosureMembership(plan ListPlan, rel string) Expr {
 // closure relation in list_subjects.
 //
 // When composition is safe it replaces the per-candidate
-// check_permission_internal with a semi-join against rel's list_subjects set —
+// check with a semi-join against rel's list_subjects set —
 // list_{type}_{rel}_sub(p_object_id, p_subject_type) is exactly the set of
 // subjects holding rel on the object. The list_objects mirror keeps a userset-
 // guarded check arm, but list_subjects composition is gated OUT here when
@@ -365,6 +513,7 @@ func complexClosureSubjectMembership(plan ListPlan, rel string) Expr {
 		Relation:    rel,
 		Object:      LiteralObject(plan.ObjectType, ObjectID),
 		ExpectAllow: true,
+		Graph:       plan.graph(),
 	}
 	if plan.Analysis.Features.HasWildcard {
 		return check
@@ -402,7 +551,7 @@ func intersectionPartComposable(plan ListPlan, rel string) bool {
 // rel on the candidate object objectID, for one positive part of an INTERSECT
 // group in list_objects.
 //
-// When composition is safe it replaces the per-candidate check_permission_internal
+// When composition is safe it replaces the per-candidate check
 // with a semi-join against rel's list_objects set, keeping a check arm guarded to
 // userset-typed subjects for parity (a Recursive/Composed target may under-report
 // a userset subject like "group:eng#member"; an under-reported positive membership
@@ -416,6 +565,7 @@ func intersectionPartMembership(plan ListPlan, rel string, objectID Expr) Expr {
 		Relation:    rel,
 		Object:      LiteralObject(plan.ObjectType, objectID),
 		ExpectAllow: true,
+		Graph:       plan.graph(),
 	}
 	if !intersectionPartComposable(plan, rel) {
 		return check
@@ -427,7 +577,7 @@ func intersectionPartMembership(plan ListPlan, rel string, objectID Expr) Expr {
 // exclusion inside an INTERSECT part: the object is kept when the subject does
 // NOT hold rel on it. When composition is safe it is the negation of rel's
 // list_objects membership (plus a userset-guarded check arm — an under-reported
-// exclusion is over-permissive); otherwise the per-candidate check_permission_internal
+// exclusion is over-permissive); otherwise the per-candidate check
 // with ExpectAllow=false. Mirrors complexExclusionAntiJoin.
 func intersectionPartExclusion(plan ListPlan, rel string, objectID Expr) Expr {
 	check := CheckPermission{
@@ -436,6 +586,7 @@ func intersectionPartExclusion(plan ListPlan, rel string, objectID Expr) Expr {
 		Relation:    rel,
 		Object:      LiteralObject(plan.ObjectType, objectID),
 		ExpectAllow: false,
+		Graph:       plan.graph(),
 	}
 	if !intersectionPartComposable(plan, rel) {
 		return check
@@ -446,6 +597,7 @@ func intersectionPartExclusion(plan ListPlan, rel string, objectID Expr) Expr {
 		Relation:    rel,
 		Object:      LiteralObject(plan.ObjectType, objectID),
 		ExpectAllow: true,
+		Graph:       plan.graph(),
 	}
 	return Not(composedListObjectsMembership(plan.DatabaseSchema, plan.ObjectType, rel, objectID, SubjectType, SubjectID, "excl_obj", positiveCheck))
 }
@@ -455,7 +607,7 @@ func intersectionPartExclusion(plan ListPlan, rel string, objectID Expr) Expr {
 //
 // When composition is safe it semi-joins against the userset relation's list
 // function — the set-oriented replacement for a per-candidate check — but
-// keeps a check_permission_internal arm guarded to userset-typed subjects:
+// keeps a check arm guarded to userset-typed subjects:
 // check functions can prove membership for subjects like "group:eng#member"
 // through closure arms that not every list strategy enumerates. For plain
 // subjects the guard is false and the arm short-circuits before the check.
@@ -471,6 +623,7 @@ func usersetMembership(plan ListPlan, pattern listUsersetPatternInput) Expr {
 			ID:   UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}},
 		},
 		ExpectAllow: true,
+		Graph:       plan.graph(),
 	}
 	if !composableListTarget(plan, pattern.SubjectType, pattern.SubjectRelation) {
 		return check

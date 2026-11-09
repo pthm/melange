@@ -8,6 +8,11 @@ type CheckPlan struct {
 	Analysis       RelationAnalysis
 	Inline         InlineSQLData
 	DatabaseSchema string
+	// FunctionSchema is the schema explain functions are created in and call
+	// each other through, when it is not DatabaseSchema (pg_temp, for
+	// explain on demand). Everything else, check functions included, stays
+	// in DatabaseSchema. Check functions ignore it.
+	FunctionSchema string
 
 	// Function identity
 	FunctionName              string
@@ -56,6 +61,12 @@ type CheckPlan struct {
 	// base function (identical body, no _nw emitted). Nil means "always assume a
 	// _nw variant exists" (backward-compatible for direct plan-builder callers).
 	NeedsNoWildcard map[string]map[string]bool
+
+	// Graph routes the body's checks on other relations to their specialized
+	// functions when the pair is known when the SQL is generated (see
+	// CheckPermission). Nil keeps every such check on the internal
+	// dispatcher.
+	Graph *relationGraph
 }
 
 // BuildCheckPlan creates a plan for generating a check function.
@@ -125,6 +136,7 @@ func BuildCheckPlanWithOrdering(a RelationAnalysis, inline InlineSQLData, databa
 	if a.Features.HasExclusion {
 		plan.Exclusions = buildExclusionInput(
 			a,
+			nil, // check bodies build their exclusion checks from the plan
 			databaseSchema,
 			ObjectID, // p_object_id parameter
 			SubjectType,
@@ -148,4 +160,13 @@ func (p CheckPlan) DetermineCheckFunctionType() string {
 	default:
 		return "recursive_intersection"
 	}
+}
+
+// functionSchema is the schema of the explain functions: FunctionSchema, or
+// DatabaseSchema when it is unset.
+func (p CheckPlan) functionSchema() string {
+	if p.FunctionSchema != "" {
+		return p.FunctionSchema
+	}
+	return p.DatabaseSchema
 }

@@ -31,15 +31,18 @@ func composedRecursiveTTUAnchor() *IndirectAnchorInfo {
 	}
 }
 
+func composedRecursiveTTUBlocks(lookup map[string]*RelationAnalysis) []TypedQueryBlock {
+	return buildComposedRecursiveTTUObjectsBlocks(composedRecursiveTTUPlan(lookup), composedRecursiveTTUAnchor(), "folder", ExclusionConfig{})
+}
+
 func composedRecursiveTTUSQL(t *testing.T, lookup map[string]*RelationAnalysis) string {
 	t.Helper()
-	plan := composedRecursiveTTUPlan(lookup)
-	anchor := composedRecursiveTTUAnchor()
-	block, err := buildComposedRecursiveTTUObjectsBlock(plan, anchor, "folder", ExclusionConfig{})
-	if err != nil {
-		t.Fatalf("buildComposedRecursiveTTUObjectsBlock: %v", err)
+	blocks := composedRecursiveTTUBlocks(lookup)
+	sqls := make([]string, len(blocks))
+	for i, b := range blocks {
+		sqls[i] = b.Query.SQL()
 	}
-	return block.Query.SQL()
+	return strings.Join(sqls, "\n")
 }
 
 func TestComposedRecursiveTTU_SemiJoinWhenComposable(t *testing.T) {
@@ -56,7 +59,7 @@ func TestComposedRecursiveTTU_SemiJoinWhenComposable(t *testing.T) {
 
 	sql := composedRecursiveTTUSQL(t, lookup)
 
-	if !strings.Contains(sql, "t.subject_id IN (SELECT obj.object_id FROM list_folder_viewer_obj(p_subject_type, p_subject_id, NULL, NULL) obj)") {
+	if !strings.Contains(sql, "t.subject_id = ANY(ARRAY(SELECT obj.object_id FROM list_folder_viewer_obj(p_subject_type, p_subject_id, NULL, NULL) obj))") {
 		t.Errorf("expected set-oriented semi-join against list_folder_viewer_obj, got:\n%s", sql)
 	}
 	// Userset-typed subjects keep a guarded per-candidate check for parity.
@@ -65,6 +68,19 @@ func TestComposedRecursiveTTU_SemiJoinWhenComposable(t *testing.T) {
 	}
 	if !strings.Contains(sql, "check_permission_internal(p_subject_type, p_subject_id, 'viewer', 'folder', t.subject_id") {
 		t.Errorf("expected guarded per-candidate check for userset subjects, got:\n%s", sql)
+	}
+
+	// The array filter is an arm of its own, so it can key the subject_id
+	// index; the check is a separate arm kept out for plain subjects.
+	blocks := composedRecursiveTTUBlocks(lookup)
+	if len(blocks) != 2 {
+		t.Fatalf("expected an array arm and a check arm, got %d blocks", len(blocks))
+	}
+	if array := blocks[0].Query.SQL(); strings.Contains(array, "check_permission_internal") || blocks[0].UsersetSubjectOnly {
+		t.Errorf("array arm must not carry the check, got:\n%s", array)
+	}
+	if !blocks[1].UsersetSubjectOnly {
+		t.Errorf("check arm must be UsersetSubjectOnly")
 	}
 }
 

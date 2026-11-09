@@ -27,7 +27,7 @@ The CLI commands use this package to:
 
 ## Key Components
 
-- `Config` - Top-level configuration struct with database, generate, migrate, and doctor settings
+- `Config` - Top-level configuration struct: schema path, database, generate, migrate and doctor settings, the `sql` section (the SQL API exposure: `sql.relations`, `sql.functions`; environments cannot override it), `default_environment` and named `environments`
 - `LoadConfig()` - Discovers config file by walking up to `.git` boundary
 - `ExitError` - Error type carrying exit code for `os.Exit()`
 - Exit code constants (`ExitConfig`, `ExitSchemaParse`, `ExitDBConnect`)

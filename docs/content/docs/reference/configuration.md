@@ -52,7 +52,8 @@ Create a `melange.yaml` in your project root, or use `melange init` to generate 
 # Path to OpenFGA schema file (used by all commands)
 schema: schemas/schema.fga
 
-# Database connection (used by migrate, status, doctor, schema pull, explain, expand)
+# Database connection (used by migrate, status, diff, history, doctor, functions,
+# schema pull, explain, expand, studio, and generate client --check)
 # See "Environments" below for per-environment overrides selected with --env.
 database:
   # Option 1: Full connection URL
@@ -73,11 +74,12 @@ database:
 generate:
   client:
     runtime: go
-    schema: schemas/schema.fga  # Overrides top-level schema
     output: internal/authz
     package: authz
-    filter: can_
     id_type: string
+    # Relations to generate constants for; leave out to inherit sql.relations
+    relations:
+      include: ["can_*"]
 
   # Migration file generation settings (for external frameworks)
   migration:
@@ -94,6 +96,23 @@ migrate:
 doctor:
   verbose: false
   skip_performance: false
+  skip_client: false      # skip the Generated Client checks
+  strict_client: false    # fail, not warn, on a client name the database lacks
+
+# Generated SQL API (used by migrate, generate migration, generate client, status,
+# doctor, functions, studio)
+# Omit the section to generate everything. See "SQL API Settings" below.
+sql:
+  relations:
+    include: ["document#can_*", "folder#can_view"]
+    exclude: ["document#can_admin"]
+  functions:
+    list_objects: true
+    list_subjects: true
+    accessible: true
+    parent_key: true
+    expand: false
+    explain: false
 ```
 
 ## Minimal Configuration
@@ -163,11 +182,16 @@ Configure under `generate.client:`:
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `runtime` | string | - | Target runtime: `go`, `typescript` |
-| `schema` | string | (top-level `schema`) | Path to schema file |
-| `output` | string | - | Output directory for generated code |
+| `output` | string | - | Output directory for generated code; `generate client --check` and doctor compare the files here |
 | `package` | string | `authz` | Package/module name |
-| `filter` | string | - | Relation prefix filter (e.g., `can_`) |
+| `relations.include` | list | `[]` | Patterns of the relations to generate constants for, as in [`sql.relations`](#sql-api-settings) |
+| `relations.exclude` | list | `[]` | Patterns of the relations to leave out |
+| `filter` | string | - | Deprecated: relation name prefix applied after the patterns (e.g., `can_`). Use `relations.include: ["can_*"]` |
 | `id_type` | string | `string` | ID type for constructors |
+
+The client is generated from the top-level `schema`, or from `--schema` when given.
+
+Without a `relations.include`, the client inherits `sql.relations` (include and exclude), so its constants match the relations `melange migrate` exposes, and a client `exclude` only narrows that. A client `include` replaces `sql.relations`. `include: ["*"]` selects every relation. The generated accessible function names always follow what a migration with the `sql:` section installs: the client names the accessible functions of the exposed relations it selects, `accessible_{type}_{relation}` when `sql.functions.accessible` is on and the `_by_{link}` forms when `sql.functions.parent_key` is on. `generate.client.relations` cannot be set to a value such as `inherit`; leave it out instead. A key under it other than `include` and `exclude` stops every command when the configuration is loaded. See [Generated Code](../generated-code/#which-relations).
 
 ### Generate Migration Settings
 
@@ -190,7 +214,7 @@ Configure under `migrate:`:
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `dry_run` | bool | `false` | Output SQL without applying |
-| `force` | bool | `false` | Force migration even if unchanged |
+| `force` | bool | `false` | Re-apply even if unchanged, and drop removed functions with `CASCADE` together with the objects that depend on them (see [Dependent objects](../../guides/migrations/#dependent-objects)) |
 
 ### Doctor Settings
 
@@ -200,6 +224,90 @@ Configure under `doctor:`:
 |-----|------|---------|-------------|
 | `verbose` | bool | `false` | Show detailed output |
 | `skip_performance` | bool | `false` | Skip performance checks (view analysis) |
+| `skip_client` | bool | `false` | Skip the Generated Client checks |
+| `strict_client` | bool | `false` | Report a name the generated client uses that the database does not answer for as a failure instead of a warning |
+
+The Generated Client checks run when `generate.client.runtime` is set. They read `generate.client.*` and the `sql:` section from the configuration only, never from command flags; see [doctor](../cli/#doctor).
+
+### SQL API Settings
+
+The `sql:` section selects the generated SQL API: which relations the public
+functions (`check_permission`, `list_accessible_objects` and the others)
+answer for, and which function families are generated. By default every
+relation is exposed and every family is generated. Restricting the API keeps
+the installed function count down: the functions of relations that no exposed
+relation reaches, and of the families turned off, are not generated. A relation
+an exposed relation reads through keeps its functions, so that the exposed one
+resolves completely. See [Exposure](../sql-api/#exposure) for what is installed
+and how unexposed relations behave.
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `relations.include` | list | `["*"]` | Patterns of the relations to expose. An empty list matches every relation |
+| `relations.exclude` | list | `[]` | Patterns of the relations not to expose. Exclude wins over include |
+| `functions.list_objects` | bool | `true` | Enable the `list_objects` family: `list_accessible_objects` |
+| `functions.list_subjects` | bool | `true` | Enable the `list_subjects` family: `list_accessible_subjects` and the `list_<type>_<relation>_sub` functions |
+| `functions.accessible` | bool | `true` | Enable the `accessible` family: `accessible_objects`, and the `accessible_<type>_<relation>` names in generated clients |
+| `functions.parent_key` | bool | `true` | Enable the `parent_key` family: the `accessible_<type>_<relation>_by_<link>` functions, and their names in generated clients |
+| `functions.expand` | bool | `true` | Enable the `expand` family: `expand_permission` and the `expand_<type>_<relation>` functions |
+| `functions.explain` | bool | `true` | Enable the `explain` family: `explain_permission` and the `explain_<type>_<relation>` functions |
+
+Check functions (`check_permission`, `check_permission_nw`,
+`check_permission_bulk`) are always generated. A key the section leaves out
+keeps its default. A key the section does not know, such as a misspelled
+`functions.expnd`, or `functions.check`, which cannot be turned off, stops
+every command when the configuration is loaded: ignoring it would keep the
+default for the key that was meant.
+
+With a family off, its public function raises `M2003` for every relation the
+model defines. Explain and expand are debugging tools, so `expand: false` and
+`explain: false` cost the CLI and studio nothing but time: `melange explain`,
+`melange expand` and studio compile those functions from the recorded model
+into `pg_temp` for each call, which needs a writable primary and the `TEMP`
+privilege (see
+[Explain and Expand on Demand](../sql-api/#explain-and-expand-on-demand)).
+`list_objects`, `accessible` and `parent_key` read each other,
+so the `list_<type>_<relation>_obj` and `accessible_<type>_<relation>`
+functions stay installed while any of the three is on: turning off
+`list_objects` or `accessible` alone removes no per-relation functions, and
+only all three off removes them.
+
+**Patterns.** A pattern is `relation`, which matches that relation on every
+type, or `type#relation`. `*` matches any run of characters and `?` one
+character, within one part: neither crosses `#`. `can_*` matches every
+relation starting with `can_`; `document#*` matches every relation of
+`document`. A pattern may not be empty, have more than one `#`, an empty
+part, or contain whitespace, `:` or `@`. An invalid pattern stops every
+command when the configuration is loaded, with an error naming the key (and
+the environment variable, when the value came from one). A valid pattern
+that matches no relation of the schema is a warning from `melange migrate`
+and `melange doctor`, not an error.
+
+**Declarative.** The section describes the API the database should have.
+`melange migrate` always applies the exposure it resolves to (config file,
+then `MELANGE_SQL_*` variables, then flags, over the defaults), and records it
+in `melange_migrations`. Removing the section, or a key of it, widens the
+database back to the default on the next migrate. The command-line flags
+(`--include-relation`, `--exclude-relation`, `--no-<family>`) apply to one run
+only and are not remembered, so keep a lasting restriction in the config file.
+`melange generate client` reads the section too, without those flags, so a
+restriction kept in the file also gives the client the matching names.
+`melange status` and `melange doctor` compare the local exposure with the
+recorded one and report a difference as exposure drift.
+
+{{< callout type="info" >}}
+Only the CLI is declarative. A Go program that calls `migrator.Migrate` or
+`migrator.MigrateWithOptions` without an `Exposure` keeps the exposure the
+database last recorded, so an application that migrates on startup does not
+undo a restriction applied with `melange migrate`. `Migrator.MigrateWithTypes`
+records no migration, so it cannot change the exposure at all. See
+[Programmatic Alternative](../cli/#programmatic-alternative).
+{{< /callout >}}
+
+The `sql:` section applies to every environment: the exposure describes the
+schema, not a connection. An `sql:` key inside an
+[environment profile](#environments) is rejected when the configuration is
+loaded.
 
 ## Custom Database Schema
 
@@ -343,7 +451,9 @@ diagnostic commands.
 ### Overlay semantics
 
 An environment's `database` block overlays the base one — fields it sets win,
-fields it omits fall through. To keep behaviour predictable, when an environment
+fields it omits fall through. An environment can set `database` and `schema`
+only; the [`sql:` section](#sql-api-settings) is the same for every
+environment, and an environment that sets it is rejected. To keep behaviour predictable, when an environment
 supplies a discrete connection (`host`/`name`) on top of a base that uses a
 `url`, the base URL is dropped rather than decomposed. In that case the
 environment must provide a complete connection (including `user`); melange does
@@ -381,6 +491,7 @@ Environments:
   staging          staging.db.internal:5432/app
 
 Default: local
+Active:  local (marked with *)
 ```
 
 `melange config show --env production` prints the fully-resolved configuration
@@ -403,10 +514,11 @@ All configuration options can be set via environment variables with the `MELANGE
 | `MELANGE_DATABASE_SSLMODE` | `database.sslmode` |
 | `MELANGE_DATABASE_SCHEMA` | `database.schema` |
 | `MELANGE_GENERATE_CLIENT_RUNTIME` | `generate.client.runtime` |
-| `MELANGE_GENERATE_CLIENT_SCHEMA` | `generate.client.schema` |
 | `MELANGE_GENERATE_CLIENT_OUTPUT` | `generate.client.output` |
 | `MELANGE_GENERATE_CLIENT_PACKAGE` | `generate.client.package` |
-| `MELANGE_GENERATE_CLIENT_FILTER` | `generate.client.filter` |
+| `MELANGE_GENERATE_CLIENT_RELATIONS_INCLUDE` | `generate.client.relations.include` |
+| `MELANGE_GENERATE_CLIENT_RELATIONS_EXCLUDE` | `generate.client.relations.exclude` |
+| `MELANGE_GENERATE_CLIENT_FILTER` | `generate.client.filter` (deprecated) |
 | `MELANGE_GENERATE_CLIENT_ID_TYPE` | `generate.client.id_type` |
 | `MELANGE_GENERATE_MIGRATION_OUTPUT` | `generate.migration.output` |
 | `MELANGE_GENERATE_MIGRATION_NAME` | `generate.migration.name` |
@@ -415,6 +527,16 @@ All configuration options can be set via environment variables with the `MELANGE
 | `MELANGE_MIGRATE_FORCE` | `migrate.force` |
 | `MELANGE_DOCTOR_VERBOSE` | `doctor.verbose` |
 | `MELANGE_DOCTOR_SKIP_PERFORMANCE` | `doctor.skip_performance` |
+| `MELANGE_DOCTOR_SKIP_CLIENT` | `doctor.skip_client` |
+| `MELANGE_DOCTOR_STRICT_CLIENT` | `doctor.strict_client` |
+| `MELANGE_SQL_RELATIONS_INCLUDE` | `sql.relations.include` |
+| `MELANGE_SQL_RELATIONS_EXCLUDE` | `sql.relations.exclude` |
+| `MELANGE_SQL_FUNCTIONS_LIST_OBJECTS` | `sql.functions.list_objects` |
+| `MELANGE_SQL_FUNCTIONS_LIST_SUBJECTS` | `sql.functions.list_subjects` |
+| `MELANGE_SQL_FUNCTIONS_ACCESSIBLE` | `sql.functions.accessible` |
+| `MELANGE_SQL_FUNCTIONS_PARENT_KEY` | `sql.functions.parent_key` |
+| `MELANGE_SQL_FUNCTIONS_EXPAND` | `sql.functions.expand` |
+| `MELANGE_SQL_FUNCTIONS_EXPLAIN` | `sql.functions.explain` |
 | `MELANGE_ENV` | selects an [environment profile](#environments) (like `--env`) |
 | `CI` | _(special)_ |
 
@@ -429,19 +551,31 @@ melange migrate
 
 **Boolean values:** Use `true`/`false` or `1`/`0` for boolean environment variables.
 
+**List values:** Separate the entries of a list variable with commas; spaces
+around the commas are ignored. A variable replaces the whole list from the
+config file:
+
+```bash
+export MELANGE_SQL_RELATIONS_INCLUDE="document#can_*, folder#can_view"
+```
+
+An empty variable is ignored, so the config file value (or the default)
+applies.
+
 ## Configuration Inheritance
 
-Per-command settings can override top-level settings:
+An [environment profile](#environments) can override the top-level `schema`:
 
 ```yaml
-# Top-level default
 schema: schemas/schema.fga
 
-generate:
-  client:
-    # Overrides top-level schema for generate command only
-    schema: schemas/api-schema.fga
+environments:
+  legacy:
+    schema: schemas/legacy.fga
 ```
+
+No other section has its own schema path: `generate client`, `generate migration`
+and the database commands read the top-level `schema` (or `--schema`).
 
 ## Viewing Effective Configuration
 
@@ -465,13 +599,21 @@ melange config show --env production
 Config file: /path/to/project/melange.yaml
 Environment: production
 
-schema: schemas/schema.fga
-database:
-  url: postgres://prod-user:****@prod-db:5432/app
-  host: ""
-  port: 5432
-  ...
+Database:
+  Host: ""
+  Name: ""
+  Password: ""
+  Port: 5432
+  SSLMode: prefer
+  Schema: ""
+  URL: postgres://prod-user:****@prod-db:5432/app
+  User: ""
+...
+Schema: schemas/schema.fga
 ```
+
+The keys are the Go field names (`Database`, `URL`, `SSLMode`, `SQL`), sorted
+alphabetically, not the `melange.yaml` keys.
 
 ## Security Considerations
 

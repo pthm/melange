@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	_ "github.com/lib/pq"
@@ -28,7 +29,20 @@ var (
 var migrateCmd = &cobra.Command{
 	Use:   "migrate",
 	Short: "Apply schema to database",
-	Long:  `Apply authorization schema to PostgreSQL database.`,
+	Long: `Apply authorization schema to PostgreSQL database.
+
+The generated SQL API follows the sql section of the configuration, with the
+exposure flags on top. Each run applies exactly that exposure: a run without
+an sql section or exposure flags restores the default (every relation, every
+function family), so keep a lasting restriction in the configuration file.
+
+Functions the new SQL no longer generates are dropped. When views, policies,
+rules or functions depend on one, migrate refuses and lists them; --force
+drops them together with their dependents (CASCADE).
+
+melange generate client follows the sql section, not the exposure flags:
+when a client is configured and the flags change the exposure, migrate
+warns that the client may name what it does not install.`,
 	Example: `  # Apply schema to database
   melange migrate --db postgres://localhost/mydb
 
@@ -38,8 +52,12 @@ var migrateCmd = &cobra.Command{
   # Preview migration without applying
   melange migrate --db postgres://localhost/mydb --dry-run
 
-  # Force re-apply even if schema unchanged
+  # Re-apply functions changed outside Melange; also drops the views and
+  # policies that call removed functions (CASCADE) instead of refusing
   melange migrate --db postgres://localhost/mydb --force
+
+  # Expose only the can_* relations, without the expand and explain functions
+  melange migrate --include-relation 'can_*' --no-expand --no-explain
 
   # Drift-safe apply: abort unless the deployed checksum matches (CI gate)
   melange migrate --env production --if-deployed-checksum "$CURRENT"`,
@@ -59,6 +77,12 @@ var migrateCmd = &cobra.Command{
 		dryRun := resolveBool(migrateDryRun, cfg.Migrate.DryRun)
 		force := resolveBool(migrateForce, cfg.Migrate.Force)
 
+		exposure, err := resolveExposure(cmd, cfg.SQL)
+		if err != nil {
+			return err
+		}
+		warnClientExposure(cmd, exposure)
+
 		// Get DSN
 		dsn, err := resolveDSN(migrateDB)
 		if err != nil {
@@ -72,7 +96,8 @@ var migrateCmd = &cobra.Command{
 			ifDeployedChecksum = &migrateIfDeployedChecksum
 		}
 
-		return runMigrate(dsn, schemaPath, dryRun, force, databaseSchema, ifDeployedChecksum)
+		warnUnmatchedPatterns(schemaPath, exposure)
+		return runMigrate(dsn, schemaPath, dryRun, force, databaseSchema, ifDeployedChecksum, exposure)
 	},
 }
 
@@ -82,8 +107,20 @@ func init() {
 	f.StringVar(&migrateDBSchema, "db-schema", "", "database schema (default: config database.schema, else public)")
 	f.StringVar(&migrateSchema, "schema", "", "path to schema.fga or fga.mod file")
 	f.BoolVar(&migrateDryRun, "dry-run", false, "output migration SQL without applying")
-	f.BoolVar(&migrateForce, "force", false, "force migration even if schema unchanged")
-	f.StringVar(&migrateIfDeployedChecksum, "if-deployed-checksum", "", "apply only if the deployed schema checksum matches this value (from `melange status --format json`)")
+	f.BoolVar(&migrateForce, "force", false, "re-apply even if unchanged, and drop removed functions with CASCADE, together with the views, policies and functions that depend on them")
+	f.StringVar(&migrateIfDeployedChecksum, "if-deployed-checksum", "", "apply only if the deployed schema checksum matches this value (from `melange status --format json`); the exposure is not compared")
+	addExposureFlags(f)
+}
+
+// warnClientExposure warns when exposure flags make this migration's SQL
+// API differ from melange.yaml's sql section, which generate client follows,
+// so a configured client may name what this migration does not install.
+func warnClientExposure(cmd *cobra.Command, exposure migrator.Exposure) {
+	if quiet || cfg.Generate.Client.Runtime == "" || !slices.ContainsFunc(exposureFlagNames(), cmd.Flags().Changed) ||
+		migrator.SameExposure(exposure, cfg.SQL.Exposure()) {
+		return
+	}
+	fmt.Fprintln(os.Stderr, "warning: the exposure flags differ from melange.yaml's sql section, which melange generate client follows; the generated client may name functions or relations this migration does not install (check with melange generate client --check --db)")
 }
 
 // resolveDSN gets the database DSN from flag or config.
@@ -109,7 +146,7 @@ func resolveDSN(flagDSN string) (string, error) {
 	return dsn, nil
 }
 
-func runMigrate(dsn, schemaPath string, dryRun, force bool, databaseSchema string, ifDeployedChecksum *string) error {
+func runMigrate(dsn, schemaPath string, dryRun, force bool, databaseSchema string, ifDeployedChecksum *string, exposure migrator.Exposure) error {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return cli.DBConnectError("connecting to database", err)
@@ -123,6 +160,7 @@ func runMigrate(dsn, schemaPath string, dryRun, force bool, databaseSchema strin
 		Version:            version.Version,
 		DatabaseSchema:     databaseSchema,
 		IfDeployedChecksum: ifDeployedChecksum,
+		Exposure:           &exposure,
 	}
 
 	if dryRun {
@@ -178,6 +216,11 @@ func migrateExitError(err error) error {
 	var aheadErr *migrator.DatabaseAheadError
 	if errors.As(err, &aheadErr) {
 		return &cli.ExitError{Code: cli.ExitDatabaseAhead, Message: "migration refused", Err: aheadErr}
+	}
+	// The error lists the dependents; say how to drop them anyway.
+	var depErr *migrator.DependentObjectsError
+	if errors.As(err, &depErr) {
+		return cli.GeneralError("migration refused (rerun with --force to drop the dependents)", depErr)
 	}
 	if strings.Contains(err.Error(), "parsing schema") {
 		return cli.SchemaParseError("schema error", err)

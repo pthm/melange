@@ -1,0 +1,369 @@
+# Listing the subjects of an intersection enumerates candidates from one part
+# of each AND group (an anchor) and checks each candidate. A group's anchor can
+# be a relation on the object, the relation's own direct tuples ([user] and
+# ...), or a parent relation (x from y), whose subjects come from the parent
+# type's list function for each linked object. These cases cover each anchor
+# kind, groups with only a parent relation, and the parts that cannot anchor
+# (direct grants through usersets or wildcards, parents that can return '*').
+tests:
+  # [user] and member from owner: the direct tuples anchor the group.
+  - name: intersection_subjects_direct_and_parent_member
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type organization
+            relations
+              define member: [user]
+          type parent
+            relations
+              define owner: [organization]
+              define viewer: [user] and member from owner
+        tuples:
+          - user: organization:acme
+            relation: owner
+            object: parent:p
+          - user: user:alice
+            relation: member
+            object: organization:acme
+          - user: user:bob
+            relation: member
+            object: organization:acme
+          - user: user:alice
+            relation: viewer
+            object: parent:p
+          - user: user:carol
+            relation: viewer
+            object: parent:p
+        listUsersAssertions:
+          - request:
+              object: parent:p
+              relation: viewer
+              filters:
+                - user
+            expectation:
+              - user:alice
+
+  # (viewer and member) or viewer from parent or cable_admin: the second
+  # group is a parent relation alone, so it can only anchor itself.
+  - name: intersection_subjects_parent_only_group
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type organization
+            relations
+              define member: [user]
+              define cable_admin: [user]
+              define viewer: [user]
+              define parent: [parent]
+              define reader: (viewer and member) or viewer from parent or cable_admin
+          type parent
+            relations
+              define owner: [organization]
+              define viewer: [user] and member from owner
+        tuples:
+          - user: organization:program
+            relation: owner
+            object: parent:program
+          - user: parent:program
+            relation: parent
+            object: organization:child
+          - user: user:paula
+            relation: member
+            object: organization:program
+          - user: user:paula
+            relation: viewer
+            object: parent:program
+          - user: user:pete
+            relation: viewer
+            object: parent:program
+          - user: user:mia
+            relation: member
+            object: organization:child
+          - user: user:mia
+            relation: viewer
+            object: organization:child
+          - user: user:vic
+            relation: viewer
+            object: organization:child
+          - user: user:ada
+            relation: cable_admin
+            object: organization:child
+        listUsersAssertions:
+          - request:
+              object: organization:child
+              relation: reader
+              filters:
+                - user
+            expectation:
+              - user:mia
+              - user:paula
+              - user:ada
+
+  # A parent relation reached through two linking types.
+  - name: intersection_subjects_parent_anchor_two_linking_types
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type organization
+            relations
+              define member: [user]
+              define editor: [user]
+          type team
+            relations
+              define member: [user]
+              define editor: [user]
+          type doc
+            relations
+              define owner_scope: [organization, team]
+              define can_own: editor from owner_scope and member from owner_scope
+        tuples:
+          - user: organization:acme
+            relation: owner_scope
+            object: doc:d
+          - user: team:core
+            relation: owner_scope
+            object: doc:d
+          - user: user:olga
+            relation: editor
+            object: organization:acme
+          - user: user:olga
+            relation: member
+            object: organization:acme
+          - user: user:tom
+            relation: editor
+            object: team:core
+          - user: user:tom
+            relation: member
+            object: team:core
+          - user: user:ed
+            relation: editor
+            object: team:core
+          - user: user:max
+            relation: member
+            object: organization:acme
+        listUsersAssertions:
+          - request:
+              object: doc:d
+              relation: can_own
+              filters:
+                - user
+            expectation:
+              - user:olga
+              - user:tom
+
+  # [user, group#member] and member from owner: the direct tuples can't anchor
+  # (a group grant lists no users), so the parent relation does.
+  - name: intersection_subjects_direct_userset_not_anchor
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type organization
+            relations
+              define member: [user]
+          type parent
+            relations
+              define owner: [organization]
+              define viewer: [user, group#member] and member from owner
+        tuples:
+          - user: organization:acme
+            relation: owner
+            object: parent:p
+          - user: group:eng#member
+            relation: viewer
+            object: parent:p
+          - user: user:gus
+            relation: member
+            object: group:eng
+          - user: user:gus
+            relation: member
+            object: organization:acme
+          - user: user:gia
+            relation: member
+            object: group:eng
+          - user: user:dee
+            relation: viewer
+            object: parent:p
+          - user: user:dee
+            relation: member
+            object: organization:acme
+        listUsersAssertions:
+          - request:
+              object: parent:p
+              relation: viewer
+              filters:
+                - user
+            expectation:
+              - user:gus
+              - user:dee
+
+  # [user:*] and member from owner: a wildcard grant can't anchor, and the
+  # parent relation anchors instead.
+  - name: intersection_subjects_direct_wildcard_not_anchor
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type organization
+            relations
+              define member: [user]
+          type parent
+            relations
+              define owner: [organization]
+              define viewer: [user, user:*] and member from owner
+        tuples:
+          - user: organization:acme
+            relation: owner
+            object: parent:p
+          - user: user:*
+            relation: viewer
+            object: parent:p
+          - user: user:wes
+            relation: member
+            object: organization:acme
+          - user: user:wyn
+            relation: member
+            object: organization:acme
+        listUsersAssertions:
+          - request:
+              object: parent:p
+              relation: viewer
+              filters:
+                - user
+            expectation:
+              - user:wes
+              - user:wyn
+
+  # viewer from parent and [user]: the parent relation can return '*', so it
+  # can't anchor, and the direct tuples do.
+  - name: intersection_subjects_wildcard_parent_not_anchor
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type organization
+            relations
+              define viewer: [user, user:*]
+          type doc
+            relations
+              define org: [organization]
+              define reader: [user] and viewer from org
+        tuples:
+          - user: organization:acme
+            relation: org
+            object: doc:d
+          - user: user:*
+            relation: viewer
+            object: organization:acme
+          - user: user:rae
+            relation: reader
+            object: doc:d
+        listUsersAssertions:
+          - request:
+              object: doc:d
+              relation: reader
+              filters:
+                - user
+            expectation:
+              - user:rae
+
+  # folder.viewer has no direct wildcard but reaches one through public from
+  # org, so its list returns '*': it can't anchor, and the per-part blocks
+  # supply alice.
+  - name: intersection_subjects_parent_reaches_wildcard
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type organization
+            relations
+              define public: [user:*]
+              define member: [user, user:*]
+          type folder
+            relations
+              define org: [organization]
+              define viewer: [user] or public from org
+          type document
+            relations
+              define parent: [folder]
+              define org: [organization]
+              define reader: viewer from parent and member from org
+        tuples:
+          - user: organization:o
+            relation: org
+            object: folder:f
+          - user: folder:f
+            relation: parent
+            object: document:d
+          - user: organization:o
+            relation: org
+            object: document:d
+          - user: user:*
+            relation: public
+            object: organization:o
+          - user: user:alice
+            relation: member
+            object: organization:o
+        listUsersAssertions:
+          - request:
+              object: document:d
+              relation: reader
+              filters:
+                - user
+            expectation:
+              - user:alice
+
+  # A direct userset grant outside the AND group: only the userset expansion
+  # lists alice.
+  - name: intersection_subjects_userset_grant_outside_groups
+    stages:
+      - model: |
+          model
+            schema 1.1
+          type user
+          type group
+            relations
+              define member: [user]
+          type doc
+            relations
+              define writer: [user]
+              define editor: [user]
+              define viewer: [user, group#member] or (writer and editor)
+        tuples:
+          - user: group:eng#member
+            relation: viewer
+            object: doc:1
+          - user: user:alice
+            relation: member
+            object: group:eng
+          - user: user:bob
+            relation: writer
+            object: doc:1
+          - user: user:bob
+            relation: editor
+            object: doc:1
+          - user: user:cy
+            relation: writer
+            object: doc:1
+        listUsersAssertions:
+          - request:
+              object: doc:1
+              relation: viewer
+              filters:
+                - user
+            expectation:
+              - user:alice
+              - user:bob

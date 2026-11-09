@@ -22,6 +22,7 @@ cleanup:
 | `schema_format`   | `single` (a `.fga` file) or `modular` (an `fga.mod` manifest)        |
 | `schema_checksum` | A SHA-256 of the schema, used for fast change detection              |
 | `melange_version` | The melange version that applied the migration                       |
+| `exposure`        | The [SQL API exposure](../sql-api/#exposure) the functions were generated with, as JSON (`{}` is the default) |
 
 `schema_dsl` and `model_json` are two independent representations of the same
 model. Tools prefer `model_json` (already parsed) and fall back to parsing
@@ -34,11 +35,11 @@ The deployed model is the single source of truth behind a family of commands
 
 | Command                          | Uses the deployed model to…                                        |
 | -------------------------------- | ------------------------------------------------------------------ |
-| `status`                         | Report whether the local schema is in sync with the database       |
+| `status`                         | Report whether the local schema and exposure are in sync with the database |
 | `schema pull`                    | Reconstruct and print the deployed `.fga` for recovery or review   |
 | `diff`                           | Classify local changes additive/breaking against what is deployed  |
 | `history`                        | List the migration audit trail (versions, checksums, timestamps)   |
-| `doctor`                         | Check the model is recorded and warn on a pending breaking change  |
+| `doctor`                         | Check the model is recorded, warn on a pending breaking change or exposure change, and expect the functions of the recorded exposure |
 | `migrate --if-deployed-checksum` | Apply only if the database is still at the expected checksum        |
 
 ## Why store the model

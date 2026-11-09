@@ -21,13 +21,19 @@ type GeneratedSQL struct {
     NoWildcardFunctions  []string // Check functions excluding wildcard matches
     Dispatcher           string   // Main check_permission dispatcher
     DispatcherNoWildcard string   // Dispatcher excluding wildcards
+    BulkDispatcher       string   // check_permission_bulk
+    ExplainFunctions     []string // explain_<type>_<relation> functions
+    ExplainDispatcher    string   // explain_permission dispatcher
+    ExpandFunctions      []string // expand_<type>_<relation> functions
+    ExpandDispatcher     string   // expand_permission dispatcher
 }
 
 // ListGeneratedSQL contains all SQL generated for list functions.
 type ListGeneratedSQL struct {
-    ListObjectsFunctions   []string // list_objects_* functions
-    ListSubjectsFunctions  []string // list_subjects_* functions
-    ListObjectsDispatcher  string   // list_accessible_objects dispatcher
+    ListObjectsFunctions       []string        // list_<type>_<relation>_obj functions
+    ListSubjectsFunctions      []string        // list_<type>_<relation>_sub functions
+    AccessibleObjectsFunctions []NamedFunction // accessible_* functions, then the accessible_objects dispatcher
+    ListObjectsDispatcher      string          // list_accessible_objects dispatcher
     ListSubjectsDispatcher string   // list_accessible_subjects dispatcher
 }
 
@@ -50,10 +56,26 @@ var AnalyzeRelations func(types []schema.TypeDefinition, closure []schema.Closur
 var ComputeCanGenerate func(analyses []RelationAnalysis) []RelationAnalysis
 
 // GenerateSQL generates specialized check_permission functions from relation analyses.
-var GenerateSQL func(analyses []RelationAnalysis, inline InlineSQLData) (GeneratedSQL, error)
+var GenerateSQL func(analyses []RelationAnalysis, inline InlineSQLData, databaseSchema string) (GeneratedSQL, error)
 
-// GenerateListSQL generates specialized list functions from relation analyses.
-var GenerateListSQL func(analyses []RelationAnalysis, inline InlineSQLData) (ListGeneratedSQL, error)
+// GenerateListSQL generates the list and accessible functions.
+var GenerateListSQL func(analyses []RelationAnalysis, inline InlineSQLData, databaseSchema string) (ListGeneratedSQL, error)
+
+// GenerateSQLWithOptions, GenerateListSQLWithOptions, CollectFunctionNamesWithOptions and
+// CollectNamedFunctionsWithOptions take GenerateSQLOptions{Exposure: ...} to generate
+// only the exposed SQL API (Exposure, RelationPatterns, FunctionFamilies).
+
+// AccessibleFunctions returns the installed accessible_<t>_<r> and
+// accessible_<t>_<r>_by_<link> functions of the exposed relations.
+var AccessibleFunctions func(analyses []RelationAnalysis, exposure Exposure) ([]AccessibleFunction, error)
+
+// ParentKeyFunctions and ParentKeyFunctionsWithOptions describe the parent-key functions.
+
+// GenerateTraceSQL generates the explain and expand functions into another schema (on demand).
+var GenerateTraceSQL func(analyses []RelationAnalysis, inline InlineSQLData, databaseSchema string, opts TraceSQLOptions) (TraceSQL, error)
+
+// DispatcherFunctionNames lists the dispatchers, in the order DOWN migrations drop them.
+var DispatcherFunctionNames []string
 
 // CollectFunctionNames returns all generated function names for tracking.
 var CollectFunctionNames func(analyses []RelationAnalysis) []string
@@ -87,7 +109,7 @@ analyses = compiler.ComputeCanGenerate(analyses)
 inline := compiler.BuildInlineSQLData(closure, analyses)
 
 // Generate SQL
-sql, err := compiler.GenerateSQL(analyses, inline)
+sql, err := compiler.GenerateSQL(analyses, inline, "")
 if err != nil {
     log.Fatal(err)
 }
@@ -125,8 +147,8 @@ analyses := compiler.AnalyzeRelations(types, closure)
 analyses = compiler.ComputeCanGenerate(analyses)
 inline := compiler.BuildInlineSQLData(closure, analyses)
 
-checkSQL, _ := compiler.GenerateSQL(analyses, inline)
-listSQL, _ := compiler.GenerateListSQL(analyses, inline)
+checkSQL, _ := compiler.GenerateSQL(analyses, inline, "")
+listSQL, _ := compiler.GenerateListSQL(analyses, inline, "")
 
 // Write to files for review
 os.WriteFile("check_functions.sql", []byte(checkSQL.Dispatcher), 0644)
@@ -162,7 +184,7 @@ The compiler package sits between schema analysis and database migration, provid
 
 ## Dependency Information
 
-This package re-exports types from `lib/sqlgen`. It depends on:
+This package re-exports types from `internal/sqlgen`. It depends on:
 
-- `github.com/pthm/melange/lib/sqlgen` - SQL generation implementation
+- `github.com/pthm/melange/internal/sqlgen` - SQL generation implementation
 - `github.com/pthm/melange/pkg/schema` - Schema types (via sqlgen)

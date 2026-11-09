@@ -206,6 +206,31 @@ Every `(object_type, relation)` pair in the OpenFGA compatibility suite generate
 
 A sentinel response means the requested pair has no generated function. Check what you passed against the migrated schema before treating it as a bug.
 
+## Restricted Exposure
+
+With a restricted SQL API [exposure](../../reference/sql-api/#exposure),
+`explain_permission` answers only for exposed relations, and only when
+`sql.functions.explain` is on. For any other relation the model defines it
+raises `M2003`, which the Go and TypeScript runtimes report as a
+`ValidationError` with code 2000 (see
+[Errors](../../reference/errors/#postgresql-error-mapping)). `melange explain`
+and studio check the exposure recorded by the last migration first and say
+which relation is not exposed and how to expose it.
+
+## Explain Without the Explain Functions
+
+With `sql.functions.explain` off, the database has no `explain_*` functions,
+and `Checker.Explain` gets `M2003` for every relation. `melange explain` and
+studio still explain: they compile the explain functions from the model the
+last migration recorded and create them in `pg_temp` for one transaction that
+is always rolled back, so the trace is the one the installed functions would
+return. That needs a writable primary (not a hot-standby replica), the `TEMP`
+privilege, a model recorded by `melange migrate`, and a melange of the
+codegen version that migrated the database; the tools say which is missing.
+Each call costs tens of milliseconds more than an installed explain, for
+creating the functions. See
+[Explain and Expand on Demand](../../reference/sql-api/#explain-and-expand-on-demand).
+
 ## See Also
 
 - [Expanding Permissions](../expanding-permissions/): the companion `Expand` API for "who has access?"
@@ -213,6 +238,6 @@ A sentinel response means the requested pair has no generated function. Check wh
 - [Caching](../caching/): opt-in caching for Explain traces via `ExplainCache`
 - [Troubleshooting](../troubleshooting/): when checks return the wrong answer
 - [Studio](../studio/): run Explain, with what-if tuples, from a local web console
-- [Go API reference](../reference/go-api/#explain): `Checker.Explain` signature
-- [SQL API reference](../reference/sql-api/#explain_permission): `explain_permission` SQL function
-- [CLI reference](../reference/cli/#explain): `melange explain` command
+- [Go API reference](../../reference/go-api/#explain): `Checker.Explain` signature
+- [SQL API reference](../../reference/sql-api/#explain_permission): `explain_permission` SQL function
+- [CLI reference](../../reference/cli/#explain): `melange explain` command

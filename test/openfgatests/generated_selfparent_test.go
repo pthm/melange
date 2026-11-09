@@ -32,7 +32,10 @@ func TestOpenFGA_GeneratedSelfParent(t *testing.T) {
 	for i := 0; i < models*10 && accepted < models; i++ {
 		modelSeed := seed + i
 		if !t.Run(fmt.Sprintf("seed_%d", modelSeed), func(t *testing.T) {
-			if runSelfParentDifferential(t, algebraProgram(int64(modelSeed)), modelSeed%2 == 1) {
+			// multi comes from the program as in FuzzSelfParentAlgebra, so a
+			// failure's printed input replays the same model there.
+			program := algebraProgram(int64(modelSeed))
+			if runSelfParentDifferential(t, program, program[0]%2 == 1) {
 				accepted++
 			}
 		}) {
@@ -174,5 +177,5 @@ type group
 			}
 		}
 	}
-	return compareNested(t, dsl, relations, ids, all, fmt.Sprintf("FuzzSelfParentAlgebra input: %x", program))
+	return compareNested(t, dsl, relations, ids, all, g.exposure(relations), fmt.Sprintf("FuzzSelfParentAlgebra input: %x", program))
 }

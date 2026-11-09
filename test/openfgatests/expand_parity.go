@@ -36,7 +36,7 @@ import (
 //
 // Skipping (not failing):
 //   - The dispatcher's empty-leaf sentinel. When the relation's
-//     renderer is not yet eligible (see lib/sqlgen
+//     renderer is not yet eligible (see internal/sqlgen
 //     ComputeExpandEligibility) the dispatcher emits an empty
 //     Leaf.Users tree. Asserting parity would let the sentinel
 //     falsely "pass" empty-expectation assertions; we skip and log.

@@ -8,6 +8,8 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/pthm/melange/internal/sqlgen"
+	"github.com/pthm/melange/pkg/migrator"
+	"github.com/pthm/melange/pkg/parser"
 )
 
 func TestParseIndexColumns(t *testing.T) {
@@ -366,7 +368,8 @@ func TestCheckExpandFanoutAdvisory(t *testing.T) {
 		assert.Equal(t, "expand_fanout_advisory", check.Name)
 		assert.Equal(t, StatusPass, check.Status)
 		assert.Contains(t, check.Details, "document#public")
-		assert.Contains(t, check.Details, "max_expand_leaf")
+		assert.Contains(t, check.Details, "WithExpandMaxLeaf")
+		assert.NotContains(t, check.Details, "max_expand_leaf")
 		assert.Contains(t, check.Details, "Wildcard grants")
 	})
 
@@ -427,4 +430,89 @@ func TestHasLeadingColumn(t *testing.T) {
 			t.Errorf("hasLeadingColumn(%q) = %v, want %v", col, got, want)
 		}
 	}
+}
+
+// exposureDoctor is a Doctor for restrictedPerfSchema, migrated with exposure.
+func exposureDoctor(t *testing.T, exposure sqlgen.Exposure) *Doctor {
+	t.Helper()
+	types, err := parser.ParseSchemaString(restrictedPerfSchema)
+	if err != nil {
+		t.Fatalf("parsing schema: %v", err)
+	}
+	return &Doctor{parsedTypes: types, lastMigration: &migrator.MigrationRecord{Exposure: exposure}}
+}
+
+const restrictedPerfSchema = `model
+  schema 1.1
+
+type user
+
+type folder
+  relations
+    define viewer: [user]
+
+type document
+  relations
+    define parent: [folder]
+    define public: [user:*]
+    define editor: [user]
+    define viewer: [user] or editor or viewer from parent
+`
+
+func TestInstalledIndexRecommendations(t *testing.T) {
+	off := false
+	recommended := func(d *Doctor) map[string][]string {
+		out := make(map[string][]string)
+		for _, rec := range d.installedIndexRecommendations(d.getAnalyses()) {
+			out[strings.Join(rec.Columns, ",")+partialSuffix(rec)] = rec.BenefitsFunctions
+		}
+		return out
+	}
+	subjectKeyed := "subject_type,subject_id,relation,object_type,object_id"
+
+	all := recommended(exposureDoctor(t, sqlgen.Exposure{}))
+	assert.Contains(t, all[subjectKeyed], "list_document_viewer_obj", "the default exposure installs list_*_obj")
+	assert.Len(t, all, 3, "object-keyed, subject-keyed and wildcard partial")
+
+	// No list_*_obj is installed without these families, so the
+	// subject-keyed index benefits nothing; public is outside the closure,
+	// so the wildcard partial index benefits nothing either.
+	restricted := recommended(exposureDoctor(t, sqlgen.Exposure{
+		Relations: sqlgen.RelationPatterns{Include: []string{"document#viewer"}},
+		Functions: sqlgen.FunctionFamilies{ListObjects: &off, Accessible: &off, ParentKey: &off},
+	}))
+	assert.NotContains(t, restricted, subjectKeyed)
+	assert.Len(t, restricted, 1, "only the object-keyed index has installed beneficiaries")
+	for _, benefits := range restricted {
+		assert.Contains(t, benefits, "check_document_viewer")
+		assert.Contains(t, benefits, "check_folder_viewer", "in document#viewer's closure")
+		assert.NotContains(t, benefits, "check_document_public", "outside the closure")
+	}
+}
+
+func TestCheckExpandFanoutAdvisory_InstalledExposure(t *testing.T) {
+	off := false
+	advisory := func(d *Doctor) *CheckResult {
+		report := &Report{}
+		if err := d.checkExpandFanoutAdvisory(context.Background(), report); err != nil {
+			t.Fatalf("checkExpandFanoutAdvisory: %v", err)
+		}
+		if len(report.Checks) == 0 {
+			return nil
+		}
+		return &report.Checks[0]
+	}
+
+	if c := advisory(exposureDoctor(t, sqlgen.Exposure{})); assert.NotNil(t, c) {
+		assert.Contains(t, c.Details, "document#public")
+	}
+	c := advisory(exposureDoctor(t, sqlgen.Exposure{
+		Relations: sqlgen.RelationPatterns{Include: []string{"document#editor"}},
+	}))
+	if c != nil {
+		assert.NotContains(t, c.Details, "document#public", "the expand dispatcher raises for relations outside the closure")
+	}
+	assert.Nil(t, advisory(exposureDoctor(t, sqlgen.Exposure{
+		Functions: sqlgen.FunctionFamilies{Expand: &off},
+	})), "no expand functions are installed")
 }
