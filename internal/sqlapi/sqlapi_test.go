@@ -231,6 +231,14 @@ func recorded(t *testing.T, e sqlgen.Exposure, types []schema.TypeDefinition, co
 	return FromModel(&migrator.DeployedModel{Exposure: e, Types: types, CodegenVersion: codegen})
 }
 
+// unreadable is the API Load returns for a record whose model cannot be
+// read.
+func unreadable(e sqlgen.Exposure, codegen string) *API {
+	a := New(e, nil)
+	a.codegenVersion, a.unreadable = codegen, true
+	return a
+}
+
 // Explain and expand with the family off are compiled on demand when the
 // record has a model and this codegen version; otherwise they are refused
 // with why. Other families are never compiled.
@@ -251,6 +259,10 @@ func TestOnDemand_Decision(t *testing.T) {
 		{
 			"no recorded model", recorded(t, allOff, nil, this), Explain, false,
 			[]string{"the explain functions are not installed", "cannot compile them on demand", "recorded no model", "run melange migrate to record it", "sql.functions.explain back on"},
+		},
+		{
+			"unreadable recorded model", unreadable(allOff, this), Explain, false,
+			[]string{"cannot compile them on demand", "recorded cannot be read", "melange migrate --force", "sql.functions.explain back on"},
 		},
 		{
 			"other codegen version", recorded(t, allOff, testTypes(t), "v0.0.1"), Expand, false,

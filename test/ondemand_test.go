@@ -530,6 +530,16 @@ func TestOnDemand_RefusedWithoutAMatchingRecord(t *testing.T) {
 		assert.Contains(t, msg, "recorded no model")
 		assert.Contains(t, msg, "run melange migrate to record it")
 	})
+	t.Run("record with an unreadable model", func(t *testing.T) {
+		db, _, migrate := kitchenSinkRecorded(t, "public")
+		migrate(false)
+		_, err := db.ExecContext(ctx, `UPDATE melange_migrations SET schema_dsl = 'not a model', model_json = '{}'`)
+		require.NoError(t, err)
+		msg := message(t, call(db), "not installed")
+		assert.Contains(t, msg, "recorded cannot be read")
+		assert.Contains(t, msg, "melange migrate --force")
+		assert.NotContains(t, msg, "recorded no model")
+	})
 	t.Run("record with only the DSL", func(t *testing.T) {
 		db, _, migrate := kitchenSinkRecorded(t, "public")
 		migrate(false)

@@ -263,9 +263,16 @@ func Deployed(ctx context.Context, db migrator.Execer, databaseSchema string, fa
 	if err != nil {
 		return nil, nil, fmt.Errorf("reading the migration record: %w", err)
 	}
-	types, err := migrator.DeployedTypes(rec)
-	if err != nil {
+	types, readErr := migrator.DeployedTypes(rec)
+	if readErr != nil {
 		types = nil
+	}
+	// What the record lacks and how to record it: a record with no model is
+	// recorded by any migrate, one whose model cannot be read only by one
+	// that does not skip.
+	missing, record := "recorded no model", "run melange migrate with this melange to record the model"
+	if readErr != nil {
+		missing, record = "recorded a model that cannot be read", rerecordHint(rec.CodegenVersion)
 	}
 	var exposure sqlgen.Exposure
 	var note string
@@ -275,10 +282,10 @@ func Deployed(ctx context.Context, db migrator.Execer, databaseSchema string, fa
 	case fallback == nil && rec == nil:
 		return nil, rec, fmt.Errorf("%w: no melange migration found in schema %q", ErrNoRecordedModel, databaseSchema)
 	case fallback == nil:
-		return nil, rec, fmt.Errorf("%w: the last migration recorded none; re-run melange migrate with a current version to record it", ErrNoRecordedModel)
+		return nil, rec, fmt.Errorf("%w: the last migration %s; %s", ErrNoRecordedModel, missing, record)
 	case rec != nil:
 		types, exposure = fallback.Types, rec.Exposure
-		note = "The last migration recorded no model, so the local schema file is compared under the recorded exposure; run melange migrate with this melange to record the model."
+		note = fmt.Sprintf("The last migration %s, so the local schema file is compared under the recorded exposure; %s.", missing, record)
 	default:
 		types, exposure = fallback.Types, fallback.Exposure
 		note = "No migration is recorded (as for a database built from melange generate migration files), so the local schema file is compared under the local exposure."
