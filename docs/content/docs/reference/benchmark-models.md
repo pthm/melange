@@ -1,11 +1,11 @@
 ---
 title: Benchmark schemas
-description: "Complete schemas, data layout, and query selection behind the October 2026 performance measurements."
+description: "Complete schemas, data layout, and query selection behind the November 2026 performance measurements."
 sidebar:
   exclude: true
 ---
 
-These are the models behind the [Performance reference](../performance/). The October 2026 cloud run uses two scale fixtures and the small, individually defined OpenFGA compatibility fixtures. A feature's cost depends on its relation, query direction, and data distribution; the models below make those differences explicit.
+These are the models behind the [Performance reference](../performance/). The November 2026 cloud run uses two scale fixtures and the small, individually defined OpenFGA compatibility fixtures. A feature's cost depends on its relation, query direction, and data distribution; the models below make those differences explicit.
 
 ## Kitchen-sink collaboration model
 
@@ -257,7 +257,7 @@ type pull_request
     define can_read_security_advisories_and_vulnerability_reports: can_admin from repo
 ```
 
-`can_read_security_advisories_and_vulnerability_reports` was added after the October run to test truncated accessible-function names and is not benchmarked.
+`can_read_security_advisories_and_vulnerability_reports` tests truncated accessible-function names and is not benchmarked.
 
 The scale loader populates organization memberships, repositories linked to those organizations, and PRs linked to repositories with authors. Other schema types and relation definitions support integration tests but are not all populated by this scale loader. `melange_tuples` is a `UNION ALL` view over domain tables, including `organization_members`, `repositories`, and `pull_requests`, with IDs cast to text. See `test/testutil/testdata/tuples_view.sql.tmpl` and `domain_tables.sql` for the view and indexes; these timings include that view's work.
 
