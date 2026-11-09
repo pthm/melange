@@ -100,8 +100,10 @@ pkg/
 - Only package that imports the OpenFGA parser dependency
 
 **`pkg/migrator`** - Migration:
-- `Migrate(ctx, db, dir)` - One-step migration
+- `Migrate(ctx, db, schemaPath)` - One-step migration
 - `MigrateFromString(ctx, db, dsl)` - Migrate from string
+- `MigrateWithOptions(ctx, db, schemaPath, opts)` - Dry run, force, exposure, drift guard
+- `PlanWithOptions(ctx, db, schemaPath, opts)` / `Migrator.Plan` - Predict what an unforced migrate would do (skip, record only, apply, refuse) without changing the database
 
 **`pkg/clientgen`** - Client code generation:
 - `Generate(runtime, types, cfg)` - Generate client code
@@ -111,11 +113,14 @@ pkg/
 
 ```
 internal/
-├── clientgen/         # Generator registry and implementations
+├── cli/               # Config resolution and cobra commands
+├── clientgen/         # Generator registry, implementations and --check comparison
 │   ├── generator.go   # Generator interface
 │   ├── go/            # Go generator
 │   └── typescript/    # TypeScript generator
+├── sqlapi/            # Generated SQL API model: functions report, on-demand explain/expand, client name checks
 ├── sqlgen/            # SQL DSL, query builders, code generation internals
+├── studio/            # melange studio web console
 └── doctor/            # CLI health check logic
 ```
 
@@ -125,12 +130,15 @@ SQL is generated from the internal/sqlgen package:
 
 ```
 internal/sqlgen/
-├── sql.go             # SQL DSL core
-├── expr.go            # Expression types
-├── query.go           # Query builders
-├── check_queries.go   # Permission check queries
-├── list_queries.go    # List operation queries
-└── *.go               # Additional helpers
+├── sqldsl/                 # SQL DSL core (sql.go, expr.go, cte.go, ...)
+├── plpgsql/                # Function builders (PlpgsqlFunction, SqlFunction)
+├── analysis/               # Relation pattern analysis
+├── check_queries.go        # Permission check queries
+├── check_render.go         # Check function rendering
+├── list_objects_*.go       # list_objects and accessible function generation
+├── list_subjects_*.go      # list_subjects generation
+├── exposure.go             # SQL API exposure
+└── *.go                    # Additional helpers
 ```
 
 ### Key Functions
@@ -142,11 +150,11 @@ internal/sqlgen/
 
 **`list_accessible_objects()`** - Find accessible objects:
 - Returns object IDs the subject can access
-- Uses recursive CTE
+- Recursive relations are listed by a breadth-first PL/pgSQL walk that raises M2002 instead of truncating
 
 **`list_accessible_subjects()`** - Find subjects with access:
 - Returns subject IDs that have access to object
-- Uses recursive CTE
+- Recursive relations are listed by a breadth-first PL/pgSQL walk that raises M2002 instead of truncating
 
 ## CLI
 
@@ -188,12 +196,14 @@ test/
 ├── benchmark_test.go       # Performance benchmarks
 ├── integration_test.go     # Integration tests
 ├── openfgatests/           # OpenFGA compatibility suite
-│   ├── loader.go           # Test case loader
 │   ├── client.go           # Test client
 │   ├── runner.go           # Test execution
 │   └── *_test.go           # Test files
 ├── cmd/dumptest/           # Test case inspector
 ├── cmd/dumpsql/            # SQL dump tool
+├── cmd/explaintest/        # EXPLAIN ANALYZE for test cases
+├── cmd/dumpinventory/      # Function inventory dump
+├── cmd/benchreport/        # Benchmark report tables
 └── testutil/               # Test utilities
     └── testdata/           # Test schemas
 ```
@@ -202,14 +212,12 @@ test/
 
 The `openfgatests` package runs OpenFGA's official test suite against Melange:
 
-**`loader.go`** - Loads test cases from embedded YAML files
-
 **`client.go`** - Test client:
 - Uses `pkg/parser` for schema parsing
 - Creates database schema
 - Executes assertions
 
-**`runner.go`** - Test execution:
+**`runner.go`** - Loads embedded YAML cases and runs them by category or pattern:
 - Category-based test runners
 - Pattern matching
 - Benchmark wrappers
@@ -290,7 +298,7 @@ For OpenFGA compatibility tests, the test cases come from the embedded OpenFGA t
 
 ```go
 func TestCustomScenario(t *testing.T) {
-    db := testutil.SetupDB(t)
+    db := testutil.EmptyDB(t)
 
     // Apply schema
     err := migrator.MigrateFromString(ctx, db, `

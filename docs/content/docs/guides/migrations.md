@@ -44,7 +44,7 @@ Melange connects, generates the SQL functions, and applies them in a single tran
 - **Orphan cleanup**: Functions from removed relations, or outside a narrower exposure, are dropped automatically. A drop that views or policies depend on is refused unless forced; see [Dependent objects](#dependent-objects).
 - **Dry-run**: Use `--dry-run` to preview the SQL without applying it.
 
-See the [CLI Reference](../reference/cli/#migrate) for the full flag list.
+See the [CLI Reference](../../reference/cli/#migrate) for the full flag list.
 
 ### SQL API exposure
 
@@ -319,6 +319,9 @@ CREATE OR REPLACE FUNCTION check_document_viewer(
     p_visited TEXT [] DEFAULT ARRAY[]::TEXT[]
 ) RETURNS INTEGER AS $$
 BEGIN
+    IF array_length(p_visited, 1) >= 26 THEN
+        RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';
+    END IF;
     -- ... userset subject handling omitted for brevity ...
 
     IF EXISTS (
@@ -337,16 +340,12 @@ BEGIN
         RETURN 0;
     END IF;
 END;
-$$ LANGUAGE plpgsql STABLE;
+$$ LANGUAGE plpgsql STABLE PARALLEL RESTRICTED COST 1000;  -- SET search_path and planner settings omitted
 
--- ============================================================
--- No-Wildcard Check Functions (1 functions)
--- ============================================================
-
--- Same as above but excludes wildcard (type:*) matches
-CREATE OR REPLACE FUNCTION check_document_viewer_no_wildcard(
-    -- ... same signature and body, omitted for brevity ...
-) RETURNS INTEGER AS $$ /* ... */ $$ LANGUAGE plpgsql STABLE;
+-- Explain, Expand, List Objects and List Subjects sections follow
+-- (explain_document_viewer, expand_document_viewer, list_document_viewer_obj,
+-- list_document_viewer_sub), omitted. A relation that can match a wildcard
+-- also gets a check_<type>_<relation>_nw variant.
 
 -- ============================================================
 -- Check Dispatchers
@@ -361,15 +360,17 @@ CREATE OR REPLACE FUNCTION check_permission_internal(
     p_visited TEXT [] DEFAULT ARRAY[]::TEXT[]
 ) RETURNS INTEGER AS $$
 BEGIN
-    IF array_length(p_visited, 1) >= 25 THEN
+    IF array_length(p_visited, 1) >= 26 THEN
         RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';
     END IF;
-    IF (p_object_type = 'document' AND p_relation = 'viewer') THEN
-        RETURN check_document_viewer(p_subject_type, p_subject_id, p_object_id, p_visited);
+    IF (p_object_type = 'document') THEN
+        IF (p_relation = 'viewer') THEN
+            RETURN check_document_viewer(p_subject_type, p_subject_id, p_object_id, p_visited);
+        END IF;
     END IF;
     RETURN 0;
 END;
-$$ LANGUAGE plpgsql STABLE;
+$$ LANGUAGE plpgsql STABLE PARALLEL RESTRICTED COST 1000;
 
 -- Public entry point - this is what your application calls
 CREATE OR REPLACE FUNCTION check_permission(
@@ -384,12 +385,13 @@ CREATE OR REPLACE FUNCTION check_permission(
         p_object_type, p_object_id, ARRAY[]::TEXT[]);
 $$ LANGUAGE sql STABLE;
 
--- ... check_permission_no_wildcard, check_permission_bulk,
---     list_accessible_objects, list_accessible_subjects omitted ...
+-- ... check_permission_nw, check_permission_bulk, explain_permission,
+--     expand_permission, list_accessible_objects, list_accessible_subjects,
+--     and the accessible functions (accessible_document_viewer, accessible_objects) omitted ...
 ```
 
 {{< callout type="info" >}}
-Each relation in your schema produces a specialized function (e.g., `check_document_viewer`). The dispatchers (`check_permission`, `list_accessible_objects`, etc.) are always regenerated because they contain a `CASE` branch for every relation.
+Each relation in your schema produces specialized functions (e.g., `check_document_viewer`). The dispatchers (`check_permission`, `list_accessible_objects`, etc.) are always regenerated because they route every relation.
 {{< /callout >}}
 
 ### DOWN migration
@@ -401,19 +403,27 @@ The DOWN migration drops all functions installed by the UP migration. To restore
 -- To restore a previous version, apply that version's UP migration.
 
 -- Drop specialized functions
+DROP FUNCTION IF EXISTS accessible_document_viewer CASCADE;
 DROP FUNCTION IF EXISTS check_document_viewer CASCADE;
-DROP FUNCTION IF EXISTS check_document_viewer_no_wildcard CASCADE;
-DROP FUNCTION IF EXISTS list_document_viewer_objects CASCADE;
-DROP FUNCTION IF EXISTS list_document_viewer_subjects CASCADE;
+DROP FUNCTION IF EXISTS expand_document_viewer CASCADE;
+DROP FUNCTION IF EXISTS explain_document_viewer CASCADE;
+DROP FUNCTION IF EXISTS list_document_viewer_obj CASCADE;
+DROP FUNCTION IF EXISTS list_document_viewer_sub CASCADE;
 
 -- Drop dispatchers
 DROP FUNCTION IF EXISTS check_permission CASCADE;
 DROP FUNCTION IF EXISTS check_permission_internal CASCADE;
-DROP FUNCTION IF EXISTS check_permission_no_wildcard CASCADE;
-DROP FUNCTION IF EXISTS check_permission_no_wildcard_internal CASCADE;
+DROP FUNCTION IF EXISTS check_permission_nw CASCADE;
+DROP FUNCTION IF EXISTS check_permission_nw_internal CASCADE;
 DROP FUNCTION IF EXISTS check_permission_bulk CASCADE;
+DROP FUNCTION IF EXISTS explain_permission CASCADE;
+DROP FUNCTION IF EXISTS explain_permission_internal CASCADE;
+DROP FUNCTION IF EXISTS expand_permission CASCADE;
+DROP FUNCTION IF EXISTS expand_permission_internal CASCADE;
+DROP FUNCTION IF EXISTS accessible_objects CASCADE;
 DROP FUNCTION IF EXISTS list_accessible_objects CASCADE;
 DROP FUNCTION IF EXISTS list_accessible_subjects CASCADE;
+DROP FUNCTION IF EXISTS list_accessible_subjects_internal CASCADE;
 ```
 
 ### Comparison mode example
@@ -426,19 +436,18 @@ When using `--git-ref` or `--db`, only changed functions appear. For example, if
 -- Schema checksum: b7e4...
 -- Codegen version: 1
 -- Previous state: git:main
--- Changed functions: 2 of 4
+-- Changed functions: 6 of 13
 
 -- ============================================================
--- Changed Functions (2 functions)
+-- Changed Functions (6 functions)
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION check_document_editor(
     -- ... new function for the added relation ...
-) RETURNS INTEGER AS $$ /* ... */ $$ LANGUAGE plpgsql STABLE;
+) RETURNS INTEGER AS $$ /* ... */ $$ LANGUAGE plpgsql STABLE PARALLEL RESTRICTED COST 1000;
 
-CREATE OR REPLACE FUNCTION check_document_editor_no_wildcard(
-    -- ... no-wildcard variant ...
-) RETURNS INTEGER AS $$ /* ... */ $$ LANGUAGE plpgsql STABLE;
+-- ... expand_document_editor, explain_document_editor, list_document_editor_obj,
+--     list_document_editor_sub and accessible_document_editor omitted ...
 
 -- ============================================================
 -- Check Dispatchers
@@ -450,29 +459,38 @@ CREATE OR REPLACE FUNCTION check_permission_internal(
 ) RETURNS INTEGER AS $$
 BEGIN
     /* ... */
-    IF (p_object_type = 'document' AND p_relation = 'editor') THEN
-        RETURN check_document_editor(p_subject_type, p_subject_id, p_object_id, p_visited);
-    END IF;
-    IF (p_object_type = 'document' AND p_relation = 'viewer') THEN
-        RETURN check_document_viewer(p_subject_type, p_subject_id, p_object_id, p_visited);
+    IF (p_object_type = 'document') THEN
+        IF (p_relation = 'editor') THEN
+            RETURN check_document_editor(p_subject_type, p_subject_id, p_object_id, p_visited);
+        END IF;
+        IF (p_relation = 'viewer') THEN
+            RETURN check_document_viewer(p_subject_type, p_subject_id, p_object_id, p_visited);
+        END IF;
     END IF;
     RETURN 0;
 END;
-$$ LANGUAGE plpgsql STABLE;
+$$ LANGUAGE plpgsql STABLE PARALLEL RESTRICTED COST 1000;
 
 -- ... remaining dispatchers omitted ...
 ```
 
-If you **remove** a relation, the comparison mode also emits `DROP` statements for the orphaned functions:
+If you **remove** a relation, the comparison mode also emits `DROP` statements for the orphaned functions, right after the header and without `CASCADE`:
 
 ```sql
 -- ============================================================
 -- Drop removed functions
 -- ============================================================
 
-DROP FUNCTION IF EXISTS check_document_editor CASCADE;
-DROP FUNCTION IF EXISTS check_document_editor_no_wildcard CASCADE;
+-- These fail if other database objects depend on them; change or drop those first.
+DROP FUNCTION IF EXISTS accessible_document_editor;
+DROP FUNCTION IF EXISTS check_document_editor;
+DROP FUNCTION IF EXISTS expand_document_editor;
+DROP FUNCTION IF EXISTS explain_document_editor;
+DROP FUNCTION IF EXISTS list_document_editor_obj;
+DROP FUNCTION IF EXISTS list_document_editor_sub;
 ```
+
+The list holds the functions the previous exposure installed, sorted by name.
 
 ## Typical Workflows
 

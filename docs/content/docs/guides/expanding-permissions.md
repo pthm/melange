@@ -46,7 +46,7 @@ document:1#viewer • union of 2
     └── computed → document:1#editor  (melange expand document:1#editor to chase)
 ```
 
-`--format=json` returns the raw `UsersetTree` JSONB. `--flatten` calls `ExpandRecursive` and prints the flat, deduplicated user list.
+`--format=json` returns the raw `UsersetTree` JSONB. `--flatten` prints the deduplicated `Leaf.Users` entries of the returned tree without chasing computed or TTU pointers. `--recursive` calls `ExpandRecursive`, which chases those pointers, and prints the flat, deduplicated user list.
 {{< /tab >}}
 
 {{< tab name="SQL" >}}
@@ -117,7 +117,7 @@ A `UsersetTree` carries a single `Root *UsersetTreeNode`. Every node has a `Name
 | `Intersection` | AND-aggregated children — `a and b` |
 | `Difference` | Named `base` / `subtract` slots — `a but not b` |
 
-Full Go type signatures: [Go API reference](../reference/go-api/#expand).
+Full Go type signatures: [Go API reference](../../reference/go-api/#expand).
 
 ### Direct Grants + Wildcards + Userset References
 
@@ -176,7 +176,7 @@ Grants for other subject types are still visible in the tree structure (Computed
 
 Cap each `Leaf.Users` list. When the cap fires, the leaf gets a `UsersTruncated: true` field so consumers know the list is incomplete.
 
-Three-tier precedence, per-call > session GUC > default:
+Set the cap per call:
 
 {{< tabs >}}
 
@@ -195,18 +195,13 @@ $ melange expand document:1 viewer --max-leaf 100
 
 {{< tab name="SQL" >}}
 ```sql
--- Per-call
 SELECT expand_permission('document', '1', 'viewer', NULL, 100);
-
--- Per-session
-SET melange.max_expand_leaf = 500;
-SELECT expand_permission('document', '1', 'viewer');
 ```
 {{< /tab >}}
 
 {{< /tabs >}}
 
-Default is unbounded (matching OpenFGA). Set the GUC as a safety belt on connections that serve admin flows.
+Default is unbounded (matching OpenFGA): a `NULL` or `0` cap means no cap. Pass a cap on calls that serve admin flows as a safety belt.
 
 ## Wildcards
 
@@ -262,7 +257,7 @@ installed expand, for creating the functions. The runtimes'
 
 ## Caching
 
-Opt-in via `ExpandCache` — see [Caching](./caching/#expandcache).
+Opt-in via `ExpandCache`. See [Caching](../caching/#explain-and-expand-caching).
 
 ## See Also
 
@@ -270,6 +265,6 @@ Opt-in via `ExpandCache` — see [Caching](./caching/#expandcache).
 - [Studio](../studio/): browse Expand trees one pointer at a time in a local web console
 - [Listing Subjects](../listing-subjects/): request-path listing without the tree structure
 - [Caching](../caching/): opt-in caching for Expand trees via `ExpandCache`
-- [Go API reference](../reference/go-api/#expand): `Checker.Expand` / `ExpandRecursive` signatures
-- [SQL API reference](../reference/sql-api/#expand_permission): `expand_permission` SQL function
-- [CLI reference](../reference/cli/#expand): `melange expand` command
+- [Go API reference](../../reference/go-api/#expand): `Checker.Expand` / `ExpandRecursive` signatures
+- [SQL API reference](../../reference/sql-api/#expand_permission): `expand_permission` SQL function
+- [CLI reference](../../reference/cli/#expand): `melange expand` command

@@ -70,7 +70,7 @@
 //
 // The tuples subpackage provides a fluent builder for common tuple queries:
 //
-//	query := Tuples("t").
+//	query := Tuples("", "t").
 //	    ObjectType("document").
 //	    Relations("viewer", "editor").
 //	    WhereSubjectType(SubjectType).

@@ -4,7 +4,7 @@ description: "Measured Melange latency on managed PostgreSQL: what checks and li
 weight: 10
 ---
 
-Use these measurements to choose an API and identify what to profile. They come from a same-zone application VM and Cloud SQL for PostgreSQL, measured in October 2026. They describe these fixtures and hardware; benchmark your own schema before setting a latency or capacity target.
+Use these measurements to choose an API and identify what to profile. They come from a same-zone application VM and Cloud SQL for PostgreSQL, measured in October 2026. They describe these fixtures and hardware; benchmark your own schema before setting a latency or capacity target. They predate later changes to list pagination (top-k object lists), recursive list walks and direct check calls, and the hierarchy fixture's subject-first indexes in `domain_tables.sql`; rerun the benchmarks for current numbers.
 
 Detailed [measurements](#checks), [schemas](#benchmark-models), and [methodology](#methodology) follow the optimization advice.
 
@@ -35,7 +35,7 @@ A check is one SQL statement. On a same-zone connection, the round trip costs mo
 2. **Batch checks before increasing concurrency.** Batching amortizes round trips. Tune pool size against database CPU and request latency; the measured four-worker throughput is not a capacity guarantee.
 3. **Index the tuple sources.** Run `melange doctor`; inspect the tables behind your view, including casts. See [Indexing](#indexing).
 4. **Profile expensive lists in each direction.** Record returned rows, candidates, buffers, joins, and recursive work. An empty answer can still require a large traversal. See [Schema shape](#schema-shape).
-5. **Use pagination to bound payloads.** Verify whether the limit reduces database work. The measured first-page PR query takes roughly 0.26 seconds at limits from 10 through 500.
+5. **Use pagination to bound payloads.** For object lists a smaller page also reduces database work; check the plan for subject lists.
 6. **Cache deliberately.** Choose an invalidation or TTL policy that fits your permission-change requirements. The single-check cache does not cache list results; see [Caching](../../guides/caching/).
 
 ## Indexing
@@ -139,11 +139,11 @@ The Go checker rejects invalid relations, types, and subject formats before send
 
 ## List operations
 
-`list_accessible_objects` and `list_accessible_subjects` return every match, so their cost depends on how much of the permission graph Postgres has to walk to find them. That is not always the size of the answer:
+`list_accessible_objects` and `list_accessible_subjects` return every match, or one page of matches when you pass `p_limit`, so their cost depends on how much of the permission graph Postgres has to walk to find them. That is not always the size of the answer:
 
 - **Candidates, not results.** An intersection enumerates candidates from a part and filters them; an exclusion starts from its base relation. `viewer and active` over a document set costs about the same as listing every `viewer`, even when only a few documents pass the `active` filter.
 - **Graph size, not results.** Recursive relations (`viewer from parent`) and userset subjects (`group:eng#member` through nested groups) walk the reachable graph. A query that returns 10 results can still take hundreds of milliseconds if those results are found through thousands of group memberships.
-- **Pagination may bound the response without reducing the expensive work.** The first PR page took 262 to 269 ms at the largest hierarchy scale for limits of 10, 50, 100, and 500. Later-page costs were not measured. Inspect your plan before assuming a smaller limit makes it faster.
+- **Pagination bounds list_objects work.** `list_accessible_objects` keeps only the IDs after the cursor in each part of the relation, up to the page limit, and reads a tuple-to-userset a parent at a time, so a first page usually costs less than the full list. The measurements on this page were taken before that change: then the first PR page took 262 to 269 ms at the largest hierarchy scale for limits of 10 through 500. Inspect your plan before relying on a page limit for `list_accessible_subjects`.
 
 ### ListObjects
 
@@ -195,7 +195,7 @@ The same relation can behave very differently in the two listing directions. Use
 | Feature | What to inspect | Evidence in this run |
 | --- | --- | --- |
 | Direct / computed userset / union | Index lookups, number of grants, duplicate paths | Small fixtures generally below 0.6 ms; a broad document union plus exclusion reaches 339 ms for object listing. |
-| TTU (`viewer from parent`) | Parent count, join selectivity, inherited candidates | PR first pages reach 262–269 ms; a page limit does not remove the inherited-access work in this fixture. |
+| TTU (`viewer from parent`) | Parent count, join selectivity, inherited candidates | PR first pages took 262 to 269 ms before list_objects paging became top-k (see [List operations](#list-operations)). |
 | Recursive TTU | Depth, branching, overlap in reachable ancestors | Folder viewer object lists: 2.1–31.7 ms; subject lists: 2.8–9.5 ms. |
 | Userset references (`group#member`) | Nested membership expansion; querying a userset versus querying a user | Userset-subject organization lists: 1.6–188 ms, versus 0.420–0.501 ms for the corresponding point checks. |
 | Intersection | Candidate part size and selectivity of the other parts | Document `gated` object lists: 5.8–211 ms; subject lists: 0.861–0.993 ms. |

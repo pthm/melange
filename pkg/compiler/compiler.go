@@ -1,7 +1,7 @@
 // Package compiler provides public APIs for compiling OpenFGA schemas to SQL.
 //
-// It is a thin wrapper around lib/sqlgen that exposes only the types and
-// functions needed by external consumers. The package covers two concerns:
+// It is a thin wrapper around internal/sqlgen that exposes only the types and
+// functions needed by external consumers. The package covers four concerns:
 //
 //   - Check and list SQL generation: AnalyzeRelations, GenerateSQL,
 //     GenerateListSQL, CollectFunctionNames, CollectNamedFunctions, and

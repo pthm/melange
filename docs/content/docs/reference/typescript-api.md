@@ -20,23 +20,23 @@ const checker = new Checker(pool);
 
 ```typescript
 class Checker {
-  check(subject: MelangeObject, relation: Relation, object: MelangeObject): Promise<boolean>
-  checkWithContextualTuples(subject: MelangeObject, relation: Relation, object: MelangeObject, tuples: ContextualTuple[]): Promise<boolean>
+  check(subject: MelangeObject, relation: Relation, object: MelangeObject, contextualTuples?: ContextualTuple[]): Promise<Decision>
+  checkWithContextualTuples(subject: MelangeObject, relation: Relation, object: MelangeObject, tuples: ContextualTuple[]): Promise<Decision>
 }
 ```
 
-`check` returns `true` if the subject has the relation on the object. `checkWithContextualTuples` mirrors the Go equivalent — temporary tuples for the call only; requires a client that supports transactions.
+`check` resolves to a `Decision`; `decision.allowed` is `true` if the subject has the relation on the object. `checkWithContextualTuples` has the Go signature, but the TypeScript client does not apply contextual tuples yet: it runs a plain `check_permission` and skips the cache. Use the Go `Checker` for contextual tuples.
 
 ### List Operations
 
 ```typescript
 class Checker {
-  listObjects(subject: MelangeObject, relation: Relation, objectType: ObjectType, page?: PageOptions): Promise<{ ids: string[]; nextCursor: string | null }>
-  listSubjects(object: MelangeObject, relation: Relation, subjectType: ObjectType, page?: PageOptions): Promise<{ ids: string[]; nextCursor: string | null }>
+  listObjects(subject: MelangeObject, relation: Relation, objectType: ObjectType, page?: PageOptions): Promise<ListResult<string>>
+  listSubjects(subjectType: ObjectType, relation: Relation, object: MelangeObject, page?: PageOptions): Promise<ListResult<string>>
 }
 ```
 
-Cursor-paginated. Pass `page.after` (the previous page's `nextCursor`) to continue.
+`ListResult` is `{ items: string[]; nextCursor?: string }`. Cursor-paginated. Pass `page.after` (the previous page's `nextCursor`) to continue.
 
 ### Explain
 
@@ -64,7 +64,7 @@ if (trace.result === true) {
 }
 ```
 
-`Trace`, `Node`, `NodeType`, `TupleRef`, and `SubjectRef` type mirrors live in `@pthm/melange` (source: `clients/typescript/src/trace.ts`). JSON tags are snake_case to match the SQL columns.
+`Trace`, `TraceNode`, `NodeType`, `TupleRef`, and `SubjectRef` type mirrors live in `@pthm/melange` (source: `clients/typescript/src/trace.ts`). JSON tags are snake_case to match the SQL columns.
 
 ### Expand
 
@@ -123,7 +123,7 @@ try {
 ```typescript
 import { Checker, MemoryCache } from '@pthm/melange';
 
-const cache = new MemoryCache({ ttlMs: 300_000 });
+const cache = new MemoryCache(300_000); // TTL in milliseconds
 const checker = new Checker(pool, { cache });
 ```
 

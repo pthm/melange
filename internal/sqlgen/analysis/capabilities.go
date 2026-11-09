@@ -39,7 +39,7 @@ const (
 	// Used for relations like "viewer: [group#member]".
 	ListStrategyUserset
 
-	// ListStrategyRecursive handles TTU patterns with recursive CTEs or cross-type calls.
+	// ListStrategyRecursive handles TTU patterns with a breadth-first walk or cross-type calls.
 	// Used for relations like "viewer: viewer from parent".
 	ListStrategyRecursive
 
@@ -53,7 +53,7 @@ const (
 
 	// ListStrategySelfRefUserset handles self-referential userset patterns.
 	// Used for relations like "member: [group#member]" where the userset
-	// references the same type and relation, requiring recursive CTEs.
+	// references the same type and relation, walked breadth first.
 	ListStrategySelfRefUserset
 
 	// ListStrategyComposed handles indirect anchor patterns via function composition.

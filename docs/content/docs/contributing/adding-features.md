@@ -35,11 +35,11 @@ If the new feature requires new data in `RelationDefinition`, add fields to the 
 
 This is the core of the work. Add a new code path in the SQL generation that produces the correct SQL for your pattern. Key files:
 
-- `internal/sqlgen/check_queries.go` for check functions.
-- `internal/sqlgen/list_queries.go` for list functions.
-- `internal/sqlgen/sql.go` and `internal/sqlgen/expr.go` for the SQL DSL.
+- `internal/sqlgen/check_queries.go` and `check_render.go` for check functions.
+- `internal/sqlgen/list_objects_*.go` and `list_subjects_*.go` for list functions.
+- `internal/sqlgen/sqldsl/` for the SQL DSL.
 
-Use `PlpgsqlFunction` (not `SqlFunction`) for any function that references `melange_tuples`.
+Use `PlpgsqlFunction` (not `SqlFunction`) for any function that references `melange_tuples`. The inlinable `accessible_<type>_<relation>` functions are the exception: they are `LANGUAGE sql` and are created with `check_function_bodies = off`.
 
 ### 4. Add Tests
 
@@ -49,7 +49,7 @@ For custom test scenarios:
 
 ```go
 func TestNewFeature(t *testing.T) {
-    db := testutil.SetupDB(t)
+    db := testutil.EmptyDB(t)
     ctx := context.Background()
 
     err := migrator.MigrateFromString(ctx, db, `

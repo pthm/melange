@@ -52,7 +52,7 @@ type ContextualTuple struct {
 }
 ```
 
-A temporary tuple injected at check time. Not persisted. Requires a `*sql.Tx` or `*sql.Conn` as the Querier (not `*sql.DB`).
+A temporary tuple injected at check time. Not persisted. Works with `*sql.DB` (the call runs on a dedicated connection from the pool), `*sql.Tx` and `*sql.Conn`; any other Querier returns `ErrContextualTuplesUnsupported`.
 
 ### PageOptions
 
@@ -110,7 +110,7 @@ Satisfied by `*sql.DB`, `*sql.Tx`, and `*sql.Conn`.
 
 | Type | Contextual Tuples | Sees Uncommitted Data |
 |------|-------------------|----------------------|
-| `*sql.DB` | No (returns `ErrContextualTuplesUnsupported`) | No |
+| `*sql.DB` | Yes (on a dedicated pooled connection per call) | No |
 | `*sql.Tx` | Yes | Yes |
 | `*sql.Conn` | Yes | No |
 
@@ -207,7 +207,7 @@ Returns `true` if the subject has the relation on the object.
 func (c *Checker) CheckWithContextualTuples(ctx context.Context, subject SubjectLike, relation RelationLike, object ObjectLike, tuples []ContextualTuple) (bool, error)
 ```
 
-Same as `Check` but with temporary tuples injected for this call only. Requires `*sql.Tx` or `*sql.Conn`.
+Same as `Check` but with temporary tuples injected for this call only.
 
 ```go
 func (c *Checker) Must(ctx context.Context, subject SubjectLike, relation RelationLike, object ObjectLike)
@@ -342,7 +342,7 @@ Narrows `Leaf.Users` entries to a single subject type. `""` (the default) matche
 func WithExpandMaxLeaf(n int) ExpandOption
 ```
 
-Caps each `Leaf.Users` list to `n` entries. `n <= 0` defers to session GUC `melange.max_expand_leaf`, then to unbounded (matching OpenFGA). When the cap fires, the emitted `Users.UsersTruncated` field is `true`. Melange extension.
+Caps each `Leaf.Users` list to `n` entries. `n <= 0` means no cap (matching OpenFGA). When the cap fires, the emitted `Users.UsersTruncated` field is `true`. Melange extension.
 
 #### UsersetTree, UsersetTreeNode, Leaf, Difference, Nodes
 

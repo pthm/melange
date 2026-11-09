@@ -26,7 +26,7 @@ The parser wraps the official OpenFGA language parser. It converts the OpenFGA A
 
 This is the only package that imports the OpenFGA parser dependency.
 
-## Schema Analysis (`pkg/schema/`)
+## Schema Analysis (`internal/sqlgen/analysis/`)
 
 Each relation is analyzed to detect its pattern:
 
@@ -49,7 +49,7 @@ Role hierarchies like `owner > admin > member` create transitive implications: i
 
 For each relation, the closure includes all relations that imply it (directly or transitively). This is inlined into the generated SQL, so a check for `member` also checks for `admin` and `owner` in a single query.
 
-The closure computation also detects cycles. Cyclic implied-by chains (e.g., `define a: b` and `define b: a`) return `ErrCyclicSchema`.
+Cycle detection is a separate pass, `schema.DetectCycles`, which validate and migrate run before compiling. Cycles among relations that resolve on the same object (implied-by chains such as `define a: b` and `define b: a`, and intersection or exclusion operands) return `ErrCyclicSchema`. Parent relation cycles, within a type or across types, are valid: the generated functions detect revisits or walk breadth first.
 
 ## SQL Generation (`internal/sqlgen/`)
 
@@ -61,7 +61,7 @@ The `sqlgen` package provides a Go DSL for building SQL:
 - `PlpgsqlFunction` for `LANGUAGE plpgsql` functions.
 - Expression types (`Lit`, `Param`, `FuncCall`, etc.) for building queries.
 
-Functions that reference `melange_tuples` must use `PlpgsqlFunction` because `LANGUAGE sql` validates table references at function creation time, but `melange_tuples` doesn't exist during migration. `LANGUAGE plpgsql` defers validation to call time.
+Functions that reference `melange_tuples` are normally `PlpgsqlFunction`: `LANGUAGE sql` validates table references at creation time, but `melange_tuples` may not exist during migration, while `LANGUAGE plpgsql` defers validation to call time. The `accessible_<type>_<relation>` functions are the exception: they are `LANGUAGE sql` without SET options so PostgreSQL inlines them into the calling query, and the migrator (and generated migration files) create them with `check_function_bodies = off`.
 
 ### Check Functions
 
@@ -81,43 +81,42 @@ Each relation pattern produces different SQL. Direct assignment queries `melange
 
 ### No-Wildcard Variants
 
-Each check function also has a `_no_wildcard` variant that excludes `subject_id = '*'` matches. These are used internally by userset resolution to avoid granting wildcard access through indirect paths.
+A check function that has or reaches a wildcard also gets a `_nw` variant (`check_<type>_<relation>_nw`) that excludes `subject_id = '*'` matches. Userset resolution uses it to avoid granting wildcard access through indirect paths. For other relations the body would be identical, so no variant is emitted and `_nw` calls go to the base function.
 
 ### Dispatchers
 
-The dispatcher function `check_permission` routes calls to the correct specialized function using a `CASE` expression:
+`check_permission` is a `LANGUAGE sql` wrapper that calls `check_permission_internal(..., ARRAY[]::TEXT[])`. The internal dispatcher raises M2002 at the depth limit, then routes with an `IF` chain grouped by object type:
 
 ```sql
-CASE
-    WHEN (p_object_type = 'document' AND p_relation = 'viewer')
-        THEN check_document_viewer(...)
-    WHEN (p_object_type = 'document' AND p_relation = 'owner')
-        THEN check_document_owner(...)
-    ELSE 0
-END
+IF p_object_type = 'document' THEN
+    IF p_relation = 'viewer' THEN RETURN check_document_viewer(p_subject_type, p_subject_id, p_object_id, p_visited); END IF;
+    IF p_relation = 'owner' THEN RETURN check_document_owner(p_subject_type, p_subject_id, p_object_id, p_visited); END IF;
+    RETURN 0;
+END IF;
+RETURN 0;
 ```
 
-Dispatchers are always regenerated because they reference every relation.
+The internal dispatchers route every check function the exposure installs. The public ones answer for the exposed relations and raise SQLSTATE M2003 (through `check_permission_unexposed`) for any other relation the model defines. Dispatchers are always regenerated because they reference every installed relation.
 
 ### List Functions
 
-`list_accessible_objects` and `list_accessible_subjects` use recursive CTEs to enumerate accessible objects/subjects. They follow the same pattern analysis as check functions but produce set-returning queries.
+`list_accessible_objects` and `list_accessible_subjects` dispatch to per-relation `list_<type>_<relation>_obj` and `list_<type>_<relation>_sub` functions, which follow the same pattern analysis as check functions but return sets. Pages are top-k queries: IDs after the cursor in order, `LIMIT p_limit + 1`, with `next_cursor` set when more remain. Recursive relations are listed by a breadth-first PL/pgSQL walk that expands each object once and raises M2002 (resolution too complex) at 25 levels instead of truncating. `accessible_<type>_<relation>` is the same query as an inlinable `LANGUAGE sql` function for filtering application queries; `accessible_objects` takes the relation and type as arguments; and `accessible_<type>_<relation>_by_<link>` returns parent IDs for relations whose every grant goes through one link to one parent type.
 
 ## Migration Orchestration (`pkg/migrator/`)
 
 The migrator:
 
-1. Parses the schema.
-2. Generates all SQL functions.
-3. Computes SHA-256 checksums for change detection.
-4. Compares against the previous migration record (if using `--db` comparison).
-5. Drops orphaned functions from removed relations.
-6. Applies all changes in a single transaction.
-7. Records the migration (schema checksum, codegen version, function inventory).
+1. Validates the schema (`DetectCycles`).
+2. Reads the last migration record and applies the guards: `--if-deployed-checksum` drift, a database migrated by a newer melange, and an exposure change on a run that records nothing.
+3. Skips when the schema checksum, codegen version and exposure all match the record (phase 1).
+4. Generates the SQL for the exposure and computes function checksums.
+5. Records only, without re-applying, when the generated functions are identical to what is deployed (phase 2). `Migrator.Plan` predicts this decision without changing the database.
+6. In one transaction under an advisory lock: re-checks the guards, refuses to drop a function that other database objects (for example a view or RLS policy) depend on (unless `--force`, which drops them with CASCADE), applies the functions, and drops the orphans.
+7. Records the migration (schema checksum, codegen version, function inventory, model JSON and exposure).
 
 ## Key Design Decisions
 
-**Why `LANGUAGE plpgsql`**: `LANGUAGE sql` validates table references at creation time. Since `melange_tuples` is a user-created view that may not exist during migration, `plpgsql` defers validation to call time.
+**Why `LANGUAGE plpgsql`**: `LANGUAGE sql` validates table references at creation time. Since `melange_tuples` is a user-created view that may not exist during migration, `plpgsql` defers validation to call time. The inlinable `accessible_<type>_<relation>` functions are `LANGUAGE sql` and are created with `check_function_bodies = off` instead.
 
 **Why specialized functions per relation**: each function has a predictable query plan. A generic function with dynamic parameters would require PostgreSQL to plan for all possible inputs, producing suboptimal plans.
 

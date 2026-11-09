@@ -44,7 +44,7 @@ Permissions are an OpenFGA model that Melange compiles into PostgreSQL functions
 - Model: `melange/schema.fga`. Config: `melange/config.yaml`.
 - Relationships come from the `melange_tuples` view over our tables, defined in our own migrations (Melange doesn't create it). Never insert tuples; change the underlying rows, or the view definition.
 - `internal/authz` is generated; don't edit it. It holds the exact names of the `accessible_*` SQL functions for filtering our own queries; use them rather than building names, which are truncated when long.
-- No OpenFGA conditions; express them as `WHERE` clauses in the tuples view or as contextual tuples (see [Replacing Conditions](../conditions/)). Use `check_permission` (or the client's check) for access decisions; listing objects or subjects can be slow and suits batch or admin use.
+- No OpenFGA conditions. Use `check_permission` (or the client's check) for access decisions; listing objects or subjects can be slow and suits batch or admin use.
 
 After editing the model:
 

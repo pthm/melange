@@ -96,6 +96,8 @@ Melange compiles this into:
 | `check_document_viewer()` | Complex check: direct, editor hierarchy, AND parent folder access |
 | `check_permission()`      | Dispatcher that routes to specialized functions                   |
 
+A default migration also installs list (`list_<type>_<relation>_obj`, `list_<type>_<relation>_sub`), `accessible_<type>_<relation>`, `expand_` and `explain_` functions for each relation that supports them, and the matching dispatchers; `melange functions` lists them.
+
 ### Pattern-Specific Code Generation
 
 The compiler recognizes authorization patterns and generates code specific to each:
@@ -174,28 +176,39 @@ Notice how the compiler has:
 
 ## The Dispatcher
 
-The `check_permission()` function acts as a router, dispatching to the appropriate specialized function:
+`check_permission()` is a thin `LANGUAGE sql` wrapper the planner can inline. It calls `check_permission_internal()`, which enforces the depth limit and routes to the specialized function:
 
 ```sql
 CREATE OR REPLACE FUNCTION check_permission(
-  p_subject_type TEXT,
-  p_subject_id TEXT,
-  p_relation TEXT,
-  p_object_type TEXT,
-  p_object_id TEXT
+  p_subject_type TEXT, p_subject_id TEXT, p_relation TEXT,
+  p_object_type TEXT, p_object_id TEXT
 ) RETURNS INTEGER AS $$
-    SELECT CASE
-        WHEN p_object_type = 'document' AND p_relation = 'viewer'
-            THEN check_document_viewer(p_subject_type, p_subject_id, p_object_id)
-        WHEN p_object_type = 'document' AND p_relation = 'editor'
-            THEN check_document_editor(p_subject_type, p_subject_id, p_object_id)
-        WHEN p_object_type = 'folder' AND p_relation = 'viewer'
-            THEN check_folder_viewer(p_subject_type, p_subject_id, p_object_id)
-        -- ... more cases
-        ELSE 0  -- Unknown type/relation: deny by default
-    END;
-$$ LANGUAGE sql STABLE;
+    SELECT check_permission_internal(p_subject_type, p_subject_id, p_relation,
+        p_object_type, p_object_id, ARRAY[]::TEXT[])
+$$ LANGUAGE sql STABLE PARALLEL RESTRICTED;
+
+CREATE OR REPLACE FUNCTION check_permission_internal(
+  p_subject_type TEXT, p_subject_id TEXT, p_relation TEXT,
+  p_object_type TEXT, p_object_id TEXT, p_visited TEXT[] DEFAULT ARRAY[]::TEXT[]
+) RETURNS INTEGER AS $$
+BEGIN
+    IF array_length(p_visited, 1) >= 26 THEN
+        RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';
+    END IF;
+    IF p_object_type = 'document' THEN
+        IF p_relation = 'viewer' THEN
+            RETURN check_document_viewer(p_subject_type, p_subject_id, p_object_id, p_visited);
+        END IF;
+        -- ... the other document relations
+        RETURN 0;
+    END IF;
+    -- ... the other types
+    RETURN 0;  -- unknown type/relation: deny by default
+END;
+$$ LANGUAGE plpgsql STABLE PARALLEL RESTRICTED COST 1000;
 ```
+
+When the `sql` section of `melange.yaml` leaves a relation out, `check_permission` raises SQLSTATE `M2003` for it instead of returning 0.
 
 This eliminates runtime schema interpretation and allows PostgreSQL's query planner to optimize each specialized function independently.
 

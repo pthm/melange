@@ -52,7 +52,8 @@ Create a `melange.yaml` in your project root, or use `melange init` to generate 
 # Path to OpenFGA schema file (used by all commands)
 schema: schemas/schema.fga
 
-# Database connection (used by migrate, status, doctor, schema pull, explain, expand)
+# Database connection (used by migrate, status, diff, history, doctor, functions,
+# schema pull, explain, expand, studio, and generate client --check)
 # See "Environments" below for per-environment overrides selected with --env.
 database:
   # Option 1: Full connection URL
@@ -73,7 +74,6 @@ database:
 generate:
   client:
     runtime: go
-    schema: schemas/schema.fga  # Overrides top-level schema
     output: internal/authz
     package: authz
     id_type: string
@@ -99,7 +99,8 @@ doctor:
   skip_client: false      # skip the Generated Client checks
   strict_client: false    # fail, not warn, on a client name the database lacks
 
-# Generated SQL API (used by migrate, generate migration, generate client, status, doctor)
+# Generated SQL API (used by migrate, generate migration, generate client, status,
+# doctor, functions, studio)
 # Omit the section to generate everything. See "SQL API Settings" below.
 sql:
   relations:
@@ -181,13 +182,14 @@ Configure under `generate.client:`:
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `runtime` | string | - | Target runtime: `go`, `typescript` |
-| `schema` | string | (top-level `schema`) | Path to schema file |
 | `output` | string | - | Output directory for generated code; `generate client --check` and doctor compare the files here |
 | `package` | string | `authz` | Package/module name |
 | `relations.include` | list | `[]` | Patterns of the relations to generate constants for, as in [`sql.relations`](#sql-api-settings) |
 | `relations.exclude` | list | `[]` | Patterns of the relations to leave out |
 | `filter` | string | - | Deprecated: relation name prefix applied after the patterns (e.g., `can_`). Use `relations.include: ["can_*"]` |
 | `id_type` | string | `string` | ID type for constructors |
+
+The client is generated from the top-level `schema`, or from `--schema` when given.
 
 Without a `relations.include`, the client inherits `sql.relations` (include and exclude), so its constants match the relations `melange migrate` exposes, and a client `exclude` only narrows that. A client `include` replaces `sql.relations`. `include: ["*"]` selects every relation. The generated accessible function names always follow what a migration with the `sql:` section installs: the client names the accessible functions of the exposed relations it selects, `accessible_{type}_{relation}` when `sql.functions.accessible` is on and the `_by_{link}` forms when `sql.functions.parent_key` is on. `generate.client.relations` cannot be set to a value such as `inherit`; leave it out instead. A key under it other than `include` and `exclude` stops every command when the configuration is loaded. See [Generated Code](../generated-code/#which-relations).
 
@@ -489,6 +491,7 @@ Environments:
   staging          staging.db.internal:5432/app
 
 Default: local
+Active:  local (marked with *)
 ```
 
 `melange config show --env production` prints the fully-resolved configuration
@@ -511,7 +514,6 @@ All configuration options can be set via environment variables with the `MELANGE
 | `MELANGE_DATABASE_SSLMODE` | `database.sslmode` |
 | `MELANGE_DATABASE_SCHEMA` | `database.schema` |
 | `MELANGE_GENERATE_CLIENT_RUNTIME` | `generate.client.runtime` |
-| `MELANGE_GENERATE_CLIENT_SCHEMA` | `generate.client.schema` |
 | `MELANGE_GENERATE_CLIENT_OUTPUT` | `generate.client.output` |
 | `MELANGE_GENERATE_CLIENT_PACKAGE` | `generate.client.package` |
 | `MELANGE_GENERATE_CLIENT_RELATIONS_INCLUDE` | `generate.client.relations.include` |
@@ -562,17 +564,18 @@ applies.
 
 ## Configuration Inheritance
 
-Per-command settings can override top-level settings:
+An [environment profile](#environments) can override the top-level `schema`:
 
 ```yaml
-# Top-level default
 schema: schemas/schema.fga
 
-generate:
-  client:
-    # Overrides top-level schema for generate command only
-    schema: schemas/api-schema.fga
+environments:
+  legacy:
+    schema: schemas/legacy.fga
 ```
+
+No other section has its own schema path: `generate client`, `generate migration`
+and the database commands read the top-level `schema` (or `--schema`).
 
 ## Viewing Effective Configuration
 
@@ -596,13 +599,21 @@ melange config show --env production
 Config file: /path/to/project/melange.yaml
 Environment: production
 
-schema: schemas/schema.fga
-database:
-  url: postgres://prod-user:****@prod-db:5432/app
-  host: ""
-  port: 5432
-  ...
+Database:
+  Host: ""
+  Name: ""
+  Password: ""
+  Port: 5432
+  SSLMode: prefer
+  Schema: ""
+  URL: postgres://prod-user:****@prod-db:5432/app
+  User: ""
+...
+Schema: schemas/schema.fga
 ```
+
+The keys are the Go field names (`Database`, `URL`, `SSLMode`, `SQL`), sorted
+alphabetically, not the `melange.yaml` keys.
 
 ## Security Considerations
 

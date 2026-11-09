@@ -663,7 +663,7 @@ for _, repo := range repos {
 }
 
 // Efficient: 1 database query
-accessibleIDs, _ := checker.ListObjects(ctx, user, "can_read", "repository")
+accessibleIDs, _ := checker.ListObjectsAll(ctx, user, "can_read", "repository")
 idSet := make(map[string]bool)
 for _, id := range accessibleIDs {
     idSet[id] = true

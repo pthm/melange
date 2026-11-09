@@ -29,13 +29,11 @@ This connects to your database (using the URL from your config file or `--db` fl
 You'll see output like:
 
 ```
-Migrating schema...
-  ✓ Compiled 6 functions
-  ✓ Installed check_permission dispatcher
-  ✓ Installed list_accessible_objects
-  ✓ Installed list_accessible_subjects
-Migration complete.
+Applying authz infrastructure...
+Authz schema applied successfully.
 ```
+
+Running it again with an unchanged schema prints `Schema unchanged, migration skipped.` and `Use --force to re-apply.`
 
 ### Preview Without Applying
 
@@ -67,10 +65,12 @@ The doctor command runs these checks against your database:
 
 1. **Schema File**: exists, parses correctly, no cyclic dependencies
 2. **Migration State**: `melange_migrations` table exists, schema is in sync
-3. **Generated Functions**: dispatcher and per-relation functions are present, no orphans
-4. **Tuples Source**: `melange_tuples` view exists with the correct columns
-5. **Data Health**: tuple count, type/relation validation against schema
-6. **Performance**: view analysis (UNION ALL usage, missing expression indexes)
+3. **Deployed Model**: the last migration recorded its model, local changes against it are additive or breaking, and published security advisories cover the melange version that generated the functions
+4. **Generated Functions**: the dispatchers and per-relation functions the recorded exposure installs are present, no orphans, and `sql.relations` patterns that match no relation
+5. **Generated Client** (when `generate.client.runtime` is set): the generated files match what `melange.yaml` generates, and every name the client uses is installed and exposed (a warning, or a failure with `--strict-client`; `--skip-client` skips it)
+6. **Tuples Source**: `melange_tuples` view exists with the correct columns
+7. **Data Health**: tuple count, type/relation validation against schema
+8. **Performance**: view analysis (UNION ALL usage, missing expression, source-table and subject-lookup indexes)
 
 For detailed output:
 

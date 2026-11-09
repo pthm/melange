@@ -496,8 +496,12 @@ func pgMessage(err error) string {
 //   - DecisionDeny: returns empty list (no access)
 //   - DecisionAllow: falls through to normal check (can't enumerate "all" objects)
 //
-// Uses a recursive CTE to walk the permission graph in a single query,
-// providing 10-50x improvement over N+1 patterns on large datasets.
+// Resolves the list in a single query, avoiding N+1 checks. Recursive
+// relations are listed by a breadth-first walk in the generated function. A
+// walk that reaches 25 levels returns a *ValidationError with
+// ErrorCodeResolutionTooComplex rather than a truncated list, and a relation
+// the database's SQL API does not expose returns a *ValidationError with
+// ErrorCodeValidation.
 func (c *Checker) ListObjects(ctx context.Context, subject SubjectLike, relation RelationLike, objectType ObjectType, page PageOptions) (ids []string, nextCursor *string, err error) {
 	if c.validateUserset {
 		if err := c.validateUsersetSubject(ctx, c.q, subject.FGASubject()); err != nil {
@@ -680,8 +684,12 @@ func (c *Checker) ListObjectsWithContextualTuples(
 //   - DecisionDeny: returns empty list (no subjects have access)
 //   - DecisionAllow: falls through to normal check (can't enumerate "all" subjects)
 //
-// Uses a recursive CTE to walk the permission graph in a single query,
-// providing 10-50x improvement over N+1 patterns on large datasets.
+// Resolves the list in a single query, avoiding N+1 checks. Recursive
+// relations are listed by a breadth-first walk in the generated function. A
+// walk that reaches 25 levels returns a *ValidationError with
+// ErrorCodeResolutionTooComplex rather than a truncated list, and a relation
+// the database's SQL API does not expose returns a *ValidationError with
+// ErrorCodeValidation.
 func (c *Checker) ListSubjects(ctx context.Context, object ObjectLike, relation RelationLike, subjectType ObjectType, page PageOptions) (ids []string, nextCursor *string, err error) {
 	if c.validateRequest {
 		if err := c.validateListUsersRequest(ctx, c.q, relation.FGARelation(), object.FGAObject(), subjectType); err != nil {

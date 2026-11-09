@@ -55,7 +55,7 @@ scoop bucket add pthm https://github.com/pthm/scoop-bucket
 scoop install pthm/melange
 ```
 
-**Go** (1.27 or later):
+**Go** (1.26 or later):
 
 ```bash
 go install github.com/pthm/melange@latest
@@ -222,6 +222,7 @@ Schema
   explain     Show why a permission check returns true or false
   expand      Show who has a permission on an object
   doctor      Run health checks
+  functions   List the SQL functions generated for each relation
   studio      Open a local, read-only web console for a database (experimental)
 
 Client

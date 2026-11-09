@@ -19,7 +19,8 @@ type TupleQuery struct {
 	limit       int
 }
 
-// Tuples creates a new TupleQuery with the given table alias.
+// Tuples creates a new TupleQuery over melange_tuples in the given schema
+// (empty for unqualified) with the given table alias.
 func Tuples(schema, alias string) *TupleQuery {
 	return &TupleQuery{
 		schema:  schema,

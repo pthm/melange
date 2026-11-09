@@ -226,7 +226,7 @@ export const AccessibleByParentFunctions = {
 } as const;
 ```
 
-The values are the exact, unqualified names, as for Go. A map is `{} as const` when its function family is off. Generation fails when two type or relation names map to the same `ObjectTypes` or `Relations` key, or to the same factory function, or when a factory name is not a valid identifier, is a reserved word, `eval` or `arguments`, or is one of the names the generated files import or export by name (`ObjectTypes`, `Relations`, `ObjectType`, `Relation`, `AccessibleFunctions`, `AccessibleByParentFunctions`, `MelangeObject`).
+The values are the exact, unqualified names, as for Go. A map is `{} as const` when its function family is off. Generation fails when a type or relation name maps to an `ObjectTypes` or `Relations` key that is not a valid identifier (schema names may contain `.`, `-` and `/`, so `doc-type` gives the key `Doc-type`), when two names map to the same key or to the same factory function, or when a factory name is not a valid identifier, is a reserved word, `eval` or `arguments`, or is one of the names the generated files import or export by name (`ObjectTypes`, `Relations`, `ObjectType`, `Relation`, `AccessibleFunctions`, `AccessibleByParentFunctions`, `MelangeObject`).
 
 ### index.ts
 
@@ -265,7 +265,7 @@ const { rows } = await pool.query(
 
 ## Regeneration
 
-Run `melange generate client` after any schema or `sql:` change to keep the generated code in sync. The generated files include a header comment with the Melange version and source schema path for traceability.
+Run `melange generate client` after any schema or `sql:` change to keep the generated code in sync. The Go file (`schema_gen.go`) and the TypeScript `types.ts` include a header comment with the Melange version and source schema path for traceability. `schema.ts`, `sql.ts` and `index.ts` carry only the generated-code notice.
 
 A function name changes when its type, relation or link is renamed. The client stops emitting it when the relation stops being listable, is no longer exposed, or its family is turned off, and a parent-key form appears or disappears as the relation's grants change shape (adding a direct grant to `can_read: reader from org` removes `accessible_{type}_can_read_by_org`). After regenerating, a name that went away is a compile error in Go and a type error in TypeScript. The database function can stay installed after its name goes: `accessible_{type}_{relation}` is kept while an exposed relation resolves through it and any of `list_objects`, `accessible` or `parent_key` is on (see [What is installed](../sql-api/#exposure)), but it is no longer part of the API and a later migration can drop it. When migrate does drop a function that a view or policy calls, it refuses; see [Dependent objects](../../guides/migrations/#dependent-objects).
 
@@ -277,6 +277,8 @@ A generated client can drift from the database in two places, and [`melange gene
 2. **`melange.yaml` against the database.** With `--db` or `--env`, every accessible function name and relation constant the configuration generates is checked against what the database's last migration installed and exposes. Run it after `migrate`.
 
 A client narrower than the database is fine: a relation the database exposes without a constant in the client is never reported. A client wider than the database is reported by what it would do: an accessible function that is not installed, or a relation `melange.yaml` exposes that the database does not, is an error (the call fails with `42883` or `M2003`); a constant for a relation that neither `melange.yaml` nor the database exposes is info, since constants are also used for writing tuples.
+
+A warning means the database answers today, but a later migration or the application's own objects may change that. Four cases are warnings: an accessible function installed only as an internal function (its relation is not exposed, so a later migration may drop it), a function the deployed model no longer generates (the next migrate drops it), a function installed under the name but recorded by no migration, and a constant for a relation the deployed model does not define (`check_permission` denies it). The last case is a warning whatever `melange.yaml` exposes, so a relation added to the schema but not yet migrated is a warning, not an error. `--check` exits 1 on drift or an error, and on a warning with `--strict`.
 
 `melange doctor` runs the same check when `generate.client.runtime` is configured, from `melange.yaml` only. Keep the relation selection in `generate.client.relations` rather than in `--include-relation`, and the families in `sql.functions` rather than in `migrate`'s `--no-<family>` flags, so the client, `--check`, doctor and `migrate` all see one configuration.
 

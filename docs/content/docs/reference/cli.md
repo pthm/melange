@@ -42,7 +42,8 @@ By default, Melange automatically checks for new versions in the background and 
 
 ```
 $ melange migrate
-Migration completed successfully
+Applying authz infrastructure...
+Authz schema applied successfully.
 
 * A new version of melange is available: v1.2.3 (current: v1.2.0)
   brew upgrade pthm/tap/melange
@@ -993,7 +994,7 @@ melange expand document:1 viewer --db postgres://localhost/mydb
 | `--flatten`      | `false`       | Print the flat, deduplicated user list instead of the tree. `Leaf.Users` only — computed and TTU pointers are not chased |
 | `--recursive`    | `false`       | Print the flat list *and* chase `Leaf.Computed` / TTU pointers with follow-up Expand calls (implies `--flatten`) |
 | `--subject-type` | (unset)       | Melange extension. Narrow `Leaf.Users` to a single subject type                                                  |
-| `--max-leaf`     | `0`           | Melange extension. Cap each `Leaf.Users` list. `0` defers to session GUC `melange.max_expand_leaf`, then unbounded |
+| `--max-leaf`     | `0`           | Melange extension. Cap each `Leaf.Users` list. `0` means no cap |
 | `--color`        | `auto`        | `auto` (TTY + `NO_COLOR` unset), `always`, or `never`. See [Colour Output](#colour-output) below.                |
 
 **Tree output:**
@@ -1012,14 +1013,12 @@ document:1#viewer • union of 2
 
 ```
 $ melange expand document:1 viewer --flatten
+group:eng#member
 user:alice
 user:bob
-user:carol
-group:eng#member
-user:*
 ```
 
-`--flatten` chases every `Leaf.Computed` and `Leaf.TupleToUserset` pointer with follow-up Expand calls. Cost is N round-trips per N distinct pointers; suitable for admin flows, not the request path. `--format=json` returns the raw `UsersetTree` JSONB for tooling.
+`--flatten` lists the users in the tree's `Leaf.Users`, sorted, and does not chase pointers. `--recursive` chases every `Leaf.Computed` and `Leaf.TupleToUserset` pointer with follow-up Expand calls. Cost is N round-trips per N distinct pointers; suitable for admin flows, not the request path. `--format=json` returns the raw `UsersetTree` JSONB for tooling.
 
 Expand follows the recorded [exposure](../sql-api/#exposure) like
 `explain`: a relation `expand_permission` does not answer for fails with a
@@ -1049,7 +1048,7 @@ melange studio --db postgres://localhost/mydb --addr 127.0.0.1:7070
 | `--schema`    | (config, else `schemas/schema.fga`) | Local schema file for the Health page's file and drift checks          |
 | `--addr`      | `127.0.0.1:0`           | Loopback address to listen on. Port `0` picks a free port. Non-loopback addresses are refused |
 
-Studio prints its URL on stderr and runs until Ctrl-C. Every connection is opened with `default_transaction_read_only=on`; the one exception is Explain with what-if tuples, which creates a temporary view in a transaction that is always rolled back. The global `--no-update-check` flag also hides the top bar's update badge.
+Studio prints its URL on stderr and runs until Ctrl-C. Every connection is opened with `default_transaction_read_only=on`. Two features open a read-write transaction that is always rolled back: Explain with what-if tuples, which creates a temporary view, and Explain or Expand against a database migrated with `sql.functions.explain` or `sql.functions.expand` off, which creates those functions in `pg_temp` ([on demand](../sql-api/#explain-and-expand-on-demand)). Both need a writable primary and the `TEMP` privilege. The global `--no-update-check` flag also hides the top bar's update badge.
 
 ### Colour output
 
@@ -1492,11 +1491,21 @@ melange config show --env production --source
 Config file: /path/to/project/melange.yaml
 Environment: production
 
-schema: schemas/schema.fga
-database:
-  url: postgres://prod-user:****@prod-db:5432/app
-  ...
+Database:
+  Host: ""
+  Name: ""
+  Password: ""
+  Port: 5432
+  SSLMode: prefer
+  Schema: ""
+  URL: postgres://prod-user:****@prod-db:5432/app
+  User: ""
+...
+Schema: schemas/schema.fga
 ```
+
+The keys are the Go field names, sorted alphabetically, not the `melange.yaml`
+keys.
 
 This is useful for debugging configuration issues and understanding which values
 are in effect for a given environment. The `SQL` block shows the resolved
@@ -1825,8 +1834,8 @@ call without `Exposure` keeps the recorded one, so an application that
 migrates on startup does not undo a restriction applied with `melange migrate`.
 
 Changing the exposure needs a migration that records it. `Migrator.MigrateWithTypes`,
-and `Migrator.MigrateWithTypesAndOptions` without `SchemaContent`, record
-nothing: asked for an exposure other than the recorded one (or the default when
+and `Migrator.MigrateWithTypesAndOptions` without `SchemaContent` (outside a
+dry run), record nothing: asked for an exposure other than the recorded one (or the default when
 none is recorded), they return `*migrator.UnrecordedExposureChangeError` and
 apply nothing. With pre-parsed types or an embedded schema, pass the schema
 text so the migration is recorded:

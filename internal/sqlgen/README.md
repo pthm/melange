@@ -6,9 +6,11 @@ SQL code generation for Melange authorization functions.
 
 Generates specialized PostgreSQL functions from OpenFGA schemas:
 
-- **Check functions** - `check_<type>_<relation>()` for permission checks
-- **List functions** - `list_<type>_<relation>_objects/subjects()` for enumeration
-- **Dispatchers** - Route calls to specialized functions
+- **Check functions** - `check_<type>_<relation>()` (and `_nw`) for permission checks
+- **List functions** - `list_<type>_<relation>_obj()` and `list_<type>_<relation>_sub()` for enumeration
+- **Accessible functions** - `accessible_<type>_<relation>()` (inlinable LANGUAGE sql), parent-key `accessible_<type>_<relation>_by_<link>()`, and the `accessible_objects` dispatcher
+- **Explain and expand** - `explain_<type>_<relation>()`, `expand_<type>_<relation>()`
+- **Dispatchers** - Route calls to specialized functions; under a restricted `Exposure` only the exposed relations and what they resolve through are generated, and the public dispatchers raise M2003 for the rest
 
 This is the core compilation engine that transforms authorization models into executable SQL.
 
@@ -87,7 +89,7 @@ Three-layer architecture for check functions:
 2. **Blocks** - SQL query blocks with comments
 3. **Render** - Final PL/pgSQL function output
 
-### List Generation (`list_plan.go`, `list_blocks.go`, `list_render.go`)
+### List Generation (`list_plan.go`, `list_objects_blocks*.go`, `list_subjects_blocks*.go`, `list_*_render*.go`)
 
 Parallel architecture for list functions with additional complexity for:
 - Recursive object enumeration

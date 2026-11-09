@@ -30,11 +30,10 @@ just test-openfga-pattern "tuple_to_userset"
 # List all available test names
 just test-openfga-list
 
-# Run without gotestfmt formatting
-just test-openfga-verbose
-
-# Run full suite (includes unsupported features - many will fail)
-just test-openfga-full-check
+# Also replay every YAML case through a real in-process OpenFGA server
+# (MELANGE_OPENFGA_ORACLE=1); a failure there means the case's expected
+# values are not OpenFGA-correct
+just test-openfga-oracle
 ```
 
 ### Feature Test Categories
@@ -47,27 +46,29 @@ just test-openfga-full-check
 | Wildcards         | `just test-openfga-feature Wildcards`        | Public access via `[user:*]`                            |
 | Exclusion         | `just test-openfga-feature Exclusion`        | `but not` patterns                                      |
 | Union             | `just test-openfga-feature Union`            | Multiple `or` branches                                  |
-| Complex Patterns  | `just test-openfga-feature ComplexPatterns`  | Nested combinations                                     |
+| Intersection      | `just test-openfga-feature Intersection`     | `and` patterns                                          |
+| Userset References | `just test-openfga-feature UsersetReferences` | `[group#member]`                                      |
+| Contextual Tuples | `just test-openfga-feature ContextualTuples` | Tuples passed with the request                          |
+| Validation        | `just test-openfga-feature Validation`       | Invalid models and errors                               |
+| Restricted Exposure | `just test-openfga-feature RestrictedExposure` | Each stage migrated exposing only the relations its assertions name |
+| Explain/Expand On Demand | `just test-openfga-feature ExplainExpandOnDemand` | Explain and expand with their families off, compiled per call |
 | Cycle Handling    | `just test-openfga-feature CycleHandling`    | Cycle detection                                         |
 
 ### Understanding Test Output
 
-With `gotestfmt`, passing tests show green checkmarks:
+The recipes print plain `go test` output. A passing test shows:
 
 ```
-📦 github.com/pthm/melange/test/openfgatests
-  ✅ TestOpenFGA_Wildcards (110ms)
-  ✅ TestOpenFGA_Wildcards/wildcard_direct (80ms)
-  ✅ TestOpenFGA_Wildcards/wildcard_direct/stage_0 (20ms)
-  ✅ TestOpenFGA_Wildcards/wildcard_direct/stage_0/check_0 (0s)
+--- PASS: TestOpenFGA_Wildcards (0.11s)
+    --- PASS: TestOpenFGA_Wildcards/wildcard_direct (0.08s)
 ```
 
-Failed tests show red X marks with details:
+A failing test shows the testify message:
 
 ```
-  ❌ TestOpenFGA_Unsupported/some_test
-      Error: expected: true, actual: false
-      Messages: check user:alice:viewer on document:1
+--- FAIL: TestOpenFGA_Wildcards/wildcard_direct (0.08s)
+    Error: expected: true, actual: false
+    Messages: check user:alice:viewer on document:1
 ```
 
 ## Generated differential testing
@@ -351,13 +352,12 @@ SELECT check_permission('user', 'alice', 'can_read', 'document', 'doc1');
 
 ```bash
 # OpenFGA test suite
-just test-openfga              # Supported features with gotestfmt
+just test-openfga              # Supported features
 just test-openfga-feature X    # Single feature category
 just test-openfga-name X       # Single test by name
 just test-openfga-pattern X    # Tests matching regex
 just test-openfga-list         # List all test names
-just test-openfga-verbose      # Without gotestfmt
-just test-openfga-full-check   # Full suite (many failures expected)
+just test-openfga-oracle       # Also replay every case through a real OpenFGA server
 
 # OpenFGA test inspection
 just dump-openfga-list         # List all test names
@@ -366,6 +366,6 @@ just dump-openfga-pattern X    # Dump tests matching regex
 just dump-openfga-all          # Dump all tests
 
 # Tools
-just install-gotestfmt         # Install gotestfmt formatter
+just install-tools             # Install development tools
 just build-dumptest            # Build the dumptest utility
 ```

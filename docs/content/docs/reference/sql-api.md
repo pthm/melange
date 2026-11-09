@@ -57,7 +57,8 @@ exposed relations and every relation they reach. The `list_*_obj` and
 other; `list_*_sub`, `expand_*` and `explain_*` when their family is on. The
 `_by_{link}` parent-key functions are installed for exposed relations only.
 Everything outside that set is not generated, and migrate drops it if an
-earlier exposure installed it.
+earlier exposure installed it. The one addition is the
+`check_permission_unexposed` helper described below.
 
 **Public and internal dispatchers.** The public dispatchers on this page
 answer only for exposed relations of an enabled family. A generated function
@@ -79,6 +80,8 @@ the exposure does not expose, including every relation of a disabled family
 the model does not define keep the [unknown-pair](#unknown-typerelation)
 result: `0`, an empty set, or the sentinel. With the default exposure nothing
 raises, so the API behaves as it did before exposure existed.
+
+A restricted exposure also installs `check_permission_unexposed(p_object_type TEXT, p_relation TEXT)`, the PL/pgSQL helper that the `LANGUAGE sql` public dispatchers call to raise `M2003`. It is not generated under the default exposure, and migrate drops it when the exposure returns to the default.
 
 ### Explain and Expand on Demand
 
@@ -228,7 +231,7 @@ Returns a table with two columns:
 - `idx` - 1-based position corresponding to the input arrays
 - `allowed` - `1` for access granted, `0` for access denied
 
-One row is returned per input check, in index order.
+One row is returned per input check. The rows are not in index order: they are grouped by object type and relation. Match each row to its request by `idx`, and add `ORDER BY idx` when the order matters.
 
 ### Examples
 
@@ -258,16 +261,20 @@ FROM check_permission_bulk(
     ARRAY['doc-1', 'repo-1', 'org-1']
 );
 
--- Use results in a query by joining
+-- Use results in a query: idx is the position in the input arrays
+WITH docs AS (
+    SELECT array_agg(id::text ORDER BY id) AS ids FROM documents
+)
 SELECT d.id, d.title, b.allowed
-FROM documents d
-JOIN check_permission_bulk(
-    ARRAY(SELECT 'user' FROM documents),
-    ARRAY(SELECT '123' FROM documents),
-    ARRAY(SELECT 'viewer' FROM documents),
-    ARRAY(SELECT 'document' FROM documents),
-    ARRAY(SELECT id::text FROM documents)
-) b ON d.id = b.idx
+FROM docs
+CROSS JOIN LATERAL check_permission_bulk(
+    array_fill('user'::text, ARRAY[COALESCE(cardinality(docs.ids), 0)]),
+    array_fill('123'::text, ARRAY[COALESCE(cardinality(docs.ids), 0)]),
+    array_fill('viewer'::text, ARRAY[COALESCE(cardinality(docs.ids), 0)]),
+    array_fill('document'::text, ARRAY[COALESCE(cardinality(docs.ids), 0)]),
+    COALESCE(docs.ids, ARRAY[]::text[])
+) b
+JOIN documents d ON d.id::text = docs.ids[b.idx]
 ORDER BY d.id;
 ```
 
@@ -457,6 +464,8 @@ LIMIT 50;
 
 The inlined query reads `melange_tuples` through your query's `search_path`, so the schema holding it must be on the path. Rows can repeat; `IN` does not need them distinct. Long type and relation names are shortened with a hash to fit PostgreSQL's 63-character limit; `accessible_objects` needs no names, and [generated clients](#names-in-generated-clients) and [`melange functions`](../cli/#functions) carry the exact ones.
 
+Relations listed by a breadth-first walk are the exception. These are a relation that recurses on itself through a parent (`viewer: [user] or viewer from parent`) and a userset on its own relation (`member: [user, group#member]` on `group`). For them `accessible_{type}_{relation}` reads the whole list from `list_{type}_{relation}_obj`, a PL/pgSQL function, so your filters and limit apply after the walk. A relation past the depth limit raises `M2002` through either function.
+
 ### accessible_{type}_{relation}_by_{link}
 
 A relation whose every grant comes through the same link to a single parent type, such as `can_read: reader from org` or `can_read: reader from org or admin from org`, also gets a parent-key form. It returns the IDs of the parents through which the subject holds the relation, so you filter on the column that holds the link:
@@ -616,7 +625,7 @@ expand_permission(
 | `p_object_id` | TEXT | Object identifier |
 | `p_relation` | TEXT | Relation to expand |
 | `p_subject_type` | TEXT | Melange extension. When set, `Leaf.Users` entries are filtered to this subject type. `NULL` matches all types. |
-| `p_max_leaf` | INTEGER | Melange extension. Caps each `Leaf.Users` list. `NULL` defers to session GUC `melange.max_expand_leaf`, then to unbounded (matching OpenFGA). When the cap fires the leaf's `users_truncated` field is `true`. |
+| `p_max_leaf` | INTEGER | Melange extension. Caps each `Leaf.Users` list. `NULL` means no cap (matching OpenFGA). When the cap fires the leaf's `users_truncated` field is `true`. |
 
 ### Return Value
 
@@ -662,9 +671,6 @@ SELECT expand_permission('document', '1', 'viewer', 'user');
 -- Per-call cap; users_truncated fires on overflowing leaves
 SELECT expand_permission('document', '1', 'viewer', NULL, 100);
 
--- Per-session default; subsequent calls inherit it
-SET melange.max_expand_leaf = 500;
-SELECT expand_permission('document', '1', 'viewer');
 ```
 
 ### Use from runtime / CLI
@@ -744,7 +750,7 @@ OpenFGA's own Check limit depends on which resolver it picks for the model. Its 
 RAISE EXCEPTION 'resolution too complex' USING ERRCODE = 'M2002';
 ```
 
-This can occur with deeply nested parent relationships or deeply nested userset chains. Cycles in the data do not raise: a check skips objects it has already visited, and the list functions expand each object once.
+This can occur with deeply nested parent relationships or deeply nested userset chains. A cycle in the data does not raise on its own: a check stops at an object it has already visited, and the list functions expand each object once. A check that takes more than 25 steps before it gets back to a visited object still raises `M2002`, because the depth limit is checked before the cycle.
 
 Handle this error in your application:
 

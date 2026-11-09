@@ -111,6 +111,8 @@ await denyChecker.check(user, 'can_read', repo); // always returns { allowed: fa
 
 ### Contextual Tuples
 
+`checkWithContextualTuples` has the Go signature, but the TypeScript client does not apply contextual tuples yet: it runs a plain `check_permission` and skips the cache. Use the Go `Checker` for contextual tuples.
+
 ```typescript
 // Check with temporary permissions
 const decision = await checker.checkWithContextualTuples(
@@ -278,6 +280,11 @@ class Checker {
     object: MelangeObject,
     contextualTuples: ContextualTuple[]
   ): Promise<Decision>;
+
+  explain(subject: MelangeObject, relation: Relation, object: MelangeObject, options?: ExplainOptions): Promise<Trace>;
+  expand(object: MelangeObject, relation: Relation, options?: ExpandOptions): Promise<UsersetTree>;
+  expandRecursive(object: MelangeObject, relation: Relation, options?: ExpandOptions): Promise<string[]>;
+  newBulkCheck(): BulkCheckBuilder;
 }
 ```
 
@@ -289,6 +296,7 @@ interface CheckerOptions {
   decision?: Decision;          // For testing only
   validateRequest?: boolean;    // Default: true
   validateUserset?: boolean;    // Default: true
+  databaseSchema?: string;      // Schema where melange functions live (default: search_path)
 }
 ```
 
@@ -309,8 +317,10 @@ class MemoryCache implements Cache {  // In-memory with TTL
 
 ## Error Handling
 
+Calls that reach the database map two errors. SQLSTATE `M2003`, a relation the SQL API exposure leaves out, throws `ValidationError` with `code` 2000 (`ErrorCodeValidation`) and the database message, such as `relation "viewer" on type "document" is not exposed`. A missing melange function (`42883`) throws `MissingFunctionError` with a message starting `melange: authorization function missing: `. Both keep the driver error as `cause`.
+
 ```typescript
-import { MelangeError, ValidationError, NotFoundError } from '@pthm/melange';
+import { MelangeError, ValidationError, NotFoundError, MissingFunctionError } from '@pthm/melange';
 
 try {
   await checker.check(user, 'can_read', repo);
@@ -319,6 +329,8 @@ try {
     console.error('Invalid input:', err.message);
   } else if (err instanceof NotFoundError) {
     console.error('Resource not found:', err.message);
+  } else if (err instanceof MissingFunctionError) {
+    console.error('Run melange migrate:', err.message);
   } else if (err instanceof MelangeError) {
     console.error('Melange error:', err.message);
   } else {

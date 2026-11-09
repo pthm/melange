@@ -18,9 +18,6 @@ Melange includes comprehensive benchmarks for both the OpenFGA compatibility tes
 # Run all OpenFGA benchmarks
 just bench-openfga
 
-# Quick sanity check (1 iteration, direct assignment only)
-just bench-openfga-quick
-
 # Benchmark a specific category
 just bench-openfga-category DirectAssignment
 just bench-openfga-category ComputedUserset
@@ -102,6 +99,18 @@ cd test && go test -run='^$' -bench='BenchmarkKitchenSink' -benchmem -count=6 . 
 benchstat bench.txt
 ```
 
+### SaaS Benchmark
+
+```bash
+# Multi-tenant SaaS model over a 27-branch view: warm calls and the first calls on fresh sessions
+just bench-saas          # 100K and 1M
+just bench-saas 1M
+MELANGE_BENCH_LARGE_SCALE=1 just bench-saas 5M
+
+# Check the SaaS model's list, accessible and parent-key functions against check_permission
+just test-saas
+```
+
 ### Test Data Configuration
 
 Each scale grows users, groups, orgs, folder depth, and documents together
@@ -128,6 +137,8 @@ types and relation shapes:
   `viewer`, exclusion `can_view`, intersections, and folder relations.
 - `BenchmarkKitchenSinkExpand`, `Explain`, `Bulk`: the `expand_*`, `explain_*`,
   and `check_permission_bulk` surfaces.
+- `BenchmarkKitchenSinkOnDemand`: Explain and Expand with their families
+  installed and on demand, compiled into `pg_temp` for each call.
 
 See the [Performance Reference](../../reference/performance/) for results.
 The selected `check`, `expand`, `explain`, and fixed-size bulk queries stayed roughly flat across the measured scales; this is not a constant-time guarantee for arbitrary graphs or batch sizes. List operations

@@ -69,9 +69,12 @@ func (m *Migrator) HasSchema() bool
 ```go
 // MigrateOptions controls migration behavior.
 type MigrateOptions struct {
-    DryRun  io.Writer // Output SQL without applying; nil = apply normally
-    Force   bool      // Re-run even if schema unchanged
-    Version string    // Melange version for traceability
+    DryRun             io.Writer // Output SQL without applying; nil = apply normally
+    Force              bool      // Re-run even if unchanged; also drops orphans with CASCADE and overrides the downgrade guard
+    Version            string    // Melange version for traceability
+    DatabaseSchema     string    // PostgreSQL schema for melange objects
+    IfDeployedChecksum *string   // Compare-and-swap: abort with *DeployedModelChangedError unless this checksum is deployed
+    Exposure           *Exposure // SQL API to generate; nil keeps the recorded one (the default when none), a pointer to the zero value restores the default
 }
 
 // Status represents the current migration state.
@@ -86,6 +89,7 @@ type MigrationRecord struct {
     SchemaChecksum string
     CodegenVersion string
     FunctionNames  []string
+    Exposure       Exposure // normalized exposure the functions were generated with
 }
 
 // MigrationPlan is what an unforced migration would do (Plan).
@@ -267,8 +271,8 @@ When you run migration, the following steps occur:
 4. **Analyze** - Classify relations and determine SQL patterns
 5. **Generate** - Create specialized SQL functions per relation
 6. **Apply** - Execute SQL atomically in a transaction
-7. **Track** - Record migration in `melange_migrations` table
-8. **Cleanup** - Drop orphaned functions from previous schema
+7. **Cleanup** - Drop functions a previous migration installed that this one no longer generates. When other database objects (for example a view or RLS policy) depend on one, an unforced migration fails with `*DependentObjectsError` before applying anything; `Force: true` drops them with `CASCADE`, dependents included
+8. **Track** - Record the migration (schema, codegen version, function checksums and SQL API exposure) in `melange_migrations`
 
 ## Skip-If-Unchanged Optimization
 
@@ -287,14 +291,14 @@ outcome without migrating.
 
 ## Transaction Support
 
-When using `*sql.DB`, migrations are applied atomically:
+When the Execer can begin a transaction (`*sql.DB`, `*sql.Conn`), migrations are applied atomically in the migrator's own transaction:
 
 ```go
 // All-or-nothing: either all functions are created or none
 err := migrator.Migrate(ctx, db, "schema.fga")
 ```
 
-For `*sql.Tx` or `*sql.Conn`, functions are applied individually (caller manages transaction).
+With a `*sql.Tx`, functions are applied on the caller's transaction, which the caller commits or rolls back.
 
 ## Error Handling
 
@@ -327,7 +331,7 @@ This package imports:
 - `github.com/lib/pq` - PostgreSQL driver for array handling
 - `github.com/pthm/melange/pkg/parser` - Schema parsing
 - `github.com/pthm/melange/pkg/schema` - Schema types
-- `github.com/pthm/melange/lib/sqlgen` - SQL generation
+- `github.com/pthm/melange/internal/sqlgen` - SQL generation
 
 ## Execer Interface
 

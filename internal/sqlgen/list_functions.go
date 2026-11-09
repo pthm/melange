@@ -10,11 +10,11 @@ import (
 // Applied atomically during migration alongside check functions.
 type ListGeneratedSQL struct {
 	// ListObjectsFunctions contains CREATE OR REPLACE FUNCTION statements
-	// for each specialized list_objects function (list_{type}_{relation}_objects).
+	// for each specialized list_objects function (list_{type}_{relation}_obj).
 	ListObjectsFunctions []string
 
 	// ListSubjectsFunctions contains CREATE OR REPLACE FUNCTION statements
-	// for each specialized list_subjects function (list_{type}_{relation}_subjects).
+	// for each specialized list_subjects function (list_{type}_{relation}_sub).
 	ListSubjectsFunctions []string
 
 	// AccessibleObjectsFunctions contains the accessible_{type}_{relation}
@@ -313,7 +313,7 @@ type ListUsersetPatternData struct {
 	IsComplex bool
 
 	// IsSelfReferential is true if SubjectType == ObjectType and SubjectRelation == Relation.
-	// Self-referential usersets (e.g., group.member: [group#member]) require recursive CTEs.
+	// Self-referential usersets (e.g., group.member: [group#member]) are listed by a breadth-first walk.
 	// Non-self-referential usersets use JOIN-based expansion.
 	IsSelfReferential bool
 }
@@ -376,7 +376,7 @@ type ListDispatcherCase struct {
 }
 
 // buildListParentRelations builds template data for TTU pattern expansion in list templates.
-// For each "viewer from parent" pattern, this creates data for recursive CTE traversal or
+// For each "viewer from parent" pattern, this creates data for a breadth-first walk or
 // cross-type lookup using check_permission_internal.
 //
 // Includes both direct parent relations (a.ParentRelations) and inherited parent relations

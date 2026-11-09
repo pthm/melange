@@ -133,10 +133,10 @@ package authz
 
 import "github.com/pthm/melange/melange"
 
-// Object types
+// ObjectType constants from schema.
 const (
-    TypeUser       = "user"
-    TypeRepository = "repository"
+    TypeRepository melange.ObjectType = "repository"
+    TypeUser       melange.ObjectType = "user"
 )
 
 // Relations
@@ -153,6 +153,10 @@ func User(id string) melange.Object {
 func Repository(id string) melange.Object {
     return melange.Object{Type: TypeRepository, ID: id}
 }
+
+// Wildcard constructors for public access patterns.
+func AnyRepository() melange.Object { return melange.Object{Type: TypeRepository, ID: "*"} }
+func AnyUser() melange.Object       { return melange.Object{Type: TypeUser, ID: "*"} }
 
 // Accessible functions, as installed
 const (
@@ -186,11 +190,11 @@ allowed, err := checker.Check(ctx,
 Generate code via the melange CLI:
 
 ```bash
-# Generate Go client code
-melange generate client --runtime go --output internal/authz/authz.go
+# Generate Go client code (writes internal/authz/schema_gen.go)
+melange generate client --runtime go --output internal/authz/
 
 # Generate with custom package
-melange generate client --runtime go --package authz --output authz.go
+melange generate client --runtime go --package authz --output .
 
 # Generate TypeScript (a directory: types.ts, schema.ts, sql.ts, index.ts)
 melange generate client --runtime typescript --output src/authz/
@@ -201,14 +205,14 @@ melange generate client --runtime typescript --output src/authz/
 Add to your `go:generate` directives:
 
 ```go
-//go:generate melange generate client --runtime go --output authz_gen.go
+//go:generate melange generate client --runtime go --output .
 ```
 
 Or in a Makefile:
 
 ```makefile
 generate:
-	melange generate client --runtime go --output internal/authz/authz.go
+	melange generate client --runtime go --output internal/authz/
 ```
 
 ## Deprecated API
@@ -230,7 +234,7 @@ func DefaultGenerateConfig() *GenerateConfig
 
 This package imports:
 
-- `github.com/pthm/melange/lib/clientgen` - Generator registry
-- `github.com/pthm/melange/lib/clientgen/go` - Go generator (via init)
-- `github.com/pthm/melange/lib/clientgen/typescript` - TypeScript generator (via init)
+- `github.com/pthm/melange/internal/clientgen` - Generator registry
+- `github.com/pthm/melange/internal/clientgen/go` - Go generator (via init)
+- `github.com/pthm/melange/internal/clientgen/typescript` - TypeScript generator (via init)
 - `github.com/pthm/melange/pkg/schema` - Schema types
