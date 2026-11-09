@@ -368,7 +368,8 @@ func TestCheckExpandFanoutAdvisory(t *testing.T) {
 		assert.Equal(t, "expand_fanout_advisory", check.Name)
 		assert.Equal(t, StatusPass, check.Status)
 		assert.Contains(t, check.Details, "document#public")
-		assert.Contains(t, check.Details, "max_expand_leaf")
+		assert.Contains(t, check.Details, "WithExpandMaxLeaf")
+		assert.NotContains(t, check.Details, "max_expand_leaf")
 		assert.Contains(t, check.Details, "Wildcard grants")
 	})
 

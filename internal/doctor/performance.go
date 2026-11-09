@@ -446,7 +446,8 @@ func (d *Doctor) installedIndexRecommendations(analyses []sqlgen.RelationAnalysi
 //     hierarchy multiplies the round-trip cost.
 //
 // When any relation matches either signal, we surface one advisory
-// that recommends `melange.max_expand_leaf` as a session guardrail.
+// that recommends a per-call leaf cap (WithExpandMaxLeaf, --max-leaf,
+// p_max_leaf). There is no session setting for it.
 // StatusPass — never escalates — because the schema signal is a hint,
 // not a diagnosed problem.
 func (d *Doctor) checkExpandFanoutAdvisory(_ context.Context, report *Report) error { //nolint:unparam // error return kept for consistent checker interface
@@ -475,10 +476,11 @@ func (d *Doctor) checkExpandFanoutAdvisory(_ context.Context, report *Report) er
 
 	var details strings.Builder
 	details.WriteString("Expand responses on these relations can grow large depending on tuple counts. ")
-	details.WriteString("Consider setting a per-leaf cap so admin flows don't blow past a reasonable ")
+	details.WriteString("Consider capping each leaf per call so admin flows don't blow past a reasonable ")
 	details.WriteString("response size:\n\n")
-	details.WriteString("    SET melange.max_expand_leaf = 1000;\n")
-	details.WriteString("    -- or per-call: Checker.Expand(..., WithExpandMaxLeaf(1000))\n\n")
+	details.WriteString("    Checker.Expand(..., melange.WithExpandMaxLeaf(1000))\n")
+	details.WriteString("    melange expand ... --max-leaf 1000\n")
+	details.WriteString("    -- in SQL, pass p_max_leaf to expand_permission\n\n")
 	if len(wildcardRels) > 0 {
 		fmt.Fprintf(&details, "Wildcard grants (%d relation(s)) — every Expand surfaces the wildcard entry (`user:*`):\n", len(wildcardRels))
 		for _, r := range wildcardRels {

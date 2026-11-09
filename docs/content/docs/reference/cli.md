@@ -741,7 +741,7 @@ Runs whenever `melange_tuples` exists (both view and table backends). Flags rela
 - **Wildcard grants** (`[user:*]`): every Expand response surfaces the wildcard entry (`user:*`). Downstream consumers that enumerate the wildcard client-side hit unbounded fan-out.
 - **Recursive TTU** (`viewer from parent` on a self-referential type): `ExpandRecursive` walks the parent pointer chain, so a deep hierarchy multiplies round-trip cost.
 
-The advisory is `StatusPass` — a hint, not a diagnosed problem — and suggests setting `melange.max_expand_leaf` as a session-level guardrail. See [Expanding Permissions](../../guides/expanding-permissions/#per-leaf-cap).
+The advisory is `StatusPass`, a hint rather than a diagnosed problem. It suggests capping each leaf per call with `WithExpandMaxLeaf`, `--max-leaf` or `expand_permission`'s `p_max_leaf`. See [Expanding Permissions](../../guides/expanding-permissions/#per-leaf-cap).
 
 **Verbose mode:**
 
