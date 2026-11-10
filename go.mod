@@ -24,7 +24,7 @@ require (
 	github.com/openfga/language/pkg/go v0.3.2
 	github.com/pthm/melange/melange v0.11.0
 	github.com/spf13/cobra v1.10.2
-	github.com/spf13/pflag v1.0.10
+	github.com/spf13/pflag v1.1.0
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.12.1
 	golang.org/x/mod v0.42.0
