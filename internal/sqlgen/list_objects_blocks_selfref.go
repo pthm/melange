@@ -240,13 +240,19 @@ func buildSelfRefUsersetSimplePatternBlock(plan ListPlan, pattern listUsersetPat
 
 func buildSelfRefUsersetRecursiveBlock(plan ListPlan) *TypedQueryBlock {
 	exclusionPreds := plan.Exclusions.BuildPredicates()
-	conditions := make([]Expr, 0, 6+len(exclusionPreds))
+	conditions := make([]Expr, 0, 4+len(exclusionPreds))
 	conditions = append(conditions,
 		Eq{Left: Col{Table: "t", Column: "object_type"}, Right: Lit(plan.ObjectType)},
 		In{Expr: Col{Table: "t", Column: "relation"}, Values: plan.RelationList},
 		Eq{Left: Col{Table: "t", Column: "subject_type"}, Right: Lit(plan.ObjectType)},
-		HasUserset{Source: Col{Table: "t", Column: "subject_id"}},
-		Eq{Left: UsersetRelation{Source: Col{Table: "t", Column: "subject_id"}}, Right: Lit(plan.Relation)},
+		// The frontier as usersets, compared as a constant array: PostgreSQL
+		// pushes it into each branch of the view, where an index on the
+		// subject_id expression answers it (see InFunctionSelect.Array). A join
+		// on split_part(t.subject_id, '#', 1) scans every userset grant of the
+		// relation on each pass instead. An object ID holding '#' would name
+		// another userset, so it is skipped, as in complexUsersetArms.
+		Raw(fmt.Sprintf("t.subject_id = ANY(ARRAY(SELECT me.object_id || %s FROM unnest(%s) AS me(object_id) WHERE position('#' in me.object_id) = 0))",
+			Lit("#"+plan.Relation).SQL(), walkFrontier)),
 	)
 	conditions = append(conditions, exclusionPreds...)
 
@@ -257,15 +263,8 @@ func buildSelfRefUsersetRecursiveBlock(plan ListPlan) *TypedQueryBlock {
 		},
 		Query: SelectStmt{
 			ColumnExprs: []Expr{Col{Table: "t", Column: "object_id"}},
-			FromExpr:    unnestObjectIDs(walkFrontier, "me"),
-			Joins: []JoinClause{{
-				Type:   "INNER",
-				Schema: "",
-				Table:  "melange_tuples",
-				Alias:  "t",
-				On:     Eq{Left: UsersetObjectID{Source: Col{Table: "t", Column: "subject_id"}}, Right: Col{Table: "me", Column: "object_id"}},
-			}},
-			Where: And(conditions...),
+			FromExpr:    TableAs("", "melange_tuples", "t"),
+			Where:       And(conditions...),
 		},
 	}
 }
